@@ -27,3 +27,8 @@ dist-ssr
 # Added by cargo
 
 /target
+
+/src-ui/wasm
+
+
+!/src-ui/wasm/.gitkeep

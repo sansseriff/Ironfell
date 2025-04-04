@@ -79,6 +79,16 @@ button:focus-visible {
 } */
 
 /* CSS Reset */
+
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex; 
+}
+
+
+
+
 *,
 *::before,
 *::after {
@@ -98,6 +108,14 @@ body {
   text-rendering: optimizeSpeed;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* Prevents scrollbars */
 }
 
 img,

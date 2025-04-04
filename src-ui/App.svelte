@@ -36,16 +36,18 @@
   }
 
   // No longer auto-launching on mount
-  // onMount(() => {
-  //   launch();
-  // });
+  onMount(() => {
+    launch();
+  });
+
+  function resize({ width = 0, height = 0 }) {
+    if (controller) {
+      controller.requestCanvasResize(width, height);
+    }
+  }
 </script>
 
 <div id="app-container">
-  <button id="launch-button" onclick={launch} disabled={loading_in_progress}>
-    {loading_in_progress ? "Starting..." : "Launch Controller"}
-  </button>
-
   {#if show_loading}
     <div id="loading">
       <div class="spinner"></div>
@@ -53,11 +55,11 @@
     </div>
   {/if}
 
-  <div id="container">
-    <canvas id="worker-canvas" raw-window-handle="1"></canvas>
-  </div>
-
-  <div id="container">
+  <div
+    bind:clientWidth={null, (v) => resize({ width: v, height: 0 })}
+    bind:clientHeight={null, (v) => resize({ width: 0, height: v })}
+    id="container"
+  >
     <canvas id="worker-canvas" raw-window-handle="1"></canvas>
   </div>
 </div>
@@ -66,11 +68,16 @@
   canvas {
     border: #ff5a5a 2px solid;
     width: 100%;
-    height: 100vh;
+    height: 100%;
+    display: block; /* Ensure it behaves as a block */
   }
 
   #app-container {
     position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex; /* Use flexbox for better control */
+    flex-direction: column;
   }
 
   #launch-button {
@@ -109,17 +116,13 @@
     justify-content: center;
   }
 
-  canvas {
-    border: #ff5a5a 2px solid;
-    width: 100%;
-    height: 100vh;
-  }
-
-  /* #container {
+  #container {
     position: relative;
     width: 100%;
-    height: 100vh;
-  } */
+    height: 100%;
+    flex: 1; /* Take up all available space */
+    display: flex; /* Use flexbox to control the canvas */
+  }
 
   #loading {
     position: absolute;

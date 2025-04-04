@@ -6,6 +6,9 @@ export class WorkerController {
   // Whether the worker is ready
   workerIsReady = $state(false);
 
+  width = $state(0);
+  height = $state(0);
+
   // Latest pick result
   private latestPick: any[] = [];
 
@@ -14,6 +17,8 @@ export class WorkerController {
 
   // Canvas reference for event handling
   private canvas: HTMLCanvasElement;
+
+
 
   /**
    * Creates a new WorkerController instance
@@ -115,7 +120,33 @@ export class WorkerController {
     );
   }
 
-  private resizeCanvas() {
+  public requestCanvasResize(width: number, height: number) {
+    const devicePixelRatio = window.devicePixelRatio;
+    // console.log("width:", width, "height:", height);
+
+
+    if (width != 0) {
+      this.width = width;
+    }
+    if (height != 0) {
+      this.height = height;
+    }
+
+    if (this.width != 0 && this.height != 0) {
+      // Set the display size through CSS
+      this.canvas.style.width = this.width + "px";
+      this.canvas.style.height = this.height + "px";
+
+    this.worker.postMessage({
+      ty: "resize",
+      width: this.width * devicePixelRatio,
+      height: this.height * devicePixelRatio
+    })
+    }
+    
+  }
+
+  public resizeCanvas() {
     const rect = this.canvas.getBoundingClientRect();
     const devicePixelRatio = window.devicePixelRatio;
 
@@ -205,9 +236,9 @@ export class WorkerController {
   /**
    * Blocks worker rendering for specified time
    */
-  blockWorkerRender(dt: number) {
-    this.worker.postMessage({ ty: "blockRender", blockTime: dt });
-  }
+  // blockWorkerRender(dt: number) {
+  //   this.worker.postMessage({ ty: "blockRender", blockTime: dt });
+  // }
 
   /**
    * Starts the worker engine instance

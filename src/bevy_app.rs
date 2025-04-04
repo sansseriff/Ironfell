@@ -2,6 +2,7 @@ use crate::ray_pick::RayPickPlugin;
 use crate::{ActiveInfo, WorkerApp};
 use bevy::color::palettes::css::BLANCHED_ALMOND;
 use bevy::color::palettes::tailwind::BLUE_400;
+use bevy::render::camera::ScalingMode;
 use bevy::{
     color::palettes::basic::SILVER,
     math::bounding::{Aabb3d, Bounded3d},
@@ -143,6 +144,12 @@ fn setup(
 
     commands.spawn((
         Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            fov: 60.0_f32.to_radians(),
+            near: 0.1,
+            far: 1000.0,
+            ..default()
+        }),
         Transform::from_xyz(0.0, -9., 18.0).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
     ));
 }

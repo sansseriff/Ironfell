@@ -1,11 +1,13 @@
 use crate::bevy_app::init_app;
-use crate::{ActiveInfo, WorkerApp, canvas_view::*, create_canvas_window};
+use crate::{ActiveInfo, WorkerApp, canvas_view::*, create_canvas_window, update_canvas_windows};
 use bevy::app::PluginsState;
 use bevy::ecs::system::SystemState;
 use bevy::platform_support::collections::HashMap;
 use bevy::prelude::*;
 use js_sys::BigInt;
 use wasm_bindgen::prelude::*;
+
+use bevy::{prelude::*, window::WindowResized};
 
 #[wasm_bindgen]
 extern "C" {
@@ -123,6 +125,13 @@ pub fn mouse_move(ptr: u64, x: f32, y: f32) {
     active_info.remaining_frames = 10;
 }
 
+#[wasm_bindgen]
+pub fn resize(ptr: u64, width: f32, height: f32) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    // Directly modify the window resolution
+    update_canvas_windows(app, width, height);
+}
+
 /// 鼠标左键按下
 #[wasm_bindgen]
 pub fn left_bt_down(ptr: u64, obj: JsValue, x: f32, y: f32) {
@@ -189,17 +198,19 @@ pub fn set_auto_animation(ptr: u64, needs_animate: u32) {
     active_info.auto_animate = needs_animate > 0;
 }
 
-/// 帧绘制
+/// Frame rendering
 ///
-/// render 运行在 worker 中时，主线程 post 绘制 msg 时可能 render 还没有完成当前帧的更新
+/// When render is running in a worker, the main thread may post a rendering message
+/// before the render has finished updating the current frame
 ///
-/// TODO：需要检测帧依赖的资源是否已加载完成，否则可能提交的 update 累积会导致栈溢出
+/// TODO: Need to check if the resources required for the frame have been fully loaded,
+/// otherwise accumulated updates might cause stack overflow
 #[wasm_bindgen]
 pub fn enter_frame(ptr: u64) {
     // 获取到指针指代的 Rust 对象的可变借用
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     {
-        // 检查执行帧渲染的条件
+        // Check conditions for executing frame rendering
         let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
         if !active_info.auto_animate && active_info.remaining_frames == 0 {
             return;

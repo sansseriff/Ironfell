@@ -19,7 +19,7 @@ impl WindowId {
     }
 }
 
-// 封装 ViewObj 来同时支持 Canvas 与 Offscreen
+// Encapsulate ViewObj to simultaneously support Canvas and Offscreen
 #[derive(Debug)]
 pub enum ViewObj {
     Canvas(WindowWrapper<CanvasWrapper>),

@@ -40,6 +40,9 @@ class IronWorker {
 
     // Initialize the worker
     this.initWasmInWorker();
+
+    // Add visibility change listener
+    this.setupVisibilityListener();
   }
 
   private async initWasmInWorker() {
@@ -120,7 +123,7 @@ class IronWorker {
       this.offscreenCanvas.height = height;
 
       // console.log("Resized canvas to:", this.offscreenCanvas.width, "×", this.offscreenCanvas.height);
-      
+
       // And then notify bevy it's changed
       resize(this.appHandle, width, height);
     }
@@ -129,7 +132,7 @@ class IronWorker {
   private createWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number) {
     // Store the canvas reference
     this.offscreenCanvas = offscreenCanvas;
-    
+
     // Create rendering window
     create_window_by_offscreen_canvas(
       this.appHandle,

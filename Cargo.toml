@@ -10,9 +10,6 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-app-surface = { version = "1.5.3", features = ["web_rwh"] }
-raw-window-handle = "0.6"
-wgpu = "24"
 bevy = { version = "0.16.0-rc.1", features = [
     "std",
     "bevy_pbr",
@@ -21,7 +18,19 @@ bevy = { version = "0.16.0-rc.1", features = [
     "webgpu",
     "bevy_window",
     "bevy_log",
+    "bevy_text",
+    "bevy_ui",
+    "default_font",
 ], default-features = false }
+log = { version = "*", features = [
+    "max_level_debug",
+    "release_max_level_warn",
+] }
+
+
+app-surface = { version = "1.5.3", features = ["web_rwh"] }
+raw-window-handle = "0.6"
+wgpu = "24"
 uuid = { version = "1.7.0", features = ["v4"] }
 rand = "0.8"
 # Web only

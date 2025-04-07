@@ -38,6 +38,22 @@ export class WorkerController {
 
     // Set up message handling from worker
     this.worker.onmessage = this.handleWorkerMessage.bind(this);
+
+    this.setupVisibilityListener();
+  }
+
+  private setupVisibilityListener() {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        // When tab becomes hidden, stop the rendering loop
+        this.worker.postMessage({ ty: "stopRunning" });
+        console.log("Tab hidden, paused rendering");
+      } else {
+        // When tab becomes visible again, resume rendering
+        this.worker.postMessage({ ty: "startRunning" });
+        console.log("Tab visible, resumed rendering");
+      }
+    });
   }
 
   /**
@@ -137,13 +153,13 @@ export class WorkerController {
       this.canvas.style.width = this.width + "px";
       this.canvas.style.height = this.height + "px";
 
-    this.worker.postMessage({
-      ty: "resize",
-      width: this.width * devicePixelRatio,
-      height: this.height * devicePixelRatio
-    })
+      this.worker.postMessage({
+        ty: "resize",
+        width: this.width * devicePixelRatio,
+        height: this.height * devicePixelRatio
+      })
     }
-    
+
   }
 
   public resizeCanvas() {

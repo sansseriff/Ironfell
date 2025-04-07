@@ -14,6 +14,8 @@ mod ray_pick;
 
 mod bevy_app;
 
+mod overlay;
+
 pub struct WorkerApp {
     pub app: App,
     /// 手动包装事件需要

@@ -1,10 +1,12 @@
+use crate::overlay::OverlayPlugin;
 use crate::ray_pick::RayPickPlugin;
 use crate::{ActiveInfo, WorkerApp};
 use bevy::color::palettes::css::BLANCHED_ALMOND;
 use bevy::color::palettes::tailwind::BLUE_400;
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::render::camera::ScalingMode;
 use bevy::{
-    color::palettes::basic::SILVER,
+    color::palettes::basic::{AQUA, LIME, SILVER},
     math::bounding::{Aabb3d, Bounded3d},
     prelude::*,
     render::{
@@ -15,6 +17,8 @@ use bevy::{
 use rand::Rng;
 use std::f32::consts::PI;
 use std::ops::Deref;
+
+const MAX_HISTORY_LENGTH: usize = 800000;
 
 pub(crate) fn init_app() -> WorkerApp {
     let mut app = App::new();
@@ -27,7 +31,16 @@ pub(crate) fn init_app() -> WorkerApp {
         }),
         ..default()
     });
-    app.add_plugins((default_plugins, RayPickPlugin));
+    app.add_plugins((
+        default_plugins,
+        RayPickPlugin,
+        OverlayPlugin,
+        FrameTimeDiagnosticsPlugin {
+            max_history_length: MAX_HISTORY_LENGTH,
+            smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
+        },
+        // LogDiagnosticsPlugin::default(),
+    ));
 
     app.add_systems(Startup, setup)
         .add_systems(Update, (rotate, update_aabbes))

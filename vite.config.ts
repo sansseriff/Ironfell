@@ -12,5 +12,7 @@ export default defineConfig({
     alias: {
       'src': '/src-ui'
     }
-  }
+  },
+  // Ensure WASM files are treated as assets
+  assetsInclude: ['**/*.wasm'],
 })

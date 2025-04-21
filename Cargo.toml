@@ -21,6 +21,8 @@ bevy = { version = "0.16.0-rc.1", features = [
     "bevy_text",
     "bevy_ui",
     "default_font",
+    "bevy_image",
+    "png",
 ], default-features = false }
 log = { version = "*", features = [
     "max_level_debug",
@@ -52,6 +54,9 @@ web-sys = { version = "0.3.77", features = [
     "Blob",
     "BlobPropertyBag",
     "Url",
+    "Request",
+    "RequestInit",
+    "Response",
 ] }
 js-sys = "0.3.77"
 
@@ -60,7 +65,10 @@ inherits = "release"
 opt-level = "z"
 lto = "fat"
 # lto = true
+panic = "abort"
 codegen-units = 1
+incremental = false
+debug = false
 
 
 # works

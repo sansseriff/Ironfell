@@ -38,14 +38,24 @@ fn setup_ui(mut commands: Commands) {
         .with_children(|p| {
             p.spawn((Text::default(), FpsText, Name::new("FPS Text")))
                 .with_children(|p| {
-                    p.spawn((TextSpan::new("FPS: "), font.clone(), TextColor(LIME.into())));
-                    p.spawn((TextSpan::new("0.00"), font.clone(), TextColor(AQUA.into())));
                     p.spawn((
-                        TextSpan::new("\nFPS (avg): "),
+                        TextSpan::new("\nFPS (raw): "),
                         font.clone(),
                         TextColor(LIME.into()),
                     ));
-                    p.spawn((TextSpan::new("0.00"), font.clone(), TextColor(AQUA.into())));
+                    p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
+                    p.spawn((
+                        TextSpan::new("\nFPS (SMA): "),
+                        font.clone(),
+                        TextColor(LIME.into()),
+                    ));
+                    p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
+                    p.spawn((
+                        TextSpan::new("\nFPS (EMA): "),
+                        font.clone(),
+                        TextColor(LIME.into()),
+                    ));
+                    p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
                 });
         });
 }
@@ -58,12 +68,15 @@ fn update_fps_display(
     let text_entity = *query;
 
     if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
-        if let Some(current_fps) = fps.value() {
-            *writer.text(text_entity, 2) = format!("{current_fps:.2}");
+        if let Some(raw) = fps.value() {
+            *writer.text(text_entity, 2) = format!("{raw:.2}");
+        }
+        if let Some(sma) = fps.average() {
+            *writer.text(text_entity, 4) = format!("{sma:.2}");
         }
 
-        if let Some(avg_fps) = fps.smoothed() {
-            *writer.text(text_entity, 4) = format!("{avg_fps:.2}");
+        if let Some(ema) = fps.smoothed() {
+            *writer.text(text_entity, 6) = format!("{ema:.2}");
         }
     }
 }

@@ -1,0 +1,10 @@
+[build]
+# Enable the wasm32 target
+target = ["wasm32-unknown-unknown"]
+
+[target.wasm32-unknown-unknown]
+# Ensure the wasm target is properly recognized
+runner = "wasm-server-runner"
+
+# Optional: If you're using wasm-bindgen
+# rustflags = ["--cfg=web_sys_unstable_apis"]

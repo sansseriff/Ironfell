@@ -113,6 +113,8 @@ pub fn is_preparation_completed(ptr: u64) -> u32 {
 pub fn mouse_move(ptr: u64, x: f32, y: f32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     // 提前将逻辑像转换成物理像素
+
+    info!("mouse local from rust: ({}, {})", x, y);
     let position = app.to_physical_size(x, y);
     let cursor_move = CursorMoved {
         window: app.window,
@@ -230,12 +232,12 @@ pub fn enter_frame(ptr: u64) {
         }
     } else {
         // 模拟阻塞
-        let active_info = app.world().get_resource::<ActiveInfo>().unwrap();
-        if active_info.is_in_worker {
-            block_from_worker();
-        } else {
-            block_from_rust();
-        }
+        // let active_info = app.world().get_resource::<ActiveInfo>().unwrap();
+        // if active_info.is_in_worker {
+        //     block_from_worker();
+        // } else {
+        //     block_from_rust();
+        // }
 
         app.update();
     }

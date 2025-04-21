@@ -9,6 +9,8 @@ export class WorkerController {
   width = $state(0);
   height = $state(0);
 
+  private initializationError: any = null;
+
   // Latest pick result
   private latestPick: any[] = [];
 
@@ -68,7 +70,9 @@ export class WorkerController {
 
     try {
       // Request a GPU adapter to confirm WebGPU support
-      const adapter = await navigator.gpu.requestAdapter();
+
+
+      const adapter = await (navigator as any).gpu.requestAdapter();
       if (!adapter) {
         throw new Error("No appropriate GPU adapter found");
       }
@@ -79,13 +83,9 @@ export class WorkerController {
       // Create offscreen canvas and transfer control to the worker
       this.transferCanvasToWorker();
 
-      // Mark initialization as complete
-      this.initComplete = true;
-
       return;
-    } catch (error) {
+    } catch (error: Error | any) {
       console.error("WebGPU initialization failed:", error);
-
 
       // Capture more details about the error
       const errorDetails = {
@@ -93,7 +93,7 @@ export class WorkerController {
         name: error.name,
         stack: error.stack,
         // Additional WebGPU specific info if available
-        gpuStatus: navigator.gpu ? "Available" : "Not available"
+        gpuStatus: (navigator as any).gpu ? "Available" : "Not available"
       };
 
       console.error("Error details:", errorDetails);

@@ -16,6 +16,9 @@ mod bevy_app;
 
 mod overlay;
 
+mod asset_reader;
+use asset_reader::*;
+
 pub struct WorkerApp {
     pub app: App,
     /// 手动包装事件需要

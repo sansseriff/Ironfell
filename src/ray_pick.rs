@@ -1,6 +1,6 @@
 use crate::{
     ActiveInfo,
-    bevy_app::{ActiveState, CurrentVolume},
+    bevy_app::{ActiveState, CurrentVolume, MainCamera},
     send_pick_from_rust, send_pick_from_worker,
 };
 use bevy::math::bounding::RayCast3d;
@@ -21,11 +21,17 @@ fn mouse_events_system(
     mut cursor_moved_events: EventReader<CursorMoved>,
     mut mouse_wheel_events: EventReader<MouseWheel>,
     mut app_info: ResMut<ActiveInfo>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut query: Query<(Entity, &CurrentVolume, &mut Transform), With<ActiveState>>,
 ) {
+    info!(
+        "Mouse event system running. Event count: {}",
+        cursor_moved_events.len()
+    );
+
     // 对于拖动，只使用最后一条 move 事件就能得到最终的移动偏移量
     if app_info.drag != Entity::PLACEHOLDER && !cursor_moved_events.is_empty() {
+        info!("cursor moved events not empty");
         let last_cursor_event: Option<&CursorMoved> = cursor_moved_events.read().last();
         if let Some(last_move) = last_cursor_event {
             let (camera, global_transform) = cameras.single().unwrap();
@@ -77,11 +83,11 @@ fn mouse_events_system(
         for (_, &item) in list.iter() {
             js_array.push(&JsValue::from(item));
         }
-        if app_info.is_in_worker {
-            send_pick_from_worker(js_array);
-        } else {
-            send_pick_from_rust(js_array);
-        }
+        // if app_info.is_in_worker {
+        //     send_pick_from_worker(js_array);
+        // } else {
+        //     send_pick_from_rust(js_array);
+        // }
     }
 
     // TODO: mouse wheel

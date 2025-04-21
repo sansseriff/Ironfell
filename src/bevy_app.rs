@@ -18,7 +18,9 @@ use rand::Rng;
 use std::f32::consts::PI;
 use std::ops::Deref;
 
-const MAX_HISTORY_LENGTH: usize = 800000;
+use crate::asset_reader::WebAssetPlugin;
+
+const MAX_HISTORY_LENGTH: usize = 200;
 
 pub(crate) fn init_app() -> WorkerApp {
     let mut app = App::new();
@@ -32,6 +34,7 @@ pub(crate) fn init_app() -> WorkerApp {
         ..default()
     });
     app.add_plugins((
+        WebAssetPlugin::default(),
         default_plugins,
         RayPickPlugin,
         OverlayPlugin,
@@ -65,6 +68,9 @@ pub(crate) struct ActiveState {
     pub selected: bool,
 }
 
+#[derive(Component)]
+pub(crate) struct MainCamera;
+
 impl ActiveState {
     fn is_active(&self) -> bool {
         self.hover || self.selected
@@ -78,6 +84,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     let debug_material = materials.add(StandardMaterial {
         base_color_texture: Some(images.add(uv_debug_texture())),
@@ -114,22 +121,24 @@ fn setup(
     let num_shapes = meshe_handles.len();
     let mut rng = rand::thread_rng();
 
-    for i in 0..(num_shapes * 3) {
-        for y in 0..(5 * 3) {
+    for i in 0..(num_shapes * 1) {
+        for y in 0..(5 * 1) {
             for z in 0..1 {
                 let index = rng.gen_range(0..num_shapes);
                 let mesh = meshe_handles[index].to_owned();
                 let shape = shapes[index].to_owned();
                 let transform = Transform::from_xyz(
-                    -X_EXTENT / 2. + i as f32 / (num_shapes - 1) as f32 * X_EXTENT / 3.0,
-                    (3.0 - y as f32) * 3.0 / 3.0 - 2.0,
+                    -X_EXTENT / 2. + i as f32 / (num_shapes - 1) as f32 * X_EXTENT / 1.0,
+                    (3.0 - y as f32) * 3.0 / 1.0 - 2.0,
                     2. + 4.5 * z as f32,
                 );
 
                 commands.spawn((
                     Mesh3d(mesh),
                     MeshMaterial3d(debug_material.clone()),
-                    transform.with_rotation(Quat::from_rotation_x(-PI / 4.)),
+                    transform
+                        .with_rotation(Quat::from_rotation_x(-PI / 4.))
+                        .with_scale(Vec3::splat(1.0)),
                     shape,
                     ActiveState::default(),
                 ));
@@ -157,6 +166,14 @@ fn setup(
 
     commands.spawn((
         Camera3d::default(),
+        // Camera {
+        //     // renders after / on top of the main camera
+        //     order: 1,
+        //     // don't clear the color while rendering this camera
+        //     clear_color: ClearColorConfig::None,
+        //     ..default()
+        // },
+        MainCamera,
         Projection::Perspective(PerspectiveProjection {
             fov: 60.0_f32.to_radians(),
             near: 0.1,
@@ -165,6 +182,19 @@ fn setup(
         }),
         Transform::from_xyz(0.0, -9., 18.0).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
     ));
+
+    // commands.spawn((
+    //     Camera2d,
+    //     Camera {
+    //         order: 2,
+    //         clear_color: ClearColorConfig::None,
+    //         ..default()
+    //     },
+    // ));
+
+    // commands.spawn(Sprite::from_image(
+    //     asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png"),
+    // ));
 }
 
 fn rotate(

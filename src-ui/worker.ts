@@ -14,6 +14,8 @@ import init, {
   resize,
 } from "./wasm/ironfell.js";
 
+import wasmUrl from './wasm/ironfell_bg.wasm?url'
+
 class IronWorker {
   private appHandle: bigint = BigInt(0);
   private initFinished = 0;
@@ -40,14 +42,12 @@ class IronWorker {
 
     // Initialize the worker
     this.initWasmInWorker();
-
-    // Add visibility change listener
-    this.setupVisibilityListener();
   }
 
   private async initWasmInWorker() {
     // Load wasm file
-    await init("./wasm/ironfell_bg.wasm");
+    // await init("./wasm/ironfell_bg.wasm");
+    await init(wasmUrl);
 
     // Create app
     this.appHandle = init_bevy_app();
@@ -74,6 +74,7 @@ class IronWorker {
           break;
 
         case "mousemove":
+          console.log("Mouse move event received:", data.x, data.y);
           mouse_move(this.appHandle, data.x, data.y);
           break;
 

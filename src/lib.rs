@@ -16,6 +16,8 @@ mod bevy_app;
 
 mod overlay;
 
+mod tracking_circle;
+
 mod asset_reader;
 use asset_reader::*;
 

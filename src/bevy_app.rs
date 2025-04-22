@@ -136,9 +136,7 @@ fn setup(
                 commands.spawn((
                     Mesh3d(mesh),
                     MeshMaterial3d(debug_material.clone()),
-                    transform
-                        .with_rotation(Quat::from_rotation_x(-PI / 4.))
-                        .with_scale(Vec3::splat(1.0)),
+                    transform.with_rotation(Quat::from_rotation_x(-PI / 4.)),
                     shape,
                     ActiveState::default(),
                 ));
@@ -166,13 +164,13 @@ fn setup(
 
     commands.spawn((
         Camera3d::default(),
-        // Camera {
-        //     // renders after / on top of the main camera
-        //     order: 1,
-        //     // don't clear the color while rendering this camera
-        //     clear_color: ClearColorConfig::None,
-        //     ..default()
-        // },
+        Camera {
+            // renders after / on top of the main camera
+            order: 1,
+            // don't clear the color while rendering this camera
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
         MainCamera,
         Projection::Perspective(PerspectiveProjection {
             fov: 60.0_f32.to_radians(),
@@ -183,18 +181,18 @@ fn setup(
         Transform::from_xyz(0.0, -9., 18.0).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
     ));
 
-    // commands.spawn((
-    //     Camera2d,
-    //     Camera {
-    //         order: 2,
-    //         clear_color: ClearColorConfig::None,
-    //         ..default()
-    //     },
-    // ));
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 2,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+    ));
 
-    // commands.spawn(Sprite::from_image(
-    //     asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png"),
-    // ));
+    commands.spawn(Sprite::from_image(
+        asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png"),
+    ));
 }
 
 fn rotate(

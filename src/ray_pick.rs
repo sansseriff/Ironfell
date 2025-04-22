@@ -1,7 +1,9 @@
 use crate::{
     ActiveInfo,
+    // bevy_app::{ActiveState, CurrentVolume},
     bevy_app::{ActiveState, CurrentVolume, MainCamera},
-    send_pick_from_rust, send_pick_from_worker,
+    send_pick_from_rust,
+    send_pick_from_worker,
 };
 use bevy::math::bounding::RayCast3d;
 use bevy::platform_support::collections::HashMap;
@@ -22,16 +24,12 @@ fn mouse_events_system(
     mut mouse_wheel_events: EventReader<MouseWheel>,
     mut app_info: ResMut<ActiveInfo>,
     cameras: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    // cameras: Query<(&Camera, &GlobalTransform)>,
     mut query: Query<(Entity, &CurrentVolume, &mut Transform), With<ActiveState>>,
 ) {
-    info!(
-        "Mouse event system running. Event count: {}",
-        cursor_moved_events.len()
-    );
+    // For dragging, using only the last move event is sufficient to obtain the final movement offset.
 
-    // 对于拖动，只使用最后一条 move 事件就能得到最终的移动偏移量
     if app_info.drag != Entity::PLACEHOLDER && !cursor_moved_events.is_empty() {
-        info!("cursor moved events not empty");
         let last_cursor_event: Option<&CursorMoved> = cursor_moved_events.read().last();
         if let Some(last_move) = last_cursor_event {
             let (camera, global_transform) = cameras.single().unwrap();
@@ -53,7 +51,8 @@ fn mouse_events_system(
     }
 
     // hover 列表
-    // 鼠标事件的频率通常比 render 高，使用 HashMap 是为了避免 pick 结果有重复
+    // The frequency of mouse events is usually higher than that of
+    // rendering, so a HashMap is used to avoid duplicate pick results.
     let mut list: HashMap<Entity, u64> = HashMap::default();
 
     for event in cursor_moved_events.read() {
@@ -62,15 +61,16 @@ fn mouse_events_system(
         let ray_cast = RayCast3d::from_ray(ray, 30.);
         // info!("ray_cast");
 
-        // 计算射线拾取
+        // perform ray picking
         for (entity, volume, _) in query.iter_mut() {
-            // 射线求交
+            // Perform ray intersection with the AABB volume
             let toi = ray_cast.aabb_intersection_at(volume);
 
-            // 刻意不在此时设置 hover，收集到所有 pick 到的 entity 发送给主线程，
-            // 由主线程决定需要 hover 的对象后再发送回对应的 entity
+            // Intentionally do not set the hover state here.
+            // Instead, collect all entities hit by the ray and send them to the main thread.
+            // The main thread will decide which entity should be hovered,
+            // and then send that info back to the appropriate entity.
             // status.hover = toi.is_some();
-            // info!("toi: {:?}, entity: {:?}", toi, entity);
             if toi.is_some() {
                 list.insert(entity, entity.to_bits());
             }
@@ -84,7 +84,7 @@ fn mouse_events_system(
             js_array.push(&JsValue::from(item));
         }
         // if app_info.is_in_worker {
-        //     send_pick_from_worker(js_array);
+        send_pick_from_worker(js_array);
         // } else {
         //     send_pick_from_rust(js_array);
         // }
@@ -102,7 +102,7 @@ fn update_active(active_info: ResMut<ActiveInfo>, mut query: Query<(Entity, &mut
     }
 }
 
-/// 构造一条相机射线
+// Construct a camera ray
 fn ray_from_screenspace(
     cursor_pos_screen: Vec2,
     camera: &Camera,
@@ -125,7 +125,7 @@ fn screen_to_world(
 ) -> Option<Vec3> {
     let ray = ray_from_screenspace(pixel_pos, camera, camera_transform);
     if let Some(ray) = ray {
-        // 射线与对像所有平面的交点
+        // Intersections between the ray and all planes of the object
         let d = ray.intersect_plane(Vec3::new(0., 0., 2.), InfinitePlane3d::new(Vec3::Z));
         if let Some(d) = d {
             return Some(ray.origin + ray.direction * d);

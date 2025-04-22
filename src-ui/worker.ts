@@ -74,11 +74,11 @@ class IronWorker {
           break;
 
         case "mousemove":
-          console.log("Mouse move event received:", data.x, data.y);
           mouse_move(this.appHandle, data.x, data.y);
           break;
 
         case "hover":
+          // only called following a sendPickFromWorker call
           // Set hover (highlight) effect
           set_hover(this.appHandle, data.list);
           break;

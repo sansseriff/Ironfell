@@ -1,5 +1,6 @@
 use crate::overlay::OverlayPlugin;
 use crate::ray_pick::RayPickPlugin;
+use crate::tracking_circle::TrackingCircle;
 use crate::{ActiveInfo, WorkerApp};
 use bevy::color::palettes::css::BLANCHED_ALMOND;
 use bevy::color::palettes::tailwind::BLUE_400;
@@ -38,6 +39,7 @@ pub(crate) fn init_app() -> WorkerApp {
         default_plugins,
         RayPickPlugin,
         OverlayPlugin,
+        TrackingCircle,
         FrameTimeDiagnosticsPlugin {
             max_history_length: MAX_HISTORY_LENGTH,
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
@@ -181,18 +183,18 @@ fn setup(
         Transform::from_xyz(0.0, -9., 18.0).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
     ));
 
-    commands.spawn((
-        Camera2d,
-        Camera {
-            order: 2,
-            clear_color: ClearColorConfig::None,
-            ..default()
-        },
-    ));
+    // commands.spawn((
+    //     Camera2d,
+    //     Camera {
+    //         order: 2,
+    //         clear_color: ClearColorConfig::None,
+    //         ..default()
+    //     },
+    // ));
 
-    commands.spawn(Sprite::from_image(
-        asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png"),
-    ));
+    // commands.spawn(Sprite::from_image(
+    //     asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png"),
+    // ));
 }
 
 fn rotate(

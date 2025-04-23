@@ -22,7 +22,7 @@ extern "C" {
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_pick_from_worker(list: js_sys::Array);
     /// 从主线程环境发送
-    pub(crate) fn send_pick_from_rust(list: js_sys::Array);
+    // pub(crate) fn send_pick_from_rust(list: js_sys::Array);
 
     /// 执行阻塞
     /// 由于 wasm 环境不支持 std::thread, 交由 js 环境代为执行

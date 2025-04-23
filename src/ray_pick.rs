@@ -2,7 +2,6 @@ use crate::{
     ActiveInfo,
     // bevy_app::{ActiveState, CurrentVolume},
     bevy_app::{ActiveState, CurrentVolume, MainCamera},
-    send_pick_from_rust,
     send_pick_from_worker,
 };
 use bevy::math::bounding::RayCast3d;
@@ -110,6 +109,7 @@ fn ray_from_screenspace(
 ) -> Option<Ray3d> {
     let mut viewport_pos = cursor_pos_screen;
     if let Some(viewport) = &camera.viewport {
+        // this does not run most (all?) of the time. Viewport is None
         viewport_pos -= viewport.physical_position.as_vec2();
     }
     camera
@@ -123,6 +123,7 @@ fn screen_to_world(
     camera: &Camera,
     camera_transform: &GlobalTransform,
 ) -> Option<Vec3> {
+    info!("pixel pos in raypick: {:?}", pixel_pos);
     let ray = ray_from_screenspace(pixel_pos, camera, camera_transform);
     if let Some(ray) = ray {
         // Intersections between the ray and all planes of the object

@@ -19,6 +19,8 @@ use rand::Rng;
 use std::f32::consts::PI;
 use std::ops::Deref;
 
+use bevy::render::view::RenderLayers;
+
 use crate::asset_reader::WebAssetPlugin;
 
 const MAX_HISTORY_LENGTH: usize = 200;
@@ -141,6 +143,7 @@ fn setup(
                     transform.with_rotation(Quat::from_rotation_x(-PI / 4.)),
                     shape,
                     ActiveState::default(),
+                    // RenderLayers::layer(1),
                 ));
             }
         }
@@ -155,6 +158,7 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(8.0, 4.0, 16.0),
+        // RenderLayers::layer(1),
     ));
 
     // ground plane
@@ -162,6 +166,7 @@ fn setup(
         Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0).subdivisions(10))),
         MeshMaterial3d(materials.add(Color::from(SILVER))),
         Transform::IDENTITY.with_rotation(Quat::from_rotation_x(PI / 2.)),
+        // RenderLayers::layer(1),
     ));
 
     commands.spawn((
@@ -181,16 +186,18 @@ fn setup(
             ..default()
         }),
         Transform::from_xyz(0.0, -9., 18.0).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
+        // RenderLayers::layer(1),
     ));
 
-    // commands.spawn((
-    //     Camera2d,
-    //     Camera {
-    //         order: 2,
-    //         clear_color: ClearColorConfig::None,
-    //         ..default()
-    //     },
-    // ));
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 2,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        RenderLayers::layer(1),
+    ));
 
     // commands.spawn(Sprite::from_image(
     //     asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png"),

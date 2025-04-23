@@ -1,9 +1,10 @@
 name: Deploy to GitHub Pages
 
 on:
-  # Runs on pushes targeting the default branch
+  # Run only when a tag is pushed
   push:
-    branches: ["master"]
+    tags:
+      - "v*" # Matches tags that start with v, like v1.0.0
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
@@ -24,6 +25,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
 
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
@@ -63,6 +67,8 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
+          # Explicitly set the name to match what deploy-pages@v4 expects
+          name: github-pages
 
   deploy:
     environment:
@@ -73,4 +79,7 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4
+        with:
+          # Explicitly specify the artifact name
+          artifact_name: github-pages

@@ -14,7 +14,7 @@ import init, {
   resize,
 } from "./wasm/ironfell.js";
 
-import wasmUrl from './wasm/ironfell_bg.wasm?url'
+// import wasmUrl from './wasm/ironfell_bg.wasm?url'
 
 class IronWorker {
   private appHandle: bigint = BigInt(0);
@@ -47,17 +47,40 @@ class IronWorker {
   private async initWasmInWorker() {
     // Load wasm file
     // await init("./wasm/ironfell_bg.wasm");
-    await init(wasmUrl);
+    // await init(wasmUrl);
 
     // Create app
-    this.appHandle = init_bevy_app();
+
 
     // Listen for messages from the main thread
     self.onmessage = async (event) => {
       let data = event.data;
       switch (data.ty) {
+
+
+        // case "dummy":
+        //   // Handle dummy message
+        //   console.log("Received dummy message from main thread");
+        //   break
+
+        case "wasmUrl":
+          // Initialize the wasm module with the provided URL
+
+          // console.log("The received wasmUrl is:", data.wasmUrl);
+          await init(data.wasmUrl);
+          // console.log("init computed for wasm module");
+          this.appHandle = init_bevy_app();
+          // console.log("App handle initialized:", this.appHandle);
+
+          // Notify the main thread that the worker is ready
+          // console.log("Sending workerIsReady message");
+          self.postMessage({ ty: "workerIsReady" });
+          break;
+
+
         case "init":
           this.offscreenCanvas = data.canvas;
+          console.log("running init of worker app window")
           this.createWorkerAppWindow(data.canvas, data.devicePixelRatio);
           break;
 
@@ -112,9 +135,6 @@ class IronWorker {
           break;
       }
     };
-
-    // Notify the main thread that the worker is ready
-    self.postMessage({ ty: "workerIsReady" });
   }
 
   private canvasResize(width: number, height: number) {

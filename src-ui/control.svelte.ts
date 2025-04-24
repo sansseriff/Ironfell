@@ -1,3 +1,5 @@
+import wasmUrl from './wasm/ironfell_bg.wasm?url'
+
 /**
  * WorkerController manages interactions with a Web Worker that runs the engine instance.
  * It handles communication, mouse events, and state management between the UI and worker.
@@ -40,6 +42,10 @@ export class WorkerController {
 
     // Set up message handling from worker
     this.worker.onmessage = this.handleWorkerMessage.bind(this);
+
+    // this.worker.postMessage({ ty: "dummy" });
+
+    this.worker.postMessage({ ty: "wasmUrl", wasmUrl: wasmUrl })
 
     this.setupVisibilityListener();
   }
@@ -195,7 +201,7 @@ export class WorkerController {
         break;
 
       case "pick":
-        // Display pick results on the webpage
+        // Display pick results on the 
         // const ele = document.getElementById("pick-list");
         // ele.innerText = data.list;
 

@@ -21,4 +21,8 @@ echo "starting copy"
 cp opt/ironfell.js src-ui/wasm/ironfell.js
 cp opt/ironfell.d.ts src-ui/wasm/ironfell.d.ts
 cp opt/ironfell_bg.wasm.d.ts src-ui/wasm/ironfell_bg.d.ts
-# cp opt/ironfell_bg.wasm src-ui/wasm/ironfell_bg.wasm
+
+
+# to run this for github pages build
+# git tag vX.X.X
+# git push origin vX.X.X

@@ -123,7 +123,7 @@ fn screen_to_world(
     camera: &Camera,
     camera_transform: &GlobalTransform,
 ) -> Option<Vec3> {
-    info!("pixel pos in raypick: {:?}", pixel_pos);
+    // info!("pixel pos in raypick: {:?}", pixel_pos);
     let ray = ray_from_screenspace(pixel_pos, camera, camera_transform);
     if let Some(ray) = ray {
         // Intersections between the ray and all planes of the object

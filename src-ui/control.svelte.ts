@@ -21,6 +21,10 @@ export class WorkerController {
 
   // Canvas reference for event handling
   private canvas: HTMLCanvasElement;
+  // Add these for throttling
+  private latestMouseX = 0;
+  private latestMouseY = 0;
+  private mouseMoveScheduled = false;
 
 
 
@@ -219,15 +223,37 @@ export class WorkerController {
    * Adds mouse event listeners to the canvas
    */
   private addMouseEventObservers() {
+    // this.canvas.addEventListener("mousemove", (event) => {
+    //   // window.blockMS(window.mousemoveBlockTime);
+    //   // Clear last pick cache before sending mouse move event to worker
+    //   this.latestPick = [];
+    //   this.worker.postMessage({
+    //     ty: "mousemove",
+    //     x: event.offsetX,
+    //     y: event.offsetY
+    //   });
+    // });
+
     this.canvas.addEventListener("mousemove", (event) => {
-      // window.blockMS(window.mousemoveBlockTime);
-      // Clear last pick cache before sending mouse move event to worker
-      this.latestPick = [];
-      this.worker.postMessage({
-        ty: "mousemove",
-        x: event.offsetX,
-        y: event.offsetY
-      });
+      // Store the latest position immediately
+      this.latestMouseX = event.offsetX;
+      this.latestMouseY = event.offsetY;
+
+      // Schedule a message post if one isn't already scheduled for this frame
+      if (!this.mouseMoveScheduled) {
+        this.mouseMoveScheduled = true;
+
+        requestAnimationFrame(() => {
+          // Clear last pick cache before sending the throttled mouse move event
+          this.latestPick = [];
+          this.worker.postMessage({
+            ty: "mousemove",
+            x: this.latestMouseX, // Send the latest stored position
+            y: this.latestMouseY
+          });
+          this.mouseMoveScheduled = false; // Ready to schedule the next frame's update
+        });
+      }
     });
 
     this.canvas.addEventListener("mousedown", (event) => {

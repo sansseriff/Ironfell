@@ -141,6 +141,7 @@ fn setup(
                     Mesh3d(mesh),
                     MeshMaterial3d(debug_material.clone()),
                     transform.with_rotation(Quat::from_rotation_x(-PI / 4.)),
+                    // .with_scale(Vec3::splat(5.0)),
                     shape,
                     ActiveState::default(),
                     // RenderLayers::layer(1),

@@ -242,7 +242,6 @@ export class WorkerController {
       // Schedule a message post if one isn't already scheduled for this frame
       if (!this.mouseMoveScheduled) {
         this.mouseMoveScheduled = true;
-
         requestAnimationFrame(() => {
           // Clear last pick cache before sending the throttled mouse move event
           this.latestPick = [];

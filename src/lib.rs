@@ -21,6 +21,10 @@ mod tracking_circle;
 mod asset_reader;
 use asset_reader::*;
 
+// mod type_registry;
+
+mod camera_controller;
+
 pub struct WorkerApp {
     pub app: App,
     /// 手动包装事件需要
@@ -75,6 +79,10 @@ pub(crate) struct ActiveInfo {
     /// with browser display refresh, mouse events will not directly call app.update(), but instead
     /// reset this counter of pending update frames
     pub remaining_frames: u32,
+    pub w_pressed: bool,
+    pub a_pressed: bool,
+    pub s_pressed: bool,
+    pub d_pressed: bool,
 }
 
 impl ActiveInfo {
@@ -87,6 +95,10 @@ impl ActiveInfo {
             is_in_worker: false,
             auto_animate: true,
             remaining_frames: 0,
+            w_pressed: false,
+            a_pressed: false,
+            s_pressed: false,
+            d_pressed: false,
         }
     }
 }

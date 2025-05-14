@@ -26,7 +26,14 @@ export class WorkerController {
   private latestMouseY = 0;
   private mouseMoveScheduled = false;
 
+  // Add these methods to send key events
+  public sendKeyDown(key: string) {
+    this.worker.postMessage({ ty: "keydown", key });
+  }
 
+  public sendKeyUp(key: string) {
+    this.worker.postMessage({ ty: "keyup", key });
+  }
 
   /**
    * Creates a new WorkerController instance

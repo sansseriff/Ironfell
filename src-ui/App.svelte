@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { WorkerController } from "./control.svelte";
 
   let show_loading = $state(false);
@@ -38,7 +38,36 @@
   // No longer auto-launching on mount
   onMount(() => {
     launch();
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
   });
+
+  onDestroy(() => {
+    window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("keyup", handleKeyUp);
+    // Optional: Clean up controller if necessary
+    // if (controller) {
+    //   controller.dispose(); // Assuming a dispose method if needed
+    // }
+  });
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (
+      controller &&
+      ["w", "a", "s", "d", "W", "A", "S", "D"].includes(event.key)
+    ) {
+      controller.sendKeyDown(event.key.toLowerCase());
+    }
+  }
+
+  function handleKeyUp(event: KeyboardEvent) {
+    if (
+      controller &&
+      ["w", "a", "s", "d", "W", "A", "S", "D"].includes(event.key)
+    ) {
+      controller.sendKeyUp(event.key.toLowerCase());
+    }
+  }
 
   function resize({ width = 0, height = 0 }) {
     if (controller) {
@@ -60,7 +89,7 @@
     bind:clientHeight={null, (v) => resize({ width: 0, height: v })}
     id="container"
   >
-    <canvas id="worker-canvas" raw-window-handle="1"></canvas>
+    <canvas id="worker-canvas" raw-window-handle="1" tabindex="0"></canvas>
   </div>
 </div>
 
@@ -124,14 +153,7 @@
     display: flex; /* Use flexbox to control the canvas */
   }
 
-  #loading {
-    position: absolute;
-    top: 0;
-    left: 0;
-    background-color: rgba(255, 148, 148, 0.8);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+  canvas:focus {
+    outline: none; /* Optional: remove default focus outline if desired, or style it */
   }
 </style>

@@ -33,6 +33,8 @@ pub fn create_canvas_window(app: &mut App) {
         .remove_non_send_resource::<ViewObj>()
         .unwrap();
 
+    // see the similarity to https://nickb.dev/blog/a-bevy-app-entirely-off-the-main-thread/#fn:11
+
     let mut create_window_system_state: SystemState<(
         Commands,
         Query<(Entity, &mut Window), Added<Window>>,

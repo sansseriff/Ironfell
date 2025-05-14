@@ -12,6 +12,8 @@ import init, {
   set_selection,
   set_auto_animation,
   resize,
+  key_down, // Add new FFI function
+  key_up,   // Add new FFI function
 } from "./wasm/ironfell.js";
 
 // import wasmUrl from './wasm/ironfell_bg.wasm?url'
@@ -100,6 +102,7 @@ class IronWorker {
           mouse_move(this.appHandle, data.x, data.y);
           break;
 
+
         case "hover":
           // only called following a sendPickFromWorker call
           // Set hover (highlight) effect
@@ -130,6 +133,29 @@ class IronWorker {
         case "resize":
           this.canvasResize(data.width, data.height);
           break;
+
+        case "keydown": // Handle keydown event
+          if (this.appHandle !== BigInt(0)) {
+            console.log("Key down event received:", data.key);
+            key_down(this.appHandle, data.key);
+          }
+          break;
+
+        case "keyup": // Handle keyup event
+          if (this.appHandle !== BigInt(0)) {
+            key_up(this.appHandle, data.key);
+          }
+          break;
+
+        case "get_component_value":
+        // pass
+
+
+        case "set_component_value":
+
+
+        case "get_type_registry":
+
 
         default:
           break;

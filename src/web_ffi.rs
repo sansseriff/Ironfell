@@ -7,7 +7,20 @@ use bevy::prelude::*;
 use js_sys::BigInt;
 use wasm_bindgen::prelude::*;
 
-use bevy::{prelude::*, window::WindowResized};
+// Import Bevy's input types that your FFI functions will create events for
+use bevy::input::{
+    ButtonState,                                                       // Added ButtonState
+    keyboard::{Key, KeyCode as BevyKeyCode, KeyboardInput, NativeKey}, // Added Key, BevyKeyCode, KeyboardInput, NativeKey
+    mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
+};
+use bevy::window::{CursorMoved, WindowResized}; // CursorMoved is used in mouse_move
+
+// pub struct MyMouseWheelEvent {
+//     pub delta_x: f32,
+//     pub delta_y: f32,
+//     pub unit: MouseScrollUnit,
+// }
+// impl Event for MyMouseWheelEvent {}
 
 #[wasm_bindgen]
 extern "C" {
@@ -93,6 +106,7 @@ pub fn is_preparation_completed(ptr: u64) -> u32 {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
 
     // Creating device/queue is asynchronous, completion timing is uncertain
+    // once the plugins are ready and loaded, then
     if app.plugins_state() == PluginsState::Ready {
         app.finish();
         app.cleanup();
@@ -125,6 +139,31 @@ pub fn mouse_move(ptr: u64, x: f32, y: f32) {
     active_info.remaining_frames = 10;
 }
 
+/// Receives mouse wheel events from JavaScript and sends Bevy's MouseWheel event.
+#[wasm_bindgen]
+pub fn mouse_wheel(ptr: u64, delta_x: f32, delta_y: f32, delta_mode: u32) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+
+    let unit = match delta_mode {
+        0 => MouseScrollUnit::Pixel, // DOM_DELTA_PIXEL
+        1 => MouseScrollUnit::Line,  // DOM_DELTA_LINE
+        2 => MouseScrollUnit::Line,  // DOM_DELTA_PAGE (treat as lines for simplicity)
+        _ => MouseScrollUnit::Line,
+    };
+
+    let event = MouseWheel {
+        // This event is read by Bevy's accumulate_mouse_scroll_system
+        unit,
+        x: delta_x,
+        y: delta_y,
+        window: app.window,
+    };
+    app.world_mut().send_event(event);
+
+    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    active_info.remaining_frames = 10;
+}
+
 #[wasm_bindgen]
 pub fn resize(ptr: u64, width: f32, height: f32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
@@ -137,18 +176,33 @@ pub fn resize(ptr: u64, width: f32, height: f32) {
 pub fn left_bt_down(ptr: u64, obj: JsValue, x: f32, y: f32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     let position = app.to_physical_size(x, y);
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    let window_entity = app.window; // Read app.window before active_info gets its borrow
 
-    let value = bigint_to_u64(obj);
-    if let Ok(v) = value {
-        let entity = Entity::from_bits(v);
-        active_info.drag = entity;
-        active_info.last_drag_pos = position;
-        // 当前要 drap 的对象同时也是 selection 对象
-        let mut map: HashMap<Entity, u64> = HashMap::default();
-        map.insert(entity, 0);
-        active_info.selection = map;
-    }
+    // Scope for the first set of operations involving active_info
+    {
+        let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+        let value = bigint_to_u64(obj);
+        if let Ok(v) = value {
+            let entity = Entity::from_bits(v);
+            active_info.drag = entity;
+            active_info.last_drag_pos = position;
+            // 当前要 drap 的对象同时也是 selection 对象
+            let mut map: HashMap<Entity, u64> = HashMap::default();
+            map.insert(entity, 0);
+            active_info.selection = map;
+        }
+    } // active_info goes out of scope here, releasing its mutable borrow of app.world
+
+    // Send Bevy MouseButtonInput event
+    let event = MouseButtonInput {
+        button: MouseButton::Left,
+        state: ButtonState::Pressed,
+        window: window_entity, // Use the stored window_entity
+    };
+    app.world_mut().send_event(event); // This is a new mutable borrow of app.world, which is fine now
+
+    // If you need to modify active_info again, get it again
+    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
     active_info.remaining_frames = 10;
 }
 
@@ -156,9 +210,50 @@ pub fn left_bt_down(ptr: u64, obj: JsValue, x: f32, y: f32) {
 #[wasm_bindgen]
 pub fn left_bt_up(ptr: u64) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-    active_info.drag = Entity::PLACEHOLDER;
 
+    {
+        let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+        active_info.drag = Entity::PLACEHOLDER;
+    }
+
+    // Send Bevy MouseButtonInput event
+    let event = MouseButtonInput {
+        button: MouseButton::Left,
+        state: ButtonState::Released,
+        window: app.window,
+    };
+    app.world_mut().send_event(event);
+
+    // If you need to modify active_info again, get it again
+    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    active_info.remaining_frames = 10;
+}
+
+/// 鼠标右键按下
+#[wasm_bindgen]
+pub fn right_bt_down(ptr: u64) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let event = MouseButtonInput {
+        button: MouseButton::Right,
+        state: ButtonState::Pressed,
+        window: app.window,
+    };
+    app.world_mut().send_event(event);
+    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    active_info.remaining_frames = 10;
+}
+
+/// 鼠标右键松开
+#[wasm_bindgen]
+pub fn right_bt_up(ptr: u64) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let event = MouseButtonInput {
+        button: MouseButton::Right,
+        state: ButtonState::Released,
+        window: app.window,
+    };
+    app.world_mut().send_event(event);
+    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
     active_info.remaining_frames = 10;
 }
 
@@ -198,6 +293,83 @@ pub fn set_auto_animation(ptr: u64, needs_animate: u32) {
     active_info.auto_animate = needs_animate > 0;
 }
 
+fn map_key_str_to_bevy_key(key_str: &str) -> Option<(BevyKeyCode, Key)> {
+    // This is a simplified mapping. A more comprehensive one might be needed.
+    // The `Key` (logical key) part can be more complex depending on desired behavior.
+    match key_str.to_lowercase().as_str() {
+        "w" => Some((BevyKeyCode::KeyW, Key::Character("w".into()))),
+        "a" => Some((BevyKeyCode::KeyA, Key::Character("a".into()))),
+        "s" => Some((BevyKeyCode::KeyS, Key::Character("s".into()))),
+        "d" => Some((BevyKeyCode::KeyD, Key::Character("d".into()))),
+        "g" => Some((BevyKeyCode::KeyG, Key::Character("g".into()))),
+        " " | "space" => Some((BevyKeyCode::Space, Key::Space)),
+        "shift" | "shiftleft" => Some((BevyKeyCode::ShiftLeft, Key::Shift)), // Assuming ShiftLeft
+        "control" | "controlleft" => Some((BevyKeyCode::ControlLeft, Key::Control)), // Assuming ControlLeft
+        // Add more mappings as needed
+        _ => None,
+    }
+}
+
+/// Handle key down event
+#[wasm_bindgen]
+pub fn key_down(ptr: u64, key: String) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+
+    if let Some((bevy_key_code, logical_key)) = map_key_str_to_bevy_key(&key) {
+        let event = KeyboardInput {
+            key_code: bevy_key_code,
+            logical_key,
+            text: None,
+            state: ButtonState::Pressed,
+            window: app.window,
+            repeat: false,
+        };
+
+        info!("sending key event: {:?}", event);
+        app.world_mut().send_event(event);
+    }
+
+    // Original ActiveInfo update (can be removed if camera controller fully relies on ButtonInput)
+    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    match key.as_str() {
+        "w" => active_info.w_pressed = true,
+        "a" => active_info.a_pressed = true,
+        "s" => active_info.s_pressed = true,
+        "d" => active_info.d_pressed = true,
+        _ => {}
+    }
+    active_info.remaining_frames = 10; // Ensure re-render
+}
+
+/// Handle key up event
+#[wasm_bindgen]
+pub fn key_up(ptr: u64, key: String) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+
+    if let Some((bevy_key_code, logical_key)) = map_key_str_to_bevy_key(&key) {
+        let event = KeyboardInput {
+            key_code: bevy_key_code,
+            logical_key,
+            state: ButtonState::Released,
+            window: app.window,
+            text: None,
+            repeat: false,
+        };
+        app.world_mut().send_event(event);
+    }
+
+    // Original ActiveInfo update (can be removed if camera controller fully relies on ButtonInput)
+    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    match key.as_str() {
+        "w" => active_info.w_pressed = false,
+        "a" => active_info.a_pressed = false,
+        "s" => active_info.s_pressed = false,
+        "d" => active_info.d_pressed = false,
+        _ => {}
+    }
+    active_info.remaining_frames = 10; // Ensure re-render
+}
+
 /// Frame rendering
 ///
 /// When render is running in a worker, the main thread may post a rendering message
@@ -209,37 +381,46 @@ pub fn set_auto_animation(ptr: u64, needs_animate: u32) {
 pub fn enter_frame(ptr: u64) {
     // 获取到指针指代的 Rust 对象的可变借用
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    // {
-    //     // Check conditions for executing frame rendering
-    //     let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-    //     if !active_info.auto_animate && active_info.remaining_frames == 0 {
-    //         return;
-    //     }
-    //     if active_info.remaining_frames > 0 {
-    //         active_info.remaining_frames -= 1;
-    //     }
-    // }
+    {
+        // Check conditions for executing frame rendering
+        let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+        if !active_info.auto_animate && active_info.remaining_frames == 0 {
+            return;
+        }
+        if active_info.remaining_frames > 0 {
+            active_info.remaining_frames -= 1;
+        }
+    }
 
-    // if app.plugins_state() != PluginsState::Cleaned {
-    //     if app.plugins_state() != PluginsState::Ready {
-    //         // #[cfg(not(target_arch = "wasm32"))]
-    //         // tick_global_task_pools_on_main_thread();
-    //     } else {
-    //         app.finish();
-    //         app.cleanup();
-    //     }
-    // } else {
-    // 模拟阻塞
-    // let active_info = app.world().get_resource::<ActiveInfo>().unwrap();
-    // if active_info.is_in_worker {
-    //     block_from_worker();
-    // } else {
-    //     block_from_rust();
-    // }
+    if app.plugins_state() != PluginsState::Cleaned {
+        if app.plugins_state() != PluginsState::Ready {
+            // #[cfg(not(target_arch = "wasm32"))]
+            // tick_global_task_pools_on_main_thread();
+        } else {
+            app.finish();
+            app.cleanup();
+        }
+    } else {
+        // 模拟阻塞
+        let active_info = app.world().get_resource::<ActiveInfo>().unwrap();
+        if active_info.is_in_worker {
+            block_from_worker();
+        } else {
+            block_from_rust();
+        }
 
-    app.update();
-    // }
+        app.update();
+    }
 }
+
+// TODO
+// #[wasm_bindgen]
+// process_reflection_command(command_json: &str)
+// to be written
+// should tke in a BrpRequest
+// process it to get the command
+
+// execute the command
 
 // 释放 engine 实例
 #[wasm_bindgen]

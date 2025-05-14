@@ -1,10 +1,13 @@
+use crate::camera_controller::{CameraController, CameraControllerPlugin};
 use crate::overlay::OverlayPlugin;
 use crate::ray_pick::RayPickPlugin;
 use crate::tracking_circle::TrackingCircle;
 use crate::{ActiveInfo, WorkerApp};
 use bevy::color::palettes::css::BLANCHED_ALMOND;
 use bevy::color::palettes::tailwind::BLUE_400;
+
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::math::VectorSpace;
 use bevy::render::camera::ScalingMode;
 use bevy::{
     color::palettes::basic::{AQUA, LIME, SILVER},
@@ -19,9 +22,14 @@ use rand::Rng;
 use std::f32::consts::PI;
 use std::ops::Deref;
 
+use bevy::math::{cubic_splines::*, vec2};
+
 use bevy::render::view::RenderLayers;
 
 use crate::asset_reader::WebAssetPlugin;
+
+use bevy::input::mouse::MouseScrollUnit; // Ensure this is imported if used by AccumulatedCustomScroll
+use bevy::window::CursorMoved; // Ensure this is imported for accumulate_cursor_delta_system
 
 const MAX_HISTORY_LENGTH: usize = 200;
 
@@ -46,11 +54,21 @@ pub(crate) fn init_app() -> WorkerApp {
             max_history_length: MAX_HISTORY_LENGTH,
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
         },
-        // LogDiagnosticsPlugin::default(),
+        CameraControllerPlugin, // LogDiagnosticsPlugin::default(),
     ));
+
+    app.init_resource::<AccumulatedCursorDelta>();
+    app.init_resource::<AccumulatedScroll>();
 
     app.add_systems(Startup, setup)
         .add_systems(Update, (rotate, update_aabbes))
+        .add_systems(
+            PreUpdate,
+            (
+                accumulate_cursor_delta_system,
+                accumulate_custom_scroll_system,
+            ),
+        ) // Added accumulate_custom_scroll_system
         .add_systems(PostUpdate, render_active_shapes);
 
     WorkerApp::new(app)
@@ -81,7 +99,37 @@ impl ActiveState {
     }
 }
 
+#[derive(Resource, Debug, Default, Clone, Copy)]
+pub struct AccumulatedCursorDelta {
+    // This is already pub
+    pub delta: Vec2,
+    last_position: Option<Vec2>,
+}
+
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct AccumulatedScroll {
+    // This is already pub
+    pub delta: Vec2,
+    pub unit: MouseScrollUnit,
+}
+
+// Manually implement Default
+impl Default for AccumulatedScroll {
+    fn default() -> Self {
+        Self {
+            delta: Vec2::ZERO,
+            unit: MouseScrollUnit::Line, // Or MouseScrollUnit::Pixel, choose a sensible default
+        }
+    }
+}
+
 const X_EXTENT: f32 = 13.0;
+
+trait CurveColor: VectorSpace + Into<Color> + Send + Sync + 'static {}
+impl<T: VectorSpace + Into<Color> + Send + Sync + 'static> CurveColor for T {}
+
+#[derive(Debug, Component)]
+struct Curve<T: CurveColor>(CubicCurve<T>);
 
 fn setup(
     mut commands: Commands,
@@ -150,6 +198,20 @@ fn setup(
         }
     }
 
+    // this was my unfinished bezier curve experiment
+    // let points = [[
+    //     vec2(-1.0, -20.0),
+    //     vec2(3.0, 2.0),
+    //     vec2(5.0, 3.0),
+    //     vec2(9.0, 8.0),
+    // ]];
+
+    // commands.spawn((
+    //     Sprite::sized(Vec2::new(75., 75.)),
+    //     Transform::from_xyz(0., 0.0, 0.),
+    //     Curve(CubicBezier::new(points).to_curve().unwrap()),
+    // ));
+
     commands.spawn((
         PointLight {
             shadows_enabled: true,
@@ -179,6 +241,7 @@ fn setup(
             clear_color: ClearColorConfig::None,
             ..default()
         },
+        CameraController::default(),
         MainCamera,
         Projection::Perspective(PerspectiveProjection {
             fov: 60.0_f32.to_radians(),
@@ -305,5 +368,34 @@ fn update_aabbes(
             Shape::Box(b) => b.aabb_3d(Isometry3d::new(translation, rotation)),
         };
         commands.entity(entity).insert(CurrentVolume(aabb));
+    }
+}
+
+// System to populate AccumulatedCursorDelta (from previous suggestion)
+fn accumulate_cursor_delta_system(
+    mut cursor_moved_events: EventReader<CursorMoved>,
+    mut accumulated_delta: ResMut<AccumulatedCursorDelta>,
+) {
+    accumulated_delta.delta = Vec2::ZERO;
+    for event in cursor_moved_events.read() {
+        if let Some(last_pos) = accumulated_delta.last_position {
+            let current_delta = event.position - last_pos;
+            accumulated_delta.delta += current_delta;
+        }
+        accumulated_delta.last_position = Some(event.position);
+    }
+}
+
+// If you have a system for AccumulatedScroll, it would look like this:
+fn accumulate_custom_scroll_system(
+    mut scroll_events: EventReader<bevy::input::mouse::MouseWheel>, // Or your custom event
+    mut accumulated_scroll: ResMut<AccumulatedScroll>,
+) {
+    accumulated_scroll.delta = Vec2::ZERO;
+    // Logic to populate accumulated_scroll.delta and accumulated_scroll.unit
+    // For example, if using Bevy's MouseWheel event:
+    for event in scroll_events.read() {
+        accumulated_scroll.delta += Vec2::new(event.x, event.y);
+        accumulated_scroll.unit = event.unit; // This might overwrite if units differ in one frame
     }
 }

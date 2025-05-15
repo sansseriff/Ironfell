@@ -87,10 +87,10 @@ impl Default for CameraController {
             key_left: KeyCode::KeyA,
             key_right: KeyCode::KeyD,
             key_up: KeyCode::Space,
-            key_down: KeyCode::ShiftLeft,
-            key_run: KeyCode::ControlLeft,
+            key_down: KeyCode::KeyX,
+            key_run: KeyCode::ShiftLeft,
             mouse_key_cursor_grab: MouseButton::Right,
-            keyboard_key_toggle_cursor_grab: KeyCode::KeyG,
+            keyboard_key_toggle_cursor_grab: KeyCode::KeyF,
         }
     }
 }

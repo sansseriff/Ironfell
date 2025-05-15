@@ -302,6 +302,7 @@ fn map_key_str_to_bevy_key(key_str: &str) -> Option<(BevyKeyCode, Key)> {
         "s" => Some((BevyKeyCode::KeyS, Key::Character("s".into()))),
         "d" => Some((BevyKeyCode::KeyD, Key::Character("d".into()))),
         "g" => Some((BevyKeyCode::KeyG, Key::Character("g".into()))),
+        "f" => Some((BevyKeyCode::KeyF, Key::Character("f".into()))),
         " " | "space" => Some((BevyKeyCode::Space, Key::Space)),
         "shift" | "shiftleft" => Some((BevyKeyCode::ShiftLeft, Key::Shift)), // Assuming ShiftLeft
         "control" | "controlleft" => Some((BevyKeyCode::ControlLeft, Key::Control)), // Assuming ControlLeft
@@ -325,7 +326,7 @@ pub fn key_down(ptr: u64, key: String) {
             repeat: false,
         };
 
-        info!("sending key event: {:?}", event);
+        // info!("sending key event: {:?}", event);
         app.world_mut().send_event(event);
     }
 
@@ -381,36 +382,36 @@ pub fn key_up(ptr: u64, key: String) {
 pub fn enter_frame(ptr: u64) {
     // 获取到指针指代的 Rust 对象的可变借用
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    {
-        // Check conditions for executing frame rendering
-        let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-        if !active_info.auto_animate && active_info.remaining_frames == 0 {
-            return;
-        }
-        if active_info.remaining_frames > 0 {
-            active_info.remaining_frames -= 1;
-        }
-    }
+    // {
+    //     // Check conditions for executing frame rendering
+    //     let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    //     if !active_info.auto_animate && active_info.remaining_frames == 0 {
+    //         return;
+    //     }
+    //     if active_info.remaining_frames > 0 {
+    //         active_info.remaining_frames -= 1;
+    //     }
+    // }
 
-    if app.plugins_state() != PluginsState::Cleaned {
-        if app.plugins_state() != PluginsState::Ready {
-            // #[cfg(not(target_arch = "wasm32"))]
-            // tick_global_task_pools_on_main_thread();
-        } else {
-            app.finish();
-            app.cleanup();
-        }
-    } else {
-        // 模拟阻塞
-        let active_info = app.world().get_resource::<ActiveInfo>().unwrap();
-        if active_info.is_in_worker {
-            block_from_worker();
-        } else {
-            block_from_rust();
-        }
+    // if app.plugins_state() != PluginsState::Cleaned {
+    //     if app.plugins_state() != PluginsState::Ready {
+    //         // #[cfg(not(target_arch = "wasm32"))]
+    //         // tick_global_task_pools_on_main_thread();
+    //     } else {
+    //         app.finish();
+    //         app.cleanup();
+    //     }
+    // } else {
+    //     // 模拟阻塞
+    //     let active_info = app.world().get_resource::<ActiveInfo>().unwrap();
+    //     if active_info.is_in_worker {
+    //         block_from_worker();
+    //     } else {
+    //         block_from_rust();
+    //     }
 
-        app.update();
-    }
+    app.update();
+    // }
 }
 
 // TODO

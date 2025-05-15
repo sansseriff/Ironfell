@@ -1,5 +1,9 @@
 import wasmUrl from './wasm/ironfell_bg.wasm?url'
 
+
+const OVERRIDE_SCALE = true;
+const OVERRIDE_SCALE_FACTOR = 2;
+
 /**
  * WorkerController manages interactions with a Web Worker that runs the engine instance.
  * It handles communication, mouse events, and state management between the UI and worker.
@@ -25,6 +29,9 @@ export class WorkerController {
   private latestMouseX = 0;
   private latestMouseY = 0;
   private mouseMoveScheduled = false;
+
+
+
 
   // Add these methods to send key events
   public sendKeyDown(key: string) {
@@ -121,6 +128,33 @@ export class WorkerController {
     }
   }
 
+
+  public handleKeyDown = (event: KeyboardEvent) => {
+    if (
+      [
+        "w", "a", "s", "d", "f",
+        "W", "A", "S", "D", "F",
+        "shift", "g",
+        "Shift", "G",
+      ].includes(event.key)
+    ) {
+      this.worker.postMessage({ ty: "keydown", key: event.key.toLowerCase() });
+    }
+  }
+
+  public handleKeyUp = (event: KeyboardEvent) => {
+    if (
+      [
+        "w", "a", "s", "d", "f",
+        "W", "A", "S", "D", "F",
+        "shift", "g",
+        "Shift", "G",
+      ].includes(event.key)
+    ) {
+      this.worker.postMessage({ ty: "keyup", key: event.key.toLowerCase() });
+    }
+  }
+
   /**
    * Waits for the worker to signal it's ready
    */
@@ -154,8 +188,8 @@ export class WorkerController {
   }
 
   public requestCanvasResize(width: number, height: number) {
-    const devicePixelRatio = window.devicePixelRatio;
-    // console.log("width:", width, "height:", height);
+
+    const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
 
     if (width != 0) {
@@ -181,7 +215,8 @@ export class WorkerController {
 
   public resizeCanvas() {
     const rect = this.canvas.getBoundingClientRect();
-    const devicePixelRatio = window.devicePixelRatio;
+
+    const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
     console.log("Canvas dimensions:", rect.width, "×", rect.height);
     console.log("Device pixel ratio:", devicePixelRatio);
@@ -243,8 +278,11 @@ export class WorkerController {
 
     this.canvas.addEventListener("mousemove", (event) => {
       // Store the latest position immediately
-      this.latestMouseX = event.offsetX;
-      this.latestMouseY = event.offsetY;
+
+      const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
+
+      this.latestMouseX = event.offsetX * devicePixelRatio / 2;
+      this.latestMouseY = event.offsetY * devicePixelRatio / 2;
 
       // Schedule a message post if one isn't already scheduled for this frame
       if (!this.mouseMoveScheduled) {

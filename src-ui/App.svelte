@@ -38,36 +38,18 @@
   // No longer auto-launching on mount
   onMount(() => {
     launch();
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("keydown", controller.handleKeyDown);
+    window.addEventListener("keyup", controller.handleKeyUp);
   });
 
   onDestroy(() => {
-    window.removeEventListener("keydown", handleKeyDown);
-    window.removeEventListener("keyup", handleKeyUp);
+    window.removeEventListener("keydown", controller.handleKeyDown);
+    window.removeEventListener("keyup", controller.handleKeyUp);
     // Optional: Clean up controller if necessary
     // if (controller) {
     //   controller.dispose(); // Assuming a dispose method if needed
     // }
   });
-
-  function handleKeyDown(event: KeyboardEvent) {
-    if (
-      controller &&
-      ["w", "a", "s", "d", "W", "A", "S", "D"].includes(event.key)
-    ) {
-      controller.sendKeyDown(event.key.toLowerCase());
-    }
-  }
-
-  function handleKeyUp(event: KeyboardEvent) {
-    if (
-      controller &&
-      ["w", "a", "s", "d", "W", "A", "S", "D"].includes(event.key)
-    ) {
-      controller.sendKeyUp(event.key.toLowerCase());
-    }
-  }
 
   function resize({ width = 0, height = 0 }) {
     if (controller) {

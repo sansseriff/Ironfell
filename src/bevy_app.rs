@@ -44,6 +44,9 @@ pub(crate) fn init_app() -> WorkerApp {
         }),
         ..default()
     });
+
+    app.insert_resource(ClearColor(Color::srgb(0.97, 0.97, 0.97)));
+
     app.add_plugins((
         WebAssetPlugin::default(),
         default_plugins,
@@ -228,7 +231,7 @@ fn setup(
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0).subdivisions(10))),
         MeshMaterial3d(materials.add(Color::from(SILVER))),
-        Transform::IDENTITY.with_rotation(Quat::from_rotation_x(PI / 2.)),
+        // Transform::IDENTITY.with_rotation(Quat::from_rotation_x(PI / 2.)),
         // RenderLayers::layer(1),
     ));
 
@@ -238,7 +241,7 @@ fn setup(
             // renders after / on top of the main camera
             order: 1,
             // don't clear the color while rendering this camera
-            clear_color: ClearColorConfig::None,
+            clear_color: ClearColorConfig::Default,
             ..default()
         },
         CameraController::default(),
@@ -249,7 +252,7 @@ fn setup(
             far: 1000.0,
             ..default()
         }),
-        Transform::from_xyz(0.0, -9., 18.0).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
+        Transform::from_xyz(0.0, 18., -18.).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
         // RenderLayers::layer(1),
     ));
 

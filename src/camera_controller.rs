@@ -19,7 +19,7 @@
 //! - **Control**: Toggle run mode for faster movement.
 //! - **Mouse Movement**: Look around.
 //! - **Right Mouse Button**: Grab/Release the cursor.
-//! - **G**: Toggle cursor grab mode.
+//! - **F**: Toggle cursor grab mode.
 //! - **Scroll Wheel**: Adjust movement speed.
 //!
 //! # Configuration
@@ -43,7 +43,7 @@ use std::{f32::consts::*, fmt};
 // Import your custom accumulator resource for cursor delta from bevy_app
 use crate::bevy_app::AccumulatedScroll; // Removed AccumulatedCursorDelta
 
-const RADIANS_PER_DOT: f32 = 1.0 / 180.0;
+const RADIANS_PER_DOT: f32 = 0.35 / 180.0;
 
 /// A component for controlling a camera with free-look and movement.
 #[derive(Component, Debug, Clone, Copy)]

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { WorkerController } from "./control.svelte";
+  import SplitPane from "./lib/SplitPane5.svelte";
 
   let show_loading = $state(false);
   let controller: WorkerController;
@@ -58,26 +59,47 @@
   }
 </script>
 
-<div id="app-container">
-  {#if show_loading}
-    <div id="loading">
-      <div class="spinner"></div>
-      <p>Loading...</p>
-    </div>
-  {/if}
+{#snippet a()}
+  <section style="background: white">
+    <!---->
+    <!-- <KonvaTest></KonvaTest> -->
 
-  <div
-    bind:clientWidth={null, (v) => resize({ width: v, height: 0 })}
-    bind:clientHeight={null, (v) => resize({ width: 0, height: v })}
-    id="container"
-  >
-    <canvas id="worker-canvas" raw-window-handle="1" tabindex="0"></canvas>
+    Writing Area
+  </section>
+{/snippet}
+
+{#snippet b()}
+  <div id="app-container">
+    {#if show_loading}
+      <div id="loading">
+        <div class="spinner"></div>
+        <p>Loading...</p>
+      </div>
+    {/if}
+
+    <div
+      bind:clientWidth={null, (v) => resize({ width: v, height: 0 })}
+      bind:clientHeight={null, (v) => resize({ width: 0, height: v })}
+      id="container"
+    >
+      <canvas id="worker-canvas" raw-window-handle="1" tabindex="0"></canvas>
+    </div>
   </div>
-</div>
+{/snippet}
+
+<SplitPane
+  orientation="horizontal"
+  min="25%"
+  max="75%"
+  pos="30%"
+  --color="black"
+  {a}
+  {b}
+></SplitPane>
 
 <style>
   canvas {
-    border: #ff5a5a 2px solid;
+    /* border: #ff5a5a 2px solid; */
     width: 100%;
     height: 100%;
     display: block; /* Ensure it behaves as a block */

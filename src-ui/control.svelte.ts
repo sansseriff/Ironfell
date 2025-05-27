@@ -1,8 +1,8 @@
 import wasmUrl from './wasm/ironfell_bg.wasm?url'
 
 
-const OVERRIDE_SCALE = true;
-const OVERRIDE_SCALE_FACTOR = 2;
+const OVERRIDE_SCALE = false;
+const OVERRIDE_SCALE_FACTOR = 1;
 
 /**
  * WorkerController manages interactions with a Web Worker that runs the engine instance.
@@ -204,6 +204,8 @@ export class WorkerController {
       this.canvas.style.width = this.width + "px";
       this.canvas.style.height = this.height + "px";
 
+
+      console.log("Resizing to canvas to:", this.width * devicePixelRatio, "×", this.height * devicePixelRatio);
       this.worker.postMessage({
         ty: "resize",
         width: this.width * devicePixelRatio,

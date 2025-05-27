@@ -19,6 +19,7 @@
     a: Snippet;
     b: Snippet;
     onWindowChange?: ChangeFunction;
+    onResize?: () => void; // Add new resize notification callback
   }
 
   type ChangeFunction = () => any;
@@ -32,6 +33,7 @@
     disabled = false,
     priority = "min",
     onWindowChange,
+    onResize, // Add new prop
     a,
     b,
   }: Props = $props();
@@ -72,14 +74,26 @@
   let w = $state(0);
   let h = $state(0);
 
-  //   onMount(() => {
+  onMount(() => {
+    // Notify parent when split pane is fully mounted
+    if (onResize) {
+      onResize();
+    }
+  });
+
   let validated_position = $derived.by(() => {
     if (container) {
       const size = orientation === "horizontal" ? w : h;
       return constrain(container, size, min, max, position, priority);
     }
   });
-  //   });
+
+  $effect(() => {
+    // When validated position changes, notify parent component
+    if (validated_position && onResize) {
+      onResize();
+    }
+  });
 
   // $: position = pos;
 
@@ -106,6 +120,11 @@
     // dispatch('change');
     if (onWindowChange) {
       onWindowChange();
+    }
+
+    // Also trigger resize notification
+    if (onResize) {
+      onResize();
     }
   }
 
@@ -165,7 +184,7 @@
 >
   <div class="pane">
     <!-- <slot name="a" /> -->
-     {@render a()}  
+    {@render a()}
   </div>
 
   <div class="pane">

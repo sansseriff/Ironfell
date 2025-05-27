@@ -1,6 +1,5 @@
 import wasmUrl from './wasm/ironfell_bg.wasm?url'
 
-
 const OVERRIDE_SCALE = false;
 const OVERRIDE_SCALE_FACTOR = 1;
 
@@ -16,31 +15,18 @@ export class WorkerController {
   height = $state(0);
 
   private initializationError: any = null;
-
-  // Latest pick result
-  private latestPick: any[] = [];
-
-  // Worker instance
   private worker: Worker;
-
-  // Canvas reference for event handling
   private canvas: HTMLCanvasElement;
-  // Add these for throttling
+
+  // Input handling properties
+  private latestPick: any[] = [];
   private latestMouseX = 0;
   private latestMouseY = 0;
   private mouseMoveScheduled = false;
 
-
-
-
-  // Add these methods to send key events
-  public sendKeyDown(key: string) {
-    this.worker.postMessage({ ty: "keydown", key });
-  }
-
-  public sendKeyUp(key: string) {
-    this.worker.postMessage({ ty: "keyup", key });
-  }
+  // Key handling with throttling
+  private pressedKeys = new Set<string>();
+  private keyUpdateScheduled = false;
 
   /**
    * Creates a new WorkerController instance
@@ -48,9 +34,6 @@ export class WorkerController {
    */
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-
-    // Resize the canvas for proper rendering
-    this.resizeCanvas();
 
     // Initialize the worker
     console.log("Initializing Web Worker...");
@@ -61,21 +44,22 @@ export class WorkerController {
     // Set up message handling from worker
     this.worker.onmessage = this.handleWorkerMessage.bind(this);
 
-    // this.worker.postMessage({ ty: "dummy" });
+    // Send the WASM URL to the worker
+    this.worker.postMessage({ ty: "wasmUrl", wasmUrl: wasmUrl });
 
-    this.worker.postMessage({ ty: "wasmUrl", wasmUrl: wasmUrl })
-
+    // Listen for tab visibility changes
     this.setupVisibilityListener();
   }
 
+  /**
+   * Sets up listener to pause rendering when tab is not visible
+   */
   private setupVisibilityListener() {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        // When tab becomes hidden, stop the rendering loop
         this.worker.postMessage({ ty: "stopRunning" });
         console.log("Tab hidden, paused rendering");
       } else {
-        // When tab becomes visible again, resume rendering
         this.worker.postMessage({ ty: "startRunning" });
         console.log("Tab visible, resumed rendering");
       }
@@ -84,18 +68,11 @@ export class WorkerController {
 
   /**
    * Checks if WebGPU is supported and initializes the worker
-   * @returns A promise that resolves when initialization is complete or rejects if WebGPU is not supported
+   * @returns A promise that resolves when initialization is complete
    */
   async initialize(): Promise<void> {
-    // Check if WebGPU is supported
-    // if (!("navigator" in window && "gpu" in navigator)) {
-    //   throw new Error("WebGPU is not supported in this browser");
-    // }
-
     try {
-      // Request a GPU adapter to confirm WebGPU support
-
-
+      // Request GPU adapter to confirm WebGPU support
       const adapter = await (navigator as any).gpu.requestAdapter();
       if (!adapter) {
         throw new Error("No appropriate GPU adapter found");
@@ -106,52 +83,57 @@ export class WorkerController {
 
       // Create offscreen canvas and transfer control to the worker
       this.transferCanvasToWorker();
-
       return;
+
     } catch (error: Error | any) {
       console.error("WebGPU initialization failed:", error);
 
-      // Capture more details about the error
-      const errorDetails = {
+      // Capture error details for debugging
+      this.initializationError = {
         message: error.message || "Unknown error",
         name: error.name,
         stack: error.stack,
-        // Additional WebGPU specific info if available
         gpuStatus: (navigator as any).gpu ? "Available" : "Not available"
       };
 
-      console.error("Error details:", errorDetails);
-
-      // You could also store this information in a property for display in the UI
-      this.initializationError = errorDetails;
       throw error;
     }
   }
 
-
+  /**
+   * Handles keyboard input with debouncing
+   */
   public handleKeyDown = (event: KeyboardEvent) => {
-    if (
-      [
-        "w", "a", "s", "d", "f",
-        "W", "A", "S", "D", "F",
-        "shift", "g",
-        "Shift", "G",
-      ].includes(event.key)
-    ) {
-      this.worker.postMessage({ ty: "keydown", key: event.key.toLowerCase() });
+    const validKeys = ["w", "a", "s", "d", "f", "shift", "g"];
+    const key = event.key.toLowerCase();
+
+    if (validKeys.includes(key)) {
+      // Add to pressed keys set
+      this.pressedKeys.add(key);
+
+      // Schedule key state update if not already scheduled
+      if (!this.keyUpdateScheduled) {
+        this.keyUpdateScheduled = true;
+        requestAnimationFrame(() => {
+          // Send all currently pressed keys
+          this.pressedKeys.forEach(key => {
+            this.worker.postMessage({ ty: "keydown", key });
+          });
+          this.keyUpdateScheduled = false;
+        });
+      }
     }
   }
 
   public handleKeyUp = (event: KeyboardEvent) => {
-    if (
-      [
-        "w", "a", "s", "d", "f",
-        "W", "A", "S", "D", "F",
-        "shift", "g",
-        "Shift", "G",
-      ].includes(event.key)
-    ) {
-      this.worker.postMessage({ ty: "keyup", key: event.key.toLowerCase() });
+    const key = event.key.toLowerCase();
+
+    // If it was in our pressed keys set
+    if (this.pressedKeys.has(key)) {
+      // Remove it from the set
+      this.pressedKeys.delete(key);
+      // Send the key up event immediately
+      this.worker.postMessage({ ty: "keyup", key });
     }
   }
 
@@ -179,7 +161,7 @@ export class WorkerController {
    */
   private transferCanvasToWorker() {
     const offscreenCanvas = this.canvas.transferControlToOffscreen();
-    const devicePixelRatio = window.devicePixelRatio;
+    const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
     this.worker.postMessage(
       { ty: "init", canvas: offscreenCanvas, devicePixelRatio },
@@ -187,59 +169,54 @@ export class WorkerController {
     );
   }
 
+  /**
+   * Requests canvas resize with proper pixel ratio scaling
+   */
   public requestCanvasResize(width: number, height: number) {
-
     const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
+    // Update stored dimensions if provided
+    if (width > 0) this.width = width;
+    if (height > 0) this.height = height;
 
-    if (width != 0) {
-      this.width = width;
-    }
-    if (height != 0) {
-      this.height = height;
-    }
-
-    if (this.width != 0 && this.height != 0) {
-      // Set the display size through CSS
-      this.canvas.style.width = this.width + "px";
-      this.canvas.style.height = this.height + "px";
-
-
-      console.log("Resizing to canvas to:", this.width * devicePixelRatio, "×", this.height * devicePixelRatio);
-      this.worker.postMessage({
-        ty: "resize",
-        width: this.width * devicePixelRatio,
-        height: this.height * devicePixelRatio
-      })
-    }
-
-  }
-
-  public resizeCanvas() {
-    const rect = this.canvas.getBoundingClientRect();
-
-    const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
-
-    console.log("Canvas dimensions:", rect.width, "×", rect.height);
-    console.log("Device pixel ratio:", devicePixelRatio);
-
-    // Set the actual canvas dimensions, accounting for device pixel ratio
-    this.canvas.width = rect.width * devicePixelRatio;
-    this.canvas.height = rect.height * devicePixelRatio;
+    // Only proceed if we have valid dimensions
+    if (this.width <= 0 || this.height <= 0) return;
 
     // Set the display size through CSS
-    this.canvas.style.width = rect.width + "px";
-    this.canvas.style.height = rect.height + "px";
+    this.canvas.style.width = this.width + "px";
+    this.canvas.style.height = this.height + "px";
 
-    console.log("Resized canvas to:", this.canvas.width, "×", this.canvas.height);
+    // Calculate physical pixels
+    const physicalWidth = Math.floor(this.width * devicePixelRatio);
+    const physicalHeight = Math.floor(this.height * devicePixelRatio);
+
+    console.log(`Resizing canvas to: ${physicalWidth} × ${physicalHeight} (CSS: ${this.width} × ${this.height})`);
+
+    // Send dimensions to worker
+    this.worker.postMessage({
+      ty: "resize",
+      width: physicalWidth,
+      height: physicalHeight
+    });
+  }
+
+  /**
+   * Legacy resize method - prefer using requestCanvasResize instead
+   */
+  public resizeCanvas() {
+    const rect = this.canvas.getBoundingClientRect();
+    console.log("Canvas bounding rect:", rect.width, "×", rect.height);
+
+    if (rect.width > 0 && rect.height > 0) {
+      this.requestCanvasResize(rect.width, rect.height);
+    }
   }
 
   /**
    * Handles messages received from the worker
    */
-  private async handleWorkerMessage(event: MessageEvent) {
+  private handleWorkerMessage(event: MessageEvent) {
     const data = event.data;
-    // window.blockMS(window.onmessageBlockTime);
 
     switch (data.ty) {
       case "workerIsReady":
@@ -249,10 +226,6 @@ export class WorkerController {
         break;
 
       case "pick":
-        // Display pick results on the 
-        // const ele = document.getElementById("pick-list");
-        // ele.innerText = data.list;
-
         this.latestPick = data.list;
         // Notify the worker which entities should have hover effects enabled
         this.worker.postMessage({ ty: "hover", list: this.latestPick });
@@ -267,41 +240,30 @@ export class WorkerController {
    * Adds mouse event listeners to the canvas
    */
   private addMouseEventObservers() {
-    // this.canvas.addEventListener("mousemove", (event) => {
-    //   // window.blockMS(window.mousemoveBlockTime);
-    //   // Clear last pick cache before sending mouse move event to worker
-    //   this.latestPick = [];
-    //   this.worker.postMessage({
-    //     ty: "mousemove",
-    //     x: event.offsetX,
-    //     y: event.offsetY
-    //   });
-    // });
-
+    // Throttled mouse move handling
     this.canvas.addEventListener("mousemove", (event) => {
-      // Store the latest position immediately
-
       const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
+      // Store the latest position
       this.latestMouseX = event.offsetX * devicePixelRatio / 2;
       this.latestMouseY = event.offsetY * devicePixelRatio / 2;
 
-      // Schedule a message post if one isn't already scheduled for this frame
+      // Schedule update on next animation frame if not already scheduled
       if (!this.mouseMoveScheduled) {
         this.mouseMoveScheduled = true;
         requestAnimationFrame(() => {
-          // Clear last pick cache before sending the throttled mouse move event
-          this.latestPick = [];
+          this.latestPick = []; // Clear last pick cache
           this.worker.postMessage({
             ty: "mousemove",
-            x: this.latestMouseX, // Send the latest stored position
+            x: this.latestMouseX,
             y: this.latestMouseY
           });
-          this.mouseMoveScheduled = false; // Ready to schedule the next frame's update
+          this.mouseMoveScheduled = false;
         });
       }
     });
 
+    // Mouse click and selection handling
     this.canvas.addEventListener("mousedown", (event) => {
       if (typeof this.latestPick[0] !== "undefined") {
         this.worker.postMessage({
@@ -326,13 +288,6 @@ export class WorkerController {
       }
     });
   }
-
-  /**
-   * Blocks worker rendering for specified time
-   */
-  // blockWorkerRender(dt: number) {
-  //   this.worker.postMessage({ ty: "blockRender", blockTime: dt });
-  // }
 
   /**
    * Starts the worker engine instance
@@ -365,5 +320,14 @@ export class WorkerController {
    */
   private setCanvasOpacity(opacity: string) {
     this.canvas.style.opacity = opacity;
+  }
+
+  /**
+   * Cleanup method for controller resources
+   */
+  public dispose() {
+    // Optional cleanup if needed
+    // Could terminate worker, remove event listeners, etc.
+    console.log("WorkerController cleanup");
   }
 }

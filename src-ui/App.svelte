@@ -107,9 +107,6 @@
 
 {#snippet a()}
   <section style="background: white">
-    <!---->
-    <!-- <KonvaTest></KonvaTest> -->
-
     Writing Area
   </section>
 {/snippet}
@@ -142,17 +139,16 @@
 
 <style>
   canvas {
-    /* border: #ff5a5a 2px solid; */
     width: 100%;
     height: 100%;
-    display: block; /* Ensure it behaves as a block */
+    display: block;
   }
 
   #app-container {
     position: relative;
     width: 100%;
     height: 100%;
-    display: flex; /* Use flexbox for better control */
+    display: flex;
     flex-direction: column;
   }
 
@@ -185,22 +181,25 @@
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(255, 148, 148, 0.8);
+    background-color: rgba(255, 255, 255, 0.8);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    font-family: Arial, sans-serif;
+    font-size: 3em;
+    color: #d9d8e7;
   }
 
   #container {
     position: relative;
     width: 100%;
     height: 100%;
-    flex: 1; /* Take up all available space */
-    display: flex; /* Use flexbox to control the canvas */
+    flex: 1;
+    display: flex;
   }
 
   canvas:focus {
-    outline: none; /* Optional: remove default focus outline if desired, or style it */
+    outline: none;
   }
 </style>

@@ -1,7 +1,7 @@
 import wasmUrl from './wasm/ironfell_bg.wasm?url'
 
 const OVERRIDE_SCALE = false;
-const OVERRIDE_SCALE_FACTOR = 1;
+const OVERRIDE_SCALE_FACTOR = 2;
 
 /**
  * WorkerController manages interactions with a Web Worker that runs the engine instance.
@@ -242,11 +242,13 @@ export class WorkerController {
   private addMouseEventObservers() {
     // Throttled mouse move handling
     this.canvas.addEventListener("mousemove", (event) => {
+
+      console.log("DEVICE PIXEL RATIO", window.devicePixelRatio);
       const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
       // Store the latest position
-      this.latestMouseX = event.offsetX * devicePixelRatio / 2;
-      this.latestMouseY = event.offsetY * devicePixelRatio / 2;
+      this.latestMouseX = event.offsetX * devicePixelRatio;
+      this.latestMouseY = event.offsetY * devicePixelRatio;
 
       // Schedule update on next animation frame if not already scheduled
       if (!this.mouseMoveScheduled) {

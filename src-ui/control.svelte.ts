@@ -244,11 +244,11 @@ export class WorkerController {
     this.canvas.addEventListener("mousemove", (event) => {
 
       console.log("DEVICE PIXEL RATIO", window.devicePixelRatio);
-      const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
+      // const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
       // Store the latest position
-      this.latestMouseX = event.offsetX * devicePixelRatio;
-      this.latestMouseY = event.offsetY * devicePixelRatio;
+      this.latestMouseX = event.offsetX;
+      this.latestMouseY = event.offsetY;
 
       // Schedule update on next animation frame if not already scheduled
       if (!this.mouseMoveScheduled) {

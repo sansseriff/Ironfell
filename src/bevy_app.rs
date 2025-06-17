@@ -86,7 +86,7 @@ enum Shape {
     // Cylinder(Cylinder),
     // None,
 }
-/// 标记是否 选中/高亮
+
 #[derive(Component, Default)]
 pub(crate) struct ActiveState {
     pub hover: bool,
@@ -161,7 +161,7 @@ fn setup(
         meshes.add(Cuboid::default()),
         meshes.add(Sphere::default().mesh().ico(1).unwrap()),
     ];
-    // 包围盒形状
+
     let shapes = [
         Shape::Box(Cuboid::from_size(Vec3::splat(1.1))),
         Shape::Box(Cuboid::from_size(Vec3::new(1., 2., 1.))),
@@ -301,7 +301,6 @@ fn rotate(
     }
 }
 
-/// 绘制 选中/高亮 包围盒
 fn render_active_shapes(mut gizmos: Gizmos, query: Query<(&Shape, &Transform, &ActiveState)>) {
     for (shape, transform, active_state) in query.iter() {
         if !active_state.is_active() {

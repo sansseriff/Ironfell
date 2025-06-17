@@ -24,8 +24,8 @@ fn add_circle(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let circle = meshes.add(Circle::new(30.0));
-    let color = Color::hsla(55.0, 0.95, 0.7, 0.3);
+    let circle = meshes.add(Annulus::new(46.0, 50.0));
+    let color = Color::hsla(198.0, 1.0, 0.14, 0.3);
 
     commands.spawn((
         Mesh2d(circle),

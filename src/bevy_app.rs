@@ -176,28 +176,31 @@ fn setup(
     let num_shapes = meshe_handles.len();
     let mut rng = rand::thread_rng();
 
-    for i in 0..(num_shapes * 1) {
-        for y in 0..(5 * 1) {
-            for z in 0..1 {
-                let index = rng.gen_range(0..num_shapes);
-                let mesh = meshe_handles[index].to_owned();
-                let shape = shapes[index].to_owned();
-                let transform = Transform::from_xyz(
-                    -X_EXTENT / 2. + i as f32 / (num_shapes - 1) as f32 * X_EXTENT / 1.0,
-                    (3.0 - y as f32) * 3.0 / 1.0 - 2.0,
-                    2. + 4.5 * z as f32,
-                );
+    let grid_size_x = num_shapes;
+    let grid_size_z = 5;
+    let spacing = 3.0;
+    let height = 1.5; // Height above ground plane
 
-                commands.spawn((
-                    Mesh3d(mesh),
-                    MeshMaterial3d(debug_material.clone()),
-                    transform.with_rotation(Quat::from_rotation_x(-PI / 4.)),
-                    // .with_scale(Vec3::splat(5.0)),
-                    shape,
-                    ActiveState::default(),
-                    // RenderLayers::layer(1),
-                ));
-            }
+    for x in 0..grid_size_x {
+        for z in 0..grid_size_z {
+            let index = rng.gen_range(0..num_shapes);
+            let mesh = meshe_handles[index].to_owned();
+            let shape = shapes[index].to_owned();
+
+            let transform = Transform::from_xyz(
+                (x as f32 - (grid_size_x - 1) as f32 / 2.0) * spacing,
+                height,
+                (z as f32 - (grid_size_z - 1) as f32 / 2.0) * spacing,
+            );
+
+            commands.spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(debug_material.clone()),
+                transform,
+                shape,
+                ActiveState::default(),
+                // RenderLayers::layer(1),
+            ));
         }
     }
 
@@ -218,12 +221,24 @@ fn setup(
     commands.spawn((
         PointLight {
             shadows_enabled: true,
-            intensity: 20_000_000.,
+            intensity: 15_000_000.,
             range: 100.0,
             shadow_depth_bias: 0.2,
             ..default()
         },
-        Transform::from_xyz(8.0, 4.0, 16.0),
+        Transform::from_xyz(8.0, 9.0, 16.0),
+        // RenderLayers::layer(1),
+    ));
+
+    commands.spawn((
+        PointLight {
+            shadows_enabled: true,
+            intensity: 5_000_000.,
+            range: 100.0,
+            shadow_depth_bias: 0.2,
+            ..default()
+        },
+        Transform::from_xyz(-8.0, 9.0, -10.0),
         // RenderLayers::layer(1),
     ));
 
@@ -252,7 +267,8 @@ fn setup(
             far: 1000.0,
             ..default()
         }),
-        Transform::from_xyz(0.0, 18., -18.).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
+        // if -z is forward, then z: 18 is behind the origin, looking at the origin
+        Transform::from_xyz(0.0, 18., 18.).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
         // RenderLayers::layer(1),
     ));
 

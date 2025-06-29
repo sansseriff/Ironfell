@@ -31,9 +31,10 @@ jobs:
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: nightly
           target: wasm32-unknown-unknown
           override: true
+          components: rust-src
 
       - name: Setup wasm-bindgen
         uses: jetli/wasm-bindgen-action@v0.2.0

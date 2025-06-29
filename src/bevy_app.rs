@@ -28,6 +28,9 @@ use bevy::render::view::RenderLayers;
 
 use crate::asset_reader::WebAssetPlugin;
 
+use bevy_remote_inspector::RemoteInspectorPlugin;
+use crate::ffi_inspector_bridge::{inspector_continuous_streaming_system, InspectorStreamingState};
+
 use bevy::input::mouse::MouseScrollUnit; // Ensure this is imported if used by AccumulatedCustomScroll
 use bevy::window::CursorMoved; // Ensure this is imported for accumulate_cursor_delta_system
 
@@ -58,13 +61,15 @@ pub(crate) fn init_app() -> WorkerApp {
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
         },
         CameraControllerPlugin, // LogDiagnosticsPlugin::default(),
+        RemoteInspectorPlugin,
     ));
 
     app.init_resource::<AccumulatedCursorDelta>();
     app.init_resource::<AccumulatedScroll>();
+    app.init_resource::<InspectorStreamingState>();
 
     app.add_systems(Startup, setup)
-        .add_systems(Update, (rotate, update_aabbes))
+        .add_systems(Update, (rotate, update_aabbes, inspector_continuous_streaming_system))
         .add_systems(
             PreUpdate,
             (

@@ -5,7 +5,7 @@ use crate::{
     send_pick_from_worker,
 };
 use bevy::math::bounding::RayCast3d;
-use bevy::platform_support::collections::HashMap;
+use bevy::platform::collections::HashMap;
 use bevy::{input::mouse::MouseWheel, prelude::*};
 use wasm_bindgen::JsValue;
 
@@ -83,6 +83,7 @@ fn mouse_events_system(
             js_array.push(&JsValue::from(item));
         }
         // if app_info.is_in_worker {
+        // this calls the javascript function in the worker thread
         send_pick_from_worker(js_array);
         // } else {
         //     send_pick_from_rust(js_array);

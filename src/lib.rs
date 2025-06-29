@@ -1,11 +1,18 @@
 use bevy::{
-    ecs::system::SystemState, platform_support::collections::HashMap, prelude::*,
+    ecs::system::SystemState, platform::collections::HashMap, prelude::*,
     window::WindowCloseRequested,
 };
 use std::ops::{Deref, DerefMut};
 
+// original web ffi module
 mod web_ffi;
 pub use web_ffi::*;
+
+// ffi module for specific to reflection, inspector features
+mod ffi_inspector_bridge;
+pub use ffi_inspector_bridge::*;
+
+// mod type_registry; // Disabled for now - used for streaming updates
 
 mod canvas_view;
 use canvas_view::*;

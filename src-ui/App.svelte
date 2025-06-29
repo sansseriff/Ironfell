@@ -51,7 +51,7 @@
     const width = rect.width;
     const height = rect.height;
 
-    console.log("Updating canvas size from container:", width, "×", height);
+    // console.log("Updating canvas size from container:", width, "×", height);
 
     if (width > 0 && height > 0) {
       resize({ width, height });
@@ -103,11 +103,62 @@
     // Push execution to the end of the event queue
     setTimeout(updateCanvasSize, 0);
   }
+
+  // Inspector test functions
+  function testSpawnEntity() {
+    if (controller && isInitialized) {
+      console.log("Testing spawn entity...");
+      controller.inspectorSpawnEntity();
+    }
+  }
+
+  function testToggleVisibility() {
+    if (controller && isInitialized) {
+      // Test with a sample entity ID - you would normally get this from the scene
+      const entityId = "4294967296"; // Example entity ID as string
+      console.log(`Testing toggle visibility for entity ${entityId}...`);
+      controller.inspectorToggleVisibility(entityId);
+    }
+  }
+
+  function testDespawnEntity() {
+    if (controller && isInitialized) {
+      // Test with a sample entity ID - you would normally get this from the scene
+      const entityId = "4294967296"; // Example entity ID as string
+      console.log(`Testing despawn entity ${entityId}...`);
+      controller.inspectorDespawnEntity(entityId);
+    }
+  }
 </script>
 
 {#snippet a()}
-  <section style="background: white">
-    Writing Area
+  <section style="background: white; padding: 20px;">
+    <h3>Inspector Controls</h3>
+
+    {#if !isInitialized}
+      <p>Launch the app to use inspector controls</p>
+      <button onclick={launch} disabled={loading_in_progress}>
+        {loading_in_progress ? "Loading..." : "Launch App"}
+      </button>
+    {:else}
+      <div
+        style="display: flex; flex-direction: column; gap: 10px; max-width: 200px;"
+      >
+        <button onclick={testSpawnEntity}>Spawn Entity</button>
+        <button onclick={testToggleVisibility}>Toggle Visibility</button>
+        <button onclick={testDespawnEntity}>Despawn Entity</button>
+      </div>
+
+      <div style="margin-top: 20px;">
+        <h4>Instructions:</h4>
+        <ul style="font-size: 12px; margin: 5px 0;">
+          <li>Spawn Entity: Creates a new empty entity</li>
+          <li>Toggle Visibility: Shows/hides an entity (uses example ID)</li>
+          <li>Despawn Entity: Removes an entity (uses example ID)</li>
+          <li>Check browser console for results</li>
+        </ul>
+      </div>
+    {/if}
   </section>
 {/snippet}
 
@@ -121,7 +172,7 @@
     {/if}
 
     <div bind:this={canvasContainer} id="container">
-      <canvas id="worker-canvas" raw-window-handle="1" tabindex="0"></canvas>
+      <canvas id="worker-canvas" tabindex="0"></canvas>
     </div>
   </div>
 {/snippet}
@@ -150,29 +201,6 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-  }
-
-  #launch-button {
-    position: absolute;
-    top: 20px;
-    left: 20px;
-    z-index: 10;
-    padding: 10px 20px;
-    background-color: #ff5a5a;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: bold;
-  }
-
-  #launch-button:hover {
-    background-color: #ff7a7a;
-  }
-
-  #launch-button:disabled {
-    background-color: #aaa;
-    cursor: not-allowed;
   }
 
   #loading {

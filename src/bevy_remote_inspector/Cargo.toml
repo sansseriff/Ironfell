@@ -1,0 +1,20 @@
+[package]
+name = "bevy_remote_inspector"
+version = "0.1.0"
+edition = "2021"
+authors = ["notmd"]
+repository = "https://github.com/notmd/bevy_remote_inspector"
+description = "A remote inspector for Bevy game engine, allowing you to inspect and modify entities in real-time."
+license = "MIT"
+
+[dependencies]
+bevy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+# bevy_remote_stream = { version = "0.1" }
+petgraph = "0.6.5"
+
+[features]
+default = ["bevy_render"]
+bevy_render = ["bevy/bevy_render"]

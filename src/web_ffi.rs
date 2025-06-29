@@ -2,7 +2,7 @@ use crate::bevy_app::init_app;
 use crate::{ActiveInfo, WorkerApp, canvas_view::*, create_canvas_window, update_canvas_windows};
 use bevy::app::PluginsState;
 use bevy::ecs::system::SystemState;
-use bevy::platform_support::collections::HashMap;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use js_sys::BigInt;
 use wasm_bindgen::prelude::*;
@@ -34,6 +34,9 @@ extern "C" {
     /// 从 worker 环境发送
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_pick_from_worker(list: js_sys::Array);
+    
+    // Inspector streaming callbacks
+    pub(crate) fn send_inspector_update_from_worker(update_json: &str);
     /// 从主线程环境发送
     // pub(crate) fn send_pick_from_rust(list: js_sys::Array);
 
@@ -44,6 +47,7 @@ extern "C" {
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn block_from_worker();
     /// 在主线程环境执行
+    /// english: Execute blocking in the main thread environment
     pub(crate) fn block_from_rust();
 }
 
@@ -56,6 +60,7 @@ pub fn init_bevy_app() -> u64 {
     info!("init_bevy_app");
 
     // 包装成无生命周期的指针
+    // english: Wrap it into a non-lifetime pointer
     Box::into_raw(Box::new(app)) as u64
 }
 
@@ -381,6 +386,7 @@ pub fn key_up(ptr: u64, key: String) {
 #[wasm_bindgen]
 pub fn enter_frame(ptr: u64) {
     // 获取到指针指代的 Rust 对象的可变借用
+    // english: Get a mutable borrow of the Rust object pointed to by the pointer
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     // {
     //     // Check conditions for executing frame rendering

@@ -1,16 +1,8 @@
-[package]
-name = "ironfell"
-description = "bringing science to life"
-authors = ["Andrew Mueller"]
-version = "0.0.1"
-edition = "2024"
-# rust-version = "1.78"
+[workspace]
+members = [".", "src/bevy_remote_inspector"]
 
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-bevy = { version = "0.16.0-rc.1", features = [
+[workspace.dependencies]
+bevy = { version = "0.16", features = [
     "std",
     "bevy_pbr",
     "bevy_gizmos",
@@ -24,10 +16,31 @@ bevy = { version = "0.16.0-rc.1", features = [
     "bevy_image",
     "png",
 ], default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+
+[package]
+name = "ironfell"
+description = "bringing science to life"
+authors = ["Andrew Mueller"]
+version = "0.0.1"
+edition = "2024"
+# rust-version = "1.78"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bevy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
 log = { version = "*", features = [
     "max_level_debug",
     "release_max_level_warn",
 ] }
+bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
 
 
 app-surface = { version = "1.5.3", features = ["web_rwh"] }
@@ -68,6 +81,7 @@ panic = "abort"
 codegen-units = 1
 incremental = false
 debug = false
+strip = true
 
 
 # works

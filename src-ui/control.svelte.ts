@@ -190,7 +190,7 @@ export class WorkerController {
     const physicalWidth = Math.floor(this.width * devicePixelRatio);
     const physicalHeight = Math.floor(this.height * devicePixelRatio);
 
-    console.log(`Resizing canvas to: ${physicalWidth} × ${physicalHeight} (CSS: ${this.width} × ${this.height})`);
+    // console.log(`Resizing canvas to: ${physicalWidth} × ${physicalHeight} (CSS: ${this.width} × ${this.height})`);
 
     // Send dimensions to worker
     this.worker.postMessage({
@@ -231,6 +231,18 @@ export class WorkerController {
         this.worker.postMessage({ ty: "hover", list: this.latestPick });
         break;
 
+      case "inspector_result":
+        console.log(`Inspector command ${data.command} result:`, data.success);
+        if (data.entity_id) {
+          console.log(`New entity ID: ${data.entity_id}`);
+        }
+        break;
+
+      case "inspector_update":
+        console.log("Inspector update received:", data.update);
+        // Handle streaming updates from the inspector if needed
+        break;
+
       default:
         break;
     }
@@ -243,12 +255,17 @@ export class WorkerController {
     // Throttled mouse move handling
     this.canvas.addEventListener("mousemove", (event) => {
 
-      console.log("DEVICE PIXEL RATIO", window.devicePixelRatio);
+      // console.log("DEVICE PIXEL RATIO", window.devicePixelRatio);
       // const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
       // Store the latest position
       this.latestMouseX = event.offsetX;
       this.latestMouseY = event.offsetY;
+
+      const physicalWidth = Math.floor(event.offsetX * devicePixelRatio);
+      const physicalHeight = Math.floor(event.offsetY * devicePixelRatio);
+
+      // console.log(`Mouse move to to: ${physicalWidth} × ${physicalHeight} (CSS: ${event.offsetX} × ${event.offsetY})`);
 
       // Schedule update on next animation frame if not already scheduled
       if (!this.mouseMoveScheduled) {
@@ -322,6 +339,96 @@ export class WorkerController {
    */
   private setCanvasOpacity(opacity: string) {
     this.canvas.style.opacity = opacity;
+  }
+
+  // Inspector command methods
+
+  /**
+   * Update a component on an entity
+   */
+  public inspectorUpdateComponent(entityId: string, componentId: number, valueJson: string) {
+    this.worker.postMessage({
+      ty: "inspector_update_component",
+      entity_id: entityId,
+      component_id: componentId,
+      value_json: valueJson
+    });
+  }
+
+  /**
+   * Toggle a component on an entity (add if missing, remove if present)
+   */
+  public inspectorToggleComponent(entityId: string, componentId: number) {
+    this.worker.postMessage({
+      ty: "inspector_toggle_component",
+      entity_id: entityId,
+      component_id: componentId
+    });
+  }
+
+  /**
+   * Remove a component from an entity
+   */
+  public inspectorRemoveComponent(entityId: string, componentId: number) {
+    this.worker.postMessage({
+      ty: "inspector_remove_component",
+      entity_id: entityId,
+      component_id: componentId
+    });
+  }
+
+  /**
+   * Insert a component on an entity
+   */
+  public inspectorInsertComponent(entityId: string, componentId: number, valueJson: string) {
+    this.worker.postMessage({
+      ty: "inspector_insert_component",
+      entity_id: entityId,
+      component_id: componentId,
+      value_json: valueJson
+    });
+  }
+
+  /**
+   * Despawn an entity
+   */
+  public inspectorDespawnEntity(entityId: string, kind: string = "Recursive") {
+    this.worker.postMessage({
+      ty: "inspector_despawn_entity",
+      entity_id: entityId,
+      kind: kind
+    });
+  }
+
+  /**
+   * Toggle visibility of an entity
+   */
+  public inspectorToggleVisibility(entityId: string) {
+    this.worker.postMessage({
+      ty: "inspector_toggle_visibility",
+      entity_id: entityId
+    });
+  }
+
+  /**
+   * Reparent an entity
+   */
+  public inspectorReparentEntity(entityId: string, parentId?: string) {
+    this.worker.postMessage({
+      ty: "inspector_reparent_entity",
+      entity_id: entityId,
+      parent_id: parentId
+    });
+  }
+
+  /**
+   * Spawn a new entity
+   */
+  public inspectorSpawnEntity(parentId?: string) {
+    this.worker.postMessage({
+      ty: "inspector_spawn_entity",
+      parent_id: parentId
+    });
   }
 
   /**

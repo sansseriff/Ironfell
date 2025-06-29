@@ -2,8 +2,17 @@ set -e
 
 
 
-cargo build --no-default-features --profile wasm-release \
---target wasm32-unknown-unknown 
+# RUSTFLAGS="-Zlocation-detail=none" cargo +nightly build --no-default-features --profile wasm-release \
+# --target wasm32-unknown-unknown 
+
+
+
+RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none" cargo +nightly build \
+    -Z build-std=std,panic_abort \
+    -Z build-std-features="optimize_for_size" \
+    -Z build-std-features=panic_immediate_abort \
+    --no-default-features --profile wasm-release \
+    --target wasm32-unknown-unknown 
 
 # Generate bindings
 for i in target/wasm32-unknown-unknown/wasm-release/*.wasm;
@@ -13,7 +22,7 @@ done
 
 echo "starting optimize"
 # Optimize wasm package size
-wasm-opt -Oz --output src-ui/wasm/ironfell_bg.wasm opt/ironfell_bg.wasm 
+wasm-opt --enable-bulk-memory --enable-nontrapping-float-to-int -Oz --output src-ui/wasm/ironfell_bg.wasm opt/ironfell_bg.wasm 
 
 # print "starting copy"
 echo "starting copy"

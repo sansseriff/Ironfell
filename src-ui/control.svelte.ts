@@ -239,8 +239,10 @@ export class WorkerController {
         break;
 
       case "inspector_update":
-        console.log("Inspector update received:", data.update);
+        // console.log("Inspector update received:", data.update);
         // Handle streaming updates from the inspector if needed
+
+        this.process_update(data.update);
         break;
 
       default:
@@ -439,4 +441,13 @@ export class WorkerController {
     // Could terminate worker, remove event listeners, etc.
     console.log("WorkerController cleanup");
   }
+
+
+
+  private process_update(update: any) {
+    // if update is an array longer than length 7, then save to json file
+    return
+
+  }
+
 }

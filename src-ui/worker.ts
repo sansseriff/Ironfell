@@ -364,6 +364,7 @@ class IronWorker {
     try {
       const update = JSON.parse(updateJson);
       self.postMessage({ ty: "inspector_update", update });
+
     } catch (error) {
       console.error("Failed to parse inspector update JSON:", error);
     }

@@ -21,12 +21,14 @@ mod ray_pick;
 
 mod bevy_app;
 
-mod overlay;
+mod fps_overlay;
 
 mod tracking_circle;
 
 mod asset_reader;
 use asset_reader::*;
+
+// mod asset_loader;
 
 // mod type_registry;
 

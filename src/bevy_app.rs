@@ -1,5 +1,5 @@
 use crate::camera_controller::{CameraController, CameraControllerPlugin};
-use crate::overlay::OverlayPlugin;
+use crate::fps_overlay::FPSOverlayPlugin;
 use crate::ray_pick::RayPickPlugin;
 use crate::tracking_circle::TrackingCircle;
 use crate::{ActiveInfo, WorkerApp};
@@ -28,18 +28,21 @@ use bevy::render::view::RenderLayers;
 
 use crate::asset_reader::WebAssetPlugin;
 
+use crate::ffi_inspector_bridge::{InspectorStreamingState, inspector_continuous_streaming_system};
 use bevy_remote_inspector::RemoteInspectorPlugin;
-use crate::ffi_inspector_bridge::{inspector_continuous_streaming_system, InspectorStreamingState};
 
 use bevy::input::mouse::MouseScrollUnit; // Ensure this is imported if used by AccumulatedCustomScroll
 use bevy::window::CursorMoved; // Ensure this is imported for accumulate_cursor_delta_system
 
 const MAX_HISTORY_LENGTH: usize = 200;
 
+// use crate::asset_loader::{AssetLoaderPlugin, SceneAssets};
+
 pub(crate) fn init_app() -> WorkerApp {
     let mut app = App::new();
 
     let mut default_plugins = DefaultPlugins.set(ImagePlugin::default_nearest());
+
     default_plugins = default_plugins.set(bevy::window::WindowPlugin {
         primary_window: Some(bevy::window::Window {
             present_mode: bevy::window::PresentMode::AutoNoVsync,
@@ -48,18 +51,25 @@ pub(crate) fn init_app() -> WorkerApp {
         ..default()
     });
 
+    // app.insert_resource(AssetMetaCheck::Never);
+
+    // app.add_plugins(DefaultPlugins.set(AssetPlugin {
+    //     mode: AssetMode::Processed,
+    //     meta_check: AssetMetaCheck::Never, // Disable asset meta checks
+    //     ..default()
+    // }));
     app.insert_resource(ClearColor(Color::srgb(0.97, 0.97, 0.97)));
 
     app.add_plugins((
         WebAssetPlugin::default(),
         default_plugins,
         RayPickPlugin,
-        OverlayPlugin,
-        TrackingCircle,
-        FrameTimeDiagnosticsPlugin {
-            max_history_length: MAX_HISTORY_LENGTH,
-            smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
-        },
+        // TrackingCircle,
+        // FPSOverlayPlugin,
+        // FrameTimeDiagnosticsPlugin {
+        //     max_history_length: MAX_HISTORY_LENGTH,
+        //     smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
+        // },
         CameraControllerPlugin, // LogDiagnosticsPlugin::default(),
         RemoteInspectorPlugin,
     ));
@@ -69,7 +79,10 @@ pub(crate) fn init_app() -> WorkerApp {
     app.init_resource::<InspectorStreamingState>();
 
     app.add_systems(Startup, setup)
-        .add_systems(Update, (rotate, update_aabbes, inspector_continuous_streaming_system))
+        .add_systems(
+            Update,
+            (update_aabbes, inspector_continuous_streaming_system), // rotate
+        )
         .add_systems(
             PreUpdate,
             (
@@ -139,6 +152,12 @@ impl<T: VectorSpace + Into<Color> + Send + Sync + 'static> CurveColor for T {}
 #[derive(Debug, Component)]
 struct Curve<T: CurveColor>(CubicCurve<T>);
 
+#[derive(Component, Debug)]
+pub struct Mirror1;
+
+#[derive(Component, Debug)]
+pub struct Despawnable;
+
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -151,63 +170,81 @@ fn setup(
         ..default()
     });
 
-    let meshe_handles = [
-        meshes.add(Cuboid::default()),
-        meshes.add(Capsule3d::default().mesh().longitudes(16).latitudes(8)),
-        meshes.add(
-            Torus::default()
-                .mesh()
-                .major_resolution(8)
-                .minor_resolution(6),
-        ),
-        meshes.add(Cylinder::default().mesh().resolution(3)),
-        meshes.add(Capsule3d::default()),
-        meshes.add(Cylinder::default()),
-        meshes.add(Cuboid::default()),
-        meshes.add(Sphere::default().mesh().ico(1).unwrap()),
-    ];
+    // let meshe_handles = [
+    //     meshes.add(Cuboid::default()),
+    //     meshes.add(Capsule3d::default().mesh().longitudes(16).latitudes(8)),
+    //     meshes.add(
+    //         Torus::default()
+    //             .mesh()
+    //             .major_resolution(8)
+    //             .minor_resolution(6),
+    //     ),
+    //     meshes.add(Cylinder::default().mesh().resolution(3)),
+    //     meshes.add(Capsule3d::default()),
+    //     meshes.add(Cylinder::default()),
+    //     meshes.add(Cuboid::default()),
+    //     meshes.add(Sphere::default().mesh().ico(1).unwrap()),
+    // ];
 
-    let shapes = [
-        Shape::Box(Cuboid::from_size(Vec3::splat(1.1))),
-        Shape::Box(Cuboid::from_size(Vec3::new(1., 2., 1.))),
-        Shape::Box(Cuboid::from_size(Vec3::new(1.75, 0.52, 1.75))),
-        Shape::Box(Cuboid::default()),
-        Shape::Box(Cuboid::from_size(Vec3::new(1., 2., 1.))),
-        Shape::Box(Cuboid::default()),
-        Shape::Box(Cuboid::from_size(Vec3::splat(1.1))),
-        Shape::Box(Cuboid::default()),
-    ];
+    // let shapes = [
+    //     Shape::Box(Cuboid::from_size(Vec3::splat(1.1))),
+    //     Shape::Box(Cuboid::from_size(Vec3::new(1., 2., 1.))),
+    //     Shape::Box(Cuboid::from_size(Vec3::new(1.75, 0.52, 1.75))),
+    //     Shape::Box(Cuboid::default()),
+    //     Shape::Box(Cuboid::from_size(Vec3::new(1., 2., 1.))),
+    //     Shape::Box(Cuboid::default()),
+    //     Shape::Box(Cuboid::from_size(Vec3::splat(1.1))),
+    //     Shape::Box(Cuboid::default()),
+    // ];
+
+    let meshe_handles = [meshes.add(
+        Torus::default()
+            .mesh()
+            .major_resolution(8)
+            .minor_resolution(6),
+    )];
+
+    let shape = Shape::Box(Cuboid::from_size(Vec3::new(1.75, 0.52, 1.75)));
 
     let num_shapes = meshe_handles.len();
-    let mut rng = rand::thread_rng();
+    // let mut rng = rand::thread_rng();
 
-    let grid_size_x = num_shapes;
-    let grid_size_z = 5;
-    let spacing = 3.0;
-    let height = 1.5; // Height above ground plane
+    // let grid_size_x = num_shapes;
+    // let grid_size_z = 5;
+    // let spacing = 3.0;
+    // let height = 1.5; // Height above ground plane
 
-    for x in 0..grid_size_x {
-        for z in 0..grid_size_z {
-            let index = rng.gen_range(0..num_shapes);
-            let mesh = meshe_handles[index].to_owned();
-            let shape = shapes[index].to_owned();
+    // for x in 0..grid_size_x {
+    //     for z in 0..grid_size_z {
+    //         let index = rng.gen_range(0..num_shapes);
+    //         let mesh = meshe_handles[index].to_owned();
+    //         let shape = shapes[index].to_owned();
 
-            let transform = Transform::from_xyz(
-                (x as f32 - (grid_size_x - 1) as f32 / 2.0) * spacing,
-                height,
-                (z as f32 - (grid_size_z - 1) as f32 / 2.0) * spacing,
-            );
+    //         let transform = Transform::from_xyz(
+    //             (x as f32 - (grid_size_x - 1) as f32 / 2.0) * spacing,
+    //             height,
+    //             (z as f32 - (grid_size_z - 1) as f32 / 2.0) * spacing,
+    //         );
 
-            commands.spawn((
-                Mesh3d(mesh),
-                MeshMaterial3d(debug_material.clone()),
-                transform,
-                shape,
-                ActiveState::default(),
-                // RenderLayers::layer(1),
-            ));
-        }
-    }
+    //         commands.spawn((
+    //             Mesh3d(mesh),
+    //             MeshMaterial3d(debug_material.clone()),
+    //             transform,
+    //             shape,
+    //             ActiveState::default(),
+    //             // RenderLayers::layer(1),
+    //         ));
+    //     }
+    // }
+
+    commands.spawn((
+        Mesh3d(meshe_handles[0].to_owned()),
+        MeshMaterial3d(debug_material.clone()),
+        Transform::from_xyz(0.0, 1.5, 0.0),
+        shape,
+        ActiveState::default(),
+        // RenderLayers::layer(1),
+    ));
 
     // this was my unfinished bezier curve experiment
     // let points = [[
@@ -277,6 +314,13 @@ fn setup(
         // RenderLayers::layer(1),
     ));
 
+    // commands.spawn((
+    //     SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Spaceship.glb#Scene0"))),
+    //     Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
+    //     Mirror1,
+    //     Despawnable,
+    // ));
+
     commands.spawn((
         Camera2d,
         Camera {
@@ -287,8 +331,33 @@ fn setup(
         RenderLayers::layer(1),
     ));
 
-    // commands.spawn(Sprite::from_image(
-    //     asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png"),
+    // commands.spawn((
+    //     Sprite::from_image(asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png")),
+    //     RenderLayers::layer(1),
+    // ));
+
+    // https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb
+
+    // https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/AttenuationTest/glTF-Binary/AttenuationTest.glb
+    // commands.spawn((
+    //     SceneRoot(
+    //         asset_server
+    //             .load(GltfAssetLabel::Scene(0).from_asset("http://127.0.0.1:8000/mirror_1.glb")),
+    //     ),
+    //     Transform::from_translation(Vec3::new(0.0, 12.0, 1.0)).with_scale(Vec3::splat(100.0)),
+    //     Mirror1,
+    //     Despawnable,
+    // ));
+
+    // commands.spawn((
+    //     SceneRoot(
+    //         asset_server.load(
+    //             GltfAssetLabel::Scene(0).from_asset("http://127.0.0.1:8000/MK05_thorlabs.glb"),
+    //         ),
+    //     ),
+    //     Transform::from_translation(Vec3::new(0.0, 6.0, 1.0)).with_scale(Vec3::splat(100.0)),
+    //     Mirror1,
+    //     Despawnable,
     // ));
 }
 

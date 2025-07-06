@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { WorkerController } from "./control.svelte";
   import SplitPane from "./lib/SplitPane5.svelte";
+  import WebGPUWarning from "./lib/WebGPUWarning.svelte";
 
   let show_loading = $state(false);
   let controller: WorkerController;
@@ -9,13 +10,34 @@
   let canvasContainer: HTMLDivElement;
   let canvasElement: HTMLCanvasElement;
   let isInitialized = $state(false);
+  let webgpuSupported = $state(true);
+  let showWebGPUWarning = $state(false);
 
   function showAlert() {
     alert("Check console for error");
   }
 
+  // Check for WebGPU support
+  function checkWebGPUSupport(): boolean {
+    if (!(navigator as any).gpu) {
+      return false;
+    }
+    return true;
+  }
+
+  function dismissWebGPUWarning() {
+    showWebGPUWarning = false;
+  }
+
   async function launch() {
     if (loading_in_progress) return;
+
+    // Check WebGPU support first
+    if (!checkWebGPUSupport()) {
+      webgpuSupported = false;
+      showWebGPUWarning = true;
+      return;
+    }
 
     try {
       show_loading = true;
@@ -37,7 +59,9 @@
       show_loading = false;
     } catch (error) {
       console.error(error);
-      showAlert();
+      webgpuSupported = false;
+      showWebGPUWarning = true;
+      show_loading = false;
     } finally {
       loading_in_progress = false;
     }
@@ -69,7 +93,10 @@
     }
 
     // Set new timeout (250ms is a common debounce delay for resize events)
-    resizeTimer = setTimeout(updateCanvasSize, 250) as unknown as number;
+    resizeTimer = setTimeout(() => {
+      // Normal canvas resize
+      updateCanvasSize();
+    }, 250) as unknown as number;
   }
 
   // No longer auto-launching on mount
@@ -101,14 +128,17 @@
   // Handler for SplitPane resize events
   function handleSplitPaneResize() {
     // Push execution to the end of the event queue
-    setTimeout(updateCanvasSize, 0);
+    setTimeout(() => {
+      // Normal canvas resize
+      updateCanvasSize();
+    }, 0);
   }
 
   // Inspector test functions
   function testSpawnEntity() {
     if (controller && isInitialized) {
       console.log("Testing spawn entity...");
-      controller.inspectorSpawnEntity();
+      controller.inspectorSpawnEntity("123345");
     }
   }
 
@@ -135,7 +165,17 @@
   <section style="background: white; padding: 20px;">
     <h3>Inspector Controls</h3>
 
-    {#if !isInitialized}
+    {#if showWebGPUWarning}
+      <div
+        style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; padding: 15px; margin: 10px 0;"
+      >
+        <p style="margin: 0; color: #856404;">
+          <strong>⚠️ WebGPU Not Supported</strong><br />
+          This application requires WebGPU support. Please check the main panel for
+          instructions.
+        </p>
+      </div>
+    {:else if !isInitialized}
       <p>Launch the app to use inspector controls</p>
       <button onclick={launch} disabled={loading_in_progress}>
         {loading_in_progress ? "Loading..." : "Launch App"}
@@ -164,6 +204,8 @@
 
 {#snippet b()}
   <div id="app-container">
+    <WebGPUWarning show={showWebGPUWarning} onDismiss={dismissWebGPUWarning} />
+
     {#if show_loading}
       <div id="loading">
         <div class="spinner"></div>

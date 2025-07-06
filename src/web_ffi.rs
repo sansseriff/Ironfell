@@ -9,11 +9,11 @@ use wasm_bindgen::prelude::*;
 
 // Import Bevy's input types that your FFI functions will create events for
 use bevy::input::{
-    ButtonState,                                                       // Added ButtonState
-    keyboard::{Key, KeyCode as BevyKeyCode, KeyboardInput, NativeKey}, // Added Key, BevyKeyCode, KeyboardInput, NativeKey
+    ButtonState,                                            // Added ButtonState
+    keyboard::{Key, KeyCode as BevyKeyCode, KeyboardInput}, // Added Key, BevyKeyCode, KeyboardInput, NativeKey
     mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
 };
-use bevy::window::{CursorMoved, WindowResized}; // CursorMoved is used in mouse_move
+use bevy::window::CursorMoved; // CursorMoved is used in mouse_move. Removed WindowResized
 
 // pub struct MyMouseWheelEvent {
 //     pub delta_x: f32,
@@ -34,7 +34,7 @@ extern "C" {
     /// 从 worker 环境发送
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_pick_from_worker(list: js_sys::Array);
-    
+
     // Inspector streaming callbacks
     pub(crate) fn send_inspector_update_from_worker(update_json: &str);
     /// 从主线程环境发送

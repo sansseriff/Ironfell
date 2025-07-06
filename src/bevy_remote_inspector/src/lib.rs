@@ -1,3 +1,5 @@
+// adapted from bevy_remote_inspector: https://github.com/notmd/bevy_remote_inspector
+
 pub mod command;
 mod component;
 mod entity;
@@ -10,7 +12,7 @@ use bevy::{
 };
 use component::InspectorComponentInfo;
 use entity::EntityMutation;
-use schedule::ScheduleInfo;
+use schedule::{ScheduleInfo, SchedulesPlugin};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -20,10 +22,20 @@ pub struct RemoteInspectorPlugin;
 
 impl Plugin for RemoteInspectorPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DisabledComponents>()
+        let mut deep_compare_components = DeepCompareComponents::default();
+        #[cfg(feature = "bevy_render")]
+        {
+            let id = app
+                .world_mut()
+                .register_component::<bevy::render::view::ViewVisibility>(); // this component changed every frame and very cheep to compare
+            deep_compare_components.ids.insert(id);
+        }
+
+        app.add_plugins(SchedulesPlugin)
+            .init_resource::<DisabledComponents>()
             .init_resource::<EntityVisibilities>()
-            .init_resource::<DeepCompareComponents>()
-            .init_resource::<TrackedDatas>();
+            .init_resource::<TrackedDatas>()
+            .insert_resource(deep_compare_components);
     }
 }
 

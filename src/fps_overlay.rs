@@ -1,13 +1,13 @@
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}; // removed LogDiagnosticsPlugin
 
 use bevy::{
-    color::palettes::basic::{AQUA, LIME, SILVER},
+    color::palettes::basic::{AQUA, LIME, WHITE},
     prelude::*,
 };
 
-pub(crate) struct OverlayPlugin;
+pub(crate) struct FPSOverlayPlugin;
 
-impl Plugin for OverlayPlugin {
+impl Plugin for FPSOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_ui)
             .add_systems(Update, update_fps_display);
@@ -41,19 +41,19 @@ fn setup_ui(mut commands: Commands) {
                     p.spawn((
                         TextSpan::new("\nFPS (raw): "),
                         font.clone(),
-                        TextColor(LIME.into()),
+                        TextColor(WHITE.into()),
                     ));
                     p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
                     p.spawn((
                         TextSpan::new("\nFPS (SMA): "),
                         font.clone(),
-                        TextColor(LIME.into()),
+                        TextColor(WHITE.into()),
                     ));
                     p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
                     p.spawn((
                         TextSpan::new("\nFPS (EMA): "),
                         font.clone(),
-                        TextColor(LIME.into()),
+                        TextColor(WHITE.into()),
                     ));
                     p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
                 });

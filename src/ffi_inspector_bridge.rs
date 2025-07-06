@@ -121,6 +121,8 @@ pub fn inspector_despawn_entity(ptr: u64, entity_id: u64, kind: &str) -> bool {
 pub fn inspector_toggle_visibility(ptr: u64, entity_id: u64) -> bool {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
 
+    info!("type of entity_id: {}", entity_id);
+
     let entity = Entity::from_bits(entity_id);
     let command = ToggleVisibity { entity };
 
@@ -143,6 +145,7 @@ pub fn inspector_reparent_entity(ptr: u64, entity_id: u64, parent_id: Option<u64
 /// Spawn a new entity
 #[wasm_bindgen]
 pub fn inspector_spawn_entity(ptr: u64, parent_id: Option<u64>) -> u64 {
+    info!("Spawning entity with parent: {:?}", parent_id);
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
 
     let parent = parent_id.map(Entity::from_bits);
@@ -165,7 +168,7 @@ pub struct InspectorStreamingState {
 impl Default for InspectorStreamingState {
     fn default() -> Self {
         Self {
-            continuous_streaming_enabled: false, // Disabled by default for efficiency
+            continuous_streaming_enabled: true, // Disabled by default for efficiency
             last_update_tick: 0,
             update_every_n_ticks: 3, // Update every 3 ticks when continuous streaming is enabled
         }
@@ -188,6 +191,7 @@ fn trigger_inspector_streaming(world: &mut World) {
 }
 
 /// System for continuous streaming (only when enabled, for animations)
+/// this is added in bevy_app.rs
 pub fn inspector_continuous_streaming_system(world: &mut World) {
     // Check if continuous streaming is enabled
     let streaming_enabled = {
@@ -222,7 +226,6 @@ pub fn inspector_continuous_streaming_system(world: &mut World) {
     if !should_update {
         return;
     }
-
     // Use the same trigger function for consistency
     trigger_inspector_streaming(world);
 }

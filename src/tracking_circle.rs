@@ -1,7 +1,5 @@
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
-
 use bevy::{
-    color::palettes::basic::{AQUA, LIME, SILVER},
+    // color::palettes::basic::{AQUA, LIME, SILVER},
     prelude::*,
 };
 
@@ -43,7 +41,7 @@ fn update_circle_position(
 ) {
     if !cursor_moved_events.is_empty() {
         let (camera, camera_transform) = cameras.single().unwrap();
-        for (mut circle_transform) in query.iter_mut() {
+        for mut circle_transform in query.iter_mut() {
             if let Some(event) = cursor_moved_events.read().last() {
                 let Ok(point) = camera.viewport_to_world_2d(camera_transform, event.position)
                 else {

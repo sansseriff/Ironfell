@@ -1,4 +1,8 @@
+import { SvelteMap } from 'svelte/reactivity';
 import wasmUrl from './wasm/ironfell_bg.wasm?url'
+import { SystemState } from './system_state';
+
+
 
 const OVERRIDE_SCALE = false;
 const OVERRIDE_SCALE_FACTOR = 2;
@@ -27,6 +31,9 @@ export class WorkerController {
   // Key handling with throttling
   private pressedKeys = new Set<string>();
   private keyUpdateScheduled = false;
+
+
+  private state = new SystemState();
 
   /**
    * Creates a new WorkerController instance
@@ -242,7 +249,7 @@ export class WorkerController {
         // console.log("Inspector update received:", data.update);
         // Handle streaming updates from the inspector if needed
 
-        this.process_update(data.update);
+        this.state.process_update(data.update);
         break;
 
       default:
@@ -444,10 +451,7 @@ export class WorkerController {
 
 
 
-  private process_update(update: any) {
-    // if update is an array longer than length 7, then save to json file
-    return
-
-  }
 
 }
+
+

@@ -27,5 +27,7 @@ cp opt/ironfell_bg.wasm.d.ts src-ui/wasm/ironfell_bg.d.ts
 
 
 # to run this for github pages build
+# do a regular git commit
 # git tag vX.X.X
 # git push origin vX.X.X
+# git push origin master

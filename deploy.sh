@@ -31,7 +31,7 @@ fi
 # Create and push the new tag
 git tag "$NEW_TAG"
 git push origin "$NEW_TAG"
-git push origin main
+git push origin master
 
 echo "✅ Deployment triggered! Check GitHub Actions for build progress."
 echo "🔗 https://github.com/$(git config --get remote.origin.url | sed 's/.*github.com[:/]\([^.]*\).*/\1/')/actions"

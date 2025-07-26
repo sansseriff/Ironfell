@@ -1,6 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity';
 import wasmUrl from './wasm/ironfell_bg.wasm?url'
-import { SystemState } from './system_state';
+import { SystemState } from './system_state.svelte';
 
 
 
@@ -33,7 +33,7 @@ export class WorkerController {
   private keyUpdateScheduled = false;
 
 
-  private state = new SystemState();
+  public state = new SystemState();
 
   /**
    * Creates a new WorkerController instance
@@ -41,6 +41,10 @@ export class WorkerController {
    */
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+
+    // Start fetching WASM immediately
+    console.log("Starting WASM fetch immediately...");
+    this.wasmDataPromise = fetch(wasmUrl).then(response => response.arrayBuffer());
 
     // Initialize the worker
     console.log("Initializing Web Worker...");
@@ -51,8 +55,13 @@ export class WorkerController {
     // Set up message handling from worker
     this.worker.onmessage = this.handleWorkerMessage.bind(this);
 
-    // Send the WASM URL to the worker
-    this.worker.postMessage({ ty: "wasmUrl", wasmUrl: wasmUrl });
+    // Send the WASM data to the worker once it's loaded
+    this.wasmDataPromise.then(wasmData => {
+      console.log("WASM data loaded, sending to worker...");
+      this.worker.postMessage({ ty: "wasmData", wasmData }, [wasmData]);
+    }).catch(error => {
+      console.error("Failed to load WASM:", error);
+    });
 
     // Listen for tab visibility changes
     this.setupVisibilityListener();

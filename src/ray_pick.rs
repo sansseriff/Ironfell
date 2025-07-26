@@ -1,7 +1,7 @@
 use crate::{
     ActiveInfo,
     // bevy_app::{ActiveState, CurrentVolume},
-    bevy_app::{ActiveState, CurrentVolume, MainCamera},
+    bevy_app::{ActiveState, CurrentVolume, MainCamera3D},
     send_pick_from_worker,
 };
 use bevy::math::bounding::RayCast3d;
@@ -14,6 +14,7 @@ pub(crate) struct RayPickPlugin;
 
 impl Plugin for RayPickPlugin {
     fn build(&self, app: &mut App) {
+        // app.add_systems(Update, (mouse_events_system, update_active));
         app.add_systems(Update, (mouse_events_system, update_active));
     }
 }
@@ -22,7 +23,7 @@ fn mouse_events_system(
     mut cursor_moved_events: EventReader<CursorMoved>,
     mut mouse_wheel_events: EventReader<MouseWheel>,
     mut app_info: ResMut<ActiveInfo>,
-    cameras: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<MainCamera3D>>,
     // cameras: Query<(&Camera, &GlobalTransform)>,
     mut query: Query<(Entity, &CurrentVolume, &mut Transform), With<ActiveState>>,
 ) {

@@ -4,10 +4,12 @@ import type { ComponentsEvent, EntityMutation, StreamEvent, TypeRegistryEvent, E
 import { bevyTypes } from './types/bevy';
 import { COMMON_NAMES, bevyCrates } from './types/bevy';
 
+import { SvelteMap } from 'svelte/reactivity';
+
 export class SystemState {
-    components = new Map<ComponentId, any>();
-    registry = new Map<string, any>();
-    componentNameToIdMap = new Map<string, ComponentId>();
+    components = new SvelteMap<ComponentId, any>();
+    registry = new SvelteMap<string, any>();
+    componentNameToIdMap = new SvelteMap<string, ComponentId>();
 
     entities: Map<
         EntityId,
@@ -21,7 +23,7 @@ export class SystemState {
     > = new Map();
     childParentMap: Map<EntityId, EntityId | null> = new Map();
     entityNames: Map<EntityId, string> = new Map();
-    
+
     // Client-side deep comparison cache
     private componentValueCache = new Map<EntityId, Map<ComponentId, string>>();
 
@@ -301,7 +303,7 @@ export class SystemState {
 
         const oldValueStr = entityCache.get(componentId);
         const newValueStr = JSON.stringify(newValue);
-        
+
         if (oldValueStr === newValueStr) {
             // Values are identical, skip this update
             return true;

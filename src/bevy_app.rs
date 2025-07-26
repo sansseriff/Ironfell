@@ -7,7 +7,7 @@ use bevy::color::palettes::css::BLANCHED_ALMOND;
 use bevy::color::palettes::tailwind::BLUE_400;
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
-use bevy::math::VectorSpace;
+// use bevy::math::VectorSpace;
 use bevy::render::camera::ScalingMode;
 use bevy::{
     color::palettes::basic::{AQUA, LIME, SILVER},
@@ -18,13 +18,15 @@ use bevy::{
         render_resource::{Extent3d, TextureDimension, TextureFormat},
     },
 };
+
+use bevy::gizmos::{config::DefaultGizmoConfigGroup, config::GizmoConfigStore};
+
+use bevy::render::view::RenderLayers;
 use rand::Rng;
 use std::f32::consts::PI;
 use std::ops::Deref;
 
 use bevy::math::{cubic_splines::*, vec2};
-
-use bevy::render::view::RenderLayers;
 
 use crate::asset_reader::WebAssetPlugin;
 
@@ -33,6 +35,11 @@ use bevy_remote_inspector::RemoteInspectorPlugin;
 
 use bevy::input::mouse::MouseScrollUnit; // Ensure this is imported if used by AccumulatedCustomScroll
 use bevy::window::CursorMoved; // Ensure this is imported for accumulate_cursor_delta_system
+
+use bevy_vello::{VelloPlugin, prelude::*};
+use vello::{AaConfig, AaSupport, kurbo::Affine};
+
+use std::ops::DerefMut;
 
 const MAX_HISTORY_LENGTH: usize = 200;
 
@@ -64,12 +71,17 @@ pub(crate) fn init_app() -> WorkerApp {
         WebAssetPlugin::default(),
         default_plugins,
         RayPickPlugin,
-        // TrackingCircle,
-        // FPSOverlayPlugin,
-        // FrameTimeDiagnosticsPlugin {
-        //     max_history_length: MAX_HISTORY_LENGTH,
-        //     smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
-        // },
+        TrackingCircle,
+        VelloPlugin {
+            canvas_render_layers: RenderLayers::layer(1),
+            use_cpu: false,
+            antialiasing: AaConfig::Area,
+        },
+        FPSOverlayPlugin,
+        FrameTimeDiagnosticsPlugin {
+            max_history_length: MAX_HISTORY_LENGTH,
+            smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
+        },
         CameraControllerPlugin, // LogDiagnosticsPlugin::default(),
         RemoteInspectorPlugin,
     ));
@@ -78,10 +90,15 @@ pub(crate) fn init_app() -> WorkerApp {
     app.init_resource::<AccumulatedScroll>();
     app.init_resource::<InspectorStreamingState>();
 
-    app.add_systems(Startup, setup)
+    app.add_systems(Startup, (setup_3d_scene, setup_2d_overlay))
         .add_systems(
             Update,
-            (update_aabbes, inspector_continuous_streaming_system), // rotate
+            (
+                update_aabbes,
+                inspector_continuous_streaming_system,
+                animate_2d_overlay,
+                rotate_3d_shapes,
+            ), // rotate
         )
         .add_systems(
             PreUpdate,
@@ -112,7 +129,10 @@ pub(crate) struct ActiveState {
 }
 
 #[derive(Component)]
-pub(crate) struct MainCamera;
+pub(crate) struct MainCamera3D;
+
+#[derive(Component)]
+pub(crate) struct OverlayCamera2D;
 
 impl ActiveState {
     fn is_active(&self) -> bool {
@@ -146,11 +166,11 @@ impl Default for AccumulatedScroll {
 
 const X_EXTENT: f32 = 13.0;
 
-trait CurveColor: VectorSpace + Into<Color> + Send + Sync + 'static {}
-impl<T: VectorSpace + Into<Color> + Send + Sync + 'static> CurveColor for T {}
+// trait CurveColor: VectorSpace + Into<Color> + Send + Sync + 'static {}
+// impl<T: VectorSpace + Into<Color> + Send + Sync + 'static> CurveColor for T {}
 
-#[derive(Debug, Component)]
-struct Curve<T: CurveColor>(CubicCurve<T>);
+// #[derive(Debug, Component)]
+// struct Curve<T: CurveColor>(CubicCurve<T>);
 
 #[derive(Component, Debug)]
 pub struct Mirror1;
@@ -158,7 +178,7 @@ pub struct Mirror1;
 #[derive(Component, Debug)]
 pub struct Despawnable;
 
-fn setup(
+fn setup_3d_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
@@ -170,6 +190,7 @@ fn setup(
         ..default()
     });
 
+    // 3D Shapes - commented for reference but keeping one active
     // let meshe_handles = [
     //     meshes.add(Cuboid::default()),
     //     meshes.add(Capsule3d::default().mesh().longitudes(16).latitudes(8)),
@@ -206,9 +227,9 @@ fn setup(
 
     let shape = Shape::Box(Cuboid::from_size(Vec3::new(1.75, 0.52, 1.75)));
 
-    let num_shapes = meshe_handles.len();
+    // Grid generation - commented for reference
+    // let num_shapes = meshe_handles.len();
     // let mut rng = rand::thread_rng();
-
     // let grid_size_x = num_shapes;
     // let grid_size_z = 5;
     // let spacing = 3.0;
@@ -232,34 +253,21 @@ fn setup(
     //             transform,
     //             shape,
     //             ActiveState::default(),
-    //             // RenderLayers::layer(1),
     //         ));
     //     }
     // }
 
+    // Single 3D object for demo
     commands.spawn((
         Mesh3d(meshe_handles[0].to_owned()),
         MeshMaterial3d(debug_material.clone()),
         Transform::from_xyz(0.0, 1.5, 0.0),
         shape,
         ActiveState::default(),
-        // RenderLayers::layer(1),
+        RenderLayers::layer(0),
     ));
 
-    // this was my unfinished bezier curve experiment
-    // let points = [[
-    //     vec2(-1.0, -20.0),
-    //     vec2(3.0, 2.0),
-    //     vec2(5.0, 3.0),
-    //     vec2(9.0, 8.0),
-    // ]];
-
-    // commands.spawn((
-    //     Sprite::sized(Vec2::new(75., 75.)),
-    //     Transform::from_xyz(0., 0.0, 0.),
-    //     Curve(CubicBezier::new(points).to_curve().unwrap()),
-    // ));
-
+    // 3D Lights
     commands.spawn((
         PointLight {
             shadows_enabled: true,
@@ -269,7 +277,6 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(8.0, 9.0, 16.0),
-        // RenderLayers::layer(1),
     ));
 
     commands.spawn((
@@ -281,39 +288,35 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(-8.0, 9.0, -10.0),
-        // RenderLayers::layer(1),
     ));
 
-    // ground plane
+    // 3D Ground plane
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0).subdivisions(10))),
         MeshMaterial3d(materials.add(Color::from(SILVER))),
-        // Transform::IDENTITY.with_rotation(Quat::from_rotation_x(PI / 2.)),
-        // RenderLayers::layer(1),
     ));
 
+    // 3D Camera - renders first with full clear
     commands.spawn((
         Camera3d::default(),
         Camera {
-            // renders after / on top of the main camera
-            order: 1,
-            // don't clear the color while rendering this camera
-            clear_color: ClearColorConfig::Default,
+            order: 0,                               // Renders first - 3D base layer
+            clear_color: ClearColorConfig::Default, // Clear with background color
             ..default()
         },
         CameraController::default(),
-        MainCamera,
+        MainCamera3D,
+        RenderLayers::layer(0),
         Projection::Perspective(PerspectiveProjection {
             fov: 60.0_f32.to_radians(),
             near: 0.1,
             far: 1000.0,
             ..default()
         }),
-        // if -z is forward, then z: 18 is behind the origin, looking at the origin
         Transform::from_xyz(0.0, 18., 18.).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
-        // RenderLayers::layer(1),
     ));
 
+    // 3D GLTF models - commented for reference
     // commands.spawn((
     //     SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("Spaceship.glb#Scene0"))),
     //     Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)),
@@ -321,24 +324,6 @@ fn setup(
     //     Despawnable,
     // ));
 
-    commands.spawn((
-        Camera2d,
-        Camera {
-            order: 2,
-            clear_color: ClearColorConfig::None,
-            ..default()
-        },
-        RenderLayers::layer(1),
-    ));
-
-    // commands.spawn((
-    //     Sprite::from_image(asset_server.load("https://s3.johanhelsing.studio/dump/favicon.png")),
-    //     RenderLayers::layer(1),
-    // ));
-
-    // https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/Duck/glTF-Binary/Duck.glb
-
-    // https://github.com/KhronosGroup/glTF-Sample-Models/raw/refs/heads/main/2.0/AttenuationTest/glTF-Binary/AttenuationTest.glb
     // commands.spawn((
     //     SceneRoot(
     //         asset_server
@@ -361,7 +346,57 @@ fn setup(
     // ));
 }
 
-fn rotate(
+// ===== 2D OVERLAY SETUP =====
+// Renders on top of 3D (order: 1) with no color clear to preserve 3D background
+fn setup_2d_overlay(mut commands: Commands) {
+    // 2D Overlay Camera - renders on top of 3D with transparency
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 1,                            // Renders second - 2D overlay on top of 3D
+            clear_color: ClearColorConfig::None, // Don't clear - preserve 3D background
+            ..default()
+        },
+        RenderLayers::layer(1),
+        OverlayCamera2D,
+        VelloView,
+    ));
+
+    // Vello 2D Scene for vector graphics
+    commands.spawn((VelloScene::new(), RenderLayers::layer(1)));
+}
+
+// ===== 2D ANIMATION SYSTEM =====
+fn animate_2d_overlay(mut query_scene: Single<(&mut Transform, &mut VelloScene)>, time: Res<Time>) {
+    let sin_time = time.elapsed_secs().sin().mul_add(0.5, 0.5);
+    let (transform, scene) = query_scene.deref_mut();
+
+    // Reset 2D scene every frame
+    scene.reset();
+
+    // Animate color green to blue
+    let c = Vec3::lerp(
+        Vec3::new(-1.0, 1.0, -1.0),
+        Vec3::new(-1.0, 1.0, 1.0),
+        sin_time + 0.5,
+    );
+
+    // Animate the corner radius of 2D overlay element
+    scene.fill(
+        peniko::Fill::NonZero,
+        kurbo::Affine::default(),
+        peniko::Color::new([c.x, c.y, c.z, 1.]),
+        None,
+        &kurbo::RoundedRect::new(-100.0, -100.0, 100.0, 100.0, (sin_time as f64) * 100.0),
+    );
+
+    // Animate 2D transform
+    transform.scale = Vec3::lerp(Vec3::ONE * 0.5, Vec3::ONE * 1.0, sin_time);
+    transform.translation = Vec3::lerp(Vec3::Y * -900.0, Vec3::Y * 900.0, sin_time);
+    transform.rotation = Quat::from_rotation_z(-std::f32::consts::TAU * sin_time);
+}
+
+fn rotate_3d_shapes(
     app_info: Res<ActiveInfo>,
     mut query: Query<&mut Transform, With<Shape>>,
     time: Res<Time>,

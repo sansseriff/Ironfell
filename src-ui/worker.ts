@@ -67,38 +67,31 @@ class IronWorker {
   }
 
   private async initWasmInWorker() {
-    // Load wasm file
-    // await init("./wasm/ironfell_bg.wasm");
-    // await init(wasmUrl);
-
-    // Create app
-
-
     // Listen for messages from the main thread
     self.onmessage = async (event) => {
       let data = event.data;
       switch (data.ty) {
 
-
-        // case "dummy":
-        //   // Handle dummy message
-        //   console.log("Received dummy message from main thread");
-        //   break
-
-        case "wasmUrl":
-          // Initialize the wasm module with the provided URL
-
-          // console.log("The received wasmUrl is:", data.wasmUrl);
-          await init(data.wasmUrl);
-          // console.log("init computed for wasm module");
+        case "wasmData":
+          // Initialize the wasm module with the provided data
+          console.log("Received WASM data from main thread, initializing...");
+          await init(data.wasmData);
+          console.log("WASM module initialized");
           this.appHandle = init_bevy_app();
-          // console.log("App handle initialized:", this.appHandle);
+          console.log("App handle initialized:", this.appHandle);
 
           // Notify the main thread that the worker is ready
-          // console.log("Sending workerIsReady message");
+          console.log("Sending workerIsReady message");
           self.postMessage({ ty: "workerIsReady" });
           break;
 
+        case "wasmUrl":
+          // Keep this for backward compatibility, but it shouldn't be used now
+          console.warn("Received wasmUrl - this should not happen with the new implementation");
+          await init(data.wasmUrl);
+          this.appHandle = init_bevy_app();
+          self.postMessage({ ty: "workerIsReady" });
+          break;
 
         case "init":
           this.offscreenCanvas = data.canvas;

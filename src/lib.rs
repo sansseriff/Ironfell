@@ -28,6 +28,11 @@ mod tracking_circle;
 mod asset_reader;
 use asset_reader::*;
 
+// mod bevy_vello;
+// use bevy_vello::*;
+
+// use bevy_vello::{VelloPlugin, prelude::*, render::VelloRenderer};
+
 // mod asset_loader;
 
 // mod type_registry;

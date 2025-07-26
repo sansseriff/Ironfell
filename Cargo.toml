@@ -1,6 +1,7 @@
 [workspace]
 members = [".", "src/bevy_remote_inspector"]
 
+
 [workspace.dependencies]
 bevy = { version = "0.16", features = [
     "std",
@@ -45,9 +46,10 @@ log = { version = "*", features = [
     "release_max_level_warn",
 ] }
 bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
+bevy_vello = { path = "./src/bevy_vello" }
 
-
-app-surface = { version = "1.5.3", features = ["web_rwh"] }
+# pin app-surface. It pulls in newer version of wgu and breaks wasm-bindgen
+app-surface = { version = "=1.5.3", features = ["web_rwh"] }
 raw-window-handle = "0.6"
 wgpu = "24"
 uuid = { version = "1.7.0", features = ["v4"] }

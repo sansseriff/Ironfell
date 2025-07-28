@@ -1,6 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import wasmUrl from './wasm/ironfell_bg.wasm?url'
 import { SystemState } from './system_state.svelte';
+import { MainThreadAdapter } from './main-thread-adapter';
 
 
 
@@ -19,7 +20,7 @@ export class WorkerController {
   height = $state(0);
 
   private initializationError: any = null;
-  private worker: Worker;
+  private adapter: MainThreadAdapter;
   private canvas: HTMLCanvasElement;
 
   // Input handling properties
@@ -46,19 +47,17 @@ export class WorkerController {
     console.log("Starting WASM fetch immediately...");
     this.wasmDataPromise = fetch(wasmUrl).then(response => response.arrayBuffer());
 
-    // Initialize the worker
-    console.log("Initializing Web Worker...");
-    this.worker = new Worker(new URL('./worker.js', import.meta.url), {
-      type: 'module'
-    });
+    // Initialize the main thread adapter
+    console.log("Initializing Main Thread Adapter...");
+    this.adapter = new MainThreadAdapter();
 
-    // Set up message handling from worker
-    this.worker.onmessage = this.handleWorkerMessage.bind(this);
+    // Set up message handling from adapter
+    this.adapter.onmessage = this.handleWorkerMessage.bind(this);
 
-    // Send the WASM data to the worker once it's loaded
+    // Send the WASM data to the adapter once it's loaded
     this.wasmDataPromise.then(wasmData => {
-      console.log("WASM data loaded, sending to worker...");
-      this.worker.postMessage({ ty: "wasmData", wasmData }, [wasmData]);
+      console.log("WASM data loaded, sending to adapter...");
+      this.adapter.postMessage({ ty: "wasmData", wasmData }, [wasmData]);
     }).catch(error => {
       console.error("Failed to load WASM:", error);
     });
@@ -73,10 +72,10 @@ export class WorkerController {
   private setupVisibilityListener() {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        this.worker.postMessage({ ty: "stopRunning" });
+        this.adapter.postMessage({ ty: "stopRunning" });
         console.log("Tab hidden, paused rendering");
       } else {
-        this.worker.postMessage({ ty: "startRunning" });
+        this.adapter.postMessage({ ty: "startRunning" });
         console.log("Tab visible, resumed rendering");
       }
     });
@@ -94,11 +93,11 @@ export class WorkerController {
         throw new Error("No appropriate GPU adapter found");
       }
 
-      // Wait for the worker to be ready
+      // Wait for the adapter to be ready
       await this.waitForWorkerReady();
 
-      // Create offscreen canvas and transfer control to the worker
-      this.transferCanvasToWorker();
+      // Initialize canvas with the adapter (no transfer needed)
+      this.initializeCanvasWithAdapter();
       return;
 
     } catch (error: Error | any) {
@@ -133,7 +132,7 @@ export class WorkerController {
         requestAnimationFrame(() => {
           // Send all currently pressed keys
           this.pressedKeys.forEach(key => {
-            this.worker.postMessage({ ty: "keydown", key });
+            this.adapter.postMessage({ ty: "keydown", key });
           });
           this.keyUpdateScheduled = false;
         });
@@ -149,7 +148,7 @@ export class WorkerController {
       // Remove it from the set
       this.pressedKeys.delete(key);
       // Send the key up event immediately
-      this.worker.postMessage({ ty: "keyup", key });
+      this.adapter.postMessage({ ty: "keyup", key });
     }
   }
 
@@ -173,15 +172,13 @@ export class WorkerController {
   }
 
   /**
-   * Transfers canvas control to the worker
+   * Initialize canvas with the main thread adapter
    */
-  private transferCanvasToWorker() {
-    const offscreenCanvas = this.canvas.transferControlToOffscreen();
+  private initializeCanvasWithAdapter() {
     const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
-    this.worker.postMessage(
-      { ty: "init", canvas: offscreenCanvas, devicePixelRatio },
-      [offscreenCanvas]
+    this.adapter.postMessage(
+      { ty: "init", canvas: this.canvas, devicePixelRatio }
     );
   }
 
@@ -209,7 +206,7 @@ export class WorkerController {
     // console.log(`Resizing canvas to: ${physicalWidth} × ${physicalHeight} (CSS: ${this.width} × ${this.height})`);
 
     // Send dimensions to worker
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "resize",
       width: physicalWidth,
       height: physicalHeight
@@ -232,7 +229,7 @@ export class WorkerController {
       case "pick":
         this.latestPick = data.list;
         // Notify the worker which entities should have hover effects enabled
-        this.worker.postMessage({ ty: "hover", list: this.latestPick });
+        this.adapter.postMessage({ ty: "hover", list: this.latestPick });
         break;
 
       case "inspector_result":
@@ -260,25 +257,16 @@ export class WorkerController {
   private addMouseEventObservers() {
     // Throttled mouse move handling
     this.canvas.addEventListener("mousemove", (event) => {
-
-      // console.log("DEVICE PIXEL RATIO", window.devicePixelRatio);
-      // const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
-
       // Store the latest position
       this.latestMouseX = event.offsetX;
       this.latestMouseY = event.offsetY;
-
-      const physicalWidth = Math.floor(event.offsetX * devicePixelRatio);
-      const physicalHeight = Math.floor(event.offsetY * devicePixelRatio);
-
-      // console.log(`Mouse move to to: ${physicalWidth} × ${physicalHeight} (CSS: ${event.offsetX} × ${event.offsetY})`);
 
       // Schedule update on next animation frame if not already scheduled
       if (!this.mouseMoveScheduled) {
         this.mouseMoveScheduled = true;
         requestAnimationFrame(() => {
           this.latestPick = []; // Clear last pick cache
-          this.worker.postMessage({
+          this.adapter.postMessage({
             ty: "mousemove",
             x: this.latestMouseX,
             y: this.latestMouseY
@@ -291,7 +279,7 @@ export class WorkerController {
     // Mouse click and selection handling
     this.canvas.addEventListener("mousedown", (event) => {
       if (typeof this.latestPick[0] !== "undefined") {
-        this.worker.postMessage({
+        this.adapter.postMessage({
           ty: "leftBtDown",
           pickItem: this.latestPick[0],
           x: event.offsetX,
@@ -301,12 +289,12 @@ export class WorkerController {
     });
 
     this.canvas.addEventListener("mouseup", (_event) => {
-      this.worker.postMessage({ ty: "leftBtUp" });
+      this.adapter.postMessage({ ty: "leftBtUp" });
     });
 
     this.canvas.addEventListener("click", (_event) => {
       if (Array.isArray(this.latestPick) && this.latestPick.length > 0) {
-        this.worker.postMessage({
+        this.adapter.postMessage({
           ty: "select",
           list: this.latestPick,
         });
@@ -318,7 +306,7 @@ export class WorkerController {
    * Starts the worker engine instance
    */
   startWorkerApp() {
-    this.worker.postMessage({ ty: "startRunning" });
+    this.adapter.postMessage({ ty: "startRunning" });
     this.setCanvasOpacity("100%");
   }
 
@@ -326,7 +314,7 @@ export class WorkerController {
    * Stops the worker engine instance
    */
   stopWorkerApp() {
-    this.worker.postMessage({ ty: "stopRunning" });
+    this.adapter.postMessage({ ty: "stopRunning" });
     this.setCanvasOpacity("50%");
   }
 
@@ -334,7 +322,7 @@ export class WorkerController {
    * Turns on/off engine animation
    */
   setWorkerAutoAnimation(needsAnimation: boolean) {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "autoAnimation",
       autoAnimation: needsAnimation
     });
@@ -353,7 +341,7 @@ export class WorkerController {
    * Update a component on an entity
    */
   public inspectorUpdateComponent(entityId: string, componentId: number, valueJson: string) {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "inspector_update_component",
       entity_id: entityId,
       component_id: componentId,
@@ -365,7 +353,7 @@ export class WorkerController {
    * Toggle a component on an entity (add if missing, remove if present)
    */
   public inspectorToggleComponent(entityId: string, componentId: number) {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "inspector_toggle_component",
       entity_id: entityId,
       component_id: componentId
@@ -376,7 +364,7 @@ export class WorkerController {
    * Remove a component from an entity
    */
   public inspectorRemoveComponent(entityId: string, componentId: number) {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "inspector_remove_component",
       entity_id: entityId,
       component_id: componentId
@@ -387,7 +375,7 @@ export class WorkerController {
    * Insert a component on an entity
    */
   public inspectorInsertComponent(entityId: string, componentId: number, valueJson: string) {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "inspector_insert_component",
       entity_id: entityId,
       component_id: componentId,
@@ -399,7 +387,7 @@ export class WorkerController {
    * Despawn an entity
    */
   public inspectorDespawnEntity(entityId: string, kind: string = "Recursive") {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "inspector_despawn_entity",
       entity_id: entityId,
       kind: kind
@@ -410,7 +398,7 @@ export class WorkerController {
    * Toggle visibility of an entity
    */
   public inspectorToggleVisibility(entityId: string) {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "inspector_toggle_visibility",
       entity_id: entityId
     });
@@ -420,7 +408,7 @@ export class WorkerController {
    * Reparent an entity
    */
   public inspectorReparentEntity(entityId: string, parentId?: string) {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "inspector_reparent_entity",
       entity_id: entityId,
       parent_id: parentId
@@ -431,7 +419,7 @@ export class WorkerController {
    * Spawn a new entity
    */
   public inspectorSpawnEntity(parentId?: string) {
-    this.worker.postMessage({
+    this.adapter.postMessage({
       ty: "inspector_spawn_entity",
       parent_id: parentId
     });

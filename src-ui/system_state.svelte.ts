@@ -90,10 +90,10 @@ export class SystemState {
 
                 for (const [componentId, isDisabled, value] of mutation.changes) {
                     // Client-side deep comparison for frequently changing components
-                    const shouldSkipUpdate = this.isComponentValueUnchanged(entity, componentId, value);
-                    if (shouldSkipUpdate) {
-                        continue;
-                    }
+                    // const shouldSkipUpdate = this.isComponentValueUnchanged(entity, componentId, value);
+                    // if (shouldSkipUpdate) {
+                    //     continue;
+                    // }
 
                     shouldUpdateName = !entityComponents.has(componentId);
                     entityComponents.set(componentId, {
@@ -109,26 +109,26 @@ export class SystemState {
                     }
                 }
 
-                // Log component changes with entity and component names
-                if (mutation.changes.length > 0) {
-                    const entityName = this.entityNames.get(entity) || this.getEntityName(entity) || `Entity ${prettyEntityId(entity)}`;
-                    const transformComponentId = this.componentNameToIdMap.get('bevy_transform::components::transform::Transform');
+                // // Log component changes with entity and component names
+                // if (mutation.changes.length > 0) {
+                //     const entityName = this.entityNames.get(entity) || this.getEntityName(entity) || `Entity ${prettyEntityId(entity)}`;
+                //     const transformComponentId = this.componentNameToIdMap.get('bevy_transform::components::transform::Transform');
 
-                    const changedComponents = mutation.changes.map(([componentId, isDisabled, newValue]) => {
-                        const { short_name, name } = this.getComponentName(componentId);
-                        const componentName = short_name || name || `Component ${componentId}`;
+                //     const changedComponents = mutation.changes.map(([componentId, isDisabled, newValue]) => {
+                //         const { short_name, name } = this.getComponentName(componentId);
+                //         const componentName = short_name || name || `Component ${componentId}`;
 
-                        // Show detailed values for Transform component
-                        if (componentId === transformComponentId && componentName === 'Transform') {
-                            const oldComponent = entityComponents.get(componentId);
-                            const oldValue = oldComponent?.value;
-                            return `${componentName} (${JSON.stringify(oldValue)} → ${JSON.stringify(newValue)})`;
-                        }
+                //         // Show detailed values for Transform component
+                //         if (componentId === transformComponentId && componentName === 'Transform') {
+                //             const oldComponent = entityComponents.get(componentId);
+                //             const oldValue = oldComponent?.value;
+                //             return `${componentName} (${JSON.stringify(oldValue)} → ${JSON.stringify(newValue)})`;
+                //         }
 
-                        return componentName;
-                    }).join(', ');
-                    console.log(`Entity "${entityName}" changed components: ${changedComponents}`);
-                }
+                //         return componentName;
+                //     }).join(', ');
+                //     // console.log(`Entity "${entityName}" changed components: ${changedComponents}`);
+                // }
 
                 this.entities.set(entity, new Map(entityComponents));
             } else {

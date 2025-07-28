@@ -217,18 +217,6 @@ export class WorkerController {
   }
 
   /**
-   * Legacy resize method - prefer using requestCanvasResize instead
-   */
-  public resizeCanvas() {
-    const rect = this.canvas.getBoundingClientRect();
-    console.log("Canvas bounding rect:", rect.width, "×", rect.height);
-
-    if (rect.width > 0 && rect.height > 0) {
-      this.requestCanvasResize(rect.width, rect.height);
-    }
-  }
-
-  /**
    * Handles messages received from the worker
    */
   private handleWorkerMessage(event: MessageEvent) {

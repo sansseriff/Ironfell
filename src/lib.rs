@@ -17,16 +17,16 @@ pub use ffi_inspector_bridge::*;
 mod canvas_view;
 use canvas_view::*;
 
-mod ray_pick;
+// ray_pick legacy module removed (superseded by new picking systems)
 
-mod bevy_app;
+pub mod bevy_app; // expose init_app and related types
+pub use bevy_app::*; // re-export init_app symbols
 
 mod fps_overlay;
 
 mod tracking_circle;
 
-mod asset_reader;
-use asset_reader::*;
+mod asset_reader; // kept private
 
 // mod bevy_vello;
 // use bevy_vello::*;
@@ -74,45 +74,110 @@ impl WorkerApp {
     }
 }
 
+/// Frame / animation driving data retained from the original ActiveInfo.
+/// Interaction (selection / hover / drag) has been moved to dedicated resources in the new picking pipeline.
 #[derive(Debug, Resource)]
-pub(crate) struct ActiveInfo {
-    pub hover: HashMap<Entity, u64>,
-    pub selection: HashMap<Entity, u64>,
-    /// Object responding to drag
-    pub drag: Entity,
-    /// Last frame's drag position
-    pub last_drag_pos: Vec2,
-    /// Whether running in a worker
+pub(crate) struct ActivityControl {
     pub is_in_worker: bool,
-    /// Whether to automatically execute rotation animations for scene objects
     pub auto_animate: bool,
-    /// Remaining frames
-    ///
-    /// When automatic frame animation is disabled, the scene will only be updated by mouse events.
-    /// Since frame rendering needs to be driven by requestAnimationFrame to maintain synchronization
-    /// with browser display refresh, mouse events will not directly call app.update(), but instead
-    /// reset this counter of pending update frames
     pub remaining_frames: u32,
-    pub w_pressed: bool,
-    pub a_pressed: bool,
-    pub s_pressed: bool,
-    pub d_pressed: bool,
 }
 
-impl ActiveInfo {
+impl ActivityControl {
     pub fn new() -> Self {
-        ActiveInfo {
-            hover: HashMap::default(),
-            selection: HashMap::default(),
-            drag: Entity::PLACEHOLDER,
-            last_drag_pos: Vec2::ZERO,
+        ActivityControl {
             is_in_worker: false,
             auto_animate: true,
             remaining_frames: 0,
-            w_pressed: false,
-            a_pressed: false,
-            s_pressed: false,
-            d_pressed: false,
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// New interaction / picking scaffolding (to be wired in subsequent patches)
+// -------------------------------------------------------------------------------------------------
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct ButtonSnapshot {
+    pub left: bool,
+    pub right: bool,
+    pub middle: bool,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+pub struct ModifierSnapshot {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub meta: bool,
+}
+
+#[derive(Resource, Debug, Default)]
+pub struct PointerState {
+    pub screen: Vec2,
+    pub delta: Vec2,
+    pub overlay_world: Option<Vec2>,
+    pub world_ray: Option<Ray3d>,
+    pub buttons: ButtonSnapshot,
+    pub modifiers: ModifierSnapshot,
+    pub just_pressed_left: bool,
+    pub just_released_left: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Hit2D {
+    pub entity: Entity,
+    pub z: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Hit3D {
+    pub entity: Entity,
+    pub distance: f32,
+}
+
+#[derive(Resource, Debug, Default)]
+pub struct PointerHits {
+    pub overlay: Vec<Hit2D>,
+    pub world3d: Vec<Hit3D>,
+    pub primary: Option<Entity>,
+}
+
+#[derive(Resource, Debug, Default)]
+pub struct SelectionState {
+    pub selected: HashMap<Entity, ()>,
+    pub hovered: HashMap<Entity, ()>,
+    pub last_primary: Option<Entity>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DragKind {
+    Overlay2D,
+    World3D,
+    Group,
+}
+
+#[derive(Resource, Debug, Default)]
+pub struct DragState {
+    pub target: Option<Entity>,
+    pub kind: Option<DragKind>,
+    pub grab_offset_2d: Vec2,
+    pub plane_origin: Vec3,
+    pub plane_normal: Vec3,
+}
+
+// Marker for a composite vector group (single VelloScene acting as many shapes)
+#[derive(Component, Debug)]
+pub struct GroupAggregate {
+    pub version: u32,
+    pub shape_count: u32,
+}
+
+impl Default for GroupAggregate {
+    fn default() -> Self {
+        Self {
+            version: 0,
+            shape_count: 0,
         }
     }
 }

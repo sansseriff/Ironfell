@@ -1,5 +1,8 @@
 use crate::bevy_app::init_app;
-use crate::{ActiveInfo, WorkerApp, canvas_view::*, create_canvas_window, update_canvas_windows};
+use crate::{
+    ActivityControl, DragState, WorkerApp, canvas_view::*, create_canvas_window,
+    update_canvas_windows,
+};
 use bevy::app::PluginsState;
 use bevy::ecs::system::SystemState;
 use bevy::platform::collections::HashMap;
@@ -34,6 +37,11 @@ extern "C" {
     /// 从 worker 环境发送
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_pick_from_worker(list: js_sys::Array);
+    // New outbound helpers (implemented in JS worker) for hover & selection changes
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_hover_from_worker(list: js_sys::Array);
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_selection_from_worker(list: js_sys::Array);
 
     // Inspector streaming callbacks
     pub(crate) fn send_inspector_update_from_worker(update_json: &str);
@@ -96,7 +104,7 @@ pub fn create_window_by_offscreen_canvas(
 fn create_window(app: &mut WorkerApp, view_obj: ViewObj, is_in_worker: bool) {
     app.insert_non_send_resource(view_obj);
 
-    let mut info = ActiveInfo::new();
+    let mut info = ActivityControl::new();
     info.is_in_worker = is_in_worker;
     // 选中/高亮 资源
     app.insert_resource(info);
@@ -140,7 +148,10 @@ pub fn mouse_move(ptr: u64, x: f32, y: f32) {
     };
     app.world_mut().send_event(cursor_move);
 
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    let mut active_info = app
+        .world_mut()
+        .get_resource_mut::<ActivityControl>()
+        .unwrap();
     active_info.remaining_frames = 10;
 }
 
@@ -165,7 +176,10 @@ pub fn mouse_wheel(ptr: u64, delta_x: f32, delta_y: f32, delta_mode: u32) {
     };
     app.world_mut().send_event(event);
 
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    let mut active_info = app
+        .world_mut()
+        .get_resource_mut::<ActivityControl>()
+        .unwrap();
     active_info.remaining_frames = 10;
 }
 
@@ -176,49 +190,28 @@ pub fn resize(ptr: u64, width: f32, height: f32) {
     update_canvas_windows(app, width, height);
 }
 
-/// 鼠标左键按下
+/// Mouse left button down (no entity id needed; Rust picking determines target)
 #[wasm_bindgen]
-pub fn left_bt_down(ptr: u64, obj: JsValue, x: f32, y: f32) {
+pub fn left_bt_down(ptr: u64) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    let position = app.to_physical_size(x, y);
-    let window_entity = app.window; // Read app.window before active_info gets its borrow
-
-    // Scope for the first set of operations involving active_info
-    {
-        let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-        let value = bigint_to_u64(obj);
-        if let Ok(v) = value {
-            let entity = Entity::from_bits(v);
-            active_info.drag = entity;
-            active_info.last_drag_pos = position;
-            // 当前要 drap 的对象同时也是 selection 对象
-            let mut map: HashMap<Entity, u64> = HashMap::default();
-            map.insert(entity, 0);
-            active_info.selection = map;
-        }
-    } // active_info goes out of scope here, releasing its mutable borrow of app.world
-
-    // Send Bevy MouseButtonInput event
     let event = MouseButtonInput {
         button: MouseButton::Left,
         state: ButtonState::Pressed,
-        window: window_entity, // Use the stored window_entity
+        window: app.window,
     };
-    app.world_mut().send_event(event); // This is a new mutable borrow of app.world, which is fine now
-
-    // If you need to modify active_info again, get it again
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-    active_info.remaining_frames = 10;
+    app.world_mut().send_event(event);
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
 }
 
 /// 鼠标左键松开
 #[wasm_bindgen]
 pub fn left_bt_up(ptr: u64) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-
-    {
-        let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-        active_info.drag = Entity::PLACEHOLDER;
+    if let Some(mut drag_state) = app.world_mut().get_resource_mut::<DragState>() {
+        drag_state.target = None;
+        drag_state.kind = None;
     }
 
     // Send Bevy MouseButtonInput event
@@ -230,8 +223,9 @@ pub fn left_bt_up(ptr: u64) {
     app.world_mut().send_event(event);
 
     // If you need to modify active_info again, get it again
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-    active_info.remaining_frames = 10;
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
 }
 
 /// 鼠标右键按下
@@ -244,7 +238,10 @@ pub fn right_bt_down(ptr: u64) {
         window: app.window,
     };
     app.world_mut().send_event(event);
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    let mut active_info = app
+        .world_mut()
+        .get_resource_mut::<ActivityControl>()
+        .unwrap();
     active_info.remaining_frames = 10;
 }
 
@@ -258,43 +255,21 @@ pub fn right_bt_up(ptr: u64) {
         window: app.window,
     };
     app.world_mut().send_event(event);
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-    active_info.remaining_frames = 10;
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
 }
 
-/// 设置 hover（高亮） 效果
-#[wasm_bindgen]
-pub fn set_hover(ptr: u64, arr: js_sys::Array) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-
-    // 将 js hover 列表转换为 rust 对象
-    let hover = to_map(arr);
-    // 更新 hover 数据
-    active_info.hover = hover;
-
-    active_info.remaining_frames = 10;
-}
-
-/// 设置 选中 效果
-#[wasm_bindgen]
-pub fn set_selection(ptr: u64, arr: js_sys::Array) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-
-    // 将 js selection 列表转换为 rust 对象
-    let selection = to_map(arr);
-    // 更新 hover 数据
-    active_info.selection = selection;
-
-    active_info.remaining_frames = 10;
-}
+// Inbound hover/selection setters removed; Rust is authoritative now. Keep optional FFI if UI wants to force selection later.
 
 /// 打开 / 关闭动画
 #[wasm_bindgen]
 pub fn set_auto_animation(ptr: u64, needs_animate: u32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+    let mut active_info = app
+        .world_mut()
+        .get_resource_mut::<ActivityControl>()
+        .unwrap();
     active_info.auto_animate = needs_animate > 0;
 }
 
@@ -336,15 +311,9 @@ pub fn key_down(ptr: u64, key: String) {
     }
 
     // Original ActiveInfo update (can be removed if camera controller fully relies on ButtonInput)
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-    match key.as_str() {
-        "w" => active_info.w_pressed = true,
-        "a" => active_info.a_pressed = true,
-        "s" => active_info.s_pressed = true,
-        "d" => active_info.d_pressed = true,
-        _ => {}
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
     }
-    active_info.remaining_frames = 10; // Ensure re-render
 }
 
 /// Handle key up event
@@ -365,15 +334,9 @@ pub fn key_up(ptr: u64, key: String) {
     }
 
     // Original ActiveInfo update (can be removed if camera controller fully relies on ButtonInput)
-    let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
-    match key.as_str() {
-        "w" => active_info.w_pressed = false,
-        "a" => active_info.a_pressed = false,
-        "s" => active_info.s_pressed = false,
-        "d" => active_info.d_pressed = false,
-        _ => {}
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
     }
-    active_info.remaining_frames = 10; // Ensure re-render
 }
 
 /// Frame rendering
@@ -390,7 +353,10 @@ pub fn enter_frame(ptr: u64) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     {
         // Check conditions for executing frame rendering
-        let mut active_info = app.world_mut().get_resource_mut::<ActiveInfo>().unwrap();
+        let mut active_info = app
+            .world_mut()
+            .get_resource_mut::<ActivityControl>()
+            .unwrap();
         if !active_info.auto_animate && active_info.remaining_frames == 0 {
             return;
         }
@@ -409,7 +375,7 @@ pub fn enter_frame(ptr: u64) {
         }
     } else {
         // 模拟阻塞
-        let active_info = app.world().get_resource::<ActiveInfo>().unwrap();
+        let active_info = app.world().get_resource::<ActivityControl>().unwrap();
         if active_info.is_in_worker {
             block_from_worker();
         } else {

@@ -1,7 +1,9 @@
-import { SvelteMap } from 'svelte/reactivity';
-import wasmUrl from './wasm/ironfell_bg.wasm?url'
 import { SystemState } from './system_state.svelte';
-import { MainThreadAdapter } from './main-thread-adapter';
+import { AdapterBridge } from './runtime/adapter_bridge';
+import { WasmLoader } from './runtime/wasm_loader';
+import { InputManager } from './runtime/input_manager';
+import { ResizeManager } from './runtime/resize_manager';
+import { InspectorClient } from './runtime/inspector_client';
 
 
 
@@ -12,6 +14,8 @@ const OVERRIDE_SCALE_FACTOR = 2;
  * WorkerController manages interactions with a Web Worker that runs the engine instance.
  * It handles communication, mouse events, and state management between the UI and worker.
  */
+export type RuntimeMode = 'worker' | 'main';
+
 export class WorkerController {
   // Whether the worker is ready
   workerIsReady = $state(false);
@@ -20,48 +24,28 @@ export class WorkerController {
   height = $state(0);
 
   private initializationError: any = null;
-  private adapter: MainThreadAdapter;
+  private runtimeMode: RuntimeMode;
   private canvas: HTMLCanvasElement;
+  private bridge!: AdapterBridge;
+  private wasmLoader = new WasmLoader();
+  private input = new InputManager({ enableRaw: true });
+  private resizeManager = new ResizeManager();
+  private inspector = new InspectorClient(new SystemState());
 
-  // Input handling properties
-  private latestPick: any[] = [];
-  private latestMouseX = 0;
-  private latestMouseY = 0;
-  private mouseMoveScheduled = false;
-
-  // Key handling with throttling
-  private pressedKeys = new Set<string>();
-  private keyUpdateScheduled = false;
-
-
-  public state = new SystemState();
+  public state = this.inspector.state;
 
   /**
    * Creates a new WorkerController instance
    * @param canvas The canvas element where rendering occurs
    */
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, mode: RuntimeMode = 'worker') {
     this.canvas = canvas;
+    this.runtimeMode = mode;
 
-    // Start fetching WASM immediately
-    console.log("Starting WASM fetch immediately...");
-    this.wasmDataPromise = fetch(wasmUrl).then(response => response.arrayBuffer());
-
-    // Initialize the main thread adapter
-    console.log("Initializing Main Thread Adapter...");
-    this.adapter = new MainThreadAdapter();
-
-    // Set up message handling from adapter
-    this.adapter.onmessage = this.handleWorkerMessage.bind(this);
-
-    // Send the WASM data to the adapter once it's loaded
-    this.wasmDataPromise.then(wasmData => {
-      console.log("WASM data loaded, sending to adapter...");
-      this.adapter.postMessage({ ty: "wasmData", wasmData }, [wasmData]);
-    }).catch(error => {
-      console.error("Failed to load WASM:", error);
-    });
-
+    this.bridge = new AdapterBridge(this.runtimeMode, this.canvas);
+    this.bridge.setHandler(data => this.handleBridgeMessage(data));
+    this.wasmLoader.startFetch();
+    this.inspector.init(this.bridge);
     // Listen for tab visibility changes
     this.setupVisibilityListener();
   }
@@ -72,10 +56,10 @@ export class WorkerController {
   private setupVisibilityListener() {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
-        this.adapter.postMessage({ ty: "stopRunning" });
+        this.bridge.post({ ty: 'stopRunning' });
         console.log("Tab hidden, paused rendering");
       } else {
-        this.adapter.postMessage({ ty: "startRunning" });
+        this.bridge.post({ ty: 'startRunning' });
         console.log("Tab visible, resumed rendering");
       }
     });
@@ -116,58 +100,25 @@ export class WorkerController {
   }
 
   /**
-   * Handles keyboard input with debouncing
-   */
-  public handleKeyDown = (event: KeyboardEvent) => {
-    const validKeys = ["w", "a", "s", "d", "f", "shift", "g"];
-    const key = event.key.toLowerCase();
-
-    if (validKeys.includes(key)) {
-      // Add to pressed keys set
-      this.pressedKeys.add(key);
-
-      // Schedule key state update if not already scheduled
-      if (!this.keyUpdateScheduled) {
-        this.keyUpdateScheduled = true;
-        requestAnimationFrame(() => {
-          // Send all currently pressed keys
-          this.pressedKeys.forEach(key => {
-            this.adapter.postMessage({ ty: "keydown", key });
-          });
-          this.keyUpdateScheduled = false;
-        });
-      }
-    }
-  }
-
-  public handleKeyUp = (event: KeyboardEvent) => {
-    const key = event.key.toLowerCase();
-
-    // If it was in our pressed keys set
-    if (this.pressedKeys.has(key)) {
-      // Remove it from the set
-      this.pressedKeys.delete(key);
-      // Send the key up event immediately
-      this.adapter.postMessage({ ty: "keyup", key });
-    }
-  }
-
-  /**
    * Waits for the worker to signal it's ready
    */
   private waitForWorkerReady(): Promise<void> {
+    // We dispatch wasm early; worker readiness message will flip flag
     return new Promise((resolve) => {
       if (this.workerIsReady) {
         resolve();
         return;
       }
 
-      const checkInterval = setInterval(() => {
+      const id = setInterval(() => {
         if (this.workerIsReady) {
-          clearInterval(checkInterval);
+          clearInterval(id);
           resolve();
         }
       }, 50);
+
+      // Kick wasm send if not already
+      this.wasmLoader.sendToAdapter(this.bridge).catch(e => console.error('WASM send failed', e));
     });
   }
 
@@ -177,73 +128,59 @@ export class WorkerController {
   private initializeCanvasWithAdapter() {
     const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
 
-    this.adapter.postMessage(
-      { ty: "init", canvas: this.canvas, devicePixelRatio }
-    );
+    if (this.runtimeMode === 'worker') {
+      try {
+        // Attempt to transfer existing canvas. This will fail if a rendering context was already created.
+        // @ts-ignore
+        const offscreen: OffscreenCanvas = (this.canvas as any).transferControlToOffscreen();
+        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio }, [offscreen as any]);
+      } catch (e: any) {
+        console.error('Offscreen transfer failed:', e);
+        this.bridge.post({ ty: 'init', canvas: this.canvas, devicePixelRatio });
+      }
+    } else {
+      this.bridge.post({ ty: 'init', canvas: this.canvas, devicePixelRatio });
+    }
+
+    this.resizeManager.init(this.canvas, this.bridge);
   }
 
   /**
    * Requests canvas resize with proper pixel ratio scaling
    */
-  public requestCanvasResize(width: number, height: number) {
-    const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
-
-    // Update stored dimensions if provided
-    if (width > 0) this.width = width;
-    if (height > 0) this.height = height;
-
-    // Only proceed if we have valid dimensions
-    if (this.width <= 0 || this.height <= 0) return;
-
-    // Set the display size through CSS
-    this.canvas.style.width = this.width + "px";
-    this.canvas.style.height = this.height + "px";
-
-    // Calculate physical pixels
-    const physicalWidth = Math.floor(this.width * devicePixelRatio);
-    const physicalHeight = Math.floor(this.height * devicePixelRatio);
-
-    // console.log(`Resizing canvas to: ${physicalWidth} × ${physicalHeight} (CSS: ${this.width} × ${this.height})`);
-
-    // Send dimensions to worker
-    this.adapter.postMessage({
-      ty: "resize",
-      width: physicalWidth,
-      height: physicalHeight
-    });
+  public requestCanvasResize(width: number, height: number, force = false) {
+    this.resizeManager.request(width, height, force);
   }
 
   /**
    * Handles messages received from the worker
    */
-  private handleWorkerMessage(event: MessageEvent) {
-    const data = event.data;
-
+  private handleBridgeMessage(data: any) {
     switch (data.ty) {
       case "workerIsReady":
         this.workerIsReady = true;
-        // Start listening for mouse events once worker is ready
-        this.addMouseEventObservers();
+        this.input.init(this.canvas, this.bridge);
         break;
 
       case "pick":
-        this.latestPick = data.list;
-        // Notify the worker which entities should have hover effects enabled
-        this.adapter.postMessage({ ty: "hover", list: this.latestPick });
+        // Deprecated: legacy pick message; store for debug / transition.
+        this.input.setPick(data.list);
+        break;
+      case "hover":
+        // Hover list coming directly from Rust picking
+        this.input.setPick(data.list);
+        break;
+      case "selection":
+        // Selection list from Rust; could drive UI panels
+        this.input.setPick(data.list);
         break;
 
       case "inspector_result":
-        console.log(`Inspector command ${data.command} result:`, data.success);
-        if (data.entity_id) {
-          console.log(`New entity ID: ${data.entity_id}`);
-        }
+        // Optionally surface result logging
         break;
 
       case "inspector_update":
-        // console.log("Inspector update received:", data.update);
-        // Handle streaming updates from the inspector if needed
-
-        this.state.process_update(data.update);
+        this.inspector.handleUpdate(data.update);
         break;
 
       default:
@@ -252,61 +189,10 @@ export class WorkerController {
   }
 
   /**
-   * Adds mouse event listeners to the canvas
-   */
-  private addMouseEventObservers() {
-    // Throttled mouse move handling
-    this.canvas.addEventListener("mousemove", (event) => {
-      // Store the latest position
-      this.latestMouseX = event.offsetX;
-      this.latestMouseY = event.offsetY;
-
-      // Schedule update on next animation frame if not already scheduled
-      if (!this.mouseMoveScheduled) {
-        this.mouseMoveScheduled = true;
-        requestAnimationFrame(() => {
-          this.latestPick = []; // Clear last pick cache
-          this.adapter.postMessage({
-            ty: "mousemove",
-            x: this.latestMouseX,
-            y: this.latestMouseY
-          });
-          this.mouseMoveScheduled = false;
-        });
-      }
-    });
-
-    // Mouse click and selection handling
-    this.canvas.addEventListener("mousedown", (event) => {
-      if (typeof this.latestPick[0] !== "undefined") {
-        this.adapter.postMessage({
-          ty: "leftBtDown",
-          pickItem: this.latestPick[0],
-          x: event.offsetX,
-          y: event.offsetY,
-        });
-      }
-    });
-
-    this.canvas.addEventListener("mouseup", (_event) => {
-      this.adapter.postMessage({ ty: "leftBtUp" });
-    });
-
-    this.canvas.addEventListener("click", (_event) => {
-      if (Array.isArray(this.latestPick) && this.latestPick.length > 0) {
-        this.adapter.postMessage({
-          ty: "select",
-          list: this.latestPick,
-        });
-      }
-    });
-  }
-
-  /**
    * Starts the worker engine instance
    */
   startWorkerApp() {
-    this.adapter.postMessage({ ty: "startRunning" });
+    this.bridge.post({ ty: 'startRunning' });
     this.setCanvasOpacity("100%");
   }
 
@@ -314,7 +200,7 @@ export class WorkerController {
    * Stops the worker engine instance
    */
   stopWorkerApp() {
-    this.adapter.postMessage({ ty: "stopRunning" });
+    this.bridge.post({ ty: 'stopRunning' });
     this.setCanvasOpacity("50%");
   }
 
@@ -322,10 +208,7 @@ export class WorkerController {
    * Turns on/off engine animation
    */
   setWorkerAutoAnimation(needsAnimation: boolean) {
-    this.adapter.postMessage({
-      ty: "autoAnimation",
-      autoAnimation: needsAnimation
-    });
+    this.bridge.post({ ty: 'autoAnimation', autoAnimation: needsAnimation });
   }
 
   /**
@@ -341,98 +224,67 @@ export class WorkerController {
    * Update a component on an entity
    */
   public inspectorUpdateComponent(entityId: string, componentId: number, valueJson: string) {
-    this.adapter.postMessage({
-      ty: "inspector_update_component",
-      entity_id: entityId,
-      component_id: componentId,
-      value_json: valueJson
-    });
+    this.inspector.updateComponent(entityId, componentId, valueJson);
   }
 
   /**
    * Toggle a component on an entity (add if missing, remove if present)
    */
   public inspectorToggleComponent(entityId: string, componentId: number) {
-    this.adapter.postMessage({
-      ty: "inspector_toggle_component",
-      entity_id: entityId,
-      component_id: componentId
-    });
+    this.inspector.toggleComponent(entityId, componentId);
   }
 
   /**
    * Remove a component from an entity
    */
   public inspectorRemoveComponent(entityId: string, componentId: number) {
-    this.adapter.postMessage({
-      ty: "inspector_remove_component",
-      entity_id: entityId,
-      component_id: componentId
-    });
+    this.inspector.removeComponent(entityId, componentId);
   }
 
   /**
    * Insert a component on an entity
    */
   public inspectorInsertComponent(entityId: string, componentId: number, valueJson: string) {
-    this.adapter.postMessage({
-      ty: "inspector_insert_component",
-      entity_id: entityId,
-      component_id: componentId,
-      value_json: valueJson
-    });
+    this.inspector.insertComponent(entityId, componentId, valueJson);
   }
 
   /**
    * Despawn an entity
    */
   public inspectorDespawnEntity(entityId: string, kind: string = "Recursive") {
-    this.adapter.postMessage({
-      ty: "inspector_despawn_entity",
-      entity_id: entityId,
-      kind: kind
-    });
+    this.inspector.despawnEntity(entityId, kind);
   }
 
   /**
    * Toggle visibility of an entity
    */
   public inspectorToggleVisibility(entityId: string) {
-    this.adapter.postMessage({
-      ty: "inspector_toggle_visibility",
-      entity_id: entityId
-    });
+    this.inspector.toggleVisibility(entityId);
   }
 
   /**
    * Reparent an entity
    */
   public inspectorReparentEntity(entityId: string, parentId?: string) {
-    this.adapter.postMessage({
-      ty: "inspector_reparent_entity",
-      entity_id: entityId,
-      parent_id: parentId
-    });
+    this.inspector.reparentEntity(entityId, parentId);
   }
 
   /**
    * Spawn a new entity
    */
   public inspectorSpawnEntity(parentId?: string) {
-    this.adapter.postMessage({
-      ty: "inspector_spawn_entity",
-      parent_id: parentId
-    });
+    this.inspector.spawnEntity(parentId);
   }
 
   /**
    * Cleanup method for controller resources
    */
   public dispose() {
-    // Optional cleanup if needed
-    // Could terminate worker, remove event listeners, etc.
-    console.log("WorkerController cleanup");
+    try { this.bridge.post({ ty: 'stopRunning' }); } catch { }
+    this.bridge.dispose();
   }
+
+  public getMode(): RuntimeMode { return this.runtimeMode; }
 
 
 

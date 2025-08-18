@@ -8,12 +8,10 @@ import init, {
   mouse_move,
   left_bt_down,
   left_bt_up,
-  set_hover,
-  set_selection,
   set_auto_animation,
   resize,
-  key_down, // Add new FFI function
-  key_up,   // Add new FFI function
+  key_down,
+  key_up,
   // Inspector FFI functions
   inspector_update_component,
   inspector_toggle_component,
@@ -51,6 +49,8 @@ class IronWorker {
     const rustBridge = {
       block_from_worker: (blockTime?: number) => this.blockFromWorker(blockTime),
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
+      send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
+      send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
       send_inspector_update_from_worker: (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson)
     };
 
@@ -60,6 +60,8 @@ class IronWorker {
     // Expose the functions to the global scope so they're accessible from Wasm
     (self as any).block_from_worker = (blockTime?: number) => this.blockFromWorker(blockTime);
     (self as any).send_pick_from_worker = (pickList: any[]) => this.sendPickFromWorker(pickList);
+    (self as any).send_hover_from_worker = (list: any[]) => this.sendHoverFromWorker(list);
+    (self as any).send_selection_from_worker = (list: any[]) => this.sendSelectionFromWorker(list);
     (self as any).send_inspector_update_from_worker = (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson);
 
     // Initialize the worker
@@ -116,19 +118,9 @@ class IronWorker {
           break;
 
 
-        case "hover":
-          // only called following a sendPickFromWorker call
-          // Set hover (highlight) effect
-          set_hover(this.appHandle, data.list);
-          break;
-
-        case "select":
-          // Set selection effect
-          set_selection(this.appHandle, data.list);
-          break;
-
         case "leftBtDown":
-          left_bt_down(this.appHandle, data.pickItem, data.x, data.y);
+          // Ignore legacy payload fields (pickItem, x, y)
+          left_bt_down(this.appHandle as any); // maintain old arity until wasm rebuild exposes new signature
           break;
 
         case "leftBtUp":
@@ -350,7 +342,16 @@ class IronWorker {
   }
 
   private sendPickFromWorker(pickList: any[]) {
+    // Deprecated path; retain for backward compatibility if needed.
     self.postMessage({ ty: "pick", list: pickList });
+  }
+
+  private sendHoverFromWorker(list: any[]) {
+    self.postMessage({ ty: "hover", list });
+  }
+
+  private sendSelectionFromWorker(list: any[]) {
+    self.postMessage({ ty: "selection", list });
   }
 
   private sendInspectorUpdateFromWorker(updateJson: string) {

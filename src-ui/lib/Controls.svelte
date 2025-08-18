@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { controllerManager } from "../controller-manager.svelte";
 
   // Props
@@ -27,6 +27,27 @@
       const entityId = "4294967296"; // Example entity ID as string
       console.log(`Testing despawn entity ${entityId}...`);
       controllerManager.controller.inspectorDespawnEntity(entityId);
+    }
+  }
+  // Runtime mode toggle
+  let pendingSwitch = $state(false);
+  async function toggleMode(event: Event) {
+    const input = event.currentTarget as HTMLInputElement | null;
+    if (!input) return;
+    const targetMode = input.checked ? "worker" : "main";
+    if (!controllerManager.controller) return;
+    const canvas = document.getElementById("worker-canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) return;
+    pendingSwitch = true;
+    try {
+      await controllerManager.switchMode(canvas, targetMode);
+      // If initialized before, re-run size logic via resize event
+      if (controllerManager.isInitialized) {
+        const resizeEvent = new Event("resize");
+        window.dispatchEvent(resizeEvent);
+      }
+    } finally {
+      pendingSwitch = false;
     }
   }
 </script>
@@ -66,6 +87,26 @@
         <li>Despawn Entity: Removes an entity (uses example ID)</li>
         <li>Check browser console for results</li>
       </ul>
+    </div>
+    <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+      <label
+        style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;"
+      >
+        <input
+          type="checkbox"
+          onchange={toggleMode}
+          disabled={controllerManager.loadingInProgress || pendingSwitch}
+          checked={controllerManager.runtimeMode === "worker"}
+        />
+        <span style="color: black;"
+          >{controllerManager.runtimeMode === "worker"
+            ? "Worker Mode"
+            : "Main Thread Mode"}</span
+        >
+      </label>
+      {#if pendingSwitch}<span style="font-size:11px; color:#666;"
+          >switching...</span
+        >{/if}
     </div>
   {/if}
 </section>

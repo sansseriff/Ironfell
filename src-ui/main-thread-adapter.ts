@@ -7,8 +7,6 @@ import init, {
   mouse_move,
   left_bt_down,
   left_bt_up,
-  set_hover,
-  set_selection,
   set_auto_animation,
   resize,
   key_down,
@@ -49,7 +47,9 @@ export class MainThreadAdapter {
     const rustBridge = {
       block_from_worker: (blockTime?: number) => this.blockFromWorker(blockTime),
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
-      send_inspector_update_from_worker: (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson)
+      send_inspector_update_from_worker: (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson),
+      send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
+      send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list)
     };
 
     // Make it globally accessible
@@ -59,6 +59,8 @@ export class MainThreadAdapter {
     (window as any).block_from_worker = (blockTime?: number) => this.blockFromWorker(blockTime);
     (window as any).send_pick_from_worker = (pickList: any[]) => this.sendPickFromWorker(pickList);
     (window as any).send_inspector_update_from_worker = (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson);
+    (window as any).send_hover_from_worker = (list: any[]) => this.sendHoverFromWorker(list);
+    (window as any).send_selection_from_worker = (list: any[]) => this.sendSelectionFromWorker(list);
   }
 
   // Simulate worker's onmessage interface
@@ -104,18 +106,9 @@ export class MainThreadAdapter {
         mouse_move(this.appHandle, data.x, data.y);
         break;
 
-      case "hover":
-        // Set hover (highlight) effect
-        set_hover(this.appHandle, data.list);
-        break;
-
-      case "select":
-        // Set selection effect
-        set_selection(this.appHandle, data.list);
-        break;
-
       case "leftBtDown":
-        left_bt_down(this.appHandle, data.pickItem, data.x, data.y);
+        // No entity id passed now; maintain old arity shim until wasm export updated
+        left_bt_down(this.appHandle);
         break;
 
       case "leftBtUp":
@@ -345,6 +338,14 @@ export class MainThreadAdapter {
 
   private sendPickFromWorker(pickList: any[]) {
     this.sendMessage({ ty: "pick", list: pickList });
+  }
+
+  private sendHoverFromWorker(list: any[]) {
+    this.sendMessage({ ty: "hover", list });
+  }
+
+  private sendSelectionFromWorker(list: any[]) {
+    this.sendMessage({ ty: "selection", list });
   }
 
   private sendInspectorUpdateFromWorker(updateJson: string) {

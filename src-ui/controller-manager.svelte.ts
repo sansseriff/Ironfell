@@ -1,4 +1,4 @@
-import { WorkerController } from "./control.svelte";
+import { WorkerController, type RuntimeMode } from "./control.svelte";
 
 class ControllerManagerClass {
   // State properties - can be accessed directly in Svelte 5
@@ -7,6 +7,7 @@ class ControllerManagerClass {
   showWebGPUWarning = $state(false);
   loadingInProgress = $state(false);
   webGPUSupported = $state(true);
+  runtimeMode: RuntimeMode = $state('worker');
 
   // Check for WebGPU support
   private checkWebGPUSupport(): boolean {
@@ -15,7 +16,7 @@ class ControllerManagerClass {
   }
 
   // Initialize the controller if WebGPU is supported
-  async initialize(canvas: HTMLCanvasElement): Promise<void> {
+  async initialize(canvas: HTMLCanvasElement, mode: RuntimeMode = this.runtimeMode): Promise<void> {
     if (this.loadingInProgress) return;
 
     // Check WebGPU support first
@@ -28,8 +29,9 @@ class ControllerManagerClass {
     try {
       this.loadingInProgress = true;
 
-      // Create the controller
-      this.controller = new WorkerController(canvas);
+      // Create the controller (respect mode)
+      this.runtimeMode = mode;
+      this.controller = new WorkerController(canvas, mode);
 
       // Initialize the controller (checks WebGPU support, waits for worker, transfers canvas)
       await this.controller.initialize();
@@ -46,6 +48,33 @@ class ControllerManagerClass {
     } finally {
       this.loadingInProgress = false;
     }
+  }
+
+  async switchMode(_canvas: HTMLCanvasElement, mode: RuntimeMode) {
+    if (this.loadingInProgress) return;
+    if (this.runtimeMode === mode && this.isInitialized) return; // no-op
+    const container = document.getElementById('container') || _canvas.parentElement;
+    if (!container) {
+      console.error('No container found for canvas switching');
+      return;
+    }
+    // Dispose existing controller
+    this.dispose();
+    // Create a fresh canvas (never reuse one that may have a context / offscreen transfer)
+    const newCanvas = document.createElement('canvas');
+    newCanvas.id = _canvas.id || 'worker-canvas';
+    newCanvas.className = _canvas.className;
+    newCanvas.style.cssText = _canvas.style.cssText;
+    if (_canvas.hasAttribute('tabindex')) newCanvas.setAttribute('tabindex', _canvas.getAttribute('tabindex')!);
+    // Replace old canvas node if still present
+    if (_canvas.parentElement === container) {
+      try { container.replaceChild(newCanvas, _canvas); } catch { container.appendChild(newCanvas); }
+    } else {
+      container.appendChild(newCanvas);
+    }
+    await this.initialize(newCanvas, mode);
+    // Ensure listeners attached if ready already (main thread path may attach immediately after init)
+    this.controller?.ensureInputListenersAttached?.();
   }
 
   // Dismiss WebGPU warning

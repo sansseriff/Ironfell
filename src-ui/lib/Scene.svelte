@@ -120,7 +120,13 @@
   {/if}
 
   <div bind:this={canvasContainer} id="container">
-    <canvas id="worker-canvas" tabindex="0"></canvas>
+    <canvas
+      id="worker-canvas"
+      tabindex="0"
+      oncontextmenu={(e) => {
+        e.preventDefault(); /* suppress default save image menu */
+      }}
+    ></canvas>
   </div>
 </div>
 

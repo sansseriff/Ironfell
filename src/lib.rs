@@ -157,13 +157,27 @@ pub enum DragKind {
     Group,
 }
 
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug)]
 pub struct DragState {
     pub target: Option<Entity>,
     pub kind: Option<DragKind>,
     pub grab_offset_2d: Vec2,
     pub plane_origin: Vec3,
     pub plane_normal: Vec3,
+    pub grab_offset_world: Vec3,
+}
+
+impl Default for DragState {
+    fn default() -> Self {
+        Self {
+            target: None,
+            kind: None,
+            grab_offset_2d: Vec2::ZERO,
+            plane_origin: Vec3::ZERO,
+            plane_normal: Vec3::Y,
+            grab_offset_world: Vec3::ZERO,
+        }
+    }
 }
 
 // Marker for a composite vector group (single VelloScene acting as many shapes)

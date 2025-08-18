@@ -19,7 +19,10 @@ use interaction::{
     drag_apply_system, interaction_decide_system, outbound_hover_system, outbound_selection_system,
     selection_reflect_system,
 };
-use overlay2d::{animate_2d_overlay, setup_2d_overlay};
+use overlay2d::{
+    DraggableSquare, SimpleMouseState, animate_2d_overlay, render_draggable_square,
+    setup_2d_overlay, simple_mouse_state_system, update_draggable_square_state,
+};
 use picking::{pick_overlay_2d_system, pick_world_3d_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
 use scene3d::{render_active_shapes, rotate_3d_shapes, setup_3d_scene, update_aabbes};
@@ -78,39 +81,51 @@ pub(crate) fn init_app() -> WorkerApp {
     app.init_resource::<crate::PointerHits>();
     app.init_resource::<crate::SelectionState>();
     app.init_resource::<crate::DragState>();
+    // Overlay interaction resources
+    app.init_resource::<DraggableSquare>();
+    app.init_resource::<SimpleMouseState>();
 
-    app.add_systems(Startup, (setup_3d_scene, setup_2d_overlay))
-        .add_systems(
-            Update,
-            (
-                update_aabbes,
-                inspector_continuous_streaming_system,
-                animate_2d_overlay, // TODO: refactor overlay interaction to new picking path
-                rotate_3d_shapes,
-            ),
-        )
-        .add_systems(
-            PreUpdate,
-            (
-                accumulate_cursor_delta_system,
-                accumulate_custom_scroll_system,
-                pointer_collect_system,
-                pick_overlay_2d_system,
-                pick_world_3d_system,
-                resolve_primary_hit_system,
-            ),
-        )
-        .add_systems(
-            PostUpdate,
-            (
-                interaction_decide_system,
-                drag_apply_system,
-                selection_reflect_system,
-                outbound_hover_system,
-                outbound_selection_system,
-                render_active_shapes,
-            ),
-        );
+    app.add_systems(
+        Startup,
+        (
+            // setup_3d_scene,
+            setup_2d_overlay
+        ),
+    )
+    .add_systems(
+        Update,
+        (
+            update_aabbes,
+            inspector_continuous_streaming_system,
+            animate_2d_overlay, // TODO: refactor overlay interaction to new picking path
+            rotate_3d_shapes,
+            simple_mouse_state_system,
+            update_draggable_square_state,
+            render_draggable_square,
+        ),
+    )
+    .add_systems(
+        PreUpdate,
+        (
+            accumulate_cursor_delta_system,
+            accumulate_custom_scroll_system,
+            pointer_collect_system,
+            pick_overlay_2d_system,
+            pick_world_3d_system,
+            resolve_primary_hit_system,
+        ),
+    )
+    .add_systems(
+        PostUpdate,
+        (
+            interaction_decide_system,
+            drag_apply_system,
+            selection_reflect_system,
+            outbound_hover_system,
+            outbound_selection_system,
+            render_active_shapes,
+        ),
+    );
 
     WorkerApp::new(app)
 }

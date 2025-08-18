@@ -103,8 +103,10 @@ export class InputManager {
 
     private onKeyDown(event: KeyboardEvent) {
         const key = event.key.toLowerCase();
-        const valid = ["w", "a", "s", "d", "f", "shift", "g"];
+        const valid = ["w", "a", "s", "d", "f", "shift", "g", "control", "controlleft", " "]; // include space & control variants
         if (!valid.includes(key)) return;
+        // Prevent browser defaults like focus traversal or menu on ctrl+click combinations influencing state
+        event.preventDefault();
         this.keyPressed.add(key);
         if (!this.keyFrameScheduled) {
             this.keyFrameScheduled = true;

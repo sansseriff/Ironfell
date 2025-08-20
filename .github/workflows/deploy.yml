@@ -33,7 +33,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly-2025-07-26
+          toolchain: nightly-2024-07-21
           target: wasm32-unknown-unknown
           override: true
           components: rust-src

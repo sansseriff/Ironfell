@@ -74,20 +74,12 @@
     <div
       style="display: flex; flex-direction: column; gap: 10px; max-width: 200px;"
     >
-      <button onclick={testSpawnEntity}>Spawn Entity</button>
+      <!-- <button onclick={testSpawnEntity}>Spawn Entity</button>
       <button onclick={testToggleVisibility}>Toggle Visibility</button>
-      <button onclick={testDespawnEntity}>Despawn Entity</button>
+      <button onclick={testDespawnEntity}>Despawn Entity</button> -->
+      <h3>Square is draggable</h3>
     </div>
 
-    <div style="margin-top: 20px;">
-      <h4>Instructions:</h4>
-      <ul style="font-size: 12px; margin: 5px 0;">
-        <li>Spawn Entity: Creates a new empty entity</li>
-        <li>Toggle Visibility: Shows/hides an entity (uses example ID)</li>
-        <li>Despawn Entity: Removes an entity (uses example ID)</li>
-        <li>Check browser console for results</li>
-      </ul>
-    </div>
     <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px;">
       <label
         style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;"
@@ -110,3 +102,11 @@
     </div>
   {/if}
 </section>
+
+<style>
+  h3 {
+    margin: 0 0 10px;
+    font-size: 16px;
+    color: #333;
+  }
+</style>

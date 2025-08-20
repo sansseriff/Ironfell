@@ -1,8 +1,15 @@
 set -e 
 
 
+# RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none" cargo +nightly build \
+#     -Z build-std=core,alloc,std,panic_abort \
+#     -Z build-std-features=optimize_for_size,panic_immediate_abort \
+#     --no-default-features --profile wasm-release \
+#     --target wasm32-unknown-unknown 
+
+
 RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none" cargo +nightly build \
-    -Z build-std=core,alloc,std,panic_abort \
+    -Z build-std=std,panic_abort \
     -Z build-std-features=optimize_for_size,panic_immediate_abort \
     --no-default-features --profile wasm-release \
     --target wasm32-unknown-unknown 

@@ -5,7 +5,7 @@ set -e
 echo "🚀 Starting deployment process..."
 
 # Get the latest tag and increment patch version
-LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+LATEST_TAG="v0.0.18" # $(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 echo "📋 Latest tag: $LATEST_TAG"
 
 # Extract version numbers

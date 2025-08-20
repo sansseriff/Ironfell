@@ -1,6 +1,6 @@
 <script lang="ts">
   import { controllerManager } from "../controller-manager.svelte";
-
+  import Github from "./Github.svelte";
   // Props
   let { onLaunch } = $props();
 
@@ -78,9 +78,12 @@
       <button onclick={testToggleVisibility}>Toggle Visibility</button>
       <button onclick={testDespawnEntity}>Despawn Entity</button> -->
       <h3>Square is draggable</h3>
+      <Github></Github>
     </div>
 
-    <div style="margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+    <div
+      style="margin-top: 20px; margin-bottom:12px; display:flex; align-items:center; gap:8px;"
+    >
       <label
         style="font-size:12px; display:flex; align-items:center; gap:6px; cursor:pointer;"
       >
@@ -104,6 +107,10 @@
 </section>
 
 <style>
+  * {
+    color: black;
+  }
+
   h3 {
     margin: 0 0 10px;
     font-size: 16px;

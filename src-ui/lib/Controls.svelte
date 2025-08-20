@@ -77,7 +77,8 @@
       <!-- <button onclick={testSpawnEntity}>Spawn Entity</button>
       <button onclick={testToggleVisibility}>Toggle Visibility</button>
       <button onclick={testDespawnEntity}>Despawn Entity</button> -->
-      <h3>Square is draggable</h3>
+      <h3>Square & torus are draggable</h3>
+      <h3>Press F for camera controller, WASD to move</h3>
       <Github></Github>
     </div>
 

@@ -74,20 +74,20 @@ pub(crate) fn setup_3d_scene(
     // Lights
     commands.spawn((
         PointLight {
-            shadows_enabled: true,
+            shadows_enabled: false,
             intensity: 15_000_000.,
             range: 100.0,
-            shadow_depth_bias: 0.2,
+            // shadow_depth_bias: 0.2,
             ..default()
         },
         Transform::from_xyz(8.0, 9.0, 16.0),
     ));
     commands.spawn((
         PointLight {
-            shadows_enabled: true,
+            shadows_enabled: false,
             intensity: 5_000_000.,
             range: 100.0,
-            shadow_depth_bias: 0.2,
+            // shadow_depth_bias: 0.2,
             ..default()
         },
         Transform::from_xyz(-8.0, 9.0, -10.0),

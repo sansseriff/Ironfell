@@ -85,47 +85,41 @@ pub(crate) fn init_app() -> WorkerApp {
     app.init_resource::<DraggableSquare>();
     app.init_resource::<SimpleMouseState>();
 
-    app.add_systems(
-        Startup,
-        (
-            // setup_3d_scene,
-            setup_2d_overlay
-        ),
-    )
-    .add_systems(
-        Update,
-        (
-            update_aabbes,
-            inspector_continuous_streaming_system,
-            animate_2d_overlay, // TODO: refactor overlay interaction to new picking path
-            rotate_3d_shapes,
-            simple_mouse_state_system,
-            update_draggable_square_state,
-            render_draggable_square,
-        ),
-    )
-    .add_systems(
-        PreUpdate,
-        (
-            accumulate_cursor_delta_system,
-            accumulate_custom_scroll_system,
-            pointer_collect_system,
-            pick_overlay_2d_system,
-            pick_world_3d_system,
-            resolve_primary_hit_system,
-        ),
-    )
-    .add_systems(
-        PostUpdate,
-        (
-            interaction_decide_system,
-            drag_apply_system,
-            selection_reflect_system,
-            outbound_hover_system,
-            outbound_selection_system,
-            render_active_shapes,
-        ),
-    );
+    app.add_systems(Startup, (setup_3d_scene, setup_2d_overlay))
+        .add_systems(
+            Update,
+            (
+                update_aabbes,
+                inspector_continuous_streaming_system,
+                animate_2d_overlay, // TODO: refactor overlay interaction to new picking path
+                rotate_3d_shapes,
+                simple_mouse_state_system,
+                update_draggable_square_state,
+                render_draggable_square,
+            ),
+        )
+        .add_systems(
+            PreUpdate,
+            (
+                accumulate_cursor_delta_system,
+                accumulate_custom_scroll_system,
+                pointer_collect_system,
+                pick_overlay_2d_system,
+                pick_world_3d_system,
+                resolve_primary_hit_system,
+            ),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                interaction_decide_system,
+                drag_apply_system,
+                selection_reflect_system,
+                outbound_hover_system,
+                outbound_selection_system,
+                render_active_shapes,
+            ),
+        );
 
     WorkerApp::new(app)
 }

@@ -34,6 +34,9 @@ export class AdapterBridge {
     dispose() {
         if (this.mode === 'worker') {
             try { (this.adapter as Worker).terminate(); } catch { /* ignore */ }
+        } else {
+            // For main thread mode, call the adapter's dispose method to clean up RAF
+            try { (this.adapter as MainThreadAdapter).dispose(); } catch { /* ignore */ }
         }
     }
 }

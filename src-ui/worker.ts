@@ -43,6 +43,7 @@ class IronWorker {
   private frameFlag = 0;
   private streamingEnabled = false;
   private streamingInterval: number | null = null;
+  private rafId: number | null = null;
 
   constructor() {
     // Create a dedicated object for Rust FFI functions
@@ -104,13 +105,20 @@ class IronWorker {
         case "startRunning":
           if (this.isStoppedRunning) {
             this.isStoppedRunning = false;
-            // Start the frame loop
-            requestAnimationFrame((dt) => this.enterFrame(dt));
+            // Only start a new frame loop if one isn't already running
+            if (this.rafId === null) {
+              this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
+            }
           }
           break;
 
         case "stopRunning":
           this.isStoppedRunning = true;
+          // Cancel any pending RAF to prevent multiple loops
+          if (this.rafId !== null) {
+            cancelAnimationFrame(this.rafId);
+            this.rafId = null;
+          }
           break;
 
         case "mousemove":
@@ -314,11 +322,16 @@ class IronWorker {
     // Check ready state
     this.getPreparationState();
 
-    // Start frame loop
-    requestAnimationFrame((dt) => this.enterFrame(dt));
+    // Start frame loop only if not already running and not stopped
+    if (this.rafId === null && !this.isStoppedRunning) {
+      this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
+    }
   }
 
   private enterFrame(_dt: number) {
+    // Clear the RAF ID since this frame is now executing
+    this.rafId = null;
+
     if (this.appHandle === BigInt(0) || this.isStoppedRunning) return;
 
     // Execute the app's frame loop when ready
@@ -334,7 +347,11 @@ class IronWorker {
     } else {
       this.getPreparationState();
     }
-    requestAnimationFrame((dt) => this.enterFrame(dt));
+
+    // Schedule next frame only if not stopped
+    if (!this.isStoppedRunning) {
+      this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
+    }
   }
 
   private getPreparationState() {

@@ -14,6 +14,8 @@ export class InputManager {
     private keyPressed = new Set<string>();
     private keyFrameScheduled = false;
     private attached = false;
+    private lastMouseSend = 0;
+    private readonly MOUSE_THROTTLE_MS = 8; // ~120Hz max, adjust as needed
 
     constructor(options: InputManagerOptions = {}) {
         this.options = options;
@@ -68,7 +70,13 @@ export class InputManager {
             this.latestX = moveMsg.x;
             this.latestY = moveMsg.y;
             this.latestPick = [];
-            this.post(moveMsg);
+
+            // Optional: throttle for very high frequency input
+            const now = performance.now();
+            if (now - this.lastMouseSend >= this.MOUSE_THROTTLE_MS) {
+                this.post(moveMsg);
+                this.lastMouseSend = now;
+            }
         };
 
         const onPointerMove = (ev: PointerEvent) => {

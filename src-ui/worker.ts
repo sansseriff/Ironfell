@@ -5,6 +5,7 @@ import init, {
   is_preparation_completed,
   create_window_by_offscreen_canvas,
   enter_frame,
+  enter_frame_with_mouse, // Add new function
   mouse_move,
   left_bt_down,
   left_bt_up,
@@ -44,6 +45,9 @@ class IronWorker {
   private streamingEnabled = false;
   private streamingInterval: number | null = null;
   private rafId: number | null = null;
+  private latestMouseX: number = 0;
+  private latestMouseY: number = 0;
+  private hasMouseUpdate: boolean = false;
 
   constructor() {
     // Create a dedicated object for Rust FFI functions
@@ -122,7 +126,11 @@ class IronWorker {
           break;
 
         case "mousemove":
-          mouse_move(this.appHandle, data.x, data.y);
+          // Buffer the latest mouse position instead of immediately processing
+          this.latestMouseX = data.x;
+          this.latestMouseY = data.y;
+          this.hasMouseUpdate = true;
+          // Don't call mouse_move here anymore
           break;
 
 
@@ -340,7 +348,13 @@ class IronWorker {
         this.frameIndex >= this.frameFlag ||
         (this.frameIndex < this.frameFlag && this.frameCount % 60 == 0)
       ) {
-        enter_frame(this.appHandle);
+        // Use new combined function that processes mouse and frame together
+        if (this.hasMouseUpdate) {
+          enter_frame_with_mouse(this.appHandle, this.latestMouseX, this.latestMouseY, true);
+          this.hasMouseUpdate = false;
+        } else {
+          enter_frame_with_mouse(this.appHandle, 0, 0, false);
+        }
         this.frameIndex++;
       }
       this.frameCount++;

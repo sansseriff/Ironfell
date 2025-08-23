@@ -135,6 +135,20 @@ pub fn is_preparation_completed(ptr: u64) -> u32 {
     0
 }
 
+/// Set mouse position without triggering activity (for batched updates)
+#[wasm_bindgen]
+pub fn set_mouse_position(ptr: u64, x: f32, y: f32) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let position = app.to_physical_size(x, y);
+    let cursor_move = CursorMoved {
+        window: app.window,
+        position,
+        delta: None,
+    };
+    app.world_mut().send_event(cursor_move);
+    // Note: No activity trigger - this will be handled by enter_frame
+}
+
 /// 包装一个鼠标事件发送给 app
 #[wasm_bindgen]
 pub fn mouse_move(ptr: u64, x: f32, y: f32) {
@@ -155,7 +169,66 @@ pub fn mouse_move(ptr: u64, x: f32, y: f32) {
     active_info.remaining_frames = 10;
 }
 
-/// Receives mouse wheel events from JavaScript and sends Bevy's MouseWheel event.
+/// Frame rendering with optional mouse position update
+#[wasm_bindgen]
+pub fn enter_frame_with_mouse(ptr: u64, mouse_x: f32, mouse_y: f32, has_mouse_update: bool) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    
+    // Update mouse position first if provided
+    if has_mouse_update {
+        let position = app.to_physical_size(mouse_x, mouse_y);
+        let cursor_move = CursorMoved {
+            window: app.window,
+            position,
+            delta: None,
+        };
+        app.world_mut().send_event(cursor_move);
+    }
+    
+    // Get a mutable borrow of the Rust object pointed to by the pointer
+    {
+        // Check conditions for executing frame rendering
+        let mut active_info = app
+            .world_mut()
+            .get_resource_mut::<ActivityControl>()
+            .unwrap();
+        if !active_info.auto_animate && active_info.remaining_frames == 0 {
+            return;
+        }
+        if active_info.remaining_frames > 0 {
+            active_info.remaining_frames -= 1;
+        }
+    }
+
+    if app.plugins_state() != PluginsState::Cleaned {
+        if app.plugins_state() != PluginsState::Ready {
+            // #[cfg(not(target_arch = "wasm32"))]
+            // tick_global_task_pools_on_main_thread();
+        } else {
+            app.finish();
+            app.cleanup();
+        }
+    } else {
+        // 模拟阻塞
+        let active_info = app.world().get_resource::<ActivityControl>().unwrap();
+        if active_info.is_in_worker {
+            block_from_worker();
+        } else {
+            block_from_rust();
+        }
+
+        app.update();
+    }
+}
+
+/// 鼠标滚轮事件处理
+///
+/// # Parameters
+///
+/// - `ptr`: WorkerApp 的指针
+/// - `delta_x`: X 轴滚动增量
+/// - `delta_y`: Y 轴滚动增量
+/// - `delta_mode`: 滚动单位模式
 #[wasm_bindgen]
 pub fn mouse_wheel(ptr: u64, delta_x: f32, delta_y: f32, delta_mode: u32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };

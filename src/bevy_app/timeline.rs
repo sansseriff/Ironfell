@@ -1,7 +1,8 @@
 use bevy::prelude::*;
-use bevy::render::view::{self, RenderLayers};
+use bevy::render::view::RenderLayers;
 use bevy::render::camera::RenderTarget;
 use bevy::window::WindowRef;
+use crate::canvas_view::CanvasName;
 use bevy_vello::prelude::*;
 
 /// Timeline window plugin for managing timeline view with 2D graphics rendering
@@ -74,11 +75,10 @@ pub struct TimelinePlayheadScene;
 /// Setup the timeline window with 2D camera and initial scenes
 pub fn setup_timeline_window(
     mut commands: Commands,
-    windows: Query<Entity, (With<Window>, Without<TimelineWindow>, Without<ViewerWindow>)>,
-    window_query: Query<&Window>,
+    windows: Query<(Entity, Option<&CanvasName>), With<Window>>,
 ) {
     // Wait for windows to be created by canvas system
-    let window_entities: Vec<Entity> = windows.iter().collect();
+    let window_entities: Vec<(Entity, Option<&CanvasName>)> = windows.iter().collect();
     
     // if window_entities.len() < 2 {
     //     // Not enough windows created yet, will retry next frame
@@ -111,8 +111,21 @@ pub fn setup_timeline_window(
     //     return;
     // }
     
-    let viewer_window = window_entities[0]; // Primary window (not "Timeline Window")
-    // let timeline_window = window_entities[1]; // "Timeline Window"
+    // Try to pick explicit windows by CanvasName
+    let mut _viewer_window: Option<Entity> = None;
+    let mut timeline_window: Option<Entity> = None;
+    for (e, name) in window_entities.iter() {
+        if let Some(CanvasName(id)) = name {
+            if id == "viewer-canvas" { _viewer_window = Some(*e); }
+            if id == "timeline-canvas" { timeline_window = Some(*e); }
+        }
+    }
+
+    // If the timeline window isn't ready yet, wait until it exists
+    let Some(timeline_window) = timeline_window else {
+        info!("Timeline setup waiting for timeline window entity (found {} windows)", window_entities.len());
+        return;
+    };
     
     // // Mark the windows so we can identify them
     // commands.entity(viewer_window).insert(ViewerWindow);
@@ -122,18 +135,19 @@ pub fn setup_timeline_window(
     //       viewer_window, sorted_windows[0].1, timeline_window, sorted_windows[1].1);
 
     // Setup timeline 2D camera - will render to timeline window
-    commands.spawn((
-        Camera2d,
-        Camera {
-            target: RenderTarget::Window(WindowRef::Entity(viewer_window)),
-            order: 2, // Higher order than overlay camera (order: 1)
-            clear_color: ClearColorConfig::Custom(Color::srgb(1.0, 0.15, 0.15)), // Bright red background
-            ..default()
-        },
-        RenderLayers::layer(2), // Different render layer for timeline
-        TimelineCamera2D,
-        VelloView,
-    ));
+    let camera_target = RenderTarget::Window(WindowRef::Entity(timeline_window));
+        commands.spawn((
+            Camera2d,
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.15, 1.0, 0.19)), 
+                target: camera_target,
+                ..default()
+            },
+            RenderLayers::layer(2), // Different render layer for timeline
+            TimelineCamera2D,
+            VelloView,
+        ));
 
     // Timeline background scene
     commands.spawn((

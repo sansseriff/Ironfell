@@ -150,9 +150,8 @@ export class WorkerController {
       this.initializeCanvas(canvas, canvasId, devicePixelRatio, isPrimary);
     }
 
-    // Initialize resize manager with primary canvas
-    const primaryCanvas = this.canvases.get(this.primaryCanvasId!)!;
-    this.resizeManager.init(primaryCanvas, this.bridge);
+  // Initialize resize manager with all canvases
+  this.resizeManager.initAll(this.canvases, this.bridge);
   }
 
   /**

@@ -35,3 +35,8 @@ impl ViewObj {
         ViewObj::Offscreen(WindowWrapper::new(OffscreenCanvasWrapper::new(canvas)))
     }
 }
+
+// Component to tag a Window entity with the originating canvas identifier from JS
+#[derive(bevy::prelude::Component, Clone)]
+pub struct CanvasName(pub String);
+

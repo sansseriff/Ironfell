@@ -6,7 +6,7 @@ use bevy::ecs::{
     prelude::*,
     system::{Commands, NonSendMut, Query, SystemState},
 };
-use bevy::render::view::window;
+// use bevy::render::view::window;
 use bevy::window::{
     RawHandleWrapper, Window, WindowClosed, WindowCreated, WindowResized, exit_on_all_closed,
 };
@@ -101,53 +101,33 @@ pub(crate) fn changed_window(
     // TODO:
 }
 
-pub fn update_canvas_windows(app: &mut App, width: f32, height: f32) {
-    {
-        let mut system_state: SystemState<(
-            Query<(Entity, &mut Window), Changed<Window>>,
-            NonSendMut<CanvasViews>,
-            EventWriter<WindowResized>,
-        )> = SystemState::new(app.world_mut());
+pub fn update_canvas_windows(app: &mut App, _width: f32, _height: f32) {
+    // Update all Bevy windows to match the underlying canvas physical size and emit WindowResized
+    let mut system_state: SystemState<(
+        Query<(Entity, &mut Window)>,
+        NonSendMut<CanvasViews>,
+        EventWriter<WindowResized>,
+    )> = SystemState::new(app.world_mut());
 
-        let (mut changed_windows, mut app_views, mut window_events) =
-            system_state.get_mut(app.world_mut());
+    let (mut windows, app_views, mut window_events) = system_state.get_mut(app.world_mut());
 
-        // Run the changed_window logic manually
-        for (entity, mut window) in changed_windows.iter_mut() {
-            if let Some(app_view) = app_views.get_view(entity) {
-                let (logical_res, scale_factor) = match app_view {
-                    ViewObj::Canvas(canvas) => (canvas.physical_resolution(), canvas.scale_factor),
-                    ViewObj::Offscreen(offscreen) => {
-                        (offscreen.physical_resolution(), offscreen.scale_factor)
-                    }
-                };
-                // Get the previous resolution before updating
-                let prev_width = window.resolution.width();
-                let prev_height = window.resolution.height();
-                let prev_scale = window.resolution.scale_factor();
+    for (entity, mut window) in windows.iter_mut() {
+        if let Some(app_view) = app_views.get_view(entity) {
+            let (logical_res, _scale_factor) = match app_view {
+                ViewObj::Canvas(canvas) => (canvas.physical_resolution(), canvas.scale_factor),
+                ViewObj::Offscreen(offscreen) => (offscreen.physical_resolution(), offscreen.scale_factor),
+            };
 
-                // Update window resolution based on the canvas's current size
-                window.resolution.set_scale_factor(1.0);
-                // window.resolution.set(width as f32, height as f32);
-                window
-                    .resolution
-                    .set(logical_res.0 as f32, logical_res.1 as f32);
+            window.resolution.set_scale_factor(1.0);
+            window.resolution.set(logical_res.0 as f32, logical_res.1 as f32);
 
-                // crate::web_ffi::log(&format!(
-                //     "logical_res: {:?}, scale_factor: {:?}",
-                //     logical_res, scale_factor
-                // ));
-
-                // doesn't work unless you fire the event
-                // this must be handled in the winit plugin, if we were using that.
-                window_events.write(WindowResized {
-                    window: entity,
-                    width: logical_res.0 as f32,
-                    height: logical_res.1 as f32,
-                });
-            }
+            window_events.write(WindowResized {
+                window: entity,
+                width: logical_res.0 as f32,
+                height: logical_res.1 as f32,
+            });
         }
-
-        system_state.apply(app.world_mut());
     }
+
+    system_state.apply(app.world_mut());
 }

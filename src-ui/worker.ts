@@ -3,7 +3,7 @@
 import init, {
   init_bevy_app,
   is_preparation_completed,
-  create_window_by_offscreen_canvas,
+  create_window_by_offscreen_canvas_with_id,
   enter_frame,
   enter_frame_with_mouse, // Add new function
   mouse_move,
@@ -38,7 +38,7 @@ class IronWorker {
   private initFinished = 0;
   private isStoppedRunning = false;
   private renderBlockTime = 1;
-  private offscreenCanvas: OffscreenCanvas | null = null;
+  private offscreenCanvases: Map<string, OffscreenCanvas> = new Map();
   private frameIndex = 0;
   private frameCount = 0;
   private frameFlag = 0;
@@ -101,14 +101,16 @@ class IronWorker {
           break;
 
         case "init":
-          this.offscreenCanvas = data.canvas;
+          // Remember which canvas this init corresponds to
+          (self as any).lastInitCanvasId = data.canvasId;
           console.log(`running init of worker app window: ${data.canvasId || 'primary'}`);
-          this.createWorkerAppWindow(data.canvas, data.devicePixelRatio);
+          this.createWorkerAppWindow(data.canvas, data.devicePixelRatio, data.canvasId || 'viewer-canvas');
           break;
 
         case "createAdditionalWindow":
+          (self as any).lastInitCanvasId = data.canvasId;
           console.log(`creating additional worker app window: ${data.canvasId || 'unknown'}`);
-          this.createAdditionalWorkerAppWindow(data.canvas, data.devicePixelRatio);
+          this.createAdditionalWorkerAppWindow(data.canvas, data.devicePixelRatio, data.canvasId || 'secondary');
           break;
 
         case "startRunning":
@@ -309,10 +311,11 @@ class IronWorker {
   }
 
   private canvasResize(canvasId: string, width: number, height: number) {
-    if (this.offscreenCanvas) {
-      // I think I update the the canvas size here
-      this.offscreenCanvas.width = width;
-      this.offscreenCanvas.height = height;
+    const osc = this.offscreenCanvases.get(canvasId);
+    if (osc) {
+      // Update the matched canvas
+      osc.width = width;
+      osc.height = height;
 
       // console.log("Resized canvas to:", this.offscreenCanvas.width, "×", this.offscreenCanvas.height);
 
@@ -321,15 +324,19 @@ class IronWorker {
     }
   }
 
-  private createWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number) {
-    // Store the canvas reference
-    this.offscreenCanvas = offscreenCanvas;
+  private createWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number, canvasId: string) {
+    // Store the canvas reference keyed by id
+    this.offscreenCanvases.set(canvasId, offscreenCanvas);
 
-    // Create rendering window
-    create_window_by_offscreen_canvas(
+    // Decide window kind by id
+    const kind = canvasId === 'viewer-canvas' ? 'viewer' : (canvasId.includes('timeline') ? 'timeline' : 'other');
+    // Pass extra args via `any` cast for forward compatibility
+  create_window_by_offscreen_canvas_with_id(
       this.appHandle,
       offscreenCanvas,
-      devicePixelRatio
+      devicePixelRatio,
+      canvasId,
+      kind
     );
 
     // Check ready state
@@ -341,12 +348,16 @@ class IronWorker {
     }
   }
 
-  private createAdditionalWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number) {
+  private createAdditionalWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number, canvasId: string) {
     // Create additional rendering window on the same Bevy app instance
-    create_window_by_offscreen_canvas(
+    const kind = canvasId.includes('timeline') ? 'timeline' : 'other';
+    this.offscreenCanvases.set(canvasId, offscreenCanvas);
+  create_window_by_offscreen_canvas_with_id(
       this.appHandle,
       offscreenCanvas,
-      devicePixelRatio
+      devicePixelRatio,
+      canvasId,
+      kind
     );
 
     // No need to start another frame loop - the existing one handles all windows

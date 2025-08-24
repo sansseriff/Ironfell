@@ -34,14 +34,15 @@
       const isPrimary = canvasId === "viewer-canvas";
       console.log(`Registering canvas: ${canvasId} (primary: ${isPrimary})`);
       await controllerManager.registerCanvas(canvasElement, isPrimary);
-      
+
       // Update canvas size after registration
       // Wait a bit for initialization to potentially complete
-      setTimeout(() => {
-        if (controllerManager.isInitialized) {
-          updateCanvasSize();
-        }
-      }, 100);
+      // setTimeout(() => {
+      //   if (controllerManager.isInitialized) {
+      //     updateCanvasSize();
+      //   }
+      // }, 100);
+      updateCanvasSize();
     } catch (error) {
       console.error(`Failed to register canvas ${canvasId}:`, error);
       return;

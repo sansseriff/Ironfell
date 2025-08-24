@@ -2,6 +2,9 @@ use crate::ActivityControl;
 use crate::camera_controller::CameraController;
 use bevy::math::bounding::{Aabb3d, Bounded3d};
 use bevy::prelude::*;
+use bevy::render::camera::RenderTarget;
+use bevy::window::WindowRef;
+use crate::canvas_view::CanvasName;
 use bevy::render::view::RenderLayers;
 use bevy::render::{
     render_asset::RenderAssetUsages,
@@ -48,6 +51,7 @@ pub(crate) fn setup_3d_scene(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     _asset_server: Res<AssetServer>,
+    windows: Query<(Entity, Option<&CanvasName>), With<Window>>,
 ) {
     let debug_material = materials.add(StandardMaterial {
         base_color_texture: Some(images.add(uv_debug_texture())),
@@ -77,7 +81,6 @@ pub(crate) fn setup_3d_scene(
             shadows_enabled: false,
             intensity: 15_000_000.,
             range: 100.0,
-            // shadow_depth_bias: 0.2,
             ..default()
         },
         Transform::from_xyz(8.0, 9.0, 16.0),
@@ -87,7 +90,6 @@ pub(crate) fn setup_3d_scene(
             shadows_enabled: false,
             intensity: 5_000_000.,
             range: 100.0,
-            // shadow_depth_bias: 0.2,
             ..default()
         },
         Transform::from_xyz(-8.0, 9.0, -10.0),
@@ -99,14 +101,26 @@ pub(crate) fn setup_3d_scene(
         MeshMaterial3d(materials.add(Color::srgb(0.75, 0.75, 0.75))),
     ));
 
+    // Resolve viewer window by CanvasName
+    let mut viewer_window_entity: Option<Entity> = None;
+    for (e, name) in windows.iter() {
+        if let Some(CanvasName(id)) = name {
+            if id == "viewer-canvas" { viewer_window_entity = Some(e); break; }
+        }
+    }
+
     // Camera
+    let mut camera = Camera {
+        order: 0,
+        clear_color: ClearColorConfig::Default,
+        ..default()
+    };
+    if let Some(e) = viewer_window_entity {
+        camera.target = RenderTarget::Window(WindowRef::Entity(e));
+    }
     commands.spawn((
         Camera3d::default(),
-        Camera {
-            order: 0,
-            clear_color: ClearColorConfig::Default,
-            ..default()
-        },
+        camera,
         CameraController::default(),
         MainCamera3D,
         RenderLayers::layer(0),

@@ -7,7 +7,7 @@ use bevy::app::PluginsState;
 use bevy::ecs::system::SystemState;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy::window::Window;
+use bevy::window::{PrimaryWindow, Window};
 use js_sys::BigInt;
 use wasm_bindgen::prelude::*;
 
@@ -86,84 +86,118 @@ pub fn init_bevy_app() -> u64 {
 //     create_window(app, view_obj, false);
 // }
 
-/// 创建离屏窗口
+/// 创建离屏窗口（带 canvas_id 与 window_kind，用于稳定匹配）
 #[wasm_bindgen]
 pub fn create_window_by_offscreen_canvas(
     ptr: u64,
     canvas: web_sys::OffscreenCanvas,
     scale_factor: f32,
 ) {
+    // Backward-compatible API without IDs; infer kind by order (1st viewer, 2nd timeline)
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    app.scale_factor = scale_factor;
+
+    // Use a small resource to count windows
+    #[derive(Resource, Default)]
+    struct InitOrderCounter { n: u32 }
+    if !app.world().contains_resource::<InitOrderCounter>() {
+        app.insert_resource(InitOrderCounter { n: 0 });
+    }
+    let order = {
+        let mut c = app.world_mut().resource_mut::<InitOrderCounter>();
+        c.n += 1;
+        c.n
+    };
+
+    let (canvas_id, kind) = if order == 1 { ("viewer-canvas".to_string(), "viewer".to_string()) } else { ("timeline-canvas".to_string(), "timeline".to_string()) };
+
+    let offscreen_canvas = OffscreenCanvas::new(canvas, scale_factor, 1);
+    let view_obj = ViewObj::from_offscreen_canvas(offscreen_canvas);
+    info!("create_window_by_offscreen_canvas[compat]: {} ({})", canvas_id, kind);
+
+    create_window(app, view_obj, true, canvas_id, kind);
+}
+
+/// 创建离屏窗口（带 canvas_id 与 window_kind，用于稳定匹配）
+#[wasm_bindgen]
+pub fn create_window_by_offscreen_canvas_with_id(
+    ptr: u64,
+    canvas: web_sys::OffscreenCanvas,
+    scale_factor: f32,
+    canvas_id: String,
+    window_kind: String,
+) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     app.scale_factor = scale_factor;
 
     let offscreen_canvas = OffscreenCanvas::new(canvas, scale_factor, 1);
     let view_obj = ViewObj::from_offscreen_canvas(offscreen_canvas);
-    info!("calling create window once");
+    info!("create_window_by_offscreen_canvas_with_id: {} ({})", canvas_id, window_kind);
 
-    create_window(app, view_obj, true);
+    create_window(app, view_obj, true, canvas_id, window_kind);
 }
 
-/// Resource to track ViewObj creation count
-#[derive(Resource, Default)]
-struct ViewObjCounter {
-    count: u32,
-    pending_view_obj: Option<ViewObj>,
-}
+fn create_window(
+    app: &mut WorkerApp,
+    view_obj: ViewObj,
+    is_in_worker: bool,
+    canvas_id: String,
+    window_kind: String,
+) {
+    use crate::canvas_view::CanvasName;
 
-fn create_window(app: &mut WorkerApp, view_obj: ViewObj, is_in_worker: bool) {
-    // Initialize counter resource if it doesn't exist
-    if !app.world().contains_resource::<ViewObjCounter>() {
-        app.insert_resource(ViewObjCounter::default());
-    }
-    
-    // Increment counter and get current count
-    let current_count = {
-        let mut counter = app.world_mut().resource_mut::<ViewObjCounter>();
-        counter.count += 1;
-        info!("ViewObj #{} received", counter.count);
-        counter.count
+    // Spawn a Window entity first so the CanvasViewPlugin can associate the ViewObj
+    let title = match window_kind.as_str() {
+        "timeline" => "Timeline".to_owned(),
+        "viewer" => "Viewer".to_owned(),
+        other => other.to_owned(),
     };
-    
-    if current_count == 1 {
-        // First ViewObj - store it for later processing
-        info!("Storing first ViewObj (pending)");
-        let mut counter = app.world_mut().resource_mut::<ViewObjCounter>();
-        counter.pending_view_obj = Some(view_obj);
-    } else if current_count == 2 {
-        // Second ViewObj - now we can process both
-        info!("Second ViewObj received, processing both");
-        
-        // Create additional Window entity for second ViewObj
-        let new_window_entity = app.world_mut().spawn(Window {
-            title: "Timeline Window".to_owned(),
-            ..default()
-        }).id();
-        
-        info!("Created additional Window entity: {:?}", new_window_entity);
-        
-        // Process the first ViewObj (which was pending)
-        if let Some(first_view_obj) = app.world_mut().resource_mut::<ViewObjCounter>().pending_view_obj.take() {
-            info!("Processing first ViewObj with primary window");
-            let window_count_before = app.world_mut().query::<&Window>().iter(app.world()).count();
-            info!("Windows available before first ViewObj: {}", window_count_before);
-            app.insert_non_send_resource(first_view_obj);
-            create_canvas_window(app);
-            info!("First ViewObj processing complete");
+    let is_viewer = window_kind == "viewer";
+    // If this should be the primary window, first remove old PrimaryWindow markers
+    if is_viewer {
+        let mut remove_state: SystemState<Query<Entity, With<PrimaryWindow>>> =
+            SystemState::from_world(app.world_mut());
+        // Collect entities while holding the borrow once
+        let existing: Vec<Entity> = {
+            let mut world = app.world_mut();
+            let q = remove_state.get_mut(&mut world);
+            q.iter().collect()
+        };
+        {
+            let mut world = app.world_mut();
+            for e in existing {
+                world.entity_mut(e).remove::<PrimaryWindow>();
+            }
+            remove_state.apply(&mut world);
         }
-        
-        // Process the second ViewObj
-        info!("Processing second ViewObj with additional window");
-        let window_count_before = app.world_mut().query::<&Window>().iter(app.world()).count();
-        info!("Windows available before second ViewObj: {}", window_count_before);
-        app.insert_non_send_resource(view_obj);
-        create_canvas_window(app);
-        info!("Second ViewObj processing complete");
     }
 
-    let mut info = ActivityControl::new();
-    info.is_in_worker = is_in_worker;
-    app.insert_resource(info);
+    // Now spawn the window and optionally tag it as primary
+    let entity = {
+        let mut world = app.world_mut();
+        let mut ecmd = world.spawn(Window { title, ..default() });
+        if is_viewer {
+            ecmd.insert(PrimaryWindow);
+        }
+        ecmd.id()
+    };
+    {
+        let mut world = app.world_mut();
+        world.entity_mut(entity).insert(CanvasName(canvas_id.clone()));
+    }
+
+    // Provide the ViewObj for this Added<Window>
+    app.insert_non_send_resource(view_obj);
+    create_canvas_window(app);
+
+    // Activity control
+    let mut act = ActivityControl::new();
+    act.is_in_worker = is_in_worker;
+    app.insert_resource(act);
 }
+
+/// Helper: tag the most recently created window with CanvasName and set a predictable title
+fn tag_last_created_window(_app: &mut WorkerApp, _canvas_id: &str, _window_kind: &str) {}
 
 /// Check if plugin initialization is completed
 /// Frame rendering cannot be called before initialization is complete
@@ -177,10 +211,23 @@ pub fn is_preparation_completed(ptr: u64) -> u32 {
         app.finish();
         app.cleanup();
 
-        // Store the window object directly on the app to avoid subsequent queries
-        let mut windows_system_state: SystemState<Query<(Entity, &Window)>> =
+        // Choose a default window deterministically. Prefer a window tagged with CanvasName("viewer-canvas").
+        let mut windows_system_state: SystemState<Query<(Entity, Option<&crate::canvas_view::CanvasName>, &Window)>> =
             SystemState::from_world(app.world_mut());
-        if let Ok((entity, _)) = windows_system_state.get(app.world_mut()).single() {
+        let mut q = windows_system_state.get_mut(app.world_mut());
+        let mut chosen: Option<Entity> = None;
+        for (entity, name, _win) in q.iter_mut() {
+            if let Some(n) = name {
+                if n.0 == "viewer-canvas" {
+                    chosen = Some(entity);
+                    break;
+                }
+            }
+            if chosen.is_none() {
+                chosen = Some(entity);
+            }
+        }
+        if let Some(entity) = chosen {
             app.window = entity;
             return 1;
         }

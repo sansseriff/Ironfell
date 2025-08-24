@@ -293,12 +293,12 @@ pub(crate) fn update_draggable_square_state(
     let Some(mut last_pos) = last_opt else {
         return;
     };
-    // Correct Y inversion if window events are in a top-left origin space
-    if let Ok(window) = q_window.single() {
-        // Bevy logical cursor coords use bottom-left origin for viewport_to_world_2d.
-        // If our injected events are top-left, flip them.
-        last_pos.y = window.height() - last_pos.y;
-    }
+    // // Correct Y inversion if window events are in a top-left origin space
+    // if let Ok(window) = q_window.single() {
+    //     // Bevy logical cursor coords use bottom-left origin for viewport_to_world_2d.
+    //     // If our injected events are top-left, flip them.
+    //     last_pos.y = window.height() - last_pos.y;
+    // }
     let (camera, cam_transform) = match q_cam.single() {
         Ok(v) => v,
         Err(_) => return,

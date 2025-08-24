@@ -2,7 +2,7 @@
 import init, {
   init_bevy_app,
   is_preparation_completed,
-  create_window_by_offscreen_canvas,
+  create_window_by_offscreen_canvas_with_id,
   enter_frame,
   mouse_move,
   left_bt_down,
@@ -308,10 +308,12 @@ export class MainThreadAdapter {
     // For main thread, we need to convert the regular canvas to an offscreen canvas
     // or use it directly - let's try using the offscreen function with regular canvas
     try {
-      create_window_by_offscreen_canvas(
+      (create_window_by_offscreen_canvas_with_id as any)(
         this.appHandle,
-        canvas as any, // Cast to any to bypass TypeScript checks
-        devicePixelRatio
+        canvas as any,
+        devicePixelRatio,
+        (window as any).lastInitCanvasId || canvas.id || 'viewer-canvas',
+        ((window as any).lastInitCanvasId || canvas.id || 'viewer-canvas') === 'viewer-canvas' ? 'viewer' : 'other'
       );
     } catch (error) {
       console.error("Failed to create window:", error);
@@ -331,10 +333,12 @@ export class MainThreadAdapter {
   private createAdditionalAppWindow(canvas: HTMLCanvasElement, devicePixelRatio: number) {
     // Create additional rendering window on the same Bevy app instance
     try {
-      create_window_by_offscreen_canvas(
+      (create_window_by_offscreen_canvas_with_id as any)(
         this.appHandle,
-        canvas as any, // Cast to any to bypass TypeScript checks
-        devicePixelRatio
+        canvas as any,
+        devicePixelRatio,
+        (window as any).lastInitCanvasId || canvas.id || 'timeline-canvas',
+        'timeline'
       );
       console.log("Additional main thread app window created");
     } catch (error) {

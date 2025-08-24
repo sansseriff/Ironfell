@@ -46,11 +46,11 @@ pub(crate) fn init_app() -> WorkerApp {
 
     let mut default_plugins = DefaultPlugins.set(ImagePlugin::default_nearest());
 
+    // By default, a primary window gets spawned by `WindowPlugin`, contained in `DefaultPlugins`
+    // Do NOT create an implicit primary window; all windows are created explicitly
+    // from JS via create_window_by_offscreen_canvas with deterministic IDs.
     default_plugins = default_plugins.set(bevy::window::WindowPlugin {
-        primary_window: Some(bevy::window::Window {
-            present_mode: bevy::window::PresentMode::AutoNoVsync,
-            ..default()
-        }),
+        primary_window: None,
         ..default()
     });
 
@@ -61,7 +61,7 @@ pub(crate) fn init_app() -> WorkerApp {
         default_plugins,
         // TrackingCircle,
         VelloPlugin {
-            canvas_render_layers: RenderLayers::layer(1),
+            canvas_render_layers: vec![RenderLayers::layer(1), RenderLayers::layer(2)],
             use_cpu: false,
             antialiasing: vello::AaConfig::Area,
         },

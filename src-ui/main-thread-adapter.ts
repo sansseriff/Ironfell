@@ -87,8 +87,13 @@ export class MainThreadAdapter {
 
       case "init":
         this.canvas = data.canvas;
-        console.log("running init of main thread app window");
+        console.log(`running init of main thread app window: ${data.canvasId || 'primary'}`);
         this.createAppWindow(data.canvas, data.devicePixelRatio);
+        break;
+
+      case "createAdditionalWindow":
+        console.log(`creating additional main thread app window: ${data.canvasId || 'unknown'}`);
+        this.createAdditionalAppWindow(data.canvas, data.devicePixelRatio);
         break;
 
       case "startRunning":
@@ -132,7 +137,7 @@ export class MainThreadAdapter {
         break;
 
       case "resize":
-        this.canvasResize(data.width, data.height);
+        this.canvasResize(data.canvasId, data.width, data.height);
         break;
 
       case "keydown":
@@ -283,7 +288,7 @@ export class MainThreadAdapter {
     }
   }
 
-  private canvasResize(width: number, height: number) {
+  private canvasResize(canvasId: string, width: number, height: number) {
     if (this.canvas) {
       // Update the canvas size
       this.canvas.width = width;
@@ -321,6 +326,23 @@ export class MainThreadAdapter {
     if (this.rafId === null && !this.isStoppedRunning) {
       this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
     }
+  }
+
+  private createAdditionalAppWindow(canvas: HTMLCanvasElement, devicePixelRatio: number) {
+    // Create additional rendering window on the same Bevy app instance
+    try {
+      create_window_by_offscreen_canvas(
+        this.appHandle,
+        canvas as any, // Cast to any to bypass TypeScript checks
+        devicePixelRatio
+      );
+      console.log("Additional main thread app window created");
+    } catch (error) {
+      console.error("Failed to create additional window:", error);
+      throw error;
+    }
+
+    // No need to start another frame loop - the existing one handles all windows
   }
 
   private enterFrame(_dt: number) {

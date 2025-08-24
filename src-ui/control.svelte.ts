@@ -11,8 +11,18 @@ const OVERRIDE_SCALE = false;
 const OVERRIDE_SCALE_FACTOR = 2;
 
 /**
+ * Canvas configuration for multi-canvas setup
+ */
+export interface CanvasConfig {
+  canvas: HTMLCanvasElement;
+  id: string;
+  isPrimary?: boolean;
+}
+
+/**
  * WorkerController manages interactions with a Web Worker that runs the engine instance.
  * It handles communication, mouse events, and state management between the UI and worker.
+ * Now supports multiple canvases from initialization.
  */
 export type RuntimeMode = 'worker' | 'main';
 
@@ -23,9 +33,9 @@ export class WorkerController {
   width = $state(0);
   height = $state(0);
 
-  private initializationError: any = null;
   private runtimeMode: RuntimeMode;
-  private canvas: HTMLCanvasElement;
+  private canvases = new Map<string, HTMLCanvasElement>();
+  private primaryCanvasId: string | null = null;
   private bridge!: AdapterBridge;
   private wasmLoader = new WasmLoader();
   private input = new InputManager({ enableRaw: true });
@@ -36,13 +46,25 @@ export class WorkerController {
 
   /**
    * Creates a new WorkerController instance
-   * @param canvas The canvas element where rendering occurs
+   * @param canvasConfigs Array of canvas configurations
    */
-  constructor(canvas: HTMLCanvasElement, mode: RuntimeMode = 'worker') {
-    this.canvas = canvas;
+  constructor(canvasConfigs: CanvasConfig[], mode: RuntimeMode = 'worker') {
     this.runtimeMode = mode;
+    
+    // Store canvases and identify primary
+    for (const config of canvasConfigs) {
+      this.canvases.set(config.id, config.canvas);
+      if (config.isPrimary || this.primaryCanvasId === null) {
+        this.primaryCanvasId = config.id;
+      }
+    }
 
-    this.bridge = new AdapterBridge(this.runtimeMode, this.canvas);
+    if (!this.primaryCanvasId) {
+      throw new Error('No canvases provided to WorkerController');
+    }
+
+    const primaryCanvas = this.canvases.get(this.primaryCanvasId)!;
+    this.bridge = new AdapterBridge(this.runtimeMode, primaryCanvas);
     this.bridge.setHandler(data => this.handleBridgeMessage(data));
     this.wasmLoader.startFetch();
     this.inspector.init(this.bridge);
@@ -80,20 +102,12 @@ export class WorkerController {
       // Wait for the adapter to be ready
       await this.waitForWorkerReady();
 
-      // Initialize canvas with the adapter (no transfer needed)
-      this.initializeCanvasWithAdapter();
+      // Initialize all canvases with the adapter
+      this.initializeAllCanvases();
       return;
 
     } catch (error: Error | any) {
       console.error("WebGPU initialization failed:", error);
-
-      // Capture error details for debugging
-      this.initializationError = {
-        message: error.message || "Unknown error",
-        name: error.name,
-        stack: error.stack,
-        gpuStatus: (navigator as any).gpu ? "Available" : "Not available"
-      };
 
       throw error;
     }
@@ -123,33 +137,51 @@ export class WorkerController {
   }
 
   /**
-   * Initialize canvas with the main thread adapter
+   * Initialize all canvases with the adapter
    */
-  private initializeCanvasWithAdapter() {
+  private initializeAllCanvases() {
     const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
-
-    if (this.runtimeMode === 'worker') {
-      try {
-        // Attempt to transfer existing canvas. This will fail if a rendering context was already created.
-        // @ts-ignore
-        const offscreen: OffscreenCanvas = (this.canvas as any).transferControlToOffscreen();
-        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio }, [offscreen as any]);
-      } catch (e: any) {
-        console.error('Offscreen transfer failed:', e);
-        this.bridge.post({ ty: 'init', canvas: this.canvas, devicePixelRatio });
-      }
-    } else {
-      this.bridge.post({ ty: 'init', canvas: this.canvas, devicePixelRatio });
+    const canvasArray = Array.from(this.canvases.entries());
+    
+    for (let i = 0; i < canvasArray.length; i++) {
+      const [canvasId, canvas] = canvasArray[i];
+      const isPrimary = canvasId === this.primaryCanvasId;
+      
+      this.initializeCanvas(canvas, canvasId, devicePixelRatio, isPrimary);
     }
 
-    this.resizeManager.init(this.canvas, this.bridge);
+    // Initialize resize manager with primary canvas
+    const primaryCanvas = this.canvases.get(this.primaryCanvasId!)!;
+    this.resizeManager.init(primaryCanvas, this.bridge);
+  }
+
+  /**
+   * Initialize a single canvas (shared logic)
+   */
+  private initializeCanvas(canvas: HTMLCanvasElement, canvasId: string, devicePixelRatio: number, isPrimary: boolean) {
+    const messageType = isPrimary ? 'init' : 'createAdditionalWindow';
+    
+    if (this.runtimeMode === 'worker') {
+      try {
+        // Attempt to transfer canvas to offscreen
+        const offscreen: OffscreenCanvas = (canvas as any).transferControlToOffscreen();
+        this.bridge.post({ ty: messageType, canvas: offscreen, devicePixelRatio, canvasId }, [offscreen as any]);
+      } catch (e: any) {
+        console.error(`Offscreen transfer failed for ${canvasId}:`, e);
+        this.bridge.post({ ty: messageType, canvas: canvas, devicePixelRatio, canvasId });
+      }
+    } else {
+      this.bridge.post({ ty: messageType, canvas: canvas, devicePixelRatio, canvasId });
+    }
+    
+    console.log(`Initialized canvas: ${canvasId} (${isPrimary ? 'primary' : 'additional'})`);
   }
 
   /**
    * Requests canvas resize with proper pixel ratio scaling
    */
-  public requestCanvasResize(width: number, height: number, force = false) {
-    this.resizeManager.request(width, height, force);
+  public requestCanvasResize(canvasId: string, width: number, height: number, force = false) {
+    this.resizeManager.request(canvasId, width, height, force);
   }
 
   /**
@@ -159,7 +191,8 @@ export class WorkerController {
     switch (data.ty) {
       case "workerIsReady":
         this.workerIsReady = true;
-        this.input.init(this.canvas, this.bridge);
+        const primaryCanvas = this.canvases.get(this.primaryCanvasId!)!;
+        this.input.init(primaryCanvas, this.bridge);
         break;
 
       case "pick":
@@ -212,10 +245,12 @@ export class WorkerController {
   }
 
   /**
-   * Sets the canvas opacity
+   * Sets the opacity for all canvases
    */
   private setCanvasOpacity(opacity: string) {
-    this.canvas.style.opacity = opacity;
+    for (const canvas of this.canvases.values()) {
+      canvas.style.opacity = opacity;
+    }
   }
 
   // Inspector command methods
@@ -274,6 +309,47 @@ export class WorkerController {
    */
   public inspectorSpawnEntity(parentId?: string) {
     this.inspector.spawnEntity(parentId);
+  }
+
+  /**
+   * Add a canvas after initialization
+   */
+  public async addCanvas(config: CanvasConfig): Promise<void> {
+    if (this.canvases.has(config.id)) {
+      console.warn(`Canvas ${config.id} already exists`);
+      return;
+    }
+
+    this.canvases.set(config.id, config.canvas);
+    const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
+    
+    this.initializeCanvas(config.canvas, config.id, devicePixelRatio, false);
+  }
+
+  /**
+   * Remove a canvas
+   */
+  public removeCanvas(canvasId: string): void {
+    if (canvasId === this.primaryCanvasId) {
+      throw new Error('Cannot remove primary canvas');
+    }
+    
+    this.canvases.delete(canvasId);
+    console.log(`Removed canvas: ${canvasId}`);
+  }
+
+  /**
+   * Get all canvas IDs
+   */
+  public getCanvasIds(): string[] {
+    return Array.from(this.canvases.keys());
+  }
+
+  /**
+   * Get canvas by ID
+   */
+  public getCanvas(canvasId: string): HTMLCanvasElement | undefined {
+    return this.canvases.get(canvasId);
   }
 
   /**

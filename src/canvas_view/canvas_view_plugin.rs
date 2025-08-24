@@ -10,6 +10,7 @@ use bevy::render::view::window;
 use bevy::window::{
     RawHandleWrapper, Window, WindowClosed, WindowCreated, WindowResized, exit_on_all_closed,
 };
+use bevy::prelude::info;
 
 pub struct CanvasViewPlugin;
 
@@ -72,7 +73,8 @@ pub fn create_canvas_window(app: &mut App) {
         commands.entity(entity).insert(raw_window_wrapper.unwrap());
 
         created_window_events.write(WindowCreated { window: entity });
-        break;
+        info!("Successfully created canvas window for entity: {:?}", entity);
+        break; // Still break after processing one ViewObj, but this is called multiple times
     }
     create_window_system_state.apply(app.world_mut());
 }

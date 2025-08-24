@@ -6,6 +6,7 @@ const OVERRIDE_SCALE_FACTOR = 2;
 export class ResizeManager {
     private bridge: AdapterBridge | null = null;
     private canvas: HTMLCanvasElement | null = null;
+    private canvasId: string = '';
     private width = 0;
     private height = 0;
     private lastPhysicalWidth = -1;
@@ -15,11 +16,12 @@ export class ResizeManager {
 
     init(canvas: HTMLCanvasElement, bridge: AdapterBridge) {
         this.canvas = canvas;
+        this.canvasId = canvas.id || 'unknown-canvas';
         this.bridge = bridge;
         this.attachObserver();
     }
 
-    request(width: number, height: number, force = false) {
+    request(canvasId: string, width: number, height: number, force = false) {
         if (!this.canvas || !this.bridge) return;
         const dpr = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
         if (width > 0) this.width = width;
@@ -37,7 +39,7 @@ export class ResizeManager {
         this.lastPhysicalWidth = physicalWidth;
         this.lastPhysicalHeight = physicalHeight;
         this.lastDpr = dpr;
-        this.bridge.post({ ty: 'resize', width: physicalWidth, height: physicalHeight });
+        this.bridge.post({ ty: 'resize', canvasId, width: physicalWidth, height: physicalHeight });
     }
 
     private attachObserver() {
@@ -47,7 +49,7 @@ export class ResizeManager {
                 for (const entry of entries) {
                     if (entry.target === this.canvas) {
                         const rect = this.canvas.getBoundingClientRect();
-                        this.request(Math.round(rect.width), Math.round(rect.height));
+                        this.request(this.canvasId, Math.round(rect.width), Math.round(rect.height));
                     }
                 }
             });
@@ -63,7 +65,7 @@ export class ResizeManager {
                     const rect = this.canvas!.getBoundingClientRect();
                     this.width = rect.width; this.height = rect.height;
                 }
-                this.request(this.width, this.height, true);
+                this.request(this.canvasId, this.width, this.height, true);
             }
         }, { passive: true });
     }

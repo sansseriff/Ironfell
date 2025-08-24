@@ -102,8 +102,13 @@ class IronWorker {
 
         case "init":
           this.offscreenCanvas = data.canvas;
-          console.log("running init of worker app window")
+          console.log(`running init of worker app window: ${data.canvasId || 'primary'}`);
           this.createWorkerAppWindow(data.canvas, data.devicePixelRatio);
+          break;
+
+        case "createAdditionalWindow":
+          console.log(`creating additional worker app window: ${data.canvasId || 'unknown'}`);
+          this.createAdditionalWorkerAppWindow(data.canvas, data.devicePixelRatio);
           break;
 
         case "startRunning":
@@ -152,7 +157,7 @@ class IronWorker {
           break;
 
         case "resize":
-          this.canvasResize(data.width, data.height);
+          this.canvasResize(data.canvasId, data.width, data.height);
           break;
 
         case "keydown": // Handle keydown event
@@ -303,7 +308,7 @@ class IronWorker {
     };
   }
 
-  private canvasResize(width: number, height: number) {
+  private canvasResize(canvasId: string, width: number, height: number) {
     if (this.offscreenCanvas) {
       // I think I update the the canvas size here
       this.offscreenCanvas.width = width;
@@ -334,6 +339,18 @@ class IronWorker {
     if (this.rafId === null && !this.isStoppedRunning) {
       this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
     }
+  }
+
+  private createAdditionalWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number) {
+    // Create additional rendering window on the same Bevy app instance
+    create_window_by_offscreen_canvas(
+      this.appHandle,
+      offscreenCanvas,
+      devicePixelRatio
+    );
+
+    // No need to start another frame loop - the existing one handles all windows
+    console.log("Additional worker app window created");
   }
 
   private enterFrame(_dt: number) {

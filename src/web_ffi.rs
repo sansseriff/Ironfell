@@ -7,6 +7,7 @@ use bevy::app::PluginsState;
 use bevy::ecs::system::SystemState;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::window::Window;
 use js_sys::BigInt;
 use wasm_bindgen::prelude::*;
 
@@ -97,19 +98,71 @@ pub fn create_window_by_offscreen_canvas(
 
     let offscreen_canvas = OffscreenCanvas::new(canvas, scale_factor, 1);
     let view_obj = ViewObj::from_offscreen_canvas(offscreen_canvas);
+    info!("calling create window once");
 
     create_window(app, view_obj, true);
 }
 
+/// Resource to track ViewObj creation count
+#[derive(Resource, Default)]
+struct ViewObjCounter {
+    count: u32,
+    pending_view_obj: Option<ViewObj>,
+}
+
 fn create_window(app: &mut WorkerApp, view_obj: ViewObj, is_in_worker: bool) {
-    app.insert_non_send_resource(view_obj);
+    // Initialize counter resource if it doesn't exist
+    if !app.world().contains_resource::<ViewObjCounter>() {
+        app.insert_resource(ViewObjCounter::default());
+    }
+    
+    // Increment counter and get current count
+    let current_count = {
+        let mut counter = app.world_mut().resource_mut::<ViewObjCounter>();
+        counter.count += 1;
+        info!("ViewObj #{} received", counter.count);
+        counter.count
+    };
+    
+    if current_count == 1 {
+        // First ViewObj - store it for later processing
+        info!("Storing first ViewObj (pending)");
+        let mut counter = app.world_mut().resource_mut::<ViewObjCounter>();
+        counter.pending_view_obj = Some(view_obj);
+    } else if current_count == 2 {
+        // Second ViewObj - now we can process both
+        info!("Second ViewObj received, processing both");
+        
+        // Create additional Window entity for second ViewObj
+        let new_window_entity = app.world_mut().spawn(Window {
+            title: "Timeline Window".to_owned(),
+            ..default()
+        }).id();
+        
+        info!("Created additional Window entity: {:?}", new_window_entity);
+        
+        // Process the first ViewObj (which was pending)
+        if let Some(first_view_obj) = app.world_mut().resource_mut::<ViewObjCounter>().pending_view_obj.take() {
+            info!("Processing first ViewObj with primary window");
+            let window_count_before = app.world_mut().query::<&Window>().iter(app.world()).count();
+            info!("Windows available before first ViewObj: {}", window_count_before);
+            app.insert_non_send_resource(first_view_obj);
+            create_canvas_window(app);
+            info!("First ViewObj processing complete");
+        }
+        
+        // Process the second ViewObj
+        info!("Processing second ViewObj with additional window");
+        let window_count_before = app.world_mut().query::<&Window>().iter(app.world()).count();
+        info!("Windows available before second ViewObj: {}", window_count_before);
+        app.insert_non_send_resource(view_obj);
+        create_canvas_window(app);
+        info!("Second ViewObj processing complete");
+    }
 
     let mut info = ActivityControl::new();
     info.is_in_worker = is_in_worker;
-    // 选中/高亮 资源
     app.insert_resource(info);
-
-    create_canvas_window(app);
 }
 
 /// Check if plugin initialization is completed

@@ -4,11 +4,15 @@
   import Controls from "./lib/Controls.svelte";
 
   let sceneComponent: Scene;
+  let timelineSceneComponent: Scene;
 
   // Handler for SplitPane resize events
   function handleSplitPaneResize() {
     if (sceneComponent) {
       sceneComponent.triggerResize();
+    }
+    if (timelineSceneComponent) {
+      timelineSceneComponent.triggerResize();
     }
   }
 
@@ -23,7 +27,7 @@
 {/snippet}
 
 {#snippet b()}
-  <Scene bind:this={sceneComponent} />
+  <Scene bind:this={sceneComponent} canvasId="viewer-canvas" />
 {/snippet}
 
 {#snippet ab()}
@@ -39,8 +43,8 @@
   ></SplitPane>
 {/snippet}
 
-{#snippet empty()}
-  <h3>THis</h3>
+{#snippet timeline()}
+  <Scene bind:this={timelineSceneComponent} canvasId="timeline-canvas" />
 {/snippet}
 
 <SplitPane
@@ -50,7 +54,7 @@
   pos="75%"
   --color="black"
   a={ab}
-  b={empty}
+  b={timeline}
   onResize={handleSplitPaneResize}
 ></SplitPane>
 

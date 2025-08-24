@@ -6,39 +6,50 @@
   // Props
   let {
     onResize,
+    canvasId = "worker-canvas",
   }: {
     onResize?: () => void;
+    canvasId?: string;
   } = $props();
 
   let canvasContainer: HTMLDivElement;
   let canvasElement: HTMLCanvasElement;
+  let windowId: string | null = null;
 
   function dismissWebGPUWarning() {
     controllerManager.dismissWebGPUWarning();
   }
 
   async function launch() {
-    if (controllerManager.loadingInProgress) return;
+    console.log(`LAUNCHING canvas: ${canvasId}`);
 
-    canvasElement = document.getElementById(
-      "worker-canvas"
-    ) as HTMLCanvasElement;
+    canvasElement = document.getElementById(canvasId) as HTMLCanvasElement;
     if (!canvasElement) {
-      console.error("Canvas element not found");
+      console.error(`Canvas element with id "${canvasId}" not found`);
       return;
     }
 
-    await controllerManager.initialize(canvasElement);
-
-    // Update canvas size after initialization
-    if (controllerManager.isInitialized) {
-      updateCanvasSize();
+    // Register canvas with controller manager
+    try {
+      const isPrimary = canvasId === "viewer-canvas";
+      console.log(`Registering canvas: ${canvasId} (primary: ${isPrimary})`);
+      await controllerManager.registerCanvas(canvasElement, isPrimary);
+      
+      // Update canvas size after registration
+      // Wait a bit for initialization to potentially complete
+      setTimeout(() => {
+        if (controllerManager.isInitialized) {
+          updateCanvasSize();
+        }
+      }, 100);
+    } catch (error) {
+      console.error(`Failed to register canvas ${canvasId}:`, error);
+      return;
     }
   }
 
   // Function to handle canvas size updates
   function updateCanvasSize() {
-    // @ts-ignore
     if (!canvasContainer || !controllerManager.isInitialized) return;
 
     const rect = canvasContainer.getBoundingClientRect();
@@ -86,6 +97,9 @@
 
   onDestroy(() => {
     window.removeEventListener("resize", handleWindowResize);
+
+    // Remove canvas from controller manager when destroyed
+    controllerManager.removeCanvas(canvasId);
   });
 
   function resize({
@@ -96,7 +110,7 @@
     height?: number;
   }) {
     if (controllerManager.controller && controllerManager.isInitialized) {
-      controllerManager.controller.requestCanvasResize(width, height);
+      controllerManager.controller.requestCanvasResize(canvasId, width, height);
     }
   }
 
@@ -121,7 +135,7 @@
 
   <div bind:this={canvasContainer} id="container">
     <canvas
-      id="worker-canvas"
+      id={canvasId}
       tabindex="0"
       oncontextmenu={(e) => {
         e.preventDefault(); /* suppress default save image menu */

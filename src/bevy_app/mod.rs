@@ -7,6 +7,7 @@ mod overlay2d;
 mod picking;
 mod pointer;
 mod scene3d;
+mod timeline;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
@@ -26,6 +27,7 @@ use overlay2d::{
 use picking::{pick_overlay_2d_system, pick_world_3d_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
 use scene3d::{render_active_shapes, rotate_3d_shapes, setup_3d_scene, update_aabbes};
+use timeline::TimelinePlugin;
 
 use crate::{
     WorkerApp,
@@ -70,6 +72,7 @@ pub(crate) fn init_app() -> WorkerApp {
         },
         CameraControllerPlugin,
         RemoteInspectorPlugin,
+        TimelinePlugin,
     ));
 
     app.init_resource::<AccumulatedCursorDelta>();

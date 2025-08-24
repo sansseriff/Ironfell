@@ -19,25 +19,38 @@
 </script>
 
 {#snippet a()}
-  <Controls
-    onLaunch={handleLaunch}
-  />
+  <Controls onLaunch={handleLaunch} />
 {/snippet}
 
 {#snippet b()}
-  <Scene
-    bind:this={sceneComponent}
-  />
+  <Scene bind:this={sceneComponent} />
+{/snippet}
+
+{#snippet ab()}
+  <SplitPane
+    orientation="horizontal"
+    min="1%"
+    max="75%"
+    pos="52%"
+    --color="black"
+    {a}
+    {b}
+    onResize={handleSplitPaneResize}
+  ></SplitPane>
+{/snippet}
+
+{#snippet empty()}
+  <h3>THis</h3>
 {/snippet}
 
 <SplitPane
-  orientation="horizontal"
+  orientation="vertical"
   min="1%"
   max="75%"
-  pos="52%"
+  pos="75%"
   --color="black"
-  {a}
-  {b}
+  a={ab}
+  b={empty}
   onResize={handleSplitPaneResize}
 ></SplitPane>
 

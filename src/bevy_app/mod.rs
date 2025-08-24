@@ -33,7 +33,7 @@ use crate::{
     camera_controller::CameraControllerPlugin,
     ffi_inspector_bridge::{InspectorStreamingState, inspector_continuous_streaming_system},
     fps_overlay::FPSOverlayPlugin,
-    tracking_circle::TrackingCircle,
+    // tracking_circle::TrackingCircle,
 };
 use bevy_remote_inspector::RemoteInspectorPlugin;
 
@@ -57,7 +57,7 @@ pub(crate) fn init_app() -> WorkerApp {
     app.add_plugins((
         WebAssetPlugin::default(),
         default_plugins,
-        TrackingCircle,
+        // TrackingCircle,
         VelloPlugin {
             canvas_render_layers: RenderLayers::layer(1),
             use_cpu: false,

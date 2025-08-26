@@ -2,9 +2,12 @@
   import SplitPane from "./lib/SplitPane5.svelte";
   import Scene from "./lib/Scene.svelte";
   import Controls from "./lib/Controls.svelte";
+  import { UIState } from "./ui-state.svelte";
 
   let sceneComponent: Scene;
   let timelineSceneComponent: Scene;
+
+  const ui_state = new UIState();
 
   // Handler for SplitPane resize events
   function handleSplitPaneResize() {
@@ -47,17 +50,24 @@
   <Scene bind:this={timelineSceneComponent} canvasId="timeline-canvas" />
 {/snippet}
 
-<SplitPane
-  orientation="vertical"
-  min="1%"
-  max="75%"
-  pos="75%"
-  --color="black"
-  a={ab}
-  b={timeline}
-  onResize={handleSplitPaneResize}
-></SplitPane>
+<div class="master-container">
+  <SplitPane
+    orientation="vertical"
+    min="1%"
+    max="75%"
+    pos="75%"
+    --color="black"
+    a={ab}
+    b={timeline}
+    onResize={handleSplitPaneResize}
+  ></SplitPane>
+</div>
 
 <style>
-  /* App-specific styles can go here if needed */
+  .master-container {
+    height: 100vh;
+    width: 100vw;
+    padding: 2.5px;
+    background-color: var(--bg-color);
+  }
 </style>

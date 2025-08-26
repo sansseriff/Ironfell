@@ -207,15 +207,23 @@
 
 <style>
   .container {
+    --thickness: 5px;
     --sp-thickness: var(--thickness, 8px);
-    --sp-color: var(--color, transparent);
+    --sp-hover-color: rgba(89, 148, 220, 0.885);
+    --container-bg: var(--bg-color);
+
+    /* --panel-border-radius: 12px; */
+    /* --panel-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); */
+
     display: grid;
     position: relative;
     width: 100%;
     height: 100%;
+    background-color: var(--container-bg);
+    gap: var(--sp-thickness);
+    padding: 0;
   }
 
-  /* ahh, so this picks up the --pos variable injected in the html section and uses it */
   .container.vertical {
     grid-template-rows: var(--pos) 1fr;
   }
@@ -227,7 +235,8 @@
   .pane {
     width: 100%;
     height: 100%;
-    overflow: auto;
+    overflow: hidden;
+    position: relative;
   }
 
   .pane > :global(*) {
@@ -242,28 +251,36 @@
     top: 0;
     width: 100%;
     height: 100%;
-    background: rgba(255, 255, 255, 0.0001);
+    z-index: 1000;
   }
 
   .divider {
     position: absolute;
     touch-action: none !important;
+    background: transparent;
+    z-index: 10;
   }
 
   .divider::after {
     content: "";
     position: absolute;
-    background-color: var(--sp-color);
+    background-color: transparent;
+    transition: all 0.2s ease;
+    padding: 2px;
+  }
+
+  .divider:hover::after {
+    background-color: var(--sp-hover-color);
+    filter: drop-shadow(0 0px 4px rgba(60, 134, 224, 0.3));
   }
 
   .horizontal > .divider {
-    padding: 0 calc(0.5 * var(--sp-thickness));
-    width: 0;
+    width: var(--sp-thickness);
     height: 100%;
     cursor: ew-resize;
-    left: var(--pos);
-    transform: translate(calc(-0.5 * var(--sp-thickness)), 0);
-    background: rgba(0, 0, 0, 0.1);
+    left: calc(var(--pos));
+    top: 0;
+    height: calc(100% + 2 * var(--sp-thickness));
   }
 
   .horizontal > .divider.disabled {
@@ -273,17 +290,18 @@
   .horizontal > .divider::after {
     left: 50%;
     top: 0;
-    width: 1px;
+    width: 2px;
     height: 100%;
+    transform: translateX(-50%);
+    border-radius: 1px;
   }
 
   .vertical > .divider {
-    padding: calc(0.5 * var(--sp-thickness)) 0;
-    width: 100%;
-    height: 0;
+    width: calc(100% - 2 * var(--sp-thickness));
+    height: var(--sp-thickness);
     cursor: ns-resize;
-    top: var(--pos);
-    transform: translate(0, calc(-0.5 * var(--sp-thickness)));
+    top: calc(var(--pos));
+    left: var(--sp-thickness);
   }
 
   .vertical > .divider.disabled {
@@ -294,6 +312,8 @@
     top: 50%;
     left: 0;
     width: 100%;
-    height: 1px;
+    height: 2px;
+    transform: translateY(-50%);
+    border-radius: 1px;
   }
 </style>

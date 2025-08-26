@@ -79,7 +79,7 @@ pub(crate) fn setup_3d_scene(
     commands.spawn((
         PointLight {
             shadows_enabled: false,
-            intensity: 15_000_000.,
+            intensity: 07_000_000.,
             range: 100.0,
             ..default()
         },
@@ -88,7 +88,7 @@ pub(crate) fn setup_3d_scene(
     commands.spawn((
         PointLight {
             shadows_enabled: false,
-            intensity: 5_000_000.,
+            intensity: 2_000_000.,
             range: 100.0,
             ..default()
         },

@@ -140,7 +140,7 @@ pub fn setup_timeline_window(
             Camera2d,
             Camera {
                 order: 1,
-                clear_color: ClearColorConfig::Custom(Color::srgb(0.15, 1.0, 0.19)), 
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.145, 0.145, 0.152)), 
                 target: camera_target,
                 ..default()
             },
@@ -219,7 +219,7 @@ pub fn render_timeline_grid(
         scene.fill(
             peniko::Fill::NonZero,
             kurbo::Affine::default(),
-            peniko::Color::new([1.0, 1.0, 0.1, 1.0]), // Bright yellow background
+            peniko::Color::new([0.1, 0.1, 0.1, 1.0]), // dark gray background
             None,
             &background_rect,
         );

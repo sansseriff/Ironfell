@@ -158,6 +158,7 @@
     height: 100%;
     display: flex;
     flex-direction: column;
+    background-color: var(--bg-color);
   }
 
   #loading {
@@ -182,6 +183,9 @@
     height: 100%;
     flex: 1;
     display: flex;
+    border-radius: 8px;
+    /* border: 1px solid var(--outer-border-color); */
+    overflow: hidden;
   }
 
   canvas:focus {

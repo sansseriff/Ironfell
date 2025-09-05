@@ -152,6 +152,8 @@ fn create_window(
         "viewer" => "Viewer".to_owned(),
         other => other.to_owned(),
     };
+
+    // https://chatgpt.com/c/68b0a24d-09c4-8324-bb10-fbe87aac2ff7
     let is_viewer = window_kind == "viewer";
     // If this should be the primary window, first remove old PrimaryWindow markers
     if is_viewer {

@@ -33,7 +33,7 @@ pub(crate) struct DraggableSquare {
 impl Default for DraggableSquare {
     fn default() -> Self {
         Self {
-            position: Vec2::ZERO,
+            position: Vec2::new(0.0, -200.0),
             size: Vec2::splat(120.0),
             dragging: false,
             hovered: false,
@@ -332,16 +332,21 @@ pub(crate) fn update_draggable_square_state(
         return;
     }
     let last_opt = cursor_events.read().last().map(|e| e.position);
-    let Some(last_pos) = last_opt else {
+    let Some(mut last_pos) = last_opt else {
         return;
     };
-    // NOTE: If upstream cursor injection uses a top-left origin, apply Y inversion here.
-    // Currently events are already bottom-left aligned, so no transform applied.
-
+    // Normalize cursor Y to bottom-left origin by flipping using the viewport height (if present)
     let (camera, cam_transform) = match q_cam.single() {
         Ok(v) => v,
         Err(_) => return,
     };
+    if let Some(vp) = &camera.viewport {
+        let h = vp.physical_size.y as f32;
+        last_pos.y = h - last_pos.y;
+    } else if let Some(rect) = camera.logical_viewport_rect() {
+        let h = (rect.max.y - rect.min.y) as f32;
+        last_pos.y = h - last_pos.y;
+    }
     let Ok(world_pos) = camera.viewport_to_world_2d(cam_transform, last_pos) else {
         return;
     };

@@ -23,6 +23,7 @@ use interaction::{
 use overlay2d::{
     DraggableSquare, SimpleMouseState, animate_2d_overlay, render_draggable_square,
     setup_2d_overlay, simple_mouse_state_system, update_draggable_square_state,
+    camera_projection_diagnostics,
 };
 use picking::{pick_overlay_2d_system, pick_world_3d_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
@@ -92,6 +93,8 @@ pub(crate) fn init_app() -> WorkerApp {
         .add_systems(
             Update,
             (
+                // deferred camera spawns removed; cameras spawn during setup
+                camera_projection_diagnostics,
                 update_aabbes,
                 inspector_continuous_streaming_system,
                 animate_2d_overlay, // TODO: refactor overlay interaction to new picking path

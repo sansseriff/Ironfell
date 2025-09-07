@@ -122,7 +122,7 @@ pub fn setup_timeline_window(
     }
 
     // If the timeline window isn't ready yet, wait until it exists
-    let Some(timeline_window) = timeline_window else {
+    let Some(_timeline_window) = timeline_window else {
         info!("Timeline setup waiting for timeline window entity (found {} windows)", window_entities.len());
         return;
     };
@@ -134,26 +134,29 @@ pub fn setup_timeline_window(
     // info!("Timeline window setup: viewer={:?} ({}), timeline={:?} ({})", 
     //       viewer_window, sorted_windows[0].1, timeline_window, sorted_windows[1].1);
 
-    // Setup timeline 2D camera - will render to timeline window
-    let camera_target = RenderTarget::Window(WindowRef::Entity(timeline_window));
+    // Spawn timeline camera immediately (was previously deferred)
+    if let Some(timeline_window) = timeline_window {
+        let camera_target = RenderTarget::Window(WindowRef::Entity(timeline_window));
         commands.spawn((
             Camera2d,
             Camera {
                 order: 1,
-                clear_color: ClearColorConfig::Custom(Color::srgb(0.145, 0.145, 0.152)), 
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.145, 0.145, 0.152)),
                 target: camera_target,
                 ..default()
             },
-            RenderLayers::layer(2), // Different render layer for timeline
+            RenderLayers::layer(2),
             TimelineCamera2D,
             VelloView,
         ));
+    }
 
     // Timeline background scene
     commands.spawn((
         VelloScene::new(),
         RenderLayers::layer(2),
         TimelineBackgroundScene,
+        // VelloScreenSpace
     ));
 
     // Timeline grid scene for time markers and grid lines
@@ -161,6 +164,7 @@ pub fn setup_timeline_window(
         VelloScene::new(),
         RenderLayers::layer(2),
         TimelineGridScene,
+        // VelloScreenSpace
     ));
 
     // Timeline playhead scene (current time indicator)
@@ -168,10 +172,13 @@ pub fn setup_timeline_window(
         VelloScene::new(),
         RenderLayers::layer(2),
         TimelinePlayheadScene,
+        // VelloScreenSpace
     ));
 
     info!("Timeline window setup complete");
 }
+
+// (Removed) deferred_timeline_camera_spawn: camera now created in setup_timeline_window
 
 /// Update timeline view based on current state
 pub fn update_timeline_view(
@@ -204,10 +211,10 @@ pub fn render_timeline_grid(
         // Timeline dimensions (adjust based on your needs)
         let timeline_width: f64 = 800.0;
         let timeline_height: f64 = 100.0;
-        let timeline_left: f64 = -timeline_width / 2.0;
+        let timeline_left: f64 = timeline_width / -2.0;
         let timeline_right: f64 = timeline_width / 2.0;
         let timeline_top: f64 = timeline_height / 2.0;
-        let timeline_bottom: f64 = -timeline_height / 2.0;
+        let timeline_bottom: f64 = timeline_height / -2.0;
 
         // Draw timeline background
         let background_rect = kurbo::Rect::new(

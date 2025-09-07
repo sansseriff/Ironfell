@@ -1,10 +1,15 @@
 use bevy::input::mouse::MouseButtonInput; // added for button event reader
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
+use bevy::render::{
+    camera::RenderTarget,
+    view::RenderLayers,
+};
+use bevy::window::WindowRef;
+use crate::canvas_view::CanvasName;
 use bevy_vello::prelude::*;
 // Bring kurbo trait methods into scope for PathSeg operations (arclen, inv_arclen, etc.)
 use bevy_vello::prelude::kurbo::{ParamCurve, ParamCurveArclen};
-
+use bevy_vello::prelude::VelloScreenSpace;
 // -------------------------------------------------------------------------------------------------
 // Overlay 2D camera + animated demo scene (existing behavior)
 // -------------------------------------------------------------------------------------------------
@@ -107,19 +112,39 @@ pub(crate) struct SimpleMouseState {
 pub(crate) fn setup_2d_overlay(
     mut commands: Commands,
     existing_bezier: Option<Res<AnimatedBezierPath>>,
+    windows: Query<(Entity, Option<&CanvasName>), With<Window>>,
 ) {
-    commands.spawn((
-        Camera2d,
-        Camera {
-            order: 1,
-            // clear_color: ClearColorConfig::None,
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.97, 0.97, 0.97)),
-            ..default()
-        },
-        RenderLayers::layer(1),
-        OverlayCamera2D,
-        VelloView,
-    ));
+    // Find the viewer window deterministically by CanvasName; fall back to Primary if not yet present
+    let mut viewer_window: Option<Entity> = None;
+    for (e, name) in windows.iter() {
+        if let Some(CanvasName(id)) = name {
+            if id == "viewer-canvas" {
+                viewer_window = Some(e);
+                break;
+            }
+        }
+    }
+    let Some(_viewer_window) = viewer_window else {
+        // Defer until the viewer window exists
+        return;
+    };
+
+    // Spawn overlay camera immediately (was previously deferred)
+    if let Some(viewer_entity) = viewer_window {
+        let camera_target = RenderTarget::Window(WindowRef::Entity(viewer_entity));
+        commands.spawn((
+            Camera2d,
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.97, 0.97, 0.97)),
+                target: camera_target,
+                ..default()
+            },
+            RenderLayers::layer(1),
+            OverlayCamera2D,
+            VelloView,
+        ));
+    }
     // Animated demo scene (kept from previous implementation)
     commands.spawn((
         VelloScene::new(),
@@ -144,7 +169,26 @@ pub(crate) fn setup_2d_overlay(
         VelloScene::new(),
         RenderLayers::layer(1),
         AnimatedBezierStrokeScene,
+        VelloScreenSpace,
     ));
+}
+
+// (Removed) deferred_overlay_camera_spawn: camera now created in setup_2d_overlay
+
+// Diagnostic: log projection extents for overlay and timeline cameras first few frames
+pub(crate) fn camera_projection_diagnostics(
+    overlay_cam: Query<&Camera, With<OverlayCamera2D>>,
+    timeline_cam: Query<&Camera, (With<crate::bevy_app::timeline::TimelineCamera2D>, Without<OverlayCamera2D>)>,
+    mut counter: Local<u32>,
+) {
+    if *counter >= 120 { return; }
+    if let Ok(cam) = overlay_cam.single() {
+        if let Some(vp) = &cam.viewport { info!("diag overlay viewport phys={}x{}", vp.physical_size.x, vp.physical_size.y); }
+    }
+    if let Ok(cam) = timeline_cam.single() {
+        if let Some(vp) = &cam.viewport { info!("diag timeline viewport phys={}x{}", vp.physical_size.x, vp.physical_size.y); }
+    }
+    *counter += 1;
 }
 
 pub(crate) fn animate_2d_overlay(
@@ -278,8 +322,6 @@ pub(crate) fn update_draggable_square_state(
     mut cursor_events: EventReader<CursorMoved>,
     mouse: Res<SimpleMouseState>,
     q_cam: Query<(&Camera, &GlobalTransform), With<OverlayCamera2D>>,
-    // Correct Y origin mismatch (browser events usually top-left; Bevy viewport_to_world_2d expects bottom-left)
-    q_window: Query<&Window>,
 ) {
     // Follow the pattern in tracking_circle.rs: only act if we have cursor movement events this frame.
     if cursor_events.is_empty() {
@@ -290,15 +332,12 @@ pub(crate) fn update_draggable_square_state(
         return;
     }
     let last_opt = cursor_events.read().last().map(|e| e.position);
-    let Some(mut last_pos) = last_opt else {
+    let Some(last_pos) = last_opt else {
         return;
     };
-    // // Correct Y inversion if window events are in a top-left origin space
-    // if let Ok(window) = q_window.single() {
-    //     // Bevy logical cursor coords use bottom-left origin for viewport_to_world_2d.
-    //     // If our injected events are top-left, flip them.
-    //     last_pos.y = window.height() - last_pos.y;
-    // }
+    // NOTE: If upstream cursor injection uses a top-left origin, apply Y inversion here.
+    // Currently events are already bottom-left aligned, so no transform applied.
+
     let (camera, cam_transform) = match q_cam.single() {
         Ok(v) => v,
         Err(_) => return,
@@ -310,9 +349,9 @@ pub(crate) fn update_draggable_square_state(
     // Hover test (AABB of the square)
     let half = state.size * 0.5;
     state.hovered = (world_pos.x >= state.position.x - half.x)
-        && (world_pos.x <= state.position.x + half.x)
-        && (world_pos.y >= state.position.y - half.y)
-        && (world_pos.y <= state.position.y + half.y);
+                 && (world_pos.x <= state.position.x + half.x)
+                 && (world_pos.y >= state.position.y - half.y)
+                 && (world_pos.y <= state.position.y + half.y);
 
     // Drag start
     if !state.dragging && state.hovered && mouse.left_pressed {

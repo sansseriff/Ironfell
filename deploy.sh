@@ -1,11 +1,14 @@
 #!/bin/bash
 # filepath: /Users/andrew/Documents/PROGRAM_LOCAL/iron/deploy.sh
 set -e
+set -o pipefail
 
 echo "🚀 Starting deployment process..."
 
 # Get the latest tag and increment patch version
-LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+git fetch --quiet --tags --prune 2>/dev/null || true
+LATEST_TAG=$(git tag -l 'v*' | sort -V | tail -1)
+[ -z "$LATEST_TAG" ] && LATEST_TAG="v0.0.0"
 echo "📋 Latest tag: $LATEST_TAG"
 
 # Extract version numbers
@@ -19,6 +22,12 @@ PATCH=${VERSION_PARTS[2]:-0}
 NEW_PATCH=$((PATCH + 1))
 NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
 
+# Ensure uniqueness against both local and remote (handles concurrent runs)
+while git rev-parse "$NEW_TAG" >/dev/null 2>&1 || git ls-remote --tags origin | grep -q "refs/tags/$NEW_TAG$"; do
+  NEW_PATCH=$((NEW_PATCH + 1))
+  NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+done
+
 echo "🏷️  Creating new tag: $NEW_TAG"
 
 # Commit any pending changes
@@ -29,8 +38,20 @@ if ! git diff-index --quiet HEAD --; then
 fi
 
 # Create and push the new tag
-git tag "$NEW_TAG"
-git push origin "$NEW_TAG"
+git tag -m "Release $NEW_TAG" "$NEW_TAG"
+
+# Retry push if a race occurs (very unlikely after loop, but safe)
+if ! git push origin "$NEW_TAG"; then
+  echo "⚠️ Tag push failed (race). Recomputing..."
+  git fetch --quiet --tags
+  while git ls-remote --tags origin | grep -q "refs/tags/$NEW_TAG$"; do
+    NEW_PATCH=$((NEW_PATCH + 1))
+    NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+  done
+  git tag -m "Release $NEW_TAG" "$NEW_TAG"
+  git push origin "$NEW_TAG"
+fi
+
 git push origin master
 
 echo "✅ Deployment triggered! Check GitHub Actions for build progress."

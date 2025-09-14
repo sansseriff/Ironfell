@@ -17,7 +17,7 @@ use bevy::input::{
     keyboard::{Key, KeyCode as BevyKeyCode, KeyboardInput}, // Added Key, BevyKeyCode, KeyboardInput, NativeKey
     mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
 };
-use bevy::window::CursorMoved; // CursorMoved is used in mouse_move. Removed WindowResized
+use bevy::window::{CursorMoved, PresentMode}; // CursorMoved is used in mouse_move. Removed WindowResized
 
 // pub struct MyMouseWheelEvent {
 //     pub delta_x: f32,
@@ -177,7 +177,7 @@ fn create_window(
     // Now spawn the window and optionally tag it as primary
     let entity = {
         let mut world = app.world_mut();
-        let mut ecmd = world.spawn(Window { title, ..default() });
+        let mut ecmd = world.spawn(Window { title, present_mode: PresentMode::AutoNoVsync, ..default() });
         if is_viewer {
             ecmd.insert(PrimaryWindow);
         }

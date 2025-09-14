@@ -331,7 +331,7 @@ class IronWorker {
     // Decide window kind by id
     const kind = canvasId === 'viewer-canvas' ? 'viewer' : (canvasId.includes('timeline') ? 'timeline' : 'other');
     // Pass extra args via `any` cast for forward compatibility
-  create_window_by_offscreen_canvas_with_id(
+    create_window_by_offscreen_canvas_with_id(
       this.appHandle,
       offscreenCanvas,
       devicePixelRatio,
@@ -352,7 +352,7 @@ class IronWorker {
     // Create additional rendering window on the same Bevy app instance
     const kind = canvasId.includes('timeline') ? 'timeline' : 'other';
     this.offscreenCanvases.set(canvasId, offscreenCanvas);
-  create_window_by_offscreen_canvas_with_id(
+    create_window_by_offscreen_canvas_with_id(
       this.appHandle,
       offscreenCanvas,
       devicePixelRatio,
@@ -365,35 +365,36 @@ class IronWorker {
   }
 
   private enterFrame(_dt: number) {
-    // Clear the RAF ID since this frame is now executing
+    // Clear the RAF ID since this call was triggered
     this.rafId = null;
 
-    if (this.appHandle === BigInt(0) || this.isStoppedRunning) return;
+    // Non-blocking 10 ms delay so the worker can still process incoming messages
+    setTimeout(() => {
+      if (this.appHandle === BigInt(0) || this.isStoppedRunning) return;
 
-    // Execute the app's frame loop when ready
-    if (this.initFinished > 0) {
-      if (
-        this.frameIndex >= this.frameFlag ||
-        (this.frameIndex < this.frameFlag && this.frameCount % 60 == 0)
-      ) {
-        // Use new combined function that processes mouse and frame together
-        if (this.hasMouseUpdate) {
-          enter_frame_with_mouse(this.appHandle, this.latestMouseX, this.latestMouseY, true);
-          this.hasMouseUpdate = false;
-        } else {
-          enter_frame_with_mouse(this.appHandle, 0, 0, false);
+      // Execute the app's frame loop when ready
+      if (this.initFinished > 0) {
+        if (
+          this.frameIndex >= this.frameFlag ||
+          (this.frameIndex < this.frameFlag && this.frameCount % 60 == 0)
+        ) {
+          if (this.hasMouseUpdate) {
+            enter_frame_with_mouse(this.appHandle, this.latestMouseX, this.latestMouseY, true);
+            this.hasMouseUpdate = false;
+          } else {
+            enter_frame_with_mouse(this.appHandle, 0, 0, false);
+          }
+          this.frameIndex++;
         }
-        this.frameIndex++;
+        this.frameCount++;
+      } else {
+        this.getPreparationState();
       }
-      this.frameCount++;
-    } else {
-      this.getPreparationState();
-    }
 
-    // Schedule next frame only if not stopped
-    if (!this.isStoppedRunning) {
-      this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
-    }
+      if (!this.isStoppedRunning) {
+        this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
+      }
+    }, 0);
   }
 
   private getPreparationState() {

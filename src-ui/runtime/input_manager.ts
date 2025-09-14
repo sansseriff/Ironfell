@@ -15,7 +15,7 @@ export class InputManager {
     private keyFrameScheduled = false;
     private attached = false;
     private lastMouseSend = 0;
-    private readonly MOUSE_THROTTLE_MS = 8; // ~120Hz max, adjust as needed
+    private readonly MOUSE_THROTTLE_MS = 0; // ~120Hz max, adjust as needed
 
     constructor(options: InputManagerOptions = {}) {
         this.options = options;

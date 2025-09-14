@@ -71,6 +71,7 @@ pub(crate) fn init_app() -> WorkerApp {
             max_history_length: MAX_HISTORY_LENGTH,
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
         },
+        bevy_framepace::FramepacePlugin,
         CameraControllerPlugin,
         RemoteInspectorPlugin,
         TimelinePlugin,

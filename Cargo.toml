@@ -79,7 +79,6 @@ web-sys = { version = "0.3.77", features = [
     "Response",
 ] }
 js-sys = "0.3.77"
-bevy_framepace = "0.19.1"
 
 [profile.wasm-release]
 inherits = "release"

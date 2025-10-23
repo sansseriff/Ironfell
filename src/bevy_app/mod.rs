@@ -23,7 +23,7 @@ use interaction::{
 use overlay2d::{
     DraggableSquare, SimpleMouseState, animate_2d_overlay, render_draggable_square,
     setup_2d_overlay, simple_mouse_state_system, update_draggable_square_state,
-    camera_projection_diagnostics,
+    camera_projection_diagnostics, update_mini_square_entities, render_mini_squares, render_selection_marquee
 };
 use picking::{pick_overlay_2d_system, pick_world_3d_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
@@ -71,7 +71,6 @@ pub(crate) fn init_app() -> WorkerApp {
             max_history_length: MAX_HISTORY_LENGTH,
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
         },
-        bevy_framepace::FramepacePlugin,
         CameraControllerPlugin,
         RemoteInspectorPlugin,
         TimelinePlugin,
@@ -103,6 +102,9 @@ pub(crate) fn init_app() -> WorkerApp {
                 simple_mouse_state_system,
                 update_draggable_square_state,
                 render_draggable_square,
+                update_mini_square_entities,
+                render_mini_squares,
+                render_selection_marquee
             ),
         )
         .add_systems(

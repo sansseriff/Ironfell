@@ -24,7 +24,7 @@ class ControllerManagerClass {
    */
   async registerCanvas(canvas: HTMLCanvasElement, isPrimary = false, mode: RuntimeMode = this.runtimeMode): Promise<void> {
     console.log(`Registering canvas: ${canvas.id} (primary: ${isPrimary})`);
-    
+
     this.pendingCanvases.set(canvas.id, {
       canvas,
       id: canvas.id,
@@ -116,7 +116,7 @@ class ControllerManagerClass {
     if (this.controller) {
       this.controller.removeCanvas(canvasId);
     }
-    
+
     console.log(`Removed canvas: ${canvasId}`);
   }
 
@@ -126,7 +126,7 @@ class ControllerManagerClass {
   async switchMode(_referenceCanvas: HTMLCanvasElement, mode: RuntimeMode) {
     if (this.loadingInProgress) return;
     if (this.runtimeMode === mode && this.isInitialized) return; // no-op
-    
+
     // Store current canvas configurations
     const currentConfigs = Array.from(this.pendingCanvases.values());
     if (this.controller) {
@@ -138,15 +138,15 @@ class ControllerManagerClass {
         }
       }
     }
-    
+
     // Dispose existing controller
     this.dispose();
-    
+
     // Recreate canvases (never reuse ones that may have a context / offscreen transfer)
     for (const config of currentConfigs) {
       const container = document.getElementById('container') || config.canvas.parentElement;
       if (!container) continue;
-      
+
       const newCanvas = document.createElement('canvas');
       newCanvas.id = config.id;
       newCanvas.className = config.canvas.className;
@@ -154,18 +154,18 @@ class ControllerManagerClass {
       if (config.canvas.hasAttribute('tabindex')) {
         newCanvas.setAttribute('tabindex', config.canvas.getAttribute('tabindex')!);
       }
-      
+
       // Replace old canvas
       if (config.canvas.parentElement === container) {
-        try { 
-          container.replaceChild(newCanvas, config.canvas); 
-        } catch { 
-          container.appendChild(newCanvas); 
+        try {
+          container.replaceChild(newCanvas, config.canvas);
+        } catch {
+          container.appendChild(newCanvas);
         }
       } else {
         container.appendChild(newCanvas);
       }
-      
+
       // Register new canvas
       await this.registerCanvas(newCanvas, config.isPrimary, mode);
     }

@@ -50,7 +50,7 @@ export class WorkerController {
    */
   constructor(canvasConfigs: CanvasConfig[], mode: RuntimeMode = 'worker') {
     this.runtimeMode = mode;
-    
+
     // Store canvases and identify primary
     for (const config of canvasConfigs) {
       this.canvases.set(config.id, config.canvas);
@@ -142,16 +142,16 @@ export class WorkerController {
   private initializeAllCanvases() {
     const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
     const canvasArray = Array.from(this.canvases.entries());
-    
+
     for (let i = 0; i < canvasArray.length; i++) {
       const [canvasId, canvas] = canvasArray[i];
       const isPrimary = canvasId === this.primaryCanvasId;
-      
+
       this.initializeCanvas(canvas, canvasId, devicePixelRatio, isPrimary);
     }
 
-  // Initialize resize manager with all canvases
-  this.resizeManager.initAll(this.canvases, this.bridge);
+    // Initialize resize manager with all canvases
+    this.resizeManager.initAll(this.canvases, this.bridge);
   }
 
   /**
@@ -159,7 +159,7 @@ export class WorkerController {
    */
   private initializeCanvas(canvas: HTMLCanvasElement, canvasId: string, devicePixelRatio: number, isPrimary: boolean) {
     const messageType = isPrimary ? 'init' : 'createAdditionalWindow';
-    
+
     if (this.runtimeMode === 'worker') {
       try {
         // Attempt to transfer canvas to offscreen
@@ -172,7 +172,7 @@ export class WorkerController {
     } else {
       this.bridge.post({ ty: messageType, canvas: canvas, devicePixelRatio, canvasId });
     }
-    
+
     console.log(`Initialized canvas: ${canvasId} (${isPrimary ? 'primary' : 'additional'})`);
   }
 
@@ -321,7 +321,7 @@ export class WorkerController {
 
     this.canvases.set(config.id, config.canvas);
     const devicePixelRatio = OVERRIDE_SCALE ? OVERRIDE_SCALE_FACTOR : window.devicePixelRatio;
-    
+
     this.initializeCanvas(config.canvas, config.id, devicePixelRatio, false);
   }
 
@@ -332,7 +332,7 @@ export class WorkerController {
     if (canvasId === this.primaryCanvasId) {
       throw new Error('Cannot remove primary canvas');
     }
-    
+
     this.canvases.delete(canvasId);
     console.log(`Removed canvas: ${canvasId}`);
   }

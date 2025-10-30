@@ -36,11 +36,11 @@
     if (!input) return;
     const targetMode = input.checked ? "worker" : "main";
     if (!controllerManager.controller) return;
-    const canvas = document.getElementById("worker-canvas");
-    if (!(canvas instanceof HTMLCanvasElement)) return;
+
     pendingSwitch = true;
+    console.log("get here?");
     try {
-      await controllerManager.switchMode(canvas, targetMode);
+      await controllerManager.switchMode(targetMode);
       // If initialized before, re-run size logic via resize event
       if (controllerManager.isInitialized) {
         const resizeEvent = new Event("resize");

@@ -57,6 +57,8 @@ class ControllerManagerClass {
       this.loadingInProgress = true;
       this.runtimeMode = mode;
 
+      console.log("pre-initialize pendingCanvases:", this.pendingCanvases);
+
       const canvasConfigs = Array.from(this.pendingCanvases.values());
       if (canvasConfigs.length === 0) {
         throw new Error('No canvases registered for initialization');
@@ -78,28 +80,29 @@ class ControllerManagerClass {
       this.initializationStarted = false;
     } finally {
       this.loadingInProgress = false;
+      console.log("post-initialize pendingCanvases:", this.pendingCanvases);
     }
   }
 
   /**
-   * Add a canvas after controller is initialized
+   * Add a canvas after controller is initialized. not currently used. 
    */
-  async addCanvas(canvas: HTMLCanvasElement): Promise<void> {
-    if (!this.isInitialized || !this.controller) {
-      // If controller isn't ready, register for later initialization
-      await this.registerCanvas(canvas, false);
-      return;
-    }
+  // async addCanvas(canvas: HTMLCanvasElement): Promise<void> {
+  //   if (!this.isInitialized || !this.controller) {
+  //     // If controller isn't ready, register for later initialization
+  //     await this.registerCanvas(canvas, false);
+  //     return;
+  //   }
 
-    const config: CanvasConfig = {
-      canvas,
-      id: canvas.id,
-      isPrimary: false
-    };
+  //   const config: CanvasConfig = {
+  //     canvas,
+  //     id: canvas.id,
+  //     isPrimary: false
+  //   };
 
-    await this.controller.addCanvas(config);
-    console.log(`Added canvas after initialization: ${canvas.id}`);
-  }
+  //   await this.controller.addCanvas(config);
+  //   console.log(`Added canvas after initialization: ${canvas.id}`);
+  // }
 
   /**
    * Remove a canvas window when it's destroyed
@@ -123,12 +126,14 @@ class ControllerManagerClass {
   /**
    * Switch runtime mode - recreates all canvases
    */
-  async switchMode(_referenceCanvas: HTMLCanvasElement, mode: RuntimeMode) {
+  async switchMode(mode: RuntimeMode) {
+
+    console.log("SWITCHMODE switching mode from ", this.runtimeMode, " to ", mode);
     if (this.loadingInProgress) return;
     if (this.runtimeMode === mode && this.isInitialized) return; // no-op
 
     // Store current canvas configurations
-    const currentConfigs = Array.from(this.pendingCanvases.values());
+    const currentConfigs = [];
     if (this.controller) {
       // Get canvas IDs from controller if initialized
       for (const canvasId of this.controller.getCanvasIds()) {
@@ -142,8 +147,16 @@ class ControllerManagerClass {
     // Dispose existing controller
     this.dispose();
 
+
+    console.log("SWITCHMODE current configs: ", currentConfigs);
+
     // Recreate canvases (never reuse ones that may have a context / offscreen transfer)
     for (const config of currentConfigs) {
+
+      console.log("SWITCHMODE parent element is ", config.canvas.parentElement);
+      console.log("SWITCHMODE and document.getElementById('container') is ", document.getElementById('container'));
+
+
       const container = document.getElementById('container') || config.canvas.parentElement;
       if (!container) continue;
 

@@ -32,7 +32,6 @@
     // Register canvas with controller manager
     try {
       const isPrimary = canvasId === "viewer-canvas";
-      console.log(`Registering canvas: ${canvasId} (primary: ${isPrimary})`);
       await controllerManager.registerCanvas(canvasElement, isPrimary);
 
       // Update canvas size after registration

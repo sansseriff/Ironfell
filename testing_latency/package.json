@@ -1,0 +1,22 @@
+{
+  "name": "iron-latency-testing",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "install:browsers": "playwright install chromium",
+    "analyze": "tsx src/runner/generate-analysis-data.ts",
+    "analyze:manual": "tsx src/runner/analyze-manual-results.ts",
+    "run": "tsx src/runner/run-playwright.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.0",
+    "@types/node": "^26.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "~5.7.2",
+    "vite": "^6.2.0"
+  }
+}

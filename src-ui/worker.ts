@@ -48,6 +48,7 @@ class IronWorker {
   private latestMouseX: number = 0;
   private latestMouseY: number = 0;
   private hasMouseUpdate: boolean = false;
+  private postedEnginePrepared: boolean = false;
 
   constructor() {
     // Create a dedicated object for Rust FFI functions
@@ -398,7 +399,12 @@ class IronWorker {
   }
 
   private getPreparationState() {
+    const prev = this.initFinished;
     this.initFinished = is_preparation_completed(this.appHandle);
+    if (!this.postedEnginePrepared && this.initFinished > 0) {
+      this.postedEnginePrepared = true;
+      self.postMessage({ ty: "enginePrepared" });
+    }
   }
 
   private sendPickFromWorker(pickList: any[]) {

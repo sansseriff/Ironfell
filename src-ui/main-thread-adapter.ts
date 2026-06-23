@@ -42,6 +42,7 @@ export class MainThreadAdapter {
   private streamingInterval: number | null = null;
   private messageHandler: ((event: any) => void) | null = null;
   private rafId: number | null = null;
+  private postedEnginePrepared: boolean = false;
 
   constructor() {
     // Create a dedicated object for Rust FFI functions
@@ -376,7 +377,12 @@ export class MainThreadAdapter {
   }
 
   private getPreparationState() {
+    const prev = this.initFinished;
     this.initFinished = is_preparation_completed(this.appHandle);
+    if (!this.postedEnginePrepared && this.initFinished > 0) {
+      this.postedEnginePrepared = true;
+      this.sendMessage({ ty: "enginePrepared" });
+    }
   }
 
   private sendPickFromWorker(pickList: any[]) {

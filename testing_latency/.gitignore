@@ -1,0 +1,5 @@
+dist/
+node_modules/
+results/*.json
+manual_results/*.json
+manual_results/analysis.*

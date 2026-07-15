@@ -46,8 +46,10 @@ async function main() {
   const files = (await readdir(manualDir)).filter((file) => file.endsWith('.json')).sort();
   const analyses: AppManualAnalysis[] = [];
   for (const file of files) {
-    const result = JSON.parse(await readFile(resolve(manualDir, file), 'utf8')) as TrialResult;
-    analyses.push(analyze(file, result));
+    const parsed = JSON.parse(await readFile(resolve(manualDir, file), 'utf8'));
+    for (const { label, result } of unpackResults(file, parsed)) {
+      analyses.push(analyze(label, result));
+    }
   }
 
   await writeFile(resolve(manualDir, 'analysis.json'), JSON.stringify({ generatedAt: new Date().toISOString(), analyses }, null, 2));
@@ -81,6 +83,24 @@ function analyze(file: string, result: TrialResult): AppManualAnalysis {
     bursts100: bursts(events, 100, 100, t0).slice(0, 12),
     timeSeries: timeSeries(events, renders, t0, t1, 250),
   };
+}
+
+function unpackResults(file: string, parsed: unknown): Array<{ label: string; result: TrialResult }> {
+  if (isManualPackage(parsed)) {
+    return parsed.results.map((result, index) => ({
+      label: `${file}#${index + 1}_${result.app}`,
+      result,
+    }));
+  }
+  return [{ label: file, result: parsed as TrialResult }];
+}
+
+function isManualPackage(value: unknown): value is { results: TrialResult[] } {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && Array.isArray((value as { results?: unknown }).results),
+  );
 }
 
 function stats(values: Array<number | null | undefined>): Stats {

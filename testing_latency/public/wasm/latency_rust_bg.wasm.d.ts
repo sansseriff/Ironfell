@@ -1,0 +1,34 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const start_winit_main: (a: any, b: any, c: any) => [number, number, number];
+export const __wbg_winitmainhandle_free: (a: number, b: number) => void;
+export const winitmainhandle_start: (a: number, b: any, c: any) => [number, number];
+export const start_bevy_main: (a: number, b: number, c: any, d: any) => [number, number, number];
+export const __wbg_bevymainhandle_free: (a: number, b: number) => void;
+export const bevymainhandle_start: (a: number, b: any, c: any) => [number, number];
+export const start_wgpu_worker: (a: any, b: any, c: any) => any;
+export const __wbg_wgpuworkerhandle_free: (a: number, b: number) => void;
+export const wgpuworkerhandle_start: (a: number, b: any, c: any) => [number, number];
+export const wgpuworkerhandle_pointer_down: (a: number, b: any) => [number, number];
+export const wgpuworkerhandle_pointer_move: (a: number, b: any) => [number, number];
+export const wgpuworkerhandle_pointer_up: (a: number, b: any) => [number, number];
+export const wgpuworkerhandle_stop: (a: number) => void;
+export const wgpuworkerhandle_dispose: (a: number) => void;
+export const start_bevy_worker: (a: any, b: any, c: any) => any;
+export const start_bevy_vello_worker: (a: any, b: any, c: any) => any;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_export_1: WebAssembly.Table;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_export_6: WebAssembly.Table;
+export const __externref_table_dealloc: (a: number) => void;
+export const wasm_bindgen__convert__closures_____invoke__he8af2f093d91a0ee: (a: number, b: number, c: number) => void;
+export const closure67410_externref_shim: (a: number, b: number, c: any) => void;
+export const wasm_bindgen__convert__closures_____invoke__h38142521103eab74: (a: number, b: number) => void;
+export const closure67411_externref_shim: (a: number, b: number, c: any, d: any) => void;
+export const closure67595_externref_shim: (a: number, b: number, c: any) => void;
+export const closure67621_externref_shim: (a: number, b: number, c: any, d: any) => void;
+export const __wbindgen_start: () => void;

@@ -28,6 +28,44 @@ Open:
 - `http://127.0.0.1:5177/test/webgpu-raf`
 - `http://127.0.0.1:5177/test/worker-webgpu`
 - `http://127.0.0.1:5177/test/worker-webgpu-sab`
+- `http://127.0.0.1:5177/test/main-raf-immediate-probe`
+- `http://127.0.0.1:5177/test/main-raf-buffered-schedule-probe`
+- `http://127.0.0.1:5177/test/worker-webgpu-buffered-input-probe`
+- `http://127.0.0.1:5177/test/worker-webgpu-buffered-block-probe`
+- `http://127.0.0.1:5177/test/worker-webgpu-buffered-vello-cost-probe`
+- `http://127.0.0.1:5177/test/rust-winit-main`
+- `http://127.0.0.1:5177/test/rust-bevy-main`
+- `http://127.0.0.1:5177/test/rust-wgpu-worker`
+- `http://127.0.0.1:5177/test/rust-bevy-worker`
+- `http://127.0.0.1:5177/test/rust-bevy-vello-worker`
+
+For repeatable hand-driven runs, open:
+
+- `http://127.0.0.1:5177/guided`
+
+The guided runner lets you choose a subset of apps, records one manual trial per selected app, stores every JSON result client-side during the session, asks for platform/browser labels, and saves one package JSON at the end. Browsers with the File System Access API show a save-location picker; other browsers use a normal download.
+
+Guided mode deliberately navigates to a dedicated `/test/:app` URL for every step instead of swapping apps inside one page. This gives each app a fresh JS/Wasm page context, which matters for real `winit` and Bevy web apps where teardown is best-effort rather than a strong isolation guarantee. Step results and skips are persisted in IndexedDB before navigating, so a refresh or browser crash does not discard already saved steps.
+
+## Rust Wasm Apps
+
+The real Rust test pages load wasm-bindgen output from `public/wasm`.
+
+```sh
+npm run build:rust
+```
+
+To build both the Rust wasm and the Vite app:
+
+```sh
+npm run build:all
+```
+
+Current status:
+
+- `rust-winit-main` is a compiled Rust/winit wasm app. Winit owns the canvas event loop and Rust draws the draggable shape to the canvas.
+- `rust-bevy-main` is a compiled Rust/Bevy wasm app using Bevy's standard web path: `DefaultPlugins`, `WindowPlugin.primary_window.canvas`, Bevy's winit integration, and a 2D sprite square.
+- `rust-wgpu-worker`, `rust-bevy-worker`, and `rust-bevy-vello-worker` have reserved wasm entry points and UI wrappers, but intentionally report "not implemented" until their real worker renderers are filled in. They do not fall back to TypeScript probes.
 
 ## Automated Trials
 
@@ -52,6 +90,8 @@ Manual trials use the latest browser pointer event as the reference point. That 
 
 Manual pages also draw a translucent green main-thread 2D reference square during drag. Exported samples include `relativeErrorPx` and `relativeLatencyMs`, which compare the tested renderer against that immediate reference overlay. For manual analysis, prefer dragging-only relative metrics.
 
+Guided package JSON files can be placed directly in `testing_latency/results` for `npm run analyze`, or in `testing_latency/manual_results` for `npm run analyze:manual`. The analysis scripts expand package `results[]` automatically.
+
 ## Current Test Apps
 
 - `canvas-2d-event`: pointer event updates state and draws immediately.
@@ -62,6 +102,16 @@ Manual pages also draw a translucent green main-thread 2D reference square durin
 - `webgpu-raf`: minimal WebGPU RAF renderer.
 - `worker-webgpu`: WebGPU renderer in a worker using pointer `postMessage`.
 - `worker-webgpu-sab`: WebGPU renderer in a worker using `SharedArrayBuffer` pointer state.
+- `main-raf-immediate-probe`: TypeScript control with main-thread RAF rendering and immediate pointer state updates.
+- `main-raf-buffered-schedule-probe`: TypeScript control with next-frame input, schedule cost, and one render-stage delay.
+- `worker-webgpu-buffered-input-probe`: TypeScript control with worker WebGPU rendering and pointer moves applied only inside worker RAF.
+- `worker-webgpu-buffered-block-probe`: TypeScript control with buffered worker WebGPU plus small per-frame worker blocking.
+- `worker-webgpu-buffered-vello-cost-probe`: TypeScript control with buffered worker WebGPU plus heavier render cost and one render-stage delay.
+- `rust-winit-main`: compiled Rust/winit main-thread wasm app.
+- `rust-bevy-main`: compiled Rust/Bevy main-thread wasm app using the standard Bevy web canvas selector path.
+- `rust-wgpu-worker`: reserved compiled Rust/wgpu worker wasm app slot.
+- `rust-bevy-worker`: reserved compiled Rust/Bevy worker wasm app slot.
+- `rust-bevy-vello-worker`: reserved compiled Rust/Bevy worker wasm app slot using bevy_vello.
 
 The SAB tests use localhost plus Vite COOP/COEP headers. No HTTPS certificate is needed for local development.
 

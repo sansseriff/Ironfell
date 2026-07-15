@@ -10,7 +10,8 @@ body {
 }
 
 button,
-select {
+select,
+input {
   font: inherit;
 }
 
@@ -94,7 +95,9 @@ pre {
 }
 
 .controls select,
-.controls button {
+.controls button,
+.field-label input,
+.field-label select {
   min-height: 36px;
   border: 1px solid #bec7d1;
   border-radius: 6px;
@@ -134,8 +137,111 @@ pre {
   z-index: 2;
 }
 
+.phase-probe-hud {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  width: min(520px, calc(100% - 24px));
+  margin: 0;
+  border: 1px solid rgba(17, 24, 39, 0.18);
+  background: rgba(17, 24, 39, 0.84);
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  z-index: 3;
+}
+
 .result-panel {
   margin: 0 24px 24px;
+}
+
+.guided-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+  padding: 18px 24px 24px;
+}
+
+.guided-sidebar .panel {
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
+.guided-main .stage-wrap {
+  padding-top: 18px;
+}
+
+.guided-instructions {
+  padding: 12px 14px;
+  border: 1px solid #c7d0da;
+  border-radius: 8px;
+  background: white;
+  line-height: 1.45;
+}
+
+.field-label {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: #526070;
+  font-size: 13px;
+}
+
+.field-label input,
+.field-label select {
+  width: 100%;
+  padding: 0 10px;
+}
+
+.check-list {
+  display: grid;
+  gap: 8px;
+}
+
+.check-list label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-size: 13px;
+}
+
+.check-list span {
+  overflow-wrap: anywhere;
+}
+
+.progress-list {
+  display: grid;
+  gap: 8px;
+  padding-left: 20px;
+  margin: 0;
+}
+
+.progress-list li {
+  padding-left: 2px;
+}
+
+.progress-list span {
+  display: block;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.progress-list small {
+  color: #526070;
+}
+
+.progress-list .running span {
+  color: #075db8;
+}
+
+.progress-list .saved span {
+  color: #087443;
+}
+
+.progress-list .skipped span {
+  color: #8a5a00;
 }
 
 .analysis-page {
@@ -268,6 +374,11 @@ th {
 @media (max-width: 760px) {
   .bar-row {
     grid-template-columns: 1fr;
+  }
+
+  .guided-layout {
+    grid-template-columns: 1fr;
+    padding: 14px;
   }
 
   table {

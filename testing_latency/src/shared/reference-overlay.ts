@@ -2,6 +2,8 @@ import type { Point } from './paths';
 import type { LatencySample, TestOptions } from './protocol';
 import { setupCanvas } from './render';
 
+const REFERENCE_VISUAL_INSET_PX = 8;
+
 export class ReferenceOverlay {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -108,15 +110,16 @@ export class ReferenceOverlay {
     ctx.clearRect(0, 0, this.options.width, this.options.height);
     if (!this.dragging) return;
 
-    const half = this.options.squareSize / 2;
+    const referenceSize = Math.max(8, this.options.squareSize - REFERENCE_VISUAL_INSET_PX * 2);
+    const half = referenceSize / 2;
     ctx.save();
     ctx.globalAlpha = 0.55;
     ctx.fillStyle = '#00d084';
-    ctx.fillRect(this.reference.x - half, this.reference.y - half, this.options.squareSize, this.options.squareSize);
+    ctx.fillRect(this.reference.x - half, this.reference.y - half, referenceSize, referenceSize);
     ctx.globalAlpha = 1;
     ctx.strokeStyle = '#003d26';
     ctx.lineWidth = 3;
-    ctx.strokeRect(this.reference.x - half, this.reference.y - half, this.options.squareSize, this.options.squareSize);
+    ctx.strokeRect(this.reference.x - half, this.reference.y - half, referenceSize, referenceSize);
     ctx.strokeStyle = '#00a3ff';
     ctx.beginPath();
     ctx.moveTo(this.pointer.x - 14, this.pointer.y);

@@ -34,8 +34,10 @@ async function main() {
   const files = (await readdir(resultsDir)).filter((file) => file.endsWith('.json')).sort();
   const compact: CompactResult[] = [];
   for (const file of files) {
-    const result = JSON.parse(await readFile(resolve(resultsDir, file), 'utf8')) as TrialResult;
-    compact.push(compactResult(file, result));
+    const parsed = JSON.parse(await readFile(resolve(resultsDir, file), 'utf8'));
+    for (const { result, label } of unpackResults(file, parsed)) {
+      compact.push(compactResult(label, result));
+    }
   }
 
   await mkdir(dirname(outputPath), { recursive: true });
@@ -126,6 +128,24 @@ function compactResult(file: string, result: TrialResult): CompactResult {
     timingCounts: countTimings(result.timings),
     phaseCounts: countPhases(samples),
   };
+}
+
+function unpackResults(file: string, parsed: unknown): Array<{ label: string; result: TrialResult }> {
+  if (isManualPackage(parsed)) {
+    return parsed.results.map((result, index) => ({
+      label: `${file}#${index + 1}_${result.app}_${result.path}`,
+      result,
+    }));
+  }
+  return [{ label: file, result: parsed as TrialResult }];
+}
+
+function isManualPackage(value: unknown): value is { results: TrialResult[] } {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && Array.isArray((value as { results?: unknown }).results),
+  );
 }
 
 function computeInputAge(samples: LatencySample[], pointerTimings: EventTimingSample[]) {

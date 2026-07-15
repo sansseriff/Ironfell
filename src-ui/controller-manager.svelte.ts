@@ -1,118 +1,75 @@
-import { CanvasManager } from "./canvas_manager";
+import { PanelManager } from "./panel_manager";
 import type { RuntimeMode } from "./runtime/session_adapter";
 
+/**
+ * Thin reactive wrapper around PanelManager for Svelte components.
+ */
 class ControllerManagerClass {
-  // State properties - can be accessed directly in Svelte 5
-  controller: { requestCanvasResize: (id: string, width: number, height: number, force?: boolean) => void } | undefined = $state();
   isInitialized = $state(false);
   showWebGPUWarning = $state(false);
   loadingInProgress = $state(false);
   webGPUSupported = $state(true);
   runtimeMode: RuntimeMode = $state('worker');
 
-  private manager = new CanvasManager(this.runtimeMode);
+  private manager = new PanelManager();
 
   constructor() {
     this.manager.onInitialized = () => {
-      this.isInitialized = true;
+      this.syncFlags();
     };
   }
 
-  /**
-   * Register a canvas for initialization (collects all canvases before creating controller)
-   */
-  async registerCanvas(canvas: HTMLCanvasElement, isPrimary = false, mode: RuntimeMode = this.runtimeMode): Promise<void> {
-    console.log(`Registering canvas: ${canvas.id} (primary: ${isPrimary})`);
-    this.runtimeMode = mode;
-    this.manager.setMode(mode);
-    const kind = canvas.id === 'viewer-canvas' ? 'viewer' : (canvas.id.includes('timeline') ? 'timeline' : 'other');
+  /** Boot the app on the full-window canvas (called once from App.svelte). */
+  async boot(canvas: HTMLCanvasElement): Promise<void> {
     this.loadingInProgress = true;
     try {
-      await this.manager.registerCanvas(canvas, canvas.id, kind as any, isPrimary);
-      this.isInitialized = this.manager.isInitialized;
-      this.webGPUSupported = this.manager.webGPUSupported;
-      this.showWebGPUWarning = this.manager.showWebGPUWarning;
-      this.controller = {
-        requestCanvasResize: (id: string, width: number, height: number, force?: boolean) =>
-          this.manager.requestCanvasResize(id, width, height, !!force)
-      };
+      await this.manager.boot(canvas, this.runtimeMode);
     } finally {
-      this.loadingInProgress = false;
+      this.syncFlags();
     }
   }
 
-  /**
-   * Initialize the controller with all registered canvases
-   */
-  // initialization is handled inside CanvasManager
-
-  /**
-   * Add a canvas after controller is initialized. not currently used. 
-   */
-  // async addCanvas(canvas: HTMLCanvasElement): Promise<void> {
-  //   if (!this.isInitialized || !this.controller) {
-  //     // If controller isn't ready, register for later initialization
-  //     await this.registerCanvas(canvas, false);
-  //     return;
-  //   }
-
-  //   const config: CanvasConfig = {
-  //     canvas,
-  //     id: canvas.id,
-  //     isPrimary: false
-  //   };
-
-  //   await this.controller.addCanvas(config);
-  //   console.log(`Added canvas after initialization: ${canvas.id}`);
-  // }
-
-  /**
-   * Remove a canvas window when it's destroyed
-   */
-  removeCanvas(canvasId: string): void {
-    this.manager.removeCanvas(canvasId);
-    console.log(`Removed canvas: ${canvasId}`);
+  registerPanel(id: string, kind: string, el: HTMLElement): void {
+    this.manager.registerPanel(id, kind, el);
   }
 
-  /**
-   * Switch runtime mode - recreates all canvases
-   */
+  unregisterPanel(id: string): void {
+    this.manager.unregisterPanel(id);
+  }
+
+  /** Re-measure all panels (SplitPane drag callback). */
+  syncAllPanels(): void {
+    this.manager.syncAllPanels();
+  }
+
+  /** Switch runtime mode — clean teardown and re-init on a fresh canvas element. */
   async switchMode(mode: RuntimeMode) {
-    console.log("SWITCHMODE switching mode from ", this.runtimeMode, " to ", mode);
     if (this.loadingInProgress) return;
-    if (this.runtimeMode === mode && this.isInitialized) return; // no-op
+    if (this.runtimeMode === mode && this.isInitialized) return;
     this.loadingInProgress = true;
+    this.runtimeMode = mode;
     try {
       await this.manager.switchMode(mode);
-      this.runtimeMode = mode;
-      this.isInitialized = this.manager.isInitialized;
     } finally {
-      this.loadingInProgress = false;
+      this.syncFlags();
     }
   }
 
-  // Dismiss WebGPU warning
   dismissWebGPUWarning(): void {
     this.showWebGPUWarning = false;
   }
 
-  /**
-   * Reset state (useful for cleanup or reinitializing)
-   */
-  reset(): void {
-    this.controller = undefined;
-    this.isInitialized = false;
-    this.showWebGPUWarning = false;
-    this.loadingInProgress = false;
-    this.webGPUSupported = true;
-  }
-
-  /**
-   * Cleanup
-   */
   dispose(): void {
     this.manager.dispose();
-    this.reset();
+    this.isInitialized = false;
+    this.loadingInProgress = false;
+  }
+
+  private syncFlags() {
+    this.isInitialized = this.manager.isInitialized;
+    this.loadingInProgress = this.manager.loadingInProgress;
+    this.webGPUSupported = this.manager.webGPUSupported;
+    this.showWebGPUWarning = this.manager.showWebGPUWarning;
   }
 }
 

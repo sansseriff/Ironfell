@@ -1,31 +1,39 @@
 import { AdapterBridge } from './adapter_bridge';
 import { WasmLoader } from './wasm_loader';
-import type { RenderSession } from './render_session';
 
 export type RuntimeMode = 'worker' | 'main';
 
-export class SessionAdapter implements RenderSession {
-  private mode: RuntimeMode;
+export interface PanelRectMsg {
+  id: string;
+  kind: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * One render session = one wasm app instance (in a worker or on the main thread),
+ * one full-window canvas, and a set of panel viewport rects.
+ *
+ * Messages that arrive before the engine is prepared are coalesced (latest canvas
+ * size, latest rect per panel id) and flushed on `enginePrepared`.
+ */
+export class SessionAdapter {
+  readonly mode: RuntimeMode;
   private bridge: AdapterBridge | null = null;
   private wasmLoader = new WasmLoader();
   private messageHandler: ((msg: any) => void) | null = null;
   private workerIsReady = false;
   private enginePrepared = false;
-  private primaryCanvasId: string | null = null;
-  private pendingWindows: Array<{ canvas: HTMLCanvasElement, id: string, kind: string, dpr: number, isPrimary: boolean }> = [];
-  private pendingResizes: Array<{ id: string, width: number, height: number }> = [];
+  private disposed = false;
+
+  private pendingInit: { canvas: HTMLCanvasElement; dpr: number } | null = null;
+  private latestCanvasSize: { width: number; height: number } | null = null;
+  private latestPanelRects = new Map<string, PanelRectMsg>();
 
   constructor(mode: RuntimeMode) {
     this.mode = mode;
-  }
-
-  async initialize(): Promise<void> {
-    // Lazy initialization occurs when primary window is created.
-    if (this.bridge && this.workerIsReady) return;
-    // If bridge exists but not ready, wait for ready.
-    if (this.bridge && !this.workerIsReady) {
-      await this.waitForReady();
-    }
   }
 
   onMessage(handler: (msg: any) => void): void {
@@ -37,103 +45,105 @@ export class SessionAdapter implements RenderSession {
     this.bridge.post(data, transfer as any);
   }
 
-  createWindow(canvas: HTMLCanvasElement, id: string, kind: string, dpr: number, isPrimary: boolean): void {
-    // Establish bridge on first window (primary preferred, but not required)
-    if (!this.bridge) {
-      if (isPrimary) this.primaryCanvasId = id;
-      this.bridge = new AdapterBridge(this.mode, canvas);
-      this.bridge.setHandler((data: any) => this.handleBridgeMessage(data));
-      // Kick wasm send; readiness will be signaled by worker
-      this.wasmLoader.sendToAdapter(this.bridge).catch(e => console.error('WASM send failed', e));
-    }
-
-    // If not ready yet, queue the window creation and return
-    if (!this.workerIsReady) {
-      this.pendingWindows.push({ canvas, id, kind, dpr, isPrimary });
-      return;
-    }
-
-    this.postCreateWindow(canvas, id, kind, dpr, isPrimary);
+  isPrepared(): boolean {
+    return this.enginePrepared;
   }
 
-  resizeWindow(id: string, width: number, height: number): void {
-    // Defer resizes until enginePrepared so Bevy windows are fully ready
-    if (!this.bridge || !this.enginePrepared) {
-      this.pendingResizes.push({ id, width, height });
+  /** Create the bridge, ship the wasm, and create the single Bevy window. */
+  attachCanvas(canvas: HTMLCanvasElement): void {
+    if (this.bridge) {
+      console.warn('SessionAdapter: canvas already attached');
       return;
     }
-    this.bridge.post({ ty: 'resize', canvasId: id, width, height });
+    this.bridge = new AdapterBridge(this.mode, canvas);
+    this.bridge.setHandler((data: any) => this.handleBridgeMessage(data));
+    this.pendingInit = { canvas, dpr: window.devicePixelRatio || 1 };
+    this.wasmLoader.sendToAdapter(this.bridge).catch(e => console.error('WASM send failed', e));
+  }
+
+  /** Full-window canvas backing size (physical px). */
+  resizeCanvas(width: number, height: number): void {
+    this.latestCanvasSize = { width, height };
+    if (this.enginePrepared) {
+      this.post({ ty: 'resize', width, height });
+    }
+  }
+
+  /** Upsert a panel viewport rect (physical px, window coordinates). */
+  setPanelViewport(rect: PanelRectMsg): void {
+    this.latestPanelRects.set(rect.id, rect);
+    if (this.enginePrepared) {
+      this.post({ ty: 'setPanelViewport', ...rect });
+    }
+  }
+
+  despawnPanel(id: string): void {
+    this.latestPanelRects.delete(id);
+    if (this.enginePrepared) {
+      this.post({ ty: 'despawnPanel', id });
+    }
+  }
+
+  /** Re-send canvas size and every known panel rect. Idempotent. */
+  syncAll(): void {
+    if (!this.enginePrepared) return;
+    if (this.latestCanvasSize) {
+      this.post({ ty: 'resize', ...this.latestCanvasSize });
+    }
+    for (const rect of this.latestPanelRects.values()) {
+      this.post({ ty: 'setPanelViewport', ...rect });
+    }
   }
 
   start(): void {
-    if (!this.bridge) return;
-    this.bridge.post({ ty: 'startRunning' });
+    this.post({ ty: 'startRunning' });
   }
 
   stop(): void {
-    if (!this.bridge) return;
-    this.bridge.post({ ty: 'stopRunning' });
+    this.post({ ty: 'stopRunning' });
   }
 
   dispose(): void {
-    try { this.stop(); } catch {}
-    try { this.bridge?.dispose(); } catch {}
+    if (this.disposed) return;
+    this.disposed = true;
+    try { this.stop(); } catch { }
+    // Release the Bevy app (main mode frees GPU resources in-place; the worker is
+    // torn down with terminate() inside bridge.dispose()).
+    try { this.post({ ty: 'releaseApp' }); } catch { }
+    try { this.bridge?.dispose(); } catch { }
     this.bridge = null;
     this.workerIsReady = false;
-    this.primaryCanvasId = null;
-    this.pendingWindows = [];
-    this.pendingResizes = [];
+    this.enginePrepared = false;
+    this.latestPanelRects.clear();
+    this.latestCanvasSize = null;
+    this.pendingInit = null;
   }
 
   private handleBridgeMessage(data: any) {
     if (data?.ty === 'workerIsReady') {
       this.workerIsReady = true;
-      // Flush any queued window creations
-      const queued = this.pendingWindows;
-      this.pendingWindows = [];
-      for (const w of queued) {
-        this.postCreateWindow(w.canvas, w.id, w.kind, w.dpr, w.isPrimary);
-      }
+      this.postInit();
     }
     if (data?.ty === 'enginePrepared') {
       this.enginePrepared = true;
-      // Flush any queued resizes now that Bevy is fully prepared
-      const resizes = this.pendingResizes;
-      this.pendingResizes = [];
-      for (const r of resizes) {
-        if (this.bridge) this.bridge.post({ ty: 'resize', canvasId: r.id, width: r.width, height: r.height });
-      }
+      this.syncAll();
     }
     if (this.messageHandler) this.messageHandler(data);
   }
 
-  private waitForReady(): Promise<void> {
-    return new Promise((resolve) => {
-      if (this.workerIsReady) return resolve();
-      const interval = setInterval(() => {
-        if (this.workerIsReady) {
-          clearInterval(interval);
-          resolve();
-        }
-      }, 50);
-    });
-  }
-
-  private postCreateWindow(canvas: HTMLCanvasElement, id: string, kind: string, dpr: number, isPrimary: boolean) {
-    if (!this.bridge) return;
-    const messageType = isPrimary ? 'init' : 'createAdditionalWindow';
+  private postInit() {
+    if (!this.bridge || !this.pendingInit) return;
+    const { canvas, dpr } = this.pendingInit;
+    this.pendingInit = null;
     if (this.mode === 'worker') {
       try {
         const offscreen: OffscreenCanvas = (canvas as any).transferControlToOffscreen();
-        this.bridge.post({ ty: messageType, canvas: offscreen, devicePixelRatio: dpr, canvasId: id, kind }, [offscreen as any]);
+        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio: dpr }, [offscreen as any]);
+        return;
       } catch (e: any) {
-        console.error(`Offscreen transfer failed for ${id}:`, e);
-        this.bridge.post({ ty: messageType, canvas: canvas, devicePixelRatio: dpr, canvasId: id, kind });
+        console.error('Offscreen transfer failed, falling back to direct canvas:', e);
       }
-    } else {
-      this.bridge.post({ ty: messageType, canvas: canvas, devicePixelRatio: dpr, canvasId: id, kind });
     }
+    this.bridge.post({ ty: 'init', canvas, devicePixelRatio: dpr });
   }
 }
-
-

@@ -1,5 +1,5 @@
 import { MainThreadAdapter } from '../main-thread-adapter';
-import type { RuntimeMode } from '../control.svelte';
+import type { RuntimeMode } from './session_adapter';
 
 export type MessageHandler = (data: any) => void;
 

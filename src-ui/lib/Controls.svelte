@@ -1,51 +1,17 @@
 <script lang="ts">
   import { controllerManager } from "../controller-manager.svelte";
   import Github from "./Github.svelte";
-  // Props
-  let { onLaunch } = $props();
 
-  // Inspector test functions
-  function testSpawnEntity() {
-    if (controllerManager.controller && controllerManager.isInitialized) {
-      console.log("Testing spawn entity...");
-      controllerManager.controller.inspectorSpawnEntity("123345");
-    }
-  }
-
-  function testToggleVisibility() {
-    if (controllerManager.controller && controllerManager.isInitialized) {
-      // Test with a sample entity ID - you would normally get this from the scene
-      const entityId = "4294967296"; // Example entity ID as string
-      console.log(`Testing toggle visibility for entity ${entityId}...`);
-      controllerManager.controller.inspectorToggleVisibility(entityId);
-    }
-  }
-
-  function testDespawnEntity() {
-    if (controllerManager.controller && controllerManager.isInitialized) {
-      // Test with a sample entity ID - you would normally get this from the scene
-      const entityId = "4294967296"; // Example entity ID as string
-      console.log(`Testing despawn entity ${entityId}...`);
-      controllerManager.controller.inspectorDespawnEntity(entityId);
-    }
-  }
   // Runtime mode toggle
   let pendingSwitch = $state(false);
   async function toggleMode(event: Event) {
     const input = event.currentTarget as HTMLInputElement | null;
     if (!input) return;
     const targetMode = input.checked ? "worker" : "main";
-    if (!controllerManager.controller) return;
 
     pendingSwitch = true;
-    console.log("get here?");
     try {
       await controllerManager.switchMode(targetMode);
-      // If initialized before, re-run size logic via resize event
-      if (controllerManager.isInitialized) {
-        const resizeEvent = new Event("resize");
-        window.dispatchEvent(resizeEvent);
-      }
     } finally {
       pendingSwitch = false;
     }
@@ -64,15 +30,11 @@
       </p>
     </div>
   {:else if !controllerManager.isInitialized}
-    <p>Launch the app to use inspector controls</p>
-    <button onclick={onLaunch} disabled={controllerManager.loadingInProgress}>
-      {controllerManager.loadingInProgress ? "Loading..." : "Launch App"}
-    </button>
+    <p>
+      {controllerManager.loadingInProgress ? "Loading..." : "Starting up..."}
+    </p>
   {:else}
     <div class="controls-container">
-      <!-- <button onclick={testSpawnEntity}>Spawn Entity</button>
-      <button onclick={testToggleVisibility}>Toggle Visibility</button>
-      <button onclick={testDespawnEntity}>Despawn Entity</button> -->
       <h3>Square & torus are draggable</h3>
       <h3>Press F for camera controller, WASD to move</h3>
       <Github></Github>
@@ -111,7 +73,8 @@
   .controls-section {
     background-color: var(--body-color);
     padding: 20px;
-    border-radius: 8px;
+    border-radius: 12px;
+    height: 100%;
   }
 
   .webgpu-warning {

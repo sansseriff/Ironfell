@@ -1,21 +1,17 @@
 use bevy::input::mouse::MouseButtonInput; // added for button event reader
 use bevy::prelude::*;
-use bevy::render::{
-    camera::RenderTarget,
-    view::RenderLayers,
-};
-use bevy::window::WindowRef;
-use crate::canvas_view::CanvasName;
+use bevy::render::view::RenderLayers;
 use bevy_vello::prelude::*;
 // Bring kurbo trait methods into scope for PathSeg operations (arclen, inv_arclen, etc.)
 use bevy_vello::prelude::kurbo::{ParamCurve, ParamCurveArclen};
 use bevy_vello::prelude::VelloScreenSpace;
-// -------------------------------------------------------------------------------------------------
-// Overlay 2D camera + animated demo scene (existing behavior)
-// -------------------------------------------------------------------------------------------------
 
-#[derive(Component)]
-pub(crate) struct OverlayCamera2D;
+use crate::panels::{Panels, VIEWER_PANEL, overlay_affine, overlay_world_from_screen};
+
+// -------------------------------------------------------------------------------------------------
+// Overlay 2D content, drawn in "overlay world" coordinates (viewer panel center origin,
+// y-up) and mapped into screen space + clipped to the viewer panel rect at render time.
+// -------------------------------------------------------------------------------------------------
 
 // -------------------------------------------------------------------------------------------------
 // Draggable square state + marker scene
@@ -198,52 +194,25 @@ pub(crate) fn simple_mouse_state_system(
 pub(crate) fn setup_2d_overlay(
     mut commands: Commands,
     existing_bezier: Option<Res<AnimatedBezierPath>>,
-    windows: Query<(Entity, Option<&CanvasName>), With<Window>>,
 ) {
-    // Find the viewer window deterministically by CanvasName; fall back to Primary if not yet present
-    let mut viewer_window: Option<Entity> = None;
-    for (e, name) in windows.iter() {
-        if let Some(CanvasName(id)) = name {
-            if id == "viewer-canvas" {
-                viewer_window = Some(e);
-                break;
-            }
-        }
-    }
-    let Some(_viewer_window) = viewer_window else {
-        // Defer until the viewer window exists
-        return;
-    };
+    // All overlay scenes are screen-space; panel placement/clipping is baked into
+    // the scene content affines by the render systems below.
 
-    // Spawn overlay camera immediately (was previously deferred)
-    if let Some(viewer_entity) = viewer_window {
-        let camera_target = RenderTarget::Window(WindowRef::Entity(viewer_entity));
-        commands.spawn((
-            Camera2d,
-            Camera {
-                order: 1,
-                clear_color: ClearColorConfig::Custom(Color::srgb(0.97, 0.97, 0.97)),
-                target: camera_target,
-                ..default()
-            },
-            RenderLayers::layer(1),
-            OverlayCamera2D,
-            VelloView,
-        ));
-    }
     // Animated demo scene (kept from previous implementation)
+    // NOTE: scenes must carry the vello camera's RenderLayers (layer 1) or upstream
+    // bevy_vello's extract_scenes culls them (default layer 0 doesn't intersect).
     commands.spawn((
         VelloScene::new(),
-        Transform::default(),
-        GlobalTransform::default(),
-        RenderLayers::layer(1),
         AnimatedOverlayScene,
+        VelloScreenSpace,
+        RenderLayers::layer(1),
     ));
 
     // Static scene for draggable square (unaffected by animated transform changes)
     commands.spawn((
         VelloScene::new(),
         DraggableOverlayScene,
+        VelloScreenSpace,
         RenderLayers::layer(1),
     ));
 
@@ -253,9 +222,9 @@ pub(crate) fn setup_2d_overlay(
     }
     commands.spawn((
         VelloScene::new(),
-        RenderLayers::layer(1),
         AnimatedBezierStrokeScene,
         VelloScreenSpace,
+        RenderLayers::layer(1),
     ));
 
     // SPAWN many mini square entities (NO per-entity VelloScene now)
@@ -267,7 +236,7 @@ pub(crate) fn setup_2d_overlay(
         (*seed as f32) / (u32::MAX as f32)
     }
     let mini_size = 120.0 / 4.0;
-    for _ in 0..3000 {
+    for _ in 0..20 {
         let x = (next(&mut seed) - 0.5) * 1900.0;
         let y = (next(&mut seed) - 0.5) * 1200.0;
         let r = next(&mut seed);
@@ -276,7 +245,6 @@ pub(crate) fn setup_2d_overlay(
         commands.spawn((
             Transform::from_translation(Vec3::new(x, y, 0.0)),
             GlobalTransform::default(),
-            RenderLayers::layer(1),
             MiniSquare { size: mini_size, base_color: [r, g, b] },
             MiniSquareState {
                 final_color: [r, g, b, 1.0],
@@ -288,8 +256,9 @@ pub(crate) fn setup_2d_overlay(
     // Shared batched scene entity for all mini squares
     commands.spawn((
         VelloScene::new(),
-        RenderLayers::layer(1),
         MiniSquaresScene,
+        VelloScreenSpace,
+        RenderLayers::layer(1),
     ));
     commands.insert_resource(MiniSquaresDirty(true));
 
@@ -297,31 +266,14 @@ pub(crate) fn setup_2d_overlay(
     commands.insert_resource(SelectionMarquee::default());
     commands.spawn((
         VelloScene::new(),
-        RenderLayers::layer(1),
         SelectionMarqueeScene,
+        VelloScreenSpace,
+        RenderLayers::layer(1),
     ));
 }
 
-// (Removed) deferred_overlay_camera_spawn: camera now created in setup_2d_overlay
-
-// Diagnostic: log projection extents for overlay and timeline cameras first few frames
-pub(crate) fn camera_projection_diagnostics(
-    overlay_cam: Query<&Camera, With<OverlayCamera2D>>,
-    timeline_cam: Query<&Camera, (With<crate::bevy_app::timeline::TimelineCamera2D>, Without<OverlayCamera2D>)>,
-    mut counter: Local<u32>,
-) {
-    if *counter >= 120 { return; }
-    if let Ok(cam) = overlay_cam.single() {
-        if let Some(vp) = &cam.viewport { info!("diag overlay viewport phys={}x{}", vp.physical_size.x, vp.physical_size.y); }
-    }
-    if let Ok(cam) = timeline_cam.single() {
-        if let Some(vp) = &cam.viewport { info!("diag timeline viewport phys={}x{}", vp.physical_size.x, vp.physical_size.y); }
-    }
-    *counter += 1;
-}
-
 pub(crate) fn animate_2d_overlay(
-    mut query_scene: Query<(&mut Transform, &mut VelloScene), With<AnimatedOverlayScene>>,
+    mut query_scene: Query<&mut VelloScene, (With<AnimatedOverlayScene>, Without<AnimatedBezierStrokeScene>)>,
     mut bezier_scene: Query<
         &mut VelloScene,
         (
@@ -331,12 +283,22 @@ pub(crate) fn animate_2d_overlay(
     >,
     bezier: Option<Res<AnimatedBezierPath>>,
     time: Res<Time>,
+    panels: Res<Panels>,
 ) {
-    let Ok((mut transform, mut scene)) = query_scene.single_mut() else {
+    let Ok(mut scene) = query_scene.single_mut() else {
         return;
     }; // not ready yet
     let sin_time = time.elapsed_secs().sin().mul_add(0.5, 0.5);
     scene.reset();
+
+    let Some(rect) = panels.rect(VIEWER_PANEL) else {
+        if let Ok(mut scene_stroke) = bezier_scene.single_mut() {
+            scene_stroke.reset();
+        }
+        return;
+    };
+    let base = overlay_affine(rect);
+    let clip = rect.to_kurbo();
 
     let c = Vec3::lerp(
         Vec3::new(-1.0, 1.0, -1.0),
@@ -344,17 +306,25 @@ pub(crate) fn animate_2d_overlay(
         sin_time + 0.5,
     );
 
+    // Animation previously expressed via the entity Transform, now baked into the affine:
+    // translate (world y-up) ∘ rotate ∘ scale, then mapped into screen space.
+    let translation = f64::from(Vec3::lerp(Vec3::Y * -900.0, Vec3::Y * 900.0, sin_time).y);
+    let rotation = f64::from(-std::f32::consts::TAU * sin_time);
+    let scale = f64::from(Vec3::lerp(Vec3::ONE * 0.5, Vec3::ONE * 1.0, sin_time).x);
+    let anim = base
+        * kurbo::Affine::translate((0.0, translation))
+        * kurbo::Affine::rotate(rotation)
+        * kurbo::Affine::scale(scale);
+
+    scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &clip);
     scene.fill(
         peniko::Fill::NonZero,
-        kurbo::Affine::default(),
+        anim,
         peniko::Color::new([c.x, c.y, c.z, 1.]),
         None,
         &kurbo::RoundedRect::new(-100.0, -100.0, 100.0, 100.0, (sin_time as f64) * 100.0),
     );
-
-    transform.scale = Vec3::lerp(Vec3::ONE * 0.5, Vec3::ONE * 1.0, sin_time);
-    transform.translation = Vec3::lerp(Vec3::Y * -900.0, Vec3::Y * 900.0, sin_time);
-    transform.rotation = Quat::from_rotation_z(-std::f32::consts::TAU * sin_time);
+    scene.pop_layer();
 
     // Animate progressive bezier stroke reveal
     if let (Ok(mut scene_stroke), Some(bezier)) = (bezier_scene.single_mut(), bezier) {
@@ -364,15 +334,17 @@ pub(crate) fn animate_2d_overlay(
         if target_len <= 0.0 {
             return;
         }
+        scene_stroke.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &clip);
         if (target_len - bezier.total_length).abs() < f64::EPSILON {
             let stroke_style = kurbo::Stroke::new(bezier.stroke_width as f64);
             scene_stroke.stroke(
                 &stroke_style,
-                kurbo::Affine::default(),
+                base,
                 peniko::Color::new([0.0, 0.6, 1.0, 1.0]),
                 None,
                 &bezier.path,
             );
+            scene_stroke.pop_layer();
             return;
         }
         let mut partial = kurbo::BezPath::new();
@@ -420,7 +392,7 @@ pub(crate) fn animate_2d_overlay(
         let stroke_style = kurbo::Stroke::new(bezier.stroke_width as f64);
         scene_stroke.stroke(
             &stroke_style,
-            kurbo::Affine::default(),
+            base,
             peniko::Color::new([0.0, 0.6, 1.0, 1.0]),
             None,
             &partial,
@@ -433,12 +405,13 @@ pub(crate) fn animate_2d_overlay(
             };
             scene_stroke.fill(
                 peniko::Fill::NonZero,
-                kurbo::Affine::default(),
+                base,
                 peniko::Color::new([0.95, 0.2, 0.4, 1.0]),
                 None,
                 &kurbo::Circle::new(head, (bezier.stroke_width * 0.55) as f64),
             );
         }
+        scene_stroke.pop_layer();
     }
 }
 
@@ -450,7 +423,7 @@ pub(crate) fn update_draggable_square_state(
     mut state: ResMut<DraggableSquare>,
     mut cursor_events: EventReader<CursorMoved>,
     mouse: Res<SimpleMouseState>,
-    q_cam: Query<(&Camera, &GlobalTransform), With<OverlayCamera2D>>,
+    panels: Res<Panels>,
 ) {
     // Follow the pattern in tracking_circle.rs: only act if we have cursor movement events this frame.
     if cursor_events.is_empty() {
@@ -461,24 +434,13 @@ pub(crate) fn update_draggable_square_state(
         return;
     }
     let last_opt = cursor_events.read().last().map(|e| e.position);
-    let Some(mut last_pos) = last_opt else {
+    let Some(last_pos) = last_opt else {
         return;
     };
-    // Normalize cursor Y to bottom-left origin by flipping using the viewport height (if present)
-    let (camera, cam_transform) = match q_cam.single() {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    if let Some(vp) = &camera.viewport {
-        let h = vp.physical_size.y as f32;
-        last_pos.y = h - last_pos.y;
-    } else if let Some(rect) = camera.logical_viewport_rect() {
-        let h = (rect.max.y - rect.min.y) as f32;
-        last_pos.y = h - last_pos.y;
-    }
-    let Ok(world_pos) = camera.viewport_to_world_2d(cam_transform, last_pos) else {
+    let Some(rect) = panels.rect(VIEWER_PANEL) else {
         return;
     };
+    let world_pos = overlay_world_from_screen(rect, last_pos);
 
     // Hover test (AABB of the square)
     let half = state.size * 0.5;
@@ -512,7 +474,7 @@ pub(crate) fn update_mini_square_entities(
     mut marquee_res: ResMut<SelectionMarquee>,
     mut cursor_events: EventReader<CursorMoved>,
     mouse: Res<SimpleMouseState>,
-    q_cam: Query<(&Camera, &GlobalTransform), With<OverlayCamera2D>>,
+    panels: Res<Panels>,
     mut dirty: ResMut<MiniSquaresDirty>,
 ) {
     if cursor_events.is_empty() && !mouse.just_pressed && !mouse.just_released {
@@ -530,18 +492,9 @@ pub(crate) fn update_mini_square_entities(
 
     // Latest cursor world position
     let mut world_pos_opt = None;
-    if let Some(mut screen) = cursor_events.read().last().map(|e| e.position) {
-        if let Ok((cam, tf)) = q_cam.get_single() {
-            if let Some(vp) = &cam.viewport {
-                let h = vp.physical_size.y as f32;
-                screen.y = h - screen.y;
-            } else if let Some(rect) = cam.logical_viewport_rect() {
-                let h = (rect.max.y - rect.min.y) as f32;
-                screen.y = h - screen.y;
-            }
-            if let Ok(wp) = cam.viewport_to_world_2d(tf, screen) {
-                world_pos_opt = Some(wp);
-            }
+    if let Some(screen) = cursor_events.read().last().map(|e| e.position) {
+        if let Some(rect) = panels.rect(VIEWER_PANEL) {
+            world_pos_opt = Some(overlay_world_from_screen(rect, screen));
         }
     }
     let Some(world_pos) = world_pos_opt else { return; };
@@ -687,9 +640,12 @@ pub(crate) fn update_mini_square_entities(
 pub(crate) fn render_draggable_square(
     mut scenes: Query<&mut VelloScene, With<DraggableOverlayScene>>,
     state: Res<DraggableSquare>,
+    panels: Res<Panels>,
 ) {
     let Ok(mut scene) = scenes.single_mut() else { return; };
     scene.reset();
+    let Some(panel_rect) = panels.rect(VIEWER_PANEL) else { return; };
+    let base = overlay_affine(panel_rect);
 
     // Choose color based on state
     // Dragging: red, Hover: pink, Idle: dark gray
@@ -707,42 +663,47 @@ pub(crate) fn render_draggable_square(
         (state.position.x + half.x) as f64,
         (state.position.y + half.y) as f64,
     );
+    scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
     scene.fill(
         peniko::Fill::NonZero,
-        kurbo::Affine::default(),
+        base,
         peniko::Color::new([r, g, b, 1.0]),
         None,
         &rect,
     );
+    scene.pop_layer();
 }
 
 pub(crate) fn render_mini_squares(
     mut dirty: ResMut<MiniSquaresDirty>,
     mut q_scene: Query<&mut VelloScene, With<MiniSquaresScene>>,
     q_squares: Query<(&Transform, &MiniSquare, &MiniSquareState)>,
+    panels: Res<Panels>,
 ) {
+    // Panel layout changes move the whole batch, so they dirty the scene too.
+    if panels.is_changed() {
+        dirty.0 = true;
+    }
     if !dirty.0 {
         return;
     }
     let Ok(mut scene) = q_scene.single_mut() else { return; };
     scene.reset();
+    let Some(panel_rect) = panels.rect(VIEWER_PANEL) else { return; };
+    let base = overlay_affine(panel_rect);
 
     // Canonical unit rect
     const UNIT_RECT: kurbo::Rect = kurbo::Rect::new(0.0, 0.0, 1.0, 1.0);
 
+    scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
     for (tr, sq, st) in q_squares.iter() {
         let center = tr.translation.truncate();
         let half = sq.size * 0.5;
-        // let affine = kurbo::Affine::translate((
-        //     (center.x - half) as f64,
-        //     (center.y - half) as f64,
-        // ))
-        // .then_scale(sq.size as f64);
-        let affine = kurbo::Affine::scale(sq.size as f64).then_translate((
-            (center.x - half) as f64,
-            (center.y - half) as f64,
-        ).into());
-
+        let affine = base
+            * kurbo::Affine::scale(sq.size as f64).then_translate((
+                (center.x - half) as f64,
+                (center.y - half) as f64,
+            ).into());
 
         scene.fill(
             peniko::Fill::NonZero,
@@ -752,6 +713,7 @@ pub(crate) fn render_mini_squares(
             &UNIT_RECT,
         );
     }
+    scene.pop_layer();
 
     dirty.0 = false;
 }
@@ -759,17 +721,21 @@ pub(crate) fn render_mini_squares(
 pub(crate) fn render_selection_marquee(
     marquee_res: Res<SelectionMarquee>,
     mut q_scene: Query<&mut VelloScene, With<SelectionMarqueeScene>>,
+    panels: Res<Panels>,
 ) {
-    if marquee_res.is_changed() {
+    if marquee_res.is_changed() || panels.is_changed() {
         if let Ok(mut scene) = q_scene.single_mut() {
             scene.reset();
+            let Some(panel_rect) = panels.rect(VIEWER_PANEL) else { return; };
+            let base = overlay_affine(panel_rect);
             if let (Some(a), Some(b)) = (marquee_res.start, marquee_res.current) {
                 let min = a.min(b);
                 let max = a.max(b);
                 let rect = kurbo::Rect::new(min.x as f64, min.y as f64, max.x as f64, max.y as f64);
+                scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
                 scene.fill(
                     peniko::Fill::NonZero,
-                    kurbo::Affine::default(),
+                    base,
                     peniko::Color::new([0.1, 0.4, 1.0, 0.15]),
                     None,
                     &rect,
@@ -777,11 +743,12 @@ pub(crate) fn render_selection_marquee(
                 let stroke = kurbo::Stroke::new(2.0);
                 scene.stroke(
                     &stroke,
-                    kurbo::Affine::default(),
+                    base,
                     peniko::Color::new([0.1, 0.4, 1.0, 0.9]),
                     None,
                     &rect,
                 );
+                scene.pop_layer();
             }
         }
     }

@@ -44,10 +44,8 @@ pub fn interaction_decide_system(
                     drag.plane_origin = cam_tf.translation();
                 }
                 // Compute grab offset: intersection point - entity translation
-                if let Some(ray) = camera
-                    .viewport_to_world(cam_tf, pointer.screen)
-                    .ok()
-                    .map(Ray3d::from)
+                if let Some(ray) =
+                    crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, pointer.screen)
                 {
                     if let Some(hit_pos) =
                         intersect_ray_plane(ray, drag.plane_origin, drag.plane_normal)
@@ -88,10 +86,8 @@ pub fn drag_apply_system(
     let Ok((camera, cam_tf)) = cameras.single() else {
         return;
     };
-    let Some(ray) = camera
-        .viewport_to_world(cam_tf, pointer.screen)
-        .ok()
-        .map(Ray3d::from)
+    let Some(ray) =
+        crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, pointer.screen)
     else {
         return;
     };

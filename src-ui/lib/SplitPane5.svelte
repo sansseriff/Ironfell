@@ -210,7 +210,8 @@
     --thickness: 5px;
     --sp-thickness: var(--thickness, 8px);
     --sp-hover-color: rgba(89, 148, 220, 0.885);
-    --container-bg: var(--bg-color);
+    /* Overridable so the pane grid can sit transparently over the Bevy canvas */
+    --container-bg: var(--split-pane-bg, var(--bg-color));
 
     /* --panel-border-radius: 12px; */
     /* --panel-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); */
@@ -252,6 +253,8 @@
     width: 100%;
     height: 100%;
     z-index: 1000;
+    /* Must capture drags even when an ancestor disables pointer events */
+    pointer-events: auto;
   }
 
   .divider {
@@ -259,6 +262,8 @@
     touch-action: none !important;
     background: transparent;
     z-index: 10;
+    /* Dividers stay interactive inside the pointer-events:none UI layer */
+    pointer-events: auto;
   }
 
   .divider::after {

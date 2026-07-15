@@ -1,13 +1,11 @@
 use crate::bevy_app::init_app;
-use crate::{
-    ActivityControl, DragState, WorkerApp, canvas_view::*, create_canvas_window,
-    update_canvas_windows,
-};
+use crate::panels::{PanelRect, Panels};
+use crate::{ActivityControl, DragState, WorkerApp, canvas_view::*};
 use bevy::app::PluginsState;
 use bevy::ecs::system::SystemState;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy::window::{PrimaryWindow, Window};
+use bevy::window::PrimaryWindow;
 use js_sys::BigInt;
 use wasm_bindgen::prelude::*;
 
@@ -17,7 +15,7 @@ use bevy::input::{
     keyboard::{Key, KeyCode as BevyKeyCode, KeyboardInput}, // Added Key, BevyKeyCode, KeyboardInput, NativeKey
     mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
 };
-use bevy::window::{CursorMoved, PresentMode}; // CursorMoved is used in mouse_move. Removed WindowResized
+use bevy::window::CursorMoved; // CursorMoved is used in mouse_move
 
 // pub struct MyMouseWheelEvent {
 //     pub delta_x: f32,
@@ -46,25 +44,11 @@ extern "C" {
 
     // Inspector streaming callbacks
     pub(crate) fn send_inspector_update_from_worker(update_json: &str);
-    /// 从主线程环境发送
-    // pub(crate) fn send_pick_from_rust(list: js_sys::Array);
-
-    /// 执行阻塞
-    /// 由于 wasm 环境不支持 std::thread, 交由 js 环境代为执行
-    ///
-    /// 在 worker 环境执行
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn block_from_worker();
-    /// 在主线程环境执行
-    /// english: Execute blocking in the main thread environment
-    pub(crate) fn block_from_rust();
 }
 
 #[wasm_bindgen]
 pub fn init_bevy_app() -> u64 {
-    let mut app = init_app();
-    // 添加自定义的 canvas 窗口插件
-    app.add_plugins(CanvasViewPlugin);
+    let app = init_app();
 
     info!("init_bevy_app");
 
@@ -73,133 +57,60 @@ pub fn init_bevy_app() -> u64 {
     Box::into_raw(Box::new(app)) as u64
 }
 
-// // 创建 Canvas 窗口
-// #[wasm_bindgen]
-// pub fn create_window_by_canvas(ptr: u64, canvas_id: &str, scale_factor: f32) {
-//     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-//     app.scale_factor = scale_factor;
-
-//     // 完成自定义 canvas 窗口的创建
-//     let canvas = Canvas::new(canvas_id, 1);
-//     let view_obj = ViewObj::from_canvas(canvas);
-
-//     create_window(app, view_obj, false);
-// }
-
-/// 创建离屏窗口（带 canvas_id 与 window_kind，用于稳定匹配）
+/// Create the single full-window Bevy window from a canvas.
+///
+/// Called once per app. In worker mode the canvas is a transferred OffscreenCanvas;
+/// in main-thread mode it is the HTML canvas element (structurally compatible).
 #[wasm_bindgen]
 pub fn create_window_by_offscreen_canvas(
     ptr: u64,
     canvas: web_sys::OffscreenCanvas,
     scale_factor: f32,
-) {
-    // Backward-compatible API without IDs; infer kind by order (1st viewer, 2nd timeline)
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    app.scale_factor = scale_factor;
-
-    // Use a small resource to count windows
-    #[derive(Resource, Default)]
-    struct InitOrderCounter { n: u32 }
-    if !app.world().contains_resource::<InitOrderCounter>() {
-        app.insert_resource(InitOrderCounter { n: 0 });
-    }
-    let order = {
-        let mut c = app.world_mut().resource_mut::<InitOrderCounter>();
-        c.n += 1;
-        c.n
-    };
-
-    let (canvas_id, kind) = if order == 1 { ("viewer-canvas".to_string(), "viewer".to_string()) } else { ("timeline-canvas".to_string(), "timeline".to_string()) };
-
-    let offscreen_canvas = OffscreenCanvas::new(canvas, scale_factor, 1);
-    let view_obj = ViewObj::from_offscreen_canvas(offscreen_canvas);
-    info!("create_window_by_offscreen_canvas[compat]: {} ({})", canvas_id, kind);
-
-    create_window(app, view_obj, true, canvas_id, kind);
-}
-
-/// 创建离屏窗口（带 canvas_id 与 window_kind，用于稳定匹配）
-#[wasm_bindgen]
-pub fn create_window_by_offscreen_canvas_with_id(
-    ptr: u64,
-    canvas: web_sys::OffscreenCanvas,
-    scale_factor: f32,
-    canvas_id: String,
-    window_kind: String,
-) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    app.scale_factor = scale_factor;
-
-    let offscreen_canvas = OffscreenCanvas::new(canvas, scale_factor, 1);
-    let view_obj = ViewObj::from_offscreen_canvas(offscreen_canvas);
-    info!("create_window_by_offscreen_canvas_with_id: {} ({})", canvas_id, window_kind);
-
-    create_window(app, view_obj, true, canvas_id, window_kind);
-}
-
-fn create_window(
-    app: &mut WorkerApp,
-    view_obj: ViewObj,
     is_in_worker: bool,
-    canvas_id: String,
-    window_kind: String,
 ) {
-    use crate::canvas_view::CanvasName;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    app.scale_factor = scale_factor;
 
-    // Spawn a Window entity first so the CanvasViewPlugin can associate the ViewObj
-    let title = match window_kind.as_str() {
-        "timeline" => "Timeline".to_owned(),
-        "viewer" => "Viewer".to_owned(),
-        other => other.to_owned(),
-    };
+    let offscreen_canvas = OffscreenCanvas::new(canvas, scale_factor, 1);
+    let view_obj = ViewObj::from_offscreen_canvas(offscreen_canvas);
 
-    // https://chatgpt.com/c/68b0a24d-09c4-8324-bb10-fbe87aac2ff7
-    let is_viewer = window_kind == "viewer";
-    // If this should be the primary window, first remove old PrimaryWindow markers
-    if is_viewer {
-        let mut remove_state: SystemState<Query<Entity, With<PrimaryWindow>>> =
-            SystemState::from_world(app.world_mut());
-        // Collect entities while holding the borrow once
-        let existing: Vec<Entity> = {
-            let mut world = app.world_mut();
-            let q = remove_state.get_mut(&mut world);
-            q.iter().collect()
-        };
-        {
-            let mut world = app.world_mut();
-            for e in existing {
-                world.entity_mut(e).remove::<PrimaryWindow>();
-            }
-            remove_state.apply(&mut world);
-        }
-    }
+    let entity = create_canvas_window(app, view_obj);
+    app.window = entity;
 
-    // Now spawn the window and optionally tag it as primary
-    let entity = {
-        let mut world = app.world_mut();
-        let mut ecmd = world.spawn(Window { title, present_mode: PresentMode::AutoNoVsync, ..default() });
-        if is_viewer {
-            ecmd.insert(PrimaryWindow);
-        }
-        ecmd.id()
-    };
-    {
-        let mut world = app.world_mut();
-        world.entity_mut(entity).insert(CanvasName(canvas_id.clone()));
-    }
-
-    // Provide the ViewObj for this Added<Window>
-    app.insert_non_send_resource(view_obj);
-    create_canvas_window(app);
-
-    // Activity control
     let mut act = ActivityControl::new();
     act.is_in_worker = is_in_worker;
     app.insert_resource(act);
 }
 
-/// Helper: tag the most recently created window with CanvasName and set a predictable title
-fn tag_last_created_window(_app: &mut WorkerApp, _canvas_id: &str, _window_kind: &str) {}
+/// Upsert a panel rectangle (physical px, top-left origin, window coordinates).
+/// The `kind` decides what the panel drives ("viewer" = 3D camera viewport,
+/// "timeline" = timeline vello region, ...).
+#[wasm_bindgen]
+pub fn set_panel_viewport(ptr: u64, id: String, kind: String, x: f32, y: f32, w: f32, h: f32) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Some(mut panels) = app.world_mut().get_resource_mut::<Panels>() else {
+        return;
+    };
+    panels.upsert(&id, &kind, PanelRect { x, y, w, h });
+
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+}
+
+/// Remove a panel.
+#[wasm_bindgen]
+pub fn despawn_panel(ptr: u64, id: String) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Some(mut panels) = app.world_mut().get_resource_mut::<Panels>() else {
+        return;
+    };
+    panels.remove(&id);
+
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+}
 
 /// Check if plugin initialization is completed
 /// Frame rendering cannot be called before initialization is complete
@@ -213,23 +124,9 @@ pub fn is_preparation_completed(ptr: u64) -> u32 {
         app.finish();
         app.cleanup();
 
-        // Choose a default window deterministically. Prefer a window tagged with CanvasName("viewer-canvas").
-        let mut windows_system_state: SystemState<Query<(Entity, Option<&crate::canvas_view::CanvasName>, &Window)>> =
+        let mut windows_system_state: SystemState<Query<Entity, With<PrimaryWindow>>> =
             SystemState::from_world(app.world_mut());
-        let mut q = windows_system_state.get_mut(app.world_mut());
-        let mut chosen: Option<Entity> = None;
-        for (entity, name, _win) in q.iter_mut() {
-            if let Some(n) = name {
-                if n.0 == "viewer-canvas" {
-                    chosen = Some(entity);
-                    break;
-                }
-            }
-            if chosen.is_none() {
-                chosen = Some(entity);
-            }
-        }
-        if let Some(entity) = chosen {
+        if let Ok(entity) = windows_system_state.get(app.world()).single() {
             app.window = entity;
             return 1;
         }
@@ -311,14 +208,6 @@ pub fn enter_frame_with_mouse(ptr: u64, mouse_x: f32, mouse_y: f32, has_mouse_up
             app.cleanup();
         }
     } else {
-        // 模拟阻塞
-        let active_info = app.world().get_resource::<ActivityControl>().unwrap();
-        if active_info.is_in_worker {
-            block_from_worker();
-        } else {
-            block_from_rust();
-        }
-
         app.update();
     }
 }
@@ -359,10 +248,14 @@ pub fn mouse_wheel(ptr: u64, delta_x: f32, delta_y: f32, delta_mode: u32) {
 }
 
 #[wasm_bindgen]
-pub fn resize(ptr: u64, width: f32, height: f32) {
+pub fn resize(ptr: u64, _width: f32, _height: f32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    // Directly modify the window resolution
-    update_canvas_windows(app, width, height);
+    // JS has already resized the canvas backing store; sync the Bevy window to it.
+    update_canvas_window(app);
+
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
 }
 
 /// Mouse left button down (no entity id needed; Rust picking determines target)
@@ -549,14 +442,6 @@ pub fn enter_frame(ptr: u64) {
             app.cleanup();
         }
     } else {
-        // 模拟阻塞
-        let active_info = app.world().get_resource::<ActivityControl>().unwrap();
-        if active_info.is_in_worker {
-            block_from_worker();
-        } else {
-            block_from_rust();
-        }
-
         app.update();
     }
 }
@@ -574,7 +459,7 @@ pub fn enter_frame(ptr: u64) {
 #[wasm_bindgen]
 pub fn release_app(ptr: u64) {
     // 将指针转换为其指代的实际 Rust 对象，同时也拿回此对象的内存管理权
-    let app: Box<App> = unsafe { Box::from_raw(ptr as *mut _) };
+    let app: Box<WorkerApp> = unsafe { Box::from_raw(ptr as *mut WorkerApp) };
     crate::close_bevy_window(app);
 }
 

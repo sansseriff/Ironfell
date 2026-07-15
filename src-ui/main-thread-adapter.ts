@@ -1,16 +1,21 @@
-// Main thread adapter to replace worker functionality for testing
+// Main-thread adapter: same message protocol as worker.ts, but every message is a
+// direct synchronous wasm call (no postMessage hop) — minimal input latency.
 import init, {
   init_bevy_app,
   is_preparation_completed,
-  create_window_by_offscreen_canvas_with_id,
+  create_window_by_offscreen_canvas,
   enter_frame,
   mouse_move,
   left_bt_down,
   left_bt_up,
   set_auto_animation,
   resize,
+  mouse_wheel,
   key_down,
   key_up,
+  set_panel_viewport,
+  despawn_panel,
+  release_app,
   // Inspector FFI functions
   inspector_update_component,
   inspector_toggle_component,
@@ -33,21 +38,18 @@ export class MainThreadAdapter {
   private appHandle: bigint = BigInt(0);
   private initFinished = 0;
   private isStoppedRunning = false;
-  private renderBlockTime = 1;
   private canvas: HTMLCanvasElement | null = null;
   private frameIndex = 0;
   private frameCount = 0;
   private frameFlag = 0;
-  private streamingEnabled = false;
-  private streamingInterval: number | null = null;
   private messageHandler: ((event: any) => void) | null = null;
   private rafId: number | null = null;
   private postedEnginePrepared: boolean = false;
+  private disposed = false;
 
   constructor() {
     // Create a dedicated object for Rust FFI functions
     const rustBridge = {
-      block_from_worker: (blockTime?: number) => this.blockFromWorker(blockTime),
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
       send_inspector_update_from_worker: (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson),
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
@@ -57,8 +59,7 @@ export class MainThreadAdapter {
     // Make it globally accessible
     (window as any).rustBridge = rustBridge;
 
-    // Expose the functions to the global scope so they're accessible from Wasm
-    (window as any).block_from_worker = (blockTime?: number) => this.blockFromWorker(blockTime);
+    // Expose the functions to the global scope so they're accessible from Wasm.
     (window as any).send_pick_from_worker = (pickList: any[]) => this.sendPickFromWorker(pickList);
     (window as any).send_inspector_update_from_worker = (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson);
     (window as any).send_hover_from_worker = (list: any[]) => this.sendHoverFromWorker(list);
@@ -71,36 +72,41 @@ export class MainThreadAdapter {
   }
 
   // Simulate worker's postMessage interface
-  async postMessage(data: any, transfer?: any[]) {
+  async postMessage(data: any, _transfer?: any[]) {
+    if (this.disposed) return;
     switch (data.ty) {
       case "wasmData":
-        // Initialize the wasm module with the provided data
-        console.log("Received WASM data from main thread, initializing...");
+        console.log("Received WASM data (main thread), initializing...");
         await init(data.wasmData);
-        console.log("WASM module initialized");
         this.appHandle = init_bevy_app();
         console.log("App handle initialized:", this.appHandle);
-
-        // Notify that the "worker" is ready
-        console.log("Sending workerIsReady message");
         this.sendMessage({ ty: "workerIsReady" });
         break;
 
       case "init":
-        this.canvas = data.canvas;
-        console.log(`running init of main thread app window: ${data.canvasId || 'primary'}`);
+        console.log("creating main thread app window (single full-window canvas)");
         this.createAppWindow(data.canvas, data.devicePixelRatio);
         break;
 
-      case "createAdditionalWindow":
-        console.log(`creating additional main thread app window: ${data.canvasId || 'unknown'}`);
-        this.createAdditionalAppWindow(data.canvas, data.devicePixelRatio);
+      case "resize":
+        this.canvasResize(data.width, data.height);
+        break;
+
+      case "setPanelViewport":
+        if (this.appHandle !== BigInt(0)) {
+          set_panel_viewport(this.appHandle, data.id, data.kind, data.x, data.y, data.w, data.h);
+        }
+        break;
+
+      case "despawnPanel":
+        if (this.appHandle !== BigInt(0)) {
+          despawn_panel(this.appHandle, data.id);
+        }
         break;
 
       case "startRunning":
         if (this.isStoppedRunning) {
           this.isStoppedRunning = false;
-          // Only start a new frame loop if one isn't already running
           if (this.rafId === null) {
             this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
           }
@@ -109,41 +115,49 @@ export class MainThreadAdapter {
 
       case "stopRunning":
         this.isStoppedRunning = true;
-        // Cancel any pending RAF to prevent multiple loops
         if (this.rafId !== null) {
           cancelAnimationFrame(this.rafId);
           this.rafId = null;
         }
         break;
 
+      case "releaseApp":
+        this.releaseApp();
+        break;
+
       case "mousemove":
-        mouse_move(this.appHandle, data.x, data.y);
+        // Direct synchronous call — the whole point of main-thread mode.
+        if (this.appHandle !== BigInt(0)) {
+          mouse_move(this.appHandle, data.x, data.y);
+        }
         break;
 
       case "leftBtDown":
-        // No entity id passed now; maintain old arity shim until wasm export updated
-        left_bt_down(this.appHandle);
+        if (this.appHandle !== BigInt(0)) {
+          left_bt_down(this.appHandle);
+        }
         break;
 
       case "leftBtUp":
-        left_bt_up(this.appHandle);
+        if (this.appHandle !== BigInt(0)) {
+          left_bt_up(this.appHandle);
+        }
         break;
 
-      case "blockRender":
-        this.renderBlockTime = data.blockTime;
+      case "mouseWheel":
+        if (this.appHandle !== BigInt(0)) {
+          mouse_wheel(this.appHandle, data.dx, data.dy, data.mode);
+        }
         break;
 
       case "autoAnimation":
-        set_auto_animation(this.appHandle, data.autoAnimation);
-        break;
-
-      case "resize":
-        this.canvasResize(data.canvasId, data.width, data.height);
+        if (this.appHandle !== BigInt(0)) {
+          set_auto_animation(this.appHandle, data.autoAnimation);
+        }
         break;
 
       case "keydown":
         if (this.appHandle !== BigInt(0)) {
-          console.log("Key down event received:", data.key);
           key_down(this.appHandle, data.key);
         }
         break;
@@ -289,38 +303,25 @@ export class MainThreadAdapter {
     }
   }
 
-  private canvasResize(canvasId: string, width: number, height: number) {
-    if (this.canvas) {
-      // Update the canvas size
+  private canvasResize(width: number, height: number) {
+    if (this.canvas && this.appHandle !== BigInt(0)) {
       this.canvas.width = width;
       this.canvas.height = height;
-
-      // console.log("Resized canvas to:", this.canvas.width, "×", this.canvas.height);
-
-      // Notify bevy it's changed
       resize(this.appHandle, width, height);
     }
   }
 
   private createAppWindow(canvas: HTMLCanvasElement, devicePixelRatio: number) {
-    // Store the canvas reference
     this.canvas = canvas;
 
-    // For main thread, we need to convert the regular canvas to an offscreen canvas
-    // or use it directly - let's try using the offscreen function with regular canvas
-    try {
-      (create_window_by_offscreen_canvas_with_id as any)(
-        this.appHandle,
-        canvas as any,
-        devicePixelRatio,
-        (window as any).lastInitCanvasId || canvas.id || 'viewer-canvas',
-        ((window as any).lastInitCanvasId || canvas.id || 'viewer-canvas') === 'viewer-canvas' ? 'viewer' : 'other'
-      );
-    } catch (error) {
-      console.error("Failed to create window:", error);
-      // If that doesn't work, we might need a different approach
-      throw error;
-    }
+    // The wasm entry point takes an OffscreenCanvas; the HTML canvas is structurally
+    // compatible for surface creation, as before.
+    create_window_by_offscreen_canvas(
+      this.appHandle,
+      canvas as any,
+      devicePixelRatio,
+      false, // is_in_worker
+    );
 
     // Check ready state
     this.getPreparationState();
@@ -331,32 +332,13 @@ export class MainThreadAdapter {
     }
   }
 
-  private createAdditionalAppWindow(canvas: HTMLCanvasElement, devicePixelRatio: number) {
-    // Create additional rendering window on the same Bevy app instance
-    try {
-      (create_window_by_offscreen_canvas_with_id as any)(
-        this.appHandle,
-        canvas as any,
-        devicePixelRatio,
-        (window as any).lastInitCanvasId || canvas.id || 'timeline-canvas',
-        'timeline'
-      );
-      console.log("Additional main thread app window created");
-    } catch (error) {
-      console.error("Failed to create additional window:", error);
-      throw error;
-    }
-
-    // No need to start another frame loop - the existing one handles all windows
-  }
-
   private enterFrame(_dt: number) {
-    // Clear the RAF ID since this frame is now executing
     this.rafId = null;
 
     if (this.appHandle === BigInt(0) || this.isStoppedRunning) return;
 
-    // Execute the app's frame loop when ready
+    // Execute the app's frame loop when ready.
+    // Mouse events were already applied synchronously as they arrived.
     if (this.initFinished > 0) {
       if (
         this.frameIndex >= this.frameFlag ||
@@ -370,14 +352,12 @@ export class MainThreadAdapter {
       this.getPreparationState();
     }
 
-    // Schedule next frame only if not stopped
     if (!this.isStoppedRunning) {
       this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
     }
   }
 
   private getPreparationState() {
-    const prev = this.initFinished;
     this.initFinished = is_preparation_completed(this.appHandle);
     if (!this.postedEnginePrepared && this.initFinished > 0) {
       this.postedEnginePrepared = true;
@@ -406,9 +386,16 @@ export class MainThreadAdapter {
     }
   }
 
-  private blockFromWorker(blockTime?: number) {
-    const start = performance.now();
-    while (performance.now() - start < (blockTime || this.renderBlockTime)) { }
+  private releaseApp() {
+    this.isStoppedRunning = true;
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    if (this.appHandle !== BigInt(0)) {
+      try { release_app(this.appHandle); } catch (e) { console.error("release_app failed", e); }
+      this.appHandle = BigInt(0);
+    }
   }
 
   private enableContinuousStreaming() {
@@ -416,7 +403,6 @@ export class MainThreadAdapter {
 
     try {
       enable_inspector_streaming(this.appHandle);
-      this.streamingEnabled = true;
       console.log("Continuous inspector streaming enabled (for animations)");
     } catch (error) {
       console.error("Failed to enable continuous streaming:", error);
@@ -428,7 +414,6 @@ export class MainThreadAdapter {
 
     try {
       disable_inspector_streaming(this.appHandle);
-      this.streamingEnabled = false;
       console.log("Continuous inspector streaming disabled");
     } catch (error) {
       console.error("Failed to disable continuous streaming:", error);
@@ -479,24 +464,12 @@ export class MainThreadAdapter {
     }
   }
 
-  // Cleanup method to properly dispose of the adapter
+  // Cleanup: stop the frame loop and free the Bevy app (GPU device, surfaces).
   dispose() {
-    // Immediately stop running and cancel any pending RAF
-    this.isStoppedRunning = true;
-    if (this.rafId !== null) {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
-    }
-
-    // Clear any streaming intervals
-    if (this.streamingInterval !== null) {
-      clearInterval(this.streamingInterval);
-      this.streamingInterval = null;
-    }
-
-    // Reset state
+    if (this.disposed) return;
+    this.disposed = true;
+    this.releaseApp();
     this.canvas = null;
     this.messageHandler = null;
-    this.streamingEnabled = false;
   }
 }

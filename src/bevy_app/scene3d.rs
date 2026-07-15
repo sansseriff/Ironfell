@@ -2,9 +2,6 @@ use crate::ActivityControl;
 use crate::camera_controller::CameraController;
 use bevy::math::bounding::{Aabb3d, Bounded3d};
 use bevy::prelude::*;
-use bevy::render::camera::RenderTarget;
-use bevy::window::WindowRef;
-use crate::canvas_view::CanvasName;
 use bevy::render::view::RenderLayers;
 use bevy::render::{
     render_asset::RenderAssetUsages,
@@ -51,7 +48,6 @@ pub(crate) fn setup_3d_scene(
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     _asset_server: Res<AssetServer>,
-    windows: Query<(Entity, Option<&CanvasName>), With<Window>>,
 ) {
     let debug_material = materials.add(StandardMaterial {
         base_color_texture: Some(images.add(uv_debug_texture())),
@@ -101,23 +97,14 @@ pub(crate) fn setup_3d_scene(
         MeshMaterial3d(materials.add(Color::srgb(0.75, 0.75, 0.75))),
     ));
 
-    // Resolve viewer window by CanvasName
-    let mut viewer_window_entity: Option<Entity> = None;
-    for (e, name) in windows.iter() {
-        if let Some(CanvasName(id)) = name {
-            if id == "viewer-canvas" { viewer_window_entity = Some(e); break; }
-        }
-    }
-
-    // Camera
-    let mut camera = Camera {
+    // Camera renders into the "viewer" panel's viewport rect; it stays inactive
+    // until JS posts that panel (see apply_viewer_viewport in bevy_app/mod.rs).
+    let camera = Camera {
         order: 0,
         clear_color: ClearColorConfig::Default,
+        is_active: false,
         ..default()
     };
-    if let Some(e) = viewer_window_entity {
-        camera.target = RenderTarget::Window(WindowRef::Entity(e));
-    }
     commands.spawn((
         Camera3d::default(),
         camera,

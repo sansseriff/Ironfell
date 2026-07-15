@@ -168,7 +168,7 @@ pub struct InspectorStreamingState {
 impl Default for InspectorStreamingState {
     fn default() -> Self {
         Self {
-            continuous_streaming_enabled: true, // Disabled by default for efficiency
+            continuous_streaming_enabled: false,
             last_update_tick: 0,
             update_every_n_ticks: 3, // Update every 3 ticks when continuous streaming is enabled
         }

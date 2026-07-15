@@ -15,7 +15,8 @@ pub use ffi_inspector_bridge::*;
 // mod type_registry; // Disabled for now - used for streaming updates
 
 mod canvas_view;
-use canvas_view::*;
+
+pub mod panels;
 
 // ray_pick legacy module removed (superseded by new picking systems)
 
@@ -196,14 +197,16 @@ impl Default for GroupAggregate {
     }
 }
 
-pub(crate) fn close_bevy_window(mut app: Box<App>) {
+pub(crate) fn close_bevy_window(mut app: Box<WorkerApp>) {
     let mut windows_state: SystemState<Query<(Entity, &mut Window)>> =
         SystemState::from_world(app.world_mut());
     let windows = windows_state.get_mut(app.world_mut());
-    let (entity, _window) = windows.iter().last().unwrap();
-    app.world_mut()
-        .send_event(WindowCloseRequested { window: entity });
-    windows_state.apply(app.world_mut());
-
-    app.update();
+    let entity = windows.iter().last().map(|(entity, _)| entity);
+    if let Some(entity) = entity {
+        app.world_mut()
+            .send_event(WindowCloseRequested { window: entity });
+        windows_state.apply(app.world_mut());
+        app.update();
+    }
+    // Dropping the WorkerApp (and its App) releases the wgpu device/surfaces.
 }

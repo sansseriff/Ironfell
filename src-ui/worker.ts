@@ -3,16 +3,18 @@
 import init, {
   init_bevy_app,
   is_preparation_completed,
-  create_window_by_offscreen_canvas_with_id,
-  enter_frame,
-  enter_frame_with_mouse, // Add new function
-  mouse_move,
+  create_window_by_offscreen_canvas,
+  enter_frame_with_mouse,
   left_bt_down,
   left_bt_up,
   set_auto_animation,
   resize,
+  mouse_wheel,
   key_down,
   key_up,
+  set_panel_viewport,
+  despawn_panel,
+  release_app,
   // Inspector FFI functions
   inspector_update_component,
   inspector_toggle_component,
@@ -22,7 +24,7 @@ import init, {
   inspector_toggle_visibility,
   inspector_reparent_entity,
   inspector_spawn_entity,
-  // Streaming FFI functions (now available after WASM rebuild)
+  // Streaming FFI functions
   enable_inspector_streaming,
   disable_inspector_streaming,
   set_inspector_streaming_frequency,
@@ -31,19 +33,15 @@ import init, {
   inspector_reset_streaming_state,
 } from "./wasm/ironfell.js";
 
-// import wasmUrl from './wasm/ironfell_bg.wasm?url'
-
 class IronWorker {
   private appHandle: bigint = BigInt(0);
   private initFinished = 0;
   private isStoppedRunning = false;
-  private renderBlockTime = 1;
-  private offscreenCanvases: Map<string, OffscreenCanvas> = new Map();
+  private offscreenCanvas: OffscreenCanvas | null = null;
   private frameIndex = 0;
   private frameCount = 0;
   private frameFlag = 0;
   private streamingEnabled = false;
-  private streamingInterval: number | null = null;
   private rafId: number | null = null;
   private latestMouseX: number = 0;
   private latestMouseY: number = 0;
@@ -53,7 +51,6 @@ class IronWorker {
   constructor() {
     // Create a dedicated object for Rust FFI functions
     const rustBridge = {
-      block_from_worker: (blockTime?: number) => this.blockFromWorker(blockTime),
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
       send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
@@ -64,7 +61,6 @@ class IronWorker {
     (self as any).rustBridge = rustBridge;
 
     // Expose the functions to the global scope so they're accessible from Wasm
-    (self as any).block_from_worker = (blockTime?: number) => this.blockFromWorker(blockTime);
     (self as any).send_pick_from_worker = (pickList: any[]) => this.sendPickFromWorker(pickList);
     (self as any).send_hover_from_worker = (list: any[]) => this.sendHoverFromWorker(list);
     (self as any).send_selection_from_worker = (list: any[]) => this.sendSelectionFromWorker(list);
@@ -89,35 +85,33 @@ class IronWorker {
           console.log("App handle initialized:", this.appHandle);
 
           // Notify the main thread that the worker is ready
-          console.log("Sending workerIsReady message");
-          self.postMessage({ ty: "workerIsReady" });
-          break;
-
-        case "wasmUrl":
-          // Keep this for backward compatibility, but it shouldn't be used now
-          console.warn("Received wasmUrl - this should not happen with the new implementation");
-          await init(data.wasmUrl);
-          this.appHandle = init_bevy_app();
           self.postMessage({ ty: "workerIsReady" });
           break;
 
         case "init":
-          // Remember which canvas this init corresponds to
-          (self as any).lastInitCanvasId = data.canvasId;
-          console.log(`running init of worker app window: ${data.canvasId || 'primary'}`);
-          this.createWorkerAppWindow(data.canvas, data.devicePixelRatio, data.canvasId || 'viewer-canvas');
+          console.log("creating worker app window (single full-window canvas)");
+          this.createWorkerAppWindow(data.canvas, data.devicePixelRatio);
           break;
 
-        case "createAdditionalWindow":
-          (self as any).lastInitCanvasId = data.canvasId;
-          console.log(`creating additional worker app window: ${data.canvasId || 'unknown'}`);
-          this.createAdditionalWorkerAppWindow(data.canvas, data.devicePixelRatio, data.canvasId || 'secondary');
+        case "resize":
+          this.canvasResize(data.width, data.height);
+          break;
+
+        case "setPanelViewport":
+          if (this.appHandle !== BigInt(0)) {
+            set_panel_viewport(this.appHandle, data.id, data.kind, data.x, data.y, data.w, data.h);
+          }
+          break;
+
+        case "despawnPanel":
+          if (this.appHandle !== BigInt(0)) {
+            despawn_panel(this.appHandle, data.id);
+          }
           break;
 
         case "startRunning":
           if (this.isStoppedRunning) {
             this.isStoppedRunning = false;
-            // Only start a new frame loop if one isn't already running
             if (this.rafId === null) {
               this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
             }
@@ -126,58 +120,62 @@ class IronWorker {
 
         case "stopRunning":
           this.isStoppedRunning = true;
-          // Cancel any pending RAF to prevent multiple loops
           if (this.rafId !== null) {
             cancelAnimationFrame(this.rafId);
             this.rafId = null;
           }
           break;
 
+        case "releaseApp":
+          this.isStoppedRunning = true;
+          if (this.rafId !== null) {
+            cancelAnimationFrame(this.rafId);
+            this.rafId = null;
+          }
+          if (this.appHandle !== BigInt(0)) {
+            try { release_app(this.appHandle); } catch (e) { console.error("release_app failed", e); }
+            this.appHandle = BigInt(0);
+          }
+          break;
+
         case "mousemove":
-          // Buffer the latest mouse position instead of immediately processing
+          // Buffer the latest mouse position; applied at the next frame tick
           this.latestMouseX = data.x;
           this.latestMouseY = data.y;
           this.hasMouseUpdate = true;
-          // Don't call mouse_move here anymore
           break;
 
-
         case "leftBtDown":
-          // Ignore legacy payload fields (pickItem, x, y)
-          left_bt_down(this.appHandle as any); // maintain old arity until wasm rebuild exposes new signature
+          left_bt_down(this.appHandle);
           break;
 
         case "leftBtUp":
           left_bt_up(this.appHandle);
           break;
 
-        case "blockRender":
-          this.renderBlockTime = data.blockTime;
+        case "mouseWheel":
+          if (this.appHandle !== BigInt(0)) {
+            mouse_wheel(this.appHandle, data.dx, data.dy, data.mode);
+          }
           break;
 
         case "autoAnimation":
           set_auto_animation(this.appHandle, data.autoAnimation);
           break;
 
-        case "resize":
-          this.canvasResize(data.canvasId, data.width, data.height);
-          break;
-
-        case "keydown": // Handle keydown event
+        case "keydown":
           if (this.appHandle !== BigInt(0)) {
-            console.log("Key down event received:", data.key);
             key_down(this.appHandle, data.key);
           }
           break;
 
-        case "keyup": // Handle keyup event
+        case "keyup":
           if (this.appHandle !== BigInt(0)) {
             key_up(this.appHandle, data.key);
           }
           break;
 
-        // make the bevy inspector commands here!
-        // begin commands
+        // Inspector commands
 
         case "inspector_update_component":
           if (this.appHandle !== BigInt(0)) {
@@ -301,43 +299,27 @@ class IronWorker {
           this.resetStreamingState();
           break;
 
-        // end commands
-
-
-
         default:
           break;
       }
     };
   }
 
-  private canvasResize(canvasId: string, width: number, height: number) {
-    const osc = this.offscreenCanvases.get(canvasId);
-    if (osc) {
-      // Update the matched canvas
-      osc.width = width;
-      osc.height = height;
-
-      // console.log("Resized canvas to:", this.offscreenCanvas.width, "×", this.offscreenCanvas.height);
-
-      // And then notify bevy it's changed
+  private canvasResize(width: number, height: number) {
+    if (this.offscreenCanvas) {
+      this.offscreenCanvas.width = width;
+      this.offscreenCanvas.height = height;
       resize(this.appHandle, width, height);
     }
   }
 
-  private createWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number, canvasId: string) {
-    // Store the canvas reference keyed by id
-    this.offscreenCanvases.set(canvasId, offscreenCanvas);
-
-    // Decide window kind by id
-    const kind = canvasId === 'viewer-canvas' ? 'viewer' : (canvasId.includes('timeline') ? 'timeline' : 'other');
-    // Pass extra args via `any` cast for forward compatibility
-    create_window_by_offscreen_canvas_with_id(
+  private createWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number) {
+    this.offscreenCanvas = offscreenCanvas;
+    create_window_by_offscreen_canvas(
       this.appHandle,
       offscreenCanvas,
       devicePixelRatio,
-      canvasId,
-      kind
+      true, // is_in_worker
     );
 
     // Check ready state
@@ -349,57 +331,38 @@ class IronWorker {
     }
   }
 
-  private createAdditionalWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number, canvasId: string) {
-    // Create additional rendering window on the same Bevy app instance
-    const kind = canvasId.includes('timeline') ? 'timeline' : 'other';
-    this.offscreenCanvases.set(canvasId, offscreenCanvas);
-    create_window_by_offscreen_canvas_with_id(
-      this.appHandle,
-      offscreenCanvas,
-      devicePixelRatio,
-      canvasId,
-      kind
-    );
-
-    // No need to start another frame loop - the existing one handles all windows
-    console.log("Additional worker app window created");
-  }
-
   private enterFrame(_dt: number) {
     // Clear the RAF ID since this call was triggered
     this.rafId = null;
 
-    // Non-blocking 10 ms delay so the worker can still process incoming messages
-    setTimeout(() => {
-      if (this.appHandle === BigInt(0) || this.isStoppedRunning) return;
+    if (this.appHandle === BigInt(0) || this.isStoppedRunning) return;
 
-      // Execute the app's frame loop when ready
-      if (this.initFinished > 0) {
-        if (
-          this.frameIndex >= this.frameFlag ||
-          (this.frameIndex < this.frameFlag && this.frameCount % 60 == 0)
-        ) {
-          if (this.hasMouseUpdate) {
-            enter_frame_with_mouse(this.appHandle, this.latestMouseX, this.latestMouseY, true);
-            this.hasMouseUpdate = false;
-          } else {
-            enter_frame_with_mouse(this.appHandle, 0, 0, false);
-          }
-          this.frameIndex++;
+    // Execute the app's frame loop when ready. Returning from this callback gives
+    // the worker event loop a chance to process messages before the next RAF.
+    if (this.initFinished > 0) {
+      if (
+        this.frameIndex >= this.frameFlag ||
+        (this.frameIndex < this.frameFlag && this.frameCount % 60 == 0)
+      ) {
+        if (this.hasMouseUpdate) {
+          enter_frame_with_mouse(this.appHandle, this.latestMouseX, this.latestMouseY, true);
+          this.hasMouseUpdate = false;
+        } else {
+          enter_frame_with_mouse(this.appHandle, 0, 0, false);
         }
-        this.frameCount++;
-      } else {
-        this.getPreparationState();
+        this.frameIndex++;
       }
+      this.frameCount++;
+    } else {
+      this.getPreparationState();
+    }
 
-      if (!this.isStoppedRunning) {
-        this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
-      }
-    }, 0);
+    if (!this.isStoppedRunning) {
+      this.rafId = requestAnimationFrame((dt) => this.enterFrame(dt));
+    }
   }
 
   private getPreparationState() {
-    const prev = this.initFinished;
     this.initFinished = is_preparation_completed(this.appHandle);
     if (!this.postedEnginePrepared && this.initFinished > 0) {
       this.postedEnginePrepared = true;
@@ -408,7 +371,6 @@ class IronWorker {
   }
 
   private sendPickFromWorker(pickList: any[]) {
-    // Deprecated path; retain for backward compatibility if needed.
     self.postMessage({ ty: "pick", list: pickList });
   }
 
@@ -424,30 +386,15 @@ class IronWorker {
     try {
       const update = JSON.parse(updateJson);
       self.postMessage({ ty: "inspector_update", update });
-
     } catch (error) {
       console.error("Failed to parse inspector update JSON:", error);
     }
-  }
-
-  private blockFromWorker(blockTime?: number) {
-    const start = performance.now();
-    while (performance.now() - start < (blockTime || this.renderBlockTime)) { }
-  }
-
-  private enableStreaming() {
-    this.enableContinuousStreaming();
-  }
-
-  private disableStreaming() {
-    this.disableContinuousStreaming();
   }
 
   private enableContinuousStreaming() {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      // Enable continuous streaming for animations/automatic updates
       enable_inspector_streaming(this.appHandle);
       this.streamingEnabled = true;
       console.log("Continuous inspector streaming enabled (for animations)");
@@ -468,21 +415,7 @@ class IronWorker {
     }
   }
 
-  private enableInspectorStreaming() {
-    // Alias for backward compatibility
-    this.enableContinuousStreaming();
-  }
-
-  private disableInspectorStreaming() {
-    // Alias for backward compatibility  
-    this.disableContinuousStreaming();
-  }
-
   private setStreamingFrequency(ticks: number) {
-    this.setInspectorStreamingFrequency(ticks);
-  }
-
-  private setInspectorStreamingFrequency(ticks: number) {
     if (this.appHandle === BigInt(0)) return;
 
     try {

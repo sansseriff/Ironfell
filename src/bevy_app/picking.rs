@@ -4,6 +4,33 @@ use bevy::prelude::*;
 use crate::bevy_app::overlay2d::DraggableSquare;
 use crate::bevy_app::scene3d::{CurrentVolume, MainCamera3D};
 
+/// Build a world ray from a window-space cursor position (physical px).
+/// The camera renders into a viewport sub-rect, so the position is translated to
+/// viewport-local coordinates first; returns None when the cursor is outside the
+/// viewport (e.g. over the timeline or an HTML panel).
+pub fn camera_ray_from_window_px(
+    camera: &Camera,
+    cam_transform: &GlobalTransform,
+    screen: Vec2,
+) -> Option<Ray3d> {
+    let local = match &camera.viewport {
+        Some(vp) => {
+            let origin = vp.physical_position.as_vec2();
+            let size = vp.physical_size.as_vec2();
+            let p = screen - origin;
+            if p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y {
+                return None;
+            }
+            p
+        }
+        None => screen,
+    };
+    camera
+        .viewport_to_world(cam_transform, local)
+        .ok()
+        .map(Ray3d::from)
+}
+
 // Overlay 2D placeholder: treat draggable square as a hit if pointer over its AABB.
 pub fn pick_overlay_2d_system(
     pointer: Res<crate::PointerState>,
@@ -42,12 +69,8 @@ pub fn pick_world_3d_system(
     let Ok((camera, cam_transform)) = cameras.single() else {
         return;
     };
-    // Build ray from pointer screen pos
-    let Some(ray) = camera
-        .viewport_to_world(cam_transform, pointer.screen)
-        .ok()
-        .map(Ray3d::from)
-    else {
+    // Build ray from pointer screen pos (viewport-aware)
+    let Some(ray) = camera_ray_from_window_px(camera, cam_transform, pointer.screen) else {
         return;
     };
     let ray_cast = RayCast3d::from_ray(ray, 10_000.0);

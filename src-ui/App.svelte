@@ -1,73 +1,171 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
   import SplitPane from "./lib/SplitPane5.svelte";
-  import Scene from "./lib/Scene.svelte";
+  import BevyPanel from "./lib/BevyPanel.svelte";
   import Controls from "./lib/Controls.svelte";
+  import WebGPUWarning from "./lib/WebGPUWarning.svelte";
+  import { controllerManager } from "./controller-manager.svelte";
   import { UIState } from "./ui-state.svelte";
-
-  let sceneComponent: Scene;
-  let timelineSceneComponent: Scene;
 
   const ui_state = new UIState();
 
-  // Handler for SplitPane resize events
+  let canvasEl: HTMLCanvasElement;
+
+  // SplitPane drags don't resize the canvas — they only move panel rects.
   function handleSplitPaneResize() {
-    if (sceneComponent) {
-      sceneComponent.triggerResize();
-    }
-    if (timelineSceneComponent) {
-      timelineSceneComponent.triggerResize();
-    }
+    controllerManager.syncAllPanels();
   }
 
-  function handleLaunch() {
-    // The launch functionality is now handled by the Scene component
-    // This is just a placeholder in case we need to do something from the parent
-  }
+  onMount(() => {
+    controllerManager.boot(canvasEl);
+  });
+
+  onDestroy(() => {
+    controllerManager.dispose();
+  });
 </script>
 
-{#snippet a()}
-  <Controls onLaunch={handleLaunch} />
+<!-- Layout: left HTML panel | center 3D viewer | right vello UI panel, timeline across the bottom -->
+
+{#snippet controlsPane()}
+  <div class="controls-pane">
+    <Controls />
+  </div>
 {/snippet}
 
-{#snippet b()}
-  <Scene bind:this={sceneComponent} canvasId="viewer-canvas" />
+{#snippet viewer()}
+  <BevyPanel id="viewer" kind="viewer" />
 {/snippet}
 
-{#snippet ab()}
+{#snippet sidebar()}
+  <BevyPanel id="sidebar" kind="ui" />
+{/snippet}
+
+{#snippet centerRight()}
   <SplitPane
     orientation="horizontal"
-    min="1%"
-    max="75%"
-    pos="52%"
+    min="40%"
+    max="95%"
+    pos="72%"
     --color="black"
-    {a}
-    {b}
+    a={viewer}
+    b={sidebar}
+    onResize={handleSplitPaneResize}
+  ></SplitPane>
+{/snippet}
+
+{#snippet top()}
+  <SplitPane
+    orientation="horizontal"
+    min="5%"
+    max="60%"
+    pos="24%"
+    --color="black"
+    a={controlsPane}
+    b={centerRight}
     onResize={handleSplitPaneResize}
   ></SplitPane>
 {/snippet}
 
 {#snippet timeline()}
-  <Scene bind:this={timelineSceneComponent} canvasId="timeline-canvas" />
+  <BevyPanel id="timeline" kind="timeline" />
 {/snippet}
 
-<div class="master-container">
-  <SplitPane
-    orientation="vertical"
-    min="1%"
-    max="75%"
-    pos="75%"
-    --color="black"
-    a={ab}
-    b={timeline}
-    onResize={handleSplitPaneResize}
-  ></SplitPane>
+<div class="stage">
+  <!-- The one canvas: full window, never resized during pane drags -->
+  <canvas
+    bind:this={canvasEl}
+    id="bevy-canvas"
+    tabindex="0"
+    oncontextmenu={(e) => {
+      e.preventDefault();
+    }}
+  ></canvas>
+
+  <!-- HTML UI layer floats above; only interactive elements re-enable pointer events -->
+  <div class="ui-layer">
+    <SplitPane
+      orientation="vertical"
+      min="1%"
+      max="75%"
+      pos="75%"
+      --color="black"
+      a={top}
+      b={timeline}
+      onResize={handleSplitPaneResize}
+    ></SplitPane>
+  </div>
+
+  <WebGPUWarning
+    show={controllerManager.showWebGPUWarning}
+    onDismiss={() => controllerManager.dismissWebGPUWarning()}
+  />
+
+  {#if controllerManager.loadingInProgress}
+    <div class="loading">
+      <div class="spinner"></div>
+      <p>Loading...</p>
+    </div>
+  {/if}
 </div>
 
 <style>
-  .master-container {
-    height: 100vh;
-    width: 100vw;
+  .stage {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+  }
+
+  #bevy-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: 0;
+  }
+
+  #bevy-canvas:focus {
+    outline: none;
+  }
+
+  .ui-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    /* Input falls through to the canvas except where children opt back in */
+    pointer-events: none;
     padding: 2.5px;
-    background-color: var(--bg-color);
+    /* SplitPane containers must not paint over the canvas */
+    --split-pane-bg: transparent;
+  }
+
+  .controls-pane {
+    /* Docked pane styled as a floating card over the canvas */
+    pointer-events: auto;
+    height: 100%;
+    overflow: auto;
+    margin: 6px;
+    width: calc(100% - 12px);
+    height: calc(100% - 12px);
+    border-radius: 12px;
+    background-color: var(--body-color);
+    border: 1px solid var(--outer-border-color);
+    box-shadow: 0 8px 24px rgba(16, 36, 94, 0.12);
+  }
+
+  .loading {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    background-color: rgba(255, 255, 255, 0.6);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: Arial, sans-serif;
+    font-size: 2em;
+    color: #9aa4b8;
+    pointer-events: none;
   }
 </style>

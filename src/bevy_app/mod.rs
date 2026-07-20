@@ -130,9 +130,9 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
             max_history_length: MAX_HISTORY_LENGTH,
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
         },
-        // CameraControllerPlugin,
+        CameraControllerPlugin,
         RemoteInspectorPlugin,
-        // TimelinePlugin,
+        TimelinePlugin,
     ));
 
     init_shared_resources(&mut app);

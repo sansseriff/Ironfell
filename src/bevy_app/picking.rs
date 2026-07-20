@@ -13,20 +13,25 @@ pub fn camera_ray_from_window_px(
     cam_transform: &GlobalTransform,
     screen: Vec2,
 ) -> Option<Ray3d> {
-    let local = match &camera.viewport {
-        Some(vp) => {
-            let origin = vp.physical_position.as_vec2();
-            let size = vp.physical_size.as_vec2();
-            let p = screen - origin;
-            if p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y {
-                return None;
-            }
-            p
+    // Reject clicks outside the camera's viewport sub-rect (e.g. over the timeline
+    // or an HTML panel). `screen` and the viewport are both window/canvas-relative
+    // physical px.
+    if let Some(vp) = &camera.viewport {
+        let origin = vp.physical_position.as_vec2();
+        let size = vp.physical_size.as_vec2();
+        let p = screen - origin;
+        if p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y {
+            return None;
         }
-        None => screen,
-    };
+    }
+    // NOTE: `viewport_to_world` expects the position in WINDOW space, not
+    // viewport-local space — it subtracts the viewport offset itself via
+    // `logical_viewport_rect().min`. So pass the full-window `screen`, not
+    // `screen - viewport.origin`; pre-subtracting double-counts the offset and
+    // throws the ray off by the viewport's top-left (the left panel width). The
+    // window scale factor is forced to 1.0, so physical `screen` == logical.
     camera
-        .viewport_to_world(cam_transform, local)
+        .viewport_to_world(cam_transform, screen)
         .ok()
         .map(Ray3d::from)
 }

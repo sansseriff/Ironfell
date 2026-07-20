@@ -1,4 +1,19 @@
-set -e 
+set -e
+
+# --- wasm-bindgen version sync -------------------------------------------------
+# Cargo.lock is the single source of truth for the wasm-bindgen version. The CLI
+# used to generate bindings MUST exactly match the crate, or wasm-bindgen aborts
+# with a "schema version" mismatch. Read the locked version and install the
+# matching CLI locally if it differs. The CI workflow derives the same version
+# from Cargo.lock, so a single `cargo update` + committed lockfile keeps this
+# machine and the runner in lockstep — no manual version bumps in two places.
+WBG_VERSION=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' Cargo.lock)
+CURRENT_WBG=$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')
+if [ "$CURRENT_WBG" != "$WBG_VERSION" ]; then
+  echo "wasm-bindgen CLI ($CURRENT_WBG) != Cargo.lock ($WBG_VERSION); installing matching CLI…"
+  cargo install -f wasm-bindgen-cli --version "$WBG_VERSION"
+fi
+# -------------------------------------------------------------------------------
 
 
 RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none" cargo build \

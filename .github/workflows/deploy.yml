@@ -38,10 +38,17 @@ jobs:
           override: true
           components: rust-src
 
+      # Cargo.lock is the single source of truth for the wasm-bindgen version.
+      # Derive the CLI version from it so the runner always matches the crate the
+      # project is locked to — bumping is just `cargo update` + committing the lock.
+      - name: Read wasm-bindgen version from Cargo.lock
+        id: wasm_bindgen_version
+        run: echo "version=$(awk -F'\"' '/^name = \"wasm-bindgen\"$/{getline; print $2}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+
       - name: Setup wasm-bindgen
         uses: jetli/wasm-bindgen-action@v0.2.0
         with:
-          version: "latest"
+          version: ${{ steps.wasm_bindgen_version.outputs.version }}
 
       - name: Install wasm-opt
         run: |

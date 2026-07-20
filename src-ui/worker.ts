@@ -32,8 +32,10 @@ import init, {
   get_type_registry_schema,
   inspector_reset_streaming_state,
 } from "./wasm/ironfell.js";
+import { CadenceProbe } from "./runtime/cadence_probe";
 
 class IronWorker {
+  private probe = new CadenceProbe();
   private appHandle: bigint = BigInt(0);
   private initFinished = 0;
   private isStoppedRunning = false;
@@ -81,7 +83,7 @@ class IronWorker {
           console.log("Received WASM data from main thread, initializing...");
           await init(data.wasmData);
           console.log("WASM module initialized");
-          this.appHandle = init_bevy_app();
+          this.appHandle = init_bevy_app(data.variantFlags >>> 0);
           console.log("App handle initialized:", this.appHandle);
 
           // Notify the main thread that the worker is ready
@@ -299,6 +301,14 @@ class IronWorker {
           this.resetStreamingState();
           break;
 
+        case "probeStats":
+          self.postMessage({ ty: "probeStats", stats: this.probe.stats() });
+          break;
+
+        case "probeReset":
+          this.probe.reset();
+          break;
+
         default:
           break;
       }
@@ -331,7 +341,7 @@ class IronWorker {
     }
   }
 
-  private enterFrame(_dt: number) {
+  private enterFrame(rafTs: number) {
     // Clear the RAF ID since this call was triggered
     this.rafId = null;
 
@@ -344,12 +354,14 @@ class IronWorker {
         this.frameIndex >= this.frameFlag ||
         (this.frameIndex < this.frameFlag && this.frameCount % 60 == 0)
       ) {
+        const tickStart = performance.now();
         if (this.hasMouseUpdate) {
           enter_frame_with_mouse(this.appHandle, this.latestMouseX, this.latestMouseY, true);
           this.hasMouseUpdate = false;
         } else {
           enter_frame_with_mouse(this.appHandle, 0, 0, false);
         }
+        this.probe.record(rafTs, performance.now() - tickStart);
         this.frameIndex++;
       }
       this.frameCount++;

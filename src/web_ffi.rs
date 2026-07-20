@@ -46,11 +46,12 @@ extern "C" {
     pub(crate) fn send_inspector_update_from_worker(update_json: &str);
 }
 
+/// `variant_flags` selects a perf-grid variant (see `bevy_app::VARIANT_*`); 0 = normal app.
 #[wasm_bindgen]
-pub fn init_bevy_app() -> u64 {
-    let app = init_app();
-
-    info!("init_bevy_app");
+pub fn init_bevy_app(variant_flags: u32) -> u64 {
+    // info!/log crate may be unavailable in nolog/min variants; always print via console.
+    log(&format!("init_bevy_app variant_flags={variant_flags}"));
+    let app = init_app(variant_flags);
 
     // 包装成无生命周期的指针
     // english: Wrap it into a non-lifetime pointer

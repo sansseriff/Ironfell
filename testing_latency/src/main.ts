@@ -257,6 +257,12 @@ async function renderTestPage(container: HTMLElement, appId: TestAppId) {
     ...DEFAULT_OPTIONS,
     dpr: window.devicePixelRatio || 1,
   };
+  // Perf-grid: `?size=full` sizes the test canvas to (almost) the whole window so
+  // the TS controls exercise the same physical pixel count as the full-window app.
+  if (new URLSearchParams(location.search).get('size') === 'full') {
+    options.width = Math.max(320, Math.floor(window.innerWidth - 32));
+    options.height = Math.max(240, Math.floor(window.innerHeight * 0.8));
+  }
   await testApp.mount(stage, options);
   overlay = new ReferenceOverlay(stage, options);
   testApp.setSampleAugmenter?.(() => {

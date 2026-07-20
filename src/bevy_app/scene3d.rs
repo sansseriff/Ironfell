@@ -8,6 +8,7 @@ use bevy::render::{
     render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use std::ops::Deref;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 
 // Marker for 3D main camera
 #[derive(Component)]
@@ -107,6 +108,8 @@ pub(crate) fn setup_3d_scene(
     };
     commands.spawn((
         Camera3d::default(),
+        bevy::render::view::Msaa::Off,
+        Tonemapping::BlenderFilmic,
         camera,
         CameraController::default(),
         MainCamera3D,

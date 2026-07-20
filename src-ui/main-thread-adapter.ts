@@ -33,8 +33,10 @@ import init, {
   get_type_registry_schema,
   inspector_reset_streaming_state,
 } from "./wasm/ironfell.js";
+import { CadenceProbe } from "./runtime/cadence_probe";
 
 export class MainThreadAdapter {
+  private probe = new CadenceProbe();
   private appHandle: bigint = BigInt(0);
   private initFinished = 0;
   private isStoppedRunning = false;
@@ -78,7 +80,7 @@ export class MainThreadAdapter {
       case "wasmData":
         console.log("Received WASM data (main thread), initializing...");
         await init(data.wasmData);
-        this.appHandle = init_bevy_app();
+        this.appHandle = init_bevy_app(data.variantFlags >>> 0);
         console.log("App handle initialized:", this.appHandle);
         this.sendMessage({ ty: "workerIsReady" });
         break;
@@ -291,6 +293,14 @@ export class MainThreadAdapter {
         this.resetStreamingState();
         break;
 
+      case "probeStats":
+        this.sendMessage({ ty: "probeStats", stats: this.probe.stats() });
+        break;
+
+      case "probeReset":
+        this.probe.reset();
+        break;
+
       default:
         break;
     }
@@ -332,7 +342,7 @@ export class MainThreadAdapter {
     }
   }
 
-  private enterFrame(_dt: number) {
+  private enterFrame(rafTs: number) {
     this.rafId = null;
 
     if (this.appHandle === BigInt(0) || this.isStoppedRunning) return;
@@ -344,7 +354,9 @@ export class MainThreadAdapter {
         this.frameIndex >= this.frameFlag ||
         (this.frameIndex < this.frameFlag && this.frameCount % 60 == 0)
       ) {
+        const tickStart = performance.now();
         enter_frame(this.appHandle);
+        this.probe.record(rafTs, performance.now() - tickStart);
         this.frameIndex++;
       }
       this.frameCount++;

@@ -136,6 +136,11 @@ export class PanelManager {
     session.attachCanvas(this.canvas!);
     session.resizeCanvas(...this.canvasPhysicalSize());
     this.syncAllPanels();
+
+    // Perf-grid cadence probe controls (see runtime/cadence_probe.ts).
+    // __probe() logs stats for the recent frames; __probeReset() clears the buffer.
+    (window as any).__probe = () => this.session?.post({ ty: 'probeStats' });
+    (window as any).__probeReset = () => this.session?.post({ ty: 'probeReset' });
   }
 
   private handleSessionMessage(data: any): void {
@@ -157,6 +162,10 @@ export class PanelManager {
         break;
       case 'inspector_update':
         this.inspector.handleUpdate(data.update);
+        break;
+      case 'probeStats':
+        (window as any).__lastProbeStats = data.stats;
+        console.log(`[cadence probe] mode=${this.mode}`, JSON.stringify(data.stats, null, 2));
         break;
       default:
         break;

@@ -200,7 +200,11 @@ impl Default for GroupAggregate {
 pub(crate) fn close_bevy_window(mut app: Box<WorkerApp>) {
     let mut windows_state: SystemState<Query<(Entity, &mut Window)>> =
         SystemState::from_world(app.world_mut());
-    let windows = windows_state.get_mut(app.world_mut());
+    // bevy 0.19: get_mut returns Result. Without the `?`-style unwrap this silently
+    // compiles as `Result::iter`, which yields the Query rather than its rows.
+    let Ok(windows) = windows_state.get_mut(app.world_mut()) else {
+        return;
+    };
     let entity = windows.iter().last().map(|(entity, _)| entity);
     if let Some(entity) = entity {
         app.world_mut()

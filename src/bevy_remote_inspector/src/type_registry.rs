@@ -1,8 +1,18 @@
 use bevy::{
     prelude::*,
+    // bevy 0.19 moved the container `*Info` types out of the `bevy_reflect` root and
+    // into per-kind modules. `OpaqueInfo` and `TypeInfo` stayed at the root.
     reflect::{
-        serde::TypedReflectSerializer, ArrayInfo, EnumInfo, ListInfo, MapInfo, OpaqueInfo, SetInfo,
-        StructInfo, TupleInfo, TupleStructInfo, TypeInfo, TypeRegistry, VariantInfo,
+        array::ArrayInfo,
+        enums::{EnumInfo, VariantInfo},
+        list::ListInfo,
+        map::MapInfo,
+        serde::TypedReflectSerializer,
+        set::SetInfo,
+        structs::StructInfo,
+        tuple::TupleInfo,
+        tuple_struct::TupleStructInfo,
+        OpaqueInfo, TypeInfo, TypeRegistry,
     },
     utils::TypeIdMap,
 };

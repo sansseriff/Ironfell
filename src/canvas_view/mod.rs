@@ -95,7 +95,10 @@ pub fn update_canvas_window(app: &mut App) {
 
     let mut system_state: SystemState<(Query<(Entity, &mut Window)>, MessageWriter<WindowResized>)> =
         SystemState::new(app.world_mut());
-    let (mut windows, mut resize_events) = system_state.get_mut(app.world_mut());
+    // bevy 0.19: SystemState::get_mut returns Result.
+    let Ok((mut windows, mut resize_events)) = system_state.get_mut(app.world_mut()) else {
+        return;
+    };
 
     for (entity, mut window) in windows.iter_mut() {
         window.resolution.set_scale_factor(1.0);

@@ -24,7 +24,8 @@ struct FpsRoot;
 
 fn setup_ui(mut commands: Commands) {
     let font = TextFont {
-        font_size: 30.0,
+        // bevy 0.19 made text size a unit-carrying enum rather than a bare f32.
+        font_size: bevy::text::FontSize::Px(30.0),
 
         ..Default::default()
     };

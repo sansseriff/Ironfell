@@ -6,7 +6,7 @@ members = [".", "src/bevy_remote_inspector"]
 
 
 [workspace.dependencies]
-bevy = { version = "0.18", features = [
+bevy = { version = "0.19", features = [
     "std",
     "bevy_pbr",
     "bevy_gizmos",
@@ -53,14 +53,16 @@ log = { version = "*", features = [
     "release_max_level_warn",
 ] }
 bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
-bevy_vello = "0.13.1"
+# 0.13.1 requires bevy ^0.18. `main` is on bevy 0.19 + vello 0.9 (PR #223,
+# 2026-07-30) but is unreleased, so track git until a release lands.
+bevy_vello = { git = "https://github.com/linebender/bevy_vello", branch = "main" }
 
 # Pin app-surface: it must resolve to the SAME wgpu major as bevy_render, or the
-# two end up with incompatible wgpu types. bevy 0.18 -> wgpu 27, and app-surface
-# 1.8.x is the last release on wgpu ^27 (1.9+ moved to 28, 1.13 to 30).
-app-surface = { version = "=1.8.1", features = ["web_rwh"] }
+# two end up with incompatible wgpu types. bevy 0.19 -> wgpu 29, and app-surface
+# 1.12.x is the last release on wgpu ^29 (1.13 moved to 30).
+app-surface = { version = "=1.12.0", features = ["web_rwh"] }
 raw-window-handle = "0.6"
-wgpu = "27"
+wgpu = "29"
 # Web only
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.51"

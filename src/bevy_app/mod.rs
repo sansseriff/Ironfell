@@ -100,12 +100,12 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         ..default()
     });
 
-    // crates.io bevy_vello enables bevy's `bevy_winit` feature, which puts WinitPlugin
-    // into DefaultPlugins. Winit cannot run in a worker (and we drive the loop from JS
-    // via enter_frame anyway), so strip it and use our own canvas window bootstrap.
-    let mut default_plugins = default_plugins
-        .build()
-        .disable::<bevy::winit::WinitPlugin>();
+    // No WinitPlugin to disable here: bevy_vello `main` no longer force-enables bevy's
+    // `bevy_winit` feature, so it is not in the graph at all. Winit could not run in a
+    // worker anyway (the frame loop is driven from JS via enter_frame), and windows come
+    // from our own canvas bootstrap. If a future dependency drags bevy_winit back in,
+    // this is where it must be disabled again.
+    let mut default_plugins = default_plugins.build();
 
     // Perf-grid cell B2 (`?bevy=nolog`): LogPlugin installs tracing-wasm on the web,
     // which emits performance.mark/measure for every system span every frame.

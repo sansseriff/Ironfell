@@ -16,7 +16,14 @@ fi
 # -------------------------------------------------------------------------------
 
 
-RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none" cargo build \
+# `+simd128` is load-bearing for the sparse-strips work: `fearless_simd` (used by
+# vello_common) silently selects a scalar fallback without it, so any hybrid CPU
+# measurement taken without this flag is not measuring the renderer that ships.
+# It also has to be here rather than in .cargo/config.toml, because this script
+# replaces RUSTFLAGS wholesale and cargo does not merge the two.
+# Baseline SIMD has been available in every current browser for years; verify with
+# `rustc --print cfg --target wasm32-unknown-unknown -Ctarget-feature=+simd128`.
+RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none -Ctarget-feature=+simd128" cargo build \
   -Z build-std=core,alloc,panic_abort,std \
   -Z build-std-features=optimize_for_size \
   --no-default-features --profile wasm-release \
@@ -30,7 +37,7 @@ done
 
 echo "starting optimize"
 # Optimize wasm package size
-wasm-opt --enable-bulk-memory --enable-nontrapping-float-to-int -Oz --output src-ui/wasm/ironfell_bg.wasm opt/ironfell_bg.wasm 
+wasm-opt --enable-bulk-memory --enable-nontrapping-float-to-int --enable-simd -Oz --output src-ui/wasm/ironfell_bg.wasm opt/ironfell_bg.wasm 
 
 # print "starting copy"
 echo "starting copy"

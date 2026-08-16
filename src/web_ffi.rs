@@ -127,7 +127,13 @@ pub fn is_preparation_completed(ptr: u64) -> u32 {
 
         let mut windows_system_state: SystemState<Query<Entity, With<PrimaryWindow>>> =
             SystemState::from_world(app.world_mut());
-        if let Ok(entity) = windows_system_state.get(app.world()).single() {
+        // bevy 0.19: SystemState::get returns Result, and so does Query::single —
+        // with different error types, hence the two-step unwrap.
+        if let Some(entity) = windows_system_state
+            .get(app.world())
+            .ok()
+            .and_then(|windows| windows.single().ok())
+        {
             app.window = entity;
             return 1;
         }
@@ -238,6 +244,8 @@ pub fn mouse_wheel(ptr: u64, delta_x: f32, delta_y: f32, delta_mode: u32) {
         x: delta_x,
         y: delta_y,
         window: app.window,
+        // bevy 0.19 added a touch phase. Per its own docs, a mouse is always Moved.
+        phase: bevy::input::touch::TouchPhase::Moved,
     };
     app.world_mut().write_message(event);
 

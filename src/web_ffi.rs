@@ -145,7 +145,7 @@ pub fn set_mouse_position(ptr: u64, x: f32, y: f32) {
         position,
         delta: None,
     };
-    app.world_mut().send_event(cursor_move);
+    app.world_mut().write_message(cursor_move);
     // Note: No activity trigger - this will be handled by enter_frame
 }
 
@@ -160,7 +160,7 @@ pub fn mouse_move(ptr: u64, x: f32, y: f32) {
         position,
         delta: None,
     };
-    app.world_mut().send_event(cursor_move);
+    app.world_mut().write_message(cursor_move);
 
     let mut active_info = app
         .world_mut()
@@ -182,7 +182,7 @@ pub fn enter_frame_with_mouse(ptr: u64, mouse_x: f32, mouse_y: f32, has_mouse_up
             position,
             delta: None,
         };
-        app.world_mut().send_event(cursor_move);
+        app.world_mut().write_message(cursor_move);
     }
     
     // Get a mutable borrow of the Rust object pointed to by the pointer
@@ -239,7 +239,7 @@ pub fn mouse_wheel(ptr: u64, delta_x: f32, delta_y: f32, delta_mode: u32) {
         y: delta_y,
         window: app.window,
     };
-    app.world_mut().send_event(event);
+    app.world_mut().write_message(event);
 
     let mut active_info = app
         .world_mut()
@@ -268,7 +268,7 @@ pub fn left_bt_down(ptr: u64) {
         state: ButtonState::Pressed,
         window: app.window,
     };
-    app.world_mut().send_event(event);
+    app.world_mut().write_message(event);
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
@@ -289,7 +289,7 @@ pub fn left_bt_up(ptr: u64) {
         state: ButtonState::Released,
         window: app.window,
     };
-    app.world_mut().send_event(event);
+    app.world_mut().write_message(event);
 
     // If you need to modify active_info again, get it again
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
@@ -306,7 +306,7 @@ pub fn right_bt_down(ptr: u64) {
         state: ButtonState::Pressed,
         window: app.window,
     };
-    app.world_mut().send_event(event);
+    app.world_mut().write_message(event);
     let mut active_info = app
         .world_mut()
         .get_resource_mut::<ActivityControl>()
@@ -323,7 +323,7 @@ pub fn right_bt_up(ptr: u64) {
         state: ButtonState::Released,
         window: app.window,
     };
-    app.world_mut().send_event(event);
+    app.world_mut().write_message(event);
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
@@ -376,7 +376,7 @@ pub fn key_down(ptr: u64, key: String) {
         };
 
         // info!("sending key event: {:?}", event);
-        app.world_mut().send_event(event);
+        app.world_mut().write_message(event);
     }
 
     // Original ActiveInfo update (can be removed if camera controller fully relies on ButtonInput)
@@ -399,7 +399,7 @@ pub fn key_up(ptr: u64, key: String) {
             text: None,
             repeat: false,
         };
-        app.world_mut().send_event(event);
+        app.world_mut().write_message(event);
     }
 
     // Original ActiveInfo update (can be removed if camera controller fully relies on ButtonInput)

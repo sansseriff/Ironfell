@@ -72,7 +72,7 @@ pub fn create_canvas_window(app: &mut App, view: ViewObj) -> Entity {
         .id();
 
     app.world_mut()
-        .send_event(WindowCreated { window: entity });
+        .write_message(WindowCreated { window: entity });
     app.insert_non_send_resource(ActiveCanvas {
         view,
         window: entity,
@@ -93,7 +93,7 @@ pub fn update_canvas_window(app: &mut App) {
         return;
     };
 
-    let mut system_state: SystemState<(Query<(Entity, &mut Window)>, EventWriter<WindowResized>)> =
+    let mut system_state: SystemState<(Query<(Entity, &mut Window)>, MessageWriter<WindowResized>)> =
         SystemState::new(app.world_mut());
     let (mut windows, mut resize_events) = system_state.get_mut(app.world_mut());
 

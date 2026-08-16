@@ -1,12 +1,12 @@
+# Opt-in for `panic = "immediate-abort"` in [profile.wasm-release] (nightly-only).
+cargo-features = ["panic-immediate-abort"]
+
 [workspace]
 members = [".", "src/bevy_remote_inspector"]
-# The bevy_vello fork submodule is no longer a dependency (crates.io bevy_vello is used);
-# it stays on disk until its branch is pushed, so keep cargo from treating it as a member.
-exclude = ["src/bevy_vello"]
 
 
 [workspace.dependencies]
-bevy = { version = "0.16", features = [
+bevy = { version = "0.18", features = [
     "std",
     "bevy_pbr",
     "bevy_gizmos",
@@ -24,6 +24,9 @@ bevy = { version = "0.16", features = [
     "bevy_scene",
     "bevy_gltf",
     "bevy_picking",
+    # bevy 0.18 no longer picks a zstd backend for you (used by KTX2/basis textures).
+    # zstd_rust is the pure-Rust one — no C toolchain needed for the wasm build.
+    "zstd_rust",
 ], default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -50,14 +53,14 @@ log = { version = "*", features = [
     "release_max_level_warn",
 ] }
 bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
-bevy_vello = "0.10.3"
+bevy_vello = "0.13.1"
 
-# pin app-surface. It pulls in newer version of wgu and breaks wasm-bindgen
-app-surface = { version = "=1.5.3", features = ["web_rwh"] }
+# Pin app-surface: it must resolve to the SAME wgpu major as bevy_render, or the
+# two end up with incompatible wgpu types. bevy 0.18 -> wgpu 27, and app-surface
+# 1.8.x is the last release on wgpu ^27 (1.9+ moved to 28, 1.13 to 30).
+app-surface = { version = "=1.8.1", features = ["web_rwh"] }
 raw-window-handle = "0.6"
-wgpu = "24"
-uuid = { version = "1.7.0", features = ["v4"] }
-rand = "0.8"
+wgpu = "27"
 # Web only
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.51"
@@ -87,7 +90,10 @@ js-sys = "0.3.78"
 inherits = "release"
 opt-level = "z"
 lto = "fat"
-panic = "abort"
+# `panic_immediate_abort` used to be a -Z build-std-features flag; newer nightlies
+# promoted it to a real panic strategy, so it is selected here instead. Still
+# requires -Z build-std (see build-wasm.sh) to rebuild core with it.
+panic = "immediate-abort"
 codegen-units = 1
 incremental = false
 debug = false

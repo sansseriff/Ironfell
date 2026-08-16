@@ -1,6 +1,9 @@
 use bevy::{
     app::{FixedMainScheduleOrder, MainScheduleOrder},
-    ecs::schedule::{InternedScheduleLabel, NodeId, ScheduleLabel, graph::Direction as BevyDirection},
+    ecs::schedule::{
+        InternedScheduleLabel, NodeId, ScheduleGraph, ScheduleLabel,
+        graph::Direction as BevyDirection,
+    },
     prelude::*,
     reflect::TypeRegistry,
 };
@@ -90,38 +93,43 @@ pub struct ScheduleInfo {
 
 impl ScheduleInfo {
     pub fn from_schedule(schedule: &Schedule, kind: ScheduleKind) -> Self {
+        // bevy 0.18: `Schedule::systems()` yields `SystemKey` rather than `NodeId`.
         let systems = schedule
             .systems()
             .unwrap()
-            .map(|(id, sys)| SystemInfo {
-                id: get_node_id(&id),
+            .map(|(key, sys)| SystemInfo {
+                id: get_node_id(&NodeId::System(key)),
                 name: sys.name().to_string(),
             })
             .collect();
         let g = schedule.graph();
+        // bevy 0.18: system sets moved to a public `system_sets` container field,
+        // keyed by `SystemSetKey`.
         let sets = g
-            .system_sets()
-            .filter_map(|(id, name, _)| {
-                if name.system_type().is_some() {
+            .system_sets
+            .iter()
+            .filter_map(|(key, set, _)| {
+                if set.system_type().is_some() {
                     return None;
                 }
 
                 Some(SetInfo {
-                    id: get_node_id(&id),
-                    name: format!("{:?}", name),
+                    id: get_node_id(&NodeId::Set(key)),
+                    name: format!("{:?}", set),
                 })
             })
             .collect();
 
+        // bevy 0.18: `Dag::cached_topsort()` became `get_toposort()`, which returns
+        // `None` while the graph is dirty (i.e. before the schedule is built).
         let hierarchies = g
             .hierarchy()
-            .cached_topsort()
+            .get_toposort()
+            .unwrap_or(&[])
             .iter()
             .filter_map(|n| {
-                if let Some(set) = g.get_set_at(*n) {
-                    if set.system_type().is_some() {
-                        return None;
-                    }
+                if is_system_type_set(g, n) {
+                    return None;
                 }
 
                 let outgoing_neighbors = g
@@ -129,10 +137,8 @@ impl ScheduleInfo {
                     .graph()
                     .neighbors_directed(*n, BevyDirection::Outgoing)
                     .filter_map(|n| {
-                        if let Some(set) = g.get_set_at(n) {
-                            if set.system_type().is_some() {
-                                return None;
-                            }
+                        if is_system_type_set(g, &n) {
+                            return None;
                         }
 
                         Some(get_node_id(&n))
@@ -144,17 +150,15 @@ impl ScheduleInfo {
                     .graph()
                     .neighbors_directed(*n, BevyDirection::Incoming)
                     .filter_map(|n| {
-                        if let Some(set) = g.get_set_at(n) {
-                            if set.system_type().is_some() {
-                                return None;
-                            }
+                        if is_system_type_set(g, &n) {
+                            return None;
                         }
 
                         Some(get_node_id(&n))
                     })
                     .collect::<Vec<_>>();
 
-                Some((get_node_id(&n), outgoing_neighbors, incoming_neighbors))
+                Some((get_node_id(n), outgoing_neighbors, incoming_neighbors))
             })
             .collect();
 
@@ -204,7 +208,8 @@ impl TrackedData {
         }
 
         for label in main_order.labels.iter() {
-            if label.0.as_dyn_eq().dyn_eq(RunFixedMainLoop.as_dyn_eq()) {
+            // bevy 0.18 changed the `DynEq` signature; interned labels compare directly.
+            if *label == RunFixedMainLoop.intern() {
                 for schedule in fixed_main_order.labels.iter() {
                     let Some(schedule) = schedules.get(*schedule) else {
                         continue;
@@ -218,7 +223,7 @@ impl TrackedData {
                 let schedule = schedules.get(*label);
                 if let Some(schedule) = schedule {
                     schedule_infos.push(ScheduleInfo::from_schedule(schedule, ScheduleKind::Main));
-                } else if label.0.as_dyn_eq().dyn_eq(Update.as_dyn_eq()) {
+                } else if *label == Update.intern() {
                     schedule_infos.push(update_schedule.info.clone());
                 }
             }
@@ -228,6 +233,15 @@ impl TrackedData {
             schedules: schedule_infos,
         });
     }
+}
+
+/// bevy 0.18 removed `ScheduleGraph::get_set_at`; set lookup now goes through the
+/// `system_sets` container and is keyed by `SystemSetKey`. Systems are never
+/// system-type sets, so a non-set node is always `false`.
+fn is_system_type_set(g: &ScheduleGraph, node: &NodeId) -> bool {
+    node.as_set()
+        .and_then(|key| g.system_sets.get(key))
+        .is_some_and(|set| set.system_type().is_some())
 }
 
 // Dirty hack to get the node id

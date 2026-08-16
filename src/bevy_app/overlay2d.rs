@@ -1,10 +1,10 @@
 use bevy::input::mouse::MouseButtonInput; // added for button event reader
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
+use crate::bevy_app::screen_space::ScreenSpaceScene;
 use bevy_vello::prelude::*;
 // Bring kurbo trait methods into scope for PathSeg operations (arclen, inv_arclen, etc.)
 use bevy_vello::prelude::kurbo::{ParamCurve, ParamCurveArclen};
-use bevy_vello::prelude::VelloScreenSpace;
 
 use crate::panels::{Panels, VIEWER_PANEL, overlay_affine, overlay_world_from_screen};
 
@@ -168,7 +168,7 @@ pub(crate) struct SelectionMarqueeScene;
 // -------------------------------------------------------------------------------------------------
 
 pub(crate) fn simple_mouse_state_system(
-    mut events: EventReader<MouseButtonInput>,
+    mut events: MessageReader<MouseButtonInput>,
     mut mouse: ResMut<SimpleMouseState>,
 ) {
     // Reset per-frame transition flags
@@ -202,17 +202,19 @@ pub(crate) fn setup_2d_overlay(
     // NOTE: scenes must carry the vello camera's RenderLayers (layer 1) or upstream
     // bevy_vello's extract_scenes culls them (default layer 0 doesn't intersect).
     commands.spawn((
-        VelloScene::new(),
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         AnimatedOverlayScene,
-        VelloScreenSpace,
         RenderLayers::layer(1),
     ));
 
     // Static scene for draggable square (unaffected by animated transform changes)
     commands.spawn((
-        VelloScene::new(),
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         DraggableOverlayScene,
-        VelloScreenSpace,
         RenderLayers::layer(1),
     ));
 
@@ -221,13 +223,14 @@ pub(crate) fn setup_2d_overlay(
         commands.insert_resource(AnimatedBezierPath::generate());
     }
     commands.spawn((
-        VelloScene::new(),
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         AnimatedBezierStrokeScene,
-        VelloScreenSpace,
         RenderLayers::layer(1),
     ));
 
-    // SPAWN many mini square entities (NO per-entity VelloScene now)
+    // SPAWN many mini square entities (NO per-entity VelloScene2d now)
     let mut seed: u32 = 0x91E2_33AB;
     fn next(seed: &mut u32) -> f32 {
         *seed ^= *seed << 13;
@@ -255,9 +258,10 @@ pub(crate) fn setup_2d_overlay(
 
     // Shared batched scene entity for all mini squares
     commands.spawn((
-        VelloScene::new(),
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         MiniSquaresScene,
-        VelloScreenSpace,
         RenderLayers::layer(1),
     ));
     commands.insert_resource(MiniSquaresDirty(true));
@@ -265,17 +269,18 @@ pub(crate) fn setup_2d_overlay(
     // Marquee scene + resource (unchanged)
     commands.insert_resource(SelectionMarquee::default());
     commands.spawn((
-        VelloScene::new(),
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         SelectionMarqueeScene,
-        VelloScreenSpace,
         RenderLayers::layer(1),
     ));
 }
 
 pub(crate) fn animate_2d_overlay(
-    mut query_scene: Query<&mut VelloScene, (With<AnimatedOverlayScene>, Without<AnimatedBezierStrokeScene>)>,
+    mut query_scene: Query<&mut VelloScene2d, (With<AnimatedOverlayScene>, Without<AnimatedBezierStrokeScene>)>,
     mut bezier_scene: Query<
-        &mut VelloScene,
+        &mut VelloScene2d,
         (
             With<AnimatedBezierStrokeScene>,
             Without<AnimatedOverlayScene>,
@@ -316,7 +321,7 @@ pub(crate) fn animate_2d_overlay(
         * kurbo::Affine::rotate(rotation)
         * kurbo::Affine::scale(scale);
 
-    scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &clip);
+    scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &clip);
     scene.fill(
         peniko::Fill::NonZero,
         anim,
@@ -334,7 +339,7 @@ pub(crate) fn animate_2d_overlay(
         if target_len <= 0.0 {
             return;
         }
-        scene_stroke.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &clip);
+        scene_stroke.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &clip);
         if (target_len - bezier.total_length).abs() < f64::EPSILON {
             let stroke_style = kurbo::Stroke::new(bezier.stroke_width as f64);
             scene_stroke.stroke(
@@ -421,7 +426,7 @@ pub(crate) fn animate_2d_overlay(
 
 pub(crate) fn update_draggable_square_state(
     mut state: ResMut<DraggableSquare>,
-    mut cursor_events: EventReader<CursorMoved>,
+    mut cursor_events: MessageReader<CursorMoved>,
     mouse: Res<SimpleMouseState>,
     panels: Res<Panels>,
 ) {
@@ -472,7 +477,7 @@ pub(crate) fn update_draggable_square_state(
 pub(crate) fn update_mini_square_entities(
     mut q_squares: Query<(&mut Transform, &MiniSquare, &mut MiniSquareState)>,
     mut marquee_res: ResMut<SelectionMarquee>,
-    mut cursor_events: EventReader<CursorMoved>,
+    mut cursor_events: MessageReader<CursorMoved>,
     mouse: Res<SimpleMouseState>,
     panels: Res<Panels>,
     mut dirty: ResMut<MiniSquaresDirty>,
@@ -638,7 +643,7 @@ pub(crate) fn update_mini_square_entities(
 // -------------------------------------------------------------------------------------------------
 
 pub(crate) fn render_draggable_square(
-    mut scenes: Query<&mut VelloScene, With<DraggableOverlayScene>>,
+    mut scenes: Query<&mut VelloScene2d, With<DraggableOverlayScene>>,
     state: Res<DraggableSquare>,
     panels: Res<Panels>,
 ) {
@@ -663,7 +668,7 @@ pub(crate) fn render_draggable_square(
         (state.position.x + half.x) as f64,
         (state.position.y + half.y) as f64,
     );
-    scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
+    scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
     scene.fill(
         peniko::Fill::NonZero,
         base,
@@ -676,7 +681,7 @@ pub(crate) fn render_draggable_square(
 
 pub(crate) fn render_mini_squares(
     mut dirty: ResMut<MiniSquaresDirty>,
-    mut q_scene: Query<&mut VelloScene, With<MiniSquaresScene>>,
+    mut q_scene: Query<&mut VelloScene2d, With<MiniSquaresScene>>,
     q_squares: Query<(&Transform, &MiniSquare, &MiniSquareState)>,
     panels: Res<Panels>,
 ) {
@@ -695,7 +700,7 @@ pub(crate) fn render_mini_squares(
     // Canonical unit rect
     const UNIT_RECT: kurbo::Rect = kurbo::Rect::new(0.0, 0.0, 1.0, 1.0);
 
-    scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
+    scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
     for (tr, sq, st) in q_squares.iter() {
         let center = tr.translation.truncate();
         let half = sq.size * 0.5;
@@ -720,7 +725,7 @@ pub(crate) fn render_mini_squares(
 
 pub(crate) fn render_selection_marquee(
     marquee_res: Res<SelectionMarquee>,
-    mut q_scene: Query<&mut VelloScene, With<SelectionMarqueeScene>>,
+    mut q_scene: Query<&mut VelloScene2d, With<SelectionMarqueeScene>>,
     panels: Res<Panels>,
 ) {
     if marquee_res.is_changed() || panels.is_changed() {
@@ -732,7 +737,7 @@ pub(crate) fn render_selection_marquee(
                 let min = a.min(b);
                 let max = a.max(b);
                 let rect = kurbo::Rect::new(min.x as f64, min.y as f64, max.x as f64, max.y as f64);
-                scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
+                scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
                 scene.fill(
                     peniko::Fill::NonZero,
                     base,

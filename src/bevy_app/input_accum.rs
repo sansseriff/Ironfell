@@ -22,7 +22,7 @@ impl Default for AccumulatedScroll {
 }
 
 pub(crate) fn accumulate_cursor_delta_system(
-    mut cursor_moved_events: EventReader<CursorMoved>,
+    mut cursor_moved_events: MessageReader<CursorMoved>,
     mut accumulated_delta: ResMut<AccumulatedCursorDelta>,
 ) {
     accumulated_delta.delta = Vec2::ZERO;
@@ -36,7 +36,7 @@ pub(crate) fn accumulate_cursor_delta_system(
 }
 
 pub(crate) fn accumulate_custom_scroll_system(
-    mut scroll_events: EventReader<MouseWheel>,
+    mut scroll_events: MessageReader<MouseWheel>,
     mut accumulated_scroll: ResMut<AccumulatedScroll>,
 ) {
     accumulated_scroll.delta = Vec2::ZERO;

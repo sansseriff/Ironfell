@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
+use crate::bevy_app::screen_space::ScreenSpaceScene;
 use bevy_vello::prelude::*;
 
 use crate::panels::{Panels, TIMELINE_PANEL};
@@ -53,20 +54,23 @@ pub struct TimelinePlayheadScene;
 fn setup_timeline_scenes(mut commands: Commands) {
     // Layer 1 = the vello camera's RenderLayers; scenes on other layers are culled.
     commands.spawn((
-        VelloScene::new(),
-        VelloScreenSpace,
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         RenderLayers::layer(1),
         TimelineBackgroundScene,
     ));
     commands.spawn((
-        VelloScene::new(),
-        VelloScreenSpace,
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         RenderLayers::layer(1),
         TimelineGridScene,
     ));
     commands.spawn((
-        VelloScene::new(),
-        VelloScreenSpace,
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         RenderLayers::layer(1),
         TimelinePlayheadScene,
     ));
@@ -87,7 +91,7 @@ pub fn update_timeline_view(mut timeline: ResMut<TimelineState>, time: Res<Time>
 /// Render the timeline background, grid and playhead into the timeline panel rect.
 pub fn render_timeline_grid(
     mut bg_scene: Query<
-        &mut VelloScene,
+        &mut VelloScene2d,
         (
             With<TimelineBackgroundScene>,
             Without<TimelineGridScene>,
@@ -95,11 +99,11 @@ pub fn render_timeline_grid(
         ),
     >,
     mut grid_scene: Query<
-        &mut VelloScene,
+        &mut VelloScene2d,
         (With<TimelineGridScene>, Without<TimelinePlayheadScene>),
     >,
     mut playhead_scene: Query<
-        &mut VelloScene,
+        &mut VelloScene2d,
         (With<TimelinePlayheadScene>, Without<TimelineGridScene>),
     >,
     timeline: Res<TimelineState>,
@@ -140,7 +144,7 @@ pub fn render_timeline_grid(
     // Render grid
     if let Ok(mut scene) = grid_scene.single_mut() {
         scene.reset();
-        scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &clip);
+        scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &clip);
 
         // Draw time grid lines across the panel width
         let time_per_pixel: f64 = timeline.duration / width;
@@ -180,7 +184,7 @@ pub fn render_timeline_grid(
     // Render playhead
     if let Ok(mut scene) = playhead_scene.single_mut() {
         scene.reset();
-        scene.push_layer(peniko::Mix::Clip, 1.0, kurbo::Affine::IDENTITY, &clip);
+        scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &clip);
 
         let time_per_pixel: f64 = timeline.duration / width;
         let playhead_x: f64 = left + (timeline.current_time / time_per_pixel);

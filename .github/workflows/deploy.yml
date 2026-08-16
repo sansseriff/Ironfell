@@ -25,18 +25,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       # Removed the Setup Pages step as it's not required and causing errors
 
+      # rust-toolchain.toml is the single source of truth for the toolchain, its
+      # components (rust-src, needed by -Z build-std) and the wasm32 target — same
+      # philosophy as the wasm-bindgen/Cargo.lock sync below. `rustup show` reads
+      # that file and installs exactly what it names, so bumping the toolchain is a
+      # one-line edit there with nothing to keep in sync here.
+      # (The old actions-rs/toolchain action is archived and pinned the version a
+      # second time, so it has been dropped.)
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly-2025-07-26
-          target: wasm32-unknown-unknown
-          override: true
-          components: rust-src
+        run: rustup show
 
       # Cargo.lock is the single source of truth for the wasm-bindgen version.
       # Derive the CLI version from it so the runner always matches the crate the

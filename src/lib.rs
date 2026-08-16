@@ -204,7 +204,7 @@ pub(crate) fn close_bevy_window(mut app: Box<WorkerApp>) {
     let entity = windows.iter().last().map(|(entity, _)| entity);
     if let Some(entity) = entity {
         app.world_mut()
-            .send_event(WindowCloseRequested { window: entity });
+            .write_message(WindowCloseRequested { window: entity });
         windows_state.apply(app.world_mut());
         app.update();
     }

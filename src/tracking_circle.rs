@@ -3,7 +3,7 @@ use bevy::{
     prelude::*,
 };
 
-use bevy::render::view::RenderLayers;
+use bevy::camera::visibility::RenderLayers;
 
 pub(crate) struct TrackingCircle;
 
@@ -36,7 +36,7 @@ fn add_circle(
 
 fn update_circle_position(
     mut query: Query<&mut Transform, With<MyCircle>>,
-    mut cursor_moved_events: EventReader<CursorMoved>,
+    mut cursor_moved_events: MessageReader<CursorMoved>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
 ) {
     if !cursor_moved_events.is_empty() {

@@ -2,11 +2,9 @@ use crate::ActivityControl;
 use crate::camera_controller::CameraController;
 use bevy::math::bounding::{Aabb3d, Bounded3d};
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
-use bevy::render::{
-    render_asset::RenderAssetUsages,
-    render_resource::{Extent3d, TextureDimension, TextureFormat},
-};
+use bevy::camera::visibility::RenderLayers;
+use bevy::asset::RenderAssetUsages;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::ops::Deref;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 

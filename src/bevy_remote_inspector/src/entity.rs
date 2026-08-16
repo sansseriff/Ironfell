@@ -76,7 +76,11 @@ impl TrackedData {
         }
 
         let this_run = world.change_tick();
-        for entity_ref in world.iter_entities() {
+        // bevy 0.18 removed `World::iter_entities`; an `EntityRef` query is the
+        // replacement. The loop body only reads the world, so the immutable
+        // reborrow below is fine.
+        let mut entity_query = world.query::<EntityRef>();
+        for entity_ref in entity_query.iter(world) {
             let id = entity_ref.id();
             let entity_disbled_components = ctx.disabled_components.0.get_mut(&entity_ref.id());
             if let Some(component_ids) = self.entities.get_mut(&id) {
@@ -86,12 +90,7 @@ impl TrackedData {
                 // Find removed components and collect them
                 let removed_component_ids: Vec<_> = component_ids
                     .iter()
-                    .filter(|&id| {
-                        archetype
-                            .components()
-                            .find(|component_id| component_id == id)
-                            .is_none()
-                    })
+                    .filter(|&id| !archetype.components().contains(id))
                     .map(|id| {
                         let is_disabled = entity_disbled_components
                             .as_ref()
@@ -108,7 +107,7 @@ impl TrackedData {
                     component_ids.remove(&component_id);
                 }
 
-                for component_id in entity_ref.archetype().components() {
+                for component_id in entity_ref.archetype().components().iter().copied() {
                     let Some(ticks) = entity_ref.get_change_ticks_by_id(component_id) else {
                         continue;
                     };
@@ -184,7 +183,7 @@ impl TrackedData {
             } else {
                 // Untracked entity, serialize all component
                 self.entities
-                    .insert(id, entity_ref.archetype().components().collect());
+                    .insert(id, entity_ref.archetype().components().iter().copied().collect());
                 let disabled_componentsi = entity_disbled_components.map(|components| {
                     let iter = components.iter().map(|(component_id, value)| {
                         let serialized = {
@@ -201,7 +200,12 @@ impl TrackedData {
                     return Box::new(iter) as Box<dyn Iterator<Item = EntityMutationChange>>;
                 });
 
-                let changes = entity_ref.archetype().components().map(|component_id| {
+                let changes = entity_ref
+                    .archetype()
+                    .components()
+                    .iter()
+                    .copied()
+                    .map(|component_id| {
                     let component_info = world.components().get_info(component_id).unwrap();
                     let serialized = serialize_component(
                         component_id,

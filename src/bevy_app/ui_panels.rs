@@ -5,7 +5,8 @@
 //! (widgets as entities, not windows).
 
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
+use crate::bevy_app::screen_space::ScreenSpaceScene;
 use bevy_vello::prelude::*;
 
 use crate::panels::Panels;
@@ -17,8 +18,9 @@ pub struct UiPanelsScene;
 
 pub fn setup_ui_panels(mut commands: Commands) {
     commands.spawn((
-        VelloScene::new(),
-        VelloScreenSpace,
+        VelloScene2d::new(),
+        ScreenSpaceScene,
+        NoFrustumCulling,
         RenderLayers::layer(1),
         UiPanelsScene,
     ));
@@ -27,7 +29,7 @@ pub fn setup_ui_panels(mut commands: Commands) {
 /// Redraw the gray backgrounds whenever panel layout changes (rects are static
 /// between layout changes, so the encoded scene is reused frame to frame).
 pub fn render_ui_panels(
-    mut q_scene: Query<&mut VelloScene, With<UiPanelsScene>>,
+    mut q_scene: Query<&mut VelloScene2d, With<UiPanelsScene>>,
     panels: Res<Panels>,
 ) {
     if !panels.is_changed() {

@@ -27,7 +27,7 @@ impl Plugin for RemoteInspectorPlugin {
         {
             let id = app
                 .world_mut()
-                .register_component::<bevy::render::view::ViewVisibility>(); // this component changed every frame and very cheep to compare
+                .register_component::<bevy::prelude::ViewVisibility>(); // this component changed every frame and very cheep to compare
             deep_compare_components.ids.insert(id);
         }
 

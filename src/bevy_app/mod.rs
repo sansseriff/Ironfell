@@ -7,12 +7,15 @@ mod overlay2d;
 mod picking;
 mod pointer;
 mod scene3d;
+mod screen_space;
 mod timeline;
 mod ui_panels;
+mod vello_world_demo;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
+use bevy::camera::visibility::RenderLayers;
+use bevy::transform::TransformSystems;
 use bevy_vello::{VelloPlugin, prelude::*};
 
 pub use input_accum::*;
@@ -29,7 +32,9 @@ use overlay2d::{
 use picking::{pick_overlay_2d_system, pick_world_3d_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
 use scene3d::{render_active_shapes, rotate_3d_shapes, setup_3d_scene, update_aabbes};
+use screen_space::sync_screen_space_transforms;
 use timeline::TimelinePlugin;
+use vello_world_demo::{animate_world_space_demo, setup_world_space_demo};
 
 use crate::{
     WorkerApp,
@@ -162,24 +167,33 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     app.add_systems(Startup, setup_3d_scene);
     app.add_systems(Update, (
         apply_viewer_viewport, 
-        rotate_3d_shapes, 
-        update_aabbes
+        rotate_3d_shapes,
     ));
 
     // --- STEP 4: 2D overlay + UI panels + remaining Update systems -----------
-    app.add_systems(Startup, (setup_2d_overlay, ui_panels::setup_ui_panels));
+    app.add_systems(
+        Startup,
+        (
+            setup_2d_overlay,
+            ui_panels::setup_ui_panels,
+            // World-space counterpart to the screen-space overlays above; see
+            // vello_world_demo for what the two coordinate spaces imply.
+            setup_world_space_demo,
+        ),
+    );
     app.add_systems(
         Update,
         (
             ui_panels::render_ui_panels,
+            animate_world_space_demo,
             inspector_continuous_streaming_system,
             animate_2d_overlay, // TODO: refactor overlay interaction to new picking path
             simple_mouse_state_system,
-            update_draggable_square_state,
-            render_draggable_square,
-            update_mini_square_entities,
-            render_mini_squares,
-            render_selection_marquee
+            update_draggable_square_state.after(simple_mouse_state_system),
+            render_draggable_square.after(update_draggable_square_state),
+            update_mini_square_entities.after(simple_mouse_state_system),
+            render_mini_squares.after(update_mini_square_entities),
+            render_selection_marquee.after(update_mini_square_entities),
         ),
     );
 
@@ -189,21 +203,31 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         (
             accumulate_cursor_delta_system,
             accumulate_custom_scroll_system,
-            pointer_collect_system,
-            pick_overlay_2d_system,
-            pick_world_3d_system,
-            resolve_primary_hit_system,
+            pointer_collect_system.after(accumulate_cursor_delta_system),
+            pick_overlay_2d_system.after(pointer_collect_system),
+            pick_world_3d_system.after(pointer_collect_system),
+            resolve_primary_hit_system
+                .after(pick_overlay_2d_system)
+                .after(pick_world_3d_system),
         ),
     );
     app.add_systems(
         PostUpdate,
         (
             interaction_decide_system,
-            drag_apply_system,
-            selection_reflect_system,
-            outbound_hover_system,
-            outbound_selection_system,
-            render_active_shapes,
+            // Must land before propagation: bevy_vello extracts scenes via
+            // GlobalTransform, so a correction written after this would be a frame late.
+            sync_screen_space_transforms.before(TransformSystems::Propagate),
+            drag_apply_system
+                .after(interaction_decide_system)
+                .before(TransformSystems::Propagate),
+            update_aabbes.after(drag_apply_system),
+            selection_reflect_system.after(interaction_decide_system),
+            outbound_hover_system.after(interaction_decide_system),
+            outbound_selection_system.after(interaction_decide_system),
+            render_active_shapes
+                .after(drag_apply_system)
+                .after(selection_reflect_system),
         ),
     );
     // ========================== END RE-ENABLE LADDER ===========================
@@ -303,7 +327,7 @@ fn apply_viewer_viewport(
     let w = (rect.w.max(1.0) as u32).min(win_w - x).max(1);
     let h = (rect.h.max(1.0) as u32).min(win_h - y).max(1);
 
-    let viewport = bevy::render::camera::Viewport {
+    let viewport = bevy::camera::Viewport {
         physical_position: UVec2::new(x, y),
         physical_size: UVec2::new(w, h),
         ..default()

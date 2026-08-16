@@ -18,7 +18,7 @@ fi
 
 RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none" cargo build \
   -Z build-std=core,alloc,panic_abort,std \
-  -Z build-std-features=optimize_for_size,panic_immediate_abort \
+  -Z build-std-features=optimize_for_size \
   --no-default-features --profile wasm-release \
   --target wasm32-unknown-unknown
 

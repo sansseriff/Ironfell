@@ -5,8 +5,8 @@ use crate::bevy_app::AccumulatedCursorDelta;
 
 // Collect pointer state from input events and accumulated deltas.
 pub fn pointer_collect_system(
-    mut cursor_events: EventReader<CursorMoved>,
-    mut button_events: EventReader<MouseButtonInput>,
+    mut cursor_events: MessageReader<CursorMoved>,
+    mut button_events: MessageReader<MouseButtonInput>,
     keys: Res<ButtonInput<KeyCode>>,
     accumulated: Res<AccumulatedCursorDelta>,
     mut pointer: ResMut<crate::PointerState>,

@@ -19,7 +19,13 @@ impl TrackedData {
         let components = world.components();
         
         // Iterate through component registry using component_ids
-        for component_id in world.archetypes().iter().flat_map(|archetype| archetype.components()) {
+        // bevy 0.18: `Archetype::components()` returns `&[ComponentId]` rather than an
+        // iterator of `ComponentId`, so copy out of the slice.
+        for component_id in world
+            .archetypes()
+            .iter()
+            .flat_map(|archetype| archetype.components().iter().copied())
+        {
             let Some(info) = components.get_info(component_id) else {
                 continue;
             };
@@ -73,7 +79,8 @@ impl InspectorComponentInfo {
     ) -> Self {
         Self {
             id: component_info.id().index(),
-            name: component_info.name().into(),
+            // bevy 0.18: `ComponentInfo::name()` returns `DebugName`, which is Display.
+            name: component_info.name().to_string(),
             reflected,
             required_components,
         }

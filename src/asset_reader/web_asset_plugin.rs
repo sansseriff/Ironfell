@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::asset_reader::web_asset_source::*;
-use bevy::asset::io::AssetSource;
+use bevy::asset::io::AssetSourceBuilder;
 
 /// Add this plugin to bevy to support loading http and https urls.
 ///
@@ -25,13 +25,15 @@ pub struct WebAssetPlugin;
 
 impl Plugin for WebAssetPlugin {
     fn build(&self, app: &mut App) {
+        // bevy 0.18 removed `AssetSource::build()`; the builder now takes its reader
+        // up front via `AssetSourceBuilder::new`.
         app.register_asset_source(
             "http",
-            AssetSource::build().with_reader(|| Box::new(WebAssetReader::Http)),
+            AssetSourceBuilder::new(|| Box::new(WebAssetReader::Http)),
         );
         app.register_asset_source(
             "https",
-            AssetSource::build().with_reader(|| Box::new(WebAssetReader::Https)),
+            AssetSourceBuilder::new(|| Box::new(WebAssetReader::Https)),
         );
     }
 }

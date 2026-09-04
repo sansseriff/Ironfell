@@ -1,10 +1,11 @@
 use bevy::input::mouse::MouseButtonInput; // added for button event reader
 use bevy::prelude::*;
-use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-use crate::bevy_app::screen_space::ScreenSpaceScene;
-use bevy_vello::prelude::*;
+use kurbo;
+use peniko;
+
+use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
 // Bring kurbo trait methods into scope for PathSeg operations (arclen, inv_arclen, etc.)
-use bevy_vello::prelude::kurbo::{ParamCurve, ParamCurveArclen};
+use kurbo::{ParamCurve, ParamCurveArclen};
 
 use crate::panels::{Panels, VIEWER_PANEL, overlay_affine, overlay_world_from_screen};
 
@@ -39,13 +40,13 @@ impl Default for DraggableSquare {
 }
 
 #[derive(Component)]
-pub(crate) struct DraggableOverlayScene; // Separate Vello scene so it isn't affected by the animated transform
+pub(crate) struct DraggableOverlayLayer; // Separate Vello scene so it isn't affected by the animated transform
 
 #[derive(Component)]
-pub(crate) struct AnimatedOverlayScene; // Marker for animated overlay scene (needs Transform)
+pub(crate) struct AnimatedOverlayLayer; // Marker for animated overlay scene (needs Transform)
 
 #[derive(Component)]
-pub(crate) struct AnimatedBezierStrokeScene; // Marker for animated bezier stroke scene
+pub(crate) struct AnimatedBezierStrokeLayer; // Marker for animated bezier stroke scene
 
 #[derive(Resource)]
 pub(crate) struct AnimatedBezierPath {
@@ -141,10 +142,7 @@ impl Default for MiniSquareState {
 }
 
 #[derive(Component)]
-pub(crate) struct MiniSquaresScene; // single batched scene for all mini squares
-
-#[derive(Resource, Default)]
-pub(crate) struct MiniSquaresDirty(pub bool);
+pub(crate) struct MiniSquaresLayer; // single batched scene for all mini squares
 
 #[derive(Resource, Default)]
 pub(crate) struct SelectionMarquee {
@@ -153,7 +151,7 @@ pub(crate) struct SelectionMarquee {
 }
 
 #[derive(Component)]
-pub(crate) struct SelectionMarqueeScene;
+pub(crate) struct SelectionMarqueeLayer;
 
 // -------------------------------------------------------------------------------------------------
 // Notes:
@@ -195,42 +193,32 @@ pub(crate) fn setup_2d_overlay(
     mut commands: Commands,
     existing_bezier: Option<Res<AnimatedBezierPath>>,
 ) {
-    // All overlay scenes are screen-space; panel placement/clipping is baked into
-    // the scene content affines by the render systems below.
+    // All overlay layers are screen-space; panel placement and clipping are baked
+    // into the emitted command transforms by the render systems below. Painter
+    // order is explicit (see `vector::order`) rather than left to spawn order.
 
-    // Animated demo scene (kept from previous implementation)
-    // NOTE: scenes must carry the vello camera's RenderLayers (layer 1) or upstream
-    // bevy_vello's extract_scenes culls them (default layer 0 doesn't intersect).
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        AnimatedOverlayScene,
-        RenderLayers::layer(1),
+        DisplayList::default(),
+        VectorLayer::screen(order::OVERLAY_ANIMATED),
+        AnimatedOverlayLayer,
     ));
 
-    // Static scene for draggable square (unaffected by animated transform changes)
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        DraggableOverlayScene,
-        RenderLayers::layer(1),
+        DisplayList::default(),
+        VectorLayer::screen(order::DRAGGABLE),
+        DraggableOverlayLayer,
     ));
 
-    // Animated bezier stroke scene
     if existing_bezier.is_none() {
         commands.insert_resource(AnimatedBezierPath::generate());
     }
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        AnimatedBezierStrokeScene,
-        RenderLayers::layer(1),
+        DisplayList::default(),
+        VectorLayer::screen(order::OVERLAY_BEZIER),
+        AnimatedBezierStrokeLayer,
     ));
 
-    // SPAWN many mini square entities (NO per-entity VelloScene2d now)
+    // Mini squares are individual entities; one shared layer batches their draws.
     let mut seed: u32 = 0x91E2_33AB;
     fn next(seed: &mut u32) -> f32 {
         *seed ^= *seed << 13;
@@ -255,50 +243,42 @@ pub(crate) fn setup_2d_overlay(
             },
         ));
     }
-
-    // Shared batched scene entity for all mini squares
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        MiniSquaresScene,
-        RenderLayers::layer(1),
+        DisplayList::default(),
+        VectorLayer::screen(order::MINI_SQUARES),
+        MiniSquaresLayer,
     ));
-    commands.insert_resource(MiniSquaresDirty(true));
 
-    // Marquee scene + resource (unchanged)
     commands.insert_resource(SelectionMarquee::default());
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        SelectionMarqueeScene,
-        RenderLayers::layer(1),
+        DisplayList::default(),
+        VectorLayer::screen(order::SELECTION_MARQUEE),
+        SelectionMarqueeLayer,
     ));
 }
 
 pub(crate) fn animate_2d_overlay(
-    mut query_scene: Query<&mut VelloScene2d, (With<AnimatedOverlayScene>, Without<AnimatedBezierStrokeScene>)>,
-    mut bezier_scene: Query<
-        &mut VelloScene2d,
-        (
-            With<AnimatedBezierStrokeScene>,
-            Without<AnimatedOverlayScene>,
-        ),
+    mut animated: Query<
+        &mut DisplayList,
+        (With<AnimatedOverlayLayer>, Without<AnimatedBezierStrokeLayer>),
+    >,
+    mut bezier_layer: Query<
+        &mut DisplayList,
+        (With<AnimatedBezierStrokeLayer>, Without<AnimatedOverlayLayer>),
     >,
     bezier: Option<Res<AnimatedBezierPath>>,
     time: Res<Time>,
     panels: Res<Panels>,
 ) {
-    let Ok(mut scene) = query_scene.single_mut() else {
+    let Ok(mut animated_list) = animated.single_mut() else {
         return;
-    }; // not ready yet
+    };
     let sin_time = time.elapsed_secs().sin().mul_add(0.5, 0.5);
-    scene.reset();
 
     let Some(rect) = panels.rect(VIEWER_PANEL) else {
-        if let Ok(mut scene_stroke) = bezier_scene.single_mut() {
-            scene_stroke.reset();
+        animated_list.rebuild(|_| {});
+        if let Ok(mut list) = bezier_layer.single_mut() {
+            list.rebuild(|_| {});
         }
         return;
     };
@@ -311,7 +291,7 @@ pub(crate) fn animate_2d_overlay(
         sin_time + 0.5,
     );
 
-    // Animation previously expressed via the entity Transform, now baked into the affine:
+    // Animation is baked into the emitted affine rather than the entity Transform:
     // translate (world y-up) ∘ rotate ∘ scale, then mapped into screen space.
     let translation = f64::from(Vec3::lerp(Vec3::Y * -900.0, Vec3::Y * 900.0, sin_time).y);
     let rotation = f64::from(-std::f32::consts::TAU * sin_time);
@@ -321,103 +301,109 @@ pub(crate) fn animate_2d_overlay(
         * kurbo::Affine::rotate(rotation)
         * kurbo::Affine::scale(scale);
 
-    scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &clip);
-    scene.fill(
-        peniko::Fill::NonZero,
-        anim,
-        peniko::Color::new([c.x, c.y, c.z, 1.]),
-        None,
-        &kurbo::RoundedRect::new(-100.0, -100.0, 100.0, 100.0, (sin_time as f64) * 100.0),
-    );
-    scene.pop_layer();
-
-    // Animate progressive bezier stroke reveal
-    if let (Ok(mut scene_stroke), Some(bezier)) = (bezier_scene.single_mut(), bezier) {
-        scene_stroke.reset();
-        let progress = (time.elapsed_secs() / 6.0).fract().clamp(0.0, 1.0);
-        let target_len = bezier.total_length * (progress as f64);
-        if target_len <= 0.0 {
-            return;
-        }
-        scene_stroke.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &clip);
-        if (target_len - bezier.total_length).abs() < f64::EPSILON {
-            let stroke_style = kurbo::Stroke::new(bezier.stroke_width as f64);
-            scene_stroke.stroke(
-                &stroke_style,
-                base,
-                peniko::Color::new([0.0, 0.6, 1.0, 1.0]),
-                None,
-                &bezier.path,
+    animated_list.rebuild(|b| {
+        b.clipped(kurbo::Affine::IDENTITY, clip, |b| {
+            b.fill(
+                anim,
+                peniko::Color::new([c.x, c.y, c.z, 1.]),
+                kurbo::RoundedRect::new(-100.0, -100.0, 100.0, 100.0, (sin_time as f64) * 100.0),
             );
-            scene_stroke.pop_layer();
-            return;
-        }
-        let mut partial = kurbo::BezPath::new();
-        let mut remaining = target_len;
-        let mut idx = 0usize;
-        let mut segs = bezier.path.segments();
-        if let Some(first) = segs.next() {
-            let first_start = match first {
-                // extract start point manually
-                kurbo::PathSeg::Line(l) => l.p0,
-                kurbo::PathSeg::Quad(q) => q.p0,
-                kurbo::PathSeg::Cubic(c) => c.p0,
-            };
-            partial.move_to(first_start);
-            let take_seg = |seg: kurbo::PathSeg,
-                            partial: &mut kurbo::BezPath,
-                            remaining: &mut f64,
-                            idx: usize| {
-                let seg_len = bezier.seg_lengths[idx];
-                if *remaining >= seg_len {
-                    partial.push(seg.as_path_el());
-                    *remaining -= seg_len;
-                    true
-                } else {
-                    let t = seg.inv_arclen(*remaining, 0.5);
-                    let sub = seg.subsegment(0.0..t);
-                    partial.push(sub.as_path_el());
-                    *remaining = 0.0;
-                    false
-                }
-            };
-            take_seg(first, &mut partial, &mut remaining, idx);
-            idx += 1;
-            for seg in segs {
-                if remaining <= 0.0 {
-                    break;
-                }
-                let cont = take_seg(seg, &mut partial, &mut remaining, idx);
-                idx += 1;
-                if !cont {
-                    break;
+        });
+    });
+
+    // Progressive bezier stroke reveal.
+    let (Ok(mut stroke_list), Some(bezier)) = (bezier_layer.single_mut(), bezier) else {
+        return;
+    };
+    let progress = (time.elapsed_secs() / 6.0).fract().clamp(0.0, 1.0);
+    let target_len = bezier.total_length * (progress as f64);
+    if target_len <= 0.0 {
+        stroke_list.rebuild(|_| {});
+        return;
+    }
+
+    // Geometry is resolved before the rebuild closure so the closure stays a
+    // straight description of drawing intent.
+    let full = (target_len - bezier.total_length).abs() < f64::EPSILON;
+    let partial = if full {
+        bezier.path.clone()
+    } else {
+        partial_path(&bezier, target_len)
+    };
+    let head = partial.segments().last().map(|last| match last {
+        kurbo::PathSeg::Line(l) => l.p1,
+        kurbo::PathSeg::Quad(q) => q.p2,
+        kurbo::PathSeg::Cubic(c) => c.p3,
+    });
+    let stroke_width = bezier.stroke_width as f64;
+
+    stroke_list.rebuild(|b| {
+        b.clipped(kurbo::Affine::IDENTITY, clip, |b| {
+            b.stroke(
+                base,
+                kurbo::Stroke::new(stroke_width),
+                peniko::Color::new([0.0, 0.6, 1.0, 1.0]),
+                partial.clone(),
+            );
+            // The leading dot only exists while the stroke is still drawing.
+            if !full {
+                if let Some(head) = head {
+                    b.fill(
+                        base,
+                        peniko::Color::new([0.95, 0.2, 0.4, 1.0]),
+                        kurbo::Circle::new(head, stroke_width * 0.55),
+                    );
                 }
             }
+        });
+    });
+}
+
+/// Build the leading `target_len` of `bezier`'s path, splitting the segment the
+/// reveal currently sits inside.
+fn partial_path(bezier: &AnimatedBezierPath, target_len: f64) -> kurbo::BezPath {
+    let mut partial = kurbo::BezPath::new();
+    let mut remaining = target_len;
+    let mut idx = 0usize;
+    let mut segs = bezier.path.segments();
+
+    let Some(first) = segs.next() else {
+        return partial;
+    };
+    let first_start = match first {
+        kurbo::PathSeg::Line(l) => l.p0,
+        kurbo::PathSeg::Quad(q) => q.p0,
+        kurbo::PathSeg::Cubic(c) => c.p0,
+    };
+    partial.move_to(first_start);
+
+    let take_seg = |seg: kurbo::PathSeg, partial: &mut kurbo::BezPath, remaining: &mut f64, idx: usize| {
+        let seg_len = bezier.seg_lengths[idx];
+        if *remaining >= seg_len {
+            partial.push(seg.as_path_el());
+            *remaining -= seg_len;
+            true
+        } else {
+            let t = seg.inv_arclen(*remaining, 0.5);
+            partial.push(seg.subsegment(0.0..t).as_path_el());
+            *remaining = 0.0;
+            false
         }
-        let stroke_style = kurbo::Stroke::new(bezier.stroke_width as f64);
-        scene_stroke.stroke(
-            &stroke_style,
-            base,
-            peniko::Color::new([0.0, 0.6, 1.0, 1.0]),
-            None,
-            &partial,
-        );
-        if let Some(last) = partial.segments().last() {
-            let head = match last {
-                kurbo::PathSeg::Line(l) => l.p1,
-                kurbo::PathSeg::Quad(q) => q.p2,
-                kurbo::PathSeg::Cubic(c) => c.p3,
-            };
-            scene_stroke.fill(
-                peniko::Fill::NonZero,
-                base,
-                peniko::Color::new([0.95, 0.2, 0.4, 1.0]),
-                None,
-                &kurbo::Circle::new(head, (bezier.stroke_width * 0.55) as f64),
-            );
+    };
+
+    take_seg(first, &mut partial, &mut remaining, idx);
+    idx += 1;
+    for seg in segs {
+        if remaining <= 0.0 {
+            break;
         }
-        scene_stroke.pop_layer();
+        let cont = take_seg(seg, &mut partial, &mut remaining, idx);
+        idx += 1;
+        if !cont {
+            break;
+        }
     }
+    partial
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -480,8 +466,12 @@ pub(crate) fn update_mini_square_entities(
     mut cursor_events: MessageReader<CursorMoved>,
     mouse: Res<SimpleMouseState>,
     panels: Res<Panels>,
-    mut dirty: ResMut<MiniSquaresDirty>,
 ) {
+    // Tracks whether anything this frame could change a square's colour. Purely a
+    // local optimisation now: the display list decides for itself whether to
+    // re-encode, so this no longer has to survive across frames.
+    let mut dirty = false;
+
     if cursor_events.is_empty() && !mouse.just_pressed && !mouse.just_released {
         if mouse.just_released {
             for (_, _, mut st) in q_squares.iter_mut() {
@@ -490,7 +480,7 @@ pub(crate) fn update_mini_square_entities(
             }
             marquee_res.start = None;
             marquee_res.current = None;
-            dirty.0 = true;
+            recompute_final_colors(&mut q_squares);
         }
         return;
     }
@@ -516,7 +506,7 @@ pub(crate) fn update_mini_square_entities(
             && world_pos.y <= center.y + half;
         if new_hovered != st.hovered {
             st.hovered = new_hovered;
-            dirty.0 = true;
+            dirty = true;
         }
         if st.hovered {
             any_hovered = true;
@@ -535,7 +525,7 @@ pub(crate) fn update_mini_square_entities(
                     let new_sel = st.hovered;
                     if new_sel != st.selected {
                         st.selected = new_sel;
-                        dirty.0 = true;
+                        dirty = true;
                     }
                 }
             }
@@ -558,7 +548,7 @@ pub(crate) fn update_mini_square_entities(
                     st.selected = false;
                     st.dragging = false;
                     st.drag_offset = Vec2::ZERO;
-                    dirty.0 = true;
+                    dirty = true;
                 }
             }
             marquee_res.start = Some(world_pos);
@@ -580,7 +570,7 @@ pub(crate) fn update_mini_square_entities(
                 let intersects = !(a_max.x < min.x || a_min.x > max.x || a_max.y < min.y || a_min.y > max.y);
                 if intersects != st.selected {
                     st.selected = intersects;
-                    dirty.0 = true;
+                    dirty = true;
                 }
             }
         }
@@ -601,7 +591,7 @@ pub(crate) fn update_mini_square_entities(
             }
         }
         if moved_any {
-            dirty.0 = true;
+            dirty = true;
         }
     }
 
@@ -613,27 +603,34 @@ pub(crate) fn update_mini_square_entities(
             if st.dragging {
                 st.dragging = false;
                 st.drag_offset = Vec2::ZERO;
-                dirty.0 = true;
+                dirty = true;
             }
         }
     }
 
     // Final color computation (only if something potentially changed)
-    if dirty.0 {
-        for (_, ms, mut st) in q_squares.iter_mut() {
-            let base = ms.base_color;
-            let new_color = if st.dragging {
-                [base[0] * 0.8, base[1] * 0.2, base[2] * 0.2, 1.0]
-            } else if st.selected {
-                [base[0] * 0.9, base[1] * 0.9, base[2] * 0.1, 1.0]
-            } else if st.hovered {
-                [0.0, 0.9, 0.3, 1.0]
-            } else {
-                [base[0], base[1], base[2], 1.0]
-            };
-            if new_color != st.final_color {
-                st.final_color = new_color;
-            }
+    if dirty {
+        recompute_final_colors(&mut q_squares);
+    }
+}
+
+/// Resolve each square's display colour from its interaction state.
+fn recompute_final_colors(
+    q_squares: &mut Query<'_, '_, (&mut Transform, &MiniSquare, &mut MiniSquareState)>,
+) {
+    for (_, ms, mut st) in q_squares.iter_mut() {
+        let base = ms.base_color;
+        let new_color = if st.dragging {
+            [base[0] * 0.8, base[1] * 0.2, base[2] * 0.2, 1.0]
+        } else if st.selected {
+            [base[0] * 0.9, base[1] * 0.9, base[2] * 0.1, 1.0]
+        } else if st.hovered {
+            [0.0, 0.9, 0.3, 1.0]
+        } else {
+            [base[0], base[1], base[2], 1.0]
+        };
+        if new_color != st.final_color {
+            st.final_color = new_color;
         }
     }
 }
@@ -643,23 +640,26 @@ pub(crate) fn update_mini_square_entities(
 // -------------------------------------------------------------------------------------------------
 
 pub(crate) fn render_draggable_square(
-    mut scenes: Query<&mut VelloScene2d, With<DraggableOverlayScene>>,
+    mut layers: Query<&mut DisplayList, With<DraggableOverlayLayer>>,
     state: Res<DraggableSquare>,
     panels: Res<Panels>,
 ) {
-    let Ok(mut scene) = scenes.single_mut() else { return; };
-    scene.reset();
-    let Some(panel_rect) = panels.rect(VIEWER_PANEL) else { return; };
+    let Ok(mut list) = layers.single_mut() else {
+        return;
+    };
+    let Some(panel_rect) = panels.rect(VIEWER_PANEL) else {
+        list.rebuild(|_| {});
+        return;
+    };
     let base = overlay_affine(panel_rect);
 
-    // Choose color based on state
-    // Dragging: red, Hover: pink, Idle: dark gray
-    let (r, g, b) = if state.dragging {
-        (1.0, 0.0, 0.0) // red
+    // Dragging: red, hover: pink, idle: dark gray.
+    let (r, g, b_) = if state.dragging {
+        (1.0, 0.0, 0.0)
     } else if state.hovered {
-        (1.0, 0.4, 0.7) // pink-ish
+        (1.0, 0.4, 0.7)
     } else {
-        (0.2, 0.2, 0.2) // dark gray
+        (0.2, 0.2, 0.2)
     };
     let half = state.size * 0.5;
     let rect = kurbo::Rect::new(
@@ -668,93 +668,76 @@ pub(crate) fn render_draggable_square(
         (state.position.x + half.x) as f64,
         (state.position.y + half.y) as f64,
     );
-    scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
-    scene.fill(
-        peniko::Fill::NonZero,
-        base,
-        peniko::Color::new([r, g, b, 1.0]),
-        None,
-        &rect,
-    );
-    scene.pop_layer();
+
+    list.rebuild(|b| {
+        b.clipped(kurbo::Affine::IDENTITY, panel_rect.to_kurbo(), |b| {
+            b.fill(base, peniko::Color::new([r, g, b_, 1.0]), rect);
+        });
+    });
 }
 
 pub(crate) fn render_mini_squares(
-    mut dirty: ResMut<MiniSquaresDirty>,
-    mut q_scene: Query<&mut VelloScene2d, With<MiniSquaresScene>>,
+    mut layers: Query<&mut DisplayList, With<MiniSquaresLayer>>,
     q_squares: Query<(&Transform, &MiniSquare, &MiniSquareState)>,
     panels: Res<Panels>,
 ) {
-    // Panel layout changes move the whole batch, so they dirty the scene too.
-    if panels.is_changed() {
-        dirty.0 = true;
-    }
-    if !dirty.0 {
+    // The old explicit `MiniSquaresDirty` flag is gone: `rebuild` compares the
+    // emitted commands, so rebuilding unconditionally re-encodes only on a real
+    // change and cannot drift out of sync with the data the way a manual flag can.
+    let Ok(mut list) = layers.single_mut() else {
         return;
-    }
-    let Ok(mut scene) = q_scene.single_mut() else { return; };
-    scene.reset();
-    let Some(panel_rect) = panels.rect(VIEWER_PANEL) else { return; };
+    };
+    let Some(panel_rect) = panels.rect(VIEWER_PANEL) else {
+        list.rebuild(|_| {});
+        return;
+    };
     let base = overlay_affine(panel_rect);
-
-    // Canonical unit rect
     const UNIT_RECT: kurbo::Rect = kurbo::Rect::new(0.0, 0.0, 1.0, 1.0);
 
-    scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
-    for (tr, sq, st) in q_squares.iter() {
-        let center = tr.translation.truncate();
-        let half = sq.size * 0.5;
-        let affine = base
-            * kurbo::Affine::scale(sq.size as f64).then_translate((
-                (center.x - half) as f64,
-                (center.y - half) as f64,
-            ).into());
-
-        scene.fill(
-            peniko::Fill::NonZero,
-            affine,
-            peniko::Color::new(st.final_color),
-            None,
-            &UNIT_RECT,
-        );
-    }
-    scene.pop_layer();
-
-    dirty.0 = false;
+    list.rebuild(|b| {
+        b.clipped(kurbo::Affine::IDENTITY, panel_rect.to_kurbo(), |b| {
+            for (tr, sq, st) in q_squares.iter() {
+                let center = tr.translation.truncate();
+                let half = sq.size * 0.5;
+                let affine = base
+                    * kurbo::Affine::scale(sq.size as f64).then_translate(
+                        ((center.x - half) as f64, (center.y - half) as f64).into(),
+                    );
+                b.fill(affine, peniko::Color::new(st.final_color), UNIT_RECT);
+            }
+        });
+    });
 }
 
 pub(crate) fn render_selection_marquee(
     marquee_res: Res<SelectionMarquee>,
-    mut q_scene: Query<&mut VelloScene2d, With<SelectionMarqueeScene>>,
+    mut layers: Query<&mut DisplayList, With<SelectionMarqueeLayer>>,
     panels: Res<Panels>,
 ) {
-    if marquee_res.is_changed() || panels.is_changed() {
-        if let Ok(mut scene) = q_scene.single_mut() {
-            scene.reset();
-            let Some(panel_rect) = panels.rect(VIEWER_PANEL) else { return; };
-            let base = overlay_affine(panel_rect);
-            if let (Some(a), Some(b)) = (marquee_res.start, marquee_res.current) {
-                let min = a.min(b);
-                let max = a.max(b);
-                let rect = kurbo::Rect::new(min.x as f64, min.y as f64, max.x as f64, max.y as f64);
-                scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &panel_rect.to_kurbo());
-                scene.fill(
-                    peniko::Fill::NonZero,
-                    base,
-                    peniko::Color::new([0.1, 0.4, 1.0, 0.15]),
-                    None,
-                    &rect,
-                );
-                let stroke = kurbo::Stroke::new(2.0);
-                scene.stroke(
-                    &stroke,
-                    base,
-                    peniko::Color::new([0.1, 0.4, 1.0, 0.9]),
-                    None,
-                    &rect,
-                );
-                scene.pop_layer();
-            }
-        }
-    }
+    let Ok(mut list) = layers.single_mut() else {
+        return;
+    };
+    let Some(panel_rect) = panels.rect(VIEWER_PANEL) else {
+        list.rebuild(|_| {});
+        return;
+    };
+    let base = overlay_affine(panel_rect);
+
+    list.rebuild(|b| {
+        let (Some(a), Some(c)) = (marquee_res.start, marquee_res.current) else {
+            return;
+        };
+        let min = a.min(c);
+        let max = a.max(c);
+        let rect = kurbo::Rect::new(min.x as f64, min.y as f64, max.x as f64, max.y as f64);
+        b.clipped(kurbo::Affine::IDENTITY, panel_rect.to_kurbo(), |b| {
+            b.fill(base, peniko::Color::new([0.1, 0.4, 1.0, 0.15]), rect);
+            b.stroke(
+                base,
+                kurbo::Stroke::new(2.0),
+                peniko::Color::new([0.1, 0.4, 1.0, 0.9]),
+                rect,
+            );
+        });
+    });
 }

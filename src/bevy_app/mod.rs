@@ -7,7 +7,6 @@ mod overlay2d;
 mod picking;
 mod pointer;
 mod scene3d;
-mod screen_space;
 mod timeline;
 mod ui_panels;
 mod vello_world_demo;
@@ -16,7 +15,7 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::transform::TransformSystems;
-use bevy_vello::{VelloPlugin, prelude::*};
+use crate::vector::{ActiveBackends, ClassicBackendCamera, VectorPlugin};
 
 pub use input_accum::*;
 // Bring required items into scope from submodules
@@ -32,7 +31,6 @@ use overlay2d::{
 use picking::{pick_overlay_2d_system, pick_world_3d_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
 use scene3d::{render_active_shapes, rotate_3d_shapes, setup_3d_scene, update_aabbes};
-use screen_space::sync_screen_space_transforms;
 use timeline::TimelinePlugin;
 use vello_world_demo::{animate_world_space_demo, setup_world_space_demo};
 
@@ -125,10 +123,11 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         // WebAssetPlugin::default(),
         default_plugins,
         // TrackingCircle,
-        VelloPlugin {
-            canvas_render_layers: RenderLayers::layer(1),
-            use_cpu: false,
-            antialiasing: vello::AaConfig::Area,
+        // Owns the display-list seam and every backend that can realize it.
+        // Which backend is live is an `ActiveBackends` resource, changeable at
+        // runtime; two can run at once for a side-by-side comparison.
+        VectorPlugin {
+            backends: ActiveBackends::default(),
         },
         FPSOverlayPlugin,
         FrameTimeDiagnosticsPlugin {
@@ -156,11 +155,14 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     // to separate "camera pipeline" from "4x multisampled 5K target".
     app.add_systems(Startup, setup_background_camera);
 
-    // --- STEP 2: vello camera ------------------------------------------------
-    // Full-window VelloView camera (order 10) + IsDefaultUiCamera. Turns on the
-    // bevy_vello render path: full-window vello compute rasterization into a
-    // second 5K texture + composite. FPS overlay UI starts rendering here too.
-    app.add_systems(Startup, setup_vello_camera);
+    // --- STEP 2: vector backend camera ---------------------------------------
+    // The backend spawns and owns its full-window compositing camera (order 10).
+    // This step only marks it as the camera bevy_ui draws into, which is what
+    // starts the FPS overlay rendering.
+    // PostStartup, not Startup: the backend spawns its camera with `Commands`, so
+    // the resource naming it does not exist until those commands are applied at
+    // the end of Startup.
+    app.add_systems(PostStartup, adopt_backend_camera_for_ui);
 
     // --- STEP 3: 3D scene + viewport camera ----------------------------------
     // MainCamera3D (viewport-scoped, driven by the "viewer" panel rect) + meshes.
@@ -217,7 +219,6 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
             interaction_decide_system,
             // Must land before propagation: bevy_vello extracts scenes via
             // GlobalTransform, so a correction written after this would be a frame late.
-            sync_screen_space_transforms.before(TransformSystems::Propagate),
             drag_apply_system
                 .after(interaction_decide_system)
                 .before(TransformSystems::Propagate),
@@ -277,21 +278,22 @@ fn setup_background_camera(mut commands: Commands) {
     ));
 }
 
-/// STEP 2 (ladder): the full-window vello camera (also hosts UI / FPS overlay).
-fn setup_vello_camera(mut commands: Commands) {
-    commands.spawn((
-        Camera2d,
-        bevy::render::view::Msaa::Off,
-        Camera {
-            order: 10,
-            clear_color: ClearColorConfig::None,
-            ..default()
-        },
-        RenderLayers::layer(1),
-        VelloView,
-        bevy::ui::IsDefaultUiCamera,
-        Name::new("Vello Camera"),
-    ));
+/// STEP 2 (ladder): let bevy_ui draw into the backend's compositing camera.
+///
+/// The camera itself belongs to the vector backend — it is where that backend's
+/// output lands — so the app only expresses the policy that UI shares it.
+fn adopt_backend_camera_for_ui(
+    mut commands: Commands,
+    camera: Option<Res<ClassicBackendCamera>>,
+) {
+    // Optional so that selecting a backend which does not provide this camera is
+    // a warning rather than a panic — but loud, because the symptom otherwise is
+    // "the FPS overlay silently vanished".
+    let Some(camera) = camera else {
+        warn!("no vector backend camera; bevy_ui has nothing to draw into");
+        return;
+    };
+    commands.entity(camera.0).insert(bevy::ui::IsDefaultUiCamera);
 }
 
 /// Mirror the "viewer" panel rect (posted from JS) onto the 3D camera's viewport.

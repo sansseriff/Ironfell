@@ -8,7 +8,7 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy_vello::prelude::kurbo;
+use kurbo;
 
 pub const VIEWER_PANEL: &str = "viewer";
 pub const TIMELINE_PANEL: &str = "timeline";

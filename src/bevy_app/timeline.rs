@@ -1,9 +1,9 @@
 use bevy::prelude::*;
-use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-use crate::bevy_app::screen_space::ScreenSpaceScene;
-use bevy_vello::prelude::*;
+use kurbo;
+use peniko;
 
 use crate::panels::{Panels, TIMELINE_PANEL};
+use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
 
 /// Timeline plugin: draws the timeline into its panel rect (screen space, clipped).
 /// No dedicated camera/window — the shared full-window vello camera presents it.
@@ -39,40 +39,33 @@ impl Default for TimelineState {
     }
 }
 
-/// Marker component for timeline background scene
+/// Marker component for the timeline background layer
 #[derive(Component)]
-pub struct TimelineBackgroundScene;
+pub struct TimelineBackgroundLayer;
 
-/// Marker component for timeline grid scene
+/// Marker component for the timeline grid layer
 #[derive(Component)]
-pub struct TimelineGridScene;
+pub struct TimelineGridLayer;
 
-/// Marker component for timeline playhead scene
+/// Marker component for the timeline playhead layer
 #[derive(Component)]
-pub struct TimelinePlayheadScene;
+pub struct TimelinePlayheadLayer;
 
 fn setup_timeline_scenes(mut commands: Commands) {
-    // Layer 1 = the vello camera's RenderLayers; scenes on other layers are culled.
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        RenderLayers::layer(1),
-        TimelineBackgroundScene,
+        DisplayList::default(),
+        VectorLayer::screen(order::TIMELINE_BACKGROUND),
+        TimelineBackgroundLayer,
     ));
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        RenderLayers::layer(1),
-        TimelineGridScene,
+        DisplayList::default(),
+        VectorLayer::screen(order::TIMELINE_GRID),
+        TimelineGridLayer,
     ));
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        RenderLayers::layer(1),
-        TimelinePlayheadScene,
+        DisplayList::default(),
+        VectorLayer::screen(order::TIMELINE_PLAYHEAD),
+        TimelinePlayheadLayer,
     ));
 }
 
@@ -90,47 +83,42 @@ pub fn update_timeline_view(mut timeline: ResMut<TimelineState>, time: Res<Time>
 
 /// Render the timeline background, grid and playhead into the timeline panel rect.
 pub fn render_timeline_grid(
-    mut bg_scene: Query<
-        &mut VelloScene2d,
+    mut bg: Query<
+        &mut DisplayList,
         (
-            With<TimelineBackgroundScene>,
-            Without<TimelineGridScene>,
-            Without<TimelinePlayheadScene>,
+            With<TimelineBackgroundLayer>,
+            Without<TimelineGridLayer>,
+            Without<TimelinePlayheadLayer>,
         ),
     >,
-    mut grid_scene: Query<
-        &mut VelloScene2d,
-        (With<TimelineGridScene>, Without<TimelinePlayheadScene>),
-    >,
-    mut playhead_scene: Query<
-        &mut VelloScene2d,
-        (With<TimelinePlayheadScene>, Without<TimelineGridScene>),
-    >,
+    mut grid: Query<&mut DisplayList, (With<TimelineGridLayer>, Without<TimelinePlayheadLayer>)>,
+    mut playhead: Query<&mut DisplayList, (With<TimelinePlayheadLayer>, Without<TimelineGridLayer>)>,
     timeline: Res<TimelineState>,
     panels: Res<Panels>,
 ) {
     let rect = panels.rect(TIMELINE_PANEL);
 
     // Background (replaces the old timeline camera's clear color)
-    if let Ok(mut scene) = bg_scene.single_mut() {
-        scene.reset();
-        if let Some(rect) = rect {
-            scene.fill(
-                peniko::Fill::NonZero,
-                kurbo::Affine::IDENTITY,
-                peniko::Color::new([0.145, 0.145, 0.152, 1.0]),
-                None,
-                &rect.to_kurbo(),
-            );
-        }
+    if let Ok(mut list) = bg.single_mut() {
+        list.rebuild(|b| {
+            if let Some(rect) = rect {
+                b.fill(
+                    kurbo::Affine::IDENTITY,
+                    peniko::Color::new([0.145, 0.145, 0.152, 1.0]),
+                    rect.to_kurbo(),
+                );
+            }
+        });
     }
 
+    // With no timeline panel there is nothing to draw; emitting empty lists keeps
+    // the layers consistent rather than leaving stale content on screen.
     let Some(rect) = rect else {
-        for mut scene in grid_scene.iter_mut() {
-            scene.reset();
+        for mut list in grid.iter_mut() {
+            list.rebuild(|_| {});
         }
-        for mut scene in playhead_scene.iter_mut() {
-            scene.reset();
+        for mut list in playhead.iter_mut() {
+            list.rebuild(|_| {});
         }
         return;
     };
@@ -140,80 +128,66 @@ pub fn render_timeline_grid(
     let top = rect.y as f64;
     let bottom = (rect.y + rect.h) as f64;
     let width = rect.w as f64;
+    let time_per_pixel: f64 = timeline.duration / width;
 
-    // Render grid
-    if let Ok(mut scene) = grid_scene.single_mut() {
-        scene.reset();
-        scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &clip);
+    if let Ok(mut list) = grid.single_mut() {
+        list.rebuild(|b| {
+            b.clipped(kurbo::Affine::IDENTITY, clip, |b| {
+                const MAJOR_STEP: f64 = 5.0;
+                const MINOR_STEP: f64 = 1.0;
 
-        // Draw time grid lines across the panel width
-        let time_per_pixel: f64 = timeline.duration / width;
-        let major_step: f64 = 5.0; // Major grid line every 5 seconds
-        let minor_step: f64 = 1.0; // Minor grid line every 1 second
+                let mut time: f64 = 0.0;
+                while time <= timeline.duration {
+                    let x: f64 = left + (time / time_per_pixel);
+                    let line = kurbo::Line::new((x, top), (x, bottom));
 
-        let mut time: f64 = 0.0;
-        while time <= timeline.duration {
-            let x: f64 = left + (time / time_per_pixel);
-            let line = kurbo::Line::new((x, top), (x, bottom));
+                    if (time % MAJOR_STEP).abs() < 0.01 {
+                        b.stroke(
+                            kurbo::Affine::IDENTITY,
+                            kurbo::Stroke::new(2.0),
+                            peniko::Color::new([0.5, 0.5, 0.5, 1.0]),
+                            line,
+                        );
+                    } else if (time % MINOR_STEP).abs() < 0.01 {
+                        b.stroke(
+                            kurbo::Affine::IDENTITY,
+                            kurbo::Stroke::new(1.0),
+                            peniko::Color::new([0.3, 0.3, 0.3, 1.0]),
+                            line,
+                        );
+                    }
 
-            if (time % major_step).abs() < 0.01 {
-                // Major line - thicker and brighter
-                scene.stroke(
-                    &kurbo::Stroke::new(2.0),
-                    kurbo::Affine::IDENTITY,
-                    peniko::Color::new([0.5, 0.5, 0.5, 1.0]),
-                    None,
-                    &line,
-                );
-            } else if (time % minor_step).abs() < 0.01 {
-                // Minor line - thinner and darker
-                scene.stroke(
-                    &kurbo::Stroke::new(1.0),
-                    kurbo::Affine::IDENTITY,
-                    peniko::Color::new([0.3, 0.3, 0.3, 1.0]),
-                    None,
-                    &line,
-                );
-            }
-
-            time += 0.5; // Check every 0.5 seconds for grid lines
-        }
-        scene.pop_layer();
+                    time += 0.5;
+                }
+            });
+        });
     }
 
-    // Render playhead
-    if let Ok(mut scene) = playhead_scene.single_mut() {
-        scene.reset();
-        scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, kurbo::Affine::IDENTITY, &clip);
+    if let Ok(mut list) = playhead.single_mut() {
+        list.rebuild(|b| {
+            b.clipped(kurbo::Affine::IDENTITY, clip, |b| {
+                let playhead_x: f64 = left + (timeline.current_time / time_per_pixel);
+                b.stroke(
+                    kurbo::Affine::IDENTITY,
+                    kurbo::Stroke::new(3.0),
+                    peniko::Color::new([1.0, 0.2, 0.2, 1.0]),
+                    kurbo::Line::new((playhead_x, top), (playhead_x, bottom)),
+                );
 
-        let time_per_pixel: f64 = timeline.duration / width;
-        let playhead_x: f64 = left + (timeline.current_time / time_per_pixel);
+                // Handle: a triangle hanging from the panel's top edge.
+                let handle_size = 8.0;
+                let mut handle = kurbo::BezPath::new();
+                handle.move_to((playhead_x, top + handle_size));
+                handle.line_to((playhead_x - handle_size, top));
+                handle.line_to((playhead_x + handle_size, top));
+                handle.close_path();
 
-        // Draw playhead line
-        let playhead_line = kurbo::Line::new((playhead_x, top), (playhead_x, bottom));
-        scene.stroke(
-            &kurbo::Stroke::new(3.0),
-            kurbo::Affine::IDENTITY,
-            peniko::Color::new([1.0, 0.2, 0.2, 1.0]), // Red playhead
-            None,
-            &playhead_line,
-        );
-
-        // Draw playhead handle (triangle hanging from the panel top edge)
-        let handle_size = 8.0;
-        let mut handle_path = kurbo::BezPath::new();
-        handle_path.move_to((playhead_x, top + handle_size));
-        handle_path.line_to((playhead_x - handle_size, top));
-        handle_path.line_to((playhead_x + handle_size, top));
-        handle_path.close_path();
-
-        scene.fill(
-            peniko::Fill::NonZero,
-            kurbo::Affine::IDENTITY,
-            peniko::Color::new([1.0, 0.2, 0.2, 1.0]), // Red playhead handle
-            None,
-            &handle_path,
-        );
-        scene.pop_layer();
+                b.fill(
+                    kurbo::Affine::IDENTITY,
+                    peniko::Color::new([1.0, 0.2, 0.2, 1.0]),
+                    handle,
+                );
+            });
+        });
     }
 }

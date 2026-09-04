@@ -1,62 +1,57 @@
-//! Generic vello-drawn UI panels.
+//! Generic UI panel backgrounds.
 //!
 //! Every panel posted from JS with `kind == "ui"` gets a flat gray background drawn
-//! into its rect. This is the placeholder substrate for the future in-scene vello UI
+//! into its rect. This is the placeholder substrate for the future in-scene vector UI
 //! (widgets as entities, not windows).
 
 use bevy::prelude::*;
-use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-use crate::bevy_app::screen_space::ScreenSpaceScene;
-use bevy_vello::prelude::*;
+use kurbo;
+use peniko;
 
 use crate::panels::Panels;
+use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
 
 pub const UI_PANEL_KIND: &str = "ui";
 
 #[derive(Component)]
-pub struct UiPanelsScene;
+pub struct UiPanelsLayer;
 
 pub fn setup_ui_panels(mut commands: Commands) {
     commands.spawn((
-        VelloScene2d::new(),
-        ScreenSpaceScene,
-        NoFrustumCulling,
-        RenderLayers::layer(1),
-        UiPanelsScene,
+        DisplayList::default(),
+        VectorLayer::screen(order::UI_PANELS),
+        UiPanelsLayer,
     ));
 }
 
-/// Redraw the gray backgrounds whenever panel layout changes (rects are static
-/// between layout changes, so the encoded scene is reused frame to frame).
+/// Rebuild the gray backgrounds. `rebuild` compares content, so running this
+/// every frame costs a rebuild of a handful of rects and re-encodes nothing
+/// unless the layout actually moved.
 pub fn render_ui_panels(
-    mut q_scene: Query<&mut VelloScene2d, With<UiPanelsScene>>,
+    mut layers: Query<&mut DisplayList, With<UiPanelsLayer>>,
     panels: Res<Panels>,
 ) {
-    if !panels.is_changed() {
-        return;
-    }
-    let Ok(mut scene) = q_scene.single_mut() else {
+    let Ok(mut list) = layers.single_mut() else {
         return;
     };
-    scene.reset();
 
-    for (_id, panel) in panels.iter() {
-        if panel.kind != UI_PANEL_KIND {
-            continue;
+    list.rebuild(|b| {
+        for (_id, panel) in panels.iter() {
+            if panel.kind != UI_PANEL_KIND {
+                continue;
+            }
+            let r = panel.rect;
+            b.fill(
+                kurbo::Affine::IDENTITY,
+                peniko::Color::new([0.35, 0.36, 0.38, 1.0]),
+                kurbo::RoundedRect::new(
+                    r.x as f64,
+                    r.y as f64,
+                    (r.x + r.w) as f64,
+                    (r.y + r.h) as f64,
+                    6.0,
+                ),
+            );
         }
-        let r = panel.rect;
-        scene.fill(
-            peniko::Fill::NonZero,
-            kurbo::Affine::IDENTITY,
-            peniko::Color::new([0.35, 0.36, 0.38, 1.0]),
-            None,
-            &kurbo::RoundedRect::new(
-                r.x as f64,
-                r.y as f64,
-                (r.x + r.w) as f64,
-                (r.y + r.h) as f64,
-                6.0,
-            ),
-        );
-    }
+    });
 }

@@ -36,7 +36,8 @@ mod asset_reader; // kept private
 
 // mod asset_loader;
 
-// mod type_registry;
+// The 2D vector rendering seam: display lists in, backend-rendered pixels out.
+mod vector;
 
 mod camera_controller;
 

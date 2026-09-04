@@ -57,6 +57,15 @@ bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
 # 2026-07-30) but is unreleased, so track git until a release lands.
 bevy_vello = { git = "https://github.com/linebender/bevy_vello", branch = "main" }
 
+# Geometry and style vocabulary, depended on directly rather than reached through
+# bevy_vello's prelude. These are not renderer types — vello classic and
+# vello_hybrid both consume them — and importing them via the renderer would make
+# `src/vector/display_list.rs` a renderer-dependent module in all but name.
+# Versions must match whatever the active backend resolves, or the types will not
+# unify: check with `cargo tree | grep -E 'kurbo|peniko'` after any bump.
+kurbo = "0.13.1"
+peniko = "0.6.1"
+
 # Pin app-surface: it must resolve to the SAME wgpu major as bevy_render, or the
 # two end up with incompatible wgpu types. bevy 0.19 -> wgpu 29, and app-surface
 # 1.12.x is the last release on wgpu ^29 (1.13 moved to 30).

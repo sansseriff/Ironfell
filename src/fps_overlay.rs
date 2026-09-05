@@ -5,20 +5,12 @@ use bevy::{
     prelude::*,
 };
 
-use crate::vector::BackendKind;
-
 pub(crate) struct FPSOverlayPlugin;
 
 impl Plugin for FPSOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_ui).add_systems(
-            Update,
-            (
-                update_fps_display,
-                update_backend_display,
-                position_fps_overlay,
-            ),
-        );
+        app.add_systems(Startup, setup_ui)
+            .add_systems(Update, (update_fps_display, position_fps_overlay));
     }
 }
 
@@ -70,14 +62,17 @@ fn setup_ui(mut commands: Commands) {
                         TextColor(WHITE.into()),
                     ));
                     p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
-                    // Which renderer is realizing the 2D layers. F9 restarts
-                    // into the other single-backend variant.
+                    // Which renderer is realizing the 2D layers.
                     p.spawn((
                         TextSpan::new("\n2D backend: "),
                         font.clone(),
                         TextColor(WHITE.into()),
                     ));
-                    p.spawn((TextSpan::new(""), font.clone(), TextColor(LIME.into())));
+                    p.spawn((
+                        TextSpan::new("vello_hybrid (sparse strips)"),
+                        font.clone(),
+                        TextColor(LIME.into()),
+                    ));
                 });
         });
 }
@@ -99,26 +94,6 @@ fn position_fps_overlay(
         node.left = Val::Px(rect.x + 8.0);
         node.top = Val::Px(rect.y + 8.0);
     }
-}
-
-/// Show the active 2D vector backend, and colour it so a glance is enough.
-fn update_backend_display(
-    backend: Res<BackendKind>,
-    query: Single<Entity, With<FpsText>>,
-    mut writer: TextUiWriter,
-    mut initialised: Local<bool>,
-) {
-    if *initialised {
-        return;
-    }
-    *initialised = true;
-
-    let (label, colour) = match *backend {
-        BackendKind::ClassicVello => ("vello classic", AQUA),
-        BackendKind::Hybrid => ("vello_hybrid (sparse strips)", LIME),
-    };
-    *writer.text(*query, 8) = label.to_owned();
-    *writer.color(*query, 8) = TextColor(colour.into());
 }
 
 fn update_fps_display(

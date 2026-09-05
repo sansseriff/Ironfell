@@ -7,7 +7,7 @@
 //!
 //! `kurbo` and `peniko` types are used directly rather than being re-wrapped.
 //! They are the Linebender ecosystem's shared geometry and style vocabulary, not
-//! renderer types — both Vello classic and Vello Hybrid consume them — so
+//! renderer types, so
 //! wrapping would add conversion cost and no isolation.
 //!
 //! # Why shapes stay shapes
@@ -107,7 +107,10 @@ pub enum DrawCmd {
         shape: Shape,
     },
     /// Begin a clip layer. Always balanced by [`DrawCmd::PopLayer`].
-    PushClip { transform: Affine, shape: Shape },
+    PushClip {
+        transform: Affine,
+        shape: Shape,
+    },
     PopLayer,
 }
 

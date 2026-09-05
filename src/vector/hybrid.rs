@@ -1,12 +1,7 @@
 //! Sparse-strips backend, via `vello_hybrid`.
 //!
-//! The second implementation of the display-list seam, and the reason the seam
-//! exists. Nothing in `src/bevy_app/` changed to add it.
-//!
-//! # How it differs from the classic backend
-//!
-//! Vello classic keeps a resolution-independent encoding and flattens paths on
-//! the GPU. Vello Hybrid flattens, tiles and computes antialiasing coverage on
+//! Vello Hybrid realizes the app's renderer-independent display lists. It
+//! flattens, tiles and computes antialiasing coverage on
 //! the **CPU**, in **device space**, and uses only vertex/fragment passes. Three
 //! consequences drive the design here:
 //!
@@ -14,9 +9,8 @@
 //!   target, so layers cannot be composited as separate scenes. All layers merge
 //!   into a single `Scene`, sorted by [`VectorLayer::order`] — which is why that
 //!   ordering had to become explicit before this backend could exist.
-//! - **The `Scene` is pixel-sized and screen-space.** That inverts the classic
-//!   bias: screen layers pass straight through, and *world* layers are the ones
-//!   needing a camera transform.
+//! - **The `Scene` is pixel-sized and screen-space.** Screen layers pass straight
+//!   through, and *world* layers are the ones needing a camera transform.
 //! - **Rebuilding is the expensive part.** Regenerating strips for 10k+ paths is
 //!   milliseconds. So the `Scene` is retained and only rebuilt when some layer's
 //!   commands actually changed — roughly a 10x saving on idle frames, and the
@@ -56,11 +50,11 @@ use bevy::render::{
     texture::GpuImage,
 };
 use bevy::window::PrimaryWindow;
-use std::sync::Mutex;
 use kurbo::{Affine, BezPath, PathEl, Rect, Shape as _};
 use peniko::Fill;
+use std::sync::Mutex;
 use vello_hybrid::{
-    LayersConfig, MemorySettings, RenderSize, RenderSettings, RenderTargetConfig, Renderer,
+    LayersConfig, MemorySettings, RenderSettings, RenderSize, RenderTargetConfig, Renderer,
     Resources, Scene, SizeU16,
 };
 use wgpu::TextureFormat;
@@ -224,10 +218,8 @@ fn new_target_image(size: UVec2) -> Image {
     // The app installs `ImagePlugin::default_nearest()` for pixel-art assets,
     // and this composite would otherwise inherit it. At an exact 1:1 blit
     // nearest and linear agree, but any sub-pixel misalignment turns nearest
-    // into visible stair-stepping along every antialiased edge — which is what
-    // separates this path from `bevy_vello`'s, whose fullscreen-triangle
-    // material maps fragment coordinates straight to UVs and so is 1:1 by
-    // construction. Linear degrades gracefully instead.
+    // into visible stair-stepping along every antialiased edge. Linear degrades
+    // gracefully instead.
     image.sampler = ImageSampler::linear();
     image
 }
@@ -346,9 +338,6 @@ fn extract_layers(
         // world layers care, and restricting the test to them is not an
         // optimisation but a correctness statement about what feeds the output.
         //
-        // It also keeps this backend out of the blast radius of anything that
-        // writes screen-layer transforms unconditionally, which the classic
-        // backend's `sync_screen_space_transforms` is entitled to do.
         let moved = layer.space == LayerSpace::World && (global.is_changed() || view_moved);
         // `is_added` covers the first frame, when the mirror has no entry yet.
         if !list.is_changed() && !moved && extracted.layers.contains_key(&entity) {
@@ -375,7 +364,6 @@ fn extract_layers(
         extracted.layers.retain(|e, _| live.contains(e));
         extracted.dirty = true;
     }
-
 }
 
 /// How the composite camera maps world units onto the scene's pixels.
@@ -442,9 +430,8 @@ fn layer_transform(space: LayerSpace, global: &GlobalTransform, view: ViewMappin
 ///
 /// Behind a `Mutex` because `vello_hybrid::Scene` holds `RefCell`/`OnceCell`
 /// internally and so is `Send` but not `Sync`, while Bevy resources must be
-/// both. `bevy_vello` wraps its renderer the same way. There is no contention
-/// to speak of: only the two render-world systems below ever take the lock, and
-/// they are ordered.
+/// both. There is no contention to speak of: only the two render-world systems
+/// below ever take the lock, and they are ordered.
 #[derive(Resource)]
 struct HybridRenderer(Mutex<HybridInner>);
 
@@ -598,8 +585,7 @@ fn emit_layer(scene: &mut Scene, layer: &ExtractedLayer, scratch: &mut BezPath) 
         }
         emitted += 1;
     }
-    // Leaving state set would leak into the next layer, which is the classic
-    // stateful-API bug.
+    // Leaving state set would leak into the next retained command stream.
     scene.reset_transform();
     scene.set_fill_rule(Fill::NonZero);
     emitted

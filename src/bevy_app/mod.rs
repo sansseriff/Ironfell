@@ -53,25 +53,14 @@ const MAX_HISTORY_LENGTH: usize = 200;
 pub const VARIANT_NO_LOG: u32 = 1 << 0;
 pub const VARIANT_MIN_PLUGINS: u32 = 1 << 1;
 pub const VARIANT_EMPTY: u32 = 1 << 2;
-/// Backwards-compatible spelling for the Hybrid backend. Hybrid is now the
-/// normal default, so this flag no longer changes backend availability.
-pub const VARIANT_HYBRID_BACKEND: u32 = 1 << 3;
 /// Add the alpha-blending stress fixture (`?bevy=alpha`). Combines with
-/// `classic`: `alpha` uses the Hybrid default and `alpha,classic` runs the same
-/// fixture through classic Vello.
+/// the other diagnostic variants.
 pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
-/// Explicitly initialize classic Vello. The ordinary app defaults to a
-/// Hybrid-only plugin set so classic's eager compute-pipeline creation cannot
-/// affect cold start. The web shell reaches this variant after an F9 request.
-pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
 
 pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     let no_log = variant_flags & VARIANT_NO_LOG != 0;
     let min_plugins = variant_flags & VARIANT_MIN_PLUGINS != 0;
     let empty = variant_flags & VARIANT_EMPTY != 0;
-    // `hybrid` remains a backwards-compatible spelling, but Hybrid is now the
-    // default. `classic` wins if both names are present.
-    let classic_backend = variant_flags & VARIANT_CLASSIC_BACKEND != 0;
     let alpha_stress = variant_flags & VARIANT_ALPHA_STRESS != 0;
 
     let mut app = App::new();
@@ -114,11 +103,9 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         ..default()
     });
 
-    // No WinitPlugin to disable here: bevy_vello `main` no longer force-enables bevy's
-    // `bevy_winit` feature, so it is not in the graph at all. Winit could not run in a
-    // worker anyway (the frame loop is driven from JS via enter_frame), and windows come
-    // from our own canvas bootstrap. If a future dependency drags bevy_winit back in,
-    // this is where it must be disabled again.
+    // No WinitPlugin is enabled. Winit could not run in a worker anyway (the
+    // frame loop is driven from JS via enter_frame), and windows come from our
+    // own canvas bootstrap.
     let mut default_plugins = default_plugins.build();
 
     // Perf-grid cell B2 (`?bevy=nolog`): LogPlugin installs tracing-wasm on the web,
@@ -139,14 +126,7 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         // WebAssetPlugin::default(),
         default_plugins,
         // TrackingCircle,
-        // The ordinary app installs exactly one renderer. Installing classic
-        // Vello eagerly constructs its compute pipelines even when inactive,
-        // so the fast-start default must omit its plugin entirely.
-        if classic_backend {
-            VectorPlugin::classic_only()
-        } else {
-            VectorPlugin::hybrid_only()
-        },
+        VectorPlugin,
         FPSOverlayPlugin,
         FrameTimeDiagnosticsPlugin {
             max_history_length: MAX_HISTORY_LENGTH,
@@ -235,8 +215,8 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         PostUpdate,
         (
             interaction_decide_system,
-            // Must land before propagation: bevy_vello extracts scenes via
-            // GlobalTransform, so a correction written after this would be a frame late.
+            // Land before propagation so downstream transform consumers see
+            // the corrected value in the same frame.
             drag_apply_system
                 .after(interaction_decide_system)
                 .before(TransformSystems::Propagate),

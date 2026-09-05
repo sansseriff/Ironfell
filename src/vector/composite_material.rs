@@ -19,8 +19,7 @@
 //! solid areas.
 //!
 //! Overriding the blend state requires a `Material2d`, so this is the smallest
-//! material that does it. `bevy_vello` reaches the same conclusion for the same
-//! reason and sets its own blend state.
+//! material that does it.
 //!
 //! # Why the shader un-premultiplies before converting
 //!
@@ -39,9 +38,8 @@
 //! shape looks as though a sharpening filter has been applied.
 //!
 //! So the texture is sampled as UNORM (no hardware decode) and the shader
-//! un-premultiplies, converts, and re-premultiplies. `bevy_vello` can decode
-//! directly because vello *classic* emits straight alpha; sparse strips does
-//! not.
+//! un-premultiplies, converts, and re-premultiplies. Sparse strips does not have
+//! a straight-alpha output option.
 //!
 //! # Why the mesh is in clip space
 //!
@@ -149,13 +147,10 @@ impl Plugin for CompositeMaterialPlugin {
         // Inlined rather than loaded from `assets/`: it is a dozen lines that
         // must stay in lockstep with this file, and shipping it as a loose asset
         // would mean a missing-file failure at runtime instead of at build time.
-        let _ = app
-            .world_mut()
-            .resource_mut::<Assets<Shader>>()
-            .insert(
-                COMPOSITE_SHADER.id(),
-                Shader::from_wgsl(COMPOSITE_WGSL, file!()),
-            );
+        let _ = app.world_mut().resource_mut::<Assets<Shader>>().insert(
+            COMPOSITE_SHADER.id(),
+            Shader::from_wgsl(COMPOSITE_WGSL, file!()),
+        );
         app.add_plugins(Material2dPlugin::<VectorCompositeMaterial>::default());
     }
 }

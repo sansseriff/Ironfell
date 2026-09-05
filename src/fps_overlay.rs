@@ -1,7 +1,7 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}; // removed LogDiagnosticsPlugin
 
 use bevy::{
-    color::palettes::basic::{AQUA, LIME, WHITE},
+    color::palettes::basic::{AQUA, WHITE},
     prelude::*,
 };
 
@@ -62,17 +62,6 @@ fn setup_ui(mut commands: Commands) {
                         TextColor(WHITE.into()),
                     ));
                     p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
-                    // Which renderer is realizing the 2D layers.
-                    p.spawn((
-                        TextSpan::new("\n2D backend: "),
-                        font.clone(),
-                        TextColor(WHITE.into()),
-                    ));
-                    p.spawn((
-                        TextSpan::new("vello_hybrid (sparse strips)"),
-                        font.clone(),
-                        TextColor(LIME.into()),
-                    ));
                 });
         });
 }

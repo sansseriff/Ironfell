@@ -3,7 +3,7 @@
   import { controllerManager } from "../controller-manager.svelte";
 
   // A Bevy panel is an empty placeholder div: the DOM lays it out, and its
-  // rectangle is mirrored to a camera viewport / vello region in Rust.
+  // rectangle is mirrored to a camera viewport or layout region in Rust.
   let { id, kind }: { id: string; kind: string } = $props();
 
   let el: HTMLDivElement;

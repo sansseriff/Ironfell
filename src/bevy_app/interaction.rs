@@ -14,7 +14,6 @@ pub fn interaction_decide_system(
     // Drag end
     if pointer.just_released_left {
         drag.target = None;
-        drag.kind = None;
     }
 
     // Drag begin or click selection start
@@ -24,7 +23,6 @@ pub fn interaction_decide_system(
             selection.selected.insert(primary, ());
             selection.last_primary = Some(primary);
             drag.target = Some(primary);
-            drag.kind = Some(crate::DragKind::World3D);
 
             // Establish drag plane for 3D: if ctrl held -> fixed XZ plane (normal Y).
             // Otherwise plane passes through object and is camera-facing (normal = camera forward).
@@ -78,10 +76,6 @@ pub fn drag_apply_system(
     let Some(entity) = drag.target else {
         return;
     };
-    match drag.kind {
-        Some(crate::DragKind::World3D) => {}
-        _ => return,
-    }
     // Build new world point from current ray-plane intersection
     let Ok((camera, cam_tf)) = cameras.single() else {
         return;

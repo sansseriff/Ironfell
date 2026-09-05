@@ -13,7 +13,7 @@ interface PanelEntry {
 /**
  * Owns the single full-window canvas, the render session (worker or main thread),
  * and the registry of Bevy panels (DOM placeholder divs whose rects are mirrored
- * to camera viewports / vello regions in Rust).
+ * to camera viewports and layout metadata in Rust).
  *
  * Layout is strictly DOM -> Bevy: the browser lays panels out, we measure and post.
  */

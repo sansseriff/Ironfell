@@ -8,8 +8,7 @@ import type { AdapterBridge } from './adapter_bridge';
  *   ?bevy=empty,nolog  same, with LogPlugin (tracing-wasm perf marks) disabled
  *   ?bevy=nolog        normal app without LogPlugin
  *   ?bevy=min          minimal plugin floor (window+render only; implies no log)
- *   ?bevy=alpha        add the alpha-blending stress fixture
- * No param = the normal Vello Hybrid app.
+ * No param = the normal Bevy-only app.
  */
 export function variantFlagsFromUrl(): number {
     const parts = (new URLSearchParams(location.search).get('bevy') || '')
@@ -19,7 +18,6 @@ export function variantFlagsFromUrl(): number {
     if (parts.includes('nolog')) flags |= 1; // VARIANT_NO_LOG
     if (parts.includes('min')) flags |= 2;   // VARIANT_MIN_PLUGINS
     if (parts.includes('empty')) flags |= 4; // VARIANT_EMPTY
-    if (parts.includes('alpha')) flags |= 16; // VARIANT_ALPHA_STRESS
     return flags;
 }
 

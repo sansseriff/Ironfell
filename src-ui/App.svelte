@@ -25,7 +25,7 @@
   });
 </script>
 
-<!-- Layout: left HTML panel | center 3D viewer | right vello UI panel, timeline across the bottom -->
+<!-- Layout: left HTML panel | center 3D viewer | right UI panel, timeline across the bottom -->
 
 {#snippet controlsPane()}
   <div class="controls-pane">

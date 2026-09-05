@@ -25,15 +25,10 @@ pub use bevy_app::*; // re-export init_app symbols
 
 mod fps_overlay;
 
-mod tracking_circle;
-
 mod asset_reader; // kept private
 
 
 // mod asset_loader;
-
-// The 2D vector rendering seam: display lists in, backend-rendered pixels out.
-mod vector;
 
 mod camera_controller;
 
@@ -114,18 +109,10 @@ pub struct ModifierSnapshot {
 pub struct PointerState {
     pub screen: Vec2,
     pub delta: Vec2,
-    pub overlay_world: Option<Vec2>,
-    pub world_ray: Option<Ray3d>,
     pub buttons: ButtonSnapshot,
     pub modifiers: ModifierSnapshot,
     pub just_pressed_left: bool,
     pub just_released_left: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Hit2D {
-    pub entity: Entity,
-    pub z: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -136,7 +123,6 @@ pub struct Hit3D {
 
 #[derive(Resource, Debug, Default)]
 pub struct PointerHits {
-    pub overlay: Vec<Hit2D>,
     pub world3d: Vec<Hit3D>,
     pub primary: Option<Entity>,
 }
@@ -148,18 +134,9 @@ pub struct SelectionState {
     pub last_primary: Option<Entity>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum DragKind {
-    Overlay2D,
-    World3D,
-    Group,
-}
-
 #[derive(Resource, Debug)]
 pub struct DragState {
     pub target: Option<Entity>,
-    pub kind: Option<DragKind>,
-    pub grab_offset_2d: Vec2,
     pub plane_origin: Vec3,
     pub plane_normal: Vec3,
     pub grab_offset_world: Vec3,
@@ -169,27 +146,9 @@ impl Default for DragState {
     fn default() -> Self {
         Self {
             target: None,
-            kind: None,
-            grab_offset_2d: Vec2::ZERO,
             plane_origin: Vec3::ZERO,
             plane_normal: Vec3::Y,
             grab_offset_world: Vec3::ZERO,
-        }
-    }
-}
-
-// Marker for a composite vector group (single VelloScene acting as many shapes)
-#[derive(Component, Debug)]
-pub struct GroupAggregate {
-    pub version: u32,
-    pub shape_count: u32,
-}
-
-impl Default for GroupAggregate {
-    fn default() -> Self {
-        Self {
-            version: 0,
-            shape_count: 0,
         }
     }
 }

@@ -4,14 +4,11 @@
 //! rectangle (physical pixels, top-left origin, full-window coordinates) through the
 //! `set_panel_viewport` FFI. Rust consumes these rects:
 //! - the `viewer` panel drives `MainCamera3D.viewport`
-//! - vello panels (timeline, overlay) draw in screen space clipped to their rect
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use kurbo;
 
 pub const VIEWER_PANEL: &str = "viewer";
-pub const TIMELINE_PANEL: &str = "timeline";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PanelRect {
@@ -29,15 +26,6 @@ impl PanelRect {
 
     pub fn contains(&self, p: Vec2) -> bool {
         p.x >= self.x && p.y >= self.y && p.x <= self.x + self.w && p.y <= self.y + self.h
-    }
-
-    pub fn to_kurbo(&self) -> kurbo::Rect {
-        kurbo::Rect::new(
-            self.x as f64,
-            self.y as f64,
-            (self.x + self.w) as f64,
-            (self.y + self.h) as f64,
-        )
     }
 }
 
@@ -83,19 +71,4 @@ impl Panels {
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Panel)> {
         self.map.iter()
     }
-}
-
-/// Map a window-space cursor position (physical px, top-left origin) into "overlay world"
-/// coordinates: origin at the panel center, y-up. This is the coordinate space the 2D
-/// overlay content is authored in (previously provided by a per-window Camera2d).
-pub fn overlay_world_from_screen(rect: PanelRect, screen: Vec2) -> Vec2 {
-    let c = rect.center();
-    Vec2::new(screen.x - c.x, c.y - screen.y)
-}
-
-/// Kurbo affine mapping overlay-world coords (panel-center origin, y-up) to
-/// screen-space vello coords (window top-left origin, y-down).
-pub fn overlay_affine(rect: PanelRect) -> kurbo::Affine {
-    let c = rect.center();
-    kurbo::Affine::new([1.0, 0.0, 0.0, -1.0, c.x as f64, c.y as f64])
 }

@@ -85,7 +85,7 @@ pub fn create_window_by_offscreen_canvas(
 
 /// Upsert a panel rectangle (physical px, top-left origin, window coordinates).
 /// The `kind` decides what the panel drives ("viewer" = 3D camera viewport,
-/// "timeline" = timeline vello region, ...).
+/// other kinds are retained as layout metadata for the web shell).
 #[wasm_bindgen]
 pub fn set_panel_viewport(ptr: u64, id: String, kind: String, x: f32, y: f32, w: f32, h: f32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
@@ -288,7 +288,6 @@ pub fn left_bt_up(ptr: u64) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     if let Some(mut drag_state) = app.world_mut().get_resource_mut::<DragState>() {
         drag_state.target = None;
-        drag_state.kind = None;
     }
 
     // Send Bevy MouseButtonInput event

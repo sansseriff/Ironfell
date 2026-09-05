@@ -1,22 +1,16 @@
 //! Bevy app module
-//! Splits 3D scene setup, 2D overlay, and shared types/systems into submodules.
+//! Bevy-only startup experiment: 3D scene, UI, input, and shared systems.
 
 mod input_accum;
 mod interaction;
-mod overlay2d;
 mod picking;
 mod pointer;
 mod scene3d;
-mod timeline;
-mod ui_panels;
-mod alpha_stress;
-mod vello_world_demo;
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
-use bevy::camera::visibility::RenderLayers;
 use bevy::transform::TransformSystems;
-use crate::vector::{VectorCamera, VectorPlugin};
 
 pub use input_accum::*;
 // Bring required items into scope from submodules
@@ -24,16 +18,9 @@ use interaction::{
     drag_apply_system, interaction_decide_system, outbound_hover_system, outbound_selection_system,
     selection_reflect_system,
 };
-use overlay2d::{
-    DraggableSquare, SimpleMouseState, animate_2d_overlay, render_draggable_square,
-    setup_2d_overlay, simple_mouse_state_system, update_draggable_square_state,
-    update_mini_square_entities, render_mini_squares, render_selection_marquee
-};
-use picking::{pick_overlay_2d_system, pick_world_3d_system, resolve_primary_hit_system};
+use picking::{pick_world_3d_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
 use scene3d::{render_active_shapes, rotate_3d_shapes, setup_3d_scene, update_aabbes};
-use timeline::TimelinePlugin;
-use vello_world_demo::{animate_world_space_demo, setup_world_space_demo};
 
 use crate::{
     WorkerApp,
@@ -41,7 +28,6 @@ use crate::{
     camera_controller::CameraControllerPlugin,
     ffi_inspector_bridge::{InspectorStreamingState, inspector_continuous_streaming_system},
     fps_overlay::FPSOverlayPlugin,
-    // tracking_circle::TrackingCircle,
 };
 use bevy_remote_inspector::RemoteInspectorPlugin;
 
@@ -53,15 +39,11 @@ const MAX_HISTORY_LENGTH: usize = 200;
 pub const VARIANT_NO_LOG: u32 = 1 << 0;
 pub const VARIANT_MIN_PLUGINS: u32 = 1 << 1;
 pub const VARIANT_EMPTY: u32 = 1 << 2;
-/// Add the alpha-blending stress fixture (`?bevy=alpha`). Combines with
-/// the other diagnostic variants.
-pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
 
 pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     let no_log = variant_flags & VARIANT_NO_LOG != 0;
     let min_plugins = variant_flags & VARIANT_MIN_PLUGINS != 0;
     let empty = variant_flags & VARIANT_EMPTY != 0;
-    let alpha_stress = variant_flags & VARIANT_ALPHA_STRESS != 0;
 
     let mut app = App::new();
 
@@ -125,8 +107,6 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     app.add_plugins((
         // WebAssetPlugin::default(),
         default_plugins,
-        // TrackingCircle,
-        VectorPlugin,
         FPSOverlayPlugin,
         FrameTimeDiagnosticsPlugin {
             max_history_length: MAX_HISTORY_LENGTH,
@@ -134,7 +114,6 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         },
         CameraControllerPlugin,
         RemoteInspectorPlugin,
-        TimelinePlugin,
     ));
 
     init_shared_resources(&mut app);
@@ -153,14 +132,8 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     // to separate "camera pipeline" from "4x multisampled 5K target".
     app.add_systems(Startup, setup_background_camera);
 
-    // --- STEP 2: vector backend camera ---------------------------------------
-    // The backend spawns and owns its full-window compositing camera (order 10).
-    // This step only marks it as the camera bevy_ui draws into, which is what
-    // starts the FPS overlay rendering.
-    // PostStartup, not Startup: the backend spawns its camera with `Commands`, so
-    // the resource naming it does not exist until those commands are applied at
-    // the end of Startup.
-    app.add_systems(PostStartup, adopt_backend_camera_for_ui);
+    // --- STEP 2: plain Bevy UI camera ----------------------------------------
+    app.add_systems(Startup, setup_ui_camera);
 
     // --- STEP 3: 3D scene + viewport camera ----------------------------------
     // MainCamera3D (viewport-scoped, driven by the "viewer" panel rect) + meshes.
@@ -170,32 +143,7 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         rotate_3d_shapes,
     ));
 
-    // --- STEP 4: 2D overlay + UI panels + remaining Update systems -----------
-    app.add_systems(
-        Startup,
-        (
-            setup_2d_overlay,
-            ui_panels::setup_ui_panels,
-            // World-space counterpart to the screen-space overlays above; see
-            // vello_world_demo for what the two coordinate spaces imply.
-            setup_world_space_demo,
-        ),
-    );
-    app.add_systems(
-        Update,
-        (
-            ui_panels::render_ui_panels,
-            animate_world_space_demo,
-            inspector_continuous_streaming_system,
-            animate_2d_overlay, // TODO: refactor overlay interaction to new picking path
-            simple_mouse_state_system,
-            update_draggable_square_state.after(simple_mouse_state_system),
-            render_draggable_square.after(update_draggable_square_state),
-            update_mini_square_entities.after(simple_mouse_state_system),
-            render_mini_squares.after(update_mini_square_entities),
-            render_selection_marquee.after(update_mini_square_entities),
-        ),
-    );
+    app.add_systems(Update, inspector_continuous_streaming_system);
 
     // --- STEP 5: input/picking/interaction pipelines --------------------------
     app.add_systems(
@@ -204,11 +152,8 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
             accumulate_cursor_delta_system,
             accumulate_custom_scroll_system,
             pointer_collect_system.after(accumulate_cursor_delta_system),
-            pick_overlay_2d_system.after(pointer_collect_system),
             pick_world_3d_system.after(pointer_collect_system),
-            resolve_primary_hit_system
-                .after(pick_overlay_2d_system)
-                .after(pick_world_3d_system),
+            resolve_primary_hit_system.after(pick_world_3d_system),
         ),
     );
     app.add_systems(
@@ -229,17 +174,6 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
                 .after(selection_reflect_system),
         ),
     );
-    if alpha_stress {
-        app.add_systems(Startup, alpha_stress::setup_alpha_stress);
-        app.add_systems(
-            Update,
-            (
-                alpha_stress::render_alpha_stress_static,
-                alpha_stress::render_alpha_stress_animated,
-            ),
-        );
-    }
-
     // ========================== END RE-ENABLE LADDER ===========================
 
     WorkerApp::new(app)
@@ -258,15 +192,11 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<crate::PointerHits>();
     app.init_resource::<crate::SelectionState>();
     app.init_resource::<crate::DragState>();
-    // Overlay interaction resources
-    app.init_resource::<DraggableSquare>();
-    app.init_resource::<SimpleMouseState>();
 }
 
-/// Full-window helper cameras for the single-canvas architecture, split so the
-/// re-enable ladder can bring them back one at a time:
+/// Full-window helper cameras for the single-canvas architecture:
 /// - background camera (order -10) clears the whole window to the app background color
-/// - vello camera (order 10) draws the full-window vello texture on top, no clear
+/// - UI camera (order 10) draws Bevy UI on top without clearing
 ///
 /// The 3D viewer camera (order 0, viewport-scoped) is spawned in `setup_3d_scene`.
 ///
@@ -287,22 +217,19 @@ fn setup_background_camera(mut commands: Commands) {
     ));
 }
 
-/// STEP 2 (ladder): let bevy_ui draw into the backend's compositing camera.
-///
-/// The camera itself belongs to the vector backend — it is where that backend's
-/// output lands — so the app only expresses the policy that UI shares it.
-fn adopt_backend_camera_for_ui(
-    mut commands: Commands,
-    camera: Option<Res<VectorCamera>>,
-) {
-    // Optional so that selecting a backend which does not provide this camera is
-    // a warning rather than a panic — but loud, because the symptom otherwise is
-    // "the FPS overlay silently vanished".
-    let Some(camera) = camera else {
-        warn!("no vector composite camera; bevy_ui has nothing to draw into");
-        return;
-    };
-    commands.entity(camera.0).insert(bevy::ui::IsDefaultUiCamera);
+fn setup_ui_camera(mut commands: Commands) {
+    commands.spawn((
+        Camera2d,
+        bevy::render::view::Msaa::Off,
+        Camera {
+            order: 10,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        RenderLayers::none(),
+        bevy::ui::IsDefaultUiCamera,
+        Name::new("Bevy UI Camera"),
+    ));
 }
 
 /// Mirror the "viewer" panel rect (posted from JS) onto the 3D camera's viewport.

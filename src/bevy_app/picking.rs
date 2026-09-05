@@ -1,7 +1,6 @@
 use bevy::math::bounding::RayCast3d;
 use bevy::prelude::*;
 
-use crate::bevy_app::overlay2d::DraggableSquare;
 use crate::bevy_app::scene3d::{CurrentVolume, MainCamera3D};
 
 /// Build a world ray from a window-space cursor position (physical px).
@@ -34,33 +33,6 @@ pub fn camera_ray_from_window_px(
         .viewport_to_world(cam_transform, screen)
         .ok()
         .map(Ray3d::from)
-}
-
-// Overlay 2D placeholder: treat draggable square as a hit if pointer over its AABB.
-pub fn pick_overlay_2d_system(
-    pointer: Res<crate::PointerState>,
-    square: Option<Res<DraggableSquare>>, // legacy structure
-    mut hits: ResMut<crate::PointerHits>,
-) {
-    hits.overlay.clear();
-    let Some(square) = square else {
-        return;
-    };
-    let half = square.size * 0.5;
-    let pos = square.position;
-    let p = pointer.screen; // screen -> we don't yet compute overlay_world; fallback AABB in overlay coords if available
-    // Without overlay_world mapping yet, skip unless we later map pointer.overlay_world.
-    if let Some(world_pos) = pointer.overlay_world {
-        // once implemented
-        if world_pos.x >= pos.x - half.x
-            && world_pos.x <= pos.x + half.x
-            && world_pos.y >= pos.y - half.y
-            && world_pos.y <= pos.y + half.y
-        {
-            // No entity ID for square yet; will become component later; using placeholder None.
-        }
-    }
-    let _ = p; // suppress unused for now
 }
 
 // 3D picking using AABB intersection along view ray.

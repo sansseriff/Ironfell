@@ -56,25 +56,10 @@ log = { version = "*", features = [
 ] }
 bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
 
-# Geometry and style vocabulary shared by the app's display lists and
-# `vello_hybrid`. Versions must match the renderer's resolved versions so their
-# types unify at the rendering seam.
-kurbo = "0.13.1"
-peniko = "0.6.1"
-
-# Sparse-strips vector renderer.
-# `text` is off: this app draws no vector text (the FPS overlay is bevy_ui),
-# and it would pull in the whole glifo font stack.
-vello_hybrid = { version = "0.2.0", default-features = false, features = [
-    "wgpu",
-] }
-
 # Pin app-surface: it must resolve to the SAME wgpu major as bevy_render, or the
 # two end up with incompatible wgpu types. bevy 0.19 -> wgpu 29, and app-surface
 # 1.12.x is the last release on wgpu ^29 (1.13 moved to 30).
 app-surface = { version = "=1.12.0", features = ["web_rwh"] }
-raw-window-handle = "0.6"
-wgpu = "29"
 # Web only
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.51"

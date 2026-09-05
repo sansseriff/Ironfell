@@ -46,41 +46,51 @@ extern "C" {
     pub(crate) fn send_inspector_update_from_worker(update_json: &str);
 }
 
+/// Build the Bevy app around the canvas it will render into.
+///
+/// The canvas arrives here rather than in a later call because `RenderPlugin`
+/// resolves the GPU adapter while it is being added, and needs the primary
+/// window to already exist. On WebGPU an adapter can be found without one, so
+/// the previous split (`init_bevy_app` then `create_window_by_offscreen_canvas`)
+/// worked by accident; on WebGL2 the adapter *is* the canvas's WebGL2 context,
+/// so a windowless adapter request finds nothing and Bevy panics with
+/// "Unable to find a GPU!".
+///
+/// In worker mode the canvas is a transferred `OffscreenCanvas`; in main-thread
+/// mode it is the HTML canvas element, which is structurally compatible.
+///
 /// `variant_flags` selects a perf-grid variant (see `bevy_app::VARIANT_*`); 0 = normal app.
 #[wasm_bindgen]
-pub fn init_bevy_app(variant_flags: u32) -> u64 {
-    // info!/log crate may be unavailable in nolog/min variants; always print via console.
-    log(&format!("init_bevy_app variant_flags={variant_flags}"));
-    let app = init_app(variant_flags);
-
-    // 包装成无生命周期的指针
-    // english: Wrap it into a non-lifetime pointer
-    Box::into_raw(Box::new(app)) as u64
-}
-
-/// Create the single full-window Bevy window from a canvas.
-///
-/// Called once per app. In worker mode the canvas is a transferred OffscreenCanvas;
-/// in main-thread mode it is the HTML canvas element (structurally compatible).
-#[wasm_bindgen]
-pub fn create_window_by_offscreen_canvas(
-    ptr: u64,
+pub fn init_bevy_app_with_canvas(
     canvas: web_sys::OffscreenCanvas,
     scale_factor: f32,
     is_in_worker: bool,
-) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    app.scale_factor = scale_factor;
+    variant_flags: u32,
+) -> u64 {
+    // Without this, a panic reaches the console as a bare `RuntimeError: unreachable`
+    // with no message, file or line: `wasm-release` builds with
+    // `panic = "immediate-abort"` plus `-Zfmt-debug=none -Zlocation-detail=none`.
+    // The hook costs nothing there (those panics are already unrecoverable aborts)
+    // and makes any non-stripped build report the real panic instead.
+    console_error_panic_hook::set_once();
+    // info!/log crate may be unavailable in nolog/min variants; always print via console.
+    log(&format!(
+        "init_bevy_app_with_canvas variant_flags={variant_flags}"
+    ));
 
     let offscreen_canvas = OffscreenCanvas::new(canvas, scale_factor, 1);
     let view_obj = ViewObj::from_offscreen_canvas(offscreen_canvas);
 
-    let entity = create_canvas_window(app, view_obj);
-    app.window = entity;
+    let mut app = init_app(variant_flags, view_obj);
+    app.scale_factor = scale_factor;
 
     let mut act = ActivityControl::new();
     act.is_in_worker = is_in_worker;
     app.insert_resource(act);
+
+    // 包装成无生命周期的指针
+    // english: Wrap it into a non-lifetime pointer
+    Box::into_raw(Box::new(app)) as u64
 }
 
 /// Upsert a panel rectangle (physical px, top-left origin, window coordinates).

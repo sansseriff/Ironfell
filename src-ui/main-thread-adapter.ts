@@ -1,9 +1,8 @@
 // Main-thread adapter: same message protocol as worker.ts, but every message is a
 // direct synchronous wasm call (no postMessage hop) — minimal input latency.
 import init, {
-  init_bevy_app,
+  init_bevy_app_with_canvas,
   is_preparation_completed,
-  create_window_by_offscreen_canvas,
   enter_frame,
   mouse_move,
   left_bt_down,
@@ -38,6 +37,9 @@ import { CadenceProbe } from "./runtime/cadence_probe";
 export class MainThreadAdapter {
   private probe = new CadenceProbe();
   private appHandle: bigint = BigInt(0);
+  // Perf-grid variant selector, received with the wasm bytes but not usable
+  // until the canvas arrives and the app is actually built.
+  private variantFlags: number = 0;
   private initFinished = 0;
   private isStoppedRunning = false;
   private canvas: HTMLCanvasElement | null = null;
@@ -80,8 +82,9 @@ export class MainThreadAdapter {
       case "wasmData":
         console.log("Received WASM data (main thread), initializing...");
         await init(data.wasmData);
-        this.appHandle = init_bevy_app(data.variantFlags >>> 0);
-        console.log("App handle initialized:", this.appHandle);
+        // The app is built later, in "init": constructing it needs the canvas,
+        // because the renderer picks its GPU adapter from the canvas's context.
+        this.variantFlags = data.variantFlags >>> 0;
         this.sendMessage({ ty: "workerIsReady" });
         break;
 
@@ -326,12 +329,13 @@ export class MainThreadAdapter {
 
     // The wasm entry point takes an OffscreenCanvas; the HTML canvas is structurally
     // compatible for surface creation, as before.
-    create_window_by_offscreen_canvas(
-      this.appHandle,
+    this.appHandle = init_bevy_app_with_canvas(
       canvas as any,
       devicePixelRatio,
       false, // is_in_worker
+      this.variantFlags,
     );
+    console.log("App handle initialized:", this.appHandle);
 
     // Check ready state
     this.getPreparationState();

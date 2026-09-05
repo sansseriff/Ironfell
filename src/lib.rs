@@ -59,10 +59,10 @@ impl DerefMut for WorkerApp {
 }
 
 impl WorkerApp {
-    pub fn new(app: App) -> Self {
+    pub fn new(app: App, window: Entity) -> Self {
         Self {
             app,
-            window: Entity::PLACEHOLDER,
+            window,
             scale_factor: 1.0,
         }
     }

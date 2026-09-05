@@ -9,9 +9,10 @@ use app_surface::{CanvasWrapper, OffscreenCanvasWrapper};
 use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
 use bevy::window::{
-    PresentMode, PrimaryWindow, RawHandleWrapper, Window, WindowCreated, WindowResized,
-    WindowWrapper,
+    PresentMode, PrimaryWindow, RawHandleWrapper, RawHandleWrapperHolder, Window, WindowCreated,
+    WindowResized, WindowWrapper,
 };
+use std::sync::{Arc, Mutex};
 
 pub(crate) use app_surface::{Canvas, OffscreenCanvas};
 
@@ -48,7 +49,12 @@ pub struct ActiveCanvas {
 }
 
 /// Spawn the single primary window for the provided canvas and wire up its raw handle.
-pub fn create_canvas_window(app: &mut App, view: ViewObj) -> Entity {
+///
+/// **Must run before `RenderPlugin` is added.** `RenderPlugin::build` — not
+/// `finish` — is what starts renderer initialization, and it looks for the
+/// primary window right then to build a surface for adapter selection. A window
+/// spawned afterwards is too late: see the `RawHandleWrapperHolder` note below.
+pub fn spawn_canvas_window(app: &mut App, view: ViewObj) -> Entity {
     let (width, height) = view.physical_resolution();
 
     let mut window = Window {
@@ -66,13 +72,29 @@ pub fn create_canvas_window(app: &mut App, view: ViewObj) -> Entity {
     }
     .expect("failed to wrap canvas window handle");
 
+    // `RawHandleWrapperHolder` is not optional here, even though `RawHandleWrapper`
+    // alone is what the rest of this app reads.
+    //
+    // `RenderPlugin` initializes the renderer from an async task, so it cannot
+    // borrow the handle out of the ECS; it looks specifically for
+    // `RawHandleWrapperHolder` on the primary window and, finding one, creates a
+    // surface to pass as `compatible_surface` when requesting the adapter.
+    //
+    // On WebGPU a missing holder is invisible: an adapter can be resolved with no
+    // surface at all. On WebGL2 it is fatal — the adapter *is* the canvas's GL
+    // context, so wgpu's GL backend returns no adapters unless a surface is
+    // supplied, and Bevy then panics with "Unable to find a GPU!". `Window` only
+    // requires `CursorOptions`, so nothing inserts this component for us.
     let entity = app
         .world_mut()
-        .spawn((window, PrimaryWindow, raw_handle))
+        .spawn((
+            window,
+            PrimaryWindow,
+            raw_handle.clone(),
+            RawHandleWrapperHolder(Arc::new(Mutex::new(Some(raw_handle)))),
+        ))
         .id();
 
-    app.world_mut()
-        .write_message(WindowCreated { window: entity });
     app.insert_non_send_resource(ActiveCanvas {
         view,
         window: entity,
@@ -80,6 +102,22 @@ pub fn create_canvas_window(app: &mut App, view: ViewObj) -> Entity {
 
     info!("Created canvas window {entity:?} ({width}x{height})");
     entity
+}
+
+/// Emit `WindowCreated` for the window spawned by [`spawn_canvas_window`].
+///
+/// Separate from the spawn because `Messages<WindowCreated>` is registered by
+/// `WindowPlugin`, which does not exist yet at spawn time.
+pub fn announce_canvas_window(app: &mut App) {
+    let Some(entity) = app
+        .world()
+        .get_non_send_resource::<ActiveCanvas>()
+        .map(|c| c.window)
+    else {
+        return;
+    };
+    app.world_mut()
+        .write_message(WindowCreated { window: entity });
 }
 
 /// Sync the Bevy window resolution to the canvas' current physical size and emit

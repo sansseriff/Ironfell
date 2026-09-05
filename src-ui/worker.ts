@@ -1,9 +1,8 @@
 // from bevy-in-web-worker https://github.com/jinleili/bevy-in-web-worker
 
 import init, {
-  init_bevy_app,
+  init_bevy_app_with_canvas,
   is_preparation_completed,
-  create_window_by_offscreen_canvas,
   enter_frame_with_mouse,
   left_bt_down,
   left_bt_up,
@@ -37,6 +36,9 @@ import { CadenceProbe } from "./runtime/cadence_probe";
 class IronWorker {
   private probe = new CadenceProbe();
   private appHandle: bigint = BigInt(0);
+  // Perf-grid variant selector, received with the wasm bytes but not usable
+  // until the canvas arrives and the app is actually built.
+  private variantFlags: number = 0;
   private initFinished = 0;
   private isStoppedRunning = false;
   private offscreenCanvas: OffscreenCanvas | null = null;
@@ -83,8 +85,9 @@ class IronWorker {
           console.log("Received WASM data from main thread, initializing...");
           await init(data.wasmData);
           console.log("WASM module initialized");
-          this.appHandle = init_bevy_app(data.variantFlags >>> 0);
-          console.log("App handle initialized:", this.appHandle);
+          // The app is built later, in "init": constructing it needs the canvas,
+          // because the renderer picks its GPU adapter from the canvas's context.
+          this.variantFlags = data.variantFlags >>> 0;
 
           // Notify the main thread that the worker is ready
           self.postMessage({ ty: "workerIsReady" });
@@ -325,12 +328,13 @@ class IronWorker {
 
   private createWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number) {
     this.offscreenCanvas = offscreenCanvas;
-    create_window_by_offscreen_canvas(
-      this.appHandle,
+    this.appHandle = init_bevy_app_with_canvas(
       offscreenCanvas,
       devicePixelRatio,
       true, // is_in_worker
+      this.variantFlags,
     );
+    console.log("App handle initialized:", this.appHandle);
 
     // Check ready state
     this.getPreparationState();

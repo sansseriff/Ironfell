@@ -38,6 +38,7 @@ use vello_world_demo::{animate_world_space_demo, setup_world_space_demo};
 use crate::{
     WorkerApp,
     asset_reader::WebAssetPlugin,
+    canvas_view::{ViewObj, announce_canvas_window, spawn_canvas_window},
     camera_controller::CameraControllerPlugin,
     ffi_inspector_bridge::{InspectorStreamingState, inspector_continuous_streaming_system},
     fps_overlay::FPSOverlayPlugin,
@@ -47,7 +48,7 @@ use bevy_remote_inspector::RemoteInspectorPlugin;
 
 const MAX_HISTORY_LENGTH: usize = 200;
 
-/// Perf-grid variant flags, passed from JS via `init_bevy_app(variant_flags)`.
+/// Perf-grid variant flags, passed from JS via `init_bevy_app_with_canvas`.
 /// Selected with the `?bevy=` URL param (see wasm_loader.ts) so one wasm artifact
 /// serves every grid cell. flags == 0 runs whatever this file currently enables.
 pub const VARIANT_NO_LOG: u32 = 1 << 0;
@@ -57,7 +58,13 @@ pub const VARIANT_EMPTY: u32 = 1 << 2;
 /// the other diagnostic variants.
 pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
 
-pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
+/// Build the app around an already-created canvas.
+///
+/// The canvas is a construction parameter rather than something attached later,
+/// because `RenderPlugin::build` resolves the GPU adapter and needs the primary
+/// window to exist at that moment. On WebGL2 the adapter *is* the canvas's GL
+/// context, so there is no adapter to find without it.
+pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     let no_log = variant_flags & VARIANT_NO_LOG != 0;
     let min_plugins = variant_flags & VARIANT_MIN_PLUGINS != 0;
     let empty = variant_flags & VARIANT_EMPTY != 0;
@@ -66,6 +73,10 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     let mut app = App::new();
 
     app.insert_resource(ClearColor(Color::srgb(0.97, 0.97, 0.97)));
+
+    // Before any plugin: `RenderPlugin::build` reads the primary window to pick
+    // an adapter, and on WebGL2 finds none without it.
+    let window_entity = spawn_canvas_window(&mut app, view);
 
     if min_plugins {
         // Perf-grid cell B3 (`?bevy=min`): the smallest plugin set that can boot a
@@ -90,14 +101,15 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
             ImagePlugin::default_nearest(),
         ));
         init_shared_resources(&mut app);
-        return WorkerApp::new(app);
+        announce_canvas_window(&mut app);
+        return WorkerApp::new(app, window_entity);
     }
 
     let mut default_plugins = DefaultPlugins.set(ImagePlugin::default_nearest());
 
     // By default, a primary window gets spawned by `WindowPlugin`, contained in `DefaultPlugins`
     // Do NOT create an implicit primary window; all windows are created explicitly
-    // from JS via create_window_by_offscreen_canvas with deterministic IDs.
+    // by `spawn_canvas_window` above, before this plugin set is added.
     default_plugins = default_plugins.set(bevy::window::WindowPlugin {
         primary_window: None,
         ..default()
@@ -119,7 +131,8 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         // no app plugins — "rendering absolutely nothing".
         app.add_plugins(default_plugins);
         init_shared_resources(&mut app);
-        return WorkerApp::new(app);
+        announce_canvas_window(&mut app);
+        return WorkerApp::new(app, window_entity);
     }
 
     app.add_plugins((
@@ -138,6 +151,7 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     ));
 
     init_shared_resources(&mut app);
+    announce_canvas_window(&mut app);
 
     // ============================ RE-ENABLE LADDER =============================
     // flags=0 escalation for the 5K frame-skip hunt. Uncomment ONE step at a time,
@@ -242,7 +256,7 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
 
     // ========================== END RE-ENABLE LADDER ===========================
 
-    WorkerApp::new(app)
+    WorkerApp::new(app, window_entity)
 }
 
 /// Resources the FFI layer touches (Option-guarded there); initialized for every

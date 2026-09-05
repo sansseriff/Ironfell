@@ -8,9 +8,8 @@
 //!
 //! The seam is the data, not a trait. A backend is a Bevy plugin that consumes
 //! [`DisplayList`](super::DisplayList) components on entities carrying
-//! [`VectorLayer`], and its systems are gated on [`backend_active`] so backends
-//! can be switched at runtime — or run at the same time, for a side-by-side
-//! comparison on identical input.
+//! [`VectorLayer`]. The app installs exactly one backend so an inactive renderer
+//! pays no initialization cost.
 //!
 //! (The `VectorRasterizer` trait sketched in the vision document is a different
 //! thing: an interface for rasterizing a *bounded* workload into a *target*. That
@@ -20,50 +19,13 @@
 use bevy::prelude::*;
 
 /// Which renderer realizes a [`DisplayList`](super::DisplayList).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum BackendKind {
     /// `vello` classic, via `bevy_vello`. GPU compute flattening.
     ClassicVello,
     /// `vello_hybrid` sparse strips. CPU strip generation, no compute shaders.
     ///
-    /// Not implemented yet; selecting it renders nothing rather than falling
-    /// back silently, so a missing backend is visible rather than mysterious.
-    #[allow(
-        dead_code,
-        reason = "the next backend's slot; removing it would hide the plan"
-    )]
     Hybrid,
-}
-
-/// Which backends are live this frame.
-///
-/// `compare` exists for A/B work: with two backends active, the same display
-/// lists are realized twice, which is the only way to compare them on genuinely
-/// identical input rather than on two builds that have drifted.
-#[derive(Resource, Clone, Debug)]
-pub struct ActiveBackends {
-    pub primary: BackendKind,
-    pub compare: Option<BackendKind>,
-}
-
-impl Default for ActiveBackends {
-    fn default() -> Self {
-        Self {
-            primary: BackendKind::ClassicVello,
-            compare: None,
-        }
-    }
-}
-
-impl ActiveBackends {
-    pub fn is_active(&self, kind: BackendKind) -> bool {
-        self.primary == kind || self.compare == Some(kind)
-    }
-}
-
-/// Run condition: is `kind` realizing display lists this frame?
-pub fn backend_active(kind: BackendKind) -> impl Fn(Res<'_, ActiveBackends>) -> bool + Clone {
-    move |backends: Res<'_, ActiveBackends>| backends.is_active(kind)
 }
 
 /// The coordinate space a layer's commands are authored in.
@@ -81,6 +43,7 @@ pub enum LayerSpace {
 /// scene at `z = 0`, where relative draw order was undefined and depended on
 /// entity iteration. Two layers must not share an order.
 #[derive(Component, Clone, Copy, Debug)]
+#[require(Transform)]
 pub struct VectorLayer {
     pub space: LayerSpace,
     pub order: i32,
@@ -117,4 +80,7 @@ pub mod order {
     pub const MINI_SQUARES: i32 = 40;
     pub const DRAGGABLE: i32 = 50;
     pub const SELECTION_MARQUEE: i32 = 60;
+    /// Alpha stress fixture (`?bevy=alpha`), drawn above everything else.
+    pub const ALPHA_STRESS_STATIC: i32 = 70;
+    pub const ALPHA_STRESS_ANIMATED: i32 = 71;
 }

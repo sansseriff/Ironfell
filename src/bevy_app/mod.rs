@@ -9,13 +9,14 @@ mod pointer;
 mod scene3d;
 mod timeline;
 mod ui_panels;
+mod alpha_stress;
 mod vello_world_demo;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::transform::TransformSystems;
-use crate::vector::{ActiveBackends, ClassicBackendCamera, VectorPlugin};
+use crate::vector::{VectorCamera, VectorPlugin};
 
 pub use input_accum::*;
 // Bring required items into scope from submodules
@@ -52,11 +53,26 @@ const MAX_HISTORY_LENGTH: usize = 200;
 pub const VARIANT_NO_LOG: u32 = 1 << 0;
 pub const VARIANT_MIN_PLUGINS: u32 = 1 << 1;
 pub const VARIANT_EMPTY: u32 = 1 << 2;
+/// Backwards-compatible spelling for the Hybrid backend. Hybrid is now the
+/// normal default, so this flag no longer changes backend availability.
+pub const VARIANT_HYBRID_BACKEND: u32 = 1 << 3;
+/// Add the alpha-blending stress fixture (`?bevy=alpha`). Combines with
+/// `classic`: `alpha` uses the Hybrid default and `alpha,classic` runs the same
+/// fixture through classic Vello.
+pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
+/// Explicitly initialize classic Vello. The ordinary app defaults to a
+/// Hybrid-only plugin set so classic's eager compute-pipeline creation cannot
+/// affect cold start. The web shell reaches this variant after an F9 request.
+pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
 
 pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
     let no_log = variant_flags & VARIANT_NO_LOG != 0;
     let min_plugins = variant_flags & VARIANT_MIN_PLUGINS != 0;
     let empty = variant_flags & VARIANT_EMPTY != 0;
+    // `hybrid` remains a backwards-compatible spelling, but Hybrid is now the
+    // default. `classic` wins if both names are present.
+    let classic_backend = variant_flags & VARIANT_CLASSIC_BACKEND != 0;
+    let alpha_stress = variant_flags & VARIANT_ALPHA_STRESS != 0;
 
     let mut app = App::new();
 
@@ -123,11 +139,13 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
         // WebAssetPlugin::default(),
         default_plugins,
         // TrackingCircle,
-        // Owns the display-list seam and every backend that can realize it.
-        // Which backend is live is an `ActiveBackends` resource, changeable at
-        // runtime; two can run at once for a side-by-side comparison.
-        VectorPlugin {
-            backends: ActiveBackends::default(),
+        // The ordinary app installs exactly one renderer. Installing classic
+        // Vello eagerly constructs its compute pipelines even when inactive,
+        // so the fast-start default must omit its plugin entirely.
+        if classic_backend {
+            VectorPlugin::classic_only()
+        } else {
+            VectorPlugin::hybrid_only()
         },
         FPSOverlayPlugin,
         FrameTimeDiagnosticsPlugin {
@@ -231,6 +249,17 @@ pub(crate) fn init_app(variant_flags: u32) -> WorkerApp {
                 .after(selection_reflect_system),
         ),
     );
+    if alpha_stress {
+        app.add_systems(Startup, alpha_stress::setup_alpha_stress);
+        app.add_systems(
+            Update,
+            (
+                alpha_stress::render_alpha_stress_static,
+                alpha_stress::render_alpha_stress_animated,
+            ),
+        );
+    }
+
     // ========================== END RE-ENABLE LADDER ===========================
 
     WorkerApp::new(app)
@@ -284,13 +313,13 @@ fn setup_background_camera(mut commands: Commands) {
 /// output lands — so the app only expresses the policy that UI shares it.
 fn adopt_backend_camera_for_ui(
     mut commands: Commands,
-    camera: Option<Res<ClassicBackendCamera>>,
+    camera: Option<Res<VectorCamera>>,
 ) {
     // Optional so that selecting a backend which does not provide this camera is
     // a warning rather than a panic — but loud, because the symptom otherwise is
     // "the FPS overlay silently vanished".
     let Some(camera) = camera else {
-        warn!("no vector backend camera; bevy_ui has nothing to draw into");
+        warn!("no vector composite camera; bevy_ui has nothing to draw into");
         return;
     };
     commands.entity(camera.0).insert(bevy::ui::IsDefaultUiCamera);

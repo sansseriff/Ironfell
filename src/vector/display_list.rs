@@ -24,7 +24,7 @@ use bevy::prelude::*;
 use kurbo;
 use peniko;
 
-use kurbo::{Affine, BezPath, Circle, Line, Rect, RoundedRect, Stroke};
+use kurbo::{Affine, BezPath, Circle, Line, Rect, RoundedRect, Shape as _, Stroke};
 use peniko::{Color, Fill};
 
 /// A drawable outline, keeping its specific type so backends can take fast paths.
@@ -60,6 +60,19 @@ impl From<Line> for Shape {
 impl From<BezPath> for Shape {
     fn from(v: BezPath) -> Self {
         Self::Path(v)
+    }
+}
+
+impl Shape {
+    /// Untransformed bounds of the outline.
+    pub fn bounding_box(&self) -> Rect {
+        match self {
+            Self::Rect(s) => s.bounding_box(),
+            Self::RoundedRect(s) => s.bounding_box(),
+            Self::Circle(s) => s.bounding_box(),
+            Self::Line(s) => s.bounding_box(),
+            Self::Path(s) => s.bounding_box(),
+        }
     }
 }
 
@@ -115,6 +128,55 @@ pub struct DisplayList {
 impl DisplayList {
     pub fn cmds(&self) -> &[DrawCmd] {
         &self.cmds
+    }
+
+    /// Conservative bounds of everything this layer draws, in layer space.
+    ///
+    /// `None` for an empty list. Clips are treated as content rather than as
+    /// intersections, so the result can be larger than what is actually painted
+    /// — never smaller, which is the direction that keeps callers correct.
+    ///
+    /// Three things want this, in increasing order of ambition:
+    ///
+    /// 1. **Culling** (used today): skip a layer entirely when its bounds miss
+    ///    the viewport, so an off-screen layer costs no encoding at all.
+    /// 2. **Damage**: union of a layer's previous and current bounds is the
+    ///    region a change actually dirtied.
+    /// 3. **Rasterization**: a cached raster needs a size and a placement, and
+    ///    this is where both come from.
+    ///
+    /// Recomputed on demand rather than cached, because it is O(commands) over
+    /// data that is already hot and is only asked for once per rebuild. If that
+    /// stops being true, cache it next to `cmds` and invalidate in `rebuild`.
+    pub fn bounds(&self) -> Option<Rect> {
+        let mut acc: Option<Rect> = None;
+        for cmd in &self.cmds {
+            let b = match cmd {
+                DrawCmd::Fill {
+                    transform, shape, ..
+                }
+                | DrawCmd::PushClip { transform, shape } => {
+                    transform.transform_rect_bbox(shape.bounding_box())
+                }
+                DrawCmd::Stroke {
+                    transform,
+                    style,
+                    shape,
+                    ..
+                } => {
+                    // Inflate by half the stroke width before mapping, so the
+                    // outset is measured in the space the width is defined in.
+                    let half = style.width * 0.5;
+                    transform.transform_rect_bbox(shape.bounding_box().inflate(half, half))
+                }
+                DrawCmd::PopLayer => continue,
+            };
+            acc = Some(match acc {
+                Some(a) => a.union(b),
+                None => b,
+            });
+        }
+        acc
     }
 }
 

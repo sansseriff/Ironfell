@@ -16,7 +16,8 @@ use bevy::transform::TransformSystems;
 use bevy::window::PrimaryWindow;
 use bevy_vello::{VelloPlugin, prelude::*};
 
-use super::backend::{BackendKind, LayerSpace, VectorLayer, backend_active};
+use super::backend::{LayerSpace, VectorLayer};
+use super::composite::{VECTOR_LAYER, VectorCamera};
 use super::display_list::{Brush, DisplayList, DrawCmd, Shape};
 
 /// Dispatch on the concrete shape type rather than converting to `BezPath`, so
@@ -36,17 +37,6 @@ macro_rules! with_shape {
     };
 }
 
-/// The render layer the Vello canvas composites on. Layers other than this are
-/// culled by `bevy_vello`'s extraction, so every scene must carry it.
-const VELLO_LAYER: usize = 1;
-
-/// The full-window camera that composites the Vello output.
-///
-/// Exposed so app-level composition (which camera owns the UI, for instance) can
-/// attach to it without this module deciding app policy.
-#[derive(Resource, Debug, Clone, Copy)]
-pub struct ClassicBackendCamera(pub Entity);
-
 /// Marks a scene whose commands are authored in absolute screen pixels.
 #[derive(Component)]
 struct ScreenSpaceScene;
@@ -55,16 +45,18 @@ pub struct ClassicVelloBackend;
 
 impl Plugin for ClassicVelloBackend {
     fn build(&self, app: &mut App) {
-        // `VelloPlugin` cannot be toggled at runtime, so it is always installed.
-        // When the backend is inactive its scenes are empty and it composites a
-        // cleared texture — cheap, but not free, which is worth remembering when
-        // reading A/B numbers with both backends installed.
+        // Installing `VelloPlugin` eagerly constructs Vello's renderer and
+        // compute pipelines in `Plugin::finish`. The normal Hybrid path therefore
+        // does not add this plugin at all; only the explicit classic variant
+        // reaches this build method.
         app.add_plugins(VelloPlugin {
-            canvas_render_layers: RenderLayers::layer(VELLO_LAYER),
+            canvas_render_layers: RenderLayers::layer(VECTOR_LAYER),
             use_cpu: false,
             antialiasing: vello::AaConfig::Area,
         })
-        .add_systems(Startup, spawn_backend_camera)
+        // PostStartup: the shared camera is spawned with `Commands` in Startup,
+        // so the resource naming it does not exist until those are applied.
+        .add_systems(PostStartup, mark_vello_view)
         .add_systems(
             PostUpdate,
             (
@@ -75,28 +67,17 @@ impl Plugin for ClassicVelloBackend {
                 sync_screen_space_transforms.before(TransformSystems::Propagate),
                 replay_display_lists,
             )
-                .chain()
-                .run_if(backend_active(BackendKind::ClassicVello)),
+                .chain(),
         );
     }
 }
 
-fn spawn_backend_camera(mut commands: Commands) {
-    let entity = commands
-        .spawn((
-            Camera2d,
-            bevy::render::view::Msaa::Off,
-            Camera {
-                order: 10,
-                clear_color: ClearColorConfig::None,
-                ..default()
-            },
-            RenderLayers::layer(VELLO_LAYER),
-            VelloView,
-            Name::new("Classic Vello Backend Camera"),
-        ))
-        .id();
-    commands.insert_resource(ClassicBackendCamera(entity));
+/// Tell `bevy_vello` which camera to composite into.
+///
+/// `VelloView` is a `bevy_vello` type, so attaching it is this backend's job
+/// even though the camera itself is shared.
+fn mark_vello_view(mut commands: Commands, camera: Res<VectorCamera>) {
+    commands.entity(camera.0).insert(VelloView);
 }
 
 /// Give every new [`VectorLayer`] the components this backend needs.
@@ -111,7 +92,7 @@ fn attach_scenes(
             // A Vello scene has no measurable bounds, so its `Aabb` stays
             // zero-sized and it would otherwise be frustum-culled.
             NoFrustumCulling,
-            RenderLayers::layer(VELLO_LAYER),
+            RenderLayers::layer(VECTOR_LAYER),
         ));
         match layer.space {
             LayerSpace::Screen => {
@@ -148,18 +129,29 @@ fn sync_screen_space_transforms(
     let half_h = window.height() / 2.0;
 
     for mut transform in &mut scenes {
+        // Every write here goes through `Mut<Transform>`, so an unconditional
+        // assignment marks the component changed *every frame* and drags the
+        // whole entity through transform propagation for no reason. Compare
+        // first: these values are constant in the steady state.
         if transform.translation.x != -half_w || transform.translation.y != half_h {
             transform.translation.x = -half_w;
             transform.translation.y = half_h;
         }
-        transform.scale.x = 1.0;
-        transform.scale.y = 1.0;
+        if transform.scale.x != 1.0 || transform.scale.y != 1.0 {
+            transform.scale.x = 1.0;
+            transform.scale.y = 1.0;
+        }
     }
 }
 
 /// Re-encode only the layers whose commands actually changed.
-fn replay_display_lists(mut layers: Query<(&DisplayList, &mut VelloScene2d), Changed<DisplayList>>) {
+fn replay_display_lists(
+    mut layers: Query<(Ref<'_, DisplayList>, &mut VelloScene2d)>,
+) {
     for (list, mut scene) in &mut layers {
+        if !list.is_changed() {
+            continue;
+        }
         scene.reset();
         for cmd in list.cmds() {
             match cmd {

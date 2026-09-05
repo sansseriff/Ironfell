@@ -339,7 +339,7 @@ Atlas allocation and eviction, tile keys by zoom bucket, painter-correct per-til
 | 3 | Will the blit-rect fast path land, and does it cover clipped rects? | Watch vello `main`; ask on Zulip `#vello` | No, but it changes Tranche D's cost |
 | 4 | Are patches 6.4/1 and 6.4/2 acceptable upstream? | Open a Zulip thread before writing code | No — but asking first is much cheaper than forking |
 | 5 | `render_to_atlas` is `#[doc(hidden)]` — is it stable enough to build a tile cache on? | Ask upstream; else use external textures + Bevy-owned atlas | Yes for Tranche D's composite strategy |
-| 6 | Does hybrid's depth/early-z path interact correctly with a Bevy-owned target? | Spike; `depth_view` is now caller-owned ([#1810](https://github.com/linebender/vello/pull/1810)) | Yes for Tranche B |
+| 6 | ~~Does hybrid's depth/early-z path interact correctly with a Bevy-owned target?~~ **Moot on 0.2.0** — `render()` takes no depth argument at all; caller-owned depth ([#1810](https://github.com/linebender/vello/pull/1810)) is on `main` and unreleased. Revisit when it ships. | Resolved by reading the released source | No |
 | 7 | Bevy-side or vello-side tile composite? | Decide at Tranche D from painter-order requirements | No — design the seam to allow both |
 
 ---

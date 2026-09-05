@@ -8,7 +8,12 @@ import type { AdapterBridge } from './adapter_bridge';
  *   ?bevy=empty,nolog  same, with LogPlugin (tracing-wasm perf marks) disabled
  *   ?bevy=nolog        normal app without LogPlugin
  *   ?bevy=min          minimal plugin floor (window+render only; implies no log)
- * No param = the normal app.
+ *   ?bevy=hybrid       backwards-compatible spelling for the normal default
+ *   ?bevy=classic      initialize classic Vello instead of Vello Hybrid;
+ *                      this deliberately pays classic's deferred startup cost
+ *   ?bevy=alpha        add the alpha-blending stress fixture; combine as
+ *                      ?bevy=alpha,classic to run that variant with classic
+ * No param = the normal app, with only Vello Hybrid initialized.
  */
 export function variantFlagsFromUrl(): number {
     const parts = (new URLSearchParams(location.search).get('bevy') || '')
@@ -18,6 +23,9 @@ export function variantFlagsFromUrl(): number {
     if (parts.includes('nolog')) flags |= 1; // VARIANT_NO_LOG
     if (parts.includes('min')) flags |= 2;   // VARIANT_MIN_PLUGINS
     if (parts.includes('empty')) flags |= 4; // VARIANT_EMPTY
+    if (parts.includes('hybrid')) flags |= 8; // VARIANT_HYBRID_BACKEND
+    if (parts.includes('alpha')) flags |= 16; // VARIANT_ALPHA_STRESS
+    if (parts.includes('classic')) flags |= 32; // VARIANT_CLASSIC_BACKEND
     return flags;
 }
 

@@ -7,6 +7,32 @@ export interface InputManagerOptions {
 }
 
 /**
+ * Return the same URL with the opposite single-backend app variant selected.
+ *
+ * The normal app is Hybrid-only. Classic Vello cannot be made genuinely lazy
+ * merely by gating its systems: installing `VelloPlugin` constructs its renderer
+ * and compute pipelines during Bevy plugin finalization. Switching therefore
+ * crosses an app-restart boundary and changes only the `bevy` query member,
+ * preserving unrelated query parameters and variants such as `alpha`/`nolog`.
+ */
+export function oppositeVectorBackendUrl(current: URL): URL {
+    const next = new URL(current.href);
+    const variants = (next.searchParams.get('bevy') || '')
+        .split(',')
+        .map(value => value.trim().toLowerCase())
+        .filter(Boolean);
+    const classic = variants.includes('classic');
+    const kept = variants.filter(value => value !== 'classic' && value !== 'hybrid');
+    if (!classic) kept.push('classic');
+    if (kept.length > 0) {
+        next.searchParams.set('bevy', kept.join(','));
+    } else {
+        next.searchParams.delete('bevy');
+    }
+    return next;
+}
+
+/**
  * Binds pointer/keyboard/wheel input on the full-window canvas and forwards it to the
  * render session. All coordinates are canvas-relative CSS pixels; Rust converts to
  * physical pixels via the scale factor it was given at window creation.
@@ -131,12 +157,22 @@ export class InputManager {
 
     private onKeyDown(event: KeyboardEvent) {
         const key = event.key.toLowerCase();
-        const valid = ["w", "a", "s", "d", "f", "shift", "g", "control", "controlleft", " "]; // include space & control variants
+        // NOTE: keys are whitelisted twice — here and in `map_key_str_to_bevy_key`
+        // in src/web_ffi.rs. A new shortcut must be added to both or it silently
+        // never reaches Bevy.
+        // f9 cycles the 2D vector backend (classic Vello <-> sparse strips).
+        const valid = ["w", "a", "s", "d", "f", "f9", "shift", "g", "control", "controlleft", " "]; // include space & control variants
         if (!valid.includes(key)) return;
         // Don't steal keystrokes from HTML form controls layered over the canvas
         const target = event.target as HTMLElement | null;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
         event.preventDefault();
+        if (key === 'f9') {
+            // A held key must not schedule multiple reloads. `replace` avoids
+            // filling browser history with backend transitions.
+            if (!event.repeat) location.replace(oppositeVectorBackendUrl(new URL(location.href)));
+            return;
+        }
         this.keyPressed.add(key);
         if (!this.keyFrameScheduled) {
             this.keyFrameScheduled = true;

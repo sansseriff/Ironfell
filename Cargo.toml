@@ -66,6 +66,15 @@ bevy_vello = { git = "https://github.com/linebender/bevy_vello", branch = "main"
 kurbo = "0.13.1"
 peniko = "0.6.1"
 
+# Sparse-strips renderer, the second vector backend. Shares wgpu 29 and
+# peniko 0.6 with bevy_vello/vello, so both backends consume the same
+# `DisplayList` types with no conversion at the seam.
+# `text` is off: this app draws no vector text (the FPS overlay is bevy_ui),
+# and it would pull in the whole glifo font stack.
+vello_hybrid = { version = "0.2.0", default-features = false, features = [
+    "wgpu",
+] }
+
 # Pin app-surface: it must resolve to the SAME wgpu major as bevy_render, or the
 # two end up with incompatible wgpu types. bevy 0.19 -> wgpu 29, and app-surface
 # 1.12.x is the last release on wgpu ^29 (1.13 moved to 30).

@@ -6,9 +6,9 @@ import type { RuntimeMode } from "./runtime/session_adapter";
  */
 class ControllerManagerClass {
   isInitialized = $state(false);
-  showWebGPUWarning = $state(false);
+  showBackendWarning = $state(false);
   loadingInProgress = $state(false);
-  webGPUSupported = $state(true);
+  backendSupported = $state(true);
   runtimeMode: RuntimeMode = $state('worker');
 
   private manager = new PanelManager();
@@ -55,8 +55,8 @@ class ControllerManagerClass {
     }
   }
 
-  dismissWebGPUWarning(): void {
-    this.showWebGPUWarning = false;
+  dismissBackendWarning(): void {
+    this.showBackendWarning = false;
   }
 
   dispose(): void {
@@ -68,8 +68,8 @@ class ControllerManagerClass {
   private syncFlags() {
     this.isInitialized = this.manager.isInitialized;
     this.loadingInProgress = this.manager.loadingInProgress;
-    this.webGPUSupported = this.manager.webGPUSupported;
-    this.showWebGPUWarning = this.manager.showWebGPUWarning;
+    this.backendSupported = this.manager.backendSupported;
+    this.showBackendWarning = this.manager.showBackendWarning;
   }
 }
 

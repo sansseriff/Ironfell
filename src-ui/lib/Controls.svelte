@@ -21,11 +21,11 @@
 <section class="controls-section">
   <h3>Inspector Controls</h3>
 
-  {#if controllerManager.showWebGPUWarning}
-    <div class="webgpu-warning">
-      <p class="webgpu-warning-text">
-        <strong>⚠️ WebGPU Not Supported</strong><br />
-        This application requires WebGPU support. Please check the main panel for
+  {#if controllerManager.showBackendWarning}
+    <div class="backend-warning">
+      <p class="backend-warning-text">
+        <strong>⚠️ WebGL2 Not Available</strong><br />
+        This build requires a WebGL2 context. Please check the main panel for
         instructions.
       </p>
     </div>
@@ -77,7 +77,7 @@
     height: 100%;
   }
 
-  .webgpu-warning {
+  .backend-warning {
     background-color: var(--warning-bg-color);
     border: 1px solid var(--warning-border-color);
     border-radius: 8px;
@@ -85,7 +85,7 @@
     margin: 10px 0;
   }
 
-  .webgpu-warning-text {
+  .backend-warning-text {
     margin: 0;
     color: #856404;
   }

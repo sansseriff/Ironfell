@@ -11,7 +11,10 @@ bevy = { version = "0.19", features = [
     "bevy_pbr",
     "bevy_gizmos",
     "tonemapping_luts",
-    "webgpu",
+    # WebGL2 build: bevy gates its WebGL2 code paths behind
+    # `all(feature = "webgl", ..., not(feature = "webgpu"))`, so "webgpu" must be
+    # absent, not merely accompanied. bevy's "webgl2" maps to bevy_internal/webgl.
+    "webgl2",
     "bevy_window",
     "bevy_log",
     "bevy_text",

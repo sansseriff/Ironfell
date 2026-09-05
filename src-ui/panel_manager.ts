@@ -17,6 +17,22 @@ interface PanelEntry {
  *
  * Layout is strictly DOM -> Bevy: the browser lays panels out, we measure and post.
  */
+/**
+ * WebGL2 capability probe.
+ *
+ * Deliberately runs against a throwaway canvas: `getContext()` permanently binds
+ * a context type to a canvas, and a canvas that already has one can no longer be
+ * handed to `transferControlToOffscreen()`. Probing the real canvas would
+ * therefore break the worker handoff it is meant to guard.
+ */
+function hasWebGL2(): boolean {
+  try {
+    return !!document.createElement("canvas").getContext("webgl2");
+  } catch {
+    return false;
+  }
+}
+
 export class PanelManager {
   private session: SessionAdapter | null = null;
   private mode: RuntimeMode = 'worker';
@@ -31,8 +47,8 @@ export class PanelManager {
   // UI flags (mirrored into the svelte controller)
   isInitialized = false;
   loadingInProgress = false;
-  webGPUSupported = true;
-  showWebGPUWarning = false;
+  backendSupported = true;
+  showBackendWarning = false;
 
   getMode(): RuntimeMode { return this.mode; }
 
@@ -41,10 +57,9 @@ export class PanelManager {
     this.mode = mode;
     this.canvas = canvas;
 
-    // @ts-ignore
-    if (!navigator.gpu) {
-      this.webGPUSupported = false;
-      this.showWebGPUWarning = true;
+    if (!hasWebGL2()) {
+      this.backendSupported = false;
+      this.showBackendWarning = true;
       return;
     }
 

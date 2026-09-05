@@ -1,6 +1,6 @@
 name: Deploy backend comparison to GitHub Pages
 
-run-name: Classic ${{ inputs.classic_ref }} / Hybrid ${{ inputs.hybrid_ref }}
+run-name: Classic ${{ inputs.classic_ref }} / Hybrid ${{ inputs.hybrid_ref }} / Hybrid-only ${{ inputs.hybrid_only_ref }}
 
 on:
   workflow_dispatch:
@@ -14,6 +14,11 @@ on:
         description: Git ref for the Hybrid build
         required: true
         default: bevy-0.19-upgrade
+        type: string
+      hybrid_only_ref:
+        description: Git ref for the Hybrid-only build without bevy_vello
+        required: true
+        default: hybrid-only-startup
         type: string
 
 # The workflow must be dispatched from master, which is already allowed to use
@@ -50,22 +55,32 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - name: Checkout Hybrid-only source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.hybrid_only_ref }}
+          path: hybrid-only
+          submodules: recursive
+          persist-credentials: false
+
       # Each checkout pins its own Rust nightly. Running rustup from inside both
       # trees installs exactly the toolchains and wasm target their builds need.
       - name: Setup Rust toolchains
         run: |
           (cd classic && rustup show)
           (cd hybrid && rustup show)
+          (cd hybrid-only && rustup show)
 
-      # wasm-bindgen's CLI schema must exactly match the crate. The two current
-      # refs both use 0.2.126; fail clearly if future input refs do not match.
+      # wasm-bindgen's CLI schema must exactly match the crate. The current refs
+      # use 0.2.126; fail clearly if future input refs do not match.
       - name: Read wasm-bindgen version
         id: wasm_bindgen_version
         run: |
           classic_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' classic/Cargo.lock)
           hybrid_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' hybrid/Cargo.lock)
-          if [ "$classic_version" != "$hybrid_version" ]; then
-            echo "Classic uses wasm-bindgen $classic_version; Hybrid uses $hybrid_version" >&2
+          hybrid_only_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' hybrid-only/Cargo.lock)
+          if [ "$classic_version" != "$hybrid_version" ] || [ "$classic_version" != "$hybrid_only_version" ]; then
+            echo "wasm-bindgen versions differ: Classic=$classic_version Hybrid=$hybrid_version Hybrid-only=$hybrid_only_version" >&2
             exit 1
           fi
           echo "version=$classic_version" >> "$GITHUB_OUTPUT"
@@ -99,19 +114,31 @@ jobs:
           bun install
           bun run build -- --base /Ironfell/hybrid/
 
+      - name: Build Hybrid-only under /hybrid-only/
+        working-directory: hybrid-only
+        run: |
+          mkdir -p opt src-ui/wasm
+          sh ./build-wasm.sh
+          bun install
+          bun run build -- --base /Ironfell/hybrid-only/
+
       - name: Assemble comparison site
         env:
           CLASSIC_REF: ${{ inputs.classic_ref }}
           HYBRID_REF: ${{ inputs.hybrid_ref }}
+          HYBRID_ONLY_REF: ${{ inputs.hybrid_only_ref }}
         run: |
-          mkdir -p site/hybrid
+          mkdir -p site/hybrid site/hybrid-only
           cp -a classic/dist/. site/
           cp -a hybrid/dist/. site/hybrid/
+          cp -a hybrid-only/dist/. site/hybrid-only/
           classic_sha=$(git -C classic rev-parse HEAD)
           hybrid_sha=$(git -C hybrid rev-parse HEAD)
-          printf 'classic_ref=%s\nclassic_sha=%s\nhybrid_ref=%s\nhybrid_sha=%s\n' \
+          hybrid_only_sha=$(git -C hybrid-only rev-parse HEAD)
+          printf 'classic_ref=%s\nclassic_sha=%s\nhybrid_ref=%s\nhybrid_sha=%s\nhybrid_only_ref=%s\nhybrid_only_sha=%s\n' \
             "$CLASSIC_REF" "$classic_sha" \
             "$HYBRID_REF" "$hybrid_sha" \
+            "$HYBRID_ONLY_REF" "$hybrid_only_sha" \
             > site/comparison-build.txt
 
       - name: Upload Pages artifact
@@ -142,11 +169,13 @@ jobs:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
           CLASSIC_REF: ${{ inputs.classic_ref }}
           HYBRID_REF: ${{ inputs.hybrid_ref }}
+          HYBRID_ONLY_REF: ${{ inputs.hybrid_only_ref }}
         run: |
           {
             echo "### Backend comparison deployed"
             echo
             echo "- Classic ($CLASSIC_REF): [$PAGE_URL]($PAGE_URL)"
             echo "- Hybrid ($HYBRID_REF): [${PAGE_URL}hybrid/](${PAGE_URL}hybrid/)"
+            echo "- Hybrid-only ($HYBRID_ONLY_REF): [${PAGE_URL}hybrid-only/](${PAGE_URL}hybrid-only/)"
             echo "- Build identity: [${PAGE_URL}comparison-build.txt](${PAGE_URL}comparison-build.txt)"
           } >> "$GITHUB_STEP_SUMMARY"

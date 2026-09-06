@@ -1,40 +1,50 @@
-name: Deploy backend comparison to GitHub Pages
+name: Deploy a ref to GitHub Pages
 
-run-name: Classic / Hybrid / Hybrid-only / Bevy-only / WebGL2 (${{ inputs.webgl2_ref }})
+run-name: Deploy ${{ inputs.app_ref }}${{ inputs.include_legacy_classic && ' + legacy classic' || '' }}
+
+# One ref, one app, every backend combination reachable by URL.
+#
+# This workflow used to check out five branches and build five sites, because a
+# branch was the only way to express a renderer or graphics-API choice. Both are
+# now cargo features on one source tree, and the app selects its backend at
+# runtime, so the whole comparison matrix collapses into a single deploy:
+#
+#   /                            automatic selection (what users get)
+#   /?gfx=webgpu                 WebGPU + Vello Hybrid
+#   /?gfx=webgpu&bevy=classic    WebGPU + Vello Classic
+#   /?gfx=webgl2                 WebGL2 + Vello Hybrid
+#
+# Combine with the perf-grid variants as before, e.g.
+# `?gfx=webgl2&bevy=alpha` or `?gfx=webgpu&bevy=classic,nolog`.
+#
+# The one cell this cannot reproduce is the pre-0.19 app, which is a different
+# bevy and a different bevy_vello. It can be deployed alongside for historical
+# reference, but note it differs in engine version as well as renderer, so it is
+# not a controlled comparison against anything above.
 
 on:
   workflow_dispatch:
     inputs:
-      classic_ref:
-        description: Git ref for the currently deployed Classic build
+      app_ref:
+        description: Git ref to build and deploy
         required: true
+        default: dual-target
+        type: string
+      include_legacy_classic:
+        description: Also deploy the pre-0.19 Vello Classic app under /legacy-classic/
+        required: false
+        default: false
+        type: boolean
+      legacy_classic_ref:
+        description: Git ref for that legacy build
+        required: false
         default: v0.0.33
-        type: string
-      hybrid_ref:
-        description: Git ref for the Hybrid build
-        required: true
-        default: bevy-0.19-upgrade
-        type: string
-      hybrid_only_ref:
-        description: Git ref for the Hybrid-only build without bevy_vello
-        required: true
-        default: hybrid-only-startup
-        type: string
-      bevy_only_ref:
-        description: Git ref for the Bevy-only build without any Vello renderer
-        required: true
-        default: bevy-only-startup
-        type: string
-      webgl2_ref:
-        description: Git ref for the Hybrid-only build running on WebGL2
-        required: true
-        default: webgl2-hybrid
         type: string
 
 # The workflow must be dispatched from master, which is already allowed to use
 # the github-pages environment. The application refs above are checkout inputs;
-# this lets us test a feature branch without granting every branch permission to
-# replace the production Pages site.
+# this lets us deploy a feature branch without granting every branch permission
+# to replace the production Pages site.
 permissions:
   contents: read
 
@@ -49,74 +59,45 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout Classic source
+      - name: Checkout app source
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.classic_ref }}
-          path: classic
+          ref: ${{ inputs.app_ref }}
+          path: app
           submodules: recursive
           persist-credentials: false
 
-      - name: Checkout Hybrid source
+      - name: Checkout legacy classic source
+        if: ${{ inputs.include_legacy_classic }}
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.hybrid_ref }}
-          path: hybrid
+          ref: ${{ inputs.legacy_classic_ref }}
+          path: legacy-classic
           submodules: recursive
           persist-credentials: false
 
-      - name: Checkout Hybrid-only source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.hybrid_only_ref }}
-          path: hybrid-only
-          submodules: recursive
-          persist-credentials: false
-
-      - name: Checkout Bevy-only source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.bevy_only_ref }}
-          path: bevy-only
-          submodules: recursive
-          persist-credentials: false
-
-      # Each checkout pins its own Rust nightly. Running rustup from inside both
+      # Each checkout pins its own Rust nightly. Running rustup from inside the
       # trees installs exactly the toolchains and wasm target their builds need.
-      - name: Checkout WebGL2 source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.webgl2_ref }}
-          path: webgl2
-          submodules: recursive
-          persist-credentials: false
-
       - name: Setup Rust toolchains
         run: |
-          (cd classic && rustup show)
-          (cd hybrid && rustup show)
-          (cd hybrid-only && rustup show)
-          (cd bevy-only && rustup show)
-          (cd webgl2 && rustup show)
+          (cd app && rustup show)
+          if [ -d legacy-classic ]; then (cd legacy-classic && rustup show); fi
 
-      # wasm-bindgen's CLI schema must exactly match the crate. The current refs
-      # use 0.2.126; fail clearly if future input refs do not match.
+      # wasm-bindgen's CLI schema must exactly match the crate. Derive the
+      # version from the lockfile, and fail clearly if a second checkout
+      # disagrees rather than emitting bindings that will not load.
       - name: Read wasm-bindgen version
         id: wasm_bindgen_version
         run: |
-          classic_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' classic/Cargo.lock)
-          hybrid_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' hybrid/Cargo.lock)
-          hybrid_only_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' hybrid-only/Cargo.lock)
-          bevy_only_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' bevy-only/Cargo.lock)
-          webgl2_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' webgl2/Cargo.lock)
-          if [ "$classic_version" != "$hybrid_version" ] || \
-             [ "$classic_version" != "$hybrid_only_version" ] || \
-             [ "$classic_version" != "$bevy_only_version" ] || \
-             [ "$classic_version" != "$webgl2_version" ]; then
-            echo "wasm-bindgen versions differ: Classic=$classic_version Hybrid=$hybrid_version Hybrid-only=$hybrid_only_version Bevy-only=$bevy_only_version WebGL2=$webgl2_version" >&2
-            exit 1
+          app_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' app/Cargo.lock)
+          if [ -d legacy-classic ]; then
+            legacy_version=$(awk -F'"' '/^name = "wasm-bindgen"$/{getline; print $2}' legacy-classic/Cargo.lock)
+            if [ "$app_version" != "$legacy_version" ]; then
+              echo "wasm-bindgen versions differ: app=$app_version legacy=$legacy_version" >&2
+              exit 1
+            fi
           fi
-          echo "version=$classic_version" >> "$GITHUB_OUTPUT"
+          echo "version=$app_version" >> "$GITHUB_OUTPUT"
 
       - name: Setup wasm-bindgen
         uses: jetli/wasm-bindgen-action@v0.2.0
@@ -131,72 +112,45 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
 
-      - name: Build Classic at the site root
-        working-directory: classic
+      # Both graphics targets: the frontend imports both artifacts statically and
+      # chooses at runtime, so building one would fail the vite build on an
+      # unresolved import. WebGPU carries Vello Classic as a second selectable
+      # renderer; WebGL2 cannot, as classic needs compute shaders.
+      - name: Build the app at the site root
+        working-directory: app
         run: |
           mkdir -p opt src-ui/wasm
-          sh ./build-wasm.sh
+          sh ./build-wasm.sh webgpu classic
+          sh ./build-wasm.sh webgl2
           bun install
           bun run build
 
-      - name: Build Hybrid under /hybrid/
-        working-directory: hybrid
+      - name: Build legacy classic under /legacy-classic/
+        if: ${{ inputs.include_legacy_classic }}
+        working-directory: legacy-classic
         run: |
           mkdir -p opt src-ui/wasm
           sh ./build-wasm.sh
           bun install
-          bun run build -- --base /Ironfell/hybrid/
+          bun run build -- --base /Ironfell/legacy-classic/
 
-      - name: Build Hybrid-only under /hybrid-only/
-        working-directory: hybrid-only
-        run: |
-          mkdir -p opt src-ui/wasm
-          sh ./build-wasm.sh
-          bun install
-          bun run build -- --base /Ironfell/hybrid-only/
-
-      - name: Build Bevy-only under /bevy-only/
-        working-directory: bevy-only
-        run: |
-          mkdir -p opt src-ui/wasm
-          sh ./build-wasm.sh
-          bun install
-          bun run build -- --base /Ironfell/bevy-only/
-
-      - name: Build WebGL2 under /webgl2/
-        working-directory: webgl2
-        run: |
-          mkdir -p opt src-ui/wasm
-          sh ./build-wasm.sh
-          bun install
-          bun run build -- --base /Ironfell/webgl2/
-
-      - name: Assemble comparison site
+      - name: Assemble site
         env:
-          CLASSIC_REF: ${{ inputs.classic_ref }}
-          HYBRID_REF: ${{ inputs.hybrid_ref }}
-          HYBRID_ONLY_REF: ${{ inputs.hybrid_only_ref }}
-          BEVY_ONLY_REF: ${{ inputs.bevy_only_ref }}
-          WEBGL2_REF: ${{ inputs.webgl2_ref }}
+          APP_REF: ${{ inputs.app_ref }}
+          LEGACY_REF: ${{ inputs.legacy_classic_ref }}
+          INCLUDE_LEGACY: ${{ inputs.include_legacy_classic }}
         run: |
-          mkdir -p site/hybrid site/hybrid-only site/bevy-only site/webgl2
-          cp -a classic/dist/. site/
-          cp -a hybrid/dist/. site/hybrid/
-          cp -a hybrid-only/dist/. site/hybrid-only/
-          cp -a bevy-only/dist/. site/bevy-only/
-          cp -a webgl2/dist/. site/webgl2/
-          classic_sha=$(git -C classic rev-parse HEAD)
-          hybrid_sha=$(git -C hybrid rev-parse HEAD)
-          hybrid_only_sha=$(git -C hybrid-only rev-parse HEAD)
-          bevy_only_sha=$(git -C bevy-only rev-parse HEAD)
-          webgl2_sha=$(git -C webgl2 rev-parse HEAD)
-          printf 'classic_ref=%s\nclassic_sha=%s\nhybrid_ref=%s\nhybrid_sha=%s\nhybrid_only_ref=%s\nhybrid_only_sha=%s\nbevy_only_ref=%s\nbevy_only_sha=%s\nwebgl2_ref=%s\nwebgl2_sha=%s\n' \
-            "$CLASSIC_REF" "$classic_sha" \
-            "$HYBRID_REF" "$hybrid_sha" \
-            "$HYBRID_ONLY_REF" "$hybrid_only_sha" \
-            "$BEVY_ONLY_REF" "$bevy_only_sha" \
-            "$WEBGL2_REF" "$webgl2_sha" \
-            > site/comparison-build.txt
+          mkdir -p site
+          cp -a app/dist/. site/
+          app_sha=$(git -C app rev-parse HEAD)
+          printf 'app_ref=%s\napp_sha=%s\n' "$APP_REF" "$app_sha" > site/comparison-build.txt
+          if [ "$INCLUDE_LEGACY" = "true" ]; then
+            mkdir -p site/legacy-classic
+            cp -a legacy-classic/dist/. site/legacy-classic/
+            legacy_sha=$(git -C legacy-classic rev-parse HEAD)
+            printf 'legacy_classic_ref=%s\nlegacy_classic_sha=%s\n' \
+              "$LEGACY_REF" "$legacy_sha" >> site/comparison-build.txt
+          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -215,28 +169,31 @@ jobs:
       pages: write
       id-token: write
     steps:
-      - name: Deploy comparison site
+      - name: Deploy site
         id: deployment
         uses: actions/deploy-pages@v4
         with:
           artifact_name: github-pages
 
-      - name: Publish comparison links
+      - name: Publish links
         env:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
-          CLASSIC_REF: ${{ inputs.classic_ref }}
-          HYBRID_REF: ${{ inputs.hybrid_ref }}
-          HYBRID_ONLY_REF: ${{ inputs.hybrid_only_ref }}
-          BEVY_ONLY_REF: ${{ inputs.bevy_only_ref }}
-          WEBGL2_REF: ${{ inputs.webgl2_ref }}
+          APP_REF: ${{ inputs.app_ref }}
+          LEGACY_REF: ${{ inputs.legacy_classic_ref }}
+          INCLUDE_LEGACY: ${{ inputs.include_legacy_classic }}
         run: |
           {
-            echo "### Backend comparison deployed"
+            echo "### Deployed $APP_REF"
             echo
-            echo "- Classic ($CLASSIC_REF): [$PAGE_URL]($PAGE_URL)"
-            echo "- Hybrid ($HYBRID_REF): [${PAGE_URL}hybrid/](${PAGE_URL}hybrid/)"
-            echo "- Hybrid-only ($HYBRID_ONLY_REF): [${PAGE_URL}hybrid-only/](${PAGE_URL}hybrid-only/)"
-            echo "- Bevy-only ($BEVY_ONLY_REF): [${PAGE_URL}bevy-only/](${PAGE_URL}bevy-only/)"
-            echo "- WebGL2 Hybrid-only ($WEBGL2_REF): [${PAGE_URL}webgl2/](${PAGE_URL}webgl2/)"
-            echo "- Build identity: [${PAGE_URL}comparison-build.txt](${PAGE_URL}comparison-build.txt)"
+            echo "| Cell | URL |"
+            echo "| --- | --- |"
+            echo "| Automatic (what users get) | [${PAGE_URL}](${PAGE_URL}) |"
+            echo "| WebGPU + Vello Hybrid | [${PAGE_URL}?gfx=webgpu](${PAGE_URL}?gfx=webgpu) |"
+            echo "| WebGPU + Vello Classic | [${PAGE_URL}?gfx=webgpu&bevy=classic](${PAGE_URL}?gfx=webgpu&bevy=classic) |"
+            echo "| WebGL2 + Vello Hybrid | [${PAGE_URL}?gfx=webgl2](${PAGE_URL}?gfx=webgl2) |"
+            if [ "$INCLUDE_LEGACY" = "true" ]; then
+              echo "| Legacy classic ($LEGACY_REF) — different bevy, not a controlled comparison | [${PAGE_URL}legacy-classic/](${PAGE_URL}legacy-classic/) |"
+            fi
+            echo
+            echo "Build identity: [${PAGE_URL}comparison-build.txt](${PAGE_URL}comparison-build.txt)"
           } >> "$GITHUB_STEP_SUMMARY"

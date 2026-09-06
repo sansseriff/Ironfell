@@ -1,3 +1,25 @@
+// Exactly one graphics backend, enforced at compile time.
+//
+// Neither mistake is visible at runtime until the app fails to start, and the
+// "both" case is the dangerous one: bevy's WebGL2 support is gated on
+// `all(feature = "webgl", ..., not(feature = "webgpu"))`, so a build with both
+// features compiles the WebGL2 paths out, asks for `Backends::BROWSER_WEBGPU`,
+// and dies looking for an adapter. Cargo features unify across the dependency
+// graph, so anything that pulls `bevy/webgpu` transitively could do this to the
+// WebGL2 build without touching this crate.
+#[cfg(all(feature = "webgpu", feature = "webgl2"))]
+compile_error!(
+    "features `webgpu` and `webgl2` are mutually exclusive: bevy compiles its \
+     WebGL2 paths out when `webgpu` is present, producing a build that cannot \
+     acquire an adapter. Build each target separately."
+);
+
+#[cfg(not(any(feature = "webgpu", feature = "webgl2")))]
+compile_error!(
+    "no graphics backend selected: build with `--features webgpu` or \
+     `--features webgl2` (see [features] in Cargo.toml)."
+);
+
 use bevy::{
     ecs::system::SystemState, platform::collections::HashMap, prelude::*,
     window::WindowCloseRequested,

@@ -1,5 +1,44 @@
 set -e
 
+# --- target selection ----------------------------------------------------------
+# Usage: ./build-wasm.sh [webgpu|webgl2]   (default: webgpu)
+#
+# One source tree, two artifacts. The backend is an `ironfell` cargo feature; see
+# [features] in Cargo.toml. Exactly one may be enabled — `src/lib.rs` enforces it.
+TARGET="${1:-webgpu}"
+case "$TARGET" in
+  webgpu|webgl2) ;;
+  *) echo "unknown target '$TARGET' (expected webgpu or webgl2)" >&2; exit 1 ;;
+esac
+
+# `-Zlocation-detail=none -Zfmt-debug=none` are applied to the WebGPU build only.
+# They break the WebGL2 build: with them the app acquires an adapter, initializes
+# and then fails every frame with wgpu errors that bevy's default
+# `RenderErrorPolicy` treats as fatal (`error_handler.rs:79`), so nothing renders.
+#
+# Established by a controlled A/B — same commit, same machine, same profile, same
+# `wasm-opt -Oz`, built back to back with only these two flags differing. The
+# mechanism was not identified. `-Zfmt-debug=none` empties every derived `Debug`
+# across all crates (std, wgpu and naga included, via `build-std`), so anything
+# using `{:?}` to build a functional string silently gets "". naga's GLSL
+# identifier generation was the obvious suspect and does not use `Debug`.
+#
+# The WebGPU build is unaffected because it never executes wgpu's GL backend.
+# Cost of omitting them for WebGL2 is ~326 KB (~1.8%).
+if [ "$TARGET" = "webgpu" ]; then
+  TARGET_RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none"
+else
+  TARGET_RUSTFLAGS=""
+fi
+
+# Output stays flat for now: the frontend still imports `../wasm/ironfell_bg.wasm`
+# statically, so one artifact is in place at a time. Per-target output dirs land
+# with the loader work that selects a backend at runtime.
+OUT_DIR="src-ui/wasm"
+mkdir -p "$OUT_DIR" opt
+echo "building target: $TARGET -> $OUT_DIR"
+# -------------------------------------------------------------------------------
+
 # --- wasm-bindgen version sync -------------------------------------------------
 # Cargo.lock is the single source of truth for the wasm-bindgen version. The CLI
 # used to generate bindings MUST exactly match the crate, or wasm-bindgen aborts
@@ -23,25 +62,10 @@ fi
 # replaces RUSTFLAGS wholesale and cargo does not merge the two.
 # Baseline SIMD has been available in every current browser for years; verify with
 # `rustc --print cfg --target wasm32-unknown-unknown -Ctarget-feature=+simd128`.
-# `-Zlocation-detail=none -Zfmt-debug=none` are NOT set here, unlike the WebGPU
-# builds. They break rendering on the WebGL2 backend: with them the app reaches
-# the GPU fine, then fails every frame with wgpu errors that Bevy's default
-# `RenderErrorPolicy` treats as fatal (`error_handler.rs:79`).
-#
-# Established by a controlled A/B — same commit, same machine, same profile, same
-# `wasm-opt -Oz`, built back to back with only these two flags differing: without
-# them the app renders; with them it does not. The mechanism was not identified;
-# `-Zfmt-debug=none` blanks every derived `Debug` across all crates (std, wgpu and
-# naga included, via `build-std`), so anything using `{:?}` to build a functional
-# string silently gets "". It is not naga's GLSL identifier generation, which was
-# checked and does not use `Debug`.
-#
-# The WebGPU builds keep both flags and are unaffected, because they never execute
-# wgpu's GL backend. Cost of dropping them here is ~326 KB (~1.8%).
-RUSTFLAGS="-Ctarget-feature=+simd128" cargo build \
+RUSTFLAGS="$TARGET_RUSTFLAGS -Ctarget-feature=+simd128" cargo build \
   -Z build-std=core,alloc,panic_abort,std \
   -Z build-std-features=optimize_for_size \
-  --no-default-features --profile wasm-release \
+  --no-default-features --features "$TARGET" --profile wasm-release \
   --target wasm32-unknown-unknown
 
 # Generate bindings
@@ -52,14 +76,14 @@ done
 
 echo "starting optimize"
 # Optimize wasm package size
-wasm-opt --enable-bulk-memory --enable-nontrapping-float-to-int --enable-simd -Oz --output src-ui/wasm/ironfell_bg.wasm opt/ironfell_bg.wasm 
+wasm-opt --enable-bulk-memory --enable-nontrapping-float-to-int --enable-simd -Oz --output "$OUT_DIR/ironfell_bg.wasm" opt/ironfell_bg.wasm
 
 # print "starting copy"
 echo "starting copy"
 
-cp opt/ironfell.js src-ui/wasm/ironfell.js
-cp opt/ironfell.d.ts src-ui/wasm/ironfell.d.ts
-cp opt/ironfell_bg.wasm.d.ts src-ui/wasm/ironfell_bg.d.ts
+cp opt/ironfell.js "$OUT_DIR/ironfell.js"
+cp opt/ironfell.d.ts "$OUT_DIR/ironfell.d.ts"
+cp opt/ironfell_bg.wasm.d.ts "$OUT_DIR/ironfell_bg.d.ts"
 
 
 # to run this for github pages build

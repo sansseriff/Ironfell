@@ -11,10 +11,6 @@ bevy = { version = "0.19", features = [
     "bevy_pbr",
     "bevy_gizmos",
     "tonemapping_luts",
-    # WebGL2 build: bevy gates its WebGL2 code paths behind
-    # `all(feature = "webgl", ..., not(feature = "webgpu"))`, so "webgpu" must be
-    # absent, not merely accompanied. bevy's "webgl2" maps to bevy_internal/webgl.
-    "webgl2",
     "bevy_window",
     "bevy_log",
     "bevy_text",
@@ -47,6 +43,23 @@ edition = "2024"
 
 [lib]
 crate-type = ["cdylib"]
+
+[features]
+# The graphics backend is selected here rather than in the shared `bevy` feature
+# list, so one source tree produces both web artifacts:
+#
+#   cargo build --no-default-features --features webgpu
+#   cargo build --no-default-features --features webgl2
+#
+# Exactly one must be active. They are not merely alternatives: bevy gates its
+# WebGL2 code paths behind `all(feature = "webgl", ..., not(feature = "webgpu"))`,
+# so enabling both silently compiles the WebGL2 paths *out* and still requests
+# `Backends::BROWSER_WEBGPU` — a build that looks fine and cannot start. Cargo
+# features are additive and unify across the graph, so this is a real hazard
+# rather than a theoretical one; `src/lib.rs` enforces it with `compile_error!`.
+default = []
+webgpu = ["bevy/webgpu"]
+webgl2 = ["bevy/webgl2"]
 
 [dependencies]
 bevy.workspace = true

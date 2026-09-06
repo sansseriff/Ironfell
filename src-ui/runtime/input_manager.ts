@@ -1,3 +1,5 @@
+import { oppositeVectorBackendUrl } from './wasm_loader';
+
 export interface InputPoster {
     post(data: any): void;
 }
@@ -134,8 +136,15 @@ export class InputManager {
         // NOTE: keys are whitelisted twice — here and in `map_key_str_to_bevy_key`
         // in src/web_ffi.rs. A new shortcut must be added to both or it silently
         // never reaches Bevy.
-        const valid = ["w", "a", "s", "d", "f", "shift", "g", "control", "controlleft", " "]; // include space & control variants
+        // f9 cycles the 2D vector backend (classic Vello <-> sparse strips).
+        const valid = ["w", "a", "s", "d", "f", "f9", "shift", "g", "control", "controlleft", " "]; // include space & control variants
         if (!valid.includes(key)) return;
+        if (key === 'f9') {
+            // A held key must not schedule multiple reloads. `replace` avoids
+            // filling browser history with backend transitions.
+            if (!event.repeat) location.replace(oppositeVectorBackendUrl(new URL(location.href)));
+            return;
+        }
         // Don't steal keystrokes from HTML form controls layered over the canvas
         const target = event.target as HTMLElement | null;
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;

@@ -14,6 +14,14 @@ compile_error!(
      acquire an adapter. Build each target separately."
 );
 
+// Classic Vello flattens paths in compute shaders. WebGL2 has none, so this is a
+// build that could never run rather than one that merely runs slowly.
+#[cfg(all(feature = "classic", feature = "webgl2"))]
+compile_error!(
+    "feature `classic` requires `webgpu`: vello classic flattens paths in \
+     compute shaders, which WebGL2 does not provide."
+);
+
 #[cfg(not(any(feature = "webgpu", feature = "webgl2")))]
 compile_error!(
     "no graphics backend selected: build with `--features webgpu` or \

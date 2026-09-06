@@ -57,6 +57,11 @@ pub const VARIANT_EMPTY: u32 = 1 << 2;
 /// Add the alpha-blending stress fixture (`?bevy=alpha`). Combines with
 /// the other diagnostic variants.
 pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
+/// Explicitly initialize classic Vello instead of Hybrid. Requires the `classic`
+/// feature (WebGPU builds only); ignored otherwise. The ordinary app defaults to
+/// a Hybrid-only plugin set so classic's eager compute-pipeline creation cannot
+/// affect cold start.
+pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
 
 /// Build the app around an already-created canvas.
 ///
@@ -69,6 +74,8 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     let min_plugins = variant_flags & VARIANT_MIN_PLUGINS != 0;
     let empty = variant_flags & VARIANT_EMPTY != 0;
     let alpha_stress = variant_flags & VARIANT_ALPHA_STRESS != 0;
+    #[cfg(feature = "classic")]
+    let classic_backend = variant_flags & VARIANT_CLASSIC_BACKEND != 0;
 
     let mut app = App::new();
 
@@ -139,7 +146,18 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
         // WebAssetPlugin::default(),
         default_plugins,
         // TrackingCircle,
-        VectorPlugin,
+        // Exactly one renderer is installed. Classic cannot be added later:
+        // `VelloPlugin` builds its compute pipelines in `Plugin::finish`, so a
+        // present-but-idle classic backend would still cost cold start. Switching
+        // renderers therefore rebuilds the `App` rather than toggling a resource.
+        #[cfg(feature = "classic")]
+        if classic_backend {
+            VectorPlugin::classic_only()
+        } else {
+            VectorPlugin::hybrid_only()
+        },
+        #[cfg(not(feature = "classic"))]
+        VectorPlugin::hybrid_only(),
         FPSOverlayPlugin,
         FrameTimeDiagnosticsPlugin {
             max_history_length: MAX_HISTORY_LENGTH,

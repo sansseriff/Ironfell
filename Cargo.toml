@@ -61,6 +61,11 @@ default = []
 webgpu = ["bevy/webgpu"]
 webgl2 = ["bevy/webgl2"]
 
+# Classic Vello as a second, selectable renderer. WebGPU only: vello classic
+# flattens paths in compute shaders, which WebGL2 does not have. Enabling it
+# alongside `webgl2` is rejected in `src/lib.rs`.
+classic = ["dep:bevy_vello"]
+
 [dependencies]
 bevy.workspace = true
 serde.workspace = true
@@ -71,6 +76,14 @@ log = { version = "*", features = [
     "release_max_level_warn",
 ] }
 bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
+
+# Classic Vello, behind the `classic` feature. Optional because its plugin
+# creates every compute pipeline in `Plugin::finish`, so an unused-but-present
+# backend is not free — and because those compute shaders cannot run on WebGL2
+# at all.
+# 0.13.1 requires bevy ^0.18. `main` is on bevy 0.19 + vello 0.9 (PR #223,
+# 2026-07-30) but is unreleased, so track git until a release lands.
+bevy_vello = { git = "https://github.com/linebender/bevy_vello", branch = "main", optional = true }
 
 # Geometry and style vocabulary shared by the app's display lists and
 # `vello_hybrid`. Versions must match the renderer's resolved versions so their

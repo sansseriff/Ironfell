@@ -1,7 +1,15 @@
-//! The contract between app-authored 2D vector layers and the renderer.
+//! Backend selection and the contract every 2D vector backend must satisfy.
 //!
-//! The seam is the data: Vello Hybrid consumes [`DisplayList`](super::DisplayList)
-//! components on entities carrying [`VectorLayer`].
+//! There is deliberately no `trait VectorBackend` here. Backends differ in
+//! *where in Bevy they live*, not just in what they do: the classic path writes
+//! components in the main world, while the sparse-strips path owns render-world
+//! resources. A single object-safe trait would force both into a shape that
+//! fits neither.
+//!
+//! The seam is the data, not a trait. A backend is a Bevy plugin that consumes
+//! [`DisplayList`](super::DisplayList) components on entities carrying
+//! [`VectorLayer`]. The app installs exactly one backend, so an inactive
+//! renderer pays no initialization cost.
 //!
 //! (The `VectorRasterizer` trait sketched in the vision document is a different
 //! thing: an interface for rasterizing a *bounded* workload into a *target*. That
@@ -9,6 +17,19 @@
 //! it now would be a trait with one implementation and no callers.)
 
 use bevy::prelude::*;
+
+/// Which renderer realizes a [`DisplayList`](super::DisplayList).
+///
+/// `ClassicVello` exists only under the `classic` feature: it is not merely
+/// unused without it, the dependency is absent entirely.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum BackendKind {
+    /// `vello` classic, via `bevy_vello`. GPU compute flattening; WebGPU only.
+    #[cfg(feature = "classic")]
+    ClassicVello,
+    /// `vello_hybrid` sparse strips. CPU strip generation, no compute shaders.
+    Hybrid,
+}
 
 /// The coordinate space a layer's commands are authored in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

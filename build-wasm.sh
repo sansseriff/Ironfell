@@ -1,7 +1,10 @@
 set -e
 
 # --- target selection ----------------------------------------------------------
-# Usage: ./build-wasm.sh [webgpu|webgl2]   (default: webgpu)
+# Usage: ./build-wasm.sh [webgpu|webgl2] [classic]   (default: webgpu)
+#
+# `classic` adds Vello Classic as a second selectable renderer (`?bevy=classic`).
+# WebGPU only — it flattens paths in compute shaders, which WebGL2 lacks.
 #
 # One source tree, two artifacts. The backend is an `ironfell` cargo feature; see
 # [features] in Cargo.toml. Exactly one may be enabled — `src/lib.rs` enforces it.
@@ -10,6 +13,14 @@ case "$TARGET" in
   webgpu|webgl2) ;;
   *) echo "unknown target '$TARGET' (expected webgpu or webgl2)" >&2; exit 1 ;;
 esac
+
+FEATURES="$TARGET"
+if [ "${2:-}" = "classic" ]; then
+  if [ "$TARGET" != "webgpu" ]; then
+    echo "classic requires the webgpu target (compute shaders)" >&2; exit 1
+  fi
+  FEATURES="$TARGET,classic"
+fi
 
 # `-Zlocation-detail=none -Zfmt-debug=none` are applied to the WebGPU build only.
 # They break the WebGL2 build: with them the app acquires an adapter, initializes
@@ -36,7 +47,7 @@ fi
 # with the loader work that selects a backend at runtime.
 OUT_DIR="src-ui/wasm"
 mkdir -p "$OUT_DIR" opt
-echo "building target: $TARGET -> $OUT_DIR"
+echo "building features: $FEATURES -> $OUT_DIR"
 # -------------------------------------------------------------------------------
 
 # --- wasm-bindgen version sync -------------------------------------------------
@@ -65,7 +76,7 @@ fi
 RUSTFLAGS="$TARGET_RUSTFLAGS -Ctarget-feature=+simd128" cargo build \
   -Z build-std=core,alloc,panic_abort,std \
   -Z build-std-features=optimize_for_size \
-  --no-default-features --features "$TARGET" --profile wasm-release \
+  --no-default-features --features "$FEATURES" --profile wasm-release \
   --target wasm32-unknown-unknown
 
 # Generate bindings

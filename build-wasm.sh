@@ -23,7 +23,22 @@ fi
 # replaces RUSTFLAGS wholesale and cargo does not merge the two.
 # Baseline SIMD has been available in every current browser for years; verify with
 # `rustc --print cfg --target wasm32-unknown-unknown -Ctarget-feature=+simd128`.
-RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none -Ctarget-feature=+simd128" cargo build \
+# `-Zlocation-detail=none -Zfmt-debug=none` are NOT set here, unlike the WebGPU
+# builds. They break rendering on the WebGL2 backend: with them the app reaches
+# the GPU fine, then fails every frame with wgpu errors that Bevy's default
+# `RenderErrorPolicy` treats as fatal (`error_handler.rs:79`).
+#
+# Established by a controlled A/B — same commit, same machine, same profile, same
+# `wasm-opt -Oz`, built back to back with only these two flags differing: without
+# them the app renders; with them it does not. The mechanism was not identified;
+# `-Zfmt-debug=none` blanks every derived `Debug` across all crates (std, wgpu and
+# naga included, via `build-std`), so anything using `{:?}` to build a functional
+# string silently gets "". It is not naga's GLSL identifier generation, which was
+# checked and does not use `Debug`.
+#
+# The WebGPU builds keep both flags and are unaffected, because they never execute
+# wgpu's GL backend. Cost of dropping them here is ~326 KB (~1.8%).
+RUSTFLAGS="-Ctarget-feature=+simd128" cargo build \
   -Z build-std=core,alloc,panic_abort,std \
   -Z build-std-features=optimize_for_size \
   --no-default-features --profile wasm-release \

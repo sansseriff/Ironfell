@@ -1,37 +1,15 @@
 // from bevy-in-web-worker https://github.com/jinleili/bevy-in-web-worker
 
-import init, {
-  init_bevy_app_with_canvas,
-  is_preparation_completed,
-  enter_frame_with_mouse,
-  left_bt_down,
-  left_bt_up,
-  set_auto_animation,
-  resize,
-  mouse_wheel,
-  key_down,
-  key_up,
-  set_panel_viewport,
-  despawn_panel,
-  release_app,
-  // Inspector FFI functions
-  inspector_update_component,
-  inspector_toggle_component,
-  inspector_remove_component,
-  inspector_insert_component,
-  inspector_despawn_entity,
-  inspector_toggle_visibility,
-  inspector_reparent_entity,
-  inspector_spawn_entity,
-  // Streaming FFI functions
-  enable_inspector_streaming,
-  disable_inspector_streaming,
-  set_inspector_streaming_frequency,
-  force_inspector_update,
-  get_type_registry_schema,
-  inspector_reset_streaming_state,
-} from "./wasm/ironfell.js";
+// The wasm-bindgen glue is loaded dynamically because it is per-target: the
+// WebGL2 build carries a shim for every WebGL2 call its GL backend makes and
+// is not interchangeable with the WebGPU one. Assigned on "wasmData", before
+// any FFI call can occur.
+import { loadGlue, type Glue } from "./runtime/glue";
+import type { Backend } from "./runtime/backend_policy";
 import { CadenceProbe } from "./runtime/cadence_probe";
+
+// Assigned before any FFI call; see the "wasmData" case below.
+let glue: Glue;
 
 class IronWorker {
   private probe = new CadenceProbe();
@@ -39,6 +17,7 @@ class IronWorker {
   // Perf-grid variant selector, received with the wasm bytes but not usable
   // until the canvas arrives and the app is actually built.
   private variantFlags: number = 0;
+  private backend: Backend = 'webgl2';
   private initFinished = 0;
   private isStoppedRunning = false;
   private offscreenCanvas: OffscreenCanvas | null = null;
@@ -83,8 +62,12 @@ class IronWorker {
         case "wasmData":
           // Initialize the wasm module with the provided data
           console.log("Received WASM data from main thread, initializing...");
-          await init(data.wasmData);
-          console.log("WASM module initialized");
+          // The backend travels with the bytes: the glue and the wasm must be
+          // the same build, so the decision is made once on the main thread.
+          this.backend = data.backend as Backend;
+          glue = await loadGlue(this.backend);
+          await glue.default(data.wasmData);
+          console.log(`WASM module initialized (${this.backend})`);
           // The app is built later, in "init": constructing it needs the canvas,
           // because the renderer picks its GPU adapter from the canvas's context.
           this.variantFlags = data.variantFlags >>> 0;
@@ -104,13 +87,13 @@ class IronWorker {
 
         case "setPanelViewport":
           if (this.appHandle !== BigInt(0)) {
-            set_panel_viewport(this.appHandle, data.id, data.kind, data.x, data.y, data.w, data.h);
+            glue.set_panel_viewport(this.appHandle, data.id, data.kind, data.x, data.y, data.w, data.h);
           }
           break;
 
         case "despawnPanel":
           if (this.appHandle !== BigInt(0)) {
-            despawn_panel(this.appHandle, data.id);
+            glue.despawn_panel(this.appHandle, data.id);
           }
           break;
 
@@ -138,7 +121,7 @@ class IronWorker {
             this.rafId = null;
           }
           if (this.appHandle !== BigInt(0)) {
-            try { release_app(this.appHandle); } catch (e) { console.error("release_app failed", e); }
+            try { glue.release_app(this.appHandle); } catch (e) { console.error("release_app failed", e); }
             this.appHandle = BigInt(0);
           }
           break;
@@ -151,32 +134,32 @@ class IronWorker {
           break;
 
         case "leftBtDown":
-          left_bt_down(this.appHandle);
+          glue.left_bt_down(this.appHandle);
           break;
 
         case "leftBtUp":
-          left_bt_up(this.appHandle);
+          glue.left_bt_up(this.appHandle);
           break;
 
         case "mouseWheel":
           if (this.appHandle !== BigInt(0)) {
-            mouse_wheel(this.appHandle, data.dx, data.dy, data.mode);
+            glue.mouse_wheel(this.appHandle, data.dx, data.dy, data.mode);
           }
           break;
 
         case "autoAnimation":
-          set_auto_animation(this.appHandle, data.autoAnimation);
+          glue.set_auto_animation(this.appHandle, data.autoAnimation);
           break;
 
         case "keydown":
           if (this.appHandle !== BigInt(0)) {
-            key_down(this.appHandle, data.key);
+            glue.key_down(this.appHandle, data.key);
           }
           break;
 
         case "keyup":
           if (this.appHandle !== BigInt(0)) {
-            key_up(this.appHandle, data.key);
+            glue.key_up(this.appHandle, data.key);
           }
           break;
 
@@ -184,7 +167,7 @@ class IronWorker {
 
         case "inspector_update_component":
           if (this.appHandle !== BigInt(0)) {
-            const success = inspector_update_component(
+            const success = glue.inspector_update_component(
               this.appHandle,
               BigInt(data.entity_id),
               data.component_id,
@@ -196,7 +179,7 @@ class IronWorker {
 
         case "inspector_toggle_component":
           if (this.appHandle !== BigInt(0)) {
-            const success = inspector_toggle_component(
+            const success = glue.inspector_toggle_component(
               this.appHandle,
               BigInt(data.entity_id),
               data.component_id
@@ -207,7 +190,7 @@ class IronWorker {
 
         case "inspector_remove_component":
           if (this.appHandle !== BigInt(0)) {
-            const success = inspector_remove_component(
+            const success = glue.inspector_remove_component(
               this.appHandle,
               BigInt(data.entity_id),
               data.component_id
@@ -218,7 +201,7 @@ class IronWorker {
 
         case "inspector_insert_component":
           if (this.appHandle !== BigInt(0)) {
-            const success = inspector_insert_component(
+            const success = glue.inspector_insert_component(
               this.appHandle,
               BigInt(data.entity_id),
               data.component_id,
@@ -230,7 +213,7 @@ class IronWorker {
 
         case "inspector_despawn_entity":
           if (this.appHandle !== BigInt(0)) {
-            const success = inspector_despawn_entity(
+            const success = glue.inspector_despawn_entity(
               this.appHandle,
               BigInt(data.entity_id),
               data.kind
@@ -241,7 +224,7 @@ class IronWorker {
 
         case "inspector_toggle_visibility":
           if (this.appHandle !== BigInt(0)) {
-            const success = inspector_toggle_visibility(
+            const success = glue.inspector_toggle_visibility(
               this.appHandle,
               BigInt(data.entity_id)
             );
@@ -251,7 +234,7 @@ class IronWorker {
 
         case "inspector_reparent_entity":
           if (this.appHandle !== BigInt(0)) {
-            const success = inspector_reparent_entity(
+            const success = glue.inspector_reparent_entity(
               this.appHandle,
               BigInt(data.entity_id),
               data.parent_id ? BigInt(data.parent_id) : undefined
@@ -262,7 +245,7 @@ class IronWorker {
 
         case "inspector_spawn_entity":
           if (this.appHandle !== BigInt(0)) {
-            const entityId = inspector_spawn_entity(
+            const entityId = glue.inspector_spawn_entity(
               this.appHandle,
               data.parent_id ? BigInt(data.parent_id) : undefined
             );
@@ -322,13 +305,13 @@ class IronWorker {
     if (this.offscreenCanvas) {
       this.offscreenCanvas.width = width;
       this.offscreenCanvas.height = height;
-      resize(this.appHandle, width, height);
+      glue.resize(this.appHandle, width, height);
     }
   }
 
   private createWorkerAppWindow(offscreenCanvas: OffscreenCanvas, devicePixelRatio: number) {
     this.offscreenCanvas = offscreenCanvas;
-    this.appHandle = init_bevy_app_with_canvas(
+    this.appHandle = glue.init_bevy_app_with_canvas(
       offscreenCanvas,
       devicePixelRatio,
       true, // is_in_worker
@@ -360,10 +343,10 @@ class IronWorker {
       ) {
         const tickStart = performance.now();
         if (this.hasMouseUpdate) {
-          enter_frame_with_mouse(this.appHandle, this.latestMouseX, this.latestMouseY, true);
+          glue.enter_frame_with_mouse(this.appHandle, this.latestMouseX, this.latestMouseY, true);
           this.hasMouseUpdate = false;
         } else {
-          enter_frame_with_mouse(this.appHandle, 0, 0, false);
+          glue.enter_frame_with_mouse(this.appHandle, 0, 0, false);
         }
         this.probe.record(rafTs, performance.now() - tickStart);
         this.frameIndex++;
@@ -379,7 +362,7 @@ class IronWorker {
   }
 
   private getPreparationState() {
-    this.initFinished = is_preparation_completed(this.appHandle);
+    this.initFinished = glue.is_preparation_completed(this.appHandle);
     if (!this.postedEnginePrepared && this.initFinished > 0) {
       this.postedEnginePrepared = true;
       self.postMessage({ ty: "enginePrepared" });
@@ -411,7 +394,7 @@ class IronWorker {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      enable_inspector_streaming(this.appHandle);
+      glue.enable_inspector_streaming(this.appHandle);
       this.streamingEnabled = true;
       console.log("Continuous inspector streaming enabled (for animations)");
     } catch (error) {
@@ -423,7 +406,7 @@ class IronWorker {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      disable_inspector_streaming(this.appHandle);
+      glue.disable_inspector_streaming(this.appHandle);
       this.streamingEnabled = false;
       console.log("Continuous inspector streaming disabled");
     } catch (error) {
@@ -435,7 +418,7 @@ class IronWorker {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      set_inspector_streaming_frequency(this.appHandle, ticks);
+      glue.set_inspector_streaming_frequency(this.appHandle, ticks);
       console.log(`Continuous streaming frequency set to ${ticks} ticks`);
     } catch (error) {
       console.error("Failed to set streaming frequency:", error);
@@ -446,7 +429,7 @@ class IronWorker {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      force_inspector_update(this.appHandle);
+      glue.force_inspector_update(this.appHandle);
       console.log("Forced inspector update");
     } catch (error) {
       console.error("Failed to force inspector update:", error);
@@ -457,7 +440,7 @@ class IronWorker {
     if (this.appHandle === BigInt(0)) return "{}";
 
     try {
-      return get_type_registry_schema(this.appHandle);
+      return glue.get_type_registry_schema(this.appHandle);
     } catch (error) {
       console.error("Failed to get type registry schema:", error);
       return "{}";
@@ -468,7 +451,7 @@ class IronWorker {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      inspector_reset_streaming_state(this.appHandle, 0); // Use client_id 0
+      glue.inspector_reset_streaming_state(this.appHandle, 0); // Use client_id 0
       console.log("Inspector streaming state reset");
     } catch (error) {
       console.error("Failed to reset streaming state:", error);

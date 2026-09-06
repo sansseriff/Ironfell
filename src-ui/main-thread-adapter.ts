@@ -1,38 +1,15 @@
 // Main-thread adapter: same message protocol as worker.ts, but every message is a
 // direct synchronous wasm call (no postMessage hop) — minimal input latency.
-import init, {
-  init_bevy_app_with_canvas,
-  is_preparation_completed,
-  enter_frame,
-  mouse_move,
-  left_bt_down,
-  left_bt_up,
-  set_auto_animation,
-  resize,
-  mouse_wheel,
-  key_down,
-  key_up,
-  set_panel_viewport,
-  despawn_panel,
-  release_app,
-  // Inspector FFI functions
-  inspector_update_component,
-  inspector_toggle_component,
-  inspector_remove_component,
-  inspector_insert_component,
-  inspector_despawn_entity,
-  inspector_toggle_visibility,
-  inspector_reparent_entity,
-  inspector_spawn_entity,
-  // Streaming FFI functions
-  enable_inspector_streaming,
-  disable_inspector_streaming,
-  set_inspector_streaming_frequency,
-  force_inspector_update,
-  get_type_registry_schema,
-  inspector_reset_streaming_state,
-} from "./wasm/ironfell.js";
+// The wasm-bindgen glue is loaded dynamically because it is per-target: the
+// WebGL2 build carries a shim for every WebGL2 call its GL backend makes and
+// is not interchangeable with the WebGPU one. Assigned on "wasmData", before
+// any FFI call can occur.
+import { loadGlue, type Glue } from "./runtime/glue";
+import type { Backend } from "./runtime/backend_policy";
 import { CadenceProbe } from "./runtime/cadence_probe";
+
+// Assigned before any FFI call; see the "wasmData" case below.
+let glue: Glue;
 
 export class MainThreadAdapter {
   private probe = new CadenceProbe();
@@ -40,6 +17,7 @@ export class MainThreadAdapter {
   // Perf-grid variant selector, received with the wasm bytes but not usable
   // until the canvas arrives and the app is actually built.
   private variantFlags: number = 0;
+  private backend: Backend = 'webgl2';
   private initFinished = 0;
   private isStoppedRunning = false;
   private canvas: HTMLCanvasElement | null = null;
@@ -81,7 +59,12 @@ export class MainThreadAdapter {
     switch (data.ty) {
       case "wasmData":
         console.log("Received WASM data (main thread), initializing...");
-        await init(data.wasmData);
+        // The backend travels with the bytes: the glue and the wasm must be the
+        // same build, so the decision is made once by the caller.
+        this.backend = data.backend as Backend;
+        glue = await loadGlue(this.backend);
+        await glue.default(data.wasmData);
+        console.log(`WASM module initialized (${this.backend})`);
         // The app is built later, in "init": constructing it needs the canvas,
         // because the renderer picks its GPU adapter from the canvas's context.
         this.variantFlags = data.variantFlags >>> 0;
@@ -99,13 +82,13 @@ export class MainThreadAdapter {
 
       case "setPanelViewport":
         if (this.appHandle !== BigInt(0)) {
-          set_panel_viewport(this.appHandle, data.id, data.kind, data.x, data.y, data.w, data.h);
+          glue.set_panel_viewport(this.appHandle, data.id, data.kind, data.x, data.y, data.w, data.h);
         }
         break;
 
       case "despawnPanel":
         if (this.appHandle !== BigInt(0)) {
-          despawn_panel(this.appHandle, data.id);
+          glue.despawn_panel(this.appHandle, data.id);
         }
         break;
 
@@ -133,50 +116,50 @@ export class MainThreadAdapter {
       case "mousemove":
         // Direct synchronous call — the whole point of main-thread mode.
         if (this.appHandle !== BigInt(0)) {
-          mouse_move(this.appHandle, data.x, data.y);
+          glue.mouse_move(this.appHandle, data.x, data.y);
         }
         break;
 
       case "leftBtDown":
         if (this.appHandle !== BigInt(0)) {
-          left_bt_down(this.appHandle);
+          glue.left_bt_down(this.appHandle);
         }
         break;
 
       case "leftBtUp":
         if (this.appHandle !== BigInt(0)) {
-          left_bt_up(this.appHandle);
+          glue.left_bt_up(this.appHandle);
         }
         break;
 
       case "mouseWheel":
         if (this.appHandle !== BigInt(0)) {
-          mouse_wheel(this.appHandle, data.dx, data.dy, data.mode);
+          glue.mouse_wheel(this.appHandle, data.dx, data.dy, data.mode);
         }
         break;
 
       case "autoAnimation":
         if (this.appHandle !== BigInt(0)) {
-          set_auto_animation(this.appHandle, data.autoAnimation);
+          glue.set_auto_animation(this.appHandle, data.autoAnimation);
         }
         break;
 
       case "keydown":
         if (this.appHandle !== BigInt(0)) {
-          key_down(this.appHandle, data.key);
+          glue.key_down(this.appHandle, data.key);
         }
         break;
 
       case "keyup":
         if (this.appHandle !== BigInt(0)) {
-          key_up(this.appHandle, data.key);
+          glue.key_up(this.appHandle, data.key);
         }
         break;
 
       // Inspector commands
       case "inspector_update_component":
         if (this.appHandle !== BigInt(0)) {
-          const success = inspector_update_component(
+          const success = glue.inspector_update_component(
             this.appHandle,
             BigInt(data.entity_id),
             data.component_id,
@@ -188,7 +171,7 @@ export class MainThreadAdapter {
 
       case "inspector_toggle_component":
         if (this.appHandle !== BigInt(0)) {
-          const success = inspector_toggle_component(
+          const success = glue.inspector_toggle_component(
             this.appHandle,
             BigInt(data.entity_id),
             data.component_id
@@ -199,7 +182,7 @@ export class MainThreadAdapter {
 
       case "inspector_remove_component":
         if (this.appHandle !== BigInt(0)) {
-          const success = inspector_remove_component(
+          const success = glue.inspector_remove_component(
             this.appHandle,
             BigInt(data.entity_id),
             data.component_id
@@ -210,7 +193,7 @@ export class MainThreadAdapter {
 
       case "inspector_insert_component":
         if (this.appHandle !== BigInt(0)) {
-          const success = inspector_insert_component(
+          const success = glue.inspector_insert_component(
             this.appHandle,
             BigInt(data.entity_id),
             data.component_id,
@@ -222,7 +205,7 @@ export class MainThreadAdapter {
 
       case "inspector_despawn_entity":
         if (this.appHandle !== BigInt(0)) {
-          const success = inspector_despawn_entity(
+          const success = glue.inspector_despawn_entity(
             this.appHandle,
             BigInt(data.entity_id),
             data.kind
@@ -233,7 +216,7 @@ export class MainThreadAdapter {
 
       case "inspector_toggle_visibility":
         if (this.appHandle !== BigInt(0)) {
-          const success = inspector_toggle_visibility(
+          const success = glue.inspector_toggle_visibility(
             this.appHandle,
             BigInt(data.entity_id)
           );
@@ -243,7 +226,7 @@ export class MainThreadAdapter {
 
       case "inspector_reparent_entity":
         if (this.appHandle !== BigInt(0)) {
-          const success = inspector_reparent_entity(
+          const success = glue.inspector_reparent_entity(
             this.appHandle,
             BigInt(data.entity_id),
             data.parent_id ? BigInt(data.parent_id) : undefined
@@ -254,7 +237,7 @@ export class MainThreadAdapter {
 
       case "inspector_spawn_entity":
         if (this.appHandle !== BigInt(0)) {
-          const entityId = inspector_spawn_entity(
+          const entityId = glue.inspector_spawn_entity(
             this.appHandle,
             data.parent_id ? BigInt(data.parent_id) : undefined
           );
@@ -320,7 +303,7 @@ export class MainThreadAdapter {
     if (this.canvas && this.appHandle !== BigInt(0)) {
       this.canvas.width = width;
       this.canvas.height = height;
-      resize(this.appHandle, width, height);
+      glue.resize(this.appHandle, width, height);
     }
   }
 
@@ -329,7 +312,7 @@ export class MainThreadAdapter {
 
     // The wasm entry point takes an OffscreenCanvas; the HTML canvas is structurally
     // compatible for surface creation, as before.
-    this.appHandle = init_bevy_app_with_canvas(
+    this.appHandle = glue.init_bevy_app_with_canvas(
       canvas as any,
       devicePixelRatio,
       false, // is_in_worker
@@ -359,7 +342,7 @@ export class MainThreadAdapter {
         (this.frameIndex < this.frameFlag && this.frameCount % 60 == 0)
       ) {
         const tickStart = performance.now();
-        enter_frame(this.appHandle);
+        glue.enter_frame(this.appHandle);
         this.probe.record(rafTs, performance.now() - tickStart);
         this.frameIndex++;
       }
@@ -374,7 +357,7 @@ export class MainThreadAdapter {
   }
 
   private getPreparationState() {
-    this.initFinished = is_preparation_completed(this.appHandle);
+    this.initFinished = glue.is_preparation_completed(this.appHandle);
     if (!this.postedEnginePrepared && this.initFinished > 0) {
       this.postedEnginePrepared = true;
       this.sendMessage({ ty: "enginePrepared" });
@@ -409,7 +392,7 @@ export class MainThreadAdapter {
       this.rafId = null;
     }
     if (this.appHandle !== BigInt(0)) {
-      try { release_app(this.appHandle); } catch (e) { console.error("release_app failed", e); }
+      try { glue.release_app(this.appHandle); } catch (e) { console.error("release_app failed", e); }
       this.appHandle = BigInt(0);
     }
   }
@@ -418,7 +401,7 @@ export class MainThreadAdapter {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      enable_inspector_streaming(this.appHandle);
+      glue.enable_inspector_streaming(this.appHandle);
       console.log("Continuous inspector streaming enabled (for animations)");
     } catch (error) {
       console.error("Failed to enable continuous streaming:", error);
@@ -429,7 +412,7 @@ export class MainThreadAdapter {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      disable_inspector_streaming(this.appHandle);
+      glue.disable_inspector_streaming(this.appHandle);
       console.log("Continuous inspector streaming disabled");
     } catch (error) {
       console.error("Failed to disable continuous streaming:", error);
@@ -440,7 +423,7 @@ export class MainThreadAdapter {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      set_inspector_streaming_frequency(this.appHandle, ticks);
+      glue.set_inspector_streaming_frequency(this.appHandle, ticks);
       console.log(`Continuous streaming frequency set to ${ticks} ticks`);
     } catch (error) {
       console.error("Failed to set streaming frequency:", error);
@@ -451,7 +434,7 @@ export class MainThreadAdapter {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      force_inspector_update(this.appHandle);
+      glue.force_inspector_update(this.appHandle);
       console.log("Forced inspector update");
     } catch (error) {
       console.error("Failed to force inspector update:", error);
@@ -462,7 +445,7 @@ export class MainThreadAdapter {
     if (this.appHandle === BigInt(0)) return "{}";
 
     try {
-      return get_type_registry_schema(this.appHandle);
+      return glue.get_type_registry_schema(this.appHandle);
     } catch (error) {
       console.error("Failed to get type registry schema:", error);
       return "{}";
@@ -473,7 +456,7 @@ export class MainThreadAdapter {
     if (this.appHandle === BigInt(0)) return;
 
     try {
-      inspector_reset_streaming_state(this.appHandle, 0); // Use client_id 0
+      glue.inspector_reset_streaming_state(this.appHandle, 0); // Use client_id 0
       console.log("Inspector streaming state reset");
     } catch (error) {
       console.error("Failed to reset streaming state:", error);

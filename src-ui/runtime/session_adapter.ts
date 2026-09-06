@@ -1,5 +1,6 @@
 import { AdapterBridge } from './adapter_bridge';
 import { WasmLoader } from './wasm_loader';
+import type { Backend } from './backend_policy';
 
 export type RuntimeMode = 'worker' | 'main';
 
@@ -49,8 +50,14 @@ export class SessionAdapter {
     return this.enginePrepared;
   }
 
-  /** Create the bridge, ship the wasm, and create the single Bevy window. */
-  attachCanvas(canvas: HTMLCanvasElement): void {
+  /**
+   * Create the bridge, ship the wasm, and create the single Bevy window.
+   *
+   * `backend` selects which of the two artifacts is loaded. It is decided once,
+   * by the caller, and travels with the bytes so the worker pairs them with the
+   * matching wasm-bindgen glue.
+   */
+  attachCanvas(canvas: HTMLCanvasElement, backend: Backend): void {
     if (this.bridge) {
       console.warn('SessionAdapter: canvas already attached');
       return;
@@ -58,7 +65,7 @@ export class SessionAdapter {
     this.bridge = new AdapterBridge(this.mode, canvas);
     this.bridge.setHandler((data: any) => this.handleBridgeMessage(data));
     this.pendingInit = { canvas, dpr: window.devicePixelRatio || 1 };
-    this.wasmLoader.sendToAdapter(this.bridge).catch(e => console.error('WASM send failed', e));
+    this.wasmLoader.sendToAdapter(this.bridge, backend).catch(e => console.error('WASM send failed', e));
   }
 
   /** Full-window canvas backing size (physical px). */

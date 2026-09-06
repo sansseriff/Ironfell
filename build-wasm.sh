@@ -42,10 +42,11 @@ else
   TARGET_RUSTFLAGS=""
 fi
 
-# Output stays flat for now: the frontend still imports `../wasm/ironfell_bg.wasm`
-# statically, so one artifact is in place at a time. Per-target output dirs land
-# with the loader work that selects a backend at runtime.
-OUT_DIR="src-ui/wasm"
+# Per-target output. Both artifacts coexist so the loader can choose one at
+# runtime; the wasm-bindgen glue is target-specific too (the WebGL2 glue carries
+# a shim for every WebGL2 call the GL backend makes, and is ~60 KB larger), so
+# the whole directory is per-target rather than just the .wasm.
+OUT_DIR="src-ui/wasm/$TARGET"
 mkdir -p "$OUT_DIR" opt
 echo "building features: $FEATURES -> $OUT_DIR"
 # -------------------------------------------------------------------------------

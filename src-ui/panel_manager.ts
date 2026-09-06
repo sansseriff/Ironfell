@@ -1,5 +1,6 @@
 import { SessionAdapter, type RuntimeMode, type PanelRectMsg } from './runtime/session_adapter';
 import { InputManager } from './runtime/input_manager';
+import { chooseBackend, type Backend } from './runtime/backend_policy';
 import { InspectorClient } from './runtime/inspector_client';
 import { SystemState } from './system_state.svelte';
 
@@ -49,6 +50,8 @@ export class PanelManager {
   loadingInProgress = false;
   backendSupported = true;
   showBackendWarning = false;
+  /** Which graphics build is loaded. Resolved during `boot`. */
+  backend: Backend = 'webgl2';
 
   getMode(): RuntimeMode { return this.mode; }
 
@@ -62,6 +65,11 @@ export class PanelManager {
       this.showBackendWarning = true;
       return;
     }
+
+    // Decided once, here, and carried through to the worker: the wasm and its
+    // glue must come from the same build (see runtime/backend_policy.ts).
+    this.backend = await chooseBackend();
+    console.log(`[gfx] backend: ${this.backend}`);
 
     this.loadingInProgress = true;
     this.sizeCanvasBackingStore();
@@ -148,7 +156,7 @@ export class PanelManager {
     this.session = session;
     session.onMessage((data) => this.handleSessionMessage(data));
     this.inspector.init({ post: (data: any, transfer?: any[]) => session.post(data, transfer) } as any);
-    session.attachCanvas(this.canvas!);
+    session.attachCanvas(this.canvas!, this.backend);
     session.resizeCanvas(...this.canvasPhysicalSize());
     this.syncAllPanels();
 

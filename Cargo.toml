@@ -6,16 +6,17 @@ members = [".", "src/bevy_remote_inspector"]
 
 
 [workspace.dependencies]
-bevy = { version = "0.18", features = [
+bevy = { version = "0.19", features = [
     "std",
     "bevy_pbr",
     "bevy_gizmos",
     "tonemapping_luts",
-    "webgpu",
     "bevy_window",
     "bevy_log",
     "bevy_text",
     "bevy_ui",
+    "bevy_ui_render",
+    "bevy_sprite_render",
     "default_font",
     "bevy_image",
     "png",
@@ -43,6 +44,28 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# The graphics backend is selected here rather than in the shared `bevy` feature
+# list, so one source tree produces both web artifacts:
+#
+#   cargo build --no-default-features --features webgpu
+#   cargo build --no-default-features --features webgl2
+#
+# Exactly one must be active. They are not merely alternatives: bevy gates its
+# WebGL2 code paths behind `all(feature = "webgl", ..., not(feature = "webgpu"))`,
+# so enabling both silently compiles the WebGL2 paths *out* and still requests
+# `Backends::BROWSER_WEBGPU` — a build that looks fine and cannot start. Cargo
+# features are additive and unify across the graph, so this is a real hazard
+# rather than a theoretical one; `src/lib.rs` enforces it with `compile_error!`.
+default = []
+webgpu = ["bevy/webgpu"]
+webgl2 = ["bevy/webgl2"]
+
+# Classic Vello as a second, selectable renderer. WebGPU only: vello classic
+# flattens paths in compute shaders, which WebGL2 does not have. Enabling it
+# alongside `webgl2` is rejected in `src/lib.rs`.
+classic = ["dep:bevy_vello"]
+
 [dependencies]
 bevy.workspace = true
 serde.workspace = true
@@ -53,14 +76,34 @@ log = { version = "*", features = [
     "release_max_level_warn",
 ] }
 bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
-bevy_vello = "0.13.1"
+
+# Classic Vello, behind the `classic` feature. Optional because its plugin
+# creates every compute pipeline in `Plugin::finish`, so an unused-but-present
+# backend is not free — and because those compute shaders cannot run on WebGL2
+# at all.
+# 0.13.1 requires bevy ^0.18. `main` is on bevy 0.19 + vello 0.9 (PR #223,
+# 2026-07-30) but is unreleased, so track git until a release lands.
+bevy_vello = { git = "https://github.com/linebender/bevy_vello", branch = "main", optional = true }
+
+# Geometry and style vocabulary shared by the app's display lists and
+# `vello_hybrid`. Versions must match the renderer's resolved versions so their
+# types unify at the rendering seam.
+kurbo = "0.13.1"
+peniko = "0.6.1"
+
+# Sparse-strips vector renderer.
+# `text` is off: this app draws no vector text (the FPS overlay is bevy_ui),
+# and it would pull in the whole glifo font stack.
+vello_hybrid = { version = "0.2.0", default-features = false, features = [
+    "wgpu",
+] }
 
 # Pin app-surface: it must resolve to the SAME wgpu major as bevy_render, or the
-# two end up with incompatible wgpu types. bevy 0.18 -> wgpu 27, and app-surface
-# 1.8.x is the last release on wgpu ^27 (1.9+ moved to 28, 1.13 to 30).
-app-surface = { version = "=1.8.1", features = ["web_rwh"] }
+# two end up with incompatible wgpu types. bevy 0.19 -> wgpu 29, and app-surface
+# 1.12.x is the last release on wgpu ^29 (1.13 moved to 30).
+app-surface = { version = "=1.12.0", features = ["web_rwh"] }
 raw-window-handle = "0.6"
-wgpu = "27"
+wgpu = "29"
 # Web only
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.51"

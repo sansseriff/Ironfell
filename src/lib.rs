@@ -1,3 +1,33 @@
+// Exactly one graphics backend, enforced at compile time.
+//
+// Neither mistake is visible at runtime until the app fails to start, and the
+// "both" case is the dangerous one: bevy's WebGL2 support is gated on
+// `all(feature = "webgl", ..., not(feature = "webgpu"))`, so a build with both
+// features compiles the WebGL2 paths out, asks for `Backends::BROWSER_WEBGPU`,
+// and dies looking for an adapter. Cargo features unify across the dependency
+// graph, so anything that pulls `bevy/webgpu` transitively could do this to the
+// WebGL2 build without touching this crate.
+#[cfg(all(feature = "webgpu", feature = "webgl2"))]
+compile_error!(
+    "features `webgpu` and `webgl2` are mutually exclusive: bevy compiles its \
+     WebGL2 paths out when `webgpu` is present, producing a build that cannot \
+     acquire an adapter. Build each target separately."
+);
+
+// Classic Vello flattens paths in compute shaders. WebGL2 has none, so this is a
+// build that could never run rather than one that merely runs slowly.
+#[cfg(all(feature = "classic", feature = "webgl2"))]
+compile_error!(
+    "feature `classic` requires `webgpu`: vello classic flattens paths in \
+     compute shaders, which WebGL2 does not provide."
+);
+
+#[cfg(not(any(feature = "webgpu", feature = "webgl2")))]
+compile_error!(
+    "no graphics backend selected: build with `--features webgpu` or \
+     `--features webgl2` (see [features] in Cargo.toml)."
+);
+
 use bevy::{
     ecs::system::SystemState, platform::collections::HashMap, prelude::*,
     window::WindowCloseRequested,
@@ -29,14 +59,11 @@ mod tracking_circle;
 
 mod asset_reader; // kept private
 
-// mod bevy_vello;
-// use bevy_vello::*;
-
-// use bevy_vello::{VelloPlugin, prelude::*, render::VelloRenderer};
 
 // mod asset_loader;
 
-// mod type_registry;
+// The 2D vector rendering seam: display lists in, backend-rendered pixels out.
+mod vector;
 
 mod camera_controller;
 
@@ -62,10 +89,10 @@ impl DerefMut for WorkerApp {
 }
 
 impl WorkerApp {
-    pub fn new(app: App) -> Self {
+    pub fn new(app: App, window: Entity) -> Self {
         Self {
             app,
-            window: Entity::PLACEHOLDER,
+            window,
             scale_factor: 1.0,
         }
     }
@@ -200,7 +227,11 @@ impl Default for GroupAggregate {
 pub(crate) fn close_bevy_window(mut app: Box<WorkerApp>) {
     let mut windows_state: SystemState<Query<(Entity, &mut Window)>> =
         SystemState::from_world(app.world_mut());
-    let windows = windows_state.get_mut(app.world_mut());
+    // bevy 0.19: get_mut returns Result. Without the `?`-style unwrap this silently
+    // compiles as `Result::iter`, which yields the Query rather than its rows.
+    let Ok(windows) = windows_state.get_mut(app.world_mut()) else {
+        return;
+    };
     let entity = windows.iter().last().map(|(entity, _)| entity);
     if let Some(entity) = entity {
         app.world_mut()

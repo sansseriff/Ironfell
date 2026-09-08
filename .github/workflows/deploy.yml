@@ -60,8 +60,16 @@ jobs:
           mkdir -p opt
           mkdir -p src-ui/wasm
 
-      - name: Build WASM
-        run: sh ./build-wasm.sh
+      # Both graphics targets, because the frontend imports both artifacts
+      # statically and picks one at runtime (see runtime/backend_policy.ts).
+      # Building only one fails the vite build on an unresolved import rather
+      # than silently shipping a half-working site.
+      # WebGPU carries Vello Classic as a second selectable renderer; WebGL2
+      # cannot, since classic flattens paths in compute shaders.
+      - name: Build WASM (both graphics targets)
+        run: |
+          sh ./build-wasm.sh webgpu classic
+          sh ./build-wasm.sh webgl2
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1

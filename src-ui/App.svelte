@@ -3,7 +3,7 @@
   import SplitPane from "./lib/SplitPane5.svelte";
   import BevyPanel from "./lib/BevyPanel.svelte";
   import Controls from "./lib/Controls.svelte";
-  import WebGPUWarning from "./lib/WebGPUWarning.svelte";
+  import WebGL2Warning from "./lib/WebGL2Warning.svelte";
   import { controllerManager } from "./controller-manager.svelte";
   import { UIState } from "./ui-state.svelte";
 
@@ -96,9 +96,9 @@
     ></SplitPane>
   </div>
 
-  <WebGPUWarning
-    show={controllerManager.showWebGPUWarning}
-    onDismiss={() => controllerManager.dismissWebGPUWarning()}
+  <WebGL2Warning
+    show={controllerManager.showBackendWarning}
+    onDismiss={() => controllerManager.dismissBackendWarning()}
   />
 
   {#if controllerManager.loadingInProgress}

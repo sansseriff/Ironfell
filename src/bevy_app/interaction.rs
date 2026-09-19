@@ -9,7 +9,9 @@ use bevy::prelude::*;
 use iron_document::{Actor, LeafPath, Op, Slot, Value};
 
 use crate::bevy_app::scene3d::ActiveState;
-use crate::document_bridge::{Doc2d, DocumentStore, NodeMap, PendingTransactions, Provenance, type_of};
+use crate::document_bridge::{
+    Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, PendingTransactions, Provenance, Shape2d, type_of,
+};
 use crate::panels::{Panels, VIEWER_PANEL, document_from_screen};
 
 /// The entity whose drag just ended, awaiting writeback.
@@ -25,7 +27,7 @@ pub fn interaction_decide_system(
     mut commit: ResMut<PendingCommit>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::bevy_app::scene3d::MainCamera3D>>,
     transforms: Query<&GlobalTransform>,
-    doc2d: Query<(), With<Doc2d>>,
+    doc2d: Query<&Doc2d>,
     panels: Res<Panels>,
 ) {
     // Hover follows the primary hit. Written only on change so downstream
@@ -54,7 +56,11 @@ pub fn interaction_decide_system(
             selection.last_primary = Some(primary);
             drag.target = Some(primary);
 
-            if doc2d.contains(primary) {
+            if doc2d.get(primary).is_ok_and(|d| matches!(d.shape, Shape2d::Slider { .. })) {
+                // Scrubbing the value, not moving the control. The first
+                // preview happens in drag_apply this same frame.
+                drag.kind = Some(crate::DragKind::SliderValue);
+            } else if doc2d.contains(primary) {
                 drag.kind = Some(crate::DragKind::Overlay2D);
                 // Offset from the pointer (document space) to the node's
                 // global origin, so the grab point stays under the cursor.
@@ -107,11 +113,38 @@ pub fn drag_apply_system(
     drag: Res<crate::DragState>,
     mut query: Query<(&mut Transform, Option<&ChildOf>)>,
     globals: Query<&GlobalTransform>,
+    sliders: Query<(&Provenance, &Doc2d)>,
+    mut store: ResMut<DocumentStore>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::bevy_app::scene3d::MainCamera3D>>,
     panels: Res<Panels>,
 ) {
     let Some(entity) = drag.target else { return };
     match drag.kind {
+        Some(crate::DragKind::SliderValue) => {
+            // Pointer x along the track, in the slider's own space, becomes a
+            // value previewed through the store; anything bound to it follows
+            // in the same frame, and nothing is written until release.
+            let Some(p) = panels.rect(VIEWER_PANEL).and_then(|r| document_from_screen(r, pointer.screen)) else {
+                return;
+            };
+            let Ok((prov, d)) = sliders.get(entity) else { return };
+            let Shape2d::Slider { w, .. } = d.shape else { return };
+            let Ok(global) = globals.get(entity) else { return };
+            let local = global.affine().inverse().transform_point3(p.extend(0.0));
+            let t = (local.x / w.max(1.0)).clamp(0.0, 1.0) as f64;
+            let id = prov.0;
+            let leaf = |s: &str| -> LeafPath { s.parse().expect("declared leaf") };
+            let num = |s: &str, d: f64| store.0.resolved(id, leaf(s)).and_then(|v| v.as_f64()).unwrap_or(d);
+            let (min, max, step) = (num("slider.min", 0.0), num("slider.max", 1.0), num("slider.step", 0.0));
+            let mut value = min + t * (max - min);
+            if step > 0.0 {
+                value = min + ((value - min) / step).round() * step;
+            }
+            let value = value.clamp(min.min(max), max.max(min));
+            if num("slider.value", f64::NAN) != value {
+                store.0.preview(id, leaf("slider.value"), Value::Number(value));
+            }
+        }
         Some(crate::DragKind::Overlay2D) => {
             let Some(p) = panels.rect(VIEWER_PANEL).and_then(|r| document_from_screen(r, pointer.screen)) else {
                 return;
@@ -151,6 +184,7 @@ pub fn drag_commit_system(
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
     mut pending: ResMut<PendingTransactions>,
+    mut gestures: ResMut<GestureRequests>,
     query: Query<(&Provenance, &Transform, Option<&Doc2d>)>,
 ) {
     let Some(entity) = commit.0.take() else { return };
@@ -159,12 +193,24 @@ pub fn drag_commit_system(
     let doc = store.0.document();
     let id = prov.0;
     let path = |s: &str| -> LeafPath { s.parse().expect("declared leaf") };
+    if doc2d.is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. })) {
+        // The store holds the previewed value; one transaction closes it.
+        gestures.0.push(GestureRequest::Commit(format!("set {ty}")));
+        return;
+    }
     let mut ops = Vec::new();
     if doc2d.is_some() {
         let t = transform.translation;
         for (leaf, value) in [("transform2d.x", t.x), ("transform2d.y", t.y)] {
             let p = path(leaf);
-            let current = doc.leaf(id, p).and_then(|s| s.constant()).and_then(|v| v.as_f64());
+            let Some(slot) = doc.leaf(id, p) else { continue };
+            if slot.expr().is_some() {
+                // A bound leaf has no handle without a disambiguation policy
+                // (doc 02 §8.2); the reconciler snaps the entity back.
+                info!("{id}.{p} is bound; drag not written");
+                continue;
+            }
+            let current = slot.constant().and_then(|v| v.as_f64());
             if current != Some(value as f64) {
                 ops.push(Op::Set { id, path: p, slot: Slot::Const(Value::Number(value as f64)) });
             }

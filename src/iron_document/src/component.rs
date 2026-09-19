@@ -235,13 +235,16 @@ impl Component {
                 component: kind,
                 field: field.to_owned(),
             })?;
-        let got = slot.kind();
-        if got != expected {
+        // A binding's kind is only known when it is evaluated; the graph
+        // reports a mismatch then. Constants are checked here.
+        if let Some(v) = slot.constant()
+            && v.kind() != expected
+        {
             let path = LeafPath::new(kind, field).expect("field checked above");
             return Err(LeafError::TypeMismatch {
                 path,
                 expected,
-                got,
+                got: v.kind(),
             });
         }
         let target = self.get_mut(field).expect("field checked above");
@@ -269,10 +272,10 @@ impl Component {
             .ok_or_else(|| format!("component {:?} must be an object", kind.name()))?;
         let mut c = kind.default_component();
         for (field, raw) in obj {
-            let value =
-                Value::from_json(raw).map_err(|e| format!("{}.{field}: {e}", kind.name()))?;
-            c.set(field, Slot::Const(value))
-                .map_err(|e| e.to_string())?;
+            // Through `Slot`, not `Value`, so `{"bind": …}` becomes a binding.
+            let slot: Slot = serde_json::from_value(raw.clone())
+                .map_err(|e| format!("{}.{field}: {e}", kind.name()))?;
+            c.set(field, slot).map_err(|e| e.to_string())?;
         }
         Ok(c)
     }

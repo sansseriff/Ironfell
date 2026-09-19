@@ -302,6 +302,7 @@ fn create(
         );
         doc.advance_next_id(id);
     }
+    check_component_bindings(doc, cx, id, comps)?;
     Ok(vec![Op::Delete { id }])
 }
 
@@ -353,6 +354,47 @@ fn reparent(
     }])
 }
 
+/// A binding may only read leaves that exist, and may not reach itself.
+fn check_binding(
+    doc: &Document,
+    cx: &Ctx,
+    target: crate::expr::Leaf,
+    expr: &crate::expr::Expr,
+) -> Result<(), ApplyError> {
+    for dep in expr.deps() {
+        live(doc, cx, dep.node).map_err(|e| cx.err(e.kind, format!("binding reads {dep}: {}", e.message)))?;
+        if doc.component(dep.node, dep.path.component).is_none() {
+            return Err(cx.err(
+                ErrorKind::UnknownPath,
+                format!(
+                    "binding reads {dep}, but {} has no {} component",
+                    dep.node,
+                    dep.path.component.name()
+                ),
+            ));
+        }
+    }
+    if doc.binding_cycles(target, expr) {
+        return Err(cx.err(ErrorKind::Cycle, format!("binding {target} would depend on itself")));
+    }
+    Ok(())
+}
+
+/// Validate every bound slot in `comps` as if it were being set on `id`.
+/// Runs after the components are in place so a node may bind its own leaves;
+/// on failure the transaction's working copy is discarded anyway.
+fn check_component_bindings(doc: &Document, cx: &Ctx, id: NodeId, comps: &[Component]) -> Result<(), ApplyError> {
+    for c in comps {
+        for (field, _) in c.fields() {
+            if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
+                let path = LeafPath::new(c.kind(), field).expect("declared field");
+                check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn set(
     doc: &mut Document,
     cx: &Ctx,
@@ -361,6 +403,9 @@ fn set(
     slot: &Slot,
 ) -> Result<Vec<Op>, ApplyError> {
     live(doc, cx, id)?;
+    if let Some(expr) = slot.expr() {
+        check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
+    }
     let comp = doc.component_mut(id, path.component).ok_or_else(|| {
         cx.err(
             ErrorKind::UnknownPath,
@@ -398,6 +443,7 @@ fn add_comp(
         ));
     }
     doc.insert_component(id, comp.clone());
+    check_component_bindings(doc, cx, id, std::slice::from_ref(comp))?;
     Ok(vec![Op::RemoveComp { id, kind }])
 }
 

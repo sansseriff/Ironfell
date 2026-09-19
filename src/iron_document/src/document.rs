@@ -6,6 +6,7 @@
 //! plans/document-spine.md §6.1: no code path mutates the store directly.
 
 use crate::component::{Component, ComponentKind, LeafPath, LeafStruct};
+use crate::expr::{Expr, Leaf};
 use crate::id::{NodeId, RelationId, Version};
 use crate::order::OrderKey;
 use crate::registry::TypeId;
@@ -193,6 +194,42 @@ impl Document {
 
     pub fn leaf(&self, id: NodeId, path: LeafPath) -> Option<&Slot> {
         self.component(id, path.component)?.get(path.field)
+    }
+
+    /// Every bound slot on a live node, with its expression.
+    pub fn bound_slots(&self) -> impl Iterator<Item = (Leaf, &Expr)> {
+        self.components.iter().flat_map(move |(kind, table)| {
+            table
+                .iter()
+                .filter(move |(id, _)| self.is_live(**id))
+                .flat_map(move |(id, comp)| {
+                    kind.fields().iter().filter_map(move |(field, _)| {
+                        let expr = comp.get(field)?.expr()?;
+                        let path = LeafPath::new(*kind, field).expect("declared field");
+                        Some((Leaf { node: *id, path }, expr))
+                    })
+                })
+        })
+    }
+
+    /// Whether binding `target` to `expr` would let a value depend on itself,
+    /// following existing bindings. Checked at apply time so the graph is
+    /// always a DAG.
+    pub fn binding_cycles(&self, target: Leaf, expr: &Expr) -> bool {
+        let mut stack: Vec<Leaf> = expr.deps().into_iter().collect();
+        let mut seen = BTreeSet::new();
+        while let Some(l) = stack.pop() {
+            if l == target {
+                return true;
+            }
+            if !seen.insert(l) {
+                continue;
+            }
+            if let Some(e) = self.leaf(l.node, l.path).and_then(|s| s.expr()) {
+                stack.extend(e.deps());
+            }
+        }
+        false
     }
 
     pub fn relation(&self, id: RelationId) -> Option<&Relation> {

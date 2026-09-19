@@ -100,6 +100,17 @@ impl NodeMap {
     }
 }
 
+/// End of a value gesture (a slider scrub): turn the store's previews into
+/// one transaction, or drop them.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GestureRequest {
+    Commit(String),
+    Cancel,
+}
+
+#[derive(Resource, Default)]
+pub struct GestureRequests(pub Vec<GestureRequest>);
+
 /// A document to replace the current one, already parsed and validated by
 /// the FFI. Applied by the sync before that frame's transactions; history is
 /// discarded with the old document.
@@ -134,6 +145,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<DocumentDirty>()
             .init_resource::<HistoryRequests>()
             .init_resource::<PendingLoad>()
+            .init_resource::<GestureRequests>()
             .add_systems(Startup, (materialize::setup_mesh_assets, render::setup_document_layer, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking.
@@ -152,13 +164,19 @@ fn sync_document(
     mut pending: ResMut<PendingTransactions>,
     mut history: ResMut<HistoryRequests>,
     mut load: ResMut<PendingLoad>,
+    mut gestures: ResMut<GestureRequests>,
     mut map: ResMut<NodeMap>,
     mut dirty: ResMut<DocumentDirty>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
 ) {
-    if pending.0.is_empty() && history.0.is_empty() && load.0.is_none() {
+    if pending.0.is_empty()
+        && history.0.is_empty()
+        && load.0.is_none()
+        && gestures.0.is_empty()
+        && !store.0.has_changes()
+    {
         return;
     }
     let now = time.elapsed().as_millis() as u64;
@@ -194,6 +212,20 @@ fn sync_document(
             }
         }
     }
+    for g in gestures.0.drain(..) {
+        match g {
+            GestureRequest::Commit(label) => match store.0.commit_gesture(label, iron_document::Actor::Human, now) {
+                None => {}
+                Some(Ok(_)) => note_applied(&store.0, &mut affected),
+                Some(Err(errors)) => {
+                    for e in errors {
+                        warn!("gesture rejected: {e}");
+                    }
+                }
+            },
+            GestureRequest::Cancel => store.0.cancel_gesture(),
+        }
+    }
     for op in history.0.drain(..) {
         let result = match op {
             HistoryOp::Undo => store.0.undo(now),
@@ -208,6 +240,14 @@ fn sync_document(
                 }
             }
         }
+    }
+    // Resolved values that moved: bindings re-evaluated, or a gesture
+    // previewed. Their nodes are rewritten like any other change.
+    for change in store.0.drain_changes() {
+        affected.insert(change.leaf.node);
+    }
+    for (leaf, err) in &store.0.reactive().errors {
+        warn!("binding {leaf}: {err}");
     }
     let version = store.0.document().version();
     if version != version_before {

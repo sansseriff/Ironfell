@@ -6,8 +6,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use iron_document::component::{Fill, Mesh as MeshComp, Radius, Size, Stroke, Transform2d, Transform3d};
-use iron_document::{Document, NodeId, Store};
+use iron_document::{ComponentKind, LeafPath, NodeId, Store, Value};
 use std::collections::BTreeSet;
 
 use crate::bevy_app::scene3d::{ActiveState, Shape};
@@ -28,12 +27,15 @@ pub enum Shape2d {
     Rect { w: f32, h: f32 },
     /// Centred on the node origin.
     Circle { r: f32 },
+    /// A scalar-on-a-track control (doc 02 §9.3): a `w`×`h` track with the
+    /// knob at fraction `t` along it.
+    Slider { w: f32, h: f32, t: f32 },
 }
 
 impl Shape2d {
     pub fn contains_local(&self, p: Vec2) -> bool {
         match *self {
-            Shape2d::Rect { w, h } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
+            Shape2d::Rect { w, h } | Shape2d::Slider { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
             Shape2d::Circle { r } => p.length_squared() <= r * r,
         }
     }
@@ -78,12 +80,13 @@ pub(super) fn reconcile(
     assets: &MeshAssets,
 ) {
     let doc = store.document();
+    let _ = ComponentKind::ALL; // keep the import meaningful for readers
 
     // Pass 1: existence and values. Hierarchy waits until every entity exists.
     for &id in affected {
         match (doc.live(id), map.entity(id)) {
             (Some(_), None) => {
-                if let Some(e) = spawn(doc, id, commands, assets) {
+                if let Some(e) = spawn(store, id, commands, assets) {
                     map.insert(id, e);
                 }
             }
@@ -95,7 +98,7 @@ pub(super) fn reconcile(
             }
             (Some(_), Some(e)) => {
                 if let Ok(mut ec) = commands.get_entity(e) {
-                    write_values(doc, id, &mut ec, assets);
+                    write_values(store, id, &mut ec, assets);
                 }
             }
             (None, None) => {}
@@ -119,11 +122,13 @@ pub(super) fn reconcile(
 
 /// Spawn the entity for a live node, or `None` for node types that have no
 /// runtime form yet (slider, bar, clip, timeline).
-fn spawn(doc: &Document, id: NodeId, commands: &mut Commands, assets: &MeshAssets) -> Option<Entity> {
-    let node = doc.live(id)?;
+fn spawn(store: &Store, id: NodeId, commands: &mut Commands, assets: &MeshAssets) -> Option<Entity> {
+    let node = store.document().live(id)?;
     let mut ec = match node.ty.name() {
         "group" => commands.spawn((Provenance(id), Name::new(format!("group {id}")), Visibility::default())),
-        "rect" | "circle" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
+        "rect" | "circle" | "bar" | "slider" => {
+            commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
+        }
         "mesh" => {
             let bounds = assets.torus_bounds;
             commands.spawn((
@@ -139,36 +144,42 @@ fn spawn(doc: &Document, id: NodeId, commands: &mut Commands, assets: &MeshAsset
         }
         _ => return None,
     };
-    write_values(doc, id, &mut ec, assets);
+    write_values(store, id, &mut ec, assets);
     Some(ec.id())
 }
 
-/// Rewrite every derived component from the node's current authored values.
-fn write_values(doc: &Document, id: NodeId, ec: &mut EntityCommands, assets: &MeshAssets) {
-    let Some(node) = doc.live(id) else { return };
+/// Rewrite every derived component from the node's current *resolved* values:
+/// a bound slot contributes what its binding evaluates to, a previewed slot
+/// what the gesture says. Authored constants are read the same way.
+fn write_values(store: &Store, id: NodeId, ec: &mut EntityCommands, assets: &MeshAssets) {
+    let Some(node) = store.document().live(id) else { return };
+    let r = Reader { store, id };
     match node.ty.name() {
         "group" => {
-            ec.insert(transform_2d(doc.get::<Transform2d>(id)));
+            ec.insert(r.transform_2d());
         }
-        "rect" | "circle" => {
-            ec.insert(transform_2d(doc.get::<Transform2d>(id)));
-            let shape = if node.ty.name() == "rect" {
-                let s = doc.get::<Size>(id);
-                Shape2d::Rect { w: num(s.map(|s| &s.w), 100.0), h: num(s.map(|s| &s.h), 100.0) }
-            } else {
-                Shape2d::Circle { r: num(doc.get::<Radius>(id).map(|r| &r.r), 50.0) }
+        "rect" | "circle" | "bar" | "slider" => {
+            ec.insert(r.transform_2d());
+            let shape = match node.ty.name() {
+                "circle" => Shape2d::Circle { r: r.num("radius.r", 50.0) },
+                "slider" => {
+                    let (min, max) = (r.num("slider.min", 0.0), r.num("slider.max", 1.0));
+                    let value = r.num("slider.value", 0.0);
+                    let t = if max > min { ((value - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
+                    Shape2d::Slider { w: r.num("size.w", 200.0), h: r.num("size.h", 24.0), t }
+                }
+                _ => Shape2d::Rect { w: r.num("size.w", 100.0), h: r.num("size.h", 100.0) },
             };
-            let fill = doc.get::<Fill>(id).map(|f| {
-                let mut c = color(&f.color);
-                c[3] *= num(Some(&f.opacity), 1.0);
+            let fill = r.color("fill.color").map(|mut c| {
+                c[3] *= r.num("fill.opacity", 1.0);
                 c
             });
-            let stroke = doc.get::<Stroke>(id).map(|s| (color(&s.color), num(Some(&s.width), 1.0)));
+            let stroke = r.color("stroke.color").map(|c| (c, r.num("stroke.width", 1.0)));
             ec.insert(Doc2d { shape, fill, stroke });
         }
         "mesh" => {
-            ec.insert(transform_3d(doc.get::<Transform3d>(id)));
-            let asset = doc.get::<MeshComp>(id).and_then(|m| m.asset.constant()).and_then(|v| v.as_str()).unwrap_or("torus");
+            ec.insert(r.transform_3d());
+            let asset = r.str("mesh.asset").unwrap_or_else(|| "torus".to_owned());
             if asset != "torus" {
                 warn!("{id}: unknown mesh asset {asset:?}; showing torus");
             }
@@ -178,37 +189,61 @@ fn write_values(doc: &Document, id: NodeId, ec: &mut EntityCommands, assets: &Me
     }
 }
 
-fn num(slot: Option<&iron_document::Slot>, default: f32) -> f32 {
-    slot.and_then(|s| s.constant()).and_then(|v| v.as_f64()).map(|n| n as f32).unwrap_or(default)
+/// Resolved-value reads for one node, with defaults for absent components.
+struct Reader<'a> {
+    store: &'a Store,
+    id: NodeId,
 }
 
-fn color(slot: &iron_document::Slot) -> [f32; 4] {
-    slot.constant().and_then(|v| v.as_color()).unwrap_or([0.5, 0.5, 0.5, 1.0])
-}
-
-fn vec3(slot: &iron_document::Slot, default: Vec3) -> Vec3 {
-    slot.constant().and_then(|v| v.as_vec3()).map(|[x, y, z]| Vec3::new(x as f32, y as f32, z as f32)).unwrap_or(default)
-}
-
-/// Document 2D space is y-down with the origin at the viewer panel's top-left;
-/// the entity transform is that space verbatim, and the layer renderer applies
-/// the panel offset when it emits commands.
-pub fn transform_2d(t: Option<&Transform2d>) -> Transform {
-    let Some(t) = t else { return Transform::IDENTITY };
-    Transform {
-        translation: Vec3::new(num(Some(&t.x), 0.0), num(Some(&t.y), 0.0), 0.0),
-        rotation: Quat::from_rotation_z(num(Some(&t.rot), 0.0)),
-        scale: Vec3::new(num(Some(&t.sx), 1.0), num(Some(&t.sy), 1.0), 1.0),
+impl Reader<'_> {
+    fn get(&self, leaf: &str) -> Option<Value> {
+        let path: LeafPath = leaf.parse().expect("declared leaf");
+        self.store.resolved(self.id, path)
     }
-}
 
-pub fn transform_3d(t: Option<&Transform3d>) -> Transform {
-    let Some(t) = t else { return Transform::IDENTITY };
-    let r = vec3(&t.rot, Vec3::ZERO);
-    Transform {
-        translation: vec3(&t.pos, Vec3::ZERO),
-        rotation: Quat::from_euler(EulerRot::XYZ, r.x, r.y, r.z),
-        scale: vec3(&t.scale, Vec3::ONE),
+    fn num(&self, leaf: &str, default: f32) -> f32 {
+        self.get(leaf).and_then(|v| v.as_f64()).map(|n| n as f32).unwrap_or(default)
+    }
+
+    fn color(&self, leaf: &str) -> Option<[f32; 4]> {
+        self.get(leaf).and_then(|v| v.as_color())
+    }
+
+    fn str(&self, leaf: &str) -> Option<String> {
+        self.get(leaf).and_then(|v| v.as_str().map(str::to_owned))
+    }
+
+    fn vec3(&self, leaf: &str, default: Vec3) -> Vec3 {
+        self.get(leaf)
+            .and_then(|v| v.as_vec3())
+            .map(|[x, y, z]| Vec3::new(x as f32, y as f32, z as f32))
+            .unwrap_or(default)
+    }
+
+    /// Document 2D space is y-down with the origin at the viewer panel's
+    /// top-left; the entity transform is that space verbatim, and the layer
+    /// renderer applies the panel offset when it emits commands.
+    fn transform_2d(&self) -> Transform {
+        if self.store.document().component(self.id, ComponentKind::Transform2d).is_none() {
+            return Transform::IDENTITY;
+        }
+        Transform {
+            translation: Vec3::new(self.num("transform2d.x", 0.0), self.num("transform2d.y", 0.0), 0.0),
+            rotation: Quat::from_rotation_z(self.num("transform2d.rot", 0.0)),
+            scale: Vec3::new(self.num("transform2d.sx", 1.0), self.num("transform2d.sy", 1.0), 1.0),
+        }
+    }
+
+    fn transform_3d(&self) -> Transform {
+        if self.store.document().component(self.id, ComponentKind::Transform3d).is_none() {
+            return Transform::IDENTITY;
+        }
+        let r = self.vec3("transform3d.rot", Vec3::ZERO);
+        Transform {
+            translation: self.vec3("transform3d.pos", Vec3::ZERO),
+            rotation: Quat::from_euler(EulerRot::XYZ, r.x, r.y, r.z),
+            scale: self.vec3("transform3d.scale", Vec3::ONE),
+        }
     }
 }
 

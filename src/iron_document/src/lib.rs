@@ -18,6 +18,8 @@
 
 pub mod component;
 pub mod document;
+pub mod expr;
+pub mod graph;
 pub mod id;
 pub mod op;
 pub mod order;
@@ -28,6 +30,8 @@ pub mod view;
 
 pub use component::{Component, ComponentKind, LeafError, LeafPath, LeafStruct};
 pub use document::{Document, Node, RelKind, Relation};
+pub use expr::{Expr, Leaf};
+pub use graph::ResolvedChange;
 pub use id::{NodeId, RelationId, Version};
 pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
 pub use order::OrderKey;
@@ -91,6 +95,7 @@ pub struct Store {
     doc: Document,
     history: History,
     recent_keys: VecDeque<(String, Version)>,
+    reactive: graph::Reactive,
 }
 
 impl Default for Store {
@@ -108,13 +113,116 @@ impl Store {
     }
 
     pub fn with_document(doc: Document) -> Store {
-        Store {
+        let mut store = Store {
             doc,
             history: History {
                 horizon: DEFAULT_HORIZON,
                 ..Default::default()
             },
             recent_keys: VecDeque::new(),
+            reactive: graph::Reactive::default(),
+        };
+        store.reactive.rebuild(&store.doc);
+        store
+    }
+
+    pub fn reactive(&self) -> &graph::Reactive {
+        &self.reactive
+    }
+
+    /// The value a reader sees for a leaf: the gesture preview if one is in
+    /// progress, else the binding's resolved value, else the constant.
+    pub fn resolved(&self, id: NodeId, path: LeafPath) -> Option<Value> {
+        self.reactive.read(&self.doc, Leaf { node: id, path })
+    }
+
+    pub fn has_changes(&self) -> bool {
+        self.reactive.has_changes()
+    }
+
+    /// Leaves whose resolved value changed since the last drain.
+    pub fn drain_changes(&mut self) -> Vec<ResolvedChange> {
+        self.reactive.drain_changes()
+    }
+
+    /// Preview a leaf's value for the duration of a gesture. Bindings that
+    /// read it re-evaluate now; nothing is written to the document until
+    /// [`Store::commit_gesture`].
+    pub fn preview(&mut self, id: NodeId, path: LeafPath, value: Value) {
+        self.reactive.preview(&self.doc, Leaf { node: id, path }, value);
+    }
+
+    pub fn gesture_in_progress(&self) -> bool {
+        !self.reactive.overlay().is_empty()
+    }
+
+    /// Turn the previewed values into one transaction. Previews on bound
+    /// leaves are dropped: a derived value has no handle without a
+    /// disambiguation policy (doc 02 invariant 2). `None` when nothing was
+    /// previewed or nothing differs from the document.
+    pub fn commit_gesture(
+        &mut self,
+        label: impl Into<String>,
+        actor: Actor,
+        ts: u64,
+    ) -> Option<Result<Applied, Vec<ApplyError>>> {
+        let mut ops = Vec::new();
+        for (leaf, value) in self.reactive.overlay() {
+            let Some(slot) = self.doc.leaf(leaf.node, leaf.path) else {
+                continue;
+            };
+            if slot.expr().is_some() {
+                continue;
+            }
+            if slot.constant() != Some(value) {
+                ops.push(Op::Set {
+                    id: leaf.node,
+                    path: leaf.path,
+                    slot: Slot::Const(value.clone()),
+                });
+            }
+        }
+        if ops.is_empty() {
+            self.cancel_gesture();
+            return None;
+        }
+        let result = self.apply(TransactionInput {
+            label: label.into(),
+            actor,
+            ts,
+            idempotency_key: None,
+            ops,
+        });
+        self.reactive.clear_overlay(&self.doc);
+        Some(result)
+    }
+
+    pub fn cancel_gesture(&mut self) {
+        self.reactive.clear_overlay(&self.doc);
+    }
+
+    /// Keep the graph in step with a transaction that just applied.
+    fn after_transaction(&mut self, tx: &Transaction) {
+        let structural = tx.ops.iter().chain(tx.inverse.iter()).any(|op| match op {
+            Op::Create { .. } | Op::Delete { .. } | Op::AddComp { .. } | Op::RemoveComp { .. } => true,
+            Op::Set { slot, .. } => slot.expr().is_some(),
+            _ => false,
+        });
+        if structural {
+            self.reactive.rebuild(&self.doc);
+        } else {
+            let changed: Vec<Leaf> = tx
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Set { id, path, .. } => Some(Leaf {
+                        node: *id,
+                        path: *path,
+                    }),
+                    _ => None,
+                })
+                .collect();
+            self.reactive.invalidate(&self.doc, changed);
         }
     }
 
@@ -145,6 +253,7 @@ impl Store {
             });
         }
         let tx = self.run(input)?;
+        self.after_transaction(&tx);
         let version = tx.version;
         if let Some(k) = &tx.idempotency_key {
             self.recent_keys.push_back((k.clone(), version));
@@ -177,6 +286,7 @@ impl Store {
         };
         Some(match self.run(input) {
             Ok(applied) => {
+                self.after_transaction(&applied);
                 let version = applied.version;
                 self.history.record(applied);
                 self.history.future.push(tx);
@@ -203,6 +313,7 @@ impl Store {
         };
         Some(match self.run(input) {
             Ok(applied) => {
+                self.after_transaction(&applied);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
                 self.history.record(applied);
@@ -253,7 +364,7 @@ impl Store {
     }
 
     pub fn view(&self, q: &ViewQuery) -> Result<String, ViewError> {
-        view::render_tree(&self.doc, q)
+        view::render_tree(&self.doc, &self.reactive, q)
     }
 
     pub fn save(&self) -> String {

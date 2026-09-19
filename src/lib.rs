@@ -180,6 +180,9 @@ pub enum DragKind {
     Overlay2D,
     World3D,
     Group,
+    /// Scrubbing a slider's value: previewed through the store each frame,
+    /// committed as one `Set` on release.
+    SliderValue,
 }
 
 #[derive(Resource, Debug)]

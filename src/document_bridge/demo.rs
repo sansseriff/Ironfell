@@ -5,7 +5,8 @@
 use super::PendingTransactions;
 use bevy::prelude::*;
 use iron_document::component::{Fill, Mesh, Name as DocName, Radius, Size, Stroke, Transform2d, Transform3d};
-use iron_document::{Actor, LeafStruct, Op, OrderKey, Slot, TypeId, Value};
+use iron_document::component::Slider;
+use iron_document::{Actor, Expr, LeafStruct, Op, OrderKey, Slot, TypeId, Value};
 
 pub(super) fn queue_demo_scene(store: Res<super::DocumentStore>, mut pending: ResMut<PendingTransactions>) {
     pending.0.push(demo_scene(&store.0));
@@ -17,7 +18,7 @@ fn n(v: f64) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(24).into_iter();
+    let mut ids = store.document().next_ids(26).into_iter();
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
     let mut order = move || {
@@ -93,6 +94,45 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         parent: Some(scene),
         order: order(),
         components: vec![t.wrap(), r.wrap(), f.wrap(), st.wrap()],
+    });
+
+    // A slider, and a bar whose height and top follow it through bindings:
+    // the first reactive edge in the document (doc 02 §4).
+    let slider = next();
+    let mut t = Transform2d::default();
+    t.x = n(100.0);
+    t.y = n(600.0);
+    let mut s = Size::default();
+    s.w = n(300.0);
+    s.h = n(24.0);
+    let mut sl = Slider::default();
+    sl.value = n(0.4);
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("level".into()));
+    ops.push(Op::Create {
+        id: slider,
+        ty: ty("slider"),
+        parent: Some(scene),
+        order: order(),
+        components: vec![t.wrap(), s.wrap(), sl.wrap(), name.wrap()],
+    });
+    let bar = next();
+    let mut t = Transform2d::default();
+    t.x = n(780.0);
+    t.y = Slot::Bound(Expr::parse(&format!("640 - {slider}.slider.value * 300")).expect("demo binding"));
+    let mut s = Size::default();
+    s.w = n(60.0);
+    s.h = Slot::Bound(Expr::parse(&format!("{slider}.slider.value * 300")).expect("demo binding"));
+    let mut f = Fill::default();
+    f.color = Slot::Const(Value::Color([0.2, 0.5, 0.9, 1.0]));
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("bar".into()));
+    ops.push(Op::Create {
+        id: bar,
+        ty: ty("bar"),
+        parent: Some(scene),
+        order: order(),
+        components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
     });
 
     // The torus.

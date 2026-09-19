@@ -325,6 +325,33 @@ measure first.
 
 ---
 
+### 5.10 Bindings and the reactive graph (decided in step 5)
+
+- **Expressions are stored as text.** A bound slot serialises as `{"bind": "<expr>"}`
+  and views render it as `<attr>="<value>" <attr>.bind="<expr>"`. The printer is
+  canonical and the parser is its inverse, tested by round trip. The grammar is doc 02
+  §4 without `Get`: literals, `#id.component.field` references, unary and binary
+  operators, `cond ? a : b`, and `name(args)` into the floor (`abs floor ceil round min
+  max clamp lerp scale`). Adding a floor function is one match arm.
+- **Dependencies are static** (`Expr::deps`). The graph is rebuilt after any structural
+  transaction and walked from changed leaves otherwise. Evaluation is height-ordered with
+  equality cutoff; every read goes through one resolver, the hook for tracked reads if
+  dynamic dependencies are ever needed.
+- **Bindings are validated at apply time**: every referenced leaf must be live and have
+  its component, and no binding may reach itself (`ErrorKind::Cycle`). This holds for
+  `Set`, `Create`, and `AddComp`.
+- **Gestures live in the store.** `Store::preview` overlays a leaf value; every
+  evaluation reads the overlay first; `commit_gesture` turns the overlay into one `Set`
+  transaction and `cancel_gesture` drops it. This is doc 04 §3.5's coalescing buffer
+  placed where the evaluator can see it, so a slider scrub updates its dependents every
+  frame without a transaction (doc 02 invariant 8).
+- **A bound leaf has no drag handle.** A previewed value on a bound leaf is never
+  written, and a position drag of a node whose `x` or `y` is bound is not written either
+  (the reconciler snaps it back). This is doc 02 §8.2's "reject" policy; detach-to-literal
+  and model-mediated repair are later choices.
+- **Resolved changes are the reconciler's third input** after ops and history: after each
+  sync, leaves whose resolved value moved name the nodes to rewrite.
+
 ## 6. Operations and history
 
 ### 6.1 The discipline
@@ -503,7 +530,7 @@ Exit criteria, in order:
 | 2 | reconciler + provenance; rect, circle, mesh, group | replaying a log from empty reproduces the current demo scene. **Done 2026-09-18**: `src/document_bridge/`; the demo scene is one transaction; drags write back as `Set` ops. Verified in headless Chrome (WebGL2, SwiftShader) via Playwright |
 | 3 | intents: drag → transaction; coalescing; undo wired to keyboard | criterion 1. **Done 2026-09-18**: the shell maps Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Ctrl+Y) to `undo`/`redo` FFI calls; the sync applies them as history transactions and reconciles like any other. Verified by the `run-iron` smoke script |
 | 4 | load/save FFI; Svelte shell reads a tree view | criterion 2. **Done 2026-09-18**: `document_save` / `document_load` / `document_view` FFI; the shell's Document panel shows the tree view and refreshes on `documentChanged`; `window.__iron` exposes save/load/view for driving. The inspector (crate, FFI bridge, TypeScript client) is removed. Round trip verified byte-identical by the smoke script |
-| 5 | `Slot::Bound`, minimal expression evaluator (`Ref`, `Bin`, `Call` with two floor functions), slider node | criterion 3 |
+| 5 | `Slot::Bound`, minimal expression evaluator (`Ref`, `Bin`, `Call` with two floor functions), slider node | criterion 3. **Done 2026-09-18**: `expr.rs` (doc 02 §4 grammar minus `Get`; literals, refs, arithmetic, comparison, `? :`, calls into a nine-function floor), `graph.rs` (height-ordered evaluation with equality cutoff, gesture overlay), slider node with scrub-to-preview and one `set slider` transaction on release, demo bar bound to it. See §5.10 |
 | 6 | `clip` node, relations, `Timing`, playhead drives `Animated` slots; timeline panel reads the document | criterion 4 |
 | 7 | TypeScript model surface: manifest from the registry, `<edit>` parser, Zod schemas, apply via FFI | criterion 5 |
 

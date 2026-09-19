@@ -47,7 +47,11 @@ impl std::error::Error for ViewError {}
 const SUMMARY_MAX_CHILDREN: usize = 8;
 const SUMMARY_SAMPLES: usize = 2;
 
-pub fn render_tree(doc: &Document, q: &ViewQuery) -> Result<String, ViewError> {
+pub fn render_tree(
+    doc: &Document,
+    reactive: &crate::graph::Reactive,
+    q: &ViewQuery,
+) -> Result<String, ViewError> {
     let mut out = String::new();
     writeln!(out, "<document version=\"{}\">", doc.version().0).expect("string write");
     let roots: Vec<NodeId> = match q.scope {
@@ -60,13 +64,20 @@ pub fn render_tree(doc: &Document, q: &ViewQuery) -> Result<String, ViewError> {
         None => doc.roots().to_vec(),
     };
     for id in roots {
-        node(doc, q, id, 0, &mut out);
+        node(doc, reactive, q, id, 0, &mut out);
     }
     out.push_str("</document>\n");
     Ok(out)
 }
 
-fn node(doc: &Document, q: &ViewQuery, id: NodeId, level: u32, out: &mut String) {
+fn node(
+    doc: &Document,
+    reactive: &crate::graph::Reactive,
+    q: &ViewQuery,
+    id: NodeId,
+    level: u32,
+    out: &mut String,
+) {
     let n = doc.live(id).expect("live");
     let indent = "  ".repeat(level as usize + 1);
     let mut attrs: Vec<(String, String)> = vec![("id".into(), id.to_string())];
@@ -102,16 +113,26 @@ fn node(doc: &Document, q: &ViewQuery, id: NodeId, level: u32, out: &mut String)
             }
             for (f, _) in c.fields() {
                 let slot = c.get(f).expect("declared");
-                let value = match slot.constant() {
-                    Some(v) => v.to_string(),
-                    None => "{bound}".to_owned(),
+                // A bound slot shows its current value like any other, and
+                // its binding as `<attr>.bind`, so a reader sees both what a
+                // value is and why.
+                let leaf = crate::expr::Leaf {
+                    node: id,
+                    path: crate::component::LeafPath::new(c.kind(), f).expect("declared"),
                 };
+                let value = reactive
+                    .read(doc, leaf)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".to_owned());
                 let key = if dup.contains(f) {
                     format!("{}.{f}", c.kind().name())
                 } else {
                     (*f).to_owned()
                 };
-                attrs.push((key, value));
+                attrs.push((key.clone(), value));
+                if let Some(e) = slot.expr() {
+                    attrs.push((format!("{key}.bind"), e.to_string()));
+                }
             }
         }
     }
@@ -155,7 +176,7 @@ fn node(doc: &Document, q: &ViewQuery, id: NodeId, level: u32, out: &mut String)
         out.push_str("/>\n");
     }
     for &k in shown {
-        node(doc, q, k, level + 1, out);
+        node(doc, reactive, q, k, level + 1, out);
     }
     writeln!(out, "{indent}</{}>", n.ty.name()).expect("string write");
 }

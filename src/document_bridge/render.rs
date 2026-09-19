@@ -59,12 +59,28 @@ pub(super) fn render_document_layer(
                 let shape = match d.shape {
                     Shape2d::Rect { w, h } => kurbo::Rect::new(0.0, 0.0, w as f64, h as f64).into_path(0.1),
                     Shape2d::Circle { r } => kurbo::Circle::new((0.0, 0.0), r as f64).into_path(0.1),
+                    Shape2d::Slider { w, h, t } => {
+                        // Track, filled part, knob. The hit shape stays the
+                        // whole w×h box so the knob is easy to grab.
+                        let (w, h, t) = (w as f64, h as f64, t as f64);
+                        let mid = h * 0.5;
+                        let track = kurbo::RoundedRect::new(0.0, mid - 3.0, w, mid + 3.0, 3.0);
+                        b.fill(affine, peniko::Color::new([0.75, 0.76, 0.8, 1.0]), track);
+                        let filled = kurbo::RoundedRect::new(0.0, mid - 3.0, (w * t).max(6.0), mid + 3.0, 3.0);
+                        b.fill(affine, peniko::Color::new(d.fill.unwrap_or([0.2, 0.5, 0.9, 1.0])), filled);
+                        let knob = kurbo::Circle::new((w * t, mid), mid.min(12.0));
+                        b.fill(affine, peniko::Color::new([1.0, 1.0, 1.0, 1.0]), knob);
+                        b.stroke(affine, kurbo::Stroke::new(1.5), peniko::Color::new([0.3, 0.3, 0.35, 1.0]), knob);
+                        kurbo::Rect::new(0.0, 0.0, w, h).into_path(0.1)
+                    }
                 };
-                if let Some(c) = d.fill {
-                    b.fill(affine, peniko::Color::new(c), shape.clone());
-                }
-                if let Some((c, w)) = d.stroke {
-                    b.stroke(affine, kurbo::Stroke::new(w as f64), peniko::Color::new(c), shape.clone());
+                if !matches!(d.shape, Shape2d::Slider { .. }) {
+                    if let Some(c) = d.fill {
+                        b.fill(affine, peniko::Color::new(c), shape.clone());
+                    }
+                    if let Some((c, w)) = d.stroke {
+                        b.stroke(affine, kurbo::Stroke::new(w as f64), peniko::Color::new(c), shape.clone());
+                    }
                 }
                 let selected = selection.selected.contains_key(&e);
                 let hovered = selection.hovered.contains_key(&e);

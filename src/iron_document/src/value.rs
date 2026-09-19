@@ -1,11 +1,12 @@
 //! Leaf values and the slots that hold them.
 //!
-//! A [`Slot`] is what a leaf path resolves to. Today every slot is a constant.
-//! The `Bound` and `Animated` variants are reserved so that adding the
-//! evaluator later touches the evaluator, not every read site
-//! (plans/document-spine.md §5.4). They carry [`Reserved`], which cannot be
-//! constructed outside this crate and has no constructor inside it either.
+//! A [`Slot`] is what a leaf path resolves to: a constant, or an expression
+//! over other leaves that the reactive graph (`graph.rs`) keeps resolved. The
+//! `Animated` variant is reserved so that adding clip-driven values later
+//! touches the evaluator, not every read site (plans/document-spine.md §5.4).
+//! It carries [`Reserved`], which cannot be constructed anywhere.
 
+use crate::expr::Expr;
 use crate::id::NodeId;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -256,26 +257,28 @@ enum Uninhabited {}
 #[derive(Clone, Debug, PartialEq)]
 pub enum Slot {
     Const(Value),
-    /// Reserved: the value is an expression over other leaves (doc 02 §4).
-    Bound(Reserved),
+    /// An expression over other leaves (doc 02 §4). Its value is derived and
+    /// lives in the reactive graph, never here.
+    Bound(Expr),
     /// Reserved: the value is driven by clips through relations (doc 05).
     Animated(Reserved),
 }
 
 impl Slot {
+    /// The authored constant, if this slot is one. Bound slots answer `None`;
+    /// their current value comes from `Store::resolved`.
     pub fn constant(&self) -> Option<&Value> {
         match self {
             Slot::Const(v) => Some(v),
-            Slot::Bound(r) | Slot::Animated(r) => match r._private {},
+            Slot::Bound(_) => None,
+            Slot::Animated(r) => match r._private {},
         }
     }
 
-    /// The kind this slot produces. For reserved variants this is the kind of
-    /// the value they would resolve to; unreachable today.
-    pub fn kind(&self) -> ValueKind {
+    pub fn expr(&self) -> Option<&Expr> {
         match self {
-            Slot::Const(v) => v.kind(),
-            Slot::Bound(r) | Slot::Animated(r) => match r._private {},
+            Slot::Bound(e) => Some(e),
+            _ => None,
         }
     }
 }
@@ -286,18 +289,28 @@ impl From<Value> for Slot {
     }
 }
 
+/// A constant serialises as its value; a binding as `{"bind": "<expr>"}`.
 impl Serialize for Slot {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
             Slot::Const(v) => v.serialize(s),
-            Slot::Bound(r) | Slot::Animated(r) => match r._private {},
+            Slot::Bound(e) => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("bind", &e.to_string())?;
+                m.end()
+            }
+            Slot::Animated(r) => match r._private {},
         }
     }
 }
 
 impl<'de> Deserialize<'de> for Slot {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        Value::deserialize(d).map(Slot::Const)
+        let raw = serde_json::Value::deserialize(d)?;
+        if let Some(text) = raw.as_object().filter(|o| o.len() == 1).and_then(|o| o.get("bind")).and_then(|b| b.as_str()) {
+            return Expr::parse(text).map(Slot::Bound).map_err(serde::de::Error::custom);
+        }
+        Value::from_json(&raw).map(Slot::Const).map_err(serde::de::Error::custom)
     }
 }
 

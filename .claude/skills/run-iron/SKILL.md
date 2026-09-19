@@ -53,19 +53,22 @@ cd .claude/skills/run-iron && bun run drive.ts < smoke.txt; cd -
 
 `smoke.txt` opens the app, waits for the engine, screenshots, drags the
 square and the torus, undoes both with Cmd+Z, redoes one with Cmd+Shift+Z,
-round-trips the document through save and load, and prints the transactions
-the store applied. Expected output, minus screenshot lines:
+scrubs the slider and checks the bar bound to it, round-trips the document
+through save and load, and prints the transactions the store applied.
+Expected output, minus screenshot lines:
 
 ```
-{"roundtrip_equal":true,"bytes":6027}
-"<document version=\"6\"> |   <group id=\"#1\" name=\"scene\" count=\"22\"> | …"
-applied "open demo scene" (24 ops) -> v1
+"<bar id=\"#P\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #O.slider.value * 300\" … h=\"270\" h.bind=\"#O.slider.value * 300\" …/>"
+{"roundtrip_equal":true,"bytes":6588}
+"<document version=\"7\"> |   <group id=\"#1\" name=\"scene\" count=\"24\"> | …"
+applied "open demo scene" (26 ops) -> v1
 applied "move rect" (2 ops) -> v2
 applied "move mesh" (1 ops) -> v3
 applied "undo: move mesh" (1 ops) -> v4
 applied "undo: move rect" (2 ops) -> v5
 applied "redo: move rect" (2 ops) -> v6
-loaded document v6 (24 live nodes)
+applied "set slider" (1 ops) -> v7
+loaded document v7 (26 live nodes)
 (no page errors)
 ```
 
@@ -108,8 +111,12 @@ cd -
 | `quit` | close the browser |
 
 Where things are in the demo scene, in document space: the draggable square
-covers (500,420)–(580,500); the circle is centred at (160,330); the torus sits
-near the viewer centre, about (435,350) at a 1600×1000 window.
+covers (500,420)–(580,500); the circle is centred at (160,330); the slider
+track runs (100,600)–(400,624) and scrubbing along it previews the value
+through the store; the bar at x=780 has its height and top bound to the
+slider; the torus sits near the viewer centre, about (435,350) at a
+1600×1000 window. Any `<attr>.bind` in a view is a binding; dragging a node
+whose position is bound is not written and snaps back.
 
 ## Run (human path)
 

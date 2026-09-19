@@ -163,6 +163,15 @@ class IronWorker {
           }
           break;
 
+        // Editor history: the shell decided the shortcut; only the command arrives.
+        case "undo":
+          if (this.appHandle !== BigInt(0)) glue.undo(this.appHandle);
+          break;
+
+        case "redo":
+          if (this.appHandle !== BigInt(0)) glue.redo(this.appHandle);
+          break;
+
         // Inspector commands
 
         case "inspector_update_component":

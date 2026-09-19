@@ -1,0 +1,9 @@
+{
+  "name": "run-iron",
+  "private": true,
+  "type": "module",
+  "description": "Agent harness for driving the Iron app in headless Chrome. See SKILL.md.",
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  }
+}

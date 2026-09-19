@@ -1,8 +1,9 @@
 use bevy::math::bounding::RayCast3d;
 use bevy::prelude::*;
 
-use crate::bevy_app::overlay2d::DraggableSquare;
 use crate::bevy_app::scene3d::{CurrentVolume, MainCamera3D};
+use crate::document_bridge::{Doc2d, NodeMap, Provenance};
+use crate::panels::{Panels, VIEWER_PANEL, document_from_screen};
 
 /// Build a world ray from a window-space cursor position (physical px).
 /// The camera renders into a viewport sub-rect, so the position is translated to
@@ -36,31 +37,28 @@ pub fn camera_ray_from_window_px(
         .map(Ray3d::from)
 }
 
-// Overlay 2D placeholder: treat draggable square as a hit if pointer over its AABB.
-pub fn pick_overlay_2d_system(
+/// Hit-test the document's 2D nodes. The cursor is mapped into document space,
+/// then into each node's local space through the inverse of its global
+/// transform, so rotated and scaled shapes pick correctly. Depth is the
+/// node's painter index: later in preorder means on top.
+pub fn pick_document_2d_system(
     pointer: Res<crate::PointerState>,
-    square: Option<Res<DraggableSquare>>, // legacy structure
+    panels: Res<Panels>,
+    map: Res<NodeMap>,
+    nodes: Query<(Entity, &Provenance, &Doc2d, &GlobalTransform)>,
     mut hits: ResMut<crate::PointerHits>,
 ) {
     hits.overlay.clear();
-    let Some(square) = square else {
-        return;
-    };
-    let half = square.size * 0.5;
-    let pos = square.position;
-    let p = pointer.screen; // screen -> we don't yet compute overlay_world; fallback AABB in overlay coords if available
-    // Without overlay_world mapping yet, skip unless we later map pointer.overlay_world.
-    if let Some(world_pos) = pointer.overlay_world {
-        // once implemented
-        if world_pos.x >= pos.x - half.x
-            && world_pos.x <= pos.x + half.x
-            && world_pos.y >= pos.y - half.y
-            && world_pos.y <= pos.y + half.y
-        {
-            // No entity ID for square yet; will become component later; using placeholder None.
+    let Some(rect) = panels.rect(VIEWER_PANEL) else { return };
+    let Some(p) = document_from_screen(rect, pointer.screen) else { return };
+    for (entity, prov, d, global) in &nodes {
+        let local = global.affine().inverse().transform_point3(p.extend(0.0));
+        if d.shape.contains_local(local.truncate()) {
+            let z = map.paint_index(prov.0).unwrap_or(0) as f32;
+            hits.overlay.push(crate::Hit2D { entity, z });
         }
     }
-    let _ = p; // suppress unused for now
+    hits.overlay.sort_by(|a, b| b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal));
 }
 
 // 3D picking using AABB intersection along view ray.
@@ -95,7 +93,11 @@ pub fn pick_world_3d_system(
     });
 }
 
-// Determine primary entity hit (currently prefer 3D first; adjust when UI/overlay implemented)
+/// The 2D layer composites over the 3D viewport, so a 2D hit wins.
 pub fn resolve_primary_hit_system(mut hits: ResMut<crate::PointerHits>) {
-    hits.primary = hits.world3d.first().map(|h| h.entity);
+    hits.primary = hits
+        .overlay
+        .first()
+        .map(|h| h.entity)
+        .or_else(|| hits.world3d.first().map(|h| h.entity));
 }

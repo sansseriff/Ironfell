@@ -1,10 +1,7 @@
-use crate::ActivityControl;
 use crate::camera_controller::CameraController;
 use bevy::math::bounding::{Aabb3d, Bounded3d};
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
-use bevy::asset::RenderAssetUsages;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::ops::Deref;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 
@@ -41,35 +38,13 @@ impl Deref for CurrentVolume {
     }
 }
 
+/// Lights, ground and the viewer camera. Content (the torus) is a document
+/// node, materialised by `document_bridge`, not spawned here.
 pub(crate) fn setup_3d_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    _asset_server: Res<AssetServer>,
 ) {
-    let debug_material = materials.add(StandardMaterial {
-        base_color_texture: Some(images.add(uv_debug_texture())),
-        ..default()
-    });
-
-    let meshe_handles = [meshes.add(
-        Torus::default()
-            .mesh()
-            .major_resolution(8)
-            .minor_resolution(6),
-    )];
-    let shape = Shape::Box(Cuboid::from_size(Vec3::new(1.75, 0.52, 1.75)));
-
-    commands.spawn((
-        Mesh3d(meshe_handles[0].to_owned()),
-        MeshMaterial3d(debug_material.clone()),
-        Transform::from_xyz(0.0, 1.5, 0.0),
-        shape,
-        ActiveState::default(),
-        RenderLayers::layer(0),
-    ));
-
     // Lights
     commands.spawn((
         PointLight {
@@ -122,19 +97,6 @@ pub(crate) fn setup_3d_scene(
     ));
 }
 
-pub(crate) fn rotate_3d_shapes(
-    app_info: Res<ActivityControl>,
-    mut query: Query<&mut Transform, With<Shape>>,
-    time: Res<Time>,
-) {
-    if !app_info.auto_animate {
-        return;
-    }
-    for mut transform in &mut query {
-        transform.rotate_y(time.delta_secs() / 2.);
-    }
-}
-
 pub(crate) fn render_active_shapes(
     mut gizmos: Gizmos,
     query: Query<(&Shape, &Transform, &ActiveState)>,
@@ -179,29 +141,4 @@ pub(crate) fn update_aabbes(
         };
         commands.entity(entity).insert(CurrentVolume(aabb));
     }
-}
-
-fn uv_debug_texture() -> Image {
-    const TEXTURE_SIZE: usize = 8;
-    let mut palette: [u8; 32] = [
-        255, 102, 159, 255, 255, 159, 102, 255, 236, 255, 102, 255, 121, 255, 102, 255, 102, 255,
-        198, 255, 102, 198, 255, 255, 121, 102, 255, 255, 236, 102, 255, 255,
-    ];
-    let mut texture_data = [0; TEXTURE_SIZE * TEXTURE_SIZE * 4];
-    for y in 0..TEXTURE_SIZE {
-        let offset = TEXTURE_SIZE * y * 4;
-        texture_data[offset..(offset + TEXTURE_SIZE * 4)].copy_from_slice(&palette);
-        palette.rotate_right(4);
-    }
-    Image::new_fill(
-        Extent3d {
-            width: TEXTURE_SIZE as u32,
-            height: TEXTURE_SIZE as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &texture_data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    )
 }

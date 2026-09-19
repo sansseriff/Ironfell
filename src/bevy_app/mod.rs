@@ -3,37 +3,30 @@
 
 mod input_accum;
 mod interaction;
-mod overlay2d;
 mod picking;
 mod pointer;
-mod scene3d;
+pub(crate) mod scene3d;
 mod timeline;
 mod ui_panels;
 mod alpha_stress;
-mod vello_world_demo;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::transform::TransformSystems;
 use crate::vector::{VectorCamera, VectorPlugin};
+use crate::document_bridge::DocumentPlugin;
 
 pub use input_accum::*;
 // Bring required items into scope from submodules
 use interaction::{
-    drag_apply_system, interaction_decide_system, outbound_hover_system, outbound_selection_system,
-    selection_reflect_system,
+    PendingCommit, drag_apply_system, drag_commit_system, interaction_decide_system,
+    outbound_hover_system, outbound_selection_system, selection_reflect_system,
 };
-use overlay2d::{
-    DraggableSquare, SimpleMouseState, animate_2d_overlay, render_draggable_square,
-    setup_2d_overlay, simple_mouse_state_system, update_draggable_square_state,
-    update_mini_square_entities, render_mini_squares, render_selection_marquee
-};
-use picking::{pick_overlay_2d_system, pick_world_3d_system, resolve_primary_hit_system};
+use picking::{pick_document_2d_system, pick_world_3d_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
-use scene3d::{render_active_shapes, rotate_3d_shapes, setup_3d_scene, update_aabbes};
+use scene3d::{render_active_shapes, setup_3d_scene, update_aabbes};
 use timeline::TimelinePlugin;
-use vello_world_demo::{animate_world_space_demo, setup_world_space_demo};
 
 use crate::{
     WorkerApp,
@@ -166,6 +159,9 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
         CameraControllerPlugin,
         RemoteInspectorPlugin,
         TimelinePlugin,
+        // The authored store and its projection into entities. Scene content
+        // (the rects, the circle, the torus) comes from here as document nodes.
+        DocumentPlugin,
     ));
 
     init_shared_resources(&mut app);
@@ -195,38 +191,16 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     app.add_systems(PostStartup, adopt_backend_camera_for_ui);
 
     // --- STEP 3: 3D scene + viewport camera ----------------------------------
-    // MainCamera3D (viewport-scoped, driven by the "viewer" panel rect) + meshes.
+    // MainCamera3D (viewport-scoped, driven by the "viewer" panel rect), lights
+    // and ground. Meshes are document nodes (DocumentPlugin).
     app.add_systems(Startup, setup_3d_scene);
-    app.add_systems(Update, (
-        apply_viewer_viewport, 
-        rotate_3d_shapes,
-    ));
+    app.add_systems(Update, apply_viewer_viewport);
 
-    // --- STEP 4: 2D overlay + UI panels + remaining Update systems -----------
-    app.add_systems(
-        Startup,
-        (
-            setup_2d_overlay,
-            ui_panels::setup_ui_panels,
-            // World-space counterpart to the screen-space overlays above; see
-            // vello_world_demo for what the two coordinate spaces imply.
-            setup_world_space_demo,
-        ),
-    );
+    // --- STEP 4: UI panels + remaining Update systems -------------------------
+    app.add_systems(Startup, ui_panels::setup_ui_panels);
     app.add_systems(
         Update,
-        (
-            ui_panels::render_ui_panels,
-            animate_world_space_demo,
-            inspector_continuous_streaming_system,
-            animate_2d_overlay, // TODO: refactor overlay interaction to new picking path
-            simple_mouse_state_system,
-            update_draggable_square_state.after(simple_mouse_state_system),
-            render_draggable_square.after(update_draggable_square_state),
-            update_mini_square_entities.after(simple_mouse_state_system),
-            render_mini_squares.after(update_mini_square_entities),
-            render_selection_marquee.after(update_mini_square_entities),
-        ),
+        (ui_panels::render_ui_panels, inspector_continuous_streaming_system),
     );
 
     // --- STEP 5: input/picking/interaction pipelines --------------------------
@@ -236,10 +210,10 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             accumulate_cursor_delta_system,
             accumulate_custom_scroll_system,
             pointer_collect_system.after(accumulate_cursor_delta_system),
-            pick_overlay_2d_system.after(pointer_collect_system),
+            pick_document_2d_system.after(pointer_collect_system),
             pick_world_3d_system.after(pointer_collect_system),
             resolve_primary_hit_system
-                .after(pick_overlay_2d_system)
+                .after(pick_document_2d_system)
                 .after(pick_world_3d_system),
         ),
     );
@@ -252,6 +226,9 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             drag_apply_system
                 .after(interaction_decide_system)
                 .before(TransformSystems::Propagate),
+            // Writeback: the released drag becomes one queued transaction,
+            // applied by the document sync next frame.
+            drag_commit_system.after(drag_apply_system),
             update_aabbes.after(drag_apply_system),
             selection_reflect_system.after(interaction_decide_system),
             outbound_hover_system.after(interaction_decide_system),
@@ -290,9 +267,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<crate::PointerHits>();
     app.init_resource::<crate::SelectionState>();
     app.init_resource::<crate::DragState>();
-    // Overlay interaction resources
-    app.init_resource::<DraggableSquare>();
-    app.init_resource::<SimpleMouseState>();
+    app.init_resource::<PendingCommit>();
 }
 
 /// Full-window helper cameras for the single-canvas architecture, split so the

@@ -76,6 +76,9 @@ log = { version = "*", features = [
     "release_max_level_warn",
 ] }
 bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
+# The authored store. Bevy-free; the app wraps it in a resource and owns the
+# reconciler (src/document_bridge). See plans/document-spine.md.
+iron_document = { path = "./src/iron_document" }
 
 # Classic Vello, behind the `classic` feature. Optional because its plugin
 # creates every compute pipeline in `Plugin::finish`, so an unused-but-present

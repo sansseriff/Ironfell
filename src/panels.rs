@@ -3,7 +3,7 @@
 //! The DOM is the layout engine. JS measures each panel placeholder and posts its
 //! rectangle (physical pixels, top-left origin, full-window coordinates) through the
 //! `set_panel_viewport` FFI. Rust consumes these rects:
-//! - the `viewer` panel drives `MainCamera3D.viewport`
+//! - the `viewer` panel drives `MainCamera3D.viewport` and anchors document 2D space
 //! - vello panels (timeline, overlay) draw in screen space clipped to their rect
 
 use bevy::platform::collections::HashMap;
@@ -98,4 +98,16 @@ pub fn overlay_world_from_screen(rect: PanelRect, screen: Vec2) -> Vec2 {
 pub fn overlay_affine(rect: PanelRect) -> kurbo::Affine {
     let c = rect.center();
     kurbo::Affine::new([1.0, 0.0, 0.0, -1.0, c.x as f64, c.y as f64])
+}
+
+/// Document 2D space is y-down with its origin at the viewer panel's top-left
+/// corner, one unit per physical pixel (plans/document-spine.md §0). This maps
+/// a window-space cursor position into it; `None` outside the panel.
+pub fn document_from_screen(rect: PanelRect, screen: Vec2) -> Option<Vec2> {
+    rect.contains(screen).then(|| Vec2::new(screen.x - rect.x, screen.y - rect.y))
+}
+
+/// Kurbo affine mapping document 2D space to screen-space vello coords.
+pub fn document_affine(rect: PanelRect) -> kurbo::Affine {
+    kurbo::Affine::translate((rect.x as f64, rect.y as f64))
 }

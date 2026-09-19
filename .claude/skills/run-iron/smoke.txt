@@ -1,0 +1,20 @@
+# Default flow: open, wait, screenshot, drag the square (document 500,420 80x80)
+# and the torus (near the viewer centre), undo both, redo one, then show the
+# transactions that applied.
+nav
+ready
+shot start
+ddrag 540 460 690 360
+shot after-square-drag
+ddrag 435 350 315 410
+shot after-torus-drag
+key Meta+z
+key Meta+z
+sleep 500
+shot after-undo-both
+key Meta+Shift+z
+sleep 500
+shot after-redo-one
+logs applied|rejected|nothing to|panicked
+errors
+quit

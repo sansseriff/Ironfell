@@ -1,6 +1,6 @@
 use crate::bevy_app::init_app;
 use crate::panels::{PanelRect, Panels};
-use crate::{ActivityControl, DragState, WorkerApp, canvas_view::*};
+use crate::{ActivityControl, WorkerApp, canvas_view::*};
 use bevy::app::PluginsState;
 use bevy::ecs::system::SystemState;
 use bevy::platform::collections::HashMap;
@@ -296,12 +296,10 @@ pub fn left_bt_down(ptr: u64) {
 #[wasm_bindgen]
 pub fn left_bt_up(ptr: u64) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    if let Some(mut drag_state) = app.world_mut().get_resource_mut::<DragState>() {
-        drag_state.target = None;
-        drag_state.kind = None;
-    }
-
-    // Send Bevy MouseButtonInput event
+    // Only the event crosses here. Drag end is decided by the interaction
+    // systems from this event, which is what lets the release commit the
+    // drag as a transaction (document_bridge); clearing `DragState` from the
+    // FFI pre-empted that.
     let event = MouseButtonInput {
         button: MouseButton::Left,
         state: ButtonState::Released,
@@ -375,6 +373,31 @@ fn map_key_str_to_bevy_key(key_str: &str) -> Option<(BevyKeyCode, Key)> {
         "control" | "controlleft" => Some((BevyKeyCode::ControlLeft, Key::Control)), // Assuming ControlLeft
         // Add more mappings as needed
         _ => None,
+    }
+}
+
+/// Editor history, requested by the shell. Which keystroke means "undo" is
+/// chrome policy on the main thread; only the command crosses here.
+#[wasm_bindgen]
+pub fn undo(ptr: u64) {
+    history_request(ptr, crate::document_bridge::HistoryOp::Undo);
+}
+
+#[wasm_bindgen]
+pub fn redo(ptr: u64) {
+    history_request(ptr, crate::document_bridge::HistoryOp::Redo);
+}
+
+fn history_request(ptr: u64, op: crate::document_bridge::HistoryOp) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    if let Some(mut requests) = app
+        .world_mut()
+        .get_resource_mut::<crate::document_bridge::HistoryRequests>()
+    {
+        requests.0.push(op);
+    }
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
     }
 }
 

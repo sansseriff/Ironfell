@@ -3101,6 +3101,7 @@ dependencies = [
  "bevy_vello",
  "console_error_panic_hook",
  "console_log",
+ "iron_document",
  "js-sys",
  "kurbo",
  "log",

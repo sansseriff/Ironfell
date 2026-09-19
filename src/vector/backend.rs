@@ -77,12 +77,8 @@ pub mod order {
     pub const TIMELINE_BACKGROUND: i32 = 10;
     pub const TIMELINE_GRID: i32 = 11;
     pub const TIMELINE_PLAYHEAD: i32 = 12;
-    pub const WORLD_DEMO: i32 = 20;
-    pub const OVERLAY_ANIMATED: i32 = 30;
-    pub const OVERLAY_BEZIER: i32 = 31;
-    pub const MINI_SQUARES: i32 = 40;
-    pub const DRAGGABLE: i32 = 50;
-    pub const SELECTION_MARQUEE: i32 = 60;
+    /// All document 2D nodes, in document preorder (see `document_bridge::render`).
+    pub const DOCUMENT_2D: i32 = 20;
     /// Alpha stress fixture (`?bevy=alpha`), drawn above everything else.
     pub const ALPHA_STRESS_STATIC: i32 = 70;
     pub const ALPHA_STRESS_ANIMATED: i32 = 71;

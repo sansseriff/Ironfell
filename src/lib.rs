@@ -65,6 +65,9 @@ mod asset_reader; // kept private
 // The 2D vector rendering seam: display lists in, backend-rendered pixels out.
 mod vector;
 
+// The authored store's runtime projection: reconciler, provenance, writeback.
+pub mod document_bridge;
+
 mod camera_controller;
 
 pub struct WorkerApp {

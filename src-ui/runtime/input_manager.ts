@@ -133,6 +133,17 @@ export class InputManager {
 
     private onKeyDown(event: KeyboardEvent) {
         const key = event.key.toLowerCase();
+        // Editor commands are decided here and sent as commands, not keys:
+        // Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z or Ctrl+Y redoes.
+        if ((event.metaKey || event.ctrlKey) && (key === 'z' || key === 'y')) {
+            const target = event.target as HTMLElement | null;
+            if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+            event.preventDefault();
+            if (event.repeat) return;
+            const redo = key === 'y' || event.shiftKey;
+            this.post({ ty: redo ? 'redo' : 'undo' });
+            return;
+        }
         // NOTE: keys are whitelisted twice — here and in `map_key_str_to_bevy_key`
         // in src/web_ffi.rs. A new shortcut must be added to both or it silently
         // never reaches Bevy.

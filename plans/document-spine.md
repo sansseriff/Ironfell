@@ -444,7 +444,7 @@ Four calls, thin, transport-agnostic (doc 08 §4):
 |---|---|---|
 | `apply` | transaction JSON | `{applied, version, aliases}` or `{errors: [...]}` |
 | `view` | view query JSON | rendered view string + version |
-| `history` | `undo` / `redo` | resulting version, or nothing to do |
+| `history` | `undo` / `redo` | resulting version, or nothing to do. Landed as `undo(ptr)` / `redo(ptr)`, queued for the next sync |
 | `document` | `load(json)` / `save()` | canonical JSON |
 
 `web_ffi.rs` stays a shell over these. Nothing else crosses.
@@ -500,8 +500,8 @@ Exit criteria, in order:
 | Step | Work | Exit |
 |---|---|---|
 | 1 | `iron_document`: types, registry, ops, apply with inverses, history, canonical JSON, tree view | native tests: inverse restores; replay equals snapshot; cycle on reparent rejected; unknown path rejected. **Done 2026-09-18** on branch `document-spine`; `cargo test -p iron_document --target aarch64-apple-darwin` |
-| 2 | reconciler + provenance; rect, circle, mesh, group | replaying a log from empty reproduces the current demo scene |
-| 3 | intents: drag → transaction; coalescing; undo wired to keyboard | criterion 1 |
+| 2 | reconciler + provenance; rect, circle, mesh, group | replaying a log from empty reproduces the current demo scene. **Done 2026-09-18**: `src/document_bridge/`; the demo scene is one transaction; drags write back as `Set` ops. Verified in headless Chrome (WebGL2, SwiftShader) via Playwright |
+| 3 | intents: drag → transaction; coalescing; undo wired to keyboard | criterion 1. **Done 2026-09-18**: the shell maps Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Ctrl+Y) to `undo`/`redo` FFI calls; the sync applies them as history transactions and reconciles like any other. Verified by the `run-iron` smoke script |
 | 4 | load/save FFI; Svelte shell reads a tree view | criterion 2 |
 | 5 | `Slot::Bound`, minimal expression evaluator (`Ref`, `Bin`, `Call` with two floor functions), slider node | criterion 3 |
 | 6 | `clip` node, relations, `Timing`, playhead drives `Animated` slots; timeline panel reads the document | criterion 4 |
@@ -512,6 +512,13 @@ Steps 1 and 2 are the spine. Step 5 is the first point at which doc 03 §5.1's d
 step 7 and consumes revisions from step 1.
 
 ---
+
+### 12.1 Verifying in a browser
+
+The `run-iron` project skill (`.claude/skills/run-iron/`, invoked as `/run-iron`) builds
+the WebGL2 dev wasm, serves it, and drives headless Chrome from a stdin-scripted
+Playwright driver. Its `smoke.txt` is exit criterion 1's first half: two drags, two
+labelled transactions, screenshots to look at. Extend that script as later steps land.
 
 ## 13. Changes to existing code
 

@@ -37,3 +37,6 @@ dist-ssr
 
 /assets/*
 !/assets/.gitkeep
+
+# Agent worktrees and scratch state
+.agents/

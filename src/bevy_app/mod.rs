@@ -33,11 +33,9 @@ use crate::{
     asset_reader::WebAssetPlugin,
     canvas_view::{ViewObj, announce_canvas_window, spawn_canvas_window},
     camera_controller::CameraControllerPlugin,
-    ffi_inspector_bridge::{InspectorStreamingState, inspector_continuous_streaming_system},
     fps_overlay::FPSOverlayPlugin,
     // tracking_circle::TrackingCircle,
 };
-use bevy_remote_inspector::RemoteInspectorPlugin;
 
 const MAX_HISTORY_LENGTH: usize = 200;
 
@@ -157,7 +155,6 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
         },
         CameraControllerPlugin,
-        RemoteInspectorPlugin,
         TimelinePlugin,
         // The authored store and its projection into entities. Scene content
         // (the rects, the circle, the torus) comes from here as document nodes.
@@ -198,10 +195,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
 
     // --- STEP 4: UI panels + remaining Update systems -------------------------
     app.add_systems(Startup, ui_panels::setup_ui_panels);
-    app.add_systems(
-        Update,
-        (ui_panels::render_ui_panels, inspector_continuous_streaming_system),
-    );
+    app.add_systems(Update, ui_panels::render_ui_panels);
 
     // --- STEP 5: input/picking/interaction pipelines --------------------------
     app.add_systems(
@@ -259,7 +253,6 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
 fn init_shared_resources(app: &mut App) {
     app.init_resource::<AccumulatedCursorDelta>();
     app.init_resource::<AccumulatedScroll>();
-    app.init_resource::<InspectorStreamingState>();
     app.init_resource::<crate::panels::Panels>();
     // New interaction resources
     app.insert_resource(crate::ActivityControl::new());

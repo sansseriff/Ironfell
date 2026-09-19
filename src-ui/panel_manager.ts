@@ -1,8 +1,7 @@
 import { SessionAdapter, type RuntimeMode, type PanelRectMsg } from './runtime/session_adapter';
 import { InputManager } from './runtime/input_manager';
 import { chooseBackend, type Backend } from './runtime/backend_policy';
-import { InspectorClient } from './runtime/inspector_client';
-import { SystemState } from './system_state.svelte';
+import { DocumentClient } from './runtime/document_client.svelte';
 
 interface PanelEntry {
   id: string;
@@ -39,7 +38,8 @@ export class PanelManager {
   private mode: RuntimeMode = 'worker';
   private canvas: HTMLCanvasElement | null = null;
   private input = new InputManager({ enableRaw: true });
-  private inspector = new InspectorClient(new SystemState());
+  /** Save, load, and views of the authored document. Reactive; the shell binds to it. */
+  readonly docClient = new DocumentClient();
   private panels = new Map<string, PanelEntry>();
   private windowResizeHandler: (() => void) | null = null;
 
@@ -155,7 +155,7 @@ export class PanelManager {
     const session = new SessionAdapter(this.mode);
     this.session = session;
     session.onMessage((data) => this.handleSessionMessage(data));
-    this.inspector.init({ post: (data: any, transfer?: any[]) => session.post(data, transfer) } as any);
+    this.docClient.init((data: any) => session.post(data));
     session.attachCanvas(this.canvas!, this.backend);
     session.resizeCanvas(...this.canvasPhysicalSize());
     this.syncAllPanels();
@@ -183,8 +183,11 @@ export class PanelManager {
         }
         if (this.onInitialized) try { this.onInitialized(); } catch { }
         break;
-      case 'inspector_update':
-        this.inspector.handleUpdate(data.update);
+      case 'documentChanged':
+      case 'documentSaved':
+      case 'documentLoaded':
+      case 'documentView':
+        this.docClient.handleMessage(data);
         break;
       case 'probeStats':
         (window as any).__lastProbeStats = data.stats;

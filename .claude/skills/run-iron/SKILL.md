@@ -53,17 +53,27 @@ cd .claude/skills/run-iron && bun run drive.ts < smoke.txt; cd -
 
 `smoke.txt` opens the app, waits for the engine, screenshots, drags the
 square and the torus, undoes both with Cmd+Z, redoes one with Cmd+Shift+Z,
-and prints the transactions the store applied. Expected tail of the output:
+round-trips the document through save and load, and prints the transactions
+the store applied. Expected output, minus screenshot lines:
 
 ```
+{"roundtrip_equal":true,"bytes":6027}
+"<document version=\"6\"> |   <group id=\"#1\" name=\"scene\" count=\"22\"> | …"
 applied "open demo scene" (24 ops) -> v1
 applied "move rect" (2 ops) -> v2
 applied "move mesh" (1 ops) -> v3
 applied "undo: move mesh" (1 ops) -> v4
 applied "undo: move rect" (2 ops) -> v5
 applied "redo: move rect" (2 ops) -> v6
+loaded document v6 (24 live nodes)
 (no page errors)
 ```
+
+`window.__iron` is the document API for `eval`: `await __iron.save()` returns
+the canonical JSON, `await __iron.load(text)` replaces the document, and
+`await __iron.view({fidelity:'summary', depth: 2})` renders a view. The
+Document panel on the left shows the full tree view and refreshes on every
+applied transaction.
 
 Screenshots land in `.claude/skills/run-iron/screenshots/<name>.png`. Look at
 them; a frame showing only "Loading..." means the engine never came up.
@@ -90,7 +100,7 @@ cd -
 | `move x y`, `down`, `up`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels |
 | `dmove x y`, `ddrag x0 y0 x1 y1 [steps]` | the same in document 2D space: viewer-panel top-left origin, y-down, the space `transform2d.x/y` are in |
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
-| `eval <js>` | evaluate in the page and print the JSON result |
+| `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |
 | `logs [regex]` | print console output since the last `logs`, optionally filtered; Rust `info!`/`warn!` lines from the worker appear here |
 | `errors` | print uncaught page errors |
 | `panel` | print the viewer panel rect |

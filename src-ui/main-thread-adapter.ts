@@ -33,9 +33,9 @@ export class MainThreadAdapter {
     // Create a dedicated object for Rust FFI functions
     const rustBridge = {
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
-      send_inspector_update_from_worker: (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson),
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
-      send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list)
+      send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
+      send_document_changed_from_worker: (version: number) => this.sendMessage({ ty: "documentChanged", version }),
     };
 
     // Make it globally accessible
@@ -43,7 +43,6 @@ export class MainThreadAdapter {
 
     // Expose the functions to the global scope so they're accessible from Wasm.
     (window as any).send_pick_from_worker = (pickList: any[]) => this.sendPickFromWorker(pickList);
-    (window as any).send_inspector_update_from_worker = (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson);
     (window as any).send_hover_from_worker = (list: any[]) => this.sendHoverFromWorker(list);
     (window as any).send_selection_from_worker = (list: any[]) => this.sendSelectionFromWorker(list);
   }
@@ -165,127 +164,33 @@ export class MainThreadAdapter {
         if (this.appHandle !== BigInt(0)) glue.redo(this.appHandle);
         break;
 
-      // Inspector commands
-      case "inspector_update_component":
+      // Document: save, load, view. Each answers with the caller's requestId.
+      case "documentSave":
         if (this.appHandle !== BigInt(0)) {
-          const success = glue.inspector_update_component(
-            this.appHandle,
-            BigInt(data.entity_id),
-            data.component_id,
-            data.value_json
-          );
-          this.sendMessage({ ty: "inspector_result", command: "update_component", success });
+          this.sendMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_save(this.appHandle) });
         }
         break;
 
-      case "inspector_toggle_component":
+      case "documentLoad":
         if (this.appHandle !== BigInt(0)) {
-          const success = glue.inspector_toggle_component(
-            this.appHandle,
-            BigInt(data.entity_id),
-            data.component_id
-          );
-          this.sendMessage({ ty: "inspector_result", command: "toggle_component", success });
+          try {
+            glue.document_load(this.appHandle, data.text);
+            this.sendMessage({ ty: "documentLoaded", requestId: data.requestId, ok: true });
+          } catch (e) {
+            this.sendMessage({ ty: "documentLoaded", requestId: data.requestId, ok: false, error: String(e) });
+          }
         }
         break;
 
-      case "inspector_remove_component":
+      case "documentView":
         if (this.appHandle !== BigInt(0)) {
-          const success = glue.inspector_remove_component(
-            this.appHandle,
-            BigInt(data.entity_id),
-            data.component_id
-          );
-          this.sendMessage({ ty: "inspector_result", command: "remove_component", success });
+          try {
+            const text = glue.document_view(this.appHandle, JSON.stringify(data.query));
+            this.sendMessage({ ty: "documentView", requestId: data.requestId, ok: true, text });
+          } catch (e) {
+            this.sendMessage({ ty: "documentView", requestId: data.requestId, ok: false, error: String(e) });
+          }
         }
-        break;
-
-      case "inspector_insert_component":
-        if (this.appHandle !== BigInt(0)) {
-          const success = glue.inspector_insert_component(
-            this.appHandle,
-            BigInt(data.entity_id),
-            data.component_id,
-            data.value_json
-          );
-          this.sendMessage({ ty: "inspector_result", command: "insert_component", success });
-        }
-        break;
-
-      case "inspector_despawn_entity":
-        if (this.appHandle !== BigInt(0)) {
-          const success = glue.inspector_despawn_entity(
-            this.appHandle,
-            BigInt(data.entity_id),
-            data.kind
-          );
-          this.sendMessage({ ty: "inspector_result", command: "despawn_entity", success });
-        }
-        break;
-
-      case "inspector_toggle_visibility":
-        if (this.appHandle !== BigInt(0)) {
-          const success = glue.inspector_toggle_visibility(
-            this.appHandle,
-            BigInt(data.entity_id)
-          );
-          this.sendMessage({ ty: "inspector_result", command: "toggle_visibility", success });
-        }
-        break;
-
-      case "inspector_reparent_entity":
-        if (this.appHandle !== BigInt(0)) {
-          const success = glue.inspector_reparent_entity(
-            this.appHandle,
-            BigInt(data.entity_id),
-            data.parent_id ? BigInt(data.parent_id) : undefined
-          );
-          this.sendMessage({ ty: "inspector_result", command: "reparent_entity", success });
-        }
-        break;
-
-      case "inspector_spawn_entity":
-        if (this.appHandle !== BigInt(0)) {
-          const entityId = glue.inspector_spawn_entity(
-            this.appHandle,
-            data.parent_id ? BigInt(data.parent_id) : undefined
-          );
-          this.sendMessage({
-            ty: "inspector_result",
-            command: "spawn_entity",
-            success: entityId !== BigInt(0),
-            entity_id: entityId.toString()
-          });
-        }
-        break;
-
-      case "enable_streaming":
-        this.enableContinuousStreaming();
-        break;
-
-      case "disable_streaming":
-        this.disableContinuousStreaming();
-        break;
-
-      case "set_streaming_frequency":
-        this.setStreamingFrequency(data.ticks || 3);
-        break;
-
-      case "force_inspector_update":
-        this.forceInspectorUpdate();
-        break;
-
-      case "get_type_registry_schema":
-        const schema = this.getTypeRegistrySchema();
-        this.sendMessage({
-          ty: "type_registry_schema",
-          schema: schema,
-          requestId: data.requestId
-        });
-        break;
-
-      case "reset_streaming_state":
-        this.resetStreamingState();
         break;
 
       case "probeStats":
@@ -385,15 +290,6 @@ export class MainThreadAdapter {
     this.sendMessage({ ty: "selection", list });
   }
 
-  private sendInspectorUpdateFromWorker(updateJson: string) {
-    try {
-      const update = JSON.parse(updateJson);
-      this.sendMessage({ ty: "inspector_update", update });
-    } catch (error) {
-      console.error("Failed to parse inspector update JSON:", error);
-    }
-  }
-
   private releaseApp() {
     this.isStoppedRunning = true;
     if (this.rafId !== null) {
@@ -406,73 +302,6 @@ export class MainThreadAdapter {
     }
   }
 
-  private enableContinuousStreaming() {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.enable_inspector_streaming(this.appHandle);
-      console.log("Continuous inspector streaming enabled (for animations)");
-    } catch (error) {
-      console.error("Failed to enable continuous streaming:", error);
-    }
-  }
-
-  private disableContinuousStreaming() {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.disable_inspector_streaming(this.appHandle);
-      console.log("Continuous inspector streaming disabled");
-    } catch (error) {
-      console.error("Failed to disable continuous streaming:", error);
-    }
-  }
-
-  private setStreamingFrequency(ticks: number) {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.set_inspector_streaming_frequency(this.appHandle, ticks);
-      console.log(`Continuous streaming frequency set to ${ticks} ticks`);
-    } catch (error) {
-      console.error("Failed to set streaming frequency:", error);
-    }
-  }
-
-  private forceInspectorUpdate() {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.force_inspector_update(this.appHandle);
-      console.log("Forced inspector update");
-    } catch (error) {
-      console.error("Failed to force inspector update:", error);
-    }
-  }
-
-  private getTypeRegistrySchema(): string {
-    if (this.appHandle === BigInt(0)) return "{}";
-
-    try {
-      return glue.get_type_registry_schema(this.appHandle);
-    } catch (error) {
-      console.error("Failed to get type registry schema:", error);
-      return "{}";
-    }
-  }
-
-  private resetStreamingState() {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.inspector_reset_streaming_state(this.appHandle, 0); // Use client_id 0
-      console.log("Inspector streaming state reset");
-    } catch (error) {
-      console.error("Failed to reset streaming state:", error);
-    }
-  }
-
-  // Cleanup: stop the frame loop and free the Bevy app (GPU device, surfaces).
   dispose() {
     if (this.disposed) return;
     this.disposed = true;

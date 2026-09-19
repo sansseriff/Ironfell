@@ -20,7 +20,14 @@ mkdir -p src-ui/wasm/webgl2 src-ui/wasm/webgpu
 wasm-bindgen --out-dir src-ui/wasm/webgl2 --web target/wasm32-unknown-unknown/dev-opt/ironfell.wasm
 
 # wasm_loader.ts imports both artifact URLs at build time, so Vite needs a
-# file at the WebGPU path even though only WebGL2 is fetched. Stub it.
-[ -e src-ui/wasm/webgpu/ironfell_bg.wasm ] || cp src-ui/wasm/webgl2/ironfell_bg.wasm src-ui/wasm/webgpu/ironfell_bg.wasm
-[ -e src-ui/wasm/webgpu/ironfell.js ] || cp src-ui/wasm/webgl2/ironfell.js src-ui/wasm/webgpu/ironfell.js
+# file at the WebGPU path even though only WebGL2 is fetched, and glue.ts
+# takes its TypeScript types from the WebGPU glue. Stub the directory with a
+# copy of the WebGL2 artifacts, and keep the stub current on every build so
+# the type declarations match the FFI; a real WebGPU build (no marker file)
+# is left alone.
+if [ ! -e src-ui/wasm/webgpu/ironfell_bg.wasm ] || [ -e src-ui/wasm/webgpu/.stub ]; then
+  cp src-ui/wasm/webgl2/ironfell_bg.wasm src-ui/wasm/webgl2/ironfell.js \
+     src-ui/wasm/webgl2/ironfell.d.ts src-ui/wasm/webgl2/ironfell_bg.wasm.d.ts src-ui/wasm/webgpu/
+  touch src-ui/wasm/webgpu/.stub
+fi
 ls -la src-ui/wasm/webgl2/ironfell_bg.wasm

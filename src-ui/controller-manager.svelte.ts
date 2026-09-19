@@ -13,6 +13,11 @@ class ControllerManagerClass {
 
   private manager = new PanelManager();
 
+  /** The document client: save, load, and the tree view the shell shows. */
+  get docClient() {
+    return this.manager.docClient;
+  }
+
   constructor() {
     this.manager.onInitialized = () => {
       this.syncFlags();

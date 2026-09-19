@@ -38,12 +38,6 @@ use std::ops::{Deref, DerefMut};
 mod web_ffi;
 pub use web_ffi::*;
 
-// ffi module for specific to reflection, inspector features
-mod ffi_inspector_bridge;
-pub use ffi_inspector_bridge::*;
-
-// mod type_registry; // Disabled for now - used for streaming updates
-
 mod canvas_view;
 
 pub mod panels;

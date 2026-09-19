@@ -24,7 +24,6 @@ class IronWorker {
   private frameIndex = 0;
   private frameCount = 0;
   private frameFlag = 0;
-  private streamingEnabled = false;
   private rafId: number | null = null;
   private latestMouseX: number = 0;
   private latestMouseY: number = 0;
@@ -37,7 +36,7 @@ class IronWorker {
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
       send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
-      send_inspector_update_from_worker: (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson)
+      send_document_changed_from_worker: (version: number) => self.postMessage({ ty: "documentChanged", version }),
     };
 
     // Make it globally accessible
@@ -47,7 +46,6 @@ class IronWorker {
     (self as any).send_pick_from_worker = (pickList: any[]) => this.sendPickFromWorker(pickList);
     (self as any).send_hover_from_worker = (list: any[]) => this.sendHoverFromWorker(list);
     (self as any).send_selection_from_worker = (list: any[]) => this.sendSelectionFromWorker(list);
-    (self as any).send_inspector_update_from_worker = (updateJson: string) => this.sendInspectorUpdateFromWorker(updateJson);
 
     // Initialize the worker
     this.initWasmInWorker();
@@ -172,128 +170,27 @@ class IronWorker {
           if (this.appHandle !== BigInt(0)) glue.redo(this.appHandle);
           break;
 
-        // Inspector commands
+        // Document: save, load, view. Each answers with the caller's requestId.
+        case "documentSave":
+          self.postMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_save(this.appHandle) });
+          break;
 
-        case "inspector_update_component":
-          if (this.appHandle !== BigInt(0)) {
-            const success = glue.inspector_update_component(
-              this.appHandle,
-              BigInt(data.entity_id),
-              data.component_id,
-              data.value_json
-            );
-            self.postMessage({ ty: "inspector_result", command: "update_component", success });
+        case "documentLoad":
+          try {
+            glue.document_load(this.appHandle, data.text);
+            self.postMessage({ ty: "documentLoaded", requestId: data.requestId, ok: true });
+          } catch (e) {
+            self.postMessage({ ty: "documentLoaded", requestId: data.requestId, ok: false, error: String(e) });
           }
           break;
 
-        case "inspector_toggle_component":
-          if (this.appHandle !== BigInt(0)) {
-            const success = glue.inspector_toggle_component(
-              this.appHandle,
-              BigInt(data.entity_id),
-              data.component_id
-            );
-            self.postMessage({ ty: "inspector_result", command: "toggle_component", success });
+        case "documentView":
+          try {
+            const text = glue.document_view(this.appHandle, JSON.stringify(data.query));
+            self.postMessage({ ty: "documentView", requestId: data.requestId, ok: true, text });
+          } catch (e) {
+            self.postMessage({ ty: "documentView", requestId: data.requestId, ok: false, error: String(e) });
           }
-          break;
-
-        case "inspector_remove_component":
-          if (this.appHandle !== BigInt(0)) {
-            const success = glue.inspector_remove_component(
-              this.appHandle,
-              BigInt(data.entity_id),
-              data.component_id
-            );
-            self.postMessage({ ty: "inspector_result", command: "remove_component", success });
-          }
-          break;
-
-        case "inspector_insert_component":
-          if (this.appHandle !== BigInt(0)) {
-            const success = glue.inspector_insert_component(
-              this.appHandle,
-              BigInt(data.entity_id),
-              data.component_id,
-              data.value_json
-            );
-            self.postMessage({ ty: "inspector_result", command: "insert_component", success });
-          }
-          break;
-
-        case "inspector_despawn_entity":
-          if (this.appHandle !== BigInt(0)) {
-            const success = glue.inspector_despawn_entity(
-              this.appHandle,
-              BigInt(data.entity_id),
-              data.kind
-            );
-            self.postMessage({ ty: "inspector_result", command: "despawn_entity", success });
-          }
-          break;
-
-        case "inspector_toggle_visibility":
-          if (this.appHandle !== BigInt(0)) {
-            const success = glue.inspector_toggle_visibility(
-              this.appHandle,
-              BigInt(data.entity_id)
-            );
-            self.postMessage({ ty: "inspector_result", command: "toggle_visibility", success });
-          }
-          break;
-
-        case "inspector_reparent_entity":
-          if (this.appHandle !== BigInt(0)) {
-            const success = glue.inspector_reparent_entity(
-              this.appHandle,
-              BigInt(data.entity_id),
-              data.parent_id ? BigInt(data.parent_id) : undefined
-            );
-            self.postMessage({ ty: "inspector_result", command: "reparent_entity", success });
-          }
-          break;
-
-        case "inspector_spawn_entity":
-          if (this.appHandle !== BigInt(0)) {
-            const entityId = glue.inspector_spawn_entity(
-              this.appHandle,
-              data.parent_id ? BigInt(data.parent_id) : undefined
-            );
-            self.postMessage({
-              ty: "inspector_result",
-              command: "spawn_entity",
-              success: entityId !== BigInt(0),
-              entity_id: entityId.toString()
-            });
-          }
-          break;
-
-        case "enable_streaming":
-          this.enableContinuousStreaming();
-          break;
-
-        case "disable_streaming":
-          this.disableContinuousStreaming();
-          break;
-
-        case "set_streaming_frequency":
-          this.setStreamingFrequency(data.ticks || 3);
-          break;
-
-        case "force_inspector_update":
-          this.forceInspectorUpdate();
-          break;
-
-        case "get_type_registry_schema":
-          const schema = this.getTypeRegistrySchema();
-          self.postMessage({
-            ty: "type_registry_schema",
-            schema: schema,
-            requestId: data.requestId
-          });
-          break;
-
-        case "reset_streaming_state":
-          this.resetStreamingState();
           break;
 
         case "probeStats":
@@ -390,82 +287,6 @@ class IronWorker {
     self.postMessage({ ty: "selection", list });
   }
 
-  private sendInspectorUpdateFromWorker(updateJson: string) {
-    try {
-      const update = JSON.parse(updateJson);
-      self.postMessage({ ty: "inspector_update", update });
-    } catch (error) {
-      console.error("Failed to parse inspector update JSON:", error);
-    }
-  }
-
-  private enableContinuousStreaming() {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.enable_inspector_streaming(this.appHandle);
-      this.streamingEnabled = true;
-      console.log("Continuous inspector streaming enabled (for animations)");
-    } catch (error) {
-      console.error("Failed to enable continuous streaming:", error);
-    }
-  }
-
-  private disableContinuousStreaming() {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.disable_inspector_streaming(this.appHandle);
-      this.streamingEnabled = false;
-      console.log("Continuous inspector streaming disabled");
-    } catch (error) {
-      console.error("Failed to disable continuous streaming:", error);
-    }
-  }
-
-  private setStreamingFrequency(ticks: number) {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.set_inspector_streaming_frequency(this.appHandle, ticks);
-      console.log(`Continuous streaming frequency set to ${ticks} ticks`);
-    } catch (error) {
-      console.error("Failed to set streaming frequency:", error);
-    }
-  }
-
-  private forceInspectorUpdate() {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.force_inspector_update(this.appHandle);
-      console.log("Forced inspector update");
-    } catch (error) {
-      console.error("Failed to force inspector update:", error);
-    }
-  }
-
-  private getTypeRegistrySchema(): string {
-    if (this.appHandle === BigInt(0)) return "{}";
-
-    try {
-      return glue.get_type_registry_schema(this.appHandle);
-    } catch (error) {
-      console.error("Failed to get type registry schema:", error);
-      return "{}";
-    }
-  }
-
-  private resetStreamingState() {
-    if (this.appHandle === BigInt(0)) return;
-
-    try {
-      glue.inspector_reset_streaming_state(this.appHandle, 0); // Use client_id 0
-      console.log("Inspector streaming state reset");
-    } catch (error) {
-      console.error("Failed to reset streaming state:", error);
-    }
-  }
 }
 
 // Initialize the worker

@@ -26,7 +26,7 @@ mod render;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
-use iron_document::{NodeId, Op, Store, TransactionInput, TypeId};
+use iron_document::{Document, NodeId, Op, Store, TransactionInput, TypeId};
 use std::collections::BTreeSet;
 
 pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d};
@@ -92,7 +92,19 @@ impl NodeMap {
         self.paint_index.remove(&id);
         Some(e)
     }
+
+    fn drain(&mut self) -> Vec<Entity> {
+        self.to_node.clear();
+        self.paint_index.clear();
+        self.to_entity.drain().map(|(_, e)| e).collect()
+    }
 }
+
+/// A document to replace the current one, already parsed and validated by
+/// the FFI. Applied by the sync before that frame's transactions; history is
+/// discarded with the old document.
+#[derive(Resource, Default)]
+pub struct PendingLoad(pub Option<Document>);
 
 /// Set when the materialised scene changed shape or values this frame, so
 /// the 2D layer rebuilds once rather than every frame.
@@ -121,6 +133,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<NodeMap>()
             .init_resource::<DocumentDirty>()
             .init_resource::<HistoryRequests>()
+            .init_resource::<PendingLoad>()
             .add_systems(Startup, (materialize::setup_mesh_assets, render::setup_document_layer, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking.
@@ -138,17 +151,35 @@ fn sync_document(
     mut store: ResMut<DocumentStore>,
     mut pending: ResMut<PendingTransactions>,
     mut history: ResMut<HistoryRequests>,
+    mut load: ResMut<PendingLoad>,
     mut map: ResMut<NodeMap>,
     mut dirty: ResMut<DocumentDirty>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
 ) {
-    if pending.0.is_empty() && history.0.is_empty() {
+    if pending.0.is_empty() && history.0.is_empty() && load.0.is_none() {
         return;
     }
     let now = time.elapsed().as_millis() as u64;
     let mut affected: BTreeSet<NodeId> = BTreeSet::new();
+    let version_before = store.0.document().version();
+    if let Some(doc) = load.0.take() {
+        // Everything materialised belongs to the old document. Tear it all
+        // down rather than diffing: ids may coincide with different types.
+        for e in map.drain() {
+            if let Ok(mut ec) = commands.get_entity(e) {
+                ec.try_despawn();
+            }
+        }
+        store.0 = Store::with_document(doc);
+        affected.extend(store.0.document().live_nodes().map(|n| n.id));
+        info!(
+            "loaded document v{} ({} live nodes)",
+            store.0.document().version().0,
+            affected.len()
+        );
+    }
     for mut input in pending.0.drain(..) {
         if input.ts == 0 {
             input.ts = now;
@@ -177,6 +208,10 @@ fn sync_document(
                 }
             }
         }
+    }
+    let version = store.0.document().version();
+    if version != version_before {
+        crate::web_ffi::send_document_changed_from_worker(version.0 as u32);
     }
     if affected.is_empty() {
         return;

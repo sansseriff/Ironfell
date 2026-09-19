@@ -502,7 +502,7 @@ Exit criteria, in order:
 | 1 | `iron_document`: types, registry, ops, apply with inverses, history, canonical JSON, tree view | native tests: inverse restores; replay equals snapshot; cycle on reparent rejected; unknown path rejected. **Done 2026-09-18** on branch `document-spine`; `cargo test -p iron_document --target aarch64-apple-darwin` |
 | 2 | reconciler + provenance; rect, circle, mesh, group | replaying a log from empty reproduces the current demo scene. **Done 2026-09-18**: `src/document_bridge/`; the demo scene is one transaction; drags write back as `Set` ops. Verified in headless Chrome (WebGL2, SwiftShader) via Playwright |
 | 3 | intents: drag → transaction; coalescing; undo wired to keyboard | criterion 1. **Done 2026-09-18**: the shell maps Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Ctrl+Y) to `undo`/`redo` FFI calls; the sync applies them as history transactions and reconciles like any other. Verified by the `run-iron` smoke script |
-| 4 | load/save FFI; Svelte shell reads a tree view | criterion 2 |
+| 4 | load/save FFI; Svelte shell reads a tree view | criterion 2. **Done 2026-09-18**: `document_save` / `document_load` / `document_view` FFI; the shell's Document panel shows the tree view and refreshes on `documentChanged`; `window.__iron` exposes save/load/view for driving. The inspector (crate, FFI bridge, TypeScript client) is removed. Round trip verified byte-identical by the smoke script |
 | 5 | `Slot::Bound`, minimal expression evaluator (`Ref`, `Bin`, `Call` with two floor functions), slider node | criterion 3 |
 | 6 | `clip` node, relations, `Timing`, playhead drives `Animated` slots; timeline panel reads the document | criterion 4 |
 | 7 | TypeScript model surface: manifest from the registry, `<edit>` parser, Zod schemas, apply via FFI | criterion 5 |
@@ -529,8 +529,8 @@ labelled transactions, screenshots to look at. Extend that script as later steps
 | `TimelineState` resource | document `clip` nodes plus an editor-local playhead |
 | overlay world space, y-up, panel-centre origin | document space, y-down, top-left origin; the panel affine maps document to screen |
 | `drag_apply_system` mutating `Transform` | optimistic move + `Set` transaction on release |
-| inspector write FFI (`inspector_update_component` …) | removed |
-| inspector streaming | optional; relabelled as a derived-state view; not a write path |
+| inspector write FFI (`inspector_update_component` …) | removed (step 4) |
+| inspector streaming, `bevy_remote_inspector` crate, TypeScript client | removed (step 4); the Document panel's tree view replaces the read half |
 | animated Bézier stroke, world-space demo | removed (nothing in slice one maps to them) |
 | alpha stress fixture | kept behind its flag as a perf fixture |
 | `Panels` (DOM → Bevy rects) | kept for chrome; hosted nodes flow the other way |

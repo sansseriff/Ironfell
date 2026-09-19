@@ -2,7 +2,7 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = [".", "src/bevy_remote_inspector", "src/iron_document"]
+members = [".", "src/iron_document"]
 
 
 [workspace.dependencies]
@@ -75,7 +75,6 @@ log = { version = "*", features = [
     "max_level_debug",
     "release_max_level_warn",
 ] }
-bevy_remote_inspector = { path = "./src/bevy_remote_inspector" }
 # The authored store. Bevy-free; the app wraps it in a resource and owns the
 # reconciler (src/document_bridge). See plans/document-spine.md.
 iron_document = { path = "./src/iron_document" }

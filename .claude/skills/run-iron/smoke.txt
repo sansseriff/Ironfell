@@ -1,6 +1,6 @@
 # Default flow: open, wait, screenshot, drag the square (document 500,420 80x80)
-# and the torus (near the viewer centre), undo both, redo one, then show the
-# transactions that applied.
+# and the torus (near the viewer centre), undo both, redo one, then round-trip
+# the document through save and load and show the transactions that applied.
 nav
 ready
 shot start
@@ -15,6 +15,11 @@ shot after-undo-both
 key Meta+Shift+z
 sleep 500
 shot after-redo-one
-logs applied|rejected|nothing to|panicked
+# Exit criterion 2: save, load, save again; the bytes must match.
+eval (async () => { const a = await __iron.save(); await __iron.load(a); await new Promise(r => setTimeout(r, 800)); const b = await __iron.save(); return { roundtrip_equal: a === b, bytes: a.length }; })()
+sleep 500
+shot after-load
+eval document.querySelector("pre.view")?.textContent.split("\n").slice(0, 4).join(" | ")
+logs applied|rejected|loaded document|nothing to|panicked
 errors
 quit

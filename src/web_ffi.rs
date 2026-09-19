@@ -41,9 +41,10 @@ extern "C" {
     pub(crate) fn send_hover_from_worker(list: js_sys::Array);
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_selection_from_worker(list: js_sys::Array);
-
-    // Inspector streaming callbacks
-    pub(crate) fn send_inspector_update_from_worker(update_json: &str);
+    /// The document's version advanced (a transaction, undo, redo, or load
+    /// applied). The shell re-reads whatever views it shows.
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_document_changed_from_worker(version: u32);
 }
 
 /// Build the Bevy app around the canvas it will render into.
@@ -374,6 +375,51 @@ fn map_key_str_to_bevy_key(key_str: &str) -> Option<(BevyKeyCode, Key)> {
         // Add more mappings as needed
         _ => None,
     }
+}
+
+// ---- Document: the four-call FFI of plans/document-spine.md §9 ----------
+// `apply` arrives through gestures for now; the model surface adds its own
+// caller in step 7. These stay thin: parse, hand to a resource, return.
+
+/// The canonical JSON of the current document.
+#[wasm_bindgen]
+pub fn document_save(ptr: u64) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    app.world()
+        .get_resource::<crate::document_bridge::DocumentStore>()
+        .map(|s| s.0.save())
+        .unwrap_or_default()
+}
+
+/// Replace the document. Validated here, so a bad file is an error to the
+/// caller and never reaches the store; applied on the next frame.
+#[wasm_bindgen]
+pub fn document_load(ptr: u64, text: String) -> Result<(), JsValue> {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let doc = iron_document::serial::load(&text).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let mut load = app
+        .world_mut()
+        .get_resource_mut::<crate::document_bridge::PendingLoad>()
+        .ok_or_else(|| JsValue::from_str("document bridge not installed"))?;
+    load.0 = Some(doc);
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    Ok(())
+}
+
+/// Render a view. `query_json` is an `iron_document::ViewQuery`, e.g.
+/// `{"scope": null, "fidelity": "summary", "depth": 2}`.
+#[wasm_bindgen]
+pub fn document_view(ptr: u64, query_json: String) -> Result<String, JsValue> {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let query: iron_document::ViewQuery =
+        serde_json::from_str(&query_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let store = app
+        .world()
+        .get_resource::<crate::document_bridge::DocumentStore>()
+        .ok_or_else(|| JsValue::from_str("document bridge not installed"))?;
+    store.0.view(&query).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Editor history, requested by the shell. Which keystroke means "undo" is

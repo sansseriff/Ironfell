@@ -269,9 +269,12 @@ later touches the evaluator, not every read site. This is the concrete form of d
 
 ### 5.5 Sibling order
 
-Fractional string keys (doc 04 §2.5), hand-rolled. Inserting between two siblings mints a key
-between theirs and touches nothing else. Rebalance is a system op when key length crosses a
-threshold.
+Fractional string keys (doc 04 §2.5), hand-rolled: the `rocicorp/fractional-indexing` scheme,
+an integer part whose length is encoded in its first letter plus an optional fraction. Appending
+after the last sibling increments the integer and stays short (ten thousand appends fit in four
+characters); inserting between neighbours bisects the fraction. Repeatedly bisecting the same gap
+costs one bit per insert, which is inherent to any scheme. Rebalance is a system op when key
+length crosses a threshold; deferred until it is observed.
 
 ### 5.6 Tombstones
 
@@ -306,6 +309,10 @@ pub struct Relation { pub id: RelationId, pub from: NodeId, pub to: NodeId,
 ```
 
 Indexed both directions. `by_target` is the index behind the "why is this moving" probe.
+
+Relation ids are not tombstoned: unlinking removes the row, and the inverse re-links with the
+original id. `Link` therefore accepts any unused id, while fresh links take ids from
+`next_relation_id`. Node ids remain never-reused.
 
 ### 5.9 Indexes and version
 
@@ -492,7 +499,7 @@ Exit criteria, in order:
 
 | Step | Work | Exit |
 |---|---|---|
-| 1 | `iron_document`: types, registry, ops, apply with inverses, history, canonical JSON, tree view | native tests: inverse restores; replay equals snapshot; cycle on reparent rejected; unknown path rejected |
+| 1 | `iron_document`: types, registry, ops, apply with inverses, history, canonical JSON, tree view | native tests: inverse restores; replay equals snapshot; cycle on reparent rejected; unknown path rejected. **Done 2026-09-18** on branch `document-spine`; `cargo test -p iron_document --target aarch64-apple-darwin` |
 | 2 | reconciler + provenance; rect, circle, mesh, group | replaying a log from empty reproduces the current demo scene |
 | 3 | intents: drag → transaction; coalescing; undo wired to keyboard | criterion 1 |
 | 4 | load/save FFI; Svelte shell reads a tree view | criterion 2 |

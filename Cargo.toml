@@ -2,7 +2,7 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = [".", "src/bevy_remote_inspector"]
+members = [".", "src/bevy_remote_inspector", "src/iron_document"]
 
 
 [workspace.dependencies]

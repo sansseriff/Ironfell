@@ -1,0 +1,11 @@
+[package]
+name = "iron_document"
+version = "0.1.0"
+edition = "2024"
+description = "The authored store: identity-stable nodes, operations, history, and views. Depends on nothing renderer-shaped."
+
+# No Bevy, by design (plans/document-spine.md §5). This crate compiles and
+# tests natively; the app crate wraps it in a resource and owns the reconciler.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

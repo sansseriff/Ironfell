@@ -3083,6 +3083,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "iron_document"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ironfell"
 version = "0.0.1"
 dependencies = [

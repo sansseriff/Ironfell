@@ -22,6 +22,7 @@
 mod demo;
 mod highlight;
 mod materialize;
+pub mod nest;
 mod panel_views;
 mod render;
 

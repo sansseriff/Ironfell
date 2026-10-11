@@ -2,7 +2,8 @@ use bevy::math::bounding::RayCast3d;
 use bevy::prelude::*;
 
 use crate::bevy_app::scene3d::{CurrentVolume, PanelCamera};
-use crate::document_bridge::{Doc2d, InComposition, NodeMap, PanelViews, Provenance};
+use crate::document_bridge::{Doc2d, DocumentStore, InComposition, NodeMap, PanelViews, nest};
+use iron_document::NodeId;
 use iron_document::composition::Dims;
 
 /// Build a world ray from a window-space cursor position (physical px).
@@ -47,31 +48,68 @@ pub fn pointer_panel_system(pointer: Res<crate::PointerState>, views: Res<PanelV
 }
 
 /// Hit-test the document's 2D nodes in the 2D panel under the pointer. The
-/// cursor is mapped into document space, then into each node's local space
-/// through the inverse of its global transform, so rotated and scaled shapes
-/// pick correctly. Depth is the node's painter index: later in preorder
-/// means on top.
+/// cursor is mapped into document space, then through any embeds into the
+/// embedded composition's space (inside its region only), then into each
+/// node's local space through the inverse of its global transform, so
+/// rotated, scaled and embedded shapes all pick. Depth is painter order of
+/// the walk: later means on top.
 pub fn pick_document_2d_system(
     pointer: Res<crate::PointerState>,
     views: Res<PanelViews>,
+    store: Res<DocumentStore>,
     map: Res<NodeMap>,
-    nodes: Query<(Entity, &Provenance, &Doc2d, &GlobalTransform, &InComposition)>,
+    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
+    globals: Query<&'static GlobalTransform>,
     mut hits: ResMut<crate::PointerHits>,
 ) {
     hits.overlay.clear();
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two) else { return };
     let Some(p) = view.to_doc(pointer.screen) else { return };
-    for (entity, prov, d, global, within) in &nodes {
-        if !view.shows(within.0) {
-            continue;
-        }
-        let local = global.affine().inverse().transform_point3(p.extend(0.0));
-        if d.shape.contains_local(local.truncate()) {
-            let z = map.paint_index(prov.0).unwrap_or(0) as f32;
-            hits.overlay.push(crate::Hit2D { entity, z });
+    let doc = store.0.document();
+    let roots = nest::panel_roots(doc, view);
+    let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, z: 0, out: Vec::new() };
+    walk.walk(&roots, kurbo::Point::new(p.x as f64, p.y as f64), kurbo::Affine::IDENTITY, 0);
+    let mut out = walk.out;
+    out.sort_by(|a, b| b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal));
+    hits.overlay = out;
+}
+
+struct Pick<'a, 'w, 's> {
+    doc: &'a iron_document::Document,
+    map: &'a NodeMap,
+    nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
+    globals: &'a Query<'w, 's, &'static GlobalTransform>,
+    z: u32,
+    out: Vec<crate::Hit2D>,
+}
+
+impl Pick<'_, '_, '_> {
+    /// `p` is in the current composition's space; `space` maps the panel's
+    /// document space into it.
+    fn walk(&mut self, roots: &[NodeId], p: kurbo::Point, space: kurbo::Affine, depth: u32) {
+        for id in nest::preorder(self.doc, roots) {
+            self.z += 1;
+            if nest::is_embed(self.doc, id) {
+                if depth < nest::MAX_DEPTH
+                    && let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id)
+                {
+                    let inv = e.placement.inverse();
+                    let q = inv * p;
+                    if e.region.contains(q) {
+                        let kids: Vec<NodeId> = self.doc.children(e.source).to_vec();
+                        self.walk(&kids, q, inv * space, depth + 1);
+                    }
+                }
+                continue;
+            }
+            let Some(entity) = self.map.entity(id) else { continue };
+            let Ok((d, global)) = self.nodes.get(entity) else { continue };
+            let local = global.affine().inverse().transform_point3(Vec3::new(p.x as f32, p.y as f32, 0.0));
+            if d.shape.contains_local(local.truncate()) {
+                self.out.push(crate::Hit2D { entity, z: self.z as f32, space });
+            }
         }
     }
-    hits.overlay.sort_by(|a, b| b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal));
 }
 
 /// The camera of a 3D composition panel.

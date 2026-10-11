@@ -29,7 +29,7 @@ compile_error!(
 );
 
 use bevy::{
-    ecs::system::SystemState, platform::collections::HashMap, prelude::*,
+    ecs::system::SystemState, prelude::*,
     window::WindowCloseRequested,
 };
 use std::ops::{Deref, DerefMut};
@@ -153,6 +153,9 @@ pub struct PointerState {
 pub struct Hit2D {
     pub entity: Entity,
     pub z: f32,
+    /// From the panel's document space into the hit node's composition
+    /// space: identity unless the node was reached through embeds.
+    pub space: kurbo::Affine,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -201,6 +204,9 @@ pub struct DragState {
     /// The panel the drag started in: its rectangle and camera map the
     /// pointer for the whole gesture, wherever the pointer goes.
     pub panel: Option<String>,
+    /// Panel document space → the dragged node's composition space (through
+    /// any embeds it was picked through).
+    pub space: kurbo::Affine,
     /// Where the press happened (window px). A move or 3D drag previews
     /// nothing until the pointer leaves it, so a click is not a move.
     pub press_screen: Vec2,
@@ -216,6 +222,7 @@ impl Default for DragState {
             kind: None,
             handle: None,
             panel: None,
+            space: kurbo::Affine::IDENTITY,
             press_screen: Vec2::ZERO,
             plane_origin: Vec3::ZERO,
             plane_normal: Vec3::Y,

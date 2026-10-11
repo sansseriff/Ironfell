@@ -33,7 +33,7 @@ mod hybrid;
 // going through here, so this list stays scoped to the authoring side.
 pub use backend::{BackendKind, VectorLayer, order};
 pub use composite::VectorCamera;
-pub use display_list::{DisplayList, DisplayListRebuild};
+pub use display_list::{DisplayList, DisplayListBuilder, DisplayListRebuild};
 
 use bevy::prelude::*;
 

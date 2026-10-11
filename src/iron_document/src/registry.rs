@@ -143,12 +143,14 @@ static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "embed",
         components: &[
+            // Placement first: a bare x, y, w or h on an embed means where
+            // it sits, not its frame (`frame.x`), which is the less common.
             (K::Embed, true),
-            (K::EmbedCamera, false),
-            (K::Frame, false),
             (K::Transform2d, false),
             (K::Transform3d, false),
             (K::Size, false),
+            (K::EmbedCamera, false),
+            (K::Frame, false),
             (K::Name, false),
         ],
         default_host: Host::Canvas,

@@ -142,7 +142,9 @@ fn drawable(doc: &iron_document::Document, id: NodeId) -> bool {
 fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &mut Commands, assets: &MeshAssets) -> Option<Entity> {
     let node = store.document().live(id)?;
     let mut ec = match node.ty.name() {
-        "group" => commands.spawn((Provenance(id), Name::new(format!("group {id}")), Visibility::default())),
+        // An embed is placed like a group; what it shows is drawn through it
+        // (`nest`), never parented to it.
+        "group" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
         "rect" | "circle" | "slider" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
@@ -175,7 +177,7 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
     let composition = iron_document::composition::composition_of(store.document(), id);
     ec.insert(InComposition(composition));
     match node.ty.name() {
-        "group" => {
+        "group" | "embed" => {
             ec.insert(r.transform_2d());
         }
         "rect" | "circle" | "slider" => {

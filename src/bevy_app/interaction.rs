@@ -85,6 +85,8 @@ pub fn interaction_decide_system(
             drag.target = Some(primary);
             drag.handle = None;
             drag.panel = hits.panel.clone();
+            // The pointer reaches an embedded node through its embeds.
+            drag.space = hits.overlay.iter().find(|h| h.entity == primary).map_or(kurbo::Affine::IDENTITY, |h| h.space);
             drag.press_screen = pointer.screen;
             let Ok(prov) = provenance.get(primary) else {
                 drag.target = None;
@@ -104,6 +106,10 @@ pub fn interaction_decide_system(
                     .as_deref()
                     .and_then(|panel| views.get(panel))
                     .and_then(|v| v.to_doc(pointer.screen))
+                    .map(|p| {
+                        let q = drag.space * kurbo::Point::new(p.x as f64, p.y as f64);
+                        Vec2::new(q.x as f32, q.y as f32)
+                    })
                     .unwrap_or(Vec2::ZERO);
                 let local = transforms
                     .get(primary)
@@ -203,7 +209,10 @@ pub fn drag_apply_system(
     }
     // The pointer in the drag's panel's document space. Outside the panel
     // the drag holds still rather than jumping.
-    let doc_point = || drag.panel.as_deref().and_then(|p| views.get(p)).and_then(|v| v.to_doc(pointer.screen));
+    let doc_point = || drag.panel.as_deref().and_then(|p| views.get(p)).and_then(|v| v.to_doc(pointer.screen)).map(|p| {
+        let q = drag.space * kurbo::Point::new(p.x as f64, p.y as f64);
+        Vec2::new(q.x as f32, q.y as f32)
+    });
     let Ok((prov, doc2d)) = nodes.get(entity) else { return };
     let id = prov.0;
     let target = |store: &mut DocumentStore, path: &str, value: Value| {

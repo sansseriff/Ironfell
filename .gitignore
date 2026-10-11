@@ -40,3 +40,6 @@ dist-ssr
 
 # Agent worktrees and scratch state
 .agents/
+
+# TypeScript incremental build state
+*.tsbuildinfo

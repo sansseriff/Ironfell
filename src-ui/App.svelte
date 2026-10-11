@@ -10,9 +10,10 @@
   const ui_state = new UIState();
 
   // `?panels=1|2|4`: how many composition panels, for measuring per-panel
-  // cost (ECM §7.1). 2 is the default layout: the 2D scene and the 3D
-  // assembly. 1 drops the assembly; 4 adds a second view of each.
-  const panelCount = Number(new URLSearchParams(location.search).get("panels") ?? "2");
+  // cost (ECM §7.1). 1 is the default layout: the viewer shows `main`,
+  // where compositions sit side by side as embeds (ECM §7.4). 2 shows the
+  // assembly in the right panel too; 4 shows scene and assembly twice.
+  const panelCount = Number(new URLSearchParams(location.search).get("panels") ?? "1");
 
   let canvasEl: HTMLCanvasElement;
 
@@ -30,7 +31,7 @@
   });
 </script>
 
-<!-- Layout: left HTML panel | the 2D "scene" composition | the 3D "assembly" composition, timeline across the bottom -->
+<!-- Layout: left HTML panel | the viewer, showing the "main" composition (which embeds the 2D scene and the 3D assembly side by side) | a placeholder, timeline across the bottom -->
 
 {#snippet controlsPane()}
   <div class="controls-pane">
@@ -41,11 +42,11 @@
 {#snippet viewer()}
   {#if panelCount >= 4}
     <div class="quad">
-      <BevyPanel id="viewer" kind="composition" composition="scene" />
+      <BevyPanel id="viewer" kind="composition" composition="main" />
       <BevyPanel id="scene-2" kind="composition" composition="scene" />
     </div>
   {:else}
-    <BevyPanel id="viewer" kind="composition" composition="scene" />
+    <BevyPanel id="viewer" kind="composition" composition="main" />
   {/if}
 {/snippet}
 
@@ -67,7 +68,7 @@
     orientation="horizontal"
     min="40%"
     max="95%"
-    pos="72%"
+    pos={panelCount <= 1 ? "85%" : "72%"}
     --color="black"
     a={viewer}
     b={sidebar}

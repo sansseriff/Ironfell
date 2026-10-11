@@ -4,10 +4,10 @@
 
 use super::PendingTransactions;
 use bevy::prelude::*;
-use iron_document::component::{Composition, Constraint, Template, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
+use iron_document::component::{Composition, Constraint, Embed, Template, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
 use iron_document::component::{Clip, Slider, Timing};
 use iron_document::definition::{self, Placement};
-use iron_document::{Actor, Expr, LeafPath, LeafStruct, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
+use iron_document::{Actor, Expr, LeafPath, LeafStruct, NodeId, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
 use std::collections::BTreeMap;
 
 pub(super) fn queue_demo_scene(store: Res<super::DocumentStore>, mut pending: ResMut<PendingTransactions>) {
@@ -20,7 +20,7 @@ fn n(v: f64) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(53).into_iter();
+    let mut ids = store.document().next_ids(56).into_iter();
     let rel_ids = store.document().next_relation_ids(11);
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
@@ -53,7 +53,8 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     };
     for _ in 0..20 {
         let mut t = Transform2d::default();
-        t.x = n((rnd() * 1100.0).round());
+        // Left of x≈790, so the main layout's 3D view at the right is clear.
+        t.x = n((rnd() * 760.0).round());
         t.y = n((rnd() * 640.0).round());
         let mut s = Size::default();
         s.w = n(30.0);
@@ -342,6 +343,34 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("model".into()));
     ops.push(Op::Create { id: model, ty: ty("model"), parent: None, order: order(), components: vec![name.wrap()] });
+
+    // The layout the viewer shows (ECM §7.4): `main` embeds the 2D scene
+    // where it sits (so document coordinates read the same in the viewer)
+    // and the 3D assembly as a camera view at the right, through the
+    // derived default view that frames the torus.
+    let main = next();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("main".into()));
+    ops.push(Op::Create { id: main, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    let embed = |source: NodeId| {
+        let mut e = Embed::default();
+        e.source = Slot::Const(Value::Ref(source));
+        e.wrap()
+    };
+    let scene_embed = next();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("scene view".into()));
+    ops.push(Op::Create { id: scene_embed, ty: ty("embed"), parent: Some(main), order: OrderKey::first(), components: vec![embed(scene), Transform2d::default().wrap(), name.wrap()] });
+    let assembly_embed = next();
+    let mut t = Transform2d::default();
+    t.x = n(815.0);
+    t.y = n(10.0);
+    let mut s = Size::default();
+    s.w = n(200.0);
+    s.h = n(350.0);
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("assembly view".into()));
+    ops.push(Op::Create { id: assembly_embed, ty: ty("embed"), parent: Some(main), order: OrderKey::after(&OrderKey::first()), components: vec![embed(assembly), t.wrap(), s.wrap(), name.wrap()] });
 
     // The library: a `bar` definition with one parameter, `level`, and a
     // "free" template whose rect binds its top and height to the

@@ -148,6 +148,8 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         "rect" | "circle" | "slider" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
+        // A camera node is a pose: embeds that name it look through it.
+        "camera" => commands.spawn((Provenance(id), Name::new(format!("camera {id}")), Transform::default(), Visibility::default())),
         "mesh" => {
             let bounds = assets.torus_bounds;
             commands.spawn((
@@ -198,6 +200,9 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
             });
             let stroke = r.color("stroke.color").map(|c| (c, r.num("stroke.width", 1.0)));
             ec.insert(Doc2d { shape, fill, stroke });
+        }
+        "camera" => {
+            ec.insert(r.transform_3d());
         }
         "mesh" => {
             ec.insert(r.transform_3d());

@@ -25,9 +25,10 @@ sleep 300
 up
 sleep 600
 shot after-square-drag
-# The torus is in the 3D "assembly" composition, in its own panel (C1):
-# panel-relative coordinates, the torus near (166,347) at 1600x1000.
-pdrag assembly 166 347 120 420
+# The torus is in the 3D "assembly" composition, which the viewer's `main`
+# composition embeds as a camera view at (815,10) 200x350; the derived
+# default view centres the torus near document (915,188).
+ddrag 915 188 880 240
 shot after-torus-drag
 key Meta+z
 key Meta+z
@@ -119,13 +120,14 @@ shot pendulum-platform-drag
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const p = v.match(/<rect[^>]*name="platform"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), p && p[0].replace(/ rot=.*/, '')]; })()
 # 8. The view marks the solver's variables with the cluster that keeps them.
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return j && j[0].match(/x\.by="[^"]*"/)[0]; })()
-# Stage C1 (ECM phase 2 exit). The cartoon box (scene, document 520,590
-# 110x70) and the torus (assembly panel, near 166,347) are two compositions
-# side by side. Select the box, shift-click the torus, press Link: one
-# "link" transaction creates one entity with both as figures.
+# Stage C1 (ECM phase 2 exit), in the main layout (ECM §7.4): the cartoon
+# box (scene, document 520,590 110x70) and the torus (the assembly's view,
+# near 915,188) are two compositions side by side in one viewer. Select the
+# box, shift-click the torus, press Link: one "link" transaction creates
+# one entity with both as figures.
 pclick viewer 575 625
 keydown Shift
-pclick assembly 166 347
+pclick viewer 915 188
 keyup Shift
 sleep 400
 eval __iron.selection()
@@ -142,17 +144,18 @@ pclick viewer 300 720
 dmove 575 625
 sleep 600
 shot c1-hover-box
-move 1430 350
+dmove 915 188
 sleep 600
 shot c1-hover-torus
-# Show in frames the counterpart: from the box, the assembly camera frames
-# the torus; from the torus, the scene pans the box to its centre.
+# Show in frames the counterpart: from the box, the viewer pans the
+# assembly's view to its centre; from the torus (now at the centre,
+# 513,373), it pans the box there.
 pclick viewer 575 625
 sleep 400
 click Show in assembly
 sleep 600
 shot c1-show-in-assembly
-pclick assembly 166 347
+pclick viewer 513 373
 sleep 400
 click Show in scene
 sleep 600
@@ -165,8 +168,8 @@ eval (async () => { const v = await __iron.view({fidelity:'full', relation:'mode
 # The model surface links the same way; when both pictures already have
 # entities it is asked which survives, and answers with keep.
 eval (async () => { const r = await __iron.edit('<edit><link-figures a="#l" b="#Q"/></edit>'); return r.ok; })()
-eval (async () => { const r = await __iron.edit('<edit><link-figures a="#t" b="#Q"/></edit>'); return r.failure; })()
-eval (async () => { const r = await __iron.edit('<edit><link-figures a="#t" b="#Q" keep="#s"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#w" b="#Q"/></edit>'); return r.failure; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#w" b="#Q" keep="#v"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
 key Meta+z
 sleep 400
 # Exit criterion 2: save, load, save again; the bytes must match.

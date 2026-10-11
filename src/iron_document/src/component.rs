@@ -236,12 +236,14 @@ components! {
     EmbedCamera / "embed_camera" => EmbedCamera { camera: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
 
     /// A manual bounding box for an embed, in the embedded composition's own
-    /// space. Absent: the bounds of everything inside.
+    /// space, as corners (names no other component uses, so a bare `x` on
+    /// an embed still means its position). Absent: the bounds of everything
+    /// inside.
     Frame / "frame" => Frame {
-        x: Number = Value::Number(0.0),
-        y: Number = Value::Number(0.0),
-        w: Number = Value::Number(400.0),
-        h: Number = Value::Number(300.0),
+        x0: Number = Value::Number(0.0),
+        y0: Number = Value::Number(0.0),
+        x1: Number = Value::Number(400.0),
+        y1: Number = Value::Number(300.0),
     }
 
     /// A camera in a 3D composition (ECM §7.4). `fov` is vertical, in

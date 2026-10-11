@@ -29,7 +29,7 @@ use interaction::{
 };
 use picking::{pick_document_2d_system, pick_world_3d_system, pointer_panel_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
-use scene3d::{apply_focus, render_active_shapes, setup_3d_scene, sync_panel_cameras, update_aabbes};
+use scene3d::{apply_focus, render_active_shapes, setup_3d_scene, sync_embed_cameras, sync_panel_cameras, update_aabbes};
 use timeline::TimelinePlugin;
 
 use crate::{
@@ -233,6 +233,11 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             // applied by the document sync next frame.
             drag_commit_system.after(GestureSystems),
             update_aabbes.after(GestureSystems),
+            // A 3D embed's camera follows its rectangle in the same frame,
+            // after the meshes' volumes it may frame are current.
+            sync_embed_cameras
+                .after(crate::document_bridge::nest::collect_embed_views)
+                .after(update_aabbes),
             // Highlights before the 2D layer draws (after propagation) and
             // before the 3D outlines read them.
             crate::document_bridge::update_highlights

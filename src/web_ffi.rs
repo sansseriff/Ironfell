@@ -539,10 +539,11 @@ pub fn document_counterparts(ptr: u64, node: String) -> String {
     serde_json::json!({"entity": entity.to_string(), "figures": figures}).to_string()
 }
 
-/// "Show in": frame `node` in every open panel showing its composition — a
-/// 3D panel's camera looks at it, a 2D panel pans it to the centre. JSON
-/// `{"ok":true,"panels":[…]}`, or `{"ok":false,"error"}` when no open panel
-/// shows that composition (the shell would open one; ours are fixed).
+/// "Show in": frame `node` in every open panel that shows it, directly or
+/// through embeds — a 2D panel pans it to the centre, a 3D panel's camera
+/// looks at it (served next frame by `apply_focus`, which logs each panel).
+/// JSON `{"ok":true}`, or `{"ok":false,"error"}` for a node outside every
+/// composition.
 #[wasm_bindgen]
 pub fn document_focus(ptr: u64, node: String) -> String {
     use iron_document::composition;
@@ -553,21 +554,14 @@ pub fn document_focus(ptr: u64, node: String) -> String {
     let Some(c) = app.world().get_resource::<crate::document_bridge::DocumentStore>().and_then(|s| composition::composition_of(s.0.document(), id)) else {
         return serde_json::json!({"ok": false, "error": format!("{id} is not in a composition")}).to_string();
     };
-    let panels: Vec<String> = app
-        .world()
-        .get_resource::<crate::document_bridge::PanelViews>()
-        .map(|v| v.showing(c).map(|v| v.panel.clone()).collect())
-        .unwrap_or_default();
-    if panels.is_empty() {
-        return serde_json::json!({"ok": false, "error": format!("no open panel shows composition {c}")}).to_string();
-    }
+    let _ = c;
     if let Some(mut focus) = app.world_mut().get_resource_mut::<crate::document_bridge::FocusRequests>() {
         focus.0.push(id);
     }
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
-    serde_json::json!({"ok": true, "panels": panels}).to_string()
+    serde_json::json!({"ok": true}).to_string()
 }
 
 /// Reserve `n` node ids for a batch of creates: JSON array of id strings.

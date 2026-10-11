@@ -73,42 +73,39 @@ screenshot lines and the per-frame `solve:` lines:
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
 redraw (document): 2 of 36 nodes changed [#M #U]; damage 499,379–741,501
 redraw (document): 2 of 36 nodes changed [#M #U]; damage 559,339–801,461
-"<rect id=\"#t\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #s.params.level * 300\" … h=\"270\" h.bind=\"#s.params.level * 300\" …>"
-"<rect id=\"#t\" name=\"bar\" x=\"730\" y=\"400\""
+"<rect id=\"#w\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #v.params.level * 300\" … h=\"270\" h.bind=\"#v.params.level * 300\" …>"
+"<rect id=\"#w\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
-"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" … <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#u"}}
+"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+{"ok":true,"version":9,"aliases":{"$n":"#x"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#u\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
+"<rect id=\"#x\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<circle id=\"#a\" name=\"ball\" x=\"440.43…\" x.by=\"#V\" y=\"298.93…\" y.by=\"#V\""," rot=\"-1.11…\""," h=\"238.93…\""]
 "move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-"<circle id=\"#a\" name=\"ball\" x=\"32….\" x.by=\"#V\" y=\"359.9…\" y.by=\"#V\""
+"<circle id=\"#a\" name=\"ball\" x=\"323.85…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
 ["<circle id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<circle id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
-#b locked for this drag: #b.transform2d.y is bound to 4 free leaves (…)
+#b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 "<applied version=\"14\">\n  <solver clusters=\"#V\" moved=\"#Y #Z #a\"/>\n  <unmet leaf=\"#a.transform2d.x\" requested=\"900\" solved=\"619.99…\">constrained by cluster #V: the constraints allow 619.99… at most</unmet>\n</applied>"
 "<edit-failed applied=\"none\" version=\"14\">\n  <error op=\"0\" kind=\"unsatisfiable\">exact transaction not honoured: #a.transform2d.x requested 900 but constraints allow 619.99…</error>\n</edit-failed>"
-"<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00000000000001\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
+"<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00…\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
 true
 "<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
-["<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"280.9…\" x.by=\"#V\" y=\"38.1…\" y.by=\"#V\""]
+["<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"280.96…\" x.by=\"#V\" y=\"38.16…\" y.by=\"#V\""]
 "x.by=\"#V\""
 ["#l","#Q"]
-clicked Link
 applied "link" (4 ops, Human) -> v19
-"<entity id=\"#w\" name=\"box\" def=\"#v\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#w\">"
-clicked Show in assembly
-clicked Show in scene
-focus #Q: panel assembly camera frames it
+"<entity id=\"#z\" name=\"box\" def=\"#y\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#z\">"
+focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"21\">\n  <question kind=\"merge\" a=\"#t\" b=\"#Q\">\n    <entity id=\"#s\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#t\"/>\n    <entity id=\"#y\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#s\" or keep=\"#y\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
-[true,"<entity id=\"#s\" name=\"bar\" def=\"#o\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#t\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":15417}
+"<edit-failed applied=\"none\" version=\"21\">\n  <question kind=\"merge\" a=\"#w\" b=\"#Q\">\n    <entity id=\"#v\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#w\"/>\n    <entity id=\"#11\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#v\" or keep=\"#11\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+[true,"<entity id=\"#v\" name=\"bar\" def=\"#r\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#w\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
+{"roundtrip_equal":true,"bytes":15962}
 "<document version=\"23\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"27\"> | …"
-applied "open demo scene" (68 ops, System) -> v1
+applied "open demo scene" (71 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -133,16 +130,22 @@ applied "model edit" (2 ops, Model) -> v17
 applied "move rect" (3 ops, Human) -> v18
 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
 applied "link" (4 ops, Human) -> v19
-applied "undo: link" (4 ops, System) -> v20
+"link" by Human: cluster #V re-solved; moved 1 node(s): #W
+applied "undo: link" (5 ops, System) -> v20
 applied "link" (4 ops, Model) -> v21
+"link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v22
 applied "undo: link" (5 ops, System) -> v23
-loaded document v23 (58 live nodes)
+loaded document v23 (61 live nodes)
 (no page errors)
 ```
 
 Solved values carry solver noise in their last digits (shown as `…`
-above); everything else is exact. Each drag frame through a cluster logs
+above); everything else is exact. After the platform drag the pendulum is
+not always fully settled, so a later transaction (the links) may log a
+`"link" by …: cluster #V re-solved; moved 1 node(s): #W` line and its undo
+one op more; that is the under-converged solve noted in
+`constraint-system.md` §14, not the link. Each drag frame through a cluster logs
 `solve: cluster #U, 12 vars, N iterations, M evaluations, T ms`; T is
 0.0–0.7 ms here, with a single ~2 ms frame where the chain straightens.
 

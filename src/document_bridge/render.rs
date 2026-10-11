@@ -73,7 +73,7 @@ pub(super) fn render_document_layer(
         }
     }
 
-    let mut cx = Draw { doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, changed: &changed.nodes, bounds: &mut bounds.0, damage, drawn: 0 };
+    let mut cx = Draw { store: &store.0, doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, changed: &changed.nodes, bounds: &mut bounds.0, damage, drawn: 0 };
     list.rebuild(|b| {
         for view in views.0.iter().filter(|v| v.dims == Dims::Two) {
             let roots = nest::panel_roots(doc, view);
@@ -98,6 +98,7 @@ pub(super) fn render_document_layer(
 /// One rebuild's walk: draws a composition's nodes in painter order and
 /// recurses into 2D embeds through their placement, clipped to their region.
 struct Draw<'a, 'w, 's> {
+    store: &'a iron_document::Store,
     doc: &'a iron_document::Document,
     map: &'a NodeMap,
     nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
@@ -119,6 +120,14 @@ impl Draw<'_, '_, '_> {
                     let inner = base * e.placement;
                     let kids: Vec<NodeId> = self.doc.children(e.source).to_vec();
                     b.clipped(inner, e.region, |b| self.walk(b, &kids, inner, depth + 1));
+                } else if let Some((_, _, w, h)) = nest::embed_3d(self.store, id) {
+                    // The 3D view itself is a camera viewport beneath this
+                    // layer (`EmbedViews`); the layer draws its frame.
+                    let placement = self.map.entity(id).and_then(|e| self.globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+                    let frame = kurbo::Rect::new(0.0, 0.0, w, h);
+                    let lit = self.highlights.selected.contains(&id) || self.highlights.hovered.contains(&id);
+                    let c = if lit { [0.1, 0.4, 1.0, 1.0] } else { [0.55, 0.57, 0.62, 1.0] };
+                    b.stroke(base * placement, kurbo::Stroke::new(1.0), peniko::Color::new(c), frame);
                 }
                 continue;
             }

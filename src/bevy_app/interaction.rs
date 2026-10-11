@@ -19,8 +19,7 @@
 use bevy::prelude::*;
 use iron_document::{DragMode, Handle, LeafPath, Value};
 
-use crate::bevy_app::picking::panel_camera;
-use crate::bevy_app::scene3d::{ActiveState, PanelCamera};
+use crate::bevy_app::scene3d::ActiveState;
 use crate::document_bridge::{Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelViews, Provenance, Shape2d, type_of};
 
 /// How far (window px) the pointer may wander between press and release and
@@ -54,7 +53,7 @@ pub fn interaction_decide_system(
     mut drag: ResMut<crate::DragState>,
     mut selection: ResMut<crate::SelectionState>,
     mut commit: ResMut<PendingCommit>,
-    cameras: Query<(&Camera, &GlobalTransform, &PanelCamera)>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform)>,
     transforms: Query<&GlobalTransform>,
     doc2d: Query<&Doc2d>,
     provenance: Query<&Provenance>,
@@ -87,6 +86,7 @@ pub fn interaction_decide_system(
             drag.panel = hits.panel.clone();
             // The pointer reaches an embedded node through its embeds.
             drag.space = hits.overlay.iter().find(|h| h.entity == primary).map_or(kurbo::Affine::IDENTITY, |h| h.space);
+            drag.camera = hits.world3d.iter().find(|h| h.entity == primary).map(|h| h.camera);
             drag.press_screen = pointer.screen;
             let Ok(prov) = provenance.get(primary) else {
                 drag.target = None;
@@ -144,7 +144,7 @@ pub fn interaction_decide_system(
                 drag.kind = Some(crate::DragKind::World3D);
                 // Establish drag plane for 3D: if ctrl held -> fixed XZ plane (normal Y).
                 // Otherwise plane passes through object and is camera-facing (normal = camera forward).
-                if let Some((camera, cam_tf)) = panel_camera(&cameras, drag.panel.as_deref()) {
+                if let Some((_, camera, cam_tf)) = drag.camera.and_then(|c| cameras.get(c).ok()) {
                     let cam_forward = cam_tf.forward().as_vec3();
                     let plane_normal = if pointer.modifiers.ctrl { Vec3::Y } else { cam_forward };
                     drag.plane_normal = plane_normal.normalize_or_zero();
@@ -197,7 +197,7 @@ pub fn drag_apply_system(
     globals: Query<&GlobalTransform>,
     nodes: Query<(&Provenance, Option<&Doc2d>)>,
     mut store: ResMut<DocumentStore>,
-    cameras: Query<(&Camera, &GlobalTransform, &PanelCamera)>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform)>,
     views: Res<PanelViews>,
 ) {
     let Some(entity) = drag.target else { return };
@@ -269,7 +269,7 @@ pub fn drag_apply_system(
             let _ = target;
         }
         Some(crate::DragKind::World3D) => {
-            let Some((camera, cam_tf)) = panel_camera(&cameras, drag.panel.as_deref()) else { return };
+            let Some((_, camera, cam_tf)) = drag.camera.and_then(|c| cameras.get(c).ok()) else { return };
             let Some(ray) = crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, pointer.screen)
             else {
                 return;

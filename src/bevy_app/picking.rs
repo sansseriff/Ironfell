@@ -1,8 +1,8 @@
 use bevy::math::bounding::RayCast3d;
 use bevy::prelude::*;
 
-use crate::bevy_app::scene3d::{CurrentVolume, PanelCamera};
-use crate::document_bridge::{Doc2d, DocumentStore, InComposition, NodeMap, PanelViews, nest};
+use crate::bevy_app::scene3d::{CurrentVolume, EmbedCam, PanelCamera};
+use crate::document_bridge::{Doc2d, DocumentStore, EmbedViews, InComposition, NodeMap, PanelViews, nest};
 use iron_document::NodeId;
 use iron_document::composition::Dims;
 
@@ -112,41 +112,48 @@ impl Pick<'_, '_, '_> {
     }
 }
 
-/// The camera of a 3D composition panel.
-pub fn panel_camera<'a>(
-    cameras: &'a Query<(&Camera, &GlobalTransform, &PanelCamera)>,
-    panel: Option<&str>,
-) -> Option<(&'a Camera, &'a GlobalTransform)> {
-    let panel = panel?;
-    cameras.iter().find(|(_, _, pc)| pc.panel == panel).map(|(c, t, _)| (c, t))
-}
-
-// 3D picking using AABB intersection along the ray of the 3D panel under
-// the pointer, against that panel's composition (and loose 3D nodes).
+// 3D picking: AABB intersection along a ray from the camera that shows the
+// pointer's spot — a 3D panel's own camera, or, in a 2D panel, the camera
+// of the 3D embed under the pointer (ECM §7.4) — against that view's
+// composition (and, in a panel, loose 3D nodes).
 pub fn pick_world_3d_system(
     pointer: Res<crate::PointerState>,
     views: Res<PanelViews>,
-    cameras: Query<(&Camera, &GlobalTransform, &PanelCamera)>,
+    embeds: Res<EmbedViews>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&PanelCamera>, Option<&EmbedCam>)>,
     query: Query<(Entity, &CurrentVolume, &InComposition)>,
     mut hits: ResMut<crate::PointerHits>,
 ) {
     hits.world3d.clear();
-    let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Three) else { return };
-    let Some((camera, cam_transform)) = panel_camera(&cameras, Some(&view.panel)) else { return };
+    let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)) else { return };
+    let (camera_entity, composition, loose) = match view.dims {
+        Dims::Three => {
+            let Some((e, ..)) = cameras.iter().find(|(_, _, _, pc, _)| pc.is_some_and(|pc| pc.panel == view.panel)) else { return };
+            (e, view.composition, true)
+        }
+        Dims::Two => {
+            let p = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
+            // The last one listed is drawn last, so it is on top.
+            let Some(ev) = embeds.0.iter().rev().find(|v| v.panel == view.panel && v.rect.contains(p)) else { return };
+            let Some((e, ..)) = cameras.iter().find(|(_, _, _, _, ec)| ec.is_some_and(|ec| ec.key == ev.key)) else { return };
+            (e, Some(ev.source), false)
+        }
+    };
+    let Ok((_, camera, cam_transform, ..)) = cameras.get(camera_entity) else { return };
     let Some(ray) = camera_ray_from_window_px(camera, cam_transform, pointer.screen) else {
         return;
     };
-    let composition = view.composition;
     let ray_cast = RayCast3d::from_ray(ray, 10_000.0);
     for (entity, vol, within) in query.iter() {
-        if within.0.is_some() && within.0 != composition {
+        let shown = match within.0 {
+            Some(c) => Some(c) == composition,
+            None => loose,
+        };
+        if !shown {
             continue;
         }
         if let Some(dist) = ray_cast.aabb_intersection_at(&vol.0) {
-            hits.world3d.push(crate::Hit3D {
-                entity,
-                distance: dist,
-            });
+            hits.world3d.push(crate::Hit3D { entity, distance: dist, camera: camera_entity });
         }
     }
     hits.world3d.sort_by(|a, b| {

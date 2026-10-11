@@ -66,32 +66,32 @@ and prints the transactions the store applied. Expected output, minus
 screenshot lines and the per-frame `solve:` lines:
 
 ```
-["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#T\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-redraw (document): 2 of 35 nodes changed [#M #T]; damage 499,379–741,501
-redraw (document): 2 of 35 nodes changed [#M #T]; damage 559,339–801,461
-"<rect id=\"#q\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #p.params.level * 300\" … h=\"270\" h.bind=\"#p.params.level * 300\" …>"
-"<rect id=\"#q\" name=\"bar\" x=\"730\" y=\"400\""
+["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
+redraw (document): 2 of 36 nodes changed [#M #U]; damage 499,379–741,501
+redraw (document): 2 of 36 nodes changed [#M #U]; damage 559,339–801,461
+"<rect id=\"#t\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #s.params.level * 300\" … h=\"270\" h.bind=\"#s.params.level * 300\" …>"
+"<rect id=\"#t\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
-"<mesh id=\"#P\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" … <driven-by ref=\"#R\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#r"}}
+"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" … <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+{"ok":true,"version":9,"aliases":{"$n":"#u"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#r\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
-["<circle id=\"#Z\" name=\"ball\" x=\"440.43…\" x.by=\"#U\" y=\"298.93…\" y.by=\"#U\""," rot=\"-1.11…\""," h=\"238.93…\""]
-"move circle" by Human: cluster #U re-solved; moved 2 node(s): #X #Y
-"<circle id=\"#Z\" name=\"ball\" x=\"32….\" x.by=\"#U\" y=\"359.9…\" y.by=\"#U\""
-["<circle id=\"#Z\" name=\"ball\" x=\"320\" x.by=\"#U\" y=\"360\" y.by=\"#U\"","<circle id=\"#X\" name=\"j1\" x=\"320\" x.by=\"#U\" y=\"160\" y.by=\"#U\""]
-#a locked for this drag: #a.transform2d.x is bound to 4 free leaves (#W.transform2d.x, #W.transform2d.y, #X.transform2d.x, #X.transform2d.y)
-#a locked for this drag: #a.transform2d.y is bound to 4 free leaves (…)
-"<applied version=\"14\">\n  <solver clusters=\"#U\" moved=\"#X #Y #Z\"/>\n  <unmet leaf=\"#Z.transform2d.x\" requested=\"900\" solved=\"619.99…\">constrained by cluster #U: the constraints allow 619.99… at most</unmet>\n</applied>"
-"<edit-failed applied=\"none\" version=\"14\">\n  <error op=\"0\" kind=\"unsatisfiable\">exact transaction not honoured: #Z.transform2d.x requested 900 but constraints allow 619.99…</error>\n</edit-failed>"
-"<constraint id=\"#h\" name=\"link1\" kind=\"distance\" value=\"120.00000000000001\" value.bind=\"#e.slider.value * 100\" enabled=\"true\">"
+"<rect id=\"#u\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
+["<circle id=\"#a\" name=\"ball\" x=\"440.43…\" x.by=\"#V\" y=\"298.93…\" y.by=\"#V\""," rot=\"-1.11…\""," h=\"238.93…\""]
+"move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+"<circle id=\"#a\" name=\"ball\" x=\"32….\" x.by=\"#V\" y=\"359.9…\" y.by=\"#V\""
+["<circle id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<circle id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
+#b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+#b locked for this drag: #b.transform2d.y is bound to 4 free leaves (…)
+"<applied version=\"14\">\n  <solver clusters=\"#V\" moved=\"#Y #Z #a\"/>\n  <unmet leaf=\"#a.transform2d.x\" requested=\"900\" solved=\"619.99…\">constrained by cluster #V: the constraints allow 619.99… at most</unmet>\n</applied>"
+"<edit-failed applied=\"none\" version=\"14\">\n  <error op=\"0\" kind=\"unsatisfiable\">exact transaction not honoured: #a.transform2d.x requested 900 but constraints allow 619.99…</error>\n</edit-failed>"
+"<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00000000000001\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
 true
-"<circle id=\"#Z\" name=\"ball\" x=\"320\" y=\"420\""
-["<circle id=\"#Z\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#V\" name=\"platform\" x=\"280.9…\" x.by=\"#U\" y=\"38.1…\" y.by=\"#U\""]
-"x.by=\"#U\""
-{"roundtrip_equal":true,"bytes":14263}
-"<document version=\"18\"> |   <group id=\"#1\" name=\"scene\" count=\"27\"> | …"
-applied "open demo scene" (65 ops, System) -> v1
+"<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
+["<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"280.9…\" x.by=\"#V\" y=\"38.1…\" y.by=\"#V\""]
+"x.by=\"#V\""
+{"roundtrip_equal":true,"bytes":14872}
+"<document version=\"18\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"27\"> | …"
+applied "open demo scene" (68 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -101,21 +101,21 @@ applied "set slider" (1 ops, Human) -> v7
 applied "move rect" (2 ops, Human) -> v8
 applied "model edit" (2 ops, Model) -> v9
 applied "move circle" (3 ops, Human) -> v10
-"move circle" by Human: cluster #U re-solved; moved 2 node(s): #X #Y
+"move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 applied "move circle" (3 ops, Human) -> v11
-"move circle" by Human: cluster #U re-solved; moved 2 node(s): #X #Y
+"move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 applied "undo: move circle" (7 ops, System) -> v12
 applied "undo: move circle" (7 ops, System) -> v13
-#a locked for this drag: … (twice)
+#b locked for this drag: … (twice)
 applied "model edit" (1 ops, Model) -> v14
-"model edit" by Model: cluster #U re-solved; moved 3 node(s): #X #Y #Z; unmet: #Z.transform2d.x wanted 900 got 619.99…
+"model edit" by Model: cluster #V re-solved; moved 3 node(s): #Y #Z #a; unmet: #a.transform2d.x wanted 900 got 619.99…
 applied "undo: model edit" (7 ops, System) -> v15
 applied "set slider" (1 ops, Human) -> v16
-"set slider" by Human: cluster #U re-solved; moved 3 node(s): #X #Y #Z
+"set slider" by Human: cluster #V re-solved; moved 3 node(s): #Y #Z #a
 applied "model edit" (2 ops, Model) -> v17
 applied "move rect" (3 ops, Human) -> v18
-"move rect" by Human: cluster #U re-solved; moved 3 node(s): #W #X #Y
-loaded document v18 (53 live nodes)
+"move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
+loaded document v18 (56 live nodes)
 (no page errors)
 ```
 
@@ -189,10 +189,12 @@ covers (500,420)–(580,500); the circle is centred at (160,330); the slider
 track runs (100,600)–(400,624) and scrubbing along it previews the value
 through the store; the bar at x=780 has its height and top bound to the
 slider through a definition: the library (a root) holds a `bar` definition
-with one parameter, `level`, and a template rect; the scene holds an entity
-instantiated from it (its `level` bound to the slider) and the rect that
-depicts it, whose y and h read the entity's params. The template itself is
-never drawn. The "shadow" rect at (600,420) has x and y bound to the square's;
+with one parameter, `level`, and a template rect; the `model` root holds an
+entity instantiated from it (its `level` bound to the slider) and the scene
+holds the rect that figures it, whose y and h read the entity's params. The
+template itself is never drawn. `scene` (#1) is a 2D composition; the torus
+lives in a 3D composition, `assembly`; the purple cartoon `box` covers
+(520,590)–(630,660); the pendulum group is a loose root, drawn in the viewer. The "shadow" rect at (600,420) has x and y bound to the square's;
 the torus sits near the viewer centre, about (435,350) at a 1600×1000
 window. The timeline holds a "slide" clip (0.5–2.5 s, square x 500→700)
 and a "spin" clip (1–4 s, torus rotation). Any `<attr>.bind` in a view is a

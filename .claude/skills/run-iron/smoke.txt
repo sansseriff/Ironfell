@@ -100,8 +100,8 @@ ddrag 320 110 360 110
 peek locked for this drag
 # 7. A scripted edit out of reach is adjusted and reported; with exact="true"
 #    it is rejected.
-eval (async () => { const r = await __iron.edit('<edit><set id="#Z" x="900"/></edit>'); return r.summary; })()
-eval (async () => { const r = await __iron.edit('<edit exact="true"><set id="#Z" x="900"/></edit>'); return r.failure; })()
+eval (async () => { const r = await __iron.edit('<edit><set id="#a" x="900"/></edit>'); return r.summary; })()
+eval (async () => { const r = await __iron.edit('<edit exact="true"><set id="#a" x="900"/></edit>'); return r.failure; })()
 key Meta+z
 sleep 400
 # 5. Scrub the length slider to about 1.2: the links re-solve live and the
@@ -110,7 +110,7 @@ ddrag 250 672 310 672
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const l = v.match(/<constraint[^>]*name="link1"[^>]*>/); return l && l[0]; })()
 # 4. Move the fix from the platform to the ball (one model transaction), then
 #    drag the platform: the arms bend and the ball stays put.
-eval (async () => { const r = await __iron.edit('<edit><unlink id="r3"/><link from="#f" to="#Z" rel="constrains" role="a"/></edit>'); return r.ok; })()
+eval (async () => { const r = await __iron.edit('<edit><unlink id="r3"/><link from="#g" to="#a" rel="constrains" role="a"/></edit>'); return r.ok; })()
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
 ddrag 260 50 300 50
 shot pendulum-platform-drag

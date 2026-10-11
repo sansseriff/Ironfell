@@ -4,7 +4,7 @@
 
 use super::PendingTransactions;
 use bevy::prelude::*;
-use iron_document::component::{Constraint, Template, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
+use iron_document::component::{Composition, Constraint, Template, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
 use iron_document::component::{Clip, Slider, Timing};
 use iron_document::definition::{self, Placement};
 use iron_document::{Actor, Expr, LeafPath, LeafStruct, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
@@ -20,7 +20,7 @@ fn n(v: f64) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(50).into_iter();
+    let mut ids = store.document().next_ids(53).into_iter();
     let rel_ids = store.document().next_relation_ids(11);
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
@@ -31,10 +31,17 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     };
     let mut ops = Vec::new();
 
+    // The 2D composition every 2D panel shows by default (ECM §5's
+    // migration: the old root group "scene" becomes a `free` composition).
+    let composition = |dims: &str| {
+        let mut c = Composition::default();
+        c.dims = Slot::Const(Value::Enum(dims.into()));
+        c.wrap()
+    };
     let scene = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("scene".into()));
-    ops.push(Op::Create { id: scene, ty: ty("group"), parent: None, order: order(), components: vec![name.wrap()] });
+    ops.push(Op::Create { id: scene, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
 
     // A field of small rects, deterministic positions.
     let mut seed: u32 = 0x91E2_33AB;
@@ -120,7 +127,11 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         order: order(),
         components: vec![t.wrap(), s.wrap(), sl.wrap(), name.wrap()],
     });
-    // The torus.
+    // The torus, in a 3D composition of its own: the second panel.
+    let assembly = next();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("assembly".into()));
+    ops.push(Op::Create { id: assembly, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("3d")] });
     let torus = next();
     let mut t = Transform3d::default();
     t.pos = Slot::Const(Value::Vec3([0.0, 1.5, 0.0]));
@@ -129,7 +140,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     ops.push(Op::Create {
         id: torus,
         ty: ty("mesh"),
-        parent: None,
+        parent: Some(assembly),
         order: order(),
         components: vec![t.wrap(), Mesh::default().wrap(), name.wrap()],
     });
@@ -311,6 +322,27 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         ops.push(constrains(rel_ids[6 + 2 * i], links[i], chain[i + 1], "b", [0.0, 0.0]));
     }
 
+    // The cartoon box: a 2D picture the torus can be linked to (ECM phase
+    // 2's exit), and the model tree that entities live in.
+    let cartoon_box = next();
+    let mut t = Transform2d::default();
+    t.x = n(520.0);
+    t.y = n(590.0);
+    let mut s = Size::default();
+    s.w = n(110.0);
+    s.h = n(70.0);
+    let mut f = Fill::default();
+    f.color = Slot::Const(Value::Color([0.55, 0.35, 0.75, 1.0]));
+    let mut st = Stroke::default();
+    st.width = n(2.0);
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("box".into()));
+    ops.push(Op::Create { id: cartoon_box, ty: ty("rect"), parent: Some(scene), order: order(), components: vec![t.wrap(), s.wrap(), f.wrap(), st.wrap(), name.wrap()] });
+    let model = next();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("model".into()));
+    ops.push(Op::Create { id: model, ty: ty("model"), parent: None, order: order(), components: vec![name.wrap()] });
+
     // The library: a `bar` definition with one parameter, `level`, and a
     // "free" template whose rect binds its top and height to the
     // parameter's default. `bar` is data, not a registry type (ECM §4.2).
@@ -364,7 +396,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
         .expect("demo scene applies");
     let last_in_scene = scratch.document().children(scene).last().and_then(|&c| scratch.document().live(c)).map(|n| n.order.clone());
-    let place = Placement { entity_parent: Some(scene), entity_after: last_in_scene.clone(), figure_parent: Some(scene), figure_after: last_in_scene.map(|k| OrderKey::after(&k)) };
+    let place = Placement { entity_parent: Some(model), entity_after: None, figure_parent: Some(scene), figure_after: last_in_scene.map(|k| OrderKey::after(&k)) };
     let (entity, inst) = definition::instantiate(scratch.document(), def, "free", "bar", &place).expect("bar instantiates");
     ops.extend(inst);
     // The entity's parameter follows the slider: the exit of ECM phase 1.

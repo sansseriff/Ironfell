@@ -17,6 +17,7 @@
 //! ```
 
 pub mod component;
+pub mod composition;
 pub mod constraint;
 pub mod definition;
 pub mod document;

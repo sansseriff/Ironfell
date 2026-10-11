@@ -226,6 +226,13 @@ components! {
     /// to the entity's `params`.
     Template / "template" => Template { notation: Str = Value::Str("free".to_owned()) }
 
+    /// A composition root (ECM §5): one diagram in one notation, 2D or 3D.
+    /// Its subtree is layout, figures and composition-local geometry.
+    Composition / "composition" => Composition {
+        notation: Str = Value::Str("free".to_owned()),
+        dims: Enum = Value::Enum("2d".to_owned()),
+    }
+
     @dynamic {
         /// An entity's parameter values, one slot per `param_spec` of its
         /// definition, each bindable. Fields are validated against the

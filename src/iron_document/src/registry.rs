@@ -124,6 +124,20 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
+    // The model tree (ECM §5): what things are, never drawn. A root.
+    TypeSpec {
+        name: "model",
+        components: &[(K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["entity"]),
+    },
+    // One diagram (ECM §5, §7): a root whose subtree one panel shows.
+    TypeSpec {
+        name: "composition",
+        components: &[(K::Name, true), (K::Composition, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Any,
+    },
     // An instance of a definition; its figures point at it with
     // `figures` relations. Ports arrive as children in a later phase.
     TypeSpec {
@@ -189,7 +203,15 @@ impl TypeSpec {
         self.components.iter().filter(|(_, r)| *r).map(|(k, _)| *k)
     }
 
+    /// Types that only exist as roots: the model tree and compositions.
+    pub fn root_only(&self) -> bool {
+        matches!(self.name, "model" | "composition")
+    }
+
     pub fn admits_child(&self, child: TypeId) -> bool {
+        if child.spec().root_only() {
+            return false;
+        }
         match self.children {
             ChildPolicy::None => false,
             ChildPolicy::Any => true,
@@ -229,6 +251,7 @@ pub fn schema_json() -> serde_json::Value {
             json!({
                 "components": spec.components.iter().map(|(k, req)| json!({"kind": k.name(), "required": req})).collect::<Vec<_>>(),
                 "default_host": spec.default_host.name(),
+                "root_only": spec.root_only(),
                 "children": children,
             }),
         );

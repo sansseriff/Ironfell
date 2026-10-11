@@ -1,0 +1,560 @@
+# The entity and composition model
+
+**Status:** Proposed — implementation plan
+**Date:** 2026-10-09
+**Scope:** The changes to `iron_document`, the Bevy bridge, and the Svelte shell needed
+to realise [`vision/09_entities-compositions-and-ports.md`](vision/09_entities-compositions-and-ports.md):
+units and structured values, run-time definitions, entities with ports, connections that
+carry signals, several compositions shown in separate panels, cross-representation
+linking, obligations, encapsulation, and the lesson layer.
+**Builds on:** [`document-spine.md`](document-spine.md). Sequenced in [`roadmap.md`](roadmap.md).
+**Works alongside:** [`constraint-system.md`](constraint-system.md). Constraints are
+composition-local, and port kinds may imply them.
+
+---
+
+## 0. Decisions at a glance
+
+| Question | Decision |
+|---|---|
+| What comes first | Value types and run-time schemas. Every later piece stores them, and the file format is cheapest to change now (doc 06 §5) |
+| Units | `Value::Quantity { si, dim }`: an SI magnitude plus a dimension vector. The display unit is a presentation choice, not stored in the value |
+| Structured values | `Value::Record` for small authored structures. Large data (time series, spectra) is runtime-only `Signal`, never written to the file |
+| Domain variety | Lives in **definitions** (data), not the Rust registry. The registry keeps primitives only. `bar` becomes a definition |
+| Field names for definition parameters | Interned symbols, so `LeafPath` stays `Copy` with fields not known at compile time |
+| Entities, ports, connections | All nodes. Connections are nodes so that a wire or a cable can depict them, and so they have ids, undo, and views |
+| Compositions | Root-level `composition` nodes with a notation. Their subtree is layout: depictions, local geometry, annotations |
+| Depiction | A role, not a type. Any visual node with a `depicts` relation to an entity, port, or connection |
+| Signals | Derived values on ports, evaluated by the reactive graph as a third node kind (after bindings and constraint clusters) |
+| Panels | Each Bevy panel shows one composition: its own camera viewport, render layer, picking, and 2D clip |
+| Selection | Keyed by `NodeId` and lifted to entities. Highlighting an entity lights every depiction of it in every panel |
+| Obligations | Computed, not stored. Only "intentionally omitted" is stored |
+| Annotations | Live in the composition they are drawn in (spatial home). A `step` relation names the owner, `targets` names the subject |
+
+---
+
+## 1. Where the code is today
+
+Facts this plan changes, from branch `document-spine`:
+
+- **One tree, one implicit scene.** The demo scene is a single root `group` holding 20
+  rects, a circle, and the torus. Everything is drawn into the one `viewer` panel.
+- **A static registry.** `TypeId(u16)` indexes a compile-time `TYPES` table (`group`,
+  `rect`, `circle`, `mesh`, `slider`, `bar`, `timeline`, `clip`). Adding a kind of thing
+  means adding Rust.
+- **Static leaf paths.** `LeafPath { component: ComponentKind, field: &'static str }` is
+  `Copy` and validated against each component's compile-time `FIELDS`. There is no way to
+  address a field defined at run time.
+- **Values** are `Number`, `Bool`, `Str`, `Color`, `Vec2`, `Vec3`, `Enum`, `Ref`. There
+  are no units and no structured values, and expressions cannot read fields (doc 02's
+  `Get` is deliberately absent). The spine plan's §15 says `Quantity` is "reserved", but
+  `value.rs` chose to leave it out entirely.
+- **Relations** have kinds `animates`, `after`, `during`, `aligns_to`, `references`.
+- **Rendering.** One `Camera3d` with its viewport set to the `viewer` panel, and one
+  full-window Vello 2D layer drawn with the viewer panel's affine. All document entities
+  use `RenderLayers::layer(0)`. `materialize.rs` switches on type names.
+- **Panels.** `set_panel_viewport(ptr, id, kind, …)` already supports several DOM-laid-out
+  panels (`viewer`, `timeline`). This is the hook for one panel per composition.
+- **Selection and hover** are keyed by Bevy `Entity`.
+- **Views.** Only a tree view. The spine plan's `ViewQuery` lists `Tree`, `Timeline`,
+  `Spatial`, and `Semantic` relations, but only `Tree` exists.
+- **Spine steps 6 and 7 are done in the working tree** (uncommitted on 2026-10-10).
+  Step 6: `time.rs` samples clips through `animates` relations into an animated layer
+  of the graph. The read order is now overlay → binding → animated → constant, and the
+  playhead is runtime state in the store. Step 7: `src-ui/model/` holds the manifest
+  (from `document_schema()`), an `<edit>` parser with `create`, `set`, `add`, `delete`,
+  `reparent`, `link` and `unlink` verbs, and an agent loop with one retry. It applies
+  through a synchronous `document_apply` with `expect_version`, and views show
+  `<driven-by>`. The model views of §11 and the new verbs extend this surface; they do
+  not replace it.
+
+---
+
+## 2. Why each part must change
+
+| Usage intent (vision 09 §1) | What blocks it today | Change |
+|---|---|---|
+| Laser power 9.58 mW flowing through a fiber | No units; a float cannot say mW, and mW plus nm is not an error | `Value::Quantity` (§3) |
+| A Gaussian beam as a signal | No structured values; no field access | `Value::Record`, `Expr::Get` (§3) |
+| An RF drive waveform | No time series anywhere | Runtime `Signal::Series` (§6) |
+| LLM- and user-defined components such as laser, fiber, modulator | Types and fields are compile-time only | Definitions as data; interned field symbols (§4) |
+| One modulator in four diagrams | One tree, no identity separate from the picture | Entities and `depicts` (§5) |
+| Schematic and 3D side by side | One viewer panel; everything on render layer 0 | One panel per composition (§7) |
+| Cross-probing | Selection keyed by Bevy `Entity` | Selection by `NodeId`, lifted to entities (§7) |
+| "This bolt needs placing" | No idea of what a composition should contain | Obligations (§8) |
+| Precompose with an interface | No encapsulation operation | `Store::encapsulate` (§9) |
+| Arrows that belong to a lesson | Annotations are just shapes | The lesson layer (§10) |
+
+---
+
+## 3. Values: units and structure
+
+### 3.1 Quantities
+
+```rust
+pub enum Value {
+    // existing variants …
+    /// A physical quantity: magnitude in SI base units plus its dimension.
+    Quantity { si: f64, dim: Dim },
+    /// A small structured value (a beam, a pulse shape). Field order is canonical.
+    Record { kind: RecordKind, fields: BTreeMap<Sym, Value> },
+}
+
+/// Exponents of the seven SI base dimensions (m, kg, s, A, K, mol, cd).
+pub struct Dim([i8; 7]);
+```
+
+- **Storage is SI.** 9.58 mW is stored as `{si: 0.00958, dim: W}`. The display unit
+  (mW, dBm, W) is a presentation choice: a property of the parameter's spec or of the
+  depiction, and an enumerated-choice leaf in doc 06's sense, so a user can flip a
+  readout from mW to dBm. Logarithmic units like dBm convert at display time.
+- **Arithmetic is dimension-checked** in the floor. `+` and `-` require equal dims;
+  `*` and `/` combine them; a mismatch is an evaluation error shown on the leaf.
+  Comparing across units is then correct by construction.
+- **The file format** writes quantities as `{"q": [0.00958, "W"]}`, with a canonical
+  unit string per dimension, so diffs stay readable.
+- **Geometry stays plain numbers** in document pixels and radians. Physical size in a
+  3D assembly is a separate question (open question I3).
+
+### 3.2 Records
+
+Records are for small authored structures, such as the default beam a laser emits.
+`RecordKind` names a record schema (`gaussian_beam`, `pulse`) from the registry or from
+a definition. `Expr::Get(expr, field)` reads a field, which adds doc 02 §4's `Get`.
+
+### 3.3 Runtime signals
+
+```rust
+pub enum Signal {
+    Value(Value),                                   // scalar, quantity, or record
+    Series { t0: f64, dt: f64, unit: Dim, samples: Arc<[f64]> },
+    Spectrum { f0: f64, df: f64, unit: Dim, samples: Arc<[f64]> },
+}
+```
+
+Signals live in the reactive graph's derived layer and are never serialised. Sources
+are authored as parameters (amplitude, frequency, waveform enum); the samples are
+computed. This keeps the authored and derived split of doc 04 §4.1.
+
+---
+
+## 4. Run-time schemas: definitions as data
+
+### 4.1 Interned field names
+
+`LeafPath` gains a field reference that may be a run-time symbol:
+
+```rust
+pub enum Field { Static(&'static str), Sym(Sym) }   // Sym(u32): a per-process interner
+pub struct LeafPath { pub component: ComponentKind, pub field: Field }  // still Copy
+```
+
+Symbols are interned on load and on apply. Files store strings, so ids never leak into
+the file. `ComponentKind::Params` is the one component whose fields are symbols,
+validated against the entity's definition rather than a compile-time list.
+
+### 4.2 Definitions
+
+A definition is a subtree in a `library` root:
+
+```text
+definition "fiber"
+  param_spec  length   : Quantity[m]   default 1 m
+  param_spec  loss_db_per_km : Number  default 0.2
+  port_spec   in       : optical_power, in
+  port_spec   out      : optical_power, out
+  behaviour   out = in * 10^(-loss_db_per_km * length_km / 10)      (bindings over params and in-ports)
+  depiction   notation "cartoon"   → template subtree
+  depiction   notation "schematic" → template subtree
+```
+
+- Built-in definitions ship as data files, so they are the same kind of thing as
+  user-authored ones.
+- Behaviour is written as bindings in the existing expression language: data, editable
+  by the LLM, evaluated by the reactive graph. A definition may instead name a floor
+  function or a Model call (doc 02 §6.3) when the behaviour is not a short expression.
+- **The registry holds primitives only:** `group`, `rect`, `circle`, `path`, `mesh`,
+  `text`, `slider`, `constraint`, and the structural types of §5. **`bar` stops being a
+  registry type.** It becomes a demo definition: a `rect` depiction whose height is
+  bound to a parameter. This is the discipline the earlier review asked for: domain
+  vocabulary in data, not in Rust.
+
+### 4.3 Instantiation
+
+Placing a definition creates an `entity` node referencing it, with:
+
+- a `params` component holding one slot per `param_spec`, each bindable;
+- one `port` node per `port_spec`, as real children. Ports get stable ids because
+  connections and annotations point at them;
+- behaviour that is *not* copied. It is evaluated per entity from the definition, so
+  editing a definition updates every instance. This is doc 05 §4's "templates mint
+  derived edges".
+
+Placing a depiction copies the notation's template subtree into the composition as
+ordinary authored nodes. Users and the LLM then edit layout freely.
+
+---
+
+## 5. Tree layout and new types
+
+```text
+library/            definitions (§4)
+model/              entities, nested by refinement; ports under entities; connection nodes
+compositions …      one root per composition: depictions, local geometry, annotations, constraints
+lessons/            lessons → steps
+```
+
+New registry types:
+
+| Type | Required components | Children | Notes |
+|---|---|---|---|
+| `definition` | `name`, `definition` | `param_spec`, `port_spec`, `behaviour`, `depiction_template` | in `library` |
+| `entity` | `name`, `instance` (definition ref), `params` | `entity`, `port`, `connection` | in `model` |
+| `port` | `name`, `port` (kind, direction) | none | under an entity |
+| `connection` | `connection` (domain) | none | two `connects` relations to ports |
+| `composition` | `name`, `composition` (notation, dims) | any visual node | root level |
+| `anchor` | `transform2d` or `transform3d` | none | under a depiction; `depicts` → a port |
+| `lesson`, `step` | `name`; `step` (framing) | ordered steps | under `lessons` |
+| `arrow`, `callout`, `label` | geometry, style | none | annotation primitives, inside compositions |
+
+New relation kinds:
+
+| Kind | From → to | Meaning |
+|---|---|---|
+| `depicts` | visual node → entity, port, or connection | this shape is a picture of that |
+| `connects` | connection → port (×2) | endpoints, with `data.end` = `a` or `b` |
+| `realizes` | entity → entity | detailed realises abstract (refinement across notations) |
+| `exposes` | boundary port → inner port | created by encapsulation (§9) |
+| `targets` | annotation → entity, port, connection, or node | what the annotation is about |
+| `step` | annotation → step | which step owns it (shows it) |
+| `highlights` | step → entity or node | step-level emphasis |
+| `omits` | composition → entity or connection | intentionally left out; suppresses obligations |
+
+The existing tombstone semantics carry over. Deleting an entity leaves its depictions
+pointing at a tombstone, shown as broken links. Undoing the delete restores them.
+
+**Migration of existing documents:** existing root groups move under one composition
+named `scene` with notation `free`. Nothing else changes.
+
+---
+
+## 6. Connections and signals in the reactive graph
+
+The graph gains a third node kind, after bindings and constraint clusters:
+
+```rust
+enum GraphNode { Binding(..), Cluster(..), Signal(SignalNode) }
+```
+
+- **An in-port's signal** is its connection partner's out-port signal, passed through
+  the port kind's adapter if the types differ.
+- **An out-port's signal** is the entity's behaviour evaluated over its parameters and
+  in-port signals.
+- **Readers** reach a signal through a derived, read-only leaf `port.signal`, using the
+  same resolver as every other read (alongside the overlay, binding, and animated
+  layers that `read_with` already checks). A meter readout is `text = #meter.in.signal`, bound
+  like any other binding.
+- **Structure** rebuilds on structural transactions (connect, disconnect, instantiate),
+  following the same rule as bindings today.
+- **Cycles** through signals are rejected at apply time, as for bindings. A real loop
+  (an optical cavity) must be a simulation or a Model.
+- **Time-varying sources** (an RF drive) depend on a time input: the store's playhead,
+  which `time.rs` already holds for clips, or simulation time (doc 05). Only signal nodes downstream of a time-dependent source
+  re-evaluate per tick. Their changes feed the reconciler's affected set like any other
+  resolved change, and are never reported to the LLM (`constraint-system.md` §9).
+
+---
+
+## 7. Compositions in the bridge and shell
+
+### 7.1 One panel per composition
+
+Panels here are camera viewports inside the single full-window canvas
+(`hybrid-ui-layout.md`, `single-canvas-migration.md`), not extra canvases. The
+`viewer` and `timeline` panels already work this way, and "dynamic panel factory" is
+listed there as enabled but not built. HTML chrome still overlays the canvas. If
+per-panel cost proves too high on WebGL2, the fallback is one live composition panel at
+a time, with other compositions shown as cached thumbnails.
+
+- `BevyPanel.svelte` gains a `composition` prop. `set_panel_viewport` carries the
+  composition id, and the `Panels` resource maps panel → composition.
+- **Render layers.** Each open composition is assigned a layer index. `materialize.rs`
+  sets `RenderLayers` from a node's composition ancestor instead of the fixed
+  `layer(0)`.
+- **3D.** One `Camera3d` per 3D composition panel, with its viewport set to that panel,
+  rendering only its layer. The current `MainCamera3D` becomes the first of these.
+- **2D.** `render_document_layer` loops over panels: for each, it draws the nodes of that
+  panel's composition with that panel's affine, clipped to its rect. That is the same
+  code as today, parameterised by panel.
+- **Picking** maps the pointer to a panel, then to a composition, and only hits nodes on
+  that composition's layer.
+- **Cost.** Several cameras and several clipped 2D passes per frame. Measure with two
+  and four panels before going further; the render-invalidation work in the roadmap
+  applies per panel.
+
+### 7.2 Linked selection and Show in
+
+- `SelectionState` and hover move from Bevy `Entity` to `NodeId`, with a derived
+  *entity selection*: selecting a depiction selects what it depicts.
+- **Cross-probe highlight.** Every depiction of a selected or hovered entity, in every
+  open panel, draws the highlight stroke. One index lookup per entity:
+  `relations_to(entity)` filtered to `depicts`.
+- **Show in ▸** is an FFI call `focus(composition, node)`. The shell opens or activates
+  that composition's panel; Rust frames its camera on the node's bounds.
+- **The representations panel** (Svelte) lists, for the selected entity, its
+  definition, parameters, ports with live signal values, and every depiction with its
+  composition.
+- **Linking gesture.** Select two depictions and choose Link. If neither has an entity,
+  one is created from a generic definition (`thing`); if one has an entity, the other
+  joins it; if both do, the user picks which survives (merging is one transaction).
+
+### 7.3 Composition-local content
+
+Brackets, posts, screws, mate features, constraints, and decoration are ordinary nodes
+in the composition with no `depicts` relation. They never appear in the model tree,
+never generate ghost lines, and are invisible to other compositions.
+
+---
+
+## 8. Obligations, ghost lines, and the tray
+
+`Store::obligations(composition) -> Vec<Obligation>` is a pure function over the model,
+the composition, and its notation:
+
+- **Missing entity**: an entity connected to something depicted in C, whose definition
+  has a depiction for C's notation, but which is not depicted in C. Shown in the
+  composition's tray, ready to place.
+- **Unrealised connection**: both endpoint entities are depicted in C, C's notation draws
+  the connection's domain, and no node in C depicts the connection. Shown as a ghost
+  line between the port anchors, and listed.
+- **Derivable facts are not obligations.** A notation that draws a domain implicitly
+  (the cartoon draws an optical arrow between any connected optical ports) realises the
+  connection automatically. No node is needed, and nothing is listed.
+
+`omits` relations suppress specific obligations. Strictness beyond listing (blocking,
+warnings on save) is deferred (vision 09 §13.1). The LLM reads obligations through a
+view, and "realise the open items in the table assembly" becomes a task it can do.
+
+---
+
+## 9. Encapsulation
+
+`Store::encapsulate(selection: &[NodeId], name) -> TransactionInput` builds one
+transaction:
+
+1. Create a parent `entity` (from a generated definition, editable afterwards) and
+   reparent the selected depictions' entities under it.
+2. For each connection with exactly one endpoint inside the selection, create a
+   boundary `port` on the parent with an `exposes` relation to the inner port, and
+   re-point the connection's inside end to the boundary port. Connections wholly
+   inside are untouched.
+3. In the composition where this ran, replace the selected depictions with one block
+   depiction of the parent (the originals move into a new internal composition
+   reachable by drill-in).
+
+Signals pass through `exposes` unchanged, so behaviour is identical before and after.
+That is the black-boxing law, and it is a test.
+
+Tests for the laws of vision 09 §11:
+
+- **associativity**: encapsulating {A, B}, then {that, C}, gives the same ports and the
+  same signals as encapsulating {A, B, C};
+- **black-boxing**: every signal outside the selection is bit-identical before and after
+  encapsulation;
+- **undo**: one undo restores the original structure exactly.
+
+---
+
+## 10. The lesson layer
+
+- `lessons/lesson/step` nodes. A step's `step` component holds framing: which
+  compositions are open, a camera bookmark per composition, and an optional playhead
+  range for scripted time.
+- **Annotations** (`arrow`, `callout`, `label`) live inside the composition they are
+  drawn in, so they share its coordinates and can be constrained. An arrow's tip can
+  have a `coincident` constraint to its target depiction's anchor, which reuses the
+  constraint system for layout.
+- **Ownership** is the `step` relation; **subject** is `targets`.
+- **Visibility is derived**: an annotation is drawn while the playback step is one of
+  its owner steps. The current step is editor state, like the playhead, and never stored
+  in the document.
+- **Carrying** an annotation to another composition creates a copy there with the same
+  `targets` and `step`, positioned at the target's depiction in that composition.
+- **Data-bound annotations** are ordinary bindings (`label.text` bound to a signal,
+  formatted with its display unit). **Claims** are text with `targets` plus optional
+  doc 04 L6 `explains` and `cites` links.
+
+---
+
+## 11. Views for the language model
+
+`ViewQuery.relation` gains:
+
+- **`Model`**: entities, their definitions, parameters, ports, connections, and signal
+  summaries. This is the default for semantic work. Example:
+
+  ```xml
+  <entity id="#e4" def="lithium_niobate_modulator" name="EOM" vpi="{q:3.5 V}">
+    <port id="#p9" name="rf" kind="rf_voltage" dir="in" from="#e7.out"/>
+    <port id="#p10" name="light_in" kind="optical_field" dir="in" from="#e2.out"/>
+    <port id="#p11" name="light_out" kind="optical_field" dir="out" to="#e5.in" signal="series[2048] W"/>
+    <depicted-in compositions="#c1 #c2 #c3"/>
+  </entity>
+  ```
+
+- **`Composition(id)`**: that composition's layout tree, with `depicts` shown as
+  `of="#e4"` attributes, plus its obligations.
+- **`Lesson(id)`**: steps, annotations with targets, and framing.
+
+Signals appear as summaries: type, length, and unit, never samples.
+
+The existing model surface (`src-ui/model/`) gains:
+
+- the new view relations, with `agent.ts` choosing `Model` by default instead of the
+  full tree;
+- edit verbs `<instantiate def=… />`, `<connect a=… b=… />`, `<depict node=… entity=… />`,
+  `<encapsulate nodes=… />`, and lesson verbs;
+- definitions and port kinds in `document_schema()`, so `manifest.ts` describes them;
+- quantity attributes (`power="9.58 mW"`) parsed in `edit.ts` by the schema's kind.
+
+---
+
+## 12. Phases and exit criteria
+
+### Phase 1 — Values and run-time schemas
+
+`Value::Quantity`, `Value::Record`, `Expr::Get`, the dimension-checked floor, `Field::Sym`
+interning, `params` validated against definitions, the `library` root, the definition
+format, and `bar` moved to a definition.
+
+*Exit:* `9.58 mW + 1 nm` is an evaluation error and `9.58 mW * 2` is not; a quantity
+round-trips through save and load with its unit string; an entity's parameter is bound
+to a slider; the demo scene's bar works as a definition; every existing test still
+passes.
+
+### Phase 2 — Entities and compositions (no ports yet)
+
+`model` and composition roots, `depicts`, migration of the demo into a `scene`
+composition, one panel per composition, selection by `NodeId`, cross-probe highlighting,
+Show in, the Link gesture, and the `Model` and `Composition` views.
+
+*Exit:* a 2D cartoon composition and a 3D composition side by side; linking the cartoon
+box to the torus creates one entity; hovering either highlights both; Show in frames
+the counterpart; undo of the link is one step; the model view lists the entity with
+both depictions.
+
+### Phase 3 — Ports, connections, scalar signals
+
+Port kinds (`optical_power`, `rf_voltage`, `electrical`, `heat_flow`, `value`),
+`port_spec`, port instantiation, `connection` nodes, signal graph nodes, the `port.signal`
+leaf, and drawing connections in notations that show their domain.
+
+*Exit:* laser → fiber → power meter in a cartoon composition and in a schematic
+composition. Raising the laser's power or the fiber's length changes the meter readout
+in both panels in the same frame. Connecting `rf_voltage` to `optical_power` is
+rejected. The model view shows the chain.
+
+### Phase 4 — Consistency and encapsulation
+
+Obligations, ghost lines, the tray, `omits`, `Store::encapsulate`, drill-in panels and
+breadcrumbs, and the law tests of §9.
+
+*Exit:* a ground connection drawn in the schematic appears as an obligation in the 3D
+composition until a bolt depiction is linked; encapsulating the laser and fiber yields a
+"source" block with one `out` port and an unchanged meter reading; drill-in shows the
+original parts.
+
+### Phase 5 — Time-domain signals: the modulator demo
+
+`Signal::Series`, time-dependent sources driven by the lesson playhead or simulation
+time, and a modulator definition (an optical field in, an RF voltage in, a modulated
+field out).
+
+*Exit, the four-representation demo:* the modulator appears in a cartoon, a schematic,
+and a 3D composition (a mesh placeholder until CAD import exists). An animated RF drive
+visibly modulates the light in the cartoon, and a scope trace in the schematic plays the
+same waveform from the same signal. Selecting the modulator anywhere highlights it
+everywhere.
+
+### Phase 6 — Lessons and annotations
+
+`lesson` and `step` nodes, annotation primitives, `targets` and `step` relations, step
+playback in the shell, carrying an annotation, the `Lesson` view, and model-surface
+support.
+
+*Exit:* a three-step lesson that frames the cartoon, then the schematic, then the 3D
+view, with a callout that follows the modulator across all three; the LLM adds a step
+through the lesson view.
+
+### Phase 7 — Implied constraints and CAD tagging
+
+After `constraint-system.md` phase 6 (3D mates): port kinds declare implied mates per
+notation; connecting a lens to a beam creates the rail; CAD import detects geometric
+features automatically, and an authoring pass (or the LLM) tags ports.
+
+*Exit:* drag a lens along its beam rail while the spot size at the detector updates
+through the signal graph.
+
+---
+
+## 13. Change map
+
+| Where | Change | Phase |
+|---|---|---|
+| `src/iron_document/src/value.rs` | `Quantity`, `Record`, `Dim`; JSON forms | 1 |
+| `src/iron_document/src/units.rs` (new) | dimensions, unit strings, display conversion | 1 |
+| `src/iron_document/src/expr.rs` | `Get`; dimension-checked arithmetic; `port.signal` reads | 1, 3 |
+| `src/iron_document/src/component.rs` | `Field::Sym`; `ComponentKind::Params`; new components | 1, 2 |
+| `src/iron_document/src/sym.rs` (new) | interner | 1 |
+| `src/iron_document/src/registry.rs` | primitives only; new structural types; `bar` removed | 1, 2 |
+| `src/iron_document/src/definition.rs` (new) | definition format, validation, instantiation | 1, 3 |
+| `src/iron_document/src/document.rs` | new relation kinds; roots; migration | 2 |
+| `src/iron_document/src/graph.rs` | `GraphNode::Signal`; time inputs | 3, 5 |
+| `src/iron_document/src/obligations.rs` (new) | §8 | 4 |
+| `src/iron_document/src/lib.rs` | `encapsulate`, `obligations`, link and merge helpers | 2, 4 |
+| `src/iron_document/src/view.rs` | `Model`, `Composition`, `Lesson` relations | 2, 6 |
+| `src/document_bridge/materialize.rs` | per-composition render layers; skip structural nodes | 2 |
+| `src/document_bridge/render.rs` | per-panel 2D passes; cross-probe highlight; ghost lines | 2, 4 |
+| `src/bevy_app/scene3d.rs` | one camera per 3D composition panel | 2 |
+| `src/bevy_app/interaction.rs`, `src/lib.rs` | selection by `NodeId`; panel-aware picking | 2 |
+| `src/panels.rs`, `src/web_ffi.rs` | panel ↔ composition; `focus` FFI | 2 |
+| `src-ui/lib/BevyPanel.svelte` and new panels | composition prop; representations panel; tray; obligations; lesson player | 2–6 |
+| `src-ui/model/*.ts`, `document_schema()` | new views, verbs, quantities, definitions in the manifest | 1–6 |
+| `library/*.json` (new) | built-in definitions and notations | 1, 3 |
+
+---
+
+## 14. Risks
+
+- **Schema dynamism versus type safety.** Run-time fields push errors from compile time
+  to apply time. Mitigate with strict validation at apply, good error messages (the LLM
+  is the main author), and tests that load every library definition.
+- **Too many concepts for a user.** Entity, definition, depiction, composition,
+  notation, port, connection, lesson. The UI should let most people never see the
+  words: they draw, link, and connect; promotion happens behind those gestures.
+- **Per-panel rendering cost.** Several cameras and 2D passes. Measure in phase 2 before
+  adding panels freely.
+- **Units friction.** Every expression that mixes plain numbers and quantities needs a
+  rule. Decide: plain numbers are dimensionless, so `9.58 mW * 2` works but
+  `9.58 mW + 2` is an error.
+
+---
+
+## 15. Open questions
+
+1. **I1. Sym stability.** Interned ids are per process and files store strings. Is that
+   enough for the model surface, which also exchanges paths as strings? Likely yes.
+2. **I2. Definition versioning.** Editing a definition changes every instance. Do
+   instances ever pin a version?
+3. **I3. Physical units in 3D.** Is a 3D composition in metres (CAD) while 2D is in
+   pixels? Probably yes: a composition declares its length unit, and the bridge scales.
+4. **I4. Default depictions.** Generate a labelled box with port anchors for any
+   notation a definition lacks, or require explicit templates?
+5. **I5. Merge on link.** When both depictions already have entities, which identity
+   survives, and what happens to connections on the other?
+6. **I6. One undo stack** for the whole project (assumed) versus per composition.
+7. **I7. Notation format.** How much of a notation is data (palette, domains, glyphs)
+   versus code (layout engines, constraint conventions)? Start with data plus a fixed
+   set of code-defined behaviours selected by enum, as doc 02 §9.6 suggests.
+8. **I8. Conservative ports** (vision 09 §13.2): whether heat and current need
+   across/through pairs.

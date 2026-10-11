@@ -432,6 +432,24 @@ round-trips through save and load with its unit string; an entity's parameter is
 to a slider; the demo scene's bar works as a definition; every existing test still
 passes.
 
+**Progress (branch `roadmap`, 2026-10-10):**
+
+- *Registry primitives only* — done first, as the roadmap asks: `bar` is out of
+  `registry.rs`; the demo's bar is a plain `rect` until the definition lands.
+- *Quantities* — done: `units.rs` (`Dim`, prefixed and compound unit parsing, canonical
+  coherent units for the file, engineering-prefix display), `Value::Quantity { si, dim }`
+  stored as `{"q": [si, "W"]}` and accepted as `{"q": "9.58 mW"}` from the model surface,
+  quantity literals in expressions (`9.58 mW`, printed canonically as `0.00958 W` so the
+  round trip is exact), dimension-checked arithmetic, comparison and floor functions
+  (`sqrt` halves, `pow` needs an integer exponent, trig needs plain numbers), clips
+  interpolating quantities, `quantity` as a schema kind the `<edit>` parser coerces.
+  Decided as the roadmap §7 defaults: SI magnitude plus dimension; display unit is
+  presentation; geometry stays in pixels and radians (`deg` and `rad` are scales on a
+  plain number); plain numbers are dimensionless, so `2 mW * 3` works and `2 mW + 3`
+  is an error. Tests: `expr::tests::quantities_are_dimension_checked`, `units.rs`,
+  `tests/values.rs` (file round trip with the unit string, views, binding errors, clips).
+  The exit's first two clauses hold.
+
 ### Phase 2 — Entities and compositions (no ports yet)
 
 `model` and composition roots, `depicts`, migration of the demo into a `scene`

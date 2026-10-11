@@ -2,7 +2,7 @@
  * The registry schema as `document_schema()` returns it: the one source for
  * the manifest, attribute resolution, and value coercion.
  */
-export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'enum' | 'ref' | 'any';
+export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'enum' | 'ref' | 'quantity' | 'any';
 
 export interface Schema {
   components: Record<string, Record<string, Kind>>;
@@ -41,7 +41,19 @@ export function resolveLeaf(schema: Schema, type: string, attr: string): { compo
 }
 
 /** The JSON a slot takes in an op: a value, or `{bind: expr}`. */
-export type SlotJson = number | boolean | string | number[] | { rgba: number[] } | { enum: string } | { ref: string } | { bind: string };
+export type SlotJson =
+  | number
+  | boolean
+  | string
+  | number[]
+  | { rgba: number[] }
+  | { enum: string }
+  | { ref: string }
+  | { q: string }
+  | { bind: string };
+
+/** `9.58 mW`, `1550nm`, `3 kg*m2/s3`: a magnitude followed by a unit. The unit table lives in Rust. */
+const QUANTITY = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*[A-Za-zµμ°Ω][A-Za-z0-9µμ°Ω*·/^-]*$/;
 
 /**
  * Coerce liberally (doc 04 §9.4): `12`, `"12"`, `12px` are all 12; colours
@@ -68,6 +80,9 @@ export function coerce(kind: Kind, raw: string): SlotJson {
       return { enum: text };
     case 'ref':
       return { ref: text.startsWith('#') ? text : `#${text}` };
+    case 'quantity':
+      if (!QUANTITY.test(text)) throw new Error(`"${raw}" is not a quantity (write a magnitude and a unit, e.g. 9.58 mW)`);
+      return { q: text };
     case 'color':
       return { rgba: parseColor(text) };
     case 'vec2':
@@ -78,6 +93,7 @@ export function coerce(kind: Kind, raw: string): SlotJson {
       return v;
     }
     case 'any': {
+      if (QUANTITY.test(text) && !/^(true|false)$/i.test(text)) return { q: text };
       if (/^-?\d/.test(text) && !text.includes(',')) return Number(text);
       if (/^[\[(]?\s*-?\d/.test(text) && text.includes(',')) return parseVector(text);
       if (text.startsWith('#') && text.length >= 7) return { rgba: parseColor(text) };

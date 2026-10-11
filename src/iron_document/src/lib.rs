@@ -28,6 +28,7 @@ pub mod order;
 pub mod registry;
 pub mod serial;
 pub mod time;
+pub mod units;
 pub mod value;
 pub mod view;
 
@@ -42,6 +43,7 @@ pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
 pub use order::OrderKey;
 pub use registry::{ChildPolicy, Host, TypeId, TypeSpec};
 pub use serial::LoadError;
+pub use units::Dim;
 pub use value::{Slot, Value, ValueKind};
 pub use view::{Fidelity, ViewError, ViewQuery};
 

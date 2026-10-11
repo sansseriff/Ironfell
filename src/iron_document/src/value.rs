@@ -8,6 +8,7 @@
 
 use crate::expr::Expr;
 use crate::id::NodeId;
+use crate::units::{self, Dim};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -25,9 +26,10 @@ pub enum Value {
     /// in its own right (vision doc 06 §3).
     Enum(String),
     Ref(NodeId),
-    // `Quantity { value, unit }` is deferred (doc 06 §5) and intentionally
-    // absent rather than reserved: adding a variant here is cheap, and a
-    // reserved variant would have to be handled by every match below.
+    /// A physical quantity: magnitude in SI base units plus its dimension
+    /// (entity-composition-model.md §3.1). The display unit is presentation.
+    /// Never dimensionless: that is a plain `Number`; see [`Value::quantity`].
+    Quantity { si: f64, dim: Dim },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -40,6 +42,7 @@ pub enum ValueKind {
     Vec3,
     Enum,
     Ref,
+    Quantity,
     /// Only as a declared field kind: the field accepts any value. Used by
     /// clip endpoints, whose kind is the target leaf's. No value has it.
     Any,
@@ -56,6 +59,7 @@ impl ValueKind {
             ValueKind::Vec3 => "vec3",
             ValueKind::Enum => "enum",
             ValueKind::Ref => "ref",
+            ValueKind::Quantity => "quantity",
             ValueKind::Any => "any",
         }
     }
@@ -72,6 +76,31 @@ impl Value {
             Value::Vec3(_) => ValueKind::Vec3,
             Value::Enum(_) => ValueKind::Enum,
             Value::Ref(_) => ValueKind::Ref,
+            Value::Quantity { .. } => ValueKind::Quantity,
+        }
+    }
+
+    /// A quantity, or a plain number when the dimension cancels: plain
+    /// numbers are dimensionless, so `1 W / 1 W` and `5 deg` are numbers.
+    pub fn quantity(si: f64, dim: Dim) -> Value {
+        if dim.is_none() { Value::Number(si) } else { Value::Quantity { si, dim } }
+    }
+
+    /// Magnitude and dimension of a number (dimensionless) or a quantity.
+    pub fn as_quantity(&self) -> Option<(f64, Dim)> {
+        match self {
+            Value::Number(n) => Some((*n, Dim::NONE)),
+            Value::Quantity { si, dim } => Some((*si, *dim)),
+            _ => None,
+        }
+    }
+
+    /// What a type error calls this value: its unit, or "a plain number".
+    pub fn describe(&self) -> String {
+        match self {
+            Value::Number(_) => "a plain number".to_owned(),
+            Value::Quantity { dim, .. } => dim.canonical_unit(),
+            v => v.kind().name().to_owned(),
         }
     }
 
@@ -172,11 +201,46 @@ impl Value {
                         .parse()
                         .map(Value::Ref)
                         .map_err(|e| e.to_string()),
+                    // `{"q": [si, "W"]}` is the file form; `{"q": "9.58 mW"}`
+                    // is accepted from the model surface, which does not
+                    // carry the unit table.
+                    "q" => match inner {
+                        J::Array(a) => match a.as_slice() {
+                            [n, J::String(u)] => {
+                                let si = n.as_f64().ok_or_else(|| "quantity magnitude must be a number".to_owned())?;
+                                let unit = units::parse_unit(u).map_err(|e| e.to_string())?;
+                                Ok(Value::quantity(si * unit.factor, unit.dim))
+                            }
+                            _ => Err("q must be [magnitude, \"unit\"]".to_owned()),
+                        },
+                        J::String(s) => Value::parse_quantity(s),
+                        _ => Err("q must be [magnitude, \"unit\"] or \"magnitude unit\"".to_owned()),
+                    },
                     other => Err(format!("unknown value tag {other:?}")),
                 }
             }
             _ => Err("unrecognised value shape".to_owned()),
         }
+    }
+}
+
+impl Value {
+    /// `"9.58 mW"`, `"1550nm"`, `"3 kg*m2/s3"`: a magnitude in any unit.
+    pub fn parse_quantity(text: &str) -> Result<Value, String> {
+        let text = text.trim();
+        let split = text
+            .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E')))
+            .unwrap_or(text.len());
+        // `e` may start a unit (eV) rather than an exponent: back off if the
+        // number does not parse.
+        let (num, unit) = (0..=split)
+            .rev()
+            .map(|i| text.split_at(i))
+            .find(|(n, _)| !n.is_empty() && n.parse::<f64>().is_ok())
+            .ok_or_else(|| format!("{text:?} is not a quantity"))?;
+        let n: f64 = num.parse().expect("checked");
+        let u = units::parse_unit(unit.trim()).map_err(|e| e.to_string())?;
+        Ok(Value::quantity(n * u.factor, u.dim))
     }
 }
 
@@ -201,6 +265,7 @@ impl fmt::Display for Value {
             Value::Vec2([x, y]) => write!(f, "{},{}", fmt_num(*x), fmt_num(*y)),
             Value::Vec3([x, y, z]) => write!(f, "{},{},{}", fmt_num(*x), fmt_num(*y), fmt_num(*z)),
             Value::Ref(id) => write!(f, "{id}"),
+            Value::Quantity { si, dim } => f.write_str(&units::format(*si, *dim)),
         }
     }
 }
@@ -235,6 +300,11 @@ impl Serialize for Value {
             Value::Ref(id) => {
                 let mut m = s.serialize_map(Some(1))?;
                 m.serialize_entry("ref", id)?;
+                m.end()
+            }
+            Value::Quantity { si, dim } => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("q", &(si, dim.canonical_unit()))?;
                 m.end()
             }
         }
@@ -334,6 +404,9 @@ mod tests {
             Value::Vec3([1.0, 2.0, 3.0]),
             Value::Enum("linear".into()),
             Value::Ref(NodeId::from_raw(9)),
+            Value::parse_quantity("9.58 mW").unwrap(),
+            Value::parse_quantity("3 kg*m2/s3").unwrap(),
+            Value::parse_quantity("1/s2").unwrap(),
         ];
         for v in cases {
             let j = serde_json::to_string(&v).unwrap();
@@ -341,6 +414,13 @@ mod tests {
             assert_eq!(back, v, "via {j}");
             assert_eq!(back.kind(), v.kind());
         }
+        assert_eq!(serde_json::to_string(&Value::parse_quantity("9.58 mW").unwrap()).unwrap(), r#"{"q":[0.00958,"W"]}"#);
+        let (si, dim) = Value::from_json(&serde_json::json!({"q": "1550 nm"})).unwrap().as_quantity().unwrap();
+        assert!((si - 1.55e-6).abs() < 1e-21 && dim == Dim::LENGTH);
+        assert_eq!(Value::parse_quantity("90 deg").unwrap(), Value::Number(std::f64::consts::FRAC_PI_2));
+        assert_eq!(Value::parse_quantity("1 eV").unwrap().kind(), ValueKind::Quantity);
+        assert!(Value::parse_quantity("fast").is_err());
+        assert!(Value::parse_quantity("3 parsecs").is_err());
     }
 
     #[test]
@@ -349,5 +429,7 @@ mod tests {
         assert_eq!(Value::Number(0.1).to_string(), "0.1");
         assert_eq!(Value::Color([1.0, 0.0, 0.0, 1.0]).to_string(), "#ff0000ff");
         assert_eq!(Value::Vec2([1.0, 2.5]).to_string(), "1,2.5");
+        assert_eq!(Value::parse_quantity("0.00958 W").unwrap().to_string(), "9.58 mW");
+        assert_eq!(Value::parse_quantity("1550 nm").unwrap().to_string(), "1.55 µm");
     }
 }

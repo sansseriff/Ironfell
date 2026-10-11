@@ -337,8 +337,22 @@ fn create(
 /// An entity's instance and params must agree with its definition; checked
 /// whenever either is created, set, or added (ECM §4.3).
 fn check_entity(doc: &Document, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
-    if doc.live(id).is_some_and(|n| n.ty.name() == "entity") {
-        crate::definition::validate_entity(doc, id).map_err(|e| cx.err(ErrorKind::BadInstance, e))?;
+    match doc.live(id).map(|n| n.ty.name()) {
+        Some("entity") => crate::definition::validate_entity(doc, id).map_err(|e| cx.err(ErrorKind::BadInstance, e))?,
+        Some("embed") => check_embeds(doc, cx, id)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Every embed at or under `id` must name a live composition other than its
+/// own, without a cycle (ECM §7.4); checked on create, set, add and
+/// reparent, since a move can close a loop too.
+fn check_embeds(doc: &Document, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
+    for n in std::iter::once(id).chain(doc.descendants(id)) {
+        if doc.live(n).is_some_and(|x| x.ty.name() == "embed") {
+            crate::composition::validate_embed(doc, n).map_err(|e| cx.err(ErrorKind::Cycle, e))?;
+        }
     }
     Ok(())
 }
@@ -384,6 +398,7 @@ fn reparent(
     }
     check_parent(doc, cx, parent, ty)?;
     doc.set_parent(id, parent, order.clone());
+    check_embeds(doc, cx, id)?;
     Ok(vec![Op::Reparent {
         id,
         parent: old_parent,
@@ -455,7 +470,7 @@ fn set(
     let old = comp
         .set(path.field, slot.clone())
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
-    if matches!(path.component, ComponentKind::Params | ComponentKind::Instance) {
+    if matches!(path.component, ComponentKind::Params | ComponentKind::Instance | ComponentKind::Embed | ComponentKind::EmbedCamera) {
         check_entity(doc, cx, id)?;
     }
     Ok(vec![Op::Set {

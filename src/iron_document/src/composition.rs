@@ -291,3 +291,61 @@ fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
     }
     ops
 }
+
+// ---------------------------------------------------------------------------
+// Embeds (ECM §7.4): one composition shown inside another.
+
+/// The composition an embed shows, if it names a live one.
+pub fn embedded(doc: &Document, embed: NodeId) -> Option<NodeId> {
+    match doc.get::<crate::component::Embed>(embed)?.source.constant()? {
+        crate::value::Value::Ref(c) if composition_of(doc, *c) == Some(*c) => Some(*c),
+        _ => None,
+    }
+}
+
+/// The camera an embed looks through, if it names one.
+pub fn embed_camera(doc: &Document, embed: NodeId) -> Option<NodeId> {
+    match doc.get::<crate::component::EmbedCamera>(embed)?.camera.constant()? {
+        crate::value::Value::Ref(c) if doc.is_live(*c) => Some(*c),
+        _ => None,
+    }
+}
+
+/// Every live embed inside `composition`, in preorder.
+pub fn embeds_in(doc: &Document, composition: NodeId) -> Vec<NodeId> {
+    let embed = TypeId::lookup("embed").expect("registered");
+    doc.descendants(composition).into_iter().filter(|&n| doc.live(n).is_some_and(|x| x.ty == embed)).collect()
+}
+
+/// An embed must sit inside a composition, name a live composition, and not
+/// close a loop: the composition it shows must not, through its own embeds,
+/// show the one the embed is in. A named camera must be a camera of the
+/// embedded composition.
+pub fn validate_embed(doc: &Document, embed: NodeId) -> Result<(), String> {
+    let home = composition_of(doc, embed).ok_or_else(|| format!("embed {embed} is not inside a composition"))?;
+    let of = match doc.get::<crate::component::Embed>(embed).and_then(|e| e.source.constant()) {
+        Some(crate::value::Value::Ref(c)) => *c,
+        _ => return Err(format!("embed {embed}: embed.source must name a composition")),
+    };
+    if composition_of(doc, of) != Some(of) {
+        return Err(format!("embed {embed}: {of} is not a live composition"));
+    }
+    // Walk what `of` shows, transitively; reaching `home` is a loop.
+    let mut stack = vec![of];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(c) = stack.pop() {
+        if c == home {
+            return Err(format!("embed {embed}: {of} already shows {home}, directly or through its embeds; embedding it in {home} would loop"));
+        }
+        if seen.insert(c) {
+            stack.extend(embeds_in(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
+        }
+    }
+    if let Some(cam) = doc.get::<crate::component::EmbedCamera>(embed).and_then(|e| e.camera.constant()) {
+        let ok = matches!(cam, crate::value::Value::Ref(c) if doc.live(*c).is_some_and(|n| n.ty.name() == "camera") && composition_of(doc, *c) == Some(of));
+        if !ok {
+            return Err(format!("embed {embed}: embed_camera.camera must name a camera inside {of}"));
+        }
+    }
+    Ok(())
+}

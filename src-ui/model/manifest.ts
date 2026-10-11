@@ -77,6 +77,12 @@ MODEL AND COMPOSITIONS
   with a figures relation pictures an entity; pictures in different compositions of
   one entity are the same thing drawn differently. Local geometry (brackets, posts,
   decoration) has no figures relation. The model root holds entities.
+  An embed node shows one composition inside another by reference (embed.source):
+  2D in 2D or 3D in 3D places and clips it like a group; a 3D composition in a 2D
+  one is a camera view (embed_camera.camera names a camera node of the 3D
+  composition; without it, a default view frames everything); a 2D composition in a
+  3D one is a plane. frame gives a manual bounding box. Editing the embedded
+  composition changes every embed of it. An embed may not loop back to itself.
 
 DEFINITIONS
   A library root holds definition nodes. A definition's param_spec children declare

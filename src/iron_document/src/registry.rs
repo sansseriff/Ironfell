@@ -138,6 +138,29 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
+    // One composition shown inside another (ECM §7.4). Placed by whichever
+    // transform matches the parent composition's dimensions.
+    TypeSpec {
+        name: "embed",
+        components: &[
+            (K::Embed, true),
+            (K::EmbedCamera, false),
+            (K::Frame, false),
+            (K::Transform2d, false),
+            (K::Transform3d, false),
+            (K::Size, false),
+            (K::Name, false),
+        ],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // A view into a 3D composition, for embeds that name it.
+    TypeSpec {
+        name: "camera",
+        components: &[(K::Transform3d, true), (K::Camera, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     // An instance of a definition; its figures point at it with
     // `figures` relations. Ports arrive as children in a later phase.
     TypeSpec {

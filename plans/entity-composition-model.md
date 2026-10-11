@@ -322,7 +322,7 @@ building and side-by-side layout happens in the centre viewer, which shows a top
 `main` composition that embeds the others. Section 7.1's one-panel-per-composition stays
 as the editor mechanism; it is no longer how two compositions sit side by side.
 
-- **`embed`** (decided name) is a node in a composition's layout with `embed.of` → the
+- **`embed`** (decided name) is a node in a composition's layout with `embed.source` → the
   composition it shows, a transform for its own dimensionality, and an optional manual
   bounding box. It is a live reference: one composition, shown wherever it is embedded,
   edited once. A cycle (A embeds B embeds A) is refused at apply time.

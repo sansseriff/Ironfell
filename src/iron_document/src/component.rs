@@ -226,6 +226,34 @@ components! {
     /// to the entity's `params`.
     Template / "template" => Template { notation: Str = Value::Str("free".to_owned()) }
 
+    /// A composition shown inside another (ECM §7.4): a live reference, not a
+    /// copy. 2D in 2D or 3D in 3D places and clips it like a group; 3D in 2D
+    /// is a camera view; 2D in 3D a plane.
+    Embed / "embed" => Embed { source: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
+
+    /// Which camera of the embedded 3D composition the embed looks through.
+    /// Absent: a derived default view framing all of its content.
+    EmbedCamera / "embed_camera" => EmbedCamera { camera: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
+
+    /// A manual bounding box for an embed, in the embedded composition's own
+    /// space. Absent: the bounds of everything inside.
+    Frame / "frame" => Frame {
+        x: Number = Value::Number(0.0),
+        y: Number = Value::Number(0.0),
+        w: Number = Value::Number(400.0),
+        h: Number = Value::Number(300.0),
+    }
+
+    /// A camera in a 3D composition (ECM §7.4). `fov` is vertical, in
+    /// radians; `aspect` (width / height) sets the shape of an embed that
+    /// looks through it.
+    Camera / "camera" => Camera {
+        fov: Number = Value::Number(0.8),
+        aspect: Number = Value::Number(1.5),
+        near: Number = Value::Number(0.1),
+        far: Number = Value::Number(1000.0),
+    }
+
     /// A composition root (ECM §5): one diagram in one notation, 2D or 3D.
     /// Its subtree is layout, figures and composition-local geometry.
     Composition / "composition" => Composition {

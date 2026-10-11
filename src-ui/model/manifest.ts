@@ -66,6 +66,15 @@ EXPRESSIONS (for {= …} bindings)
   the constant pi; angles in radians; quantity literals 9.58 mW. A binding may not
   depend on itself.
 
+DEFINITIONS
+  A library root holds definition nodes. A definition's param_spec children declare
+  its parameters (name, kind, default); a depiction child's subtree is the template
+  for one notation, and may bind to a param_spec's default. An entity instantiates
+  a definition: instance.def names it and params.<name> holds one value per
+  parameter, each bindable (params.level="{= #O.slider.value}"). Its picture is an
+  ordinary node with a depicts relation to the entity; its bindings read the
+  entity's params. Setting an unknown or wrongly typed parameter is rejected.
+
 TIME
   A clip node (child of a timeline) has timing.start, timing.dur, timing.easing and
   clip.prop (the leaf it drives, e.g. transform2d.x), clip.from, clip.to. It reaches

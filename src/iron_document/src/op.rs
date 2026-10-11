@@ -122,6 +122,8 @@ pub enum ErrorKind {
     UnknownPath,
     TypeMismatch,
     UnknownRelation,
+    /// An entity's instance or params disagree with its definition.
+    BadInstance,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -303,7 +305,17 @@ fn create(
         doc.advance_next_id(id);
     }
     check_component_bindings(doc, cx, id, comps)?;
+    check_entity(doc, cx, id)?;
     Ok(vec![Op::Delete { id }])
+}
+
+/// An entity's instance and params must agree with its definition; checked
+/// whenever either is created, set, or added (ECM §4.3).
+fn check_entity(doc: &Document, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
+    if doc.live(id).is_some_and(|n| n.ty.name() == "entity") {
+        crate::definition::validate_entity(doc, id).map_err(|e| cx.err(ErrorKind::BadInstance, e))?;
+    }
+    Ok(())
 }
 
 fn delete(doc: &mut Document, cx: &Ctx, id: NodeId) -> Result<Vec<Op>, ApplyError> {
@@ -418,6 +430,9 @@ fn set(
     let old = comp
         .set(path.field, slot.clone())
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
+    if matches!(path.component, ComponentKind::Params | ComponentKind::Instance) {
+        check_entity(doc, cx, id)?;
+    }
     Ok(vec![Op::Set {
         id,
         path,
@@ -447,6 +462,7 @@ fn add_comp(
     }
     doc.insert_component(id, comp.clone());
     check_component_bindings(doc, cx, id, std::slice::from_ref(comp))?;
+    check_entity(doc, cx, id)?;
     Ok(vec![Op::RemoveComp { id, kind }])
 }
 

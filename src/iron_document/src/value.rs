@@ -56,6 +56,24 @@ pub enum ValueKind {
 }
 
 impl ValueKind {
+    pub const ALL: &'static [ValueKind] = &[
+        ValueKind::Number,
+        ValueKind::Bool,
+        ValueKind::Str,
+        ValueKind::Color,
+        ValueKind::Vec2,
+        ValueKind::Vec3,
+        ValueKind::Enum,
+        ValueKind::Ref,
+        ValueKind::Quantity,
+        ValueKind::Record,
+        ValueKind::Any,
+    ];
+
+    pub fn from_name(s: &str) -> Option<ValueKind> {
+        ValueKind::ALL.iter().copied().find(|k| k.name() == s)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             ValueKind::Number => "number",

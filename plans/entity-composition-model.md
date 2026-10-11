@@ -449,6 +449,35 @@ passes.
   is an error. Tests: `expr::tests::quantities_are_dimension_checked`, `units.rs`,
   `tests/values.rs` (file round trip with the unit string, views, binding errors, clips).
   The exit's first two clauses hold.
+- *Run-time fields* — done, with one deviation from §4.1: instead of `Field::Sym`, run-time
+  names are interned to a deduplicated `&'static str` (`sym.rs`), so `LeafPath` keeps one
+  representation and stays `Copy`; files still store strings. `params` is the one dynamic
+  component (`component.rs`, `@dynamic`), validated against the definition at apply time;
+  a `Set` on a parameter the component lacks is an error, so every inverse is a `Set` back.
+  The registry schema marks it `"*": "any"` and the `<edit>` parser accepts `params.<name>`.
+- *Records and `Get`* — done: `Value::Record { kind, fields }` as `{"rec": ["kind", {…}]}`,
+  `Expr::Get` (`#3.params.beam.waist`). Record kinds are names only until definitions
+  declare record shapes (deviation: no `RecordKind` schema yet).
+- *Definitions as data* — done (`definition.rs`): `library`, `definition`, `param_spec`,
+  `depiction` and `entity` types; `RelKind::Depicts`; `params_of`, `validate_entity`
+  (definition exists; parameter names match the specs exactly; a constant has the spec's
+  kind and, for a quantity, the default's dimension; `ErrorKind::BadInstance`), and
+  `instantiate`, which creates the entity with every parameter at its default, copies
+  the notation's template subtree as ordinary nodes, rewrites each reference to a spec's
+  `param_spec.default` into the entity's `params.<name>` (and template-internal
+  references onto the copy), and links each copied root to the entity with `depicts`.
+  *Design choice not in the plan:* templates reference their own definition's
+  `param_spec.default` leaves rather than a placeholder for "the entity", so a template
+  is a live, evaluable subtree (it shows its defaults) and needs no new syntax. The
+  reconciler never materialises anything under a `library`. The file schema is 2;
+  schema 1 files still load. `bar` is now a definition in the demo's library with one
+  parameter, `level`, instantiated into an entity under the scene plus a rect depiction;
+  the entity's `level` is bound to the slider, and dragging the depiction still inverts
+  onto the slider through the parameter. Tests: `tests/definitions.rs`. Not done from
+  the §4 list: `behaviour` nodes (they need ports, phase 3) and the `library/*.json`
+  built-in definition files (the demo builds its definition from ops; the file form is
+  what `save` already writes). Entities live wherever a group admits them until phase 2's
+  `model` root exists. The exit's last three clauses hold; every existing test passes.
 
 ### Phase 2 — Entities and compositions (no ports yet)
 

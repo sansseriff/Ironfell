@@ -53,6 +53,8 @@ pub enum RelKind {
     During,
     AlignsTo,
     References,
+    /// A visual node is a picture of an entity (ECM §5).
+    Depicts,
 }
 
 impl RelKind {
@@ -63,6 +65,7 @@ impl RelKind {
             RelKind::During => "during",
             RelKind::AlignsTo => "aligns_to",
             RelKind::References => "references",
+            RelKind::Depicts => "depicts",
         }
     }
 }

@@ -163,6 +163,21 @@ impl Expr {
         }
     }
 
+    /// The same expression with every reference passed through `f`. Used
+    /// when a template is copied: its references move to the copy.
+    pub fn map_refs(&self, f: &dyn Fn(Leaf) -> Leaf) -> Expr {
+        match self {
+            Expr::Lit(_) | Expr::Const(_) => self.clone(),
+            Expr::Ref(l) => Expr::Ref(f(*l)),
+            Expr::Neg(e) => Expr::Neg(Box::new(e.map_refs(f))),
+            Expr::Not(e) => Expr::Not(Box::new(e.map_refs(f))),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(a.map_refs(f)), Box::new(b.map_refs(f))),
+            Expr::If(c, a, b) => Expr::If(Box::new(c.map_refs(f)), Box::new(a.map_refs(f)), Box::new(b.map_refs(f))),
+            Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.map_refs(f)).collect()),
+            Expr::Get(e, field) => Expr::Get(Box::new(e.map_refs(f)), field),
+        }
+    }
+
     /// Evaluate against a resolver for leaf values. Reads go through the
     /// resolver and nowhere else, which is the hook a tracking evaluator
     /// would use later.

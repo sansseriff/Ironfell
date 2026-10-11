@@ -375,7 +375,10 @@ fn replay_of_log_equals_snapshot_and_load_roundtrips() {
     let loaded = Store::load(&text).unwrap();
     check(&loaded);
     assert_eq!(loaded.save(), text);
-    assert!(text.starts_with("{\"schema\": 1,"));
+    assert!(text.starts_with(&format!("{{\"schema\": {},", iron_document::serial::SCHEMA)));
+    // A schema-1 file (nothing from stage B in it) still loads.
+    let old = text.replacen(&format!("\"schema\": {}", iron_document::serial::SCHEMA), "\"schema\": 1", 1);
+    assert_eq!(Store::load(&old).unwrap().save(), text);
     // The loaded store keeps working: the counter is right, so a new create
     // does not collide.
     let mut loaded = loaded;

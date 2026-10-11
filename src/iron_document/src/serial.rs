@@ -14,7 +14,10 @@ use serde_json::{Map, Value as J, json};
 use std::collections::BTreeMap;
 use std::fmt;
 
-pub const SCHEMA: u64 = 1;
+/// Bumped to 2 with definitions, entities, `params`, quantities and records
+/// (roadmap stage B). Schema 1 files hold none of those and still load.
+pub const SCHEMA: u64 = 2;
+const OLDEST_READABLE: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadError(pub String);
@@ -109,9 +112,9 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
     let schema = field("schema")?
         .as_u64()
         .ok_or_else(|| LoadError("schema must be an integer".into()))?;
-    if schema != SCHEMA {
+    if !(OLDEST_READABLE..=SCHEMA).contains(&schema) {
         return Err(LoadError(format!(
-            "schema {schema} is not supported (this build reads {SCHEMA})"
+            "schema {schema} is not supported (this build reads {OLDEST_READABLE} to {SCHEMA})"
         )));
     }
     let next_id = field("next_id")?

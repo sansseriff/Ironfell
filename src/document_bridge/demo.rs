@@ -4,9 +4,10 @@
 
 use super::PendingTransactions;
 use bevy::prelude::*;
-use iron_document::component::{Fill, Mesh, Name as DocName, Radius, Size, Stroke, Transform2d, Transform3d};
+use iron_document::component::{Depiction, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
 use iron_document::component::{Clip, Slider, Timing};
-use iron_document::{Actor, Expr, LeafStruct, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
+use iron_document::definition::{self, Placement};
+use iron_document::{Actor, Expr, LeafPath, LeafStruct, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
 use std::collections::BTreeMap;
 
 pub(super) fn queue_demo_scene(store: Res<super::DocumentStore>, mut pending: ResMut<PendingTransactions>) {
@@ -19,7 +20,7 @@ fn n(v: f64) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(30).into_iter();
+    let mut ids = store.document().next_ids(34).into_iter();
     let rel_ids = store.document().next_relation_ids(2);
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
@@ -99,8 +100,8 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         components: vec![t.wrap(), r.wrap(), f.wrap(), st.wrap()],
     });
 
-    // A slider, and a bar whose height and top follow it through bindings:
-    // the first reactive edge in the document (doc 02 §4).
+    // A slider; the bar that follows it is an instance of a definition,
+    // created at the end once the library exists.
     let slider = next();
     let mut t = Transform2d::default();
     t.x = n(100.0);
@@ -119,25 +120,6 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         order: order(),
         components: vec![t.wrap(), s.wrap(), sl.wrap(), name.wrap()],
     });
-    let bar = next();
-    let mut t = Transform2d::default();
-    t.x = n(780.0);
-    t.y = Slot::Bound(Expr::parse(&format!("640 - {slider}.slider.value * 300")).expect("demo binding"));
-    let mut s = Size::default();
-    s.w = n(60.0);
-    s.h = Slot::Bound(Expr::parse(&format!("{slider}.slider.value * 300")).expect("demo binding"));
-    let mut f = Fill::default();
-    f.color = Slot::Const(Value::Color([0.2, 0.5, 0.9, 1.0]));
-    let mut name = DocName::default();
-    name.text = Slot::Const(Value::Str("bar".into()));
-    ops.push(Op::Create {
-        id: bar,
-        ty: ty("rect"),
-        parent: Some(scene),
-        order: order(),
-        components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
-    });
-
     // The torus.
     let torus = next();
     let mut t = Transform3d::default();
@@ -208,6 +190,66 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         order: order(),
         components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
     });
+
+    // The library: a `bar` definition with one parameter, `level`, and a
+    // "free" depiction whose template rect binds its top and height to the
+    // parameter's default. `bar` is data, not a registry type (ECM §4.2).
+    let library = next();
+    let def = next();
+    let level = next();
+    let depiction = next();
+    let template = next();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("library".into()));
+    ops.push(Op::Create { id: library, ty: ty("library"), parent: None, order: order(), components: vec![name.wrap()] });
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("bar".into()));
+    ops.push(Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: OrderKey::first(), components: vec![name.wrap()] });
+    let mut spec = ParamSpec::default();
+    spec.kind = Slot::Const(Value::Enum("number".into()));
+    spec.default = n(0.4);
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("level".into()));
+    ops.push(Op::Create { id: level, ty: ty("param_spec"), parent: Some(def), order: OrderKey::first(), components: vec![spec.wrap(), name.wrap()] });
+    ops.push(Op::Create {
+        id: depiction,
+        ty: ty("depiction"),
+        parent: Some(def),
+        order: OrderKey::after(&OrderKey::first()),
+        components: vec![Depiction::default().wrap()],
+    });
+    let mut t = Transform2d::default();
+    t.x = n(780.0);
+    t.y = Slot::Bound(Expr::parse(&format!("640 - {level}.param_spec.default * 300")).expect("demo binding"));
+    let mut s = Size::default();
+    s.w = n(60.0);
+    s.h = Slot::Bound(Expr::parse(&format!("{level}.param_spec.default * 300")).expect("demo binding"));
+    let mut f = Fill::default();
+    f.color = Slot::Const(Value::Color([0.2, 0.5, 0.9, 1.0]));
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("bar".into()));
+    ops.push(Op::Create {
+        id: template,
+        ty: ty("rect"),
+        parent: Some(depiction),
+        order: OrderKey::first(),
+        components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
+    });
+
+    // Instantiate it into the scene. The ops so far are applied to a scratch
+    // copy so the instantiation can read the definition and allocate ids
+    // past everything above; all of it stays one transaction.
+    let mut scratch = iron_document::Store::with_document(store.document().clone());
+    scratch
+        .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone() })
+        .expect("demo scene applies");
+    let last_in_scene = scratch.document().children(scene).last().and_then(|&c| scratch.document().live(c)).map(|n| n.order.clone());
+    let place = Placement { entity_parent: Some(scene), entity_after: last_in_scene.clone(), depiction_parent: Some(scene), depiction_after: last_in_scene.map(|k| OrderKey::after(&k)) };
+    let (entity, inst) = definition::instantiate(scratch.document(), def, "free", "bar", &place).expect("bar instantiates");
+    ops.extend(inst);
+    // The entity's parameter follows the slider: the exit of ECM phase 1.
+    let level_path: LeafPath = "params.level".parse().expect("parameter path");
+    ops.push(Op::Set { id: entity, path: level_path, slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).expect("demo binding")) });
 
     iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops }
 }

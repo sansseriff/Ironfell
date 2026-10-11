@@ -640,7 +640,7 @@ All native, in `iron_document`:
 
 | Item | Reserved by |
 |---|---|
-| Units as a value type (doc 06 §5) | a `Value::Quantity` variant, unconstructed |
+| Units as a value type (doc 06 §5) | ~~a `Value::Quantity` variant, unconstructed~~ **Done 2026-10-10** (roadmap stage B): `Value::Quantity { si, dim }` and `units.rs`; see `entity-composition-model.md` §3 and §12 phase 1 |
 | Content hashes and the context ledger (doc 04 §4.3, §8) | `version` exists; hashes wait for measurement |
 | Components with local state and the FSM (doc 06 §1–2) | `Slot` and the registry admit new kinds without changing ops |
 | Collaboration / CRDT | `NodeId` newtype; the op log |

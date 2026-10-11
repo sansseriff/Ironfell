@@ -17,6 +17,7 @@
 //! ```
 
 pub mod component;
+pub mod definition;
 pub mod document;
 pub mod expr;
 pub mod geom;

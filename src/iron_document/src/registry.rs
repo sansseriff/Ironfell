@@ -97,6 +97,41 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // Definitions as data (entity-composition-model.md §4): the structural
+    // types a library is made of. None of them is drawn.
+    TypeSpec {
+        name: "library",
+        components: &[(K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["definition"]),
+    },
+    TypeSpec {
+        name: "definition",
+        components: &[(K::Name, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["param_spec", "depiction"]),
+    },
+    TypeSpec {
+        name: "param_spec",
+        components: &[(K::Name, true), (K::ParamSpec, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // A template: its subtree is what an instance copies.
+    TypeSpec {
+        name: "depiction",
+        components: &[(K::Depiction, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Any,
+    },
+    // An instance of a definition; its depictions point at it with
+    // `depicts` relations. Ports arrive as children in a later phase.
+    TypeSpec {
+        name: "entity",
+        components: &[(K::Instance, true), (K::Params, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     TypeSpec {
         name: "timeline",
         components: &[(K::Name, false)],

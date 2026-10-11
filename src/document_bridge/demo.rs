@@ -4,7 +4,7 @@
 
 use super::PendingTransactions;
 use bevy::prelude::*;
-use iron_document::component::{Depiction, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
+use iron_document::component::{Constraint, Depiction, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
 use iron_document::component::{Clip, Slider, Timing};
 use iron_document::definition::{self, Placement};
 use iron_document::{Actor, Expr, LeafPath, LeafStruct, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
@@ -20,8 +20,8 @@ fn n(v: f64) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(34).into_iter();
-    let rel_ids = store.document().next_relation_ids(2);
+    let mut ids = store.document().next_ids(50).into_iter();
+    let rel_ids = store.document().next_relation_ids(11);
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
     let mut order = move || {
@@ -190,6 +190,126 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         order: order(),
         components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
     });
+
+    // The inverse-kinematics pendulum (constraint-system.md §14 phase 3): a
+    // fixed platform, three joints and a ball chained by `distance`
+    // constraints whose value a slider drives, arms drawn between the
+    // joints by bindings that read the solved positions, and a bar whose
+    // height follows the ball. Grab the ball and the arms follow; move the
+    // `fix` to the ball and the platform drives instead.
+    let pendulum = next();
+    let platform = next();
+    let joints = [next(), next(), next()];
+    let ball = next();
+    let arms = [next(), next(), next()];
+    let height_bar = next();
+    let length = next();
+    let fix = next();
+    let hinge = next();
+    let links = [next(), next(), next()];
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("pendulum".into()));
+    ops.push(Op::Create { id: pendulum, ty: ty("group"), parent: None, order: order(), components: vec![name.wrap(), Transform2d::default().wrap()] });
+    let mut porder = OrderKey::first();
+    let mut porder_next = move || {
+        let k = porder.clone();
+        porder = OrderKey::after(&porder);
+        k
+    };
+    let named = |s: &str| {
+        let mut n = DocName::default();
+        n.text = Slot::Const(Value::Str(s.into()));
+        n
+    };
+    let color = |c: [f32; 4]| {
+        let mut f = Fill::default();
+        f.color = Slot::Const(Value::Color(c));
+        f
+    };
+    // The arms paint under the joints and the ball (so a grab at a joint
+    // takes the joint, not the bound arm), which means earlier sibling keys;
+    // they are still created after the joints their bindings read.
+    let arm_keys = [porder_next(), porder_next(), porder_next()];
+    let mut t = Transform2d::default();
+    t.x = n(240.0);
+    t.y = n(40.0);
+    let mut s = Size::default();
+    s.w = n(160.0);
+    s.h = n(20.0);
+    ops.push(Op::Create { id: platform, ty: ty("rect"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), s.wrap(), color([0.25, 0.25, 0.28, 1.0]).wrap(), named("platform").wrap()] });
+    let chain = [joints[0], joints[1], joints[2], ball];
+    for (i, (x, y)) in [(320.0, 60.0), (320.0, 160.0), (320.0, 260.0)].into_iter().enumerate() {
+        let mut t = Transform2d::default();
+        t.x = n(x);
+        t.y = n(y);
+        let mut r = Radius::default();
+        r.r = n(5.0);
+        ops.push(Op::Create { id: joints[i], ty: ty("circle"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), r.wrap(), color([0.15, 0.15, 0.18, 1.0]).wrap(), named(&format!("j{i}")).wrap()] });
+    }
+    let mut t = Transform2d::default();
+    t.x = n(320.0);
+    t.y = n(360.0);
+    let mut r = Radius::default();
+    r.r = n(14.0);
+    ops.push(Op::Create { id: ball, ty: ty("circle"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), r.wrap(), color([0.9, 0.35, 0.15, 1.0]).wrap(), named("ball").wrap()] });
+    for i in 0..3 {
+        let (a, b) = (chain[i], chain[i + 1]);
+        let mut t = Transform2d::default();
+        t.rot = Slot::Bound(Expr::parse(&format!("atan2({b}.transform2d.y - {a}.transform2d.y, {b}.transform2d.x - {a}.transform2d.x) - pi / 2")).expect("demo binding"));
+        t.x = Slot::Bound(Expr::parse(&format!("{a}.transform2d.x - 5 * cos({}.transform2d.rot)", arms[i])).expect("demo binding"));
+        t.y = Slot::Bound(Expr::parse(&format!("{a}.transform2d.y - 5 * sin({}.transform2d.rot)", arms[i])).expect("demo binding"));
+        let mut s = Size::default();
+        s.w = n(10.0);
+        s.h = Slot::Bound(Expr::parse(&format!("hypot({b}.transform2d.x - {a}.transform2d.x, {b}.transform2d.y - {a}.transform2d.y)")).expect("demo binding"));
+        ops.push(Op::Create { id: arms[i], ty: ty("rect"), parent: Some(pendulum), order: arm_keys[i].clone(), components: vec![t.wrap(), s.wrap(), color([0.35, 0.5, 0.7, 1.0]).wrap(), named(&format!("arm{}", i + 1)).wrap()] });
+    }
+    // A bar whose height is bound to the ball's y.
+    let mut t = Transform2d::default();
+    t.x = n(700.0);
+    t.y = n(60.0);
+    let mut s = Size::default();
+    s.w = n(24.0);
+    s.h = Slot::Bound(Expr::parse(&format!("{ball}.transform2d.y - 60")).expect("demo binding"));
+    ops.push(Op::Create { id: height_bar, ty: ty("rect"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), s.wrap(), color([0.3, 0.65, 0.4, 1.0]).wrap(), named("height").wrap()] });
+    // The length slider: 0.5 to 1.5 times 100 px per link.
+    let mut t = Transform2d::default();
+    t.x = n(100.0);
+    t.y = n(660.0);
+    let mut s = Size::default();
+    s.w = n(300.0);
+    s.h = n(24.0);
+    let mut sl = Slider::default();
+    sl.min = n(0.5);
+    sl.max = n(1.5);
+    sl.value = n(1.0);
+    ops.push(Op::Create { id: length, ty: ty("slider"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), s.wrap(), sl.wrap(), named("length").wrap()] });
+    // Constraints: the platform is fixed, its hinge coincides with the
+    // first joint, and each link keeps its distance, driven by the slider.
+    let constraint = |kind: &str, name: &str| {
+        let mut c = Constraint::default();
+        c.kind = Slot::Const(Value::Enum(kind.into()));
+        vec![c.wrap(), named(name).wrap()]
+    };
+    let constrains = |rel, from, to, role: &str, anchor: [f64; 2]| {
+        let mut data = BTreeMap::new();
+        data.insert("role".to_owned(), Value::Str(role.into()));
+        data.insert("anchor".to_owned(), Value::Vec2(anchor));
+        Op::Link { rel: Relation { id: rel, from, to, rel: RelKind::Constrains, data } }
+    };
+    ops.push(Op::Create { id: fix, ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), components: constraint("fix", "fixed platform") });
+    ops.push(constrains(rel_ids[2], fix, platform, "a", [0.0, 0.0]));
+    ops.push(Op::Create { id: hinge, ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), components: constraint("coincident", "hinge") });
+    ops.push(constrains(rel_ids[3], hinge, platform, "a", [80.0, 20.0]));
+    ops.push(constrains(rel_ids[4], hinge, joints[0], "b", [0.0, 0.0]));
+    for i in 0..3 {
+        let mut comps = constraint("distance", &format!("link{}", i + 1));
+        if let iron_document::Component::Constraint(c) = &mut comps[0] {
+            c.value = Slot::Bound(Expr::parse(&format!("{length}.slider.value * 100")).expect("demo binding"));
+        }
+        ops.push(Op::Create { id: links[i], ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), components: comps });
+        ops.push(constrains(rel_ids[5 + 2 * i], links[i], chain[i], "a", [0.0, 0.0]));
+        ops.push(constrains(rel_ids[6 + 2 * i], links[i], chain[i + 1], "b", [0.0, 0.0]));
+    }
 
     // The library: a `bar` definition with one parameter, `level`, and a
     // "free" depiction whose template rect binds its top and height to the

@@ -9,13 +9,15 @@
 //! dragged one, moves through the store in the same frame (roadmap stage A,
 //! constraint-system.md §8.2).
 //!
-//! A leaf's handle decides what a drag may do (`iron_document::Handle`): an
-//! authored constant is previewed directly; a leaf bound linearly to one
-//! constant source previews that source; anything else locks its axis for
-//! the whole gesture, so it is held still rather than moved and snapped back.
+//! The store decides what a 2D drag may do (`Store::begin_drag`): a node in
+//! a constraint cluster is dragged by a finger and the cluster re-solves
+//! every frame; otherwise each axis previews through its own handle (an
+//! authored constant directly, a linearly bound leaf through its source),
+//! and a locked axis holds still for the whole gesture rather than moving
+//! and snapping back. The reasons are logged at press.
 
 use bevy::prelude::*;
-use iron_document::{Handle, LeafPath, Value};
+use iron_document::{DragMode, Handle, LeafPath, Value};
 
 use crate::bevy_app::scene3d::ActiveState;
 use crate::document_bridge::{Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, Provenance, Shape2d, type_of};
@@ -52,7 +54,7 @@ pub fn interaction_decide_system(
     transforms: Query<&GlobalTransform>,
     doc2d: Query<&Doc2d>,
     provenance: Query<&Provenance>,
-    store: Res<DocumentStore>,
+    mut store: ResMut<DocumentStore>,
     panels: Res<Panels>,
 ) {
     // Hover follows the primary hit. Written only on change so downstream
@@ -66,11 +68,14 @@ pub fn interaction_decide_system(
         }
     }
 
-    // Drag end
+    // Drag end: the finger lifts now; the commit follows next sync.
     if pointer.just_released_left && drag.target.is_some() {
         commit.0 = drag.target;
         drag.target = None;
         drag.kind = None;
+        if let Some(h) = drag.handle.take() {
+            store.0.end_drag(&h);
+        }
     }
 
     // Drag begin or click selection start
@@ -80,7 +85,7 @@ pub fn interaction_decide_system(
             selection.selected.insert(primary, ());
             selection.last_primary = Some(primary);
             drag.target = Some(primary);
-            drag.locked = [false, false];
+            drag.handle = None;
             let Ok(prov) = provenance.get(primary) else {
                 drag.target = None;
                 return;
@@ -92,19 +97,38 @@ pub fn interaction_decide_system(
                 // preview happens in drag_apply this same frame.
                 drag.kind = Some(crate::DragKind::SliderValue);
             } else if doc2d.contains(primary) {
-                drag.locked = [locked(&store, id, leaf("transform2d.x")), locked(&store, id, leaf("transform2d.y"))];
-                drag.kind = if drag.locked == [true, true] { None } else { Some(crate::DragKind::Overlay2D) };
-                if drag.kind.is_none() {
-                    drag.target = None;
-                }
-                // Offset from the pointer (document space) to the node's
-                // global origin, so the grab point stays under the cursor.
+                // The grab point in the node's local space is the anchor the
+                // store drags by (a finger on it, for a constrained node).
                 let p = panels
                     .rect(VIEWER_PANEL)
                     .and_then(|r| document_from_screen(r, pointer.screen))
                     .unwrap_or(Vec2::ZERO);
-                let origin = transforms.get(primary).map(|g| g.translation().truncate()).unwrap_or(Vec2::ZERO);
-                drag.grab_offset_2d = origin - p;
+                let local = transforms
+                    .get(primary)
+                    .map(|g| g.affine().inverse().transform_point3(p.extend(0.0)))
+                    .unwrap_or(Vec3::ZERO);
+                let h = store.0.begin_drag(id, [local.x as f64, local.y as f64]);
+                match &h.mode {
+                    DragMode::Locked(reasons) => {
+                        for r in reasons {
+                            info!("{id} locked for this drag: {r}");
+                        }
+                        drag.kind = None;
+                        drag.target = None;
+                    }
+                    DragMode::Axes { locked, .. } => {
+                        for r in locked {
+                            info!("{id} locked for this drag: {r}");
+                        }
+                        drag.kind = Some(crate::DragKind::Overlay2D);
+                        drag.handle = Some(h);
+                    }
+                    DragMode::Cluster(cluster) => {
+                        info!("{id} dragged through cluster {cluster}");
+                        drag.kind = Some(crate::DragKind::Overlay2D);
+                        drag.handle = Some(h);
+                    }
+                }
             } else if locked(&store, id, leaf("transform3d.pos")) {
                 drag.kind = None;
                 drag.target = None;
@@ -151,7 +175,6 @@ pub fn interaction_decide_system(
 pub fn drag_apply_system(
     pointer: Res<crate::PointerState>,
     drag: Res<crate::DragState>,
-    parents: Query<Option<&ChildOf>>,
     globals: Query<&GlobalTransform>,
     nodes: Query<(&Provenance, Option<&Doc2d>)>,
     mut store: ResMut<DocumentStore>,
@@ -195,19 +218,24 @@ pub fn drag_apply_system(
             let Some(p) = panels.rect(VIEWER_PANEL).and_then(|r| document_from_screen(r, pointer.screen)) else {
                 return;
             };
-            let target_global = p + drag.grab_offset_2d;
-            // transform2d is local to the parent; map the global target back.
-            let parent = parents.get(entity).ok().flatten().and_then(|c| globals.get(c.parent()).ok());
-            let local = match parent {
-                Some(pg) => pg.affine().inverse().transform_point3(target_global.extend(0.0)),
-                None => target_global.extend(0.0),
-            };
-            if !drag.locked[0] {
-                target(&mut store, "transform2d.x", Value::Number(local.x as f64));
+            let Some(h) = &drag.handle else { return };
+            // The store puts the grab point under the pointer, through the
+            // cluster solve or the axis handles; everything moved is
+            // previewed and reconciled this frame.
+            let t0 = bevy::platform::time::Instant::now();
+            let report = store.0.drag_to(h, [p.x as f64, p.y as f64]);
+            if let DragMode::Cluster(cluster) = &h.mode {
+                // CS phase 3 exit 9: the budget is 2 ms per frame.
+                let ms = t0.elapsed().as_secs_f64() * 1e3;
+                info!(
+                    "solve: cluster {cluster}, {} vars, {} iterations, {} evaluations, {ms:.2} ms{}",
+                    report.vars,
+                    report.iterations,
+                    report.evaluations,
+                    if report.converged { "" } else { "; not converged, pose kept" }
+                );
             }
-            if !drag.locked[1] {
-                target(&mut store, "transform2d.y", Value::Number(local.y as f64));
-            }
+            let _ = target;
         }
         Some(crate::DragKind::World3D) => {
             let Ok((camera, cam_tf)) = cameras.single() else { return };

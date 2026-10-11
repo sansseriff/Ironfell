@@ -189,11 +189,10 @@ pub enum DragKind {
 pub struct DragState {
     pub target: Option<Entity>,
     pub kind: Option<DragKind>,
-    /// Axes the gesture may not move: a leaf that is bound or clip-driven
-    /// has no handle (doc 02 §9.2), so it is held still for the whole drag
-    /// rather than moved and snapped back on release.
-    pub locked: [bool; 2],
-    pub grab_offset_2d: Vec2,
+    /// The store's handle for a 2D drag: which mode it runs in (through a
+    /// constraint cluster, per axis, or not at all) and the grab point in
+    /// the node's local space (constraint-system.md §8).
+    pub handle: Option<iron_document::DragHandle>,
     pub plane_origin: Vec3,
     pub plane_normal: Vec3,
     pub grab_offset_world: Vec3,
@@ -204,8 +203,7 @@ impl Default for DragState {
         Self {
             target: None,
             kind: None,
-            locked: [false, false],
-            grab_offset_2d: Vec2::ZERO,
+            handle: None,
             plane_origin: Vec3::ZERO,
             plane_normal: Vec3::Y,
             grab_offset_world: Vec3::ZERO,

@@ -17,11 +17,12 @@
  *   </edit>
  */
 import { XMLParser } from 'fast-xml-parser';
-import type { ApplyResult, DocumentApi } from './api';
+import type { ApplyResult, DocumentApi, SolverSummary } from './api';
 import { coerce, resolveLeaf, type SlotJson } from './schema';
 
 export interface ParsedEdit {
   expectVersion: number;
+  exact: boolean;
   ops: object[];
   /** alias -> minted id */
   aliases: Record<string, string>;
@@ -62,6 +63,9 @@ export function parseEdit(api: DocumentApi, xml: string): ParsedEdit {
   if (!root) throw new EditError('no <edit> element');
   const rootAttrs = root[':@'] ?? {};
   const expectVersion = Number(rootAttrs['expect-version'] ?? 0) || 0;
+  // exact="true": refuse the edit if the solver cannot honour every value it
+  // sets, instead of adjusting and reporting (constraint-system.md §9.2).
+  const exact = /^(true|yes|1)$/i.test(String(rootAttrs['exact'] ?? ''));
   const schema = api.schema();
 
   // Pass 1: verbs in order, with their attributes.
@@ -201,7 +205,7 @@ export function parseEdit(api: DocumentApi, xml: string): ParsedEdit {
         break;
     }
   }
-  return { expectVersion, ops, aliases };
+  return { expectVersion, exact, ops, aliases };
 }
 
 /** A leaf written as `component.field`, or a bare field unique across all components. */
@@ -232,6 +236,10 @@ export interface EditOutcome {
   aliases?: Record<string, string>;
   /** Markup the model can act on (doc 04 §9.5). Present when `ok` is false. */
   failure?: string;
+  /** What the solver did, when constraints were involved. */
+  solver?: SolverSummary;
+  /** The solver's outcome as markup for the model: clusters, moved nodes, unmet requests. */
+  summary?: string;
 }
 
 /** Parse and apply one edit as the model, answering in the model's terms. */
@@ -244,11 +252,25 @@ export function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): 
     return { ok: false, failure: failed(api.version(), [{ op: err.line ?? null, kind: 'parse', message: err.message }]) };
   }
   const result: ApplyResult = api.apply(
-    { label, actor: 'model', ts: Date.now(), ops: parsed.ops },
+    { label, actor: 'model', ts: Date.now(), ops: parsed.ops, ...(parsed.exact ? { exact: true } : {}) },
     parsed.expectVersion,
   );
-  if (result.ok) return { ok: true, version: result.version, aliases: parsed.aliases };
+  if (result.ok) {
+    const out: EditOutcome = { ok: true, version: result.version, aliases: parsed.aliases };
+    if (result.solver) {
+      out.solver = result.solver;
+      out.summary = solverMarkup(result.version ?? 0, result.solver);
+    }
+    return out;
+  }
   return { ok: false, version: result.version, failure: failed(result.version ?? api.version(), result.errors ?? []) };
+}
+
+function solverMarkup(version: number, s: SolverSummary): string {
+  const unmet = (s.unmet ?? []).map(
+    (u) => `\n  <unmet leaf="${u.leaf}" requested="${u.requested}" solved="${u.solved}">${escapeXml(u.reason)}</unmet>`,
+  );
+  return `<applied version="${version}">\n  <solver clusters="${s.clusters.join(' ')}" moved="${s.moved.join(' ')}"/>${unmet.join('')}\n</applied>`;
 }
 
 function failed(version: number, errors: { op: number | null; kind: string; message: string }[]): string {

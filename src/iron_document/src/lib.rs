@@ -415,7 +415,11 @@ impl Store {
             if slot.expr().is_some() {
                 continue;
             }
-            if slot.constant() != Some(value) {
+            let same = match (slot.constant(), value) {
+                (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
+                (c, v) => c == Some(v),
+            };
+            if !same {
                 ops.push(Op::Set {
                     id: leaf.node,
                     path: leaf.path,
@@ -675,7 +679,7 @@ impl Store {
             let mut changed = Vec::new();
             for (leaf, v) in result.values {
                 let current = self.doc.leaf(leaf.node, leaf.path).and_then(|s| s.constant()).and_then(|x| x.as_f64());
-                if current == Some(v) {
+                if current.is_some_and(|c| (c - v).abs() < 1e-9) {
                     continue;
                 }
                 let op = Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Const(Value::Number(v)) };

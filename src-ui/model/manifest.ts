@@ -75,6 +75,17 @@ DEFINITIONS
   ordinary node with a depicts relation to the entity; its bindings read the
   entity's params. Setting an unknown or wrongly typed parameter is rejected.
 
+CONSTRAINTS
+  A constraint node (kind: coincident distance pin fix angle horizontal vertical;
+  value; enabled) names its operands with constrains relations
+  (<link from="#c" to="#node" rel="constrains" role="a" anchor="80,20"/>). The solver
+  keeps every constraint holding after each edit. An attribute marked x.by="#cluster"
+  is maintained by the solver: setting it drives the cluster and the rest follows, as
+  far as the constraints allow; the reply then carries a <solver> summary with any
+  <unmet> request. Put exact="true" on <edit> to have such an edit rejected instead.
+  A value may be bound (a driving dimension); binding it to one of the cluster's own
+  variables is a cycle and is rejected.
+
 TIME
   A clip node (child of a timeline) has timing.start, timing.dur, timing.easing and
   clip.prop (the leaf it drives, e.g. transform2d.x), clip.from, clip.to. It reaches

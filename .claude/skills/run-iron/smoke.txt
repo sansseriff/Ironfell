@@ -62,11 +62,66 @@ eval (async () => { const r = await __iron.edit('<edit><set id="#zz" x="1"/><set
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="from-model"[^>]*>/); return m ? m[0] : 'not found'; })()
 sleep 800
 shot after-model-edit
+# CS phase 3, the pendulum (document space: platform (240,40)-(400,60), hinge
+# (320,60), joints every 100 px down, ball at (320,360) r=14, length slider
+# (100,660)-(400,684), height bar at x=700).
+# 1. Drag the ball: the arms follow every frame and the height bar tracks it;
+#    a mid-drag view shows the previewed joints and the arm's solved rotation.
+dmove 320 360
+down
+sleep 300
+dmove 380 330
+sleep 300
+dmove 440 300
+sleep 400
+shot pendulum-mid-drag
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const a = v.match(/<rect[^>]*name="arm3"[^>]*>/); const h = v.match(/<rect[^>]*name="height"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), a && a[0].match(/ rot="[^"]*"/)[0], h && h[0].match(/ h="[^"]*"/)[0]]; })()
+# 9. Solve time per frame, logged by the bridge (budget 2 ms).
+peek solve: cluster
+up
+sleep 600
+# 3. Release is one "move circle" transaction whose derived ops are the
+#    joints; the cause line names the cluster and what moved.
+peek "move circle" by Human
+# 2. Beyond reach: the chain straightens and the ball stops at full extension
+#    under the pointer, no jitter. The grab is off-centre, clear of the arm
+#    that ends at the ball's centre.
+sleep 300
+ddrag 448 306 328 706
+shot pendulum-extended
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
+# Undo both drags returns every part.
+key Meta+z
+key Meta+z
+sleep 500
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), j && j[0].replace(/ rot=.*/, '')]; })()
+# 6. A node whose position is bound (arm1) does not drag; the reason shows.
+ddrag 320 110 360 110
+peek locked for this drag
+# 7. A scripted edit out of reach is adjusted and reported; with exact="true"
+#    it is rejected.
+eval (async () => { const r = await __iron.edit('<edit><set id="#Z" x="900"/></edit>'); return r.summary; })()
+eval (async () => { const r = await __iron.edit('<edit exact="true"><set id="#Z" x="900"/></edit>'); return r.failure; })()
+key Meta+z
+sleep 400
+# 5. Scrub the length slider to about 1.2: the links re-solve live and the
+#    release is one "set slider" transaction.
+ddrag 250 672 310 672
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const l = v.match(/<constraint[^>]*name="link1"[^>]*>/); return l && l[0]; })()
+# 4. Move the fix from the platform to the ball (one model transaction), then
+#    drag the platform: the arms bend and the ball stays put.
+eval (async () => { const r = await __iron.edit('<edit><unlink id="r3"/><link from="#f" to="#Z" rel="constrains" role="a"/></edit>'); return r.ok; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
+ddrag 260 50 300 50
+shot pendulum-platform-drag
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const p = v.match(/<rect[^>]*name="platform"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), p && p[0].replace(/ rot=.*/, '')]; })()
+# 8. The view marks the solver's variables with the cluster that keeps them.
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return j && j[0].match(/x\.by="[^"]*"/)[0]; })()
 # Exit criterion 2: save, load, save again; the bytes must match.
 eval (async () => { const a = await __iron.save(); await __iron.load(a); await new Promise(r => setTimeout(r, 800)); const b = await __iron.save(); return { roundtrip_equal: a === b, bytes: a.length }; })()
 sleep 500
 shot after-load
 eval document.querySelector("pre.view")?.textContent.split("\n").slice(0, 4).join(" | ")
-logs applied|rejected|loaded document|nothing to|panicked|binding|locked|differs
+logs applied|rejected|loaded document|nothing to|panicked|binding|locked|differs|by Human|by Model
 errors
 quit

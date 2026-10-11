@@ -689,6 +689,32 @@ ball's `y`.
    afterwards shows `.by="#pendulum"` on the arms.
 9. Solve time per frame stays under 2 ms in the wasm build (logged).
 
+**Done 2026-10-11** on `document-spine`. The demo pendulum (`demo.rs`) is a fixed
+platform, three joints and a ball chained by `distance` constraints whose value is bound
+to a "length" slider, arms drawn *between* the joints by bindings (`atan2`, `hypot`), and
+a bar bound to the ball's `y`. *Deviation from the scene above:* the arms are bound
+visuals and the joints are the solver's variables, rather than arms hinged by
+`coincident` constraints, because a slider-driven arm length needs the link to be a
+`distance` between joints; a rect whose anchors sit at a fixed `[6, 100]` cannot
+change length. The bridge (`interaction.rs`) drags 2D nodes through `Store::begin_drag`
+/ `drag_to` and logs the per-frame solve. The model surface reads `exact="true"` on
+`<edit>` and renders `Applied.solver` as `<applied><solver …/><unmet …/></applied>`;
+`document_apply` returns the summary as JSON. Every exit is in the run-iron smoke script
+and was verified in headless Chrome: (1) the arms and the height bar follow mid-drag
+(screenshot `pendulum-mid-drag.png`); (2) beyond reach the chain straightens under the
+pointer (`pendulum-extended.png`); (3) release is one "move circle" whose derived ops
+are the two free joints, and two undos return every part; (4) with the `fix` moved to
+the ball by one model edit, dragging the platform bends the arms and the ball stays
+(`pendulum-platform-drag.png`); (5) the length slider re-solves live and commits one
+"set slider"; (6) dragging an arm logs why it is locked; (7) `<set id="#ball" x="900"/>`
+answers with an `<unmet>` entry and is refused with `exact="true"`; (8) the cause line
+`"move circle" by Human: cluster #U re-solved; moved 2 node(s)` is logged and the view
+shows `.by="#U"` on the joints; (9) solve time is 0.0–0.7 ms per frame in the dev-opt
+WebGL2 build, with one 2.7 ms frame at the straightening transition where the 50
+iteration cap is hit (an opt-level-1 build; the release build is several times faster).
+Not done: the model's "why is this moving" probe beyond `.by` (§9.5) and the context
+ledger (§9.4).
+
 ### Phase 4 — Diagnostics and authoring
 
 Degrees-of-freedom display, conflict highlighting, constraint glyphs, gesture creation

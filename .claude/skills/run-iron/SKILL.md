@@ -57,24 +57,41 @@ shadow rect bound to it following) and the torus, undoes both with Cmd+Z,
 redoes one with Cmd+Shift+Z, scrubs the slider and checks the bar bound to
 it, drags the bar so its bound y inverts onto the slider, scrubs the
 timeline and checks the clip driving the torus, applies one good and one
-bad edit in the model's markup, round-trips the document through save and
-load, and prints the transactions the store applied. Expected output, minus
-screenshot lines:
+bad edit in the model's markup, runs the pendulum through every
+constraint-system phase 3 exit (drag the ball, drag beyond reach, undo,
+a locked arm, an out-of-reach model edit adjusted then refused with
+exact, the length slider, the fix moved to the ball and the platform
+dragged, `.by` markers), round-trips the document through save and load,
+and prints the transactions the store applied. Expected output, minus
+screenshot lines and the per-frame `solve:` lines:
 
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#T\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
 redraw (document): 2 of 25 nodes changed [#M #T]; damage 499,379–741,501
 redraw (document): 2 of 25 nodes changed [#M #T]; damage 559,339–801,461
-"<rect id=\"#a\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #Z.params.level * 300\" … h=\"270\" h.bind=\"#Z.params.level * 300\" …>"
-"<rect id=\"#a\" name=\"bar\" x=\"730\" y=\"400\""
+"<rect id=\"#q\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #p.params.level * 300\" … h=\"270\" h.bind=\"#p.params.level * 300\" …>"
+"<rect id=\"#q\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#P\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" … <driven-by ref=\"#R\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#b"}}
+{"ok":true,"version":9,"aliases":{"$n":"#r"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#b\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
-{"roundtrip_equal":true,"bytes":8877}
-"<document version=\"9\"> |   <group id=\"#1\" name=\"scene\" count=\"27\"> | …"
-applied "open demo scene" (40 ops, System) -> v1
+"<rect id=\"#r\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
+["<circle id=\"#Z\" name=\"ball\" x=\"440.43…\" x.by=\"#U\" y=\"298.93…\" y.by=\"#U\""," rot=\"-1.11…\""," h=\"238.93…\""]
+"move circle" by Human: cluster #U re-solved; moved 2 node(s): #X #Y
+"<circle id=\"#Z\" name=\"ball\" x=\"32….\" x.by=\"#U\" y=\"359.9…\" y.by=\"#U\""
+["<circle id=\"#Z\" name=\"ball\" x=\"320\" x.by=\"#U\" y=\"360\" y.by=\"#U\"","<circle id=\"#X\" name=\"j1\" x=\"320\" x.by=\"#U\" y=\"160\" y.by=\"#U\""]
+#a locked for this drag: #a.transform2d.x is bound to 4 free leaves (#W.transform2d.x, #W.transform2d.y, #X.transform2d.x, #X.transform2d.y)
+#a locked for this drag: #a.transform2d.y is bound to 4 free leaves (…)
+"<applied version=\"14\">\n  <solver clusters=\"#U\" moved=\"#X #Y #Z\"/>\n  <unmet leaf=\"#Z.transform2d.x\" requested=\"900\" solved=\"619.99…\">constrained by cluster #U: the constraints allow 619.99… at most</unmet>\n</applied>"
+"<edit-failed applied=\"none\" version=\"14\">\n  <error op=\"0\" kind=\"unsatisfiable\">exact transaction not honoured: #Z.transform2d.x requested 900 but constraints allow 619.99…</error>\n</edit-failed>"
+"<constraint id=\"#h\" name=\"link1\" kind=\"distance\" value=\"120.00000000000001\" value.bind=\"#e.slider.value * 100\" enabled=\"true\">"
+true
+"<circle id=\"#Z\" name=\"ball\" x=\"320\" y=\"420\""
+["<circle id=\"#Z\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#V\" name=\"platform\" x=\"280.9…\" x.by=\"#U\" y=\"38.1…\" y.by=\"#U\""]
+"x.by=\"#U\""
+{"roundtrip_equal":true,"bytes":14263}
+"<document version=\"18\"> |   <group id=\"#1\" name=\"scene\" count=\"27\"> | …"
+applied "open demo scene" (65 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -83,9 +100,29 @@ applied "redo: move rect" (2 ops, System) -> v6
 applied "set slider" (1 ops, Human) -> v7
 applied "move rect" (2 ops, Human) -> v8
 applied "model edit" (2 ops, Model) -> v9
-loaded document v9 (37 live nodes)
+applied "move circle" (3 ops, Human) -> v10
+"move circle" by Human: cluster #U re-solved; moved 2 node(s): #X #Y
+applied "move circle" (3 ops, Human) -> v11
+"move circle" by Human: cluster #U re-solved; moved 2 node(s): #X #Y
+applied "undo: move circle" (7 ops, System) -> v12
+applied "undo: move circle" (7 ops, System) -> v13
+#a locked for this drag: … (twice)
+applied "model edit" (1 ops, Model) -> v14
+"model edit" by Model: cluster #U re-solved; moved 3 node(s): #X #Y #Z; unmet: #Z.transform2d.x wanted 900 got 619.99…
+applied "undo: model edit" (7 ops, System) -> v15
+applied "set slider" (1 ops, Human) -> v16
+"set slider" by Human: cluster #U re-solved; moved 3 node(s): #X #Y #Z
+applied "model edit" (2 ops, Model) -> v17
+applied "move rect" (3 ops, Human) -> v18
+"move rect" by Human: cluster #U re-solved; moved 3 node(s): #W #X #Y
+loaded document v18 (53 live nodes)
 (no page errors)
 ```
+
+Solved values carry solver noise in their last digits (shown as `…`
+above); everything else is exact. Each drag frame through a cluster logs
+`solve: cluster #U, 12 vars, N iterations, M evaluations, T ms`; T is
+0.0–0.7 ms here, with a single ~2 ms frame where the chain straightens.
 
 Any `locked for this drag` line names an axis the drag held still and why;
 any `differs from Bevy` line means the store's world transform disagrees
@@ -161,6 +198,16 @@ window. The timeline holds a "slide" clip (0.5–2.5 s, square x 500→700)
 and a "spin" clip (1–4 s, torus rotation). Any `<attr>.bind` in a view is a
 binding and any `<driven-by>` names a clip.
 
+The pendulum (constraint-system.md phase 3) is a group with a fixed
+platform (240,40)–(400,60), joints every 100 px below its hinge at (320,60),
+a ball (r=14) at (320,360), arms drawn between the joints by bindings, a
+"length" slider (100,660)–(400,684) whose value times 100 is each link's
+`distance`, and a height bar at x=700 bound to the ball's y. Its ids: group
+#U, platform #V, joints #W #X #Y, ball #Z, arms #a #b #c, fix constraint
+#f (relation r3 to the platform), links #h #i #j. Dragging the ball or the
+platform goes through the solver (the joints follow); the arms are bound
+and locked; `.by="#U"` in a view marks a solver variable.
+
 Every position drag goes through the store's gesture overlay, so anything
 bound to the dragged node follows in the same frame and a view taken
 mid-drag shows the previewed values. A leaf bound linearly to one constant
@@ -185,7 +232,7 @@ run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-66 tests pass (30 unit, 36 integration). The host target is required because
+74 tests pass (31 unit, 43 integration). The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests).

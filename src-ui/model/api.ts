@@ -6,10 +6,18 @@
 import type { Glue } from '../runtime/glue';
 import type { Schema } from './schema';
 
+export interface SolverSummary {
+  clusters: string[];
+  moved: string[];
+  unmet?: { leaf: string; requested: number; solved: number; reason: string }[];
+}
+
 export interface ApplyResult {
   ok: boolean;
   version?: number;
   errors?: { op: number | null; kind: string; message: string }[];
+  /** Causes, not effects (constraint-system.md §9.2): present when constraints re-solved. */
+  solver?: SolverSummary;
 }
 
 export interface DocumentApi {

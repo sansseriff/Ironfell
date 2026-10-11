@@ -16,6 +16,10 @@ dmove 660 380
 sleep 400
 shot mid-drag-bound-follows
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const a = v.match(/<rect[^>]*name="square"[^>]*>/); const b = v.match(/<rect[^>]*name="shadow"[^>]*>/); return [a && a[0].replace(/ rot=.*/, ''), b && b[0].replace(/ rot=.*/, '')]; })()
+# Stage A exit: the 2D layer reports which nodes each redraw was for. A drag
+# frame names the square and its shadow (two of the drawn nodes) and the
+# damage rectangle covering their old and new bounds.
+peek redraw \(document\): 2 of
 dmove 690 360
 sleep 300
 up

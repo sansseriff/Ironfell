@@ -117,10 +117,31 @@ pub struct GestureRequests(pub Vec<GestureRequest>);
 #[derive(Resource, Default)]
 pub struct PendingLoad(pub Option<Document>);
 
-/// Set when the materialised scene changed shape or values this frame, so
-/// the 2D layer rebuilds once rather than every frame.
+/// What the reconciler rewrote since the 2D layer last drew: the nodes, and
+/// whether the tree's shape (hence painter order) changed. Both reconcile
+/// passes add to it; rendering takes it, decides what to redraw and reports
+/// what it did. Roadmap stage H turns this into culling and damage.
+#[derive(Resource, Default, Debug)]
+pub struct DocumentChanges {
+    pub nodes: BTreeSet<NodeId>,
+    pub structure: bool,
+}
+
+impl DocumentChanges {
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty() && !self.structure
+    }
+
+    pub fn take(&mut self) -> DocumentChanges {
+        std::mem::take(self)
+    }
+}
+
+/// Every drawn 2D node's bounds in document space, kept current by the
+/// render pass. Picking and culling read it; a changed node's old and new
+/// bounds are the damage a redraw reports.
 #[derive(Resource, Default)]
-pub struct DocumentDirty(pub bool);
+pub struct Bounds2d(pub HashMap<NodeId, kurbo::Rect>);
 
 /// The last version the reconciler has caught up to. Anything the log holds
 /// past it, however it was applied (queued transaction, undo, a synchronous
@@ -148,7 +169,8 @@ impl Plugin for DocumentPlugin {
         app.insert_resource(DocumentStore(Store::new()))
             .init_resource::<PendingTransactions>()
             .init_resource::<NodeMap>()
-            .init_resource::<DocumentDirty>()
+            .init_resource::<DocumentChanges>()
+            .init_resource::<Bounds2d>()
             .init_resource::<HistoryRequests>()
             .init_resource::<PendingLoad>()
             .init_resource::<GestureRequests>()
@@ -199,7 +221,7 @@ pub(crate) fn sync_document(
     mut gestures: ResMut<GestureRequests>,
     mut synced: ResMut<SyncedVersion>,
     mut map: ResMut<NodeMap>,
-    mut dirty: ResMut<DocumentDirty>,
+    mut changes: ResMut<DocumentChanges>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
@@ -215,8 +237,10 @@ pub(crate) fn sync_document(
     }
     let now = time.elapsed().as_millis() as u64;
     let mut affected: BTreeSet<NodeId> = BTreeSet::new();
+    let mut structure = false;
     let version_before = synced.0;
     if let Some(doc) = load.0.take() {
+        structure = true;
         // Everything materialised belongs to the old document. Tear it all
         // down rather than diffing: ids may coincide with different types.
         for e in map.drain() {
@@ -275,7 +299,7 @@ pub(crate) fn sync_document(
     for tx in store.0.history().log().filter(|tx| tx.version > synced.0) {
         info!("applied {:?} ({} ops, {:?}) -> v{}", tx.label, tx.ops.len(), tx.actor, tx.version.0);
         for op in tx.ops.iter().chain(tx.inverse.iter()) {
-            collect_ids(op, &mut affected);
+            structure |= collect_ids(op, &mut affected);
         }
     }
     synced.0 = store.0.document().version();
@@ -299,8 +323,11 @@ pub(crate) fn sync_document(
         return;
     };
     materialize::reconcile(&store.0, &affected, &mut map, &mut commands, &assets);
-    map.paint_index = paint_order(&store.0);
-    dirty.0 = true;
+    if structure {
+        map.paint_index = paint_order(&store.0);
+    }
+    changes.nodes.extend(affected);
+    changes.structure |= structure;
 }
 
 /// The in-frame half of a gesture (constraint-system.md §8.2). `sync_document`
@@ -313,7 +340,7 @@ pub(crate) fn sync_document(
 pub(crate) fn reconcile_gesture(
     mut store: ResMut<DocumentStore>,
     mut map: ResMut<NodeMap>,
-    mut dirty: ResMut<DocumentDirty>,
+    mut changes: ResMut<DocumentChanges>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
 ) {
@@ -323,25 +350,30 @@ pub(crate) fn reconcile_gesture(
     let affected: BTreeSet<NodeId> = store.0.drain_changes().into_iter().map(|c| c.leaf.node).collect();
     let Some(assets) = assets else { return };
     materialize::reconcile(&store.0, &affected, &mut map, &mut commands, &assets);
-    dirty.0 = true;
+    changes.nodes.extend(affected);
 }
 
-fn collect_ids(op: &Op, out: &mut BTreeSet<NodeId>) {
+/// The nodes an op touches. Returns whether it changed the tree's shape
+/// (existence, parent, or sibling order), which is what invalidates the
+/// painter order.
+fn collect_ids(op: &Op, out: &mut BTreeSet<NodeId>) -> bool {
     match op {
         Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } => {
             out.insert(*id);
             if let Some(p) = parent {
                 out.insert(*p);
             }
+            true
         }
-        Op::Delete { id }
-        | Op::Reorder { id, .. }
-        | Op::Set { id, .. }
-        | Op::AddComp { id, .. }
-        | Op::RemoveComp { id, .. } => {
+        Op::Delete { id } | Op::Reorder { id, .. } => {
             out.insert(*id);
+            true
         }
-        Op::Link { .. } | Op::Unlink { .. } => {}
+        Op::Set { id, .. } | Op::AddComp { id, .. } | Op::RemoveComp { id, .. } => {
+            out.insert(*id);
+            false
+        }
+        Op::Link { .. } | Op::Unlink { .. } => false,
     }
 }
 

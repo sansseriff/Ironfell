@@ -63,6 +63,8 @@ screenshot lines:
 
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
+redraw (document): 2 of 25 nodes changed [#M #U]; damage 499,379–741,501
+redraw (document): 2 of 25 nodes changed [#M #U]; damage 559,339–801,461
 "<bar id=\"#P\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #O.slider.value * 300\" … h=\"270\" h.bind=\"#O.slider.value * 300\" …/>"
 "<bar id=\"#P\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
@@ -87,7 +89,12 @@ loaded document v9 (31 live nodes)
 
 Any `locked for this drag` line names an axis the drag held still and why;
 any `differs from Bevy` line means the store's world transform disagrees
-with the entity's and is a bug.
+with the entity's and is a bug. Every rebuild of the 2D layer logs one
+`redraw (<reason>): N of M nodes changed [ids]; damage x0,y0–x1,y1` line:
+the reason is `document` (the reconciler's changed-node set, with
+`, structure` when the tree's shape changed), `panel layout`, or
+`selection`; the damage is the union of the changed nodes' old and new
+document-space bounds.
 
 `__iron.edit(xml)` applies `<edit>` markup exactly as a model reply would be
 applied (see `src-ui/model/edit.ts` for the verbs); `__iron.ask(text)` runs a
@@ -128,6 +135,7 @@ cd -
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |
 | `logs [regex]` | print console output since the last `logs`, optionally filtered; Rust `info!`/`warn!` lines from the worker appear here |
+| `peek [regex]` | like `logs`, without clearing the buffer |
 | `errors` | print uncaught page errors |
 | `panel` | print the viewer panel rect |
 | `sleep ms` | wait |

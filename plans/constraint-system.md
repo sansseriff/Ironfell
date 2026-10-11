@@ -584,6 +584,16 @@ a running simulation. Both kinds requested earlier come from one representation.
 *Exit:* dragging a rect moves a second rect whose `x` is bound to the first in the same
 frame; release produces one "move rect" transaction; undo restores both.
 
+**Done 2026-10-10** on branch `roadmap` (floor: `expr.rs`; `geom.rs` with
+`Store::world_affine`, a glam-based equivalence test and a runtime drift check in the
+bridge; drags: `interaction.rs` previews through `Store::preview_target`,
+`document_bridge::reconcile_gesture` runs before `TransformSystems::Propagate`). Verified
+by the run-iron smoke script: the demo's "shadow" rect reads the square's previewed
+position mid-drag, release is one "move rect" (2 ops), undo restores both. *Deviation:*
+the `Applied` change summary is not added yet; nothing produces one until phase 2's
+solve-on-apply, and `document_apply`'s JSON would carry an always-empty field. It lands
+with `Applied.solver` in phase 2.
+
 ### Phase 1 — `iron_solve`
 
 *Exit:* native unit tests pass for:

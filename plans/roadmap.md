@@ -100,6 +100,12 @@ flowchart TD
 | **H** Render invalidation | Measure per-panel frame cost; cull with `understory_index`; damage from `understory_box_tree`; dirty presentation with `understory_presentation`; caching only where culling is not enough | Only when measurements say so (doc 07; `bevy-vello-hybrid-design.md` §6) | A local edit redraws only damaged content; frame time with 4 panels is within budget | §5 |
 | **I** Later | Encapsulation and obligations (ECM 4); live simulation with grab (CS 5); 3D mates (CS 6); implied constraints and CAD tagging (ECM 7); simulated paths (CS 7) | Each builds on two or more earlier stages | Per document | — |
 
+### Status
+
+| Stage | Status |
+|---|---|
+| **A** | **Done 2026-10-10** on branch `roadmap`, one commit per item: floor functions and `pi` (`expr.rs`); `geom.rs` with `Store::world_affine`, matched against Bevy by a glam test and a runtime drift check; linear binding inversion (`handle.rs`, `Store::handle`, `Store::preview_target`, `tests/handles.rs`); all position drags through `Store::preview` with `document_bridge::reconcile_gesture` before transform propagation; `DocumentChanges` (the changed-node set plus a structure flag) and `Bounds2d` replace `DocumentDirty`, and the 2D layer logs `redraw (reason): N of M nodes changed [ids]; damage …`. Exit verified in headless Chrome by the run-iron smoke script: the demo's new "shadow" rect (bound to the square) reads the previewed position mid-drag and the screenshot `mid-drag-bound-follows.png` shows it; dragging the bar (`y = 640 − 300·v`) sets the slider in one "move bar" transaction; each drag frame logs the two redrawn nodes and their damage rect. Still re-encodes the whole layer; stage H uses the set to cull |
+
 **The playhead is already shared.** Spine step 6's `time.rs` keeps the playhead in the
 store and feeds clip values into the graph's animated layer. Stage F's time-dependent
 signals read the same playhead, so a clip and an RF drive stay in step.

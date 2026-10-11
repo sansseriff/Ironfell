@@ -21,6 +21,7 @@ pub mod document;
 pub mod expr;
 pub mod geom;
 pub mod graph;
+pub mod handle;
 pub mod id;
 pub mod op;
 pub mod order;
@@ -35,6 +36,7 @@ pub use document::{Document, Node, RelKind, Relation};
 pub use expr::{Expr, Leaf};
 pub use geom::Affine2;
 pub use graph::ResolvedChange;
+pub use handle::Handle;
 pub use id::{NodeId, RelationId, Version};
 pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
 pub use order::OrderKey;
@@ -188,6 +190,22 @@ impl Store {
     /// [`Store::commit_gesture`].
     pub fn preview(&mut self, id: NodeId, path: LeafPath, value: Value) {
         self.reactive.preview(&self.doc, Leaf { node: id, path }, value);
+    }
+
+    /// How a gesture on this leaf would be realised right now: directly, by
+    /// inverting a linear binding onto its one constant source, or not at
+    /// all (see `handle`).
+    pub fn handle(&self, id: NodeId, path: LeafPath) -> Handle {
+        handle::handle(&self.doc, &self.reactive, Leaf { node: id, path })
+    }
+
+    /// Preview a *target* value for a leaf through its handle: a constant is
+    /// previewed as is; a linearly bound leaf previews its source so the
+    /// binding re-evaluates to `value`. `Err` with the reason when locked.
+    pub fn preview_target(&mut self, id: NodeId, path: LeafPath, value: Value) -> Result<(), String> {
+        let (target, v) = handle::resolve_target(&self.doc, &self.reactive, Leaf { node: id, path }, value)?;
+        self.reactive.preview(&self.doc, target, v);
+        Ok(())
     }
 
     pub fn gesture_in_progress(&self) -> bool {

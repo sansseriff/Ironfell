@@ -68,11 +68,11 @@ EXPRESSIONS (for {= …} bindings)
 
 DEFINITIONS
   A library root holds definition nodes. A definition's param_spec children declare
-  its parameters (name, kind, default); a depiction child's subtree is the template
+  its parameters (name, kind, default); a template child's subtree is the template
   for one notation, and may bind to a param_spec's default. An entity instantiates
   a definition: instance.def names it and params.<name> holds one value per
   parameter, each bindable (params.level="{= #O.slider.value}"). Its picture is an
-  ordinary node with a depicts relation to the entity; its bindings read the
+  ordinary node with a figures relation to the entity; its bindings read the
   entity's params. Setting an unknown or wrongly typed parameter is rejected.
 
 CONSTRAINTS

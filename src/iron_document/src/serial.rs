@@ -15,8 +15,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 /// Bumped to 2 with definitions, entities, `params`, quantities and records
-/// (roadmap stage B). Schema 1 files hold none of those and still load.
-pub const SCHEMA: u64 = 2;
+/// (roadmap stage B), and to 3 when `depiction` became `template` and
+/// `depicts` became `figures`. Schema 1 and 2 files still load (`renamed`).
+pub const SCHEMA: u64 = 3;
 const OLDEST_READABLE: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -99,6 +100,18 @@ fn n_compact(v: &J) -> String {
     serde_json::to_string(v).expect("json serialises")
 }
 
+/// A type, component or relation name as this build spells it, for a file
+/// written under `schema`. Schema 3 renamed `depiction` (the definition's
+/// template holder and its component) to `template`, and the `depicts`
+/// relation to `figures`.
+fn renamed(schema: u64, name: &str) -> &str {
+    match (schema < 3, name) {
+        (true, "depiction") => "template",
+        (true, "depicts") => "figures",
+        _ => name,
+    }
+}
+
 pub fn load(text: &str) -> Result<Document, LoadError> {
     let root: J = serde_json::from_str(text).map_err(|e| LoadError(e.to_string()))?;
     let obj = root
@@ -144,7 +157,7 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
             .get("ty")
             .and_then(J::as_str)
             .ok_or_else(|| LoadError(format!("node {id}: missing ty")))?;
-        let ty = TypeId::lookup(ty_name)
+        let ty = TypeId::lookup(renamed(schema, ty_name))
             .ok_or_else(|| LoadError(format!("node {id}: unknown type {ty_name:?}")))?;
         let parent = match o.get("parent") {
             None | Some(J::Null) => None,
@@ -227,7 +240,7 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
         .as_object()
         .ok_or_else(|| LoadError("components must be an object".into()))?;
     for (kname, table) in raw_comps {
-        let kind = ComponentKind::from_name(kname)
+        let kind = ComponentKind::from_name(renamed(schema, kname))
             .ok_or_else(|| LoadError(format!("unknown component {kname:?}")))?;
         let table = table
             .as_object()
@@ -267,8 +280,12 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
         .as_array()
         .ok_or_else(|| LoadError("relations must be an array".into()))?;
     for v in raw_rels {
+        let mut v = v.clone();
+        if let Some(J::String(kind)) = v.get_mut("rel") {
+            *kind = renamed(schema, kind).to_owned();
+        }
         let r: Relation =
-            serde_json::from_value(v.clone()).map_err(|e| LoadError(e.to_string()))?;
+            serde_json::from_value(v).map_err(|e| LoadError(e.to_string()))?;
         if !nodes.contains_key(&r.from) || !nodes.contains_key(&r.to) {
             return Err(LoadError(format!(
                 "relation {} references an unknown node",

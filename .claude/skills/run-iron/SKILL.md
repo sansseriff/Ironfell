@@ -67,8 +67,8 @@ screenshot lines and the per-frame `solve:` lines:
 
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#T\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-redraw (document): 2 of 25 nodes changed [#M #T]; damage 499,379–741,501
-redraw (document): 2 of 25 nodes changed [#M #T]; damage 559,339–801,461
+redraw (document): 2 of 35 nodes changed [#M #T]; damage 499,379–741,501
+redraw (document): 2 of 35 nodes changed [#M #T]; damage 559,339–801,461
 "<rect id=\"#q\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #p.params.level * 300\" … h=\"270\" h.bind=\"#p.params.level * 300\" …>"
 "<rect id=\"#q\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"

@@ -109,7 +109,7 @@ static TYPES: &[TypeSpec] = &[
         name: "definition",
         components: &[(K::Name, true)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["param_spec", "depiction"]),
+        children: ChildPolicy::Only(&["param_spec", "template"]),
     },
     TypeSpec {
         name: "param_spec",
@@ -119,13 +119,13 @@ static TYPES: &[TypeSpec] = &[
     },
     // A template: its subtree is what an instance copies.
     TypeSpec {
-        name: "depiction",
-        components: &[(K::Depiction, true), (K::Name, false)],
+        name: "template",
+        components: &[(K::Template, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
-    // An instance of a definition; its depictions point at it with
-    // `depicts` relations. Ports arrive as children in a later phase.
+    // An instance of a definition; its figures point at it with
+    // `figures` relations. Ports arrive as children in a later phase.
     TypeSpec {
         name: "entity",
         components: &[(K::Instance, true), (K::Params, true), (K::Name, false)],

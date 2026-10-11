@@ -54,7 +54,7 @@ pub enum RelKind {
     AlignsTo,
     References,
     /// A visual node is a picture of an entity (ECM §5).
-    Depicts,
+    Figures,
     /// A constraint node to one of its operands; `data.role` names the
     /// operand's role and `data.anchor` the point in its local space.
     Constrains,
@@ -68,7 +68,7 @@ impl RelKind {
             RelKind::During => "during",
             RelKind::AlignsTo => "aligns_to",
             RelKind::References => "references",
-            RelKind::Depicts => "depicts",
+            RelKind::Figures => "figures",
             RelKind::Constrains => "constrains",
         }
     }

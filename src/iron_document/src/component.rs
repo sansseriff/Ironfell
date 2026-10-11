@@ -224,7 +224,7 @@ components! {
     /// the subtree an instance copies; their bindings may read the
     /// definition's `param_spec.default` leaves, which instantiation rewrites
     /// to the entity's `params`.
-    Depiction / "depiction" => Depiction { notation: Str = Value::Str("free".to_owned()) }
+    Template / "template" => Template { notation: Str = Value::Str("free".to_owned()) }
 
     @dynamic {
         /// An entity's parameter values, one slot per `param_spec` of its

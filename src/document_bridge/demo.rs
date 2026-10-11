@@ -4,7 +4,7 @@
 
 use super::PendingTransactions;
 use bevy::prelude::*;
-use iron_document::component::{Constraint, Depiction, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
+use iron_document::component::{Constraint, Template, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
 use iron_document::component::{Clip, Slider, Timing};
 use iron_document::definition::{self, Placement};
 use iron_document::{Actor, Expr, LeafPath, LeafStruct, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
@@ -312,13 +312,13 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     }
 
     // The library: a `bar` definition with one parameter, `level`, and a
-    // "free" depiction whose template rect binds its top and height to the
+    // "free" template whose rect binds its top and height to the
     // parameter's default. `bar` is data, not a registry type (ECM §4.2).
     let library = next();
     let def = next();
     let level = next();
-    let depiction = next();
     let template = next();
+    let template_rect = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("library".into()));
     ops.push(Op::Create { id: library, ty: ty("library"), parent: None, order: order(), components: vec![name.wrap()] });
@@ -332,11 +332,11 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     name.text = Slot::Const(Value::Str("level".into()));
     ops.push(Op::Create { id: level, ty: ty("param_spec"), parent: Some(def), order: OrderKey::first(), components: vec![spec.wrap(), name.wrap()] });
     ops.push(Op::Create {
-        id: depiction,
-        ty: ty("depiction"),
+        id: template,
+        ty: ty("template"),
         parent: Some(def),
         order: OrderKey::after(&OrderKey::first()),
-        components: vec![Depiction::default().wrap()],
+        components: vec![Template::default().wrap()],
     });
     let mut t = Transform2d::default();
     t.x = n(780.0);
@@ -349,9 +349,9 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("bar".into()));
     ops.push(Op::Create {
-        id: template,
+        id: template_rect,
         ty: ty("rect"),
-        parent: Some(depiction),
+        parent: Some(template),
         order: OrderKey::first(),
         components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
     });
@@ -364,7 +364,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
         .expect("demo scene applies");
     let last_in_scene = scratch.document().children(scene).last().and_then(|&c| scratch.document().live(c)).map(|n| n.order.clone());
-    let place = Placement { entity_parent: Some(scene), entity_after: last_in_scene.clone(), depiction_parent: Some(scene), depiction_after: last_in_scene.map(|k| OrderKey::after(&k)) };
+    let place = Placement { entity_parent: Some(scene), entity_after: last_in_scene.clone(), figure_parent: Some(scene), figure_after: last_in_scene.map(|k| OrderKey::after(&k)) };
     let (entity, inst) = definition::instantiate(scratch.document(), def, "free", "bar", &place).expect("bar instantiates");
     ops.extend(inst);
     // The entity's parameter follows the slider: the exit of ECM phase 1.

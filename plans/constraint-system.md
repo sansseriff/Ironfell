@@ -556,7 +556,7 @@ Toward the optical table.
 - Breadboard holes are discrete. Model them as snapping that creates a real `pin` on
   release, not as a continuous constraint (open question U8).
 - **Mate features versus ports.** Faces, axes, and holes used for mating are local
-  geometry on the CAD depiction, detected automatically at import. They are not ports.
+  geometry on the CAD figure, detected automatically at import. They are not ports.
   A port kind may *declare* the mate it implies (a fiber connector implies coincident
   plus concentric; an optical axis implies "on the beam line, parallel"), so connecting
   two ports creates the constraint. See vision 09 §6.

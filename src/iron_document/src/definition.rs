@@ -6,16 +6,16 @@
 //! library
 //!   definition "bar"
 //!     param_spec "level"      kind=number default=0.4
-//!     depiction  notation="free"
+//!     template   notation="free"
 //!       rect "bar"  h.bind = #<level spec>.param_spec.default * 300   (the template)
 //! ```
 //!
 //! An `entity` instantiates a definition: its `instance.def` names it and its
 //! `params` holds one slot per `param_spec`, each bindable. Placing a
-//! depiction copies the template subtree into the composition as ordinary
+//! figure copies the template subtree into the composition as ordinary
 //! authored nodes, rewriting every reference to a spec's `default` into a
 //! reference to the entity's parameter, and links each copied root to the
-//! entity with a `depicts` relation. So a template is itself a live,
+//! entity with a `figures` relation. So a template is itself a live,
 //! evaluable subtree (it shows the defaults), and an instance is plain
 //! nodes and plain bindings: nothing downstream knows about definitions.
 //!
@@ -24,7 +24,7 @@
 //! names must match the specs exactly, and a constant value must have the
 //! spec's kind (and, for a quantity, the default's dimension).
 
-use crate::component::{Component, ComponentKind, Depiction, Instance, LeafPath, LeafStruct, Name, ParamSpec, Params};
+use crate::component::{Component, ComponentKind, Template, Instance, LeafPath, LeafStruct, Name, ParamSpec, Params};
 use crate::document::{Document, RelKind, Relation};
 use crate::expr::Leaf;
 use crate::id::NodeId;
@@ -116,31 +116,31 @@ fn check_kind(spec: &ParamInfo, v: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// The `depiction` child of `def` for `notation`.
+/// The `template` child of `def` for `notation`.
 pub fn template_of(doc: &Document, def: NodeId, notation: &str) -> Option<NodeId> {
     doc.children(def).iter().copied().find(|&c| {
-        doc.get::<Depiction>(c).and_then(|d| d.notation.constant()).and_then(|v| v.as_str()) == Some(notation)
+        doc.get::<Template>(c).and_then(|d| d.notation.constant()).and_then(|v| v.as_str()) == Some(notation)
     })
 }
 
 /// Where an instance goes: the entity under `entity_parent`, the copied
-/// template roots under `depiction_parent`, each placed after the given
+/// template roots under `figure_parent`, each placed after the given
 /// key (or first, for `None`).
 pub struct Placement {
     pub entity_parent: Option<NodeId>,
     pub entity_after: Option<OrderKey>,
-    pub depiction_parent: Option<NodeId>,
-    pub depiction_after: Option<OrderKey>,
+    pub figure_parent: Option<NodeId>,
+    pub figure_after: Option<OrderKey>,
 }
 
 /// Ops that instantiate `def`: an entity named `name` with every parameter
 /// at its default, a copy of the `notation` template with its bindings
-/// rewritten onto the entity, and a `depicts` relation from each copied
+/// rewritten onto the entity, and a `figures` relation from each copied
 /// root to the entity. Ids and relation ids are taken from `doc`, so these
 /// ops must be applied before anything else allocates.
 pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
     let specs = params_of(doc, def)?;
-    let template = template_of(doc, def, notation).ok_or_else(|| format!("{def} has no depiction for notation {notation:?}"))?;
+    let template = template_of(doc, def, notation).ok_or_else(|| format!("{def} has no template for notation {notation:?}"))?;
     let roots: Vec<NodeId> = doc.children(template).to_vec();
     let mut copied: Vec<NodeId> = Vec::new();
     for &r in &roots {
@@ -186,7 +186,7 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
         components: vec![instance.wrap(), params.wrap(), entity_name.wrap()],
     });
 
-    let mut key = place.depiction_after.clone();
+    let mut key = place.figure_after.clone();
     for &old in &copied {
         let node = doc.live(old).expect("copied node is live");
         let is_root = roots.contains(&old);
@@ -195,7 +195,7 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
                 Some(k) => OrderKey::after(k),
                 None => OrderKey::first(),
             });
-            (place.depiction_parent, key.clone().expect("just set"))
+            (place.figure_parent, key.clone().expect("just set"))
         } else {
             (node.parent.map(|p| new_id[&p]), node.order.clone())
         };
@@ -216,7 +216,7 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
     }
     for (i, &r) in roots.iter().enumerate() {
         ops.push(Op::Link {
-            rel: Relation { id: rel_ids[i], from: new_id[&r], to: entity, rel: RelKind::Depicts, data: BTreeMap::new() },
+            rel: Relation { id: rel_ids[i], from: new_id[&r], to: entity, rel: RelKind::Figures, data: BTreeMap::new() },
         });
     }
     Ok((entity, ops))

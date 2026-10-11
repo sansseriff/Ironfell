@@ -19,7 +19,7 @@ doc 04 (the authored store; views for the model), doc 05 (three kinds of time), 
 ## 0. Theses
 
 1. **A thing is not its picture.** An *entity* (the modulator) is separate from each of
-   its *depictions* (a schematic symbol, a CAD body, a cartoon box). Depictions point at
+   its *figures* (a schematic symbol, a CAD body, a cartoon box). Figures point at
    the entity; they never point at each other.
 2. **A composition is a world with a notation.** A project holds many compositions in
    parallel, 2D, 3D, or mixed: an electrical schematic, an optical-table assembly, a
@@ -84,14 +84,14 @@ activity, not an afterthought.
 
 | Concept | What it is | Lives in | Drawn? |
 |---|---|---|---|
-| **Entity** | One thing being described: a modulator, a laser system, a fiber, a variable in a model | The model tree | Never directly; only through depictions |
-| **Definition** | The reusable type of an entity: its ports, parameters, local state, behaviour, and default depictions per notation. Doc 02 §5.3's "Component", renamed (§3) | A library (built-in, user, or LLM-authored) | No |
-| **Port** | A named, typed interface point on an entity | Under its entity | Via port anchors on depictions |
+| **Entity** | One thing being described: a modulator, a laser system, a fiber, a variable in a model | The model tree | Never directly; only through figures |
+| **Definition** | The reusable type of an entity: its ports, parameters, local state, behaviour, and default figures per notation. Doc 02 §5.3's "Component", renamed (§3) | A library (built-in, user, or LLM-authored) | No |
+| **Port** | A named, typed interface point on an entity | Under its entity | Via port anchors on figures |
 | **Connection** | Port to port, typed by domain (optical, RF, thermal, data, …) | Between entities | Wherever a composition's notation shows that domain |
-| **Signal** | The value on a port: a quantity with units, a structured value (a Gaussian beam), or a time series | Derived at runtime; only sources are authored | Visualised by depictions that choose to |
+| **Signal** | The value on a port: a quantity with units, a structured value (a Gaussian beam), or a time series | Derived at runtime; only sources are authored | Visualised by figures that choose to |
 | **Composition** | A 2D, 3D, or mixed world with a notation | A top-level node | Yes, in a panel |
-| **Notation** | A palette of depiction types, the port domains drawn as wires, layout conventions, and signal visualisations | A library (data) | No |
-| **Depiction** | A visual node in a composition that depicts an entity and maps its anchors to the entity's ports | Inside a composition | Yes |
+| **Notation** | A palette of figure types, the port domains drawn as wires, layout conventions, and signal visualisations | A library (data) | No |
+| **Figure** | A visual node in a composition that depicts an entity and maps its anchors to the entity's ports | Inside a composition | Yes |
 | **Local geometry** | Visual content with no entity: brackets, posts, decoration, mate features | Inside a composition | Yes |
 | **Refinement** | An entity contains sub-entities, or realises an abstract one (cartoon "laser system" → laser, isolator, collimator) | The model tree, plus `realizes` relations | No |
 | **Lesson, step, annotation** | The narrative: ordered steps, each deciding what is visible, highlighted, animated, and said | A lesson tree | Annotations are drawn in the composition a step places them in |
@@ -99,8 +99,8 @@ activity, not an afterthought.
 Two rules keep the model honest:
 
 - **Linking is hub-and-spoke.** "Link this symbol to that 3D part" connects both
-  depictions to one entity, and creates the entity if neither had one. Pairwise links
-  between depictions would multiply into relationships that can disagree.
+  figures to one entity, and creates the entity if neither had one. Pairwise links
+  between figures would multiply into relationships that can disagree.
 - **Promotion is cheap and on demand.** A rectangle drawn in a composition is local
   geometry until someone links it, gives it a port, or connects it. Nobody has to
   create entities up front.
@@ -111,7 +111,7 @@ Two rules keep the model honest:
 
 - **Doc 02's three terms.** *Model* is the behaviour of entities: built-in transfer
   functions, simulations, or external call-outs, fed and read through ports. *Projection*
-  is compositions, depictions, and data-bound visuals. *Annotation* is the narrative
+  is compositions, figures, and data-bound visuals. *Annotation* is the narrative
   layer (§9), which doc 02 §2.3 already called "the part of the work that does the
   explaining". The entity is the new piece: the identity that all three share.
 - **Doc 02 §5.3 "Components"** (parameterised reusable units with local state) become
@@ -121,7 +121,7 @@ Two rules keep the model honest:
   compositions, reached by drilling in.
 - **Doc 01 §10's pedagogical links** ("a 2D label targets a 3D part", "an animation
   track coordinates a 2D schematic with a 3D mechanism") are annotations targeting
-  entities, plus signals shared across depictions.
+  entities, plus signals shared across figures.
 - **Doc 04's views** remain the *model's reads* of the document. Compositions are not
   views: they hold authored layout. The LLM gets new view relations: the model tree,
   one composition's layout, and one lesson.
@@ -141,7 +141,7 @@ Mechanisms:
 
 | Mechanism | Direction | Behaviour |
 |---|---|---|
-| **Show in ▸ (notation)** on any depiction | Across | Opens that composition centred on the counterpart, highlighted. If there is none, offers to place one |
+| **Show in ▸ (notation)** on any figure | Across | Opens that composition centred on the counterpart, highlighted. If there is none, offers to place one |
 | **Representations panel** | Across | For the selected entity, lists every composition depicting it, its ports, and its live signals |
 | **Linked split view** | Across | Hovering or selecting in one composition lights up the counterpart in the other. The teaching mode |
 | **Drill in, breadcrumb out** | Down and up | Double-click an encapsulated block to open its internal composition |
@@ -149,7 +149,7 @@ Mechanisms:
 | **Unplaced tray** | Across | Entities added in one composition that another notation should show wait in a tray, like KiCad's "update PCB from schematic" |
 | **Obligations list** | Across | Connections or entities a composition should realise but does not (§5) |
 
-Refinement and depiction combine. A cartoon may show "laser system" as one box while
+Refinement and figures combine. A cartoon may show "laser system" as one box while
 the 3D view shows its three parts. Selecting the box highlights all three, because they
 realise it.
 
@@ -239,7 +239,7 @@ are never entity-level, so an assembly of brackets produces no rat's nest.
   pure, bounded, in-process, 60 fps (doc 02 §6). External Models remain the slow,
   cost-tagged tier.
 - **Signals are visible everywhere.** Because a signal lives on the entity's port, every
-  depiction can visualise it. The RF waveform animates in the cartoon and in the
+  figure can visualise it. The RF waveform animates in the cartoon and in the
   schematic from one source.
 - **Authored versus derived.** Source values (the laser's set power) are authored
   parameters. Propagated signals are derived and never written into the file. Time
@@ -271,10 +271,10 @@ Annotation is the third term of doc 02 and deserves its own structure.
   which annotations appear, and which signals animate.
 - **An annotation has two relationships.** Its *owner* is the step it belongs to. Its
   *target* is an entity, a port, a signal, or a region. Targets go through entities,
-  not depictions, which gives annotations useful behaviour for free:
+  not figures, which gives annotations useful behaviour for free:
   - they re-anchor when layout changes;
   - they can be *carried* into another composition ("show this callout in 3D too")
-    by resolving the target to its depiction there;
+    by resolving the target to its figure there;
   - they can be queried by subject: "what does this lesson say about the modulator?"
 - **They do not spread automatically.** An annotation appears where its step places it,
   not in every composition that depicts its target. Placement is part of the lesson's
@@ -290,7 +290,7 @@ Annotation is the third term of doc 02 and deserves its own structure.
 
 A notation bundles:
 
-1. a palette of depiction types (with default depictions per definition);
+1. a palette of figure types (with default figures per definition);
 2. the port domains it draws as connections, and how (orthogonal wires on a grid,
    physical cables in 3D, animated arrows);
 3. its layout and constraint conventions (snap grids, 3D mates, free placement);
@@ -312,8 +312,8 @@ vocabulary.
    through a declared adapter.
 2. **Associative encapsulation.** Encapsulating A and B, then that with C, is the same
    as encapsulating A, B, and C at once, in ports and in behaviour.
-3. **Depictions preserve connections.** If two entities are connected and both are
-   depicted in a composition whose notation shows that domain, their depictions are
+3. **Figures preserve connections.** If two entities are connected and both are
+   depicted in a composition whose notation shows that domain, their figures are
    connected, or the connection shows as an obligation.
 4. **Lens round trips.** Pushing an unchanged abstract view back changes nothing (*get*
    then *put*), and an edit pushed back is what you see when you derive again (*put*
@@ -322,7 +322,7 @@ vocabulary.
    composition of its parts' behaviours. Replacing a subsystem with its black-box model
    changes nothing outside.
 6. **Identity is stable.** An entity keeps its id across compositions, encapsulation,
-   refinement, and model edits. Depictions and annotations never lose their target.
+   refinement, and model edits. Figures and annotations never lose their target.
 
 ---
 
@@ -350,7 +350,7 @@ vocabulary.
 3. **Definition scope.** Built-in definitions in code, user and LLM definitions in a
    project library, a shared library across projects. Where do they live, and how are
    they versioned?
-4. **Default depictions.** When a definition is placed in a new notation, does it get a
+4. **Default figures.** When a definition is placed in a new notation, does it get a
    generated default (a labelled box with its ports) or require one?
 5. **CAD pipeline.** Which formats (STEP, glTF from SolidWorks), and where feature
    detection runs (in the worker, or offline at import).
@@ -359,7 +359,9 @@ vocabulary.
 7. **Lesson branching.** Linear steps first. Do lessons ever branch or respond to the
    learner's interaction?
 8. **Naming.** "Composition", "entity", "definition", "depiction". Settle them before
-   they reach the UI.
+   they reach the UI. **Decided 2026-10-11:** depiction was renamed figure on
+   2026-10-11 (the relation is `figures`; a definition's template child is a
+   `template`); the other three stay.
 
 ---
 
@@ -367,7 +369,7 @@ vocabulary.
 
 | Source | Taken |
 |---|---|
-| **KiCad and PCB tools** | Symbol and footprint as two depictions of one component (reference designator, pin-to-pad map); cross-probing; "update PCB from schematic"; the ratsnest |
+| **KiCad and PCB tools** | Symbol and footprint as two figures of one component (reference designator, pin-to-pad map); cross-probing; "update PCB from schematic"; the ratsnest |
 | **Revit / BIM** | One model, many views; families with per-view, per-detail-level geometry |
 | **SysML** | One model, many diagram types; ports and item flows |
 | **Capella / Arcadia** | Levels of abstraction with "realizes" links between them |

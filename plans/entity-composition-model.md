@@ -598,7 +598,11 @@ through the signal graph.
 4. **I4. Default depictions.** Generate a labelled box with port anchors for any
    notation a definition lacks, or require explicit templates?
 5. **I5. Merge on link.** When both depictions already have entities, which identity
-   survives, and what happens to connections on the other?
+   survives, and what happens to connections on the other? **Decided 2026-10-11: ask
+   before doing anything.** The UI shows both entities with their parameters and ports and
+   the person picks the survivor; the model surface refuses the edit with an `<edit-failed>`
+   naming both and asking for `keep="#id"`, answered on the retry. Port-name collisions are
+   part of the same question. No default heuristic.
 6. **I6. One undo stack** for the whole project (assumed) versus per composition.
 7. **I7. Notation format.** How much of a notation is data (palette, domains, glyphs)
    versus code (layout engines, constraint conventions)? Start with data plus a fixed

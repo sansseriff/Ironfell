@@ -222,7 +222,9 @@ Long term, one of these should be the authority (CS open question I5).
 1. **Stage B, units:** confirm SI storage with display units as presentation, and that
    geometry stays in pixels and radians (ECM §3, I3).
 2. **Stage C1, naming:** entity, definition, depiction, composition, notation. These
-   reach the UI soon (vision 09 §13.8).
+   reach the UI soon (vision 09 §13.8). **Decided 2026-10-11:** `depiction` becomes
+   **`figure`** (relation `figures`, view attribute `of`); the definition's template child
+   becomes `template`; the other four stay. The rename is task 0 in `handoff.md`.
 3. **Stage D, model edits under constraints:** adjust and report, or reject by default
    (CS U2).
 4. **Stage E, path handles:** leaves on the point, or child nodes with their own ids.

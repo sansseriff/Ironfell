@@ -132,7 +132,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     name.text = Slot::Const(Value::Str("bar".into()));
     ops.push(Op::Create {
         id: bar,
-        ty: ty("bar"),
+        ty: ty("rect"),
         parent: Some(scene),
         order: order(),
         components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],

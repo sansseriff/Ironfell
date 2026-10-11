@@ -67,7 +67,7 @@ fn scene() -> Scene {
             "build",
             vec![
                 Op::Create { id: slider, ty: ty("slider"), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), sl.wrap()] },
-                Op::Create { id: bar, ty: ty("bar"), parent: None, order: OrderKey::first(), components: vec![bt.wrap(), bs.wrap(), Fill::default().wrap()] },
+                Op::Create { id: bar, ty: ty("rect"), parent: None, order: OrderKey::first(), components: vec![bt.wrap(), bs.wrap(), Fill::default().wrap()] },
                 Op::Create { id: v, ty: ty("slider"), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), vs.wrap()] },
                 Op::Create { id: rect, ty: ty("rect"), parent: None, order: OrderKey::first(), components: vec![rt.wrap(), Size::default().wrap()] },
             ],

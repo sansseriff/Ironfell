@@ -2,7 +2,10 @@
 //! the model-facing manifest and the DOM host (plans/document-spine.md §5.7).
 //!
 //! Adding a node type is a Rust change. That is the correct place for it: the
-//! vocabulary is code, the bindings over it are data (doc 02 §9.6).
+//! vocabulary is code, the bindings over it are data (doc 02 §9.6). The
+//! registry holds *primitives only* (entity-composition-model.md §4.2):
+//! domain things such as a bar chart, a laser or a fiber are definitions in
+//! the document's library, built from these primitives.
 
 use crate::component::ComponentKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -90,17 +93,6 @@ static TYPES: &[TypeSpec] = &[
             (K::Size, false),
             (K::Name, false),
             (K::Host, false),
-        ],
-        default_host: Host::Canvas,
-        children: ChildPolicy::None,
-    },
-    TypeSpec {
-        name: "bar",
-        components: &[
-            (K::Transform2d, true),
-            (K::Size, true),
-            (K::Fill, false),
-            (K::Name, false),
         ],
         default_host: Host::Canvas,
         children: ChildPolicy::None,

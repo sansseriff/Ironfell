@@ -65,14 +65,14 @@ screenshot lines:
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
 redraw (document): 2 of 25 nodes changed [#M #U]; damage 499,379–741,501
 redraw (document): 2 of 25 nodes changed [#M #U]; damage 559,339–801,461
-"<bar id=\"#P\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #O.slider.value * 300\" … h=\"270\" h.bind=\"#O.slider.value * 300\" …/>"
-"<bar id=\"#P\" name=\"bar\" x=\"730\" y=\"400\""
+"<rect id=\"#P\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #O.slider.value * 300\" … h=\"270\" h.bind=\"#O.slider.value * 300\" …/>"
+"<rect id=\"#P\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" … <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
 {"ok":true,"version":9,"aliases":{"$n":"#V"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
 "<rect id=\"#V\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
-{"roundtrip_equal":true,"bytes":7875}
+{"roundtrip_equal":true,"bytes":7876}
 "<document version=\"9\"> |   <group id=\"#1\" name=\"scene\" count=\"26\"> | …"
 applied "open demo scene" (32 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
@@ -81,7 +81,7 @@ applied "undo: move mesh" (1 ops, System) -> v4
 applied "undo: move rect" (2 ops, System) -> v5
 applied "redo: move rect" (2 ops, System) -> v6
 applied "set slider" (1 ops, Human) -> v7
-applied "move bar" (2 ops, Human) -> v8
+applied "move rect" (2 ops, Human) -> v8
 applied "model edit" (2 ops, Model) -> v9
 loaded document v9 (31 live nodes)
 (no page errors)

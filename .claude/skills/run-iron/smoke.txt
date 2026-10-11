@@ -39,13 +39,13 @@ shot after-redo-one
 # is one "set slider" transaction.
 ddrag 220 612 370 612
 shot after-slider-scrub
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<bar[^>]*>/); return m ? m[0] : v.slice(0, 200); })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="bar"[^>]*>/); return m ? m[0] : v.slice(0, 200); })()
 # Stage A, linear binding inversion: the bar's y is bound to
 # `640 - slider.value * 300`, so dragging the bar down by 30 sets the slider
 # to 0.8 and the bar's height follows; x is a constant and moves directly.
-# One "move bar" transaction carries both.
+# One "move rect" transaction carries both.
 ddrag 810 500 760 530
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<bar[^>]*>/); return m ? m[0].replace(/ y\.bind=.*/, '') : v.slice(0, 200); })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="bar"[^>]*>/); return m ? m[0].replace(/ y\.bind=.*/, '') : v.slice(0, 200); })()
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<slider[^>]*name="level"[^>]*>/); return m ? m[0].replace(/.* value=/, 'value=') : v.slice(0, 200); })()
 # Exit criterion 4: scrub the timeline to about 2.6 s of 30. The "spin" clip
 # turns the torus and the "slide" clip has moved the square; the torus view

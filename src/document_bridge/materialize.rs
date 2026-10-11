@@ -121,12 +121,12 @@ pub(super) fn reconcile(
 }
 
 /// Spawn the entity for a live node, or `None` for node types that have no
-/// runtime form yet (slider, bar, clip, timeline).
+/// runtime form yet (clip, timeline).
 fn spawn(store: &Store, id: NodeId, commands: &mut Commands, assets: &MeshAssets) -> Option<Entity> {
     let node = store.document().live(id)?;
     let mut ec = match node.ty.name() {
         "group" => commands.spawn((Provenance(id), Name::new(format!("group {id}")), Visibility::default())),
-        "rect" | "circle" | "bar" | "slider" => {
+        "rect" | "circle" | "slider" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
         "mesh" => {
@@ -158,7 +158,7 @@ fn write_values(store: &Store, id: NodeId, ec: &mut EntityCommands, assets: &Mes
         "group" => {
             ec.insert(r.transform_2d());
         }
-        "rect" | "circle" | "bar" | "slider" => {
+        "rect" | "circle" | "slider" => {
             ec.insert(r.transform_2d());
             let shape = match node.ty.name() {
                 "circle" => Shape2d::Circle { r: r.num("radius.r", 50.0) },

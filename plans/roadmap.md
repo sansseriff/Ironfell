@@ -13,6 +13,8 @@ order in which to change it. It indexes three companion documents:
 - [`constraint-system.md`](constraint-system.md) (**CS** below) — constraints,
   interaction-time causality, live simulation.
 
+Ideas discussed but not adopted live in `plans/notes/`; do not build from them until a plan adopts them.
+
 Reconciled on 2026-10-10 against the working tree, where spine steps 6 (clips and the
 timeline, `time.rs`) and 7 (the model surface, `src-ui/model/`) are done but not yet
 committed. Commit those first, so this work starts from a clean base.

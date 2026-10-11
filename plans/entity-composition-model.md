@@ -314,6 +314,52 @@ Brackets, posts, screws, mate features, constraints, and decoration are ordinary
 in the composition with no `figures` relation. They never appear in the model tree,
 never generate ghost lines, and are invisible to other compositions.
 
+### 7.4 Embedded compositions (decided 2026-10-11)
+
+Compositions are content, not panels. As in After Effects, a composition can be pulled
+into another one; a panel (a Blender-style editor) can show any composition, but most
+building and side-by-side layout happens in the centre viewer, which shows a top-level
+`main` composition that embeds the others. Section 7.1's one-panel-per-composition stays
+as the editor mechanism; it is no longer how two compositions sit side by side.
+
+- **`embed`** (decided name) is a node in a composition's layout with `embed.of` → the
+  composition it shows, a transform for its own dimensionality, and an optional manual
+  bounding box. It is a live reference: one composition, shown wherever it is embedded,
+  edited once. A cycle (A embeds B embeds A) is refused at apply time.
+- **2D in 2D, 3D in 3D:** the embed is a placed, clipped group *by reference*. Use a group
+  when nothing needs sharing or a boundary.
+- **2D in 3D:** a textured plane. Its extent is the bounding box of the inner content, or
+  the manual box when one is set (larger, usually). Needs the 2D layer rendered to a
+  texture.
+- **3D in 2D:** a camera view. `embed.camera` optionally names a `camera` node in the 3D
+  composition (fov, aspect, near, far), and the camera's aspect sets the embed's shape.
+  Without one, the view is a derived default that frames all of the composition's
+  content from a fixed direction; it is computed, never stored. Several embeds may name
+  different cameras of one composition (front and side views).
+- **Click-through (decided):** picking descends through embeds, so hover, selection,
+  Link and drags reach the torus while looking at `main`. Selecting the embed itself
+  (to move or resize it) takes a modifier or its frame. A pick is a path (embed chain
+  plus node), because one composition can be embedded twice; highlights stay per node,
+  so every appearance lights.
+- **Show in** stays presentation: it pans and zooms the viewing panel to the embed
+  that shows the counterpart. It never moves an authored camera.
+- **Default layout (decided):** one centre viewer showing `main`, which embeds `scene`
+  (2D) and `assembly` (a camera view) side by side; the right sidebar returns to a
+  placeholder; `?panels=` still lets a panel show any composition.
+
+Build order: (1) the `embed` and `camera` types, cycle check, views; (2) 2D in 2D:
+recursive draw and pick with transform and clip; (3) 3D in 2D as a camera viewport at
+the embed's on-screen rectangle (axis-aligned, drawn beneath the 2D layer: a stated
+limitation until render-to-texture), with the derived default view; (4) the `main`
+demo and smoke (link the box to the torus inside the viewer); (5) render-to-texture,
+then 2D in 3D as a plane.
+
+**Open:** whether definitions converge with embeds. An embed is a parameterless,
+live component; a definition instance is a parameterised copy that may diverge after
+placement. A template could instead *be* a composition that figures embed with the
+entity's params bound in, trading per-instance layout edits for central ones. Kept
+separate until paths and ports show which figures want.
+
 ---
 
 ## 8. Obligations, ghost lines, and the tray

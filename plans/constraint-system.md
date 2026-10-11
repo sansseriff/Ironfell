@@ -608,6 +608,26 @@ with `Applied.solver` in phase 2.
 It also needs a benchmark: a 12-variable cluster at 20 iterations, timed natively and in
 wasm.
 
+**Done 2026-10-10** on branch `roadmap`: `src/iron_solve` (no dependencies; workspace
+member). `tests/phase1.rs` covers every exit above plus clustering and the step limit;
+`cargo test -p iron_solve --target aarch64-apple-darwin`. Benchmark: the 6-joint chain
+(`bench::chain`, 12 variables, 6 distance constraints, one finger) at 20 iterations
+measures **280 µs per solve natively** (`cargo run -p iron_solve --release --example
+bench --target aarch64-apple-darwin`) and **≈490 µs in the WebGL2 dev-opt wasm build**
+(`__iron.bench(20, 200)` in the shell, through the `solve_bench` FFI), inside the 2 ms
+budget of §5.7 before any reduction. *Deviations from §5.4:* (1) the method is
+*projected* Levenberg–Marquardt: every trial step is Newton-projected onto the required
+rows (minimum-norm) before it is judged, because a penalty weight large enough to hold
+constraints makes every step along the constraint manifold vanishingly small; the
+required weight is 10² and the required rows then hold to tolerance (10⁻⁹) by
+projection, strong rows to the weak rows' pull (≈10⁻⁵ px); (2) damping is λ·I in the
+column-scaled space rather than Marquardt's λ·diag(JᵀJ), for the same reason; (3)
+knowns and propagation (§5.2 steps 1–2) are the adapter's job in phase 2, since they need
+constraint kinds; singletons-first is not implemented, and the benchmark says it is not
+yet needed. Results are bit-identical across runs on one platform; across native and wasm
+they differ in the last bits (libm `hypot`), which §7's replay-from-recorded-ops already
+tolerates.
+
 ### Phase 2 — Constraints in the document
 
 Type, component, relation kind, `ConstraintSpec`, validation, clusters, solve-on-apply,

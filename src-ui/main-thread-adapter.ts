@@ -172,6 +172,10 @@ export class MainThreadAdapter {
         }
         break;
 
+      case "solveBench":
+        this.sendMessage({ ty: "solveBench", requestId: data.requestId, text: glue.solve_bench(data.iterations, data.repeats) });
+        break;
+
       case "documentLoad":
         if (this.appHandle !== BigInt(0)) {
           try {

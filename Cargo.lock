@@ -3075,6 +3075,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "iron_solve"
+version = "0.1.0"
+
+[[package]]
 name = "ironfell"
 version = "0.0.1"
 dependencies = [
@@ -3085,6 +3089,7 @@ dependencies = [
  "console_error_panic_hook",
  "console_log",
  "iron_document",
+ "iron_solve",
  "js-sys",
  "kurbo",
  "log",

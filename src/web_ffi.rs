@@ -684,3 +684,27 @@ fn bigint_to_u64(value: JsValue) -> Result<u64, JsValue> {
     }
     Err(JsValue::from_str("Value is not a valid u64"))
 }
+
+/// The solver's phase 1 benchmark (plans/constraint-system.md §14) in this
+/// build: the 12-variable chain at up to `iterations` iterations, solved
+/// `repeats` times. JSON with the per-solve time, so the same problem can be
+/// compared with `cargo run -p iron_solve --release --example bench`.
+#[wasm_bindgen]
+pub fn solve_bench(iterations: u32, repeats: u32) -> String {
+    use bevy::platform::time::Instant;
+    let repeats = repeats.max(1);
+    iron_solve::bench::run(iterations, 1);
+    let t0 = Instant::now();
+    let s = iron_solve::bench::run(iterations, repeats);
+    let elapsed = t0.elapsed().as_secs_f64();
+    serde_json::json!({
+        "vars": s.vars.len(),
+        "iterations": s.iterations,
+        "evaluations": s.evaluations,
+        "repeats": repeats,
+        "us_per_solve": elapsed * 1e6 / repeats as f64,
+        "max_required_residual": s.max_required_residual,
+        "max_strong_residual": s.max_strong_residual,
+    })
+    .to_string()
+}

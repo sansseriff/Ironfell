@@ -103,7 +103,13 @@ panel, so the smoke script does not call it.
 
 `window.__iron` is the document API for `eval`: `await __iron.save()` returns
 the canonical JSON, `await __iron.load(text)` replaces the document, and
-`await __iron.view({fidelity:'summary', depth: 2})` renders a view. The
+`await __iron.view({fidelity:'summary', depth: 2})` renders a view.
+`await __iron.bench(20, 200)` runs the constraint solver's benchmark
+(`iron_solve::bench`, a 12-variable chain) in this build and returns its
+per-solve time in microseconds, for comparison with the native
+`cargo run -p iron_solve --release --example bench --target aarch64-apple-darwin`.
+Under SwiftShader the number is still meaningful: the solver is CPU work in
+the worker, not rendering. The
 Document panel on the left shows the full tree view and refreshes on every
 applied transaction.
 
@@ -176,7 +182,9 @@ cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
 49 tests pass (22 unit, 27 integration). The host target is required because
-`.cargo/config.toml` defaults the whole workspace to wasm.
+`.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
+has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
+tests).
 
 ## Gotchas
 

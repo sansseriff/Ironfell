@@ -176,6 +176,10 @@ class IronWorker {
           self.postMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_save(this.appHandle) });
           break;
 
+        case "solveBench":
+          self.postMessage({ ty: "solveBench", requestId: data.requestId, text: glue.solve_bench(data.iterations, data.repeats) });
+          break;
+
         case "documentLoad":
           try {
             glue.document_load(this.appHandle, data.text);

@@ -38,12 +38,40 @@ impl fmt::Display for Leaf {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     Lit(Value),
+    /// A named constant (`pi`). Kept symbolic so it prints as written.
+    Const(Constant),
     Ref(Leaf),
     Neg(Box<Expr>),
     Not(Box<Expr>),
     Bin(BinOp, Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
+}
+
+/// Named numeric constants of the floor. One arm each, like functions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Constant {
+    Pi,
+}
+
+impl Constant {
+    pub const ALL: &'static [Constant] = &[Constant::Pi];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Constant::Pi => "pi",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Constant> {
+        Constant::ALL.iter().copied().find(|c| c.name() == s)
+    }
+
+    pub fn value(self) -> f64 {
+        match self {
+            Constant::Pi => std::f64::consts::PI,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,7 +136,7 @@ impl Expr {
 
     fn collect_deps(&self, out: &mut BTreeSet<Leaf>) {
         match self {
-            Expr::Lit(_) => {}
+            Expr::Lit(_) | Expr::Const(_) => {}
             Expr::Ref(l) => {
                 out.insert(*l);
             }
@@ -136,6 +164,7 @@ impl Expr {
     pub fn eval(&self, read: &dyn Fn(Leaf) -> Option<Value>) -> Result<Value, EvalError> {
         match self {
             Expr::Lit(v) => Ok(v.clone()),
+            Expr::Const(c) => Ok(Value::Number(c.value())),
             Expr::Ref(l) => read(*l).ok_or(EvalError::Unresolved(*l)),
             Expr::Neg(e) => match e.eval(read)? {
                 Value::Number(n) => Ok(Value::Number(-n)),
@@ -175,6 +204,7 @@ impl Expr {
     fn write(&self, f: &mut fmt::Formatter<'_>, parent: u8) -> fmt::Result {
         match self {
             Expr::Lit(v) => write_lit(v, f),
+            Expr::Const(c) => f.write_str(c.name()),
             Expr::Ref(l) => write!(f, "{l}"),
             Expr::Neg(e) => {
                 f.write_str("-")?;
@@ -333,7 +363,10 @@ fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
 pub mod floor {
     use super::{EvalError, Value};
 
-    pub const NAMES: &[&str] = &["abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale"];
+    pub const NAMES: &[&str] = &[
+        "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt",
+        "pow", "hypot",
+    ];
 
     fn nums(func: &str, args: &[Value], n: usize) -> Result<Vec<f64>, EvalError> {
         if args.len() != n {
@@ -372,6 +405,24 @@ pub mod floor {
                 let a = n(5)?;
                 let t = if a[2] == a[1] { 0.0 } else { (a[0] - a[1]) / (a[2] - a[1]) };
                 a[3] + (a[4] - a[3]) * t
+            }
+            // Trigonometry in radians, matching `transform2d.rot`.
+            "sin" => n(1)?[0].sin(),
+            "cos" => n(1)?[0].cos(),
+            "tan" => n(1)?[0].tan(),
+            // atan2(y, x), the usual argument order.
+            "atan2" => {
+                let a = n(2)?;
+                a[0].atan2(a[1])
+            }
+            "sqrt" => n(1)?[0].sqrt(),
+            "pow" => {
+                let a = n(2)?;
+                a[0].powf(a[1])
+            }
+            "hypot" => {
+                let a = n(2)?;
+                a[0].hypot(a[1])
             }
             _ => return Err(EvalError::UnknownFunction(func.to_owned())),
         }))
@@ -660,6 +711,11 @@ impl Parser {
             Some(Tok::Ident(name)) => match name.as_str() {
                 "true" => Ok(Expr::Lit(Value::Bool(true))),
                 "false" => Ok(Expr::Lit(Value::Bool(false))),
+                // A bare constant name. `pi(` is still a call, and fails at
+                // eval as an unknown function.
+                c if self.peek() != Some(&Tok::LParen) && Constant::from_name(c).is_some() => {
+                    Ok(Expr::Const(Constant::from_name(c).expect("checked")))
+                }
                 _ => {
                     self.expect(Tok::LParen)?;
                     let mut args = Vec::new();
@@ -708,6 +764,12 @@ mod tests {
             "[1, 2] * 2",
             "1 - (2 - 3)",
             "(1 < 2 ? 3 : 4) + 1",
+            "sin(#3.transform2d.rot) * 120",
+            "atan2(#4.transform2d.y, #4.transform2d.x)",
+            "hypot(3, 4) + sqrt(2) + pow(2, 10)",
+            "cos(pi / 2) + tan(0)",
+            "pi * 2",
+            "-pi",
         ];
         for text in cases {
             let e = Expr::parse(text).unwrap_or_else(|err| panic!("{text}: {err}"));
@@ -746,5 +808,25 @@ mod tests {
         assert!(matches!(ev("1 + true").unwrap_err(), EvalError::Type(_)));
         assert!(matches!(ev("nope(1)").unwrap_err(), EvalError::UnknownFunction(_)));
         assert!(matches!(ev("clamp(1)").unwrap_err(), EvalError::Arity { .. }));
+    }
+
+    #[test]
+    fn trig_roots_and_pi() {
+        let read = |_: Leaf| -> Option<Value> { None };
+        let ev = |t: &str| Expr::parse(t).unwrap().eval(&read).unwrap().as_f64().unwrap();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert!(close(ev("pi"), std::f64::consts::PI));
+        assert!(close(ev("sin(pi / 2)"), 1.0));
+        assert!(close(ev("cos(pi)"), -1.0));
+        assert!(close(ev("tan(pi / 4)"), 1.0));
+        assert!(close(ev("atan2(1, 1)"), std::f64::consts::FRAC_PI_4));
+        assert!(close(ev("atan2(1, 0)"), std::f64::consts::FRAC_PI_2), "atan2 takes (y, x)");
+        assert!(close(ev("sqrt(16)"), 4.0));
+        assert!(close(ev("pow(2, 10)"), 1024.0));
+        assert!(close(ev("hypot(3, 4)"), 5.0));
+        assert!(Expr::parse("pi").unwrap().deps().is_empty());
+        // `pi(` parses as a call and is rejected at eval, like any unknown function.
+        assert!(matches!(Expr::parse("pi()").unwrap().eval(&read).unwrap_err(), EvalError::UnknownFunction(_)));
+        assert!(Expr::parse("tau").is_err(), "unknown bare identifiers do not parse");
     }
 }

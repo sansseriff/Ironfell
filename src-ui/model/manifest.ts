@@ -59,7 +59,8 @@ VALUES
 EXPRESSIONS (for {= …} bindings)
   #id.component.field references a leaf; + - * / % < <= > >= == != && || !;
   cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
-  lerp(a,b,t) scale(x,d0,d1,r0,r1). A binding may not depend on itself.
+  lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan atan2(y,x) sqrt pow(x,y) hypot(x,y);
+  the constant pi; angles in radians. A binding may not depend on itself.
 
 TIME
   A clip node (child of a timeline) has timing.start, timing.dur, timing.easing and

@@ -332,7 +332,8 @@ measure first.
   canonical and the parser is its inverse, tested by round trip. The grammar is doc 02
   §4 without `Get`: literals, `#id.component.field` references, unary and binary
   operators, `cond ? a : b`, and `name(args)` into the floor (`abs floor ceil round min
-  max clamp lerp scale`). Adding a floor function is one match arm.
+  max clamp lerp scale`, and since roadmap stage A `sin cos tan atan2 sqrt pow hypot`
+  with the constant `pi`). Adding a floor function is one match arm.
 - **Dependencies are static** (`Expr::deps`). The graph is rebuilt after any structural
   transaction and walked from changed leaves otherwise. Evaluation is height-ordered with
   equality cutoff; every read goes through one resolver, the hook for tracked reads if

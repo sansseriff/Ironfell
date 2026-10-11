@@ -5,6 +5,13 @@
 first, then the files it points at, in the order given. It records where the code is, the
 decisions already taken, the conventions that are easy to break, and what comes next.
 
+**Update, later on 2026-10-11 (at `12466a1`):** task 0 (the rename, schema 3) and task 1
+(stage C1, all six steps) are **done**; see ECM §12 phase 2's progress notes and the roadmap
+status row. Next is task 2 (stage E, the pen tool) or task 3 (stage F, which needs the
+conservative-ports decision first). Known and left: `iron_solve`'s
+`three_link_chain_reaches_a_target` fails (CS §14, phase 1 note). The smoke script now also
+needs `GPU=1` for any frame-time measurement (see `SKILL.md`).
+
 ---
 
 ## 1. Read, in this order

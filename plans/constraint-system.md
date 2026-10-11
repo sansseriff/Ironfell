@@ -628,6 +628,13 @@ yet needed. Results are bit-identical across runs on one platform; across native
 they differ in the last bits (libm `hypot`), which §7's replay-from-recorded-ops already
 tolerates.
 
+**Regression found 2026-10-11 (not fixed):** `tests/phase1.rs::three_link_chain_reaches_a_target`
+has failed since phase 2 (`0406b11`) lowered the implicit weak weight from 1e-2 to 1e-3
+(so a finger lands within 1e-3 px). The solve still converges, but on iteration 50, and
+the test asserts fewer than 50. The same slowdown is the "50 iterations when the chain
+straightens" frame in the demo. Left as is by decision; the step limit or sub-stepping
+of §5.5 is the likely fix, and the test should pass again before relying on the cap.
+
 ### Phase 2 — Constraints in the document
 
 Type, component, relation kind, `ConstraintSpec`, validation, clusters, solve-on-apply,

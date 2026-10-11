@@ -200,6 +200,15 @@ components! {
         to: Any = Value::Number(1.0),
     }
 
+    /// A geometric relationship with no direction (constraint-system.md §4.1).
+    /// Operands are `constrains` relations. `value` is a distance or angle
+    /// for the kinds that use one, and may be bound: a driving dimension.
+    Constraint / "constraint" => Constraint {
+        kind: Enum = Value::Enum("coincident".to_owned()),
+        value: Number = Value::Number(0.0),
+        enabled: Bool = Value::Bool(true),
+    }
+
     /// Which definition an `entity` instantiates (ECM §4.3).
     Instance / "instance" => Instance { def: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
 

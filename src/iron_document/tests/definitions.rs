@@ -12,7 +12,7 @@ fn ty(name: &str) -> TypeId {
 }
 
 fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
-    TransactionInput { label: label.into(), actor: Actor::Model, ts: 0, idempotency_key: None, ops }
+    TransactionInput { label: label.into(), actor: Actor::Model, ts: 0, idempotency_key: None, ops, exact: false }
 }
 
 fn num(n: f64) -> Slot {

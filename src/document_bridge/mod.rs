@@ -51,6 +51,7 @@ impl PendingTransactions {
             ts: 0, // stamped from the clock at sync
             idempotency_key: None,
             ops,
+            exact: false,
         });
     }
 }
@@ -298,7 +299,25 @@ pub(crate) fn sync_document(
     // Everything the log gained since the last sync, whoever applied it.
     for tx in store.0.history().log().filter(|tx| tx.version > synced.0) {
         info!("applied {:?} ({} ops, {:?}) -> v{}", tx.label, tx.ops.len(), tx.actor, tx.version.0);
-        for op in tx.ops.iter().chain(tx.inverse.iter()) {
+        if let Some(s) = &tx.solver {
+            // The cause line the model hears (CS §9.1): who drove what, which
+            // clusters re-solved; inferred values are on demand, never pushed.
+            let list = |ids: &[NodeId]| ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+            info!(
+                "{:?} by {:?}: cluster {} re-solved; moved {} node(s): {}{}",
+                tx.label,
+                tx.actor,
+                list(&s.clusters),
+                s.moved.len(),
+                list(&s.moved),
+                if s.unmet.is_empty() {
+                    String::new()
+                } else {
+                    format!("; unmet: {}", s.unmet.iter().map(|u| format!("{} wanted {} got {}", u.leaf, u.requested, u.solved)).collect::<Vec<_>>().join(", "))
+                }
+            );
+        }
+        for op in tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()) {
             structure |= collect_ids(op, &mut affected);
         }
     }

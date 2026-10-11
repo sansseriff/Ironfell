@@ -3070,6 +3070,7 @@ name = "iron_document"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "iron_solve",
  "serde",
  "serde_json",
 ]

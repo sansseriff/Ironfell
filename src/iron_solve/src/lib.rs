@@ -15,7 +15,8 @@
 //!   an out-of-reach finger leaves a strong residual equal to the gap.
 //! - **Weak** terms express preference. The solver adds one implicit weak
 //!   row per variable, "stay where you were", which is what keeps motion
-//!   continuous and stops elbows flipping between solutions.
+//!   continuous and stops elbows flipping between solutions. Its weight is
+//!   small enough that a finger lands within a thousandth of a pixel.
 //!
 //! Variables are column-scaled by their characteristic size so a radian and
 //! a pixel are comparable. Jacobians are central finite differences per
@@ -143,7 +144,7 @@ impl Default for Options {
         Options {
             max_iterations: 50,
             tolerance: 1e-9,
-            weights: [1e2, 1.0, 1e-2],
+            weights: [1e2, 1.0, 1e-3],
             least_change: true,
             step_limit: None,
             project: true,

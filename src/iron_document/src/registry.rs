@@ -132,6 +132,15 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // A relationship between operand nodes, solved in whatever direction a
+    // drag chooses (constraint-system.md §4). Never materialised as content;
+    // by convention a child of the group that owns the mechanism.
+    TypeSpec {
+        name: "constraint",
+        components: &[(K::Constraint, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     TypeSpec {
         name: "timeline",
         components: &[(K::Name, false)],

@@ -47,9 +47,13 @@ impl std::error::Error for ViewError {}
 const SUMMARY_MAX_CHILDREN: usize = 8;
 const SUMMARY_SAMPLES: usize = 2;
 
+/// Which cluster maintains each solver variable, for `.by` markers.
+pub type By = std::collections::BTreeMap<crate::expr::Leaf, NodeId>;
+
 pub fn render_tree(
     doc: &Document,
     reactive: &crate::graph::Reactive,
+    by: &By,
     q: &ViewQuery,
 ) -> Result<String, ViewError> {
     let mut out = String::new();
@@ -64,7 +68,7 @@ pub fn render_tree(
         None => doc.roots().to_vec(),
     };
     for id in roots {
-        node(doc, reactive, q, id, 0, &mut out);
+        node(doc, reactive, by, q, id, 0, &mut out);
     }
     out.push_str("</document>\n");
     Ok(out)
@@ -73,6 +77,7 @@ pub fn render_tree(
 fn node(
     doc: &Document,
     reactive: &crate::graph::Reactive,
+    by: &By,
     q: &ViewQuery,
     id: NodeId,
     level: u32,
@@ -133,6 +138,11 @@ fn node(
                 if let Some(e) = slot.expr() {
                     attrs.push((format!("{key}.bind"), e.to_string()));
                 }
+                // A solver variable: writing it directly makes it a driver
+                // whose effect spreads through the cluster (CS §9.3).
+                if let Some(cluster) = by.get(&leaf) {
+                    attrs.push((format!("{key}.by"), cluster.to_string()));
+                }
             }
         }
     }
@@ -189,7 +199,7 @@ fn node(
         out.push_str("/>\n");
     }
     for &k in shown {
-        node(doc, reactive, q, k, level + 1, out);
+        node(doc, reactive, by, q, k, level + 1, out);
     }
     writeln!(out, "{indent}</{}>", n.ty.name()).expect("string write");
 }

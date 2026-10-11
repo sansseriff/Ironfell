@@ -180,7 +180,7 @@ mod tests {
                 });
             }
             store
-                .apply(TransactionInput { label: "tree".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops })
+                .apply(TransactionInput { label: "tree".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false })
                 .unwrap();
             let ours = store.world_affine(ids[depth - 1]);
             let bevy = bevy_world(&chain);
@@ -232,6 +232,7 @@ mod tests {
                         components: vec![t.wrap()],
                     },
                 ],
+                exact: false,
             })
             .unwrap();
         assert_eq!(store.world_affine(ids[1]).translation(), [100.0, 0.0]);

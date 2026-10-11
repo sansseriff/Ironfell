@@ -9,6 +9,8 @@ description = "The authored store: identity-stable nodes, operations, history, a
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The constraint solver (plans/constraint-system.md §5); pure, no Bevy.
+iron_solve = { path = "../iron_solve" }
 
 [dev-dependencies]
 # Only for the test that pins `geom::world_affine` to Bevy's own transform

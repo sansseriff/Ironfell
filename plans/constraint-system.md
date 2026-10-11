@@ -643,6 +643,27 @@ Type, component, relation kind, `ConstraintSpec`, validation, clusters, solve-on
 - a binding↔cluster cycle is rejected as `Cycle`;
 - the tree view of the pendulum matches a golden file.
 
+**Done 2026-10-11** on `document-spine`: `constraint.rs` (`constraint` type and component,
+`RelKind::Constrains` with `role`/`anchor`/`at`, the `KINDS` table, validation with
+`ErrorKind::BadConstraint` including duplicates), `solve.rs` (roles per solve, clusters by
+union-find over operand nodes named after the lowest constraint's parent group, solve
+order and the binding↔cluster cycle check, problem building over `geom` world affines,
+drivers and fingers as strong terms, `Unmet`, culprits), and in `lib.rs` solve-on-apply
+with `derived_ops`, `Applied.solver`/`Transaction.solver`, `TransactionInput.exact`,
+rollback on `Unsatisfiable`, `Store::replay` (requested then derived ops, no solve), undo
+and redo without solving, `.by` markers in views, and the §8.1 drag API (`begin_drag`,
+`drag_to`, `end_drag`; `DragMode::Cluster | Axes | Locked`). Every exit above is a test in
+`tests/constraints.rs`, with `tests/golden/pendulum.xml`. *Deviations:* (1) every cluster
+is re-solved after every transaction (warm-started, so a solved cluster costs one
+projection) rather than only touched ones; (2) culprits are found causally, by dropping
+each constraint and re-solving, with the rank analysis as the fallback, because the
+compromise pose of an unsatisfiable system spoils innocent neighbours' residuals; (3)
+`fix` is a constraint node whose operand's leaves become knowns, as planned, but a cluster
+whose operands are all known still exists so a contradiction between fixed things is
+reported; (4) solved values are snapped to 10⁻⁹ so coincident points print exactly; (5)
+`ConstraintSpec` has no units column yet (values are plain numbers, pixels or radians).
+
+
 ### Phase 3 — The inverse-kinematics demo (the proof)
 
 Scene, built in `demo.rs` from ops: a platform (rect, fixed), three arms (rects) joined

@@ -99,6 +99,22 @@ impl Reactive {
         self.nodes.contains_key(&leaf)
     }
 
+    /// Every leaf `leaf` reads, directly or through other bindings.
+    pub fn transitive_deps(&self, leaf: Leaf) -> BTreeSet<Leaf> {
+        let mut out = BTreeSet::new();
+        let mut stack = vec![leaf];
+        while let Some(l) = stack.pop() {
+            if let Some(n) = self.nodes.get(&l) {
+                for d in &n.deps {
+                    if out.insert(*d) {
+                        stack.push(*d);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn height(&self, leaf: Leaf) -> Option<u32> {
         self.nodes.get(&leaf).map(|n| n.height)
     }

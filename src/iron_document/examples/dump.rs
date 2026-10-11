@@ -43,6 +43,7 @@ fn main() {
                     components: vec![Transform2d::default().wrap(), Radius::default().wrap()],
                 },
             ],
+            exact: false,
         })
         .unwrap();
     store
@@ -56,6 +57,7 @@ fn main() {
                 path: "transform2d.x".parse().unwrap(),
                 slot: Slot::Const(Value::Number(200.0)),
             }],
+            exact: false,
         })
         .unwrap();
     println!("=== file ===\n{}", store.save());

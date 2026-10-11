@@ -241,7 +241,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     // past everything above; all of it stays one transaction.
     let mut scratch = iron_document::Store::with_document(store.document().clone());
     scratch
-        .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone() })
+        .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
         .expect("demo scene applies");
     let last_in_scene = scratch.document().children(scene).last().and_then(|&c| scratch.document().live(c)).map(|n| n.order.clone());
     let place = Placement { entity_parent: Some(scene), entity_after: last_in_scene.clone(), depiction_parent: Some(scene), depiction_after: last_in_scene.map(|k| OrderKey::after(&k)) };
@@ -251,5 +251,5 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let level_path: LeafPath = "params.level".parse().expect("parameter path");
     ops.push(Op::Set { id: entity, path: level_path, slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).expect("demo binding")) });
 
-    iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops }
+    iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false }
 }

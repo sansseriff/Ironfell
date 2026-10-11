@@ -83,6 +83,11 @@ pub struct TransactionInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     pub ops: Vec<Op>,
+    /// Refuse the transaction if the solver cannot honour every value it
+    /// sets (constraint-system.md §9.2). Off, the value is adjusted and
+    /// reported as `unmet`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exact: bool,
 }
 
 /// What the log records.
@@ -95,14 +100,28 @@ pub struct Transaction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     pub ops: Vec<Op>,
-    /// Applying these in reverse order undoes `ops`.
+    /// What the solver changed to keep every constraint holding after
+    /// `ops` (constraint-system.md §7). Redo and replay apply `ops` then
+    /// these, without solving; `inverse` covers both.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived_ops: Vec<Op>,
+    /// Applying these in reverse order undoes `ops` and `derived_ops`.
     pub inverse: Vec<Op>,
+    /// Causes the model is told about: which clusters re-solved and which
+    /// requested values were not honoured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver: Option<crate::solve::SolverSummary>,
 }
 
 impl Transaction {
     /// The ops that undo this transaction, in the order to apply them.
     pub fn undo_ops(&self) -> Vec<Op> {
         self.inverse.iter().rev().cloned().collect()
+    }
+
+    /// The ops that redo or replay it: requested, then derived, no solve.
+    pub fn replay_ops(&self) -> Vec<Op> {
+        self.ops.iter().chain(self.derived_ops.iter()).cloned().collect()
     }
 }
 
@@ -124,6 +143,12 @@ pub enum ErrorKind {
     UnknownRelation,
     /// An entity's instance or params disagree with its definition.
     BadInstance,
+    /// A constraint's kind, roles, anchors or operands are wrong, or it
+    /// duplicates another.
+    BadConstraint,
+    /// The required constraints cannot all hold after this transaction (or,
+    /// with `exact`, a requested value could not be honoured).
+    Unsatisfiable,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

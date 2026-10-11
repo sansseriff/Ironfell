@@ -16,6 +16,7 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
         ts: 0,
         idempotency_key: None,
         ops,
+        exact: false,
     }
 }
 
@@ -365,6 +366,7 @@ fn replay_of_log_equals_snapshot_and_load_roundtrips() {
                 ts: t.ts,
                 idempotency_key: None,
                 ops: t.ops.clone(),
+                exact: false,
             })
             .unwrap();
     }
@@ -764,6 +766,7 @@ fn idempotency_keys_replay_instead_of_reapplying() {
             path: path("transform2d.x"),
             slot: num(5.0),
         }],
+        exact: false,
     };
     let a = store.apply(input.clone()).unwrap();
     let b = store.apply(input).unwrap();

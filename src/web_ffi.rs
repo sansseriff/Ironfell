@@ -450,7 +450,12 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
         .to_string();
     }
     let result = match store.0.apply(input) {
-        Ok(applied) => serde_json::json!({"ok": true, "version": applied.version.0}),
+        Ok(applied) => match applied.solver {
+            // Causes, not effects (CS §9.2): which clusters re-solved, which
+            // nodes moved, and any requested value the solver did not honour.
+            Some(solver) => serde_json::json!({"ok": true, "version": applied.version.0, "solver": solver}),
+            None => serde_json::json!({"ok": true, "version": applied.version.0}),
+        },
         Err(errors) => serde_json::json!({"ok": false, "version": current, "errors": errors}),
     };
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {

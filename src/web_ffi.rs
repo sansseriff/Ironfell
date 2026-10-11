@@ -422,6 +422,112 @@ pub fn document_view(ptr: u64, query_json: String) -> Result<String, JsValue> {
     store.0.view(&query).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Apply a transaction now and answer synchronously: the model surface needs
+/// every error in one round trip (doc 04 §9.5). `expect_version`, when not
+/// zero, is compare-and-swap: the transaction is refused if the document has
+/// moved since the caller last read it. Returns JSON:
+/// `{"ok":true,"version":N}` or `{"ok":false,"errors":[...]}`.
+#[wasm_bindgen]
+pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let input: iron_document::TransactionInput = match serde_json::from_str(&transaction_json) {
+        Ok(t) => t,
+        Err(e) => {
+            return serde_json::json!({"ok": false, "errors": [{"op": null, "kind": "parse", "message": e.to_string()}]})
+                .to_string();
+        }
+    };
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "errors": [{"op": null, "kind": "no_store", "message": "document bridge not installed"}]}).to_string();
+    };
+    let current = store.0.document().version().0 as u32;
+    if expect_version != 0 && expect_version != current {
+        return serde_json::json!({
+            "ok": false,
+            "version": current,
+            "errors": [{"op": null, "kind": "stale", "message": format!("expected version {expect_version}, document is at {current}; re-read before retrying")}]
+        })
+        .to_string();
+    }
+    let result = match store.0.apply(input) {
+        Ok(applied) => serde_json::json!({"ok": true, "version": applied.version.0}),
+        Err(errors) => serde_json::json!({"ok": false, "version": current, "errors": errors}),
+    };
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    result.to_string()
+}
+
+/// Reserve `n` node ids for a batch of creates: JSON array of id strings.
+#[wasm_bindgen]
+pub fn document_next_ids(ptr: u64, n: u32) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let ids: Vec<String> = app
+        .world()
+        .get_resource::<crate::document_bridge::DocumentStore>()
+        .map(|s| s.0.document().next_ids(n as usize).iter().map(|i| i.to_string()).collect())
+        .unwrap_or_default();
+    serde_json::to_string(&ids).expect("strings serialise")
+}
+
+#[wasm_bindgen]
+pub fn document_next_relation_ids(ptr: u64, n: u32) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let ids: Vec<String> = app
+        .world()
+        .get_resource::<crate::document_bridge::DocumentStore>()
+        .map(|s| s.0.document().next_relation_ids(n as usize).iter().map(|i| i.to_string()).collect())
+        .unwrap_or_default();
+    serde_json::to_string(&ids).expect("strings serialise")
+}
+
+/// `count` sibling-order keys under `parent` ("" for the roots), placed
+/// after `after` ("" = at the front, "end" = after the last child). JSON
+/// array of key strings, in order. Order keys are the store's business; the
+/// model surface only says where.
+#[wasm_bindgen]
+pub fn document_place(ptr: u64, parent: String, after: String, count: u32) -> Result<String, JsValue> {
+    use iron_document::OrderKey;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let store = app
+        .world()
+        .get_resource::<crate::document_bridge::DocumentStore>()
+        .ok_or_else(|| JsValue::from_str("document bridge not installed"))?;
+    let doc = store.0.document();
+    let siblings: &[iron_document::NodeId] = if parent.is_empty() {
+        doc.roots()
+    } else {
+        let p: iron_document::NodeId = parent.parse().map_err(|e: iron_document::id::IdParseError| JsValue::from_str(&e.to_string()))?;
+        doc.children(p)
+    };
+    let key_of = |id: iron_document::NodeId| doc.live(id).map(|n| n.order.clone());
+    let (lo, hi): (Option<OrderKey>, Option<OrderKey>) = if after == "end" {
+        (siblings.last().and_then(|&s| key_of(s)), None)
+    } else if after.is_empty() {
+        (None, siblings.first().and_then(|&s| key_of(s)))
+    } else {
+        let a: iron_document::NodeId = after.parse().map_err(|e: iron_document::id::IdParseError| JsValue::from_str(&e.to_string()))?;
+        let pos = siblings.iter().position(|&s| s == a).ok_or_else(|| JsValue::from_str(&format!("{a} is not a child of {}", if parent.is_empty() { "the root" } else { &parent })))?;
+        (key_of(a), siblings.get(pos + 1).and_then(|&s| key_of(s)))
+    };
+    let mut keys = Vec::new();
+    let mut prev = lo;
+    for _ in 0..count {
+        let k = OrderKey::between(prev.as_ref(), hi.as_ref()).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        keys.push(k.to_string());
+        prev = Some(k);
+    }
+    Ok(serde_json::to_string(&keys).expect("strings serialise"))
+}
+
+/// The node-type and component registry as JSON: the one source for the
+/// model's manifest and the shell's editors (plans/document-spine.md §5.7).
+#[wasm_bindgen]
+pub fn document_schema() -> String {
+    iron_document::registry::schema_json().to_string()
+}
+
 /// Editor history, requested by the shell. Which keystroke means "undo" is
 /// chrome policy on the main thread; only the command crosses here.
 #[wasm_bindgen]

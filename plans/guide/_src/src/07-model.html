@@ -1,0 +1,153 @@
+<header class="chapter-head">
+  <p class="kicker">Part 7 of 7 · <chip sys="model"/> <chip sys="shell"/></p>
+  <h1>The model surface</h1>
+  <p class="lede">Step 7's exit criterion: <em>the model reads a tree view, emits one <code>&lt;edit&gt;</code> with a <code>&lt;set&gt;</code>, and the change lands in the same undo stack with <code>actor: Model</code>.</em> This part is mostly TypeScript, and it's where the earlier parts pay off. The view already exists (Part 3), transactions are already atomic and report every error (Part 3), and the bridge already picks up any applied transaction from the log (Part 4). What's left is translation: markup in, ops out.</p>
+  <div class="prereq">
+    <div><b>You need</b>Parts 3 and 4, especially the view format, <code>Store::apply</code>'s error list and <code>sync_document</code> reading the log. Parts 5 and 6 explain the <code>.bind</code> and <code>&lt;driven-by&gt;</code> the model will see.</div>
+    <div><b>Files</b><code>src-ui/model/{index,api,schema,edit,manifest,agent,transport}.ts</code> (all uncommitted), the document half of <code>src/web_ffi.rs</code>, and the <code>modelEdit</code>/<code>modelAsk</code> cases in <code>src-ui/worker.ts</code>.</div>
+  </div>
+</header>
+
+<h2 id="naive"><span class="sec">7.1</span>How should a model edit a scene?</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version A</span><p><strong>Hand it the file and take back a new file.</strong> Diff the two to find out what changed. The model has to reproduce everything it <em>didn't</em> mean to change, ids get lost or invented, and diffing has to <em>guess</em> intent (“was this node moved, or deleted and recreated?”). One hallucinated line corrupts the scene.</p></div>
+  <div class="box naive"><span class="tab">The simple version B</span><p><strong>One tool call per op, with JSON schemas.</strong> It's precise, but verbose. Each op needs raw order keys and fully qualified paths (<code>fill.color</code> as <code>{"rgba":[1,0,0,1]}</code>), and a multi-step change is many round trips with no atomicity between them.</p></div>
+</div>
+<div class="box built"><span class="tab">What was built</span>
+<p>Vision doc 04's thesis 6: <strong>read markup, write ops</strong>. The model reads the view from Part 3 and replies with one <code>&lt;edit&gt;</code> block of declarative verbs, each naming its target by id:</p>
+<raw lang="xml">
+<edit expect-version="7">
+  <create id="$n" type="rect" parent="#1" name="from-model" x="300" y="120"
+          w="{= #O.slider.value * 100}" h="40" color="#22aa55"/>
+  <set id="#N" fill.color="#ff3333"/>
+</edit>
+</raw>
+<p>TypeScript turns that into <em>one</em> transaction: it resolves <code>$n</code> to a real id, asks Rust for order keys, maps <code>w</code> to <code>size.w</code> and <code>color</code> to <code>fill.color</code>, coerces <code>#22aa55</code> to a colour, and turns <code>{= …}</code> into a binding. It then applies the transaction synchronously, with a version check. If it's rejected, the model gets back markup naming every error, and one retry.</p>
+</div>
+<p>That is the smoke test’s first edit, with the <code>expect-version</code> check a real model turn would add. Here is its result:</p>
+<figure class="shots">
+  <img src="img/after-model-edit.jpg" alt="The app after the model edit: the circle that was orange is now red, and a new green rect named from-model sits near the top of the viewer, partly behind the FPS overlay. The Document panel reads v9." width="1200" height="750">
+  <figcaption>After <code>__iron.edit(…)</code> from the smoke test: circle <code>#N</code> is red, and the new green rect sits under the FPS overlay near the top. Its width is bound to the slider. The version is now <code>v9</code>, and the panel shows the square at its animated <code>x="700"</code> because this transaction triggered a refresh (see Part 6's note).</figcaption>
+</figure>
+
+<h2 id="where"><span class="sec">7.2</span>Where it runs, and why</h2>
+<p>The model surface is TypeScript, but it runs <strong>in the worker, next to the wasm</strong>, so every question it asks the store (<em>what's the schema, give me a view, reserve three ids</em>) is a plain synchronous function call. The only asynchronous part is the network call to the model. The shell sends a message; the worker handles it:</p>
+<snip file="src-ui/worker.ts" lines="197-211"/>
+<p><code>modelEdit</code> applies markup you supply (the smoke test uses it, and so can you: <code>await __iron.edit('&lt;edit&gt;…&lt;/edit&gt;')</code> in the console). <code>modelAsk</code> runs a full turn with a real model. Both start in <code>model/index.ts</code>, which is two tiny functions wiring the pieces together (<ref file="src-ui/model/index.ts" line="11" has="export function modelEdit">index.ts:11–23</ref>). The same cases exist in <code>main-thread-adapter.ts</code> for the non-worker mode.</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 300" role="img" aria-label="One model turn. agent.ts builds a manifest from the schema and a full view, sends them to the transport, which streams from the Claude API. The reply's edit block goes to edit.ts, which calls api.ts for ids, order keys and the schema, then document_apply in Rust, which calls Store::apply with a version check. On failure the error markup goes back to the model once. The next frame, sync_document finds the new transaction in the log and reconciles it.">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-edge"/></marker></defs>
+  <rect x="20" y="30" width="170" height="52" rx="5" class="s-model"/><text class="t-mono" x="105" y="52" text-anchor="middle">agent.ts · ask()</text><text class="t-s" x="105" y="70" text-anchor="middle">manifest + full view</text>
+  <rect x="250" y="30" width="170" height="52" rx="5" class="s-model"/><text class="t-mono" x="335" y="52" text-anchor="middle">transport.ts</text><text class="t-s" x="335" y="70" text-anchor="middle">streaming SDK call</text>
+  <rect x="480" y="30" width="150" height="52" rx="5" class="box-fill" stroke-dasharray="4 3"/><text class="t" x="555" y="61" text-anchor="middle">Claude API</text>
+  <rect x="20" y="150" width="170" height="52" rx="5" class="s-model"/><text class="t-mono" x="105" y="172" text-anchor="middle">edit.ts · applyEdit</text><text class="t-s" x="105" y="190" text-anchor="middle">parse → one transaction</text>
+  <rect x="250" y="150" width="170" height="52" rx="5" class="s-model"/><text class="t-mono" x="335" y="172" text-anchor="middle">api.ts</text><text class="t-s" x="335" y="190" text-anchor="middle">thin FFI wrappers</text>
+  <rect x="480" y="150" width="170" height="52" rx="5" class="s-shell"/><text class="t-mono" x="565" y="172" text-anchor="middle">web_ffi.rs</text><text class="t-s" x="565" y="190" text-anchor="middle">document_apply (CAS)</text>
+  <rect x="710" y="150" width="190" height="52" rx="5" class="s-ops"/><text class="t-mono" x="805" y="172" text-anchor="middle">Store::apply</text><text class="t-s" x="805" y="190" text-anchor="middle">actor: model</text>
+  <rect x="710" y="238" width="190" height="46" rx="5" class="s-bridge"/><text class="t-mono" x="805" y="258" text-anchor="middle">sync_document</text><text class="t-s" x="805" y="274" text-anchor="middle">next frame, via the log</text>
+  <line x1="190" y1="56" x2="248" y2="56" class="ln" marker-end="url(#m1)"/>
+  <line x1="420" y1="56" x2="478" y2="56" class="ln" marker-end="url(#m1)"/>
+  <line x1="105" y1="82" x2="105" y2="148" class="ln" marker-end="url(#m1)"/><text class="t-s" x="112" y="120">&lt;edit&gt; from the reply</text>
+  <line x1="190" y1="176" x2="248" y2="176" class="ln" marker-end="url(#m1)"/>
+  <line x1="420" y1="176" x2="478" y2="176" class="ln" marker-end="url(#m1)"/>
+  <line x1="650" y1="176" x2="708" y2="176" class="ln" marker-end="url(#m1)"/>
+  <line x1="805" y1="202" x2="805" y2="236" class="ln" marker-end="url(#m1)"/>
+  <path d="M20,190 H8 V56 H18" class="ln-edge" marker-end="url(#m2)"/>
+  <text class="t-s" x="14" y="228">&lt;edit-failed&gt; → one retry</text>
+</svg>
+<figcaption>One <code>modelAsk</code>. Everything except the Claude API call is synchronous and in-process. The bridge doesn't need telling: the transaction is in the log, and the next <code>sync_document</code> reconciles it (Part 4).</figcaption>
+</figure>
+
+<h2 id="ffi"><span class="sec">7.3</span>What Rust exposes to it</h2>
+<p>Five FFI functions were added for the model surface. The central one applies a transaction <em>now</em> and returns JSON, instead of queueing it like the bridge's queues do:</p>
+<snip file="src/web_ffi.rs" lines="425-460" mark="443-451,452-455"/>
+<p><code>expect_version</code> is <strong>compare-and-swap</strong>. The model read <code>&lt;document version="7"&gt;</code>. If you dragged something while it was thinking, the document is now at 8, and its edit (based on a stale view) is refused with a <code>stale</code> error telling it to re-read. On success or failure it returns JSON: <code>{"ok":true,"version":9}</code> or the full error list from Part 3.</p>
+<p>The other four keep the store in charge of things only it should decide:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>FFI call</th><th>Returns</th><th>Why the model surface can't do this itself</th></tr></thead>
+  <tbody>
+    <tr><td><ref file="src/web_ffi.rs" line="464" has="pub fn document_next_ids">document_next_ids(n)</ref></td><td><code>["#U","#V",…]</code></td><td>Ids come from the store's counter (Part 3's id rules).</td></tr>
+    <tr><td><ref file="src/web_ffi.rs" line="475" has="pub fn document_next_relation_ids">document_next_relation_ids(n)</ref></td><td><code>["r3",…]</code></td><td>Same, for relations.</td></tr>
+    <tr><td><ref file="src/web_ffi.rs" line="490" has="pub fn document_place">document_place(parent, after, count)</ref></td><td><code>["a4","a5"]</code></td><td>Order keys are the store's business (Part 2). The model says <em>where</em> (“after #M”, “at the end”); Rust computes the keys.</td></tr>
+    <tr><td><ref file="src/web_ffi.rs" line="527" has="pub fn document_schema">document_schema()</ref></td><td>The registry as JSON</td><td>The single source of vocabulary (Part 2, 2.6).</td></tr>
+  </tbody>
+</table></div>
+<p><code>api.ts</code> wraps each in one line, so the rest of the TypeScript never touches the glue directly:</p>
+<snip file="src-ui/model/api.ts" lines="15-40"/>
+<div class="box edge"><span class="tab">Rough edges</span>
+<ul>
+  <li><code>version()</code> (lines 31–34) gets the version by rendering a skeleton view and matching <code>version="(\d+)"</code> with a regex. It works, but a one-line <code>document_version()</code> FFI would be more direct.</li>
+  <li><code>expect_version == 0</code> means “don't check” (<ref file="src/web_ffi.rs" line="444" has="expect_version != 0">web_ffi.rs:444</ref>), so an edit can't compare-and-swap against a brand-new empty document at version 0. That's harmless today, because the demo scene is v1 the moment the app opens.</li>
+</ul>
+</div>
+
+<h2 id="schema"><span class="sec">7.4</span>Attribute names and values: <code>schema.ts</code></h2>
+<p>The model writes <code>x="300"</code>, not <code>transform2d.x = {"number":300}</code>. Two functions bridge the gap, and both are driven by the schema from Rust, so they can't disagree with the validator.</p>
+<snip file="src-ui/model/schema.ts" lines="19-41" mark="38-38"/>
+<p><code>resolveLeaf</code> turns a bare field name into a full leaf path. It picks the <em>first</em> component in the type's declared order that has that field, so on a rect <code>color</code> means <code>fill.color</code>, because <code>fill</code> is listed before <code>stroke</code> in the registry. Anything else must be written in full (<code>stroke.color</code>), and an unknown name is an error listing the valid ones.</p>
+<snip file="src-ui/model/schema.ts" lines="46-88" mark="53-54"/>
+<p><code>coerce</code> is deliberately forgiving about <em>format</em> (vision doc 04 §9.4): <code>"12"</code>, <code>"12px"</code> and <code>"12s"</code> are all 12, and colours may be <code>#rrggbb</code>, <code>#rrggbbaa</code> or <code>rgba(…)</code>. It's strict about <em>meaning</em>: <code>"abc"</code> for a number is an error. And any attribute of any kind may instead be <code>{= expression}</code> (line 53), which becomes <code>{"bind": "…"}</code>, a <code>Slot::Bound</code> once it reaches Rust.</p>
+
+<h2 id="edit"><span class="sec">7.5</span>The edit parser: four passes, one transaction</h2>
+<p><code>parseEdit</code> in <code>edit.ts</code> uses the <code>fast-xml-parser</code> library (a new dependency in <code>package.json</code>) to read the markup, then makes four passes over the verbs:</p>
+<snip file="src-ui/model/edit.ts" lines="67-119" mark="77-90,92-114"/>
+<ol class="steps">
+  <li><b>Collect verbs</b> (67–75) in order, rejecting unknown ones (<code>&lt;move&gt;</code> gets “unknown verb; use create, set, add…”).</li>
+  <li><b>Mint aliases</b> (77–90). Every <code>&lt;create id="$something"&gt;</code> gets a real id from <code>api.nextIds</code>, in order, so later verbs in the same edit can say <code>parent="$group"</code> or <code>id="$n"</code>. The model never invents a real id.</li>
+  <li><b>Batch placements</b> (92–119). Creates and reparents are grouped by <em>(parent, after)</em>, and each group asks Rust for all its keys in one <code>api.place</code> call. Batching matters: two creates both going “at the end of #1” must get two <em>different</em> keys in the right order, which separate calls wouldn't give, since the first create hasn't been applied yet. A parent created in the same edit has no children yet, so its keys are generated locally (line 112).</li>
+  <li><b>Build ops</b> (121–203). Each verb becomes op JSON in exactly the shape Rust's <code>Op</code> deserialises (Part 3, 3.2).</li>
+</ol>
+<p>Here is the <code>create</code> and <code>set</code> arm of pass 4. You can see <code>resolveLeaf</code> and <code>coerce</code> doing the work:</p>
+<snip file="src-ui/model/edit.ts" lines="129-174" mark="141-143,148-149,166-167"/>
+<p>Line 148 fills in any required component the model didn't mention with an empty object, which Rust fills with defaults, so <code>&lt;create type="rect"/&gt;</code> alone is valid. The verbs map onto ops like this:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Markup verb</th><th>Becomes</th></tr></thead>
+  <tbody>
+    <tr><td><code>&lt;create id="$a" type="rect" parent="#1" after="#M" x="10" …/&gt;</code></td><td><code>Create</code> with components grouped from the attributes</td></tr>
+    <tr><td><code>&lt;set id="#P" x="12" size.h="{= …}"/&gt;</code></td><td>One <code>Set</code> per attribute</td></tr>
+    <tr><td><code>&lt;add id="#N" stroke.width="2"/&gt;</code></td><td><code>AddComp</code> per component named</td></tr>
+    <tr><td><code>&lt;delete id="#3"/&gt;</code></td><td><code>Delete</code> (with its descendants)</td></tr>
+    <tr><td><code>&lt;reparent id="#4" to="#1" first="true"/&gt;</code></td><td><code>Reparent</code> with a key from <code>document_place</code></td></tr>
+    <tr><td><code>&lt;link from="#S" to="#Q" rel="animates" offset="0.5"/&gt;</code></td><td><code>Link</code>; extra attributes become <code>data</code></td></tr>
+    <tr><td><code>&lt;unlink id="r1"/&gt;</code></td><td><code>Unlink</code></td></tr>
+  </tbody>
+</table></div>
+<h3 id="apply-edit">Applying, and answering in the model's terms</h3>
+<snip file="src-ui/model/edit.ts" lines="236-256"/>
+<p>Parse errors and store errors come back the same way: as an <code>&lt;edit-failed applied="none" version="N"&gt;</code> block with one <code>&lt;error op="…" kind="…"&gt;</code> per problem. The model reads that just as it read the view. The smoke test's deliberately bad edit, <code>&lt;set id="#zz" x="1"/&gt;&lt;set id="#N" radius.r="{= #N.radius.r + 1}"/&gt;</code>, gets back two errors in one reply: <code>#zz</code> doesn't exist, and the binding would depend on itself. Nothing is applied.</p>
+<div class="box edge"><span class="tab">Rough edges</span>
+<ul>
+  <li><strong><code>&lt;create&gt;</code> effectively needs an <code>id</code>.</strong> Without one, line 134 falls back to <code>minted[0]</code>, which is either undefined (a “missing id” error) or the id already given to the first alias (a “already exists” error from Rust). Either way the model gets a clear error, but the manifest could say “id is required”.</li>
+  <li><strong><code>after="$alias"</code> only works when the parent is also new.</strong> If a created node is placed after another node created in the same edit under an <em>existing</em> parent, <code>api.place</code> is asked to place after an id that doesn't exist yet and throws. <code>applyEdit</code> catches that and reports it as a parse error, so it fails safely, not silently.</li>
+</ul>
+</div>
+
+<h2 id="manifest"><span class="sec">7.6</span>What the model is told: the manifest</h2>
+<p>The system prompt is generated from the schema at runtime (<ref file="src-ui/model/manifest.ts" line="8" has="export function manifest">manifest.ts:8</ref>). The node types and component fields in it are printed from <code>document_schema()</code>, so they can't drift from what the validator accepts (vision doc 04 §9.7). The fixed prose around them explains the view, the seven verbs, value syntax, the expression grammar and the time model, and ends with the retry contract:</p>
+<snip file="src-ui/model/manifest.ts" lines="38-71"/>
+<p>The plan's step 7 mentioned Zod schemas. The model chose schema-driven coercion instead, recorded in the plan's §5.12: one registry schema drives both the prompt and the parser, so a second schema language would be one more thing that could drift.</p>
+
+<h2 id="agent"><span class="sec">7.7</span>One turn, one retry, one transport</h2>
+<snip file="src-ui/model/agent.ts" lines="21-51" mark="22-26,45-48"/>
+<p>The whole agent loop fits on one screen. Build the system prompt from the schema and the user message from a full view plus the request (22–26). Call the model. Pull out the <code>&lt;edit&gt;</code> block, which may be surrounded by a sentence of explanation. Apply it with the label <code>"model: &lt;request&gt;"</code>. If it failed, send back the <code>&lt;edit-failed&gt;</code> markup and ask for one corrected edit (47–48). At most two attempts. The transaction's actor is <code>model</code>, so it sits on the same undo stack as your drags, and <kbd>Cmd</kbd>+<kbd>Z</kbd> undoes it.</p>
+<p>How the prompt reaches a model is behind a one-method interface, <code>ModelTransport.complete(system, messages)</code>. The first implementation calls the Claude API directly from the browser:</p>
+<snip file="src-ui/model/transport.ts" lines="17-46" mark="27-27,32-38"/>
+<ul>
+  <li><b>The key is yours.</b> You paste it into the Ask box, and it's stored in this browser's <code>localStorage</code> (<ref file="src-ui/runtime/document_client.svelte.ts" line="63" has="setApiKey">document_client:63–70</ref>). <code>dangerouslyAllowBrowser</code> acknowledges that it's exposed to page scripts, which is acceptable for a local tool with your own key and not for anything deployed.</li>
+  <li><b>Streaming</b>, so a large view or a long think can't hit a request timeout. <b>Adaptive thinking</b> lets the model decide how much to reason. The system prompt is marked <code>cache_control: ephemeral</code>, so the manifest, which is identical every turn, is cached.</li>
+  <li><b>The default model</b> is <code>claude-opus-5</code>, set in both <code>transport.ts</code> and <code>DocumentClient.modelName</code>.</li>
+</ul>
+<p>The comment at the top of <code>transport.ts</code> names the next transport: a local sidecar using <code>claude -p</code>, or the document exposed as MCP tools so Claude Code can edit a running scene. Only this file would change.</p>
+
+<h2 id="loop"><span class="sec">7.8</span>Closing the loop</h2>
+<p>Look back at Part 1's drag walkthrough. A model edit joins it at step 6: <code>Store::apply</code>, the same validation, the same inverse computation, the same log. From step 7 on, nothing knows or cares that the model wrote it: the reconciler draws it, the Document panel refreshes, <kbd>Cmd</kbd>+<kbd>Z</kbd> undoes it, and <code>save()</code> writes it to disk. That's what the vision documents meant by the op log being “simultaneously undo/redo, the Bevy sync channel, and the LLM invalidation source”, and it's why the model could build steps 5 to 7 in under an hour once the spine existed (the save/load commit is stamped 21:18; the model surface files, 22:01).</p>
+
+<div class="box recap"><span class="tab">The whole series, in five lines</span>
+<ul>
+  <li>The <strong>document</strong> (<code>iron_document</code>) holds all authored state: stable ids, typed components, slots, relations. Its writes are private to the op applier.</li>
+  <li>Every change is a <strong>transaction of ops</strong> that commits entirely or not at all and records its own <strong>inverse</strong>. Undo is just another transaction.</li>
+  <li>The <strong>bridge</strong> reconciles Bevy from the transaction log, and turns gestures into one transaction each.</li>
+  <li>The <strong>reactive graph</strong> layers previews, bindings and clip samples over the constants, and every reader sees the same resolved values.</li>
+  <li>The <strong>model</strong> reads views and writes <code>&lt;edit&gt;</code> markup, which becomes an ordinary transaction with a version check.</li>
+</ul>
+</div>

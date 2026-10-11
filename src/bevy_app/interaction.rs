@@ -28,6 +28,8 @@ pub fn interaction_decide_system(
     cameras: Query<(&Camera, &GlobalTransform), With<crate::bevy_app::scene3d::MainCamera3D>>,
     transforms: Query<&GlobalTransform>,
     doc2d: Query<&Doc2d>,
+    provenance: Query<&Provenance>,
+    store: Res<DocumentStore>,
     panels: Res<Panels>,
 ) {
     // Hover follows the primary hit. Written only on change so downstream
@@ -55,13 +57,27 @@ pub fn interaction_decide_system(
             selection.selected.insert(primary, ());
             selection.last_primary = Some(primary);
             drag.target = Some(primary);
+            drag.locked = [false, false];
+
+            // Which leaves the gesture would write, and whether they have a
+            // handle right now. Bound and clip-driven leaves do not.
+            let no_handle = |leaf: &str| -> bool {
+                let Ok(prov) = provenance.get(primary) else { return false };
+                let path: LeafPath = leaf.parse().expect("declared leaf");
+                let l = iron_document::Leaf { node: prov.0, path };
+                store.0.reactive().is_bound(l) || store.0.reactive().animated().contains_key(&l)
+            };
 
             if doc2d.get(primary).is_ok_and(|d| matches!(d.shape, Shape2d::Slider { .. })) {
                 // Scrubbing the value, not moving the control. The first
                 // preview happens in drag_apply this same frame.
                 drag.kind = Some(crate::DragKind::SliderValue);
             } else if doc2d.contains(primary) {
-                drag.kind = Some(crate::DragKind::Overlay2D);
+                drag.locked = [no_handle("transform2d.x"), no_handle("transform2d.y")];
+                drag.kind = if drag.locked == [true, true] { None } else { Some(crate::DragKind::Overlay2D) };
+                if drag.kind.is_none() {
+                    drag.target = None;
+                }
                 // Offset from the pointer (document space) to the node's
                 // global origin, so the grab point stays under the cursor.
                 let p = panels
@@ -70,6 +86,9 @@ pub fn interaction_decide_system(
                     .unwrap_or(Vec2::ZERO);
                 let origin = transforms.get(primary).map(|g| g.translation().truncate()).unwrap_or(Vec2::ZERO);
                 drag.grab_offset_2d = origin - p;
+            } else if no_handle("transform3d.pos") {
+                drag.kind = None;
+                drag.target = None;
             } else {
                 drag.kind = Some(crate::DragKind::World3D);
                 // Establish drag plane for 3D: if ctrl held -> fixed XZ plane (normal Y).
@@ -156,8 +175,10 @@ pub fn drag_apply_system(
                 Some(pg) => pg.affine().inverse().transform_point3(target_global.extend(0.0)),
                 None => target_global.extend(0.0),
             };
-            if transform.translation.truncate() != local.truncate() {
+            if !drag.locked[0] && transform.translation.x != local.x {
                 transform.translation.x = local.x;
+            }
+            if !drag.locked[1] && transform.translation.y != local.y {
                 transform.translation.y = local.y;
             }
         }
@@ -208,6 +229,13 @@ pub fn drag_commit_system(
                 // A bound leaf has no handle without a disambiguation policy
                 // (doc 02 §8.2); the reconciler snaps the entity back.
                 info!("{id}.{p} is bound; drag not written");
+                continue;
+            }
+            if store.0.reactive().animated().contains_key(&iron_document::Leaf { node: id, path: p }) {
+                // A clip is driving this leaf at the current time. Writing
+                // the authored value would change nothing visible and a
+                // keyframe must never be created silently (doc 05 §5.2).
+                info!("{id}.{p} is animated at t={}; drag not written", store.0.time());
                 continue;
             }
             let current = slot.constant().and_then(|v| v.as_f64());

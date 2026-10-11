@@ -1,0 +1,14 @@
+// One transaction, three ops, submitted by the model:
+//   op 0: set #4.transform2d.x = true          (a bool into a number)
+//   op 1: bind #3.size.w to "#3.size.h + 1"    (fine on its own)
+//   op 2: reparent #1 (the group) under #2     (#2 is inside #1)
+store.apply(…) → Err([
+  { "op": 0, "kind": "type_mismatch", "message": "transform2d.x expects number but got bool" },
+  { "op": 2, "kind": "cycle",         "message": "#2 is a descendant of #1" }
+])
+// Nothing applied — not even op 1. The version did not move.
+
+// A binding that would feed back into itself:
+//   set #2.slider.value = {bind: "#3.size.h / 300"}   while #3.size.h = #2.slider.value * 300
+store.apply(…) → Err([ ApplyError { op: 0, kind: Cycle,
+                       message: "binding #2.slider.value would depend on itself" } ])

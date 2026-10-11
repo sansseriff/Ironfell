@@ -11,6 +11,8 @@
  *   await __iron.save()            -> canonical JSON string
  *   await __iron.load(text)        -> replaces the document
  *   await __iron.view({fidelity:'summary', depth: 2})
+ *   await __iron.edit('<edit>…</edit>')   -> apply markup as the model would
+ *   await __iron.ask('make the circle red') -> a real model turn (needs a key)
  */
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
@@ -29,6 +31,12 @@ export class DocumentClient {
   depth: number | null = $state(null);
   error = $state('');
 
+  // The model surface's state, for the prompt panel.
+  apiKey = $state('');
+  modelName = $state('claude-opus-5');
+  asking = $state(false);
+  lastAsk: any = $state(null);
+
   private post: ((data: any) => void) | null = null;
   private pending = new Map<number, Pending>();
   private nextId = 1;
@@ -38,11 +46,45 @@ export class DocumentClient {
     this.error = '';
     for (const p of this.pending.values()) p.reject(new Error('session replaced'));
     this.pending.clear();
+    try {
+      this.apiKey = localStorage.getItem('iron.anthropicKey') ?? '';
+    } catch {
+      // storage unavailable; the key is entered per session
+    }
     (window as any).__iron = {
       save: () => this.save(),
       load: (text: string) => this.load(text),
       view: (q: ViewQuery) => this.request('documentView', { query: { scope: null, depth: null, ...q } }),
+      edit: (xml: string, label?: string) => this.edit(xml, label),
+      ask: (instruction: string) => this.ask(instruction),
     };
+  }
+
+  setApiKey(key: string) {
+    this.apiKey = key;
+    try {
+      localStorage.setItem('iron.anthropicKey', key);
+    } catch {
+      // storage unavailable
+    }
+  }
+
+  /** Apply `<edit>` markup as the model would. Resolves with the outcome. */
+  edit(xml: string, label?: string): Promise<any> {
+    return this.request('modelEdit', { xml, label });
+  }
+
+  /** One model turn: view, prompt, apply. */
+  async ask(instruction: string): Promise<any> {
+    if (!this.apiKey) throw new Error('no API key set');
+    this.asking = true;
+    try {
+      const result = await this.request('modelAsk', { instruction, apiKey: this.apiKey, model: this.modelName });
+      this.lastAsk = result;
+      return result;
+    } finally {
+      this.asking = false;
+    }
   }
 
   /** Returns true if the message was one of ours. */
@@ -60,6 +102,17 @@ export class DocumentClient {
         this.pending.delete(data.requestId);
         if (data.ok === false) p.reject(new Error(data.error ?? 'request failed'));
         else p.resolve(data.text);
+        return true;
+      }
+      case 'modelEditResult':
+      case 'modelAskResult': {
+        // Resolve with the structured outcome even on a rejected edit: the
+        // failure markup is the useful part.
+        const p = this.pending.get(data.requestId);
+        if (!p) return true;
+        this.pending.delete(data.requestId);
+        if (data.error) p.reject(new Error(data.error));
+        else p.resolve(data.outcome ?? data.result);
         return true;
       }
       default:

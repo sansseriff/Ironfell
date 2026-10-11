@@ -1,0 +1,1386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 4 · Into Bevy: the reconciler and writeback — Iron&#x27;s Document Spine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron's Document Spine <span>· a guide to the Sept 18 work</span></a><div class="pager"><a href="03-ops.html" aria-label="Previous part">&larr;</a><span class="here">Part 4 of 7</span><a href="05-reactive.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>The shape of the change</a></li><li><a href="02-document.html"><span class="num">2</span>What the document is made of</a></li><li><a href="03-ops.html"><span class="num">3</span>Changing it: ops, transactions, undo</a></li><li><a href="04-bridge.html" aria-current="page"><span class="num">4</span>Into Bevy: the reconciler and writeback</a></li><li><a href="05-reactive.html"><span class="num">5</span>Bindings and the reactive graph</a></li><li><a href="06-time.html"><span class="num">6</span>Scripted time: clips on a timeline</a></li><li><a href="07-model.html"><span class="num">7</span>The model surface</a></li><li><a href="08-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 4 of 7 · <span class="chip sys-bridge">Bevy bridge</span> <span class="chip sys-shell">FFI & shell</span></p>
+  <h1>Into Bevy: the reconciler and writeback</h1>
+  <p class="lede">The store from Parts 2 and 3 knows nothing about Bevy. This part covers the code in between. It turns document nodes into entities, redraws only what changed, turns a drag back into one transaction, and connects undo, save and load to the Svelte shell. This is plan steps 2–4, the commits “undo redo” and “working save/load”.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 3: transactions, the log, <code>Store::apply</code>, undo as a new transaction.</div>
+    <div><b>Files</b><code>src/document_bridge/{mod,materialize,render,demo}.rs</code>, <code>src/bevy_app/{interaction,picking,mod}.rs</code>, <code>src/panels.rs</code>, <code>src/web_ffi.rs</code>, <code>src-ui/worker.ts</code>, <code>src-ui/runtime/document_client.svelte.ts</code>.</div>
+  </div>
+</header>
+
+<h2 id="bevy"><span class="sec">4.1</span>Bevy words used in this part</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Word</th><th>Meaning</th><th>Here</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Entity</strong></td><td>An id for “a thing in the scene”. It has no data of its own.</td><td>One per materialised node</td></tr>
+    <tr><td><strong>Component</strong> (Bevy's)</td><td>Data attached to an entity: <code>Transform</code>, <code>Mesh3d</code>… <em>Not</em> the same as a document component.</td><td><code>Provenance</code>, <code>Doc2d</code></td></tr>
+    <tr><td><strong>Resource</strong></td><td>A single global value in the Bevy world.</td><td><code>DocumentStore</code>, <code>NodeMap</code></td></tr>
+    <tr><td><strong>System</strong></td><td>A function Bevy calls each frame. Its parameters declare what it reads and writes.</td><td><code>sync_document</code></td></tr>
+    <tr><td><code>Res&lt;T&gt;</code> / <code>ResMut&lt;T&gt;</code></td><td>Read / write access to a resource, as a system parameter.</td><td></td></tr>
+    <tr><td><code>Query&lt;(&amp;A, &amp;B)&gt;</code></td><td>“All entities that have A and B.” A system parameter.</td><td></td></tr>
+    <tr><td><code>Commands</code></td><td>A queue of spawns, despawns and inserts, applied a little later in the frame.</td><td>The reconciler's output</td></tr>
+    <tr><td><code>PreUpdate</code>, <code>Update</code>, <code>PostUpdate</code></td><td>Schedules that run in that order every frame.</td><td>See the frame diagram in 4.6</td></tr>
+  </tbody>
+</table></div>
+<p>One practical point: a Bevy <code>Entity</code> id is <strong>recycled</strong> after despawn, so it can't serve as a node's identity. That alone rules out making Bevy the authority, and it's the first reason vision doc 04 §5.1 gives.</p>
+
+<h2 id="naive"><span class="sec">4.2</span>Two simple bridges, and why neither was chosen</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version A</span><p><strong>Rebuild every frame.</strong> Despawn everything and respawn from the document each frame. It's always correct, but you pay for the whole scene every frame, entity ids churn (breaking selection and hover), and a drag's in-progress <code>Transform</code> would be overwritten.</p></div>
+  <div class="box naive"><span class="tab">The simple version B</span><p><strong>Diff every frame.</strong> Compare every node against its entity and patch the differences. It's correct and cheaper, but it still touches every node every frame, and it has no idea <em>why</em> something changed.</p></div>
+</div>
+<div class="box built"><span class="tab">What was built</span>
+<p><strong>Reconcile from the log.</strong> After each batch of transactions, read the new entries in the history log, collect the node ids their ops touched, and re-examine only those nodes. A frame with no transactions does no work at all. Every entity carries a <code>Provenance(NodeId)</code> component, and a <code>NodeMap</code> resource maps both ways.</p>
+</div>
+
+<h2 id="resources"><span class="sec">4.3</span>The bridge's resources</h2>
+<p>Everything the bridge shares with the rest of the app is a Bevy resource declared in <code>document_bridge/mod.rs</code>:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:35">src/document_bridge/mod.rs</a><span class="range">lines 35–60</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:2;--len:2"></span><span class="band" style="--from:8;--len:2"></span><span class="band" style="--from:24;--len:2"></span><pre class="gutter" aria-hidden="true">35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60</pre><pre class="src"><code class="language-rust">/// The authored store, as a resource. Reads go through `.0.document()`;
+/// writes go through [`PendingTransactions`], never through here.
+#[derive(Resource)]
+pub struct DocumentStore(pub Store);
+
+/// Transactions queued for the next sync. Anything that wants to change
+/// authored state pushes here: gestures, keyboard commands, the FFI, the
+/// model surface.
+#[derive(Resource, Default)]
+pub struct PendingTransactions(pub Vec&lt;TransactionInput&gt;);
+
+impl PendingTransactions {
+    pub fn push(&amp;mut self, label: impl Into&lt;String&gt;, actor: iron_document::Actor, ops: Vec&lt;Op&gt;) {
+        self.0.push(TransactionInput {
+            label: label.into(),
+            actor,
+            ts: 0, // stamped from the clock at sync
+            idempotency_key: None,
+            ops,
+        });
+    }
+}
+
+/// Names the document node an entity materialises.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Provenance(pub NodeId);</code></pre></div></div></figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Resource</th><th>Holds</th><th>Written by</th></tr></thead>
+  <tbody>
+    <tr><td><code>DocumentStore</code></td><td>The <code>Store</code> itself</td><td>Only the sync, plus gesture previews (Part 5) and the synchronous FFI apply (Part 7)</td></tr>
+    <tr><td><code>PendingTransactions</code></td><td>Transactions waiting for the next sync</td><td>Drag commit, the demo scene</td></tr>
+    <tr><td><code>HistoryRequests</code></td><td>Queued <code>Undo</code> / <code>Redo</code></td><td>The <code>undo</code>/<code>redo</code> FFI calls</td></tr>
+    <tr><td><code>GestureRequests</code></td><td>“Commit” or “cancel” the current preview</td><td>Slider release (Part 5)</td></tr>
+    <tr><td><code>PendingLoad</code></td><td>A validated document waiting to replace the current one</td><td><code>document_load</code> FFI</td></tr>
+    <tr><td><code>NodeMap</code></td><td><code>NodeId ↔ Entity</code>, plus each node's paint order</td><td>The reconciler</td></tr>
+    <tr><td><code>SyncedVersion</code></td><td>The last document version the reconciler has caught up to</td><td>The sync</td></tr>
+    <tr><td><code>DocumentDirty</code></td><td>“Redraw the 2D layer this frame”</td><td>The sync; cleared by the renderer</td></tr>
+  </tbody>
+</table></div>
+<p>The pattern is the same throughout: <strong>everything that wants to change the document pushes a request into a queue</strong>, and one system, <code>sync_document</code>, drains every queue in a fixed order at the start of each frame. The plugin wires it up:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:144">src/document_bridge/mod.rs</a><span class="range">lines 144–165</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165</pre><pre class="src"><code class="language-rust">pub struct DocumentPlugin;
+
+impl Plugin for DocumentPlugin {
+    fn build(&amp;self, app: &amp;mut App) {
+        app.insert_resource(DocumentStore(Store::new()))
+            .init_resource::&lt;PendingTransactions&gt;()
+            .init_resource::&lt;NodeMap&gt;()
+            .init_resource::&lt;DocumentDirty&gt;()
+            .init_resource::&lt;HistoryRequests&gt;()
+            .init_resource::&lt;PendingLoad&gt;()
+            .init_resource::&lt;GestureRequests&gt;()
+            .init_resource::&lt;SyncedVersion&gt;()
+            .add_systems(Startup, (materialize::setup_mesh_assets, render::setup_document_layer, demo::queue_demo_scene))
+            // Before input collection, so a transaction queued last frame is
+            // visible to this frame&#x27;s picking.
+            .add_systems(PreUpdate, sync_document)
+            .add_systems(
+                PostUpdate,
+                render::render_document_layer.after(TransformSystems::Propagate),
+            );
+    }
+}</code></pre></div></div></figure>
+
+<h2 id="sync"><span class="sec">4.4</span><code>sync_document</code>: the heart of the bridge</h2>
+<p>This is the longest function in the bridge and the one to understand first. It runs once per frame in <code>PreUpdate</code>. The parameter list (lines 169–181) is the list of resources above plus <code>Commands</code> and the clock. Here it is in three pieces.</p>
+<h3 id="sync-1">First: skip, or load</h3>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:182">src/document_bridge/mod.rs</a><span class="range">lines 182–210</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:0;--len:9"></span><span class="band" style="--from:12;--len:17"></span><pre class="gutter" aria-hidden="true">182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210</pre><pre class="src"><code class="language-rust">if pending.0.is_empty()
+    &amp;&amp; history.0.is_empty()
+    &amp;&amp; load.0.is_none()
+    &amp;&amp; gestures.0.is_empty()
+    &amp;&amp; !store.0.has_changes()
+    &amp;&amp; store.0.document().version() == synced.0
+{
+    return;
+}
+let now = time.elapsed().as_millis() as u64;
+let mut affected: BTreeSet&lt;NodeId&gt; = BTreeSet::new();
+let version_before = synced.0;
+if let Some(doc) = load.0.take() {
+    // Everything materialised belongs to the old document. Tear it all
+    // down rather than diffing: ids may coincide with different types.
+    for e in map.drain() {
+        if let Ok(mut ec) = commands.get_entity(e) {
+            ec.try_despawn();
+        }
+    }
+    store.0 = Store::with_document(doc);
+    synced.0 = store.0.document().version();
+    affected.extend(store.0.document().live_nodes().map(|n| n.id));
+    info!(
+        &quot;loaded document v{} ({} live nodes)&quot;,
+        store.0.document().version().0,
+        affected.len()
+    );
+}</code></pre></div></div></figure>
+<p>The early return (182–190) is why an idle frame costs nothing: no queued work, no pending value changes, and the document's version equals the one already synced. A load tears down every entity rather than diffing, because in a different document the same id may be a different type. It then installs a fresh <code>Store</code>, which starts with empty history, and marks every live node as affected.</p>
+<h3 id="sync-2">Then: drain the queues, in order</h3>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:211">src/document_bridge/mod.rs</a><span class="range">lines 211–248</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248</pre><pre class="src"><code class="language-rust">for mut input in pending.0.drain(..) {
+    if input.ts == 0 {
+        input.ts = now;
+    }
+    let label = input.label.clone();
+    if let Err(errors) = store.0.apply(input) {
+        for e in errors {
+            warn!(&quot;transaction {label:?} rejected: {e}&quot;);
+        }
+    }
+}
+for g in gestures.0.drain(..) {
+    match g {
+        GestureRequest::Commit(label) =&gt; {
+            if let Some(Err(errors)) = store.0.commit_gesture(label, iron_document::Actor::Human, now) {
+                for e in errors {
+                    warn!(&quot;gesture rejected: {e}&quot;);
+                }
+            }
+        }
+        GestureRequest::Cancel =&gt; store.0.cancel_gesture(),
+    }
+}
+for op in history.0.drain(..) {
+    let result = match op {
+        HistoryOp::Undo =&gt; store.0.undo(now),
+        HistoryOp::Redo =&gt; store.0.redo(now),
+    };
+    match result {
+        None =&gt; info!(&quot;nothing to {op:?}&quot;),
+        Some(Ok(_)) =&gt; {}
+        Some(Err(errors)) =&gt; {
+            for e in errors {
+                warn!(&quot;{op:?} rejected: {e}&quot;);
+            }
+        }
+    }
+}</code></pre></div></div></figure>
+<p>Transactions first, then gesture commits, then undo/redo. Errors are logged as warnings, and a rejected transaction simply doesn't happen. <code>ts == 0</code> means “stamp me with the frame clock” (211–214), which is how Bevy systems submit transactions without needing a clock.</p>
+<h3 id="sync-3">Finally: find what changed and reconcile it</h3>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:249">src/document_bridge/mod.rs</a><span class="range">lines 249–279</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:7"></span><span class="band" style="--from:10;--len:3"></span><span class="band" style="--from:17;--len:3"></span><span class="band" style="--from:27;--len:1"></span><pre class="gutter" aria-hidden="true">249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+271
+272
+273
+274
+275
+276
+277
+278
+279</pre><pre class="src"><code class="language-rust">    // Everything the log gained since the last sync, whoever applied it.
+    for tx in store.0.history().log().filter(|tx| tx.version &gt; synced.0) {
+        info!(&quot;applied {:?} ({} ops, {:?}) -&gt; v{}&quot;, tx.label, tx.ops.len(), tx.actor, tx.version.0);
+        for op in tx.ops.iter().chain(tx.inverse.iter()) {
+            collect_ids(op, &amp;mut affected);
+        }
+    }
+    synced.0 = store.0.document().version();
+    // Resolved values that moved: bindings re-evaluated, or a gesture
+    // previewed. Their nodes are rewritten like any other change.
+    for change in store.0.drain_changes() {
+        affected.insert(change.leaf.node);
+    }
+    for (leaf, err) in &amp;store.0.reactive().errors {
+        warn!(&quot;binding {leaf}: {err}&quot;);
+    }
+    let version = store.0.document().version();
+    if version != version_before {
+        crate::web_ffi::send_document_changed_from_worker(version.0 as u32);
+    }
+    if affected.is_empty() {
+        return;
+    }
+    let Some(assets) = assets else {
+        warn!(&quot;mesh assets missing; cannot reconcile&quot;);
+        return;
+    };
+    materialize::reconcile(&amp;store.0, &amp;affected, &amp;mut map, &amp;mut commands, &amp;assets);
+    map.paint_index = paint_order(&amp;store.0);
+    dirty.0 = true;
+}</code></pre></div></div></figure>
+<p>Line 250 is the design decision from 4.2 in code. It doesn't look at <em>what was queued</em>; it looks at <strong>everything the log gained since <code>SyncedVersion</code></strong>. That covers the queued transactions, undo and redo, and also transactions applied by other routes: the model surface calls <code>Store::apply</code> synchronously through the FFI (Part 7), and the sync picks those up here on the next frame without being told about them.</p>
+<p>For each new transaction, <code>collect_ids</code> reads the node ids off both the ops <em>and</em> the inverse:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:281">src/document_bridge/mod.rs</a><span class="range">lines 281–298</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">281
+282
+283
+284
+285
+286
+287
+288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298</pre><pre class="src"><code class="language-rust">fn collect_ids(op: &amp;Op, out: &amp;mut BTreeSet&lt;NodeId&gt;) {
+    match op {
+        Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } =&gt; {
+            out.insert(*id);
+            if let Some(p) = parent {
+                out.insert(*p);
+            }
+        }
+        Op::Delete { id }
+        | Op::Reorder { id, .. }
+        | Op::Set { id, .. }
+        | Op::AddComp { id, .. }
+        | Op::RemoveComp { id, .. } =&gt; {
+            out.insert(*id);
+        }
+        Op::Link { .. } | Op::Unlink { .. } =&gt; {}
+    }
+}</code></pre></div></div></figure>
+<p>Why the inverse too? For a <code>Reparent</code>, the op names the <em>new</em> parent and the inverse names the <em>old</em> one. Both parents' child lists changed, and both need looking at. Links are skipped because a relation doesn't change any entity by itself.</p>
+<p>After that come the changes the <em>reactive graph</em> reports (259–261), such as “the bar's height is now 240 because the slider moved”. Part 5 explains where those come from; for now they are simply more affected nodes. If the version moved, the shell is told (266–268). Then the affected set goes to the reconciler.</p>
+
+<h2 id="reconcile"><span class="sec">4.5</span>The reconciler: node → entity</h2>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:75">src/document_bridge/materialize.rs</a><span class="range">lines 75–121</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:21"></span><span class="band" style="--from:34;--len:12"></span><pre class="gutter" aria-hidden="true">75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121</pre><pre class="src"><code class="language-rust">pub(super) fn reconcile(
+    store: &amp;Store,
+    affected: &amp;BTreeSet&lt;NodeId&gt;,
+    map: &amp;mut NodeMap,
+    commands: &amp;mut Commands,
+    assets: &amp;MeshAssets,
+) {
+    let doc = store.document();
+    let _ = ComponentKind::ALL; // keep the import meaningful for readers
+
+    // Pass 1: existence and values. Hierarchy waits until every entity exists.
+    for &amp;id in affected {
+        match (doc.live(id), map.entity(id)) {
+            (Some(_), None) =&gt; {
+                if let Some(e) = spawn(store, id, commands, assets) {
+                    map.insert(id, e);
+                }
+            }
+            (None, Some(_)) =&gt; {
+                let e = map.remove(id).expect(&quot;checked&quot;);
+                if let Ok(mut ec) = commands.get_entity(e) {
+                    ec.try_despawn();
+                }
+            }
+            (Some(_), Some(e)) =&gt; {
+                if let Ok(mut ec) = commands.get_entity(e) {
+                    write_values(store, id, &amp;mut ec, assets);
+                }
+            }
+            (None, None) =&gt; {}
+        }
+    }
+
+    // Pass 2: parent links, for every touched node that is materialised.
+    for &amp;id in affected {
+        let (Some(node), Some(e)) = (doc.live(id), map.entity(id)) else { continue };
+        let Ok(mut ec) = commands.get_entity(e) else { continue };
+        match node.parent.and_then(|p| map.entity(p)) {
+            Some(pe) =&gt; {
+                ec.insert(ChildOf(pe));
+            }
+            None =&gt; {
+                ec.remove::&lt;ChildOf&gt;();
+            }
+        }
+    }
+}</code></pre></div></div></figure>
+<p>For each affected id there are four cases (86–106): the node is live but has no entity, so spawn one; there's an entity but no live node, so despawn it; both exist, so rewrite the entity's values; neither exists, so do nothing. Parent links are set in a second pass (108–120), because during the first pass a child may be spawned before its parent.</p>
+<p><code>write_values</code> is where document components become Bevy components, one arm per node type:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:151">src/document_bridge/materialize.rs</a><span class="range">lines 151–190</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190</pre><pre class="src"><code class="language-rust">/// Rewrite every derived component from the node&#x27;s current *resolved* values:
+/// a bound slot contributes what its binding evaluates to, a previewed slot
+/// what the gesture says. Authored constants are read the same way.
+fn write_values(store: &amp;Store, id: NodeId, ec: &amp;mut EntityCommands, assets: &amp;MeshAssets) {
+    let Some(node) = store.document().live(id) else { return };
+    let r = Reader { store, id };
+    match node.ty.name() {
+        &quot;group&quot; =&gt; {
+            ec.insert(r.transform_2d());
+        }
+        &quot;rect&quot; | &quot;circle&quot; | &quot;bar&quot; | &quot;slider&quot; =&gt; {
+            ec.insert(r.transform_2d());
+            let shape = match node.ty.name() {
+                &quot;circle&quot; =&gt; Shape2d::Circle { r: r.num(&quot;radius.r&quot;, 50.0) },
+                &quot;slider&quot; =&gt; {
+                    let (min, max) = (r.num(&quot;slider.min&quot;, 0.0), r.num(&quot;slider.max&quot;, 1.0));
+                    let value = r.num(&quot;slider.value&quot;, 0.0);
+                    let t = if max &gt; min { ((value - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
+                    Shape2d::Slider { w: r.num(&quot;size.w&quot;, 200.0), h: r.num(&quot;size.h&quot;, 24.0), t }
+                }
+                _ =&gt; Shape2d::Rect { w: r.num(&quot;size.w&quot;, 100.0), h: r.num(&quot;size.h&quot;, 100.0) },
+            };
+            let fill = r.color(&quot;fill.color&quot;).map(|mut c| {
+                c[3] *= r.num(&quot;fill.opacity&quot;, 1.0);
+                c
+            });
+            let stroke = r.color(&quot;stroke.color&quot;).map(|c| (c, r.num(&quot;stroke.width&quot;, 1.0)));
+            ec.insert(Doc2d { shape, fill, stroke });
+        }
+        &quot;mesh&quot; =&gt; {
+            ec.insert(r.transform_3d());
+            let asset = r.str(&quot;mesh.asset&quot;).unwrap_or_else(|| &quot;torus&quot;.to_owned());
+            if asset != &quot;torus&quot; {
+                warn!(&quot;{id}: unknown mesh asset {asset:?}; showing torus&quot;);
+            }
+            ec.insert(Mesh3d(assets.torus.clone()));
+        }
+        _ =&gt; {}
+    }
+}</code></pre></div></div></figure>
+<p>The important detail is <em>how</em> it reads values. It doesn't use <code>doc.leaf(...)</code>, the authored slot. It goes through <code>Reader</code>, which calls <code>store.resolved(...)</code>:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:192">src/document_bridge/materialize.rs</a><span class="range">lines 192–235</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:4"></span><span class="band" style="--from:34;--len:10"></span><pre class="gutter" aria-hidden="true">192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235</pre><pre class="src"><code class="language-rust">/// Resolved-value reads for one node, with defaults for absent components.
+struct Reader&lt;&#x27;a&gt; {
+    store: &amp;&#x27;a Store,
+    id: NodeId,
+}
+
+impl Reader&lt;&#x27;_&gt; {
+    fn get(&amp;self, leaf: &amp;str) -&gt; Option&lt;Value&gt; {
+        let path: LeafPath = leaf.parse().expect(&quot;declared leaf&quot;);
+        self.store.resolved(self.id, path)
+    }
+
+    fn num(&amp;self, leaf: &amp;str, default: f32) -&gt; f32 {
+        self.get(leaf).and_then(|v| v.as_f64()).map(|n| n as f32).unwrap_or(default)
+    }
+
+    fn color(&amp;self, leaf: &amp;str) -&gt; Option&lt;[f32; 4]&gt; {
+        self.get(leaf).and_then(|v| v.as_color())
+    }
+
+    fn str(&amp;self, leaf: &amp;str) -&gt; Option&lt;String&gt; {
+        self.get(leaf).and_then(|v| v.as_str().map(str::to_owned))
+    }
+
+    fn vec3(&amp;self, leaf: &amp;str, default: Vec3) -&gt; Vec3 {
+        self.get(leaf)
+            .and_then(|v| v.as_vec3())
+            .map(|[x, y, z]| Vec3::new(x as f32, y as f32, z as f32))
+            .unwrap_or(default)
+    }
+
+    /// Document 2D space is y-down with the origin at the viewer panel&#x27;s
+    /// top-left; the entity transform is that space verbatim, and the layer
+    /// renderer applies the panel offset when it emits commands.
+    fn transform_2d(&amp;self) -&gt; Transform {
+        if self.store.document().component(self.id, ComponentKind::Transform2d).is_none() {
+            return Transform::IDENTITY;
+        }
+        Transform {
+            translation: Vec3::new(self.num(&quot;transform2d.x&quot;, 0.0), self.num(&quot;transform2d.y&quot;, 0.0), 0.0),
+            rotation: Quat::from_rotation_z(self.num(&quot;transform2d.rot&quot;, 0.0)),
+            scale: Vec3::new(self.num(&quot;transform2d.sx&quot;, 1.0), self.num(&quot;transform2d.sy&quot;, 1.0), 1.0),
+        }
+    }</code></pre></div></div></figure>
+<p><code>resolved</code> returns the value a reader should see <em>right now</em>: a gesture's preview if one is active, else a binding's computed result, else a clip's sampled value, else the authored constant. So the reconciler draws bound, previewed and animated values with no special cases, and Parts 5 and 6 plug into it without touching this file.</p>
+<p>Note also the coordinate convention in the comment on <code>transform_2d</code>. Document 2D space is <strong>y-down with the origin at the viewer panel's top-left</strong>, the same as SVG and kurbo, so the entity's <code>Transform</code> holds document coordinates as they are. The old overlay used a y-up, panel-centred space. Two tiny helpers in <code>panels.rs</code> convert between screen and document space:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/panels.rs:103">src/panels.rs</a><span class="range">lines 103–113</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113</pre><pre class="src"><code class="language-rust">/// Document 2D space is y-down with its origin at the viewer panel&#x27;s top-left
+/// corner, one unit per physical pixel (plans/document-spine.md §0). This maps
+/// a window-space cursor position into it; `None` outside the panel.
+pub fn document_from_screen(rect: PanelRect, screen: Vec2) -&gt; Option&lt;Vec2&gt; {
+    rect.contains(screen).then(|| Vec2::new(screen.x - rect.x, screen.y - rect.y))
+}
+
+/// Kurbo affine mapping document 2D space to screen-space vello coords.
+pub fn document_affine(rect: PanelRect) -&gt; kurbo::Affine {
+    kurbo::Affine::translate((rect.x as f64, rect.y as f64))
+}</code></pre></div></div></figure>
+
+<h3 id="render">Drawing: one display list for all 2D nodes</h3>
+<p>Entities with a <code>Doc2d</code> component (rects, circles, bars, sliders) are all drawn into <strong>one</strong> Vello display list by <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/render.rs:21" title="src/document_bridge/render.rs:21"><code>render_document_layer</code></a>, in document preorder, so later siblings paint on top. The list is rebuilt only when something set <code>DocumentDirty</code>, an entity moved (a drag in progress), the panel resized, or the selection changed. Picking uses the same painter order: <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/picking.rs:44" title="src/bevy_app/picking.rs:44"><code>pick_document_2d_system</code></a> maps the cursor into each node's local space through the inverse of its global transform, so rotated and scaled shapes hit-test correctly, and it uses the node's paint index as depth. This replaced the old <code>overlay2d.rs</code>, which had a separate hand-written layer and hit test for each kind of demo object.</p>
+
+<h2 id="drag"><span class="sec">4.6</span>Writeback: a drag becomes one op</h2>
+<p>This was the old square drag, in full. The square's position lived in a resource, and dragging overwrote it:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><span class="path">src/bevy_app/overlay2d.rs</span><span class="range">lines 413–458 · as of <code>177e42c</code>, before the change</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:30;--len:15"></span><pre class="gutter" aria-hidden="true">413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455
+456
+457
+458</pre><pre class="src"><code class="language-rust">pub(crate) fn update_draggable_square_state(
+    mut state: ResMut&lt;DraggableSquare&gt;,
+    mut cursor_events: MessageReader&lt;CursorMoved&gt;,
+    mouse: Res&lt;SimpleMouseState&gt;,
+    panels: Res&lt;Panels&gt;,
+) {
+    // Follow the pattern in tracking_circle.rs: only act if we have cursor movement events this frame.
+    if cursor_events.is_empty() {
+        // Still need to handle drag end even without movement.
+        if state.dragging &amp;&amp; !mouse.left_pressed {
+            state.dragging = false;
+        }
+        return;
+    }
+    let last_opt = cursor_events.read().last().map(|e| e.position);
+    let Some(last_pos) = last_opt else {
+        return;
+    };
+    let Some(rect) = panels.rect(VIEWER_PANEL) else {
+        return;
+    };
+    let world_pos = overlay_world_from_screen(rect, last_pos);
+
+    // Hover test (AABB of the square)
+    let half = state.size * 0.5;
+    state.hovered = (world_pos.x &gt;= state.position.x - half.x)
+                 &amp;&amp; (world_pos.x &lt;= state.position.x + half.x)
+                 &amp;&amp; (world_pos.y &gt;= state.position.y - half.y)
+                 &amp;&amp; (world_pos.y &lt;= state.position.y + half.y);
+
+    // Drag start
+    if !state.dragging &amp;&amp; state.hovered &amp;&amp; mouse.left_pressed {
+        state.dragging = true;
+        state.drag_offset = world_pos - state.position;
+    }
+
+    // Drag end
+    if state.dragging &amp;&amp; !mouse.left_pressed {
+        state.dragging = false;
+    }
+
+    // Drag move
+    if state.dragging &amp;&amp; mouse.left_pressed {
+        state.position = world_pos - state.drag_offset;
+    }
+}</code></pre></div></div></figure>
+<p>It worked, but the new position went nowhere. No log, no undo, no file, and the Svelte inspector had its own separate path for writing the same kind of state.</p>
+<div class="box built"><span class="tab">What was built</span>
+<p><strong>A gesture is an intent, not a mutation</strong> (vision doc 04 §5.3). While the pointer is down, the <em>entity</em> moves every frame so the square keeps up with the cursor: the optimistic half. On release, the difference between the entity and the document becomes <strong>one transaction</strong>. The sync applies it on the next frame, and the reconciler writes the entity from the document, landing on the same position.</p>
+</div>
+<figure class="diagram">
+<svg viewBox="0 0 920 320" role="img" aria-label="One frame of the app. PreUpdate runs pointer collection, picking, the timeline scrub and playhead push, then sync_document. Update runs the timeline view. PostUpdate runs interaction_decide, drag_apply, drag_commit, transform propagation, and render_document_layer. An arrow from drag_commit loops back to sync_document: the queued transaction is applied at the start of the next frame.">
+  <defs><marker id="f1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-accent"/></marker></defs>
+  <rect x="20" y="20" width="360" height="258" rx="8" class="zone"/>
+  <text class="t-b" x="36" y="44">PreUpdate</text>
+  <rect x="40" y="58" width="320" height="30" rx="4" class="box-fill"/><text class="t-mono" x="200" y="78" text-anchor="middle">pointer_collect_system</text>
+  <rect x="40" y="98" width="320" height="30" rx="4" class="box-fill"/><text class="t-mono" x="200" y="118" text-anchor="middle">pick_document_2d · pick_world_3d → primary hit</text>
+  <rect x="40" y="138" width="320" height="30" rx="4" class="s-time"/><text class="t-mono" x="200" y="158" text-anchor="middle">scrub_timeline → push_time_to_store</text>
+  <rect x="40" y="186" width="320" height="40" rx="4" class="s-bridge"/><text class="t-mono" x="200" y="205" text-anchor="middle">sync_document</text><text class="t-s" x="200" y="220" text-anchor="middle">apply queues · read log · reconcile</text>
+  <text class="t-s" x="200" y="252" text-anchor="middle">only the timeline pair is ordered .before(sync_document)</text>
+
+  <rect x="400" y="20" width="130" height="258" rx="8" class="zone"/>
+  <text class="t-b" x="416" y="44">Update</text>
+  <rect x="412" y="58" width="106" height="44" rx="4" class="box-fill"/><text class="t-s" x="465" y="77" text-anchor="middle">timeline view,</text><text class="t-s" x="465" y="92" text-anchor="middle">grid, camera…</text>
+
+  <rect x="550" y="20" width="350" height="258" rx="8" class="zone"/>
+  <text class="t-b" x="566" y="44">PostUpdate</text>
+  <rect x="570" y="58" width="310" height="30" rx="4" class="s-bridge"/><text class="t-mono" x="725" y="78" text-anchor="middle">interaction_decide_system</text>
+  <rect x="570" y="98" width="310" height="30" rx="4" class="s-bridge"/><text class="t-mono" x="725" y="118" text-anchor="middle">drag_apply_system  (moves entity)</text>
+  <rect x="570" y="138" width="310" height="30" rx="4" class="s-bridge"/><text class="t-mono" x="725" y="158" text-anchor="middle">drag_commit_system (queues ops)</text>
+  <rect x="570" y="178" width="310" height="30" rx="4" class="box-fill"/><text class="t-mono" x="725" y="198" text-anchor="middle">TransformSystems::Propagate</text>
+  <rect x="570" y="218" width="310" height="30" rx="4" class="s-bridge"/><text class="t-mono" x="725" y="238" text-anchor="middle">render_document_layer</text>
+
+  <path d="M880,153 H906 V300 H10 V206 H38" class="ln-accent" marker-end="url(#f1)"/>
+  <text class="t-s" x="460" y="296" text-anchor="middle">PendingTransactions: the “move rect” queued on release is applied by sync_document at the start of the next frame</text>
+</svg>
+<figcaption>One frame, and the loop from release to apply. The one-frame delay is invisible: during that frame the entity is already where the document is about to say it is.</figcaption>
+</figure>
+<p>Here are the three drag systems. <strong>Deciding</strong> happens on pointer down:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/interaction.rs:46">src/bevy_app/interaction.rs</a><span class="range">lines 46–88</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:5"></span><span class="band" style="--from:16;--len:8"></span><span class="band" style="--from:29;--len:6"></span><pre class="gutter" aria-hidden="true">46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88</pre><pre class="src"><code class="language-rust">// Drag end
+if pointer.just_released_left &amp;&amp; drag.target.is_some() {
+    commit.0 = drag.target;
+    drag.target = None;
+    drag.kind = None;
+}
+
+// Drag begin or click selection start
+if pointer.just_pressed_left {
+    if let Some(primary) = hits.primary {
+        selection.selected.clear();
+        selection.selected.insert(primary, ());
+        selection.last_primary = Some(primary);
+        drag.target = Some(primary);
+        drag.locked = [false, false];
+
+        // Which leaves the gesture would write, and whether they have a
+        // handle right now. Bound and clip-driven leaves do not.
+        let no_handle = |leaf: &amp;str| -&gt; bool {
+            let Ok(prov) = provenance.get(primary) else { return false };
+            let path: LeafPath = leaf.parse().expect(&quot;declared leaf&quot;);
+            let l = iron_document::Leaf { node: prov.0, path };
+            store.0.reactive().is_bound(l) || store.0.reactive().animated().contains_key(&amp;l)
+        };
+
+        if doc2d.get(primary).is_ok_and(|d| matches!(d.shape, Shape2d::Slider { .. })) {
+            // Scrubbing the value, not moving the control. The first
+            // preview happens in drag_apply this same frame.
+            drag.kind = Some(crate::DragKind::SliderValue);
+        } else if doc2d.contains(primary) {
+            drag.locked = [no_handle(&quot;transform2d.x&quot;), no_handle(&quot;transform2d.y&quot;)];
+            drag.kind = if drag.locked == [true, true] { None } else { Some(crate::DragKind::Overlay2D) };
+            if drag.kind.is_none() {
+                drag.target = None;
+            }
+            // Offset from the pointer (document space) to the node&#x27;s
+            // global origin, so the grab point stays under the cursor.
+            let p = panels
+                .rect(VIEWER_PANEL)
+                .and_then(|r| document_from_screen(r, pointer.screen))
+                .unwrap_or(Vec2::ZERO);
+            let origin = transforms.get(primary).map(|g| g.translation().truncate()).unwrap_or(Vec2::ZERO);
+            drag.grab_offset_2d = origin - p;</code></pre></div></div></figure>
+<p>Two things are new compared with the old code. On release (47–51) the system doesn't forget the drag; it hands the entity to <code>PendingCommit</code> for the commit system. On press it asks the store whether each axis <em>has a handle</em> (62–69): if <code>transform2d.x</code> is bound to an expression or driven by a clip, that axis is <strong>locked</strong> for the whole drag. That is Parts 5 and 6's rule, “a derived value has no handle”, enforced before anything moves, so nothing jumps back on release.</p>
+<p><strong>Applying</strong> each frame moves the entity, not the document. The target is converted into the parent's local space, since a node's transform is relative to its parent:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/interaction.rs:167">src/bevy_app/interaction.rs</a><span class="range">lines 167–184</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184</pre><pre class="src"><code class="language-rust">Some(crate::DragKind::Overlay2D) =&gt; {
+    let Some(p) = panels.rect(VIEWER_PANEL).and_then(|r| document_from_screen(r, pointer.screen)) else {
+        return;
+    };
+    let target_global = p + drag.grab_offset_2d;
+    let Ok((mut transform, parent)) = query.get_mut(entity) else { return };
+    // The transform is local to the parent; map the global target back.
+    let local = match parent.and_then(|c| globals.get(c.parent()).ok()) {
+        Some(pg) =&gt; pg.affine().inverse().transform_point3(target_global.extend(0.0)),
+        None =&gt; target_global.extend(0.0),
+    };
+    if !drag.locked[0] &amp;&amp; transform.translation.x != local.x {
+        transform.translation.x = local.x;
+    }
+    if !drag.locked[1] &amp;&amp; transform.translation.y != local.y {
+        transform.translation.y = local.y;
+    }
+}</code></pre></div></div></figure>
+<p><strong>Committing</strong> on release turns the difference into ops:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/interaction.rs:201">src/bevy_app/interaction.rs</a><span class="range">lines 201–258</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:21;--len:24"></span><span class="band" style="--from:54;--len:3"></span><pre class="gutter" aria-hidden="true">201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258</pre><pre class="src"><code class="language-rust">/// Write the released entity&#x27;s position home as one transaction. Skipped
+/// when nothing moved, so a click is not a &quot;move&quot;.
+pub fn drag_commit_system(
+    mut commit: ResMut&lt;PendingCommit&gt;,
+    store: Res&lt;DocumentStore&gt;,
+    map: Res&lt;NodeMap&gt;,
+    mut pending: ResMut&lt;PendingTransactions&gt;,
+    mut gestures: ResMut&lt;GestureRequests&gt;,
+    query: Query&lt;(&amp;Provenance, &amp;Transform, Option&lt;&amp;Doc2d&gt;)&gt;,
+) {
+    let Some(entity) = commit.0.take() else { return };
+    let Ok((prov, transform, doc2d)) = query.get(entity) else { return };
+    let Some(ty) = type_of(&amp;store.0, &amp;map, entity) else { return };
+    let doc = store.0.document();
+    let id = prov.0;
+    let path = |s: &amp;str| -&gt; LeafPath { s.parse().expect(&quot;declared leaf&quot;) };
+    if doc2d.is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. })) {
+        // The store holds the previewed value; one transaction closes it.
+        gestures.0.push(GestureRequest::Commit(format!(&quot;set {ty}&quot;)));
+        return;
+    }
+    let mut ops = Vec::new();
+    if doc2d.is_some() {
+        let t = transform.translation;
+        for (leaf, value) in [(&quot;transform2d.x&quot;, t.x), (&quot;transform2d.y&quot;, t.y)] {
+            let p = path(leaf);
+            let Some(slot) = doc.leaf(id, p) else { continue };
+            if slot.expr().is_some() {
+                // A bound leaf has no handle without a disambiguation policy
+                // (doc 02 §8.2); the reconciler snaps the entity back.
+                info!(&quot;{id}.{p} is bound; drag not written&quot;);
+                continue;
+            }
+            if store.0.reactive().animated().contains_key(&amp;iron_document::Leaf { node: id, path: p }) {
+                // A clip is driving this leaf at the current time. Writing
+                // the authored value would change nothing visible and a
+                // keyframe must never be created silently (doc 05 §5.2).
+                info!(&quot;{id}.{p} is animated at t={}; drag not written&quot;, store.0.time());
+                continue;
+            }
+            let current = slot.constant().and_then(|v| v.as_f64());
+            if current != Some(value as f64) {
+                ops.push(Op::Set { id, path: p, slot: Slot::Const(Value::Number(value as f64)) });
+            }
+        }
+    } else {
+        let p = path(&quot;transform3d.pos&quot;);
+        let t = transform.translation;
+        let value = Value::Vec3([t.x as f64, t.y as f64, t.z as f64]);
+        let current = doc.leaf(id, p).and_then(|s| s.constant());
+        if current != Some(&amp;value) {
+            ops.push(Op::Set { id, path: p, slot: Slot::Const(value) });
+        }
+    }
+    if !ops.is_empty() {
+        pending.push(format!(&quot;move {ty}&quot;), Actor::Human, ops);
+    }
+}</code></pre></div></div></figure>
+<p>For each axis it skips leaves that are bound or animated (a second guard behind the lock), compares the entity's position with the authored constant, and emits a <code>Set</code> only if they differ. A plain click is therefore not recorded as a move (the comment at 201–202). The label uses the node's type, so the history reads “move rect” or “move mesh”. The 3D case (246–254) writes <code>transform3d.pos</code> as one <code>Vec3</code> leaf, which is why 3D placement is a vector while 2D is separate scalars (see the comment at <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:123" title="src/iron_document/src/component.rs:123"><code>component.rs:123</code></a>).</p>
+<p>These systems are registered in <code>bevy_app/mod.rs</code> with explicit ordering: <code>drag_apply</code> must run before transform propagation so the moved position is drawn in the same frame (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/mod.rs:220" title="src/bevy_app/mod.rs:220"><code>mod.rs:214–234</code></a>).</p>
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>The comment on <code>sync_document</code>'s registration (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:157" title="src/document_bridge/mod.rs:157"><code>mod.rs:157–159</code></a>) says it runs “before input collection, so a transaction queued last frame is visible to this frame's picking”. Nothing enforces that. The picking systems in <code>bevy_app/mod.rs</code> are ordered after <code>pointer_collect_system</code> but have no <code>.before(sync_document)</code>, and newly spawned entities only appear once <code>Commands</code> are applied anyway. In practice it makes no visible difference, but the comment promises an ordering the code doesn't declare. A one-line <code>.before(pick_document_2d_system)</code> would make it true.</p>
+</div>
+
+<h2 id="shell"><span class="sec">4.7</span>Undo keys, save, load and the Document panel</h2>
+<p>The plan allows four kinds of call across the wasm boundary: <code>apply</code>, <code>view</code>, <code>history</code>, <code>document</code>. Steps 3 and 4 added three of them. Each follows the same route: a Svelte action becomes a message, <code>worker.ts</code> calls a <code>#[wasm_bindgen]</code> function, and that function either reads the store directly or queues a request for the sync.</p>
+<h3 id="undo-keys">Undo: the shell decides, Rust obeys</h3>
+<figure class="code"><figcaption><span class="chip sys-shell">FFI & shell</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/runtime/input_manager.ts:134">src-ui/runtime/input_manager.ts</a><span class="range">lines 134–146</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146</pre><pre class="src"><code class="language-typescript">private onKeyDown(event: KeyboardEvent) {
+    const key = event.key.toLowerCase();
+    // Editor commands are decided here and sent as commands, not keys:
+    // Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z or Ctrl+Y redoes.
+    if ((event.metaKey || event.ctrlKey) &amp;&amp; (key === &#x27;z&#x27; || key === &#x27;y&#x27;)) {
+        const target = event.target as HTMLElement | null;
+        if (target &amp;&amp; (target.tagName === &#x27;INPUT&#x27; || target.tagName === &#x27;TEXTAREA&#x27; || target.isContentEditable)) return;
+        event.preventDefault();
+        if (event.repeat) return;
+        const redo = key === &#x27;y&#x27; || event.shiftKey;
+        this.post({ ty: redo ? &#x27;redo&#x27; : &#x27;undo&#x27; });
+        return;
+    }</code></pre></div></div></figure>
+<p>Which keystroke means undo is a <em>chrome</em> decision, so it's made on the main thread (and ignored while you're typing in a text field). Only the command crosses: the message <code>{ty: 'undo'}</code>. The worker calls <code>glue.undo(handle)</code>, which lands here:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">FFI & shell</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:531">src/web_ffi.rs</a><span class="range">lines 531–554</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">531
+532
+533
+534
+535
+536
+537
+538
+539
+540
+541
+542
+543
+544
+545
+546
+547
+548
+549
+550
+551
+552
+553
+554</pre><pre class="src"><code class="language-rust">/// Editor history, requested by the shell. Which keystroke means &quot;undo&quot; is
+/// chrome policy on the main thread; only the command crosses here.
+#[wasm_bindgen]
+pub fn undo(ptr: u64) {
+    history_request(ptr, crate::document_bridge::HistoryOp::Undo);
+}
+
+#[wasm_bindgen]
+pub fn redo(ptr: u64) {
+    history_request(ptr, crate::document_bridge::HistoryOp::Redo);
+}
+
+fn history_request(ptr: u64, op: crate::document_bridge::HistoryOp) {
+    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
+    if let Some(mut requests) = app
+        .world_mut()
+        .get_resource_mut::&lt;crate::document_bridge::HistoryRequests&gt;()
+    {
+        requests.0.push(op);
+    }
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::&lt;ActivityControl&gt;() {
+        active_info.remaining_frames = 10;
+    }
+}</code></pre></div></div></figure>
+<p>It doesn't undo on the spot. It queues a <code>HistoryOp</code>, and the next <code>sync_document</code> runs <code>Store::undo</code> and reconciles, as in section 4.4. The <code>remaining_frames = 10</code> line (551–553) asks the frame loop to keep ticking, since the app stops rendering when idle.</p>
+<h3 id="save-load">Save, load, view</h3>
+<figure class="code"><figcaption><span class="chip sys-shell">FFI & shell</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:384">src/web_ffi.rs</a><span class="range">lines 384–423</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:15;--len:1"></span><span class="band" style="--from:20;--len:1"></span><pre class="gutter" aria-hidden="true">384
+385
+386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423</pre><pre class="src"><code class="language-rust">/// The canonical JSON of the current document.
+#[wasm_bindgen]
+pub fn document_save(ptr: u64) -&gt; String {
+    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
+    app.world()
+        .get_resource::&lt;crate::document_bridge::DocumentStore&gt;()
+        .map(|s| s.0.save())
+        .unwrap_or_default()
+}
+
+/// Replace the document. Validated here, so a bad file is an error to the
+/// caller and never reaches the store; applied on the next frame.
+#[wasm_bindgen]
+pub fn document_load(ptr: u64, text: String) -&gt; Result&lt;(), JsValue&gt; {
+    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
+    let doc = iron_document::serial::load(&amp;text).map_err(|e| JsValue::from_str(&amp;e.to_string()))?;
+    let mut load = app
+        .world_mut()
+        .get_resource_mut::&lt;crate::document_bridge::PendingLoad&gt;()
+        .ok_or_else(|| JsValue::from_str(&quot;document bridge not installed&quot;))?;
+    load.0 = Some(doc);
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::&lt;ActivityControl&gt;() {
+        active_info.remaining_frames = 10;
+    }
+    Ok(())
+}
+
+/// Render a view. `query_json` is an `iron_document::ViewQuery`, e.g.
+/// `{&quot;scope&quot;: null, &quot;fidelity&quot;: &quot;summary&quot;, &quot;depth&quot;: 2}`.
+#[wasm_bindgen]
+pub fn document_view(ptr: u64, query_json: String) -&gt; Result&lt;String, JsValue&gt; {
+    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
+    let query: iron_document::ViewQuery =
+        serde_json::from_str(&amp;query_json).map_err(|e| JsValue::from_str(&amp;e.to_string()))?;
+    let store = app
+        .world()
+        .get_resource::&lt;crate::document_bridge::DocumentStore&gt;()
+        .ok_or_else(|| JsValue::from_str(&quot;document bridge not installed&quot;))?;
+    store.0.view(&amp;query).map_err(|e| JsValue::from_str(&amp;e.to_string()))
+}</code></pre></div></div></figure>
+<p>Save and view read the store directly and return a string. Load <strong>validates immediately</strong> (line 399 runs <code>serial::load</code> from Part 3), so a broken file is an error to the caller and never reaches the running scene. A valid one is parked in <code>PendingLoad</code>, and the next sync swaps it in.</p>
+<p>On the TypeScript side, <code>DocumentClient</code> wraps these messages in promises. Each request carries a <code>requestId</code>, and the reply with the same id resolves the promise. When the store's version changes, the sync calls <code>send_document_changed_from_worker</code>, the worker posts <code>documentChanged</code>, and the client re-reads its view, which is how the Document panel stays current:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">FFI & shell</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/runtime/document_client.svelte.ts:90">src-ui/runtime/document_client.svelte.ts</a><span class="range">lines 90–141</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:4"></span><span class="band" style="--from:33;--len:8"></span><pre class="gutter" aria-hidden="true">90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141</pre><pre class="src"><code class="language-typescript">/** Returns true if the message was one of ours. */
+handleMessage(data: any): boolean {
+  switch (data?.ty) {
+    case &#x27;documentChanged&#x27;:
+      this.version = data.version;
+      void this.refresh();
+      return true;
+    case &#x27;documentSaved&#x27;:
+    case &#x27;documentLoaded&#x27;:
+    case &#x27;documentView&#x27;: {
+      const p = this.pending.get(data.requestId);
+      if (!p) return true;
+      this.pending.delete(data.requestId);
+      if (data.ok === false) p.reject(new Error(data.error ?? &#x27;request failed&#x27;));
+      else p.resolve(data.text);
+      return true;
+    }
+    case &#x27;modelEditResult&#x27;:
+    case &#x27;modelAskResult&#x27;: {
+      // Resolve with the structured outcome even on a rejected edit: the
+      // failure markup is the useful part.
+      const p = this.pending.get(data.requestId);
+      if (!p) return true;
+      this.pending.delete(data.requestId);
+      if (data.error) p.reject(new Error(data.error));
+      else p.resolve(data.outcome ?? data.result);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+private request(ty: string, payload: object): Promise&lt;any&gt; {
+  if (!this.post) return Promise.reject(new Error(&#x27;no session&#x27;));
+  const requestId = this.nextId++;
+  return new Promise((resolve, reject) =&gt; {
+    this.pending.set(requestId, { resolve, reject });
+    this.post!({ ty, requestId, ...payload });
+  });
+}
+
+async refresh(): Promise&lt;void&gt; {
+  try {
+    this.view = await this.request(&#x27;documentView&#x27;, {
+      query: { scope: null, fidelity: this.fidelity, depth: this.depth },
+    });
+    this.error = &#x27;&#x27;;
+  } catch (e) {
+    this.error = String(e);
+  }
+}</code></pre></div></div></figure>
+<p>The same client exposes <code>window.__iron.save / load / view / edit / ask</code>. The smoke test drives the app through these, and you can use them from the browser console. The panel itself is <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/lib/Controls.svelte:50" title="src-ui/lib/Controls.svelte:50"><code>Controls.svelte</code></a>: Save and Load buttons, a fidelity dropdown, the live view, and the model's Ask box (Part 7).</p>
+<h3 id="inspector">What was removed</h3>
+<p>The remote inspector crate, <code>ffi_inspector_bridge.rs</code>, <code>type_registry.rs</code>, <code>system_state.svelte.ts</code> and the inspector's TypeScript types were all deleted in <code>a383b89</code>. The inspector's write half (<code>inspector_update_component</code> and friends) edited Bevy components directly, which is exactly the route this design closes: an edit that skips the op path has no undo and no log, and gets overwritten by the next reconcile. The plan retired it and replaced its read half with the Document panel's tree view.</p>
+
+<h2 id="demo"><span class="sec">4.8</span>The starting scene is a transaction</h2>
+<p>The app no longer spawns demo objects in setup systems. <code>demo.rs</code> builds one <code>TransactionInput</code> labelled “open demo scene” and queues it at startup, so the demo scene can be undone, saved and viewed like anything else.</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:20">src/document_bridge/demo.rs</a><span class="range">lines 20–36</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:2;--len:9"></span><pre class="gutter" aria-hidden="true">20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36</pre><pre class="src"><code class="language-rust">pub fn demo_scene(store: &amp;iron_document::Store) -&gt; iron_document::TransactionInput {
+    let ty = |s: &amp;str| TypeId::lookup(s).expect(&quot;registered type&quot;);
+    let mut ids = store.document().next_ids(29).into_iter();
+    let rel_ids = store.document().next_relation_ids(2);
+    let mut next = move || ids.next().expect(&quot;reserved&quot;);
+    let mut key = OrderKey::first();
+    let mut order = move || {
+        let k = key.clone();
+        key = OrderKey::after(&amp;key);
+        k
+    };
+    let mut ops = Vec::new();
+
+    let scene = next();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str(&quot;scene&quot;.into()));
+    ops.push(Op::Create { id: scene, ty: ty(&quot;group&quot;), parent: None, order: order(), components: vec![name.wrap()] });</code></pre></div></div></figure>
+<div class="box rust"><span class="tab">Reading the Rust</span>
+<p>Lines 22–30 set up two small generators with closures. <code>next_ids(29)</code> reserves 29 ids up front (one per node the scene creates) and turns them into an iterator. <code>let mut next = move || ids.next().expect("reserved")</code> is a closure that takes ownership of that iterator (<code>move</code>) and returns the next id each time it's called. <code>order</code> works the same way over order keys, returning <code>a0</code>, then <code>a1</code>, then <code>a2</code>. Each <code>Op::Create</code> below then just says <code>id: next()</code> and <code>order: order()</code>.</p>
+<p>The components are built by starting from <code>Default</code> and overwriting fields, as in <code>let mut t = Transform2d::default(); t.x = n(500.0);</code>, then converted with <code>.wrap()</code> into the <code>Component</code> enum from Part 2.</p>
+</div>
+<p>The rest of the file creates the 20 random rects (with a deterministic xorshift generator, so every run looks the same), the square, the circle, the slider and bar (Part 5), the torus, and the timeline with two clips (Part 6).</p>
+
+<h2 id="verify"><span class="sec">4.9</span>How the model checked its work</h2>
+<p>In the same commit as the bridge, the model wrote the <code>run-iron</code> skill (<code>.claude/skills/run-iron/</code>). <code>build.sh</code> builds the WebGL2 wasm, <code>serve.sh</code> runs Vite, and <code>drive.ts</code> is a Playwright script that reads commands from stdin (<code>ddrag</code>, <code>key Meta+z</code>, <code>eval</code>, <code>shot</code>, <code>logs</code>) against headless Chrome. <code>smoke.txt</code> works through the plan's exit criteria in order: drag the square and the torus, undo both, redo one, scrub the slider, scrub the timeline, apply a model edit, and round-trip save/load, checking the bytes match. Every screenshot in this guide comes from that script's last run.</p>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>Changes are <strong>queued</strong> (<code>PendingTransactions</code>, <code>HistoryRequests</code>, <code>PendingLoad</code>, <code>GestureRequests</code>) and applied by <strong><code>sync_document</code></strong> at the start of the next frame.</li>
+  <li>The sync reconciles from the <strong>log</strong>, reading ids from ops and inverses, so anything that applied a transaction by any route gets drawn.</li>
+  <li>The reconciler reads <strong>resolved</strong> values, so bindings, previews and clips all render with no special handling.</li>
+  <li>A drag moves the entity optimistically and writes <strong>one</strong> transaction on release. Bound or animated axes are locked.</li>
+</ul>
+</div>
+
+<nav class="nextprev"><a href="03-ops.html"><small>Previous</small><span>Part 3: Changing it: ops, transactions, undo</span></a><a class="next" href="05-reactive.html"><small>Next</small><span>Part 5: Bindings and the reactive graph</span></a></nav>
+</main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

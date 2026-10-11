@@ -1,0 +1,94 @@
+<header class="chapter-head">
+  <p class="kicker">Part 6 of 7 · <chip sys="time"/></p>
+  <h1>Scripted time: clips on a timeline</h1>
+  <p class="lede">Step 6's exit criterion: <em>scrubbing the timeline plays the clip, and the “why is this moving?” query on the torus answers with the clip.</em> The interesting part isn't the interpolation, which is simple arithmetic. It's where animation lives in the document, and how it slots into the reactive graph from Part 5 without a new mechanism.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 2 (relations, <code>ValueKind::Any</code>) and Part 5 (the four read layers, <code>invalidate</code>, <code>changes</code>).</div>
+    <div><b>Files</b><code>src/iron_document/src/time.rs</code> (uncommitted), the time half of <code>lib.rs</code>, <code>graph.rs</code>'s <code>set_animated</code>, <code>src/bevy_app/timeline.rs</code>, <code>view.rs</code>, and <code>tests/time.rs</code>.</div>
+  </div>
+</header>
+
+<h2 id="naive"><span class="sec">6.1</span>Where does an animation live?</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version A</span><p><strong>On the property.</strong> Give the slot keyframes: <code>transform3d.rot = Animated { keys: [...] }</code>. This is what <code>Slot::Animated</code> was reserved for in step 1. It's easy to sample. But the animation isn't a <em>thing</em>: you can't select it, retime it on a timeline, or ask “what is animating the torus?” without scanning every slot of every node.</p></div>
+  <div class="box naive"><span class="tab">The simple version B</span><p><strong>In Bevy.</strong> Use Bevy's animation system, or the old <code>TimelineState</code>-driven demo code. The animation then lives outside the document: it isn't saved, the model can't see it, undo can't touch it.</p></div>
+</div>
+<div class="box built"><span class="tab">What was built</span>
+<p>Vision doc 05 §3 argues that <strong>a clip's target is a projection of an edge</strong>. So:</p>
+<ul>
+  <li>A <strong>clip is a node</strong> (type <code>clip</code>, child of a <code>timeline</code>) with two components: <code>Timing { start, dur, easing }</code> and <code>Clip { prop, from, to }</code>.</li>
+  <li>Its <strong>target is a relation</strong>: <code>clip ─animates→ torus</code>, stored in the relations table and indexed by target, so “what drives the torus?” is one lookup.</li>
+  <li><strong>Sampling produces a layer</strong>. For the current playhead, <code>time::sample</code> computes the value of every animated leaf, and those values sit in the reactive graph's animated layer (layer 3 of the four in Part 5). The authored constant is untouched, and bindings that read an animated leaf follow it.</li>
+</ul>
+<p>So <code>Slot::Animated</code> stays reserved. “Animated” is a fact about relations, not a kind of slot. The plan records this decision in §5.11.</p>
+</div>
+
+<h2 id="data"><span class="sec">6.2</span>The data</h2>
+<snip file="src/iron_document/src/component.rs" lines="159-173"/>
+<p><code>prop</code> is a leaf path written as a string (<code>"transform3d.rot"</code>). <code>from</code> and <code>to</code> are declared <code>Any</code>, because their kind is whatever the target leaf's kind is: a <code>Vec3</code> for the torus's rotation, a <code>Number</code> for the square's x. The registry makes <code>timeline</code> a node that admits only <code>clip</code> children (<ref file="src/iron_document/src/registry.rs" line="112" has="Only">registry.rs:112</ref>). The demo scene builds a timeline with two clips and links them:</p>
+<snip file="src/document_bridge/demo.rs" lines="183-188" mark="187-188"/>
+<p>“spin” turns the torus a full revolution about y between 1 s and 4 s with ease-in-out. “slide” moves the square's x from 500 to 700 between 0.5 s and 2.5 s. The <code>Link</code> ops (187–188) are what connect each clip to its target. Neither clip has a field naming the target.</p>
+
+<h2 id="sample"><span class="sec">6.3</span>Sampling: one time in, one layer out</h2>
+<p><code>time.rs</code> has three functions. The two small ones are the maths:</p>
+<snip file="src/iron_document/src/time.rs" lines="30-69"/>
+<p><code>ease</code> reshapes progress <code>u</code> (0 to 1) with a named curve. <code>lerp</code> interpolates between two values of the same kind: numbers, vectors and colours smoothly, and anything else (a bool, a string) by stepping to <code>to</code> at the end. Mismatched kinds return <code>None</code>. The third function does the work:</p>
+<snip file="src/iron_document/src/time.rs" lines="71-136" mark="94-94,98-103,110-113,116-127,130-132"/>
+<p>For every clip node, and for every <code>animates</code> relation leaving it (line 94):</p>
+<ol class="steps">
+  <li><b>Offset and start.</b> Each relation may carry <code>data.offset</code> to stagger targets (98). <strong>Before the clip starts, the target is skipped</strong> (100–102), so it shows its authored value.</li>
+  <li><b>Progress.</b> <code>u</code> is the fraction of the duration elapsed, capped at 1 (103). <strong>After the clip ends it holds <code>to</code>.</b></li>
+  <li><b>Conflicts are reported, not resolved.</b> A target leaf that doesn't exist, a target that is <em>bound</em> (110–113: the binding would win and the clip could never show), or endpoints of the wrong kind (116–127) each put an error in <code>out.errors</code> under the clip's id. The timeline draws that clip red.</li>
+  <li><b>Value.</b> Ease, interpolate, and record the result for that leaf (130–132).</li>
+</ol>
+<p>A worked example from the slider scene: clip <code>#6</code> runs from 0.5 s for 2 s, 500 → 700, linear.</p>
+<out src="time-changes.txt" title="Moving the playhead (real output)"/>
+
+<h2 id="store"><span class="sec">6.4</span>The playhead lives in the store, but isn't saved</h2>
+<snip file="src/iron_document/src/lib.rs" lines="136-156"/>
+<p><code>Store</code> has a <code>time: f64</code> field and a <code>time_errors</code> map (<ref file="src/iron_document/src/lib.rs" line="100" has="Runtime state">lib.rs:100–102</ref>). Neither is part of the <code>Document</code>, so neither is saved or undone. The playhead is editor state, like a scroll position. <code>set_time</code> resamples, and <code>resample</code> passes the sample to the graph:</p>
+<snip file="src/iron_document/src/graph.rs" lines="69-96" mark="73-82,87-94,95-95"/>
+<p>It compares the new sample with the old one and collects the leaves whose animated value moved, appeared or disappeared (73–82). If nothing moved it returns early, so scrubbing through a stretch with no active clips costs almost nothing. For each moved leaf it records a change, which is how the reconciler finds out, unless a gesture is currently previewing that leaf (89). Then <code>invalidate</code> (95) re-evaluates any binding that reads an animated leaf. That is how Part 5's machinery gives “a bar bound to an animated value follows the animation” for free.</p>
+<p>The sample is also refreshed after <em>every</em> transaction (in <code>after_transaction</code>, Part 5), because editing a clip's timing, linking a new target or deleting a node all change what the sample should be. The comment there admits this is unconditional: “cheap enough… clips are few”.</p>
+
+<h2 id="panel"><span class="sec">6.5</span>The timeline panel</h2>
+<p><code>TimelineState</code> survived the change, as the plan intended, but its role narrowed to the editor-local playhead plus zoom and duration. The clips themselves now come from the document. Three systems matter:</p>
+<snip file="src/bevy_app/timeline.rs" lines="15-24"/>
+<p>Scrubbing and pushing the time are ordered <code>.before(sync_document)</code>, so a scrub's new sample is reconciled in the same frame:</p>
+<snip file="src/bevy_app/timeline.rs" lines="68-93"/>
+<p>Drawing the clip rows reads the document directly, one row per <code>clip</code> node. A row whose clip id appears in <code>store.time_errors()</code> is drawn red:</p>
+<snip file="src/bevy_app/timeline.rs" lines="218-243" mark="223-230,238-238"/>
+<figure class="shots">
+  <img src="img/after-timeline-scrub.jpg" alt="The app after scrubbing the timeline to about 2.6 seconds: the red playhead line in the timeline panel crosses the two blue clip bars, the dark square has moved right to x=700, and the torus has turned." width="1200" height="750">
+  <figcaption>After the smoke test scrubs to about 2.6 s. The red playhead has passed the end of “slide” (the lower bar, 0.5–2.5 s), so the square holds <code>x=700</code>. The Document panel shows <code>x="650"</code> because the smoke test's earlier drag and redo put 650 there. It is the <em>authored</em> value, and the clip sits on top of it. “spin” (the upper bar) is still turning the torus.</figcaption>
+</figure>
+<div class="box edge"><span class="tab">Why the panel says 650</span>
+<p>The screenshot's panel text says <code>x="650"</code> for the square even though it's drawn at 700, which looks like a contradiction with “views show resolved values”. It isn't. The panel's text is refreshed only on <code>documentChanged</code>, which fires when the <em>version</em> changes (Part 4, 4.4). Scrubbing moves the playhead without creating a transaction, so the panel still shows the text it last fetched. <code>__iron.view()</code>, called after the scrub, does return the animated value; that's what the smoke test's <code>eval</code> line checks. If you want the panel to follow the playhead, it would need a refresh on time changes too.</p>
+</div>
+
+<h2 id="why"><span class="sec">6.6</span>“Why is this moving?”</h2>
+<p>Because a target is a relation, the answer is the <code>by_target</code> index: <ref file="src/iron_document/src/document.rs" line="257" has="pub fn relations_to">Document::relations_to</ref>. The view renders it for any node that something drives:</p>
+<snip file="src/iron_document/src/view.rs" lines="140-144"/>
+<snip file="src/iron_document/src/view.rs" lines="181-190"/>
+<out src="scene-view-t15.txt" title="The same scene at t = 1.5 s (real output): x is the sampled 600, and the rect names the clip that drives it"/>
+<p>A person reading the Document panel, or the model reading its view, sees on the rect <em>both</em> the current value and <code>&lt;driven-by ref="#6" prop="transform2d.x"/&gt;</code>. On the clip it sees the forward edge, <code>&lt;animates to="#4"/&gt;</code>. Bindings show as <code>.bind</code> attributes (Part 5), and clips show as <code>&lt;driven-by&gt;</code>, which covers both reasons a value can differ from what was authored.</p>
+
+<h2 id="drag"><span class="sec">6.7</span>Dragging something a clip is driving</h2>
+<p>If you grab the square while “slide” is driving its x, what should happen? Writing a new authored x would change nothing visible, since the clip wins. Silently creating a keyframe would be worse. Vision doc 05 §5.2 says keyframes must never appear silently. So the rule matches bindings: <strong>at that moment, the leaf has no handle.</strong> <code>interaction_decide_system</code> locks the x axis when <code>reactive().animated()</code> contains it (Part 4), and <code>drag_commit_system</code> refuses to write it and logs why (<ref file="src/bevy_app/interaction.rs" line="234" has="animated()">interaction.rs:234–240</ref>). Once the playhead is before the clip's start, the leaf is no longer animated and dragging works again. The plan names a “mode control” (constant / bound / animated per property) as the eventual interface for this.</p>
+
+<div class="box edge"><span class="tab">Rough edges</span>
+<ul>
+  <li><strong>Two clips on one leaf: the last one wins, silently.</strong> <code>sample</code> writes <code>out.values.insert(leaf, v)</code> (<ref file="src/iron_document/src/time.rs" line="131" has="out.values.insert">time.rs:131</ref>) for each clip in id order, so where two overlap, the higher-numbered clip's value replaces the other's with no error. Clip-vs-binding conflicts are reported; clip-vs-clip conflicts aren't.</li>
+  <li><strong>Some conflicts only show once the clip has started.</strong> The start check (line 100) runs before the target checks, so a clip aimed at a bound leaf turns red only once the playhead passes its start. A malformed <code>prop</code> path is reported at any time, because it's checked earlier (83–89).</li>
+  <li><strong>The panel's text lags a scrub</strong>, as described under the screenshot above.</li>
+</ul>
+</div>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>A <strong>clip</strong> is a node with <code>Timing</code> and <code>Clip</code> components. Its <strong>target</strong> is an <code>animates</code> relation, not a field.</li>
+  <li><code>time::sample(doc, t)</code> produces the <strong>animated layer</strong>. It sits beneath gesture previews and bindings and above constants, and is never saved.</li>
+  <li>The playhead is <strong>runtime state in the store</strong>, pushed by the timeline panel before each sync.</li>
+  <li><code>relations_to</code> answers <strong>“why is this moving?”</strong>, and views render it as <code>&lt;driven-by&gt;</code>.</li>
+</ul>
+</div>

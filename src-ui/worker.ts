@@ -7,6 +7,7 @@
 import { loadGlue, type Glue } from "./runtime/glue";
 import type { Backend } from "./runtime/backend_policy";
 import { CadenceProbe } from "./runtime/cadence_probe";
+import { modelAsk, modelEdit } from "./model";
 
 // Assigned before any FFI call; see the "wasmData" case below.
 let glue: Glue;
@@ -191,6 +192,22 @@ class IronWorker {
           } catch (e) {
             self.postMessage({ ty: "documentView", requestId: data.requestId, ok: false, error: String(e) });
           }
+          break;
+
+        // Model surface: apply an <edit> as the model, or ask a model for one.
+        case "modelEdit":
+          try {
+            const outcome = modelEdit(glue, this.appHandle, data.xml, data.label);
+            self.postMessage({ ty: "modelEditResult", requestId: data.requestId, ok: outcome.ok, outcome });
+          } catch (e) {
+            self.postMessage({ ty: "modelEditResult", requestId: data.requestId, ok: false, error: String(e) });
+          }
+          break;
+
+        case "modelAsk":
+          modelAsk(glue, this.appHandle, data.instruction, { apiKey: data.apiKey, model: data.model })
+            .then((result) => self.postMessage({ ty: "modelAskResult", requestId: data.requestId, ok: result.ok, result }))
+            .catch((e) => self.postMessage({ ty: "modelAskResult", requestId: data.requestId, ok: false, error: String(e) }));
           break;
 
         case "probeStats":

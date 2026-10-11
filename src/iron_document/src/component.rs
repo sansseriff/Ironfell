@@ -163,12 +163,13 @@ components! {
         easing: Enum = Value::Enum("linear".to_owned()),
     }
 
-    /// What a clip does to its target. Endpoints stay literal (doc 05 §2.1).
-    /// The target itself is a relation, not a field (doc 05 §3).
+    /// What a clip does to its target. Endpoints stay literal (doc 05 §2.1)
+    /// and take the target leaf's kind. The target itself is a relation, not
+    /// a field (doc 05 §3).
     Clip / "clip" => Clip {
         prop: Str = Value::Str(String::new()),
-        from: Number = Value::Number(0.0),
-        to: Number = Value::Number(1.0),
+        from: Any = Value::Number(0.0),
+        to: Any = Value::Number(1.0),
     }
 }
 
@@ -238,6 +239,7 @@ impl Component {
         // A binding's kind is only known when it is evaluated; the graph
         // reports a mismatch then. Constants are checked here.
         if let Some(v) = slot.constant()
+            && expected != ValueKind::Any
             && v.kind() != expected
         {
             let path = LeafPath::new(kind, field).expect("field checked above");

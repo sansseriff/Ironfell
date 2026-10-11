@@ -1,0 +1,7 @@
+<document version="2">
+  <group id="#1" name="scene" count="2">
+    <rect id="#2" x="200" y="80" rot="0" sx="1" sy="1" w="100" h="100" color="#808080ff" opacity="1"/>
+    <circle id="#3" x="0" y="0" rot="0" sx="1" sy="1" r="50"/>
+  </group>
+</document>
+

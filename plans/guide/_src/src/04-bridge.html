@@ -1,0 +1,168 @@
+<header class="chapter-head">
+  <p class="kicker">Part 4 of 7 · <chip sys="bridge"/> <chip sys="shell"/></p>
+  <h1>Into Bevy: the reconciler and writeback</h1>
+  <p class="lede">The store from Parts 2 and 3 knows nothing about Bevy. This part covers the code in between. It turns document nodes into entities, redraws only what changed, turns a drag back into one transaction, and connects undo, save and load to the Svelte shell. This is plan steps 2–4, the commits “undo redo” and “working save/load”.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 3: transactions, the log, <code>Store::apply</code>, undo as a new transaction.</div>
+    <div><b>Files</b><code>src/document_bridge/{mod,materialize,render,demo}.rs</code>, <code>src/bevy_app/{interaction,picking,mod}.rs</code>, <code>src/panels.rs</code>, <code>src/web_ffi.rs</code>, <code>src-ui/worker.ts</code>, <code>src-ui/runtime/document_client.svelte.ts</code>.</div>
+  </div>
+</header>
+
+<h2 id="bevy"><span class="sec">4.1</span>Bevy words used in this part</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Word</th><th>Meaning</th><th>Here</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Entity</strong></td><td>An id for “a thing in the scene”. It has no data of its own.</td><td>One per materialised node</td></tr>
+    <tr><td><strong>Component</strong> (Bevy's)</td><td>Data attached to an entity: <code>Transform</code>, <code>Mesh3d</code>… <em>Not</em> the same as a document component.</td><td><code>Provenance</code>, <code>Doc2d</code></td></tr>
+    <tr><td><strong>Resource</strong></td><td>A single global value in the Bevy world.</td><td><code>DocumentStore</code>, <code>NodeMap</code></td></tr>
+    <tr><td><strong>System</strong></td><td>A function Bevy calls each frame. Its parameters declare what it reads and writes.</td><td><code>sync_document</code></td></tr>
+    <tr><td><code>Res&lt;T&gt;</code> / <code>ResMut&lt;T&gt;</code></td><td>Read / write access to a resource, as a system parameter.</td><td></td></tr>
+    <tr><td><code>Query&lt;(&amp;A, &amp;B)&gt;</code></td><td>“All entities that have A and B.” A system parameter.</td><td></td></tr>
+    <tr><td><code>Commands</code></td><td>A queue of spawns, despawns and inserts, applied a little later in the frame.</td><td>The reconciler's output</td></tr>
+    <tr><td><code>PreUpdate</code>, <code>Update</code>, <code>PostUpdate</code></td><td>Schedules that run in that order every frame.</td><td>See the frame diagram in 4.6</td></tr>
+  </tbody>
+</table></div>
+<p>One practical point: a Bevy <code>Entity</code> id is <strong>recycled</strong> after despawn, so it can't serve as a node's identity. That alone rules out making Bevy the authority, and it's the first reason vision doc 04 §5.1 gives.</p>
+
+<h2 id="naive"><span class="sec">4.2</span>Two simple bridges, and why neither was chosen</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version A</span><p><strong>Rebuild every frame.</strong> Despawn everything and respawn from the document each frame. It's always correct, but you pay for the whole scene every frame, entity ids churn (breaking selection and hover), and a drag's in-progress <code>Transform</code> would be overwritten.</p></div>
+  <div class="box naive"><span class="tab">The simple version B</span><p><strong>Diff every frame.</strong> Compare every node against its entity and patch the differences. It's correct and cheaper, but it still touches every node every frame, and it has no idea <em>why</em> something changed.</p></div>
+</div>
+<div class="box built"><span class="tab">What was built</span>
+<p><strong>Reconcile from the log.</strong> After each batch of transactions, read the new entries in the history log, collect the node ids their ops touched, and re-examine only those nodes. A frame with no transactions does no work at all. Every entity carries a <code>Provenance(NodeId)</code> component, and a <code>NodeMap</code> resource maps both ways.</p>
+</div>
+
+<h2 id="resources"><span class="sec">4.3</span>The bridge's resources</h2>
+<p>Everything the bridge shares with the rest of the app is a Bevy resource declared in <code>document_bridge/mod.rs</code>:</p>
+<snip file="src/document_bridge/mod.rs" lines="35-60" mark="37-38,43-44,59-60"/>
+<div class="table-wrap"><table>
+  <thead><tr><th>Resource</th><th>Holds</th><th>Written by</th></tr></thead>
+  <tbody>
+    <tr><td><code>DocumentStore</code></td><td>The <code>Store</code> itself</td><td>Only the sync, plus gesture previews (Part 5) and the synchronous FFI apply (Part 7)</td></tr>
+    <tr><td><code>PendingTransactions</code></td><td>Transactions waiting for the next sync</td><td>Drag commit, the demo scene</td></tr>
+    <tr><td><code>HistoryRequests</code></td><td>Queued <code>Undo</code> / <code>Redo</code></td><td>The <code>undo</code>/<code>redo</code> FFI calls</td></tr>
+    <tr><td><code>GestureRequests</code></td><td>“Commit” or “cancel” the current preview</td><td>Slider release (Part 5)</td></tr>
+    <tr><td><code>PendingLoad</code></td><td>A validated document waiting to replace the current one</td><td><code>document_load</code> FFI</td></tr>
+    <tr><td><code>NodeMap</code></td><td><code>NodeId ↔ Entity</code>, plus each node's paint order</td><td>The reconciler</td></tr>
+    <tr><td><code>SyncedVersion</code></td><td>The last document version the reconciler has caught up to</td><td>The sync</td></tr>
+    <tr><td><code>DocumentDirty</code></td><td>“Redraw the 2D layer this frame”</td><td>The sync; cleared by the renderer</td></tr>
+  </tbody>
+</table></div>
+<p>The pattern is the same throughout: <strong>everything that wants to change the document pushes a request into a queue</strong>, and one system, <code>sync_document</code>, drains every queue in a fixed order at the start of each frame. The plugin wires it up:</p>
+<snip file="src/document_bridge/mod.rs" lines="144-165"/>
+
+<h2 id="sync"><span class="sec">4.4</span><code>sync_document</code>: the heart of the bridge</h2>
+<p>This is the longest function in the bridge and the one to understand first. It runs once per frame in <code>PreUpdate</code>. The parameter list (lines 169–181) is the list of resources above plus <code>Commands</code> and the clock. Here it is in three pieces.</p>
+<h3 id="sync-1">First: skip, or load</h3>
+<snip file="src/document_bridge/mod.rs" lines="182-210" mark="182-190,194-210"/>
+<p>The early return (182–190) is why an idle frame costs nothing: no queued work, no pending value changes, and the document's version equals the one already synced. A load tears down every entity rather than diffing, because in a different document the same id may be a different type. It then installs a fresh <code>Store</code>, which starts with empty history, and marks every live node as affected.</p>
+<h3 id="sync-2">Then: drain the queues, in order</h3>
+<snip file="src/document_bridge/mod.rs" lines="211-248"/>
+<p>Transactions first, then gesture commits, then undo/redo. Errors are logged as warnings, and a rejected transaction simply doesn't happen. <code>ts == 0</code> means “stamp me with the frame clock” (211–214), which is how Bevy systems submit transactions without needing a clock.</p>
+<h3 id="sync-3">Finally: find what changed and reconcile it</h3>
+<snip file="src/document_bridge/mod.rs" lines="249-279" mark="250-256,259-261,266-268,276-276"/>
+<p>Line 250 is the design decision from 4.2 in code. It doesn't look at <em>what was queued</em>; it looks at <strong>everything the log gained since <code>SyncedVersion</code></strong>. That covers the queued transactions, undo and redo, and also transactions applied by other routes: the model surface calls <code>Store::apply</code> synchronously through the FFI (Part 7), and the sync picks those up here on the next frame without being told about them.</p>
+<p>For each new transaction, <code>collect_ids</code> reads the node ids off both the ops <em>and</em> the inverse:</p>
+<snip file="src/document_bridge/mod.rs" lines="281-298"/>
+<p>Why the inverse too? For a <code>Reparent</code>, the op names the <em>new</em> parent and the inverse names the <em>old</em> one. Both parents' child lists changed, and both need looking at. Links are skipped because a relation doesn't change any entity by itself.</p>
+<p>After that come the changes the <em>reactive graph</em> reports (259–261), such as “the bar's height is now 240 because the slider moved”. Part 5 explains where those come from; for now they are simply more affected nodes. If the version moved, the shell is told (266–268). Then the affected set goes to the reconciler.</p>
+
+<h2 id="reconcile"><span class="sec">4.5</span>The reconciler: node → entity</h2>
+<snip file="src/document_bridge/materialize.rs" lines="75-121" mark="86-106,109-120"/>
+<p>For each affected id there are four cases (86–106): the node is live but has no entity, so spawn one; there's an entity but no live node, so despawn it; both exist, so rewrite the entity's values; neither exists, so do nothing. Parent links are set in a second pass (108–120), because during the first pass a child may be spawned before its parent.</p>
+<p><code>write_values</code> is where document components become Bevy components, one arm per node type:</p>
+<snip file="src/document_bridge/materialize.rs" lines="151-190"/>
+<p>The important detail is <em>how</em> it reads values. It doesn't use <code>doc.leaf(...)</code>, the authored slot. It goes through <code>Reader</code>, which calls <code>store.resolved(...)</code>:</p>
+<snip file="src/document_bridge/materialize.rs" lines="192-235" mark="199-202,226-235"/>
+<p><code>resolved</code> returns the value a reader should see <em>right now</em>: a gesture's preview if one is active, else a binding's computed result, else a clip's sampled value, else the authored constant. So the reconciler draws bound, previewed and animated values with no special cases, and Parts 5 and 6 plug into it without touching this file.</p>
+<p>Note also the coordinate convention in the comment on <code>transform_2d</code>. Document 2D space is <strong>y-down with the origin at the viewer panel's top-left</strong>, the same as SVG and kurbo, so the entity's <code>Transform</code> holds document coordinates as they are. The old overlay used a y-up, panel-centred space. Two tiny helpers in <code>panels.rs</code> convert between screen and document space:</p>
+<snip file="src/panels.rs" lines="103-113"/>
+
+<h3 id="render">Drawing: one display list for all 2D nodes</h3>
+<p>Entities with a <code>Doc2d</code> component (rects, circles, bars, sliders) are all drawn into <strong>one</strong> Vello display list by <ref file="src/document_bridge/render.rs" line="21" has="fn render_document_layer">render_document_layer</ref>, in document preorder, so later siblings paint on top. The list is rebuilt only when something set <code>DocumentDirty</code>, an entity moved (a drag in progress), the panel resized, or the selection changed. Picking uses the same painter order: <ref file="src/bevy_app/picking.rs" line="44" has="pick_document_2d_system">pick_document_2d_system</ref> maps the cursor into each node's local space through the inverse of its global transform, so rotated and scaled shapes hit-test correctly, and it uses the node's paint index as depth. This replaced the old <code>overlay2d.rs</code>, which had a separate hand-written layer and hit test for each kind of demo object.</p>
+
+<h2 id="drag"><span class="sec">4.6</span>Writeback: a drag becomes one op</h2>
+<p>This was the old square drag, in full. The square's position lived in a resource, and dragging overwrote it:</p>
+<snip file="src/bevy_app/overlay2d.rs" rev="177e42c" lines="413-458" mark="443-457"/>
+<p>It worked, but the new position went nowhere. No log, no undo, no file, and the Svelte inspector had its own separate path for writing the same kind of state.</p>
+<div class="box built"><span class="tab">What was built</span>
+<p><strong>A gesture is an intent, not a mutation</strong> (vision doc 04 §5.3). While the pointer is down, the <em>entity</em> moves every frame so the square keeps up with the cursor: the optimistic half. On release, the difference between the entity and the document becomes <strong>one transaction</strong>. The sync applies it on the next frame, and the reconciler writes the entity from the document, landing on the same position.</p>
+</div>
+<figure class="diagram">
+<svg viewBox="0 0 920 320" role="img" aria-label="One frame of the app. PreUpdate runs pointer collection, picking, the timeline scrub and playhead push, then sync_document. Update runs the timeline view. PostUpdate runs interaction_decide, drag_apply, drag_commit, transform propagation, and render_document_layer. An arrow from drag_commit loops back to sync_document: the queued transaction is applied at the start of the next frame.">
+  <defs><marker id="f1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-accent"/></marker></defs>
+  <rect x="20" y="20" width="360" height="258" rx="8" class="zone"/>
+  <text class="t-b" x="36" y="44">PreUpdate</text>
+  <rect x="40" y="58" width="320" height="30" rx="4" class="box-fill"/><text class="t-mono" x="200" y="78" text-anchor="middle">pointer_collect_system</text>
+  <rect x="40" y="98" width="320" height="30" rx="4" class="box-fill"/><text class="t-mono" x="200" y="118" text-anchor="middle">pick_document_2d · pick_world_3d → primary hit</text>
+  <rect x="40" y="138" width="320" height="30" rx="4" class="s-time"/><text class="t-mono" x="200" y="158" text-anchor="middle">scrub_timeline → push_time_to_store</text>
+  <rect x="40" y="186" width="320" height="40" rx="4" class="s-bridge"/><text class="t-mono" x="200" y="205" text-anchor="middle">sync_document</text><text class="t-s" x="200" y="220" text-anchor="middle">apply queues · read log · reconcile</text>
+  <text class="t-s" x="200" y="252" text-anchor="middle">only the timeline pair is ordered .before(sync_document)</text>
+
+  <rect x="400" y="20" width="130" height="258" rx="8" class="zone"/>
+  <text class="t-b" x="416" y="44">Update</text>
+  <rect x="412" y="58" width="106" height="44" rx="4" class="box-fill"/><text class="t-s" x="465" y="77" text-anchor="middle">timeline view,</text><text class="t-s" x="465" y="92" text-anchor="middle">grid, camera…</text>
+
+  <rect x="550" y="20" width="350" height="258" rx="8" class="zone"/>
+  <text class="t-b" x="566" y="44">PostUpdate</text>
+  <rect x="570" y="58" width="310" height="30" rx="4" class="s-bridge"/><text class="t-mono" x="725" y="78" text-anchor="middle">interaction_decide_system</text>
+  <rect x="570" y="98" width="310" height="30" rx="4" class="s-bridge"/><text class="t-mono" x="725" y="118" text-anchor="middle">drag_apply_system  (moves entity)</text>
+  <rect x="570" y="138" width="310" height="30" rx="4" class="s-bridge"/><text class="t-mono" x="725" y="158" text-anchor="middle">drag_commit_system (queues ops)</text>
+  <rect x="570" y="178" width="310" height="30" rx="4" class="box-fill"/><text class="t-mono" x="725" y="198" text-anchor="middle">TransformSystems::Propagate</text>
+  <rect x="570" y="218" width="310" height="30" rx="4" class="s-bridge"/><text class="t-mono" x="725" y="238" text-anchor="middle">render_document_layer</text>
+
+  <path d="M880,153 H906 V300 H10 V206 H38" class="ln-accent" marker-end="url(#f1)"/>
+  <text class="t-s" x="460" y="296" text-anchor="middle">PendingTransactions: the “move rect” queued on release is applied by sync_document at the start of the next frame</text>
+</svg>
+<figcaption>One frame, and the loop from release to apply. The one-frame delay is invisible: during that frame the entity is already where the document is about to say it is.</figcaption>
+</figure>
+<p>Here are the three drag systems. <strong>Deciding</strong> happens on pointer down:</p>
+<snip file="src/bevy_app/interaction.rs" lines="46-88" mark="47-51,62-69,75-80"/>
+<p>Two things are new compared with the old code. On release (47–51) the system doesn't forget the drag; it hands the entity to <code>PendingCommit</code> for the commit system. On press it asks the store whether each axis <em>has a handle</em> (62–69): if <code>transform2d.x</code> is bound to an expression or driven by a clip, that axis is <strong>locked</strong> for the whole drag. That is Parts 5 and 6's rule, “a derived value has no handle”, enforced before anything moves, so nothing jumps back on release.</p>
+<p><strong>Applying</strong> each frame moves the entity, not the document. The target is converted into the parent's local space, since a node's transform is relative to its parent:</p>
+<snip file="src/bevy_app/interaction.rs" lines="167-184"/>
+<p><strong>Committing</strong> on release turns the difference into ops:</p>
+<snip file="src/bevy_app/interaction.rs" lines="201-258" mark="222-245,255-257"/>
+<p>For each axis it skips leaves that are bound or animated (a second guard behind the lock), compares the entity's position with the authored constant, and emits a <code>Set</code> only if they differ. A plain click is therefore not recorded as a move (the comment at 201–202). The label uses the node's type, so the history reads “move rect” or “move mesh”. The 3D case (246–254) writes <code>transform3d.pos</code> as one <code>Vec3</code> leaf, which is why 3D placement is a vector while 2D is separate scalars (see the comment at <ref file="src/iron_document/src/component.rs" line="123" has="3D placement">component.rs:123</ref>).</p>
+<p>These systems are registered in <code>bevy_app/mod.rs</code> with explicit ordering: <code>drag_apply</code> must run before transform propagation so the moved position is drawn in the same frame (<ref file="src/bevy_app/mod.rs" line="220" has="drag_apply_system">mod.rs:214–234</ref>).</p>
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>The comment on <code>sync_document</code>'s registration (<ref file="src/document_bridge/mod.rs" line="157" has="Before input collection">mod.rs:157–159</ref>) says it runs “before input collection, so a transaction queued last frame is visible to this frame's picking”. Nothing enforces that. The picking systems in <code>bevy_app/mod.rs</code> are ordered after <code>pointer_collect_system</code> but have no <code>.before(sync_document)</code>, and newly spawned entities only appear once <code>Commands</code> are applied anyway. In practice it makes no visible difference, but the comment promises an ordering the code doesn't declare. A one-line <code>.before(pick_document_2d_system)</code> would make it true.</p>
+</div>
+
+<h2 id="shell"><span class="sec">4.7</span>Undo keys, save, load and the Document panel</h2>
+<p>The plan allows four kinds of call across the wasm boundary: <code>apply</code>, <code>view</code>, <code>history</code>, <code>document</code>. Steps 3 and 4 added three of them. Each follows the same route: a Svelte action becomes a message, <code>worker.ts</code> calls a <code>#[wasm_bindgen]</code> function, and that function either reads the store directly or queues a request for the sync.</p>
+<h3 id="undo-keys">Undo: the shell decides, Rust obeys</h3>
+<snip file="src-ui/runtime/input_manager.ts" lines="134-146"/>
+<p>Which keystroke means undo is a <em>chrome</em> decision, so it's made on the main thread (and ignored while you're typing in a text field). Only the command crosses: the message <code>{ty: 'undo'}</code>. The worker calls <code>glue.undo(handle)</code>, which lands here:</p>
+<snip file="src/web_ffi.rs" lines="531-554"/>
+<p>It doesn't undo on the spot. It queues a <code>HistoryOp</code>, and the next <code>sync_document</code> runs <code>Store::undo</code> and reconciles, as in section 4.4. The <code>remaining_frames = 10</code> line (551–553) asks the frame loop to keep ticking, since the app stops rendering when idle.</p>
+<h3 id="save-load">Save, load, view</h3>
+<snip file="src/web_ffi.rs" lines="384-423" mark="399-399,404-404"/>
+<p>Save and view read the store directly and return a string. Load <strong>validates immediately</strong> (line 399 runs <code>serial::load</code> from Part 3), so a broken file is an error to the caller and never reaches the running scene. A valid one is parked in <code>PendingLoad</code>, and the next sync swaps it in.</p>
+<p>On the TypeScript side, <code>DocumentClient</code> wraps these messages in promises. Each request carries a <code>requestId</code>, and the reply with the same id resolves the promise. When the store's version changes, the sync calls <code>send_document_changed_from_worker</code>, the worker posts <code>documentChanged</code>, and the client re-reads its view, which is how the Document panel stays current:</p>
+<snip file="src-ui/runtime/document_client.svelte.ts" lines="90-141" mark="93-96,123-130"/>
+<p>The same client exposes <code>window.__iron.save / load / view / edit / ask</code>. The smoke test drives the app through these, and you can use them from the browser console. The panel itself is <ref file="src-ui/lib/Controls.svelte" line="50" has="Document">Controls.svelte</ref>: Save and Load buttons, a fidelity dropdown, the live view, and the model's Ask box (Part 7).</p>
+<h3 id="inspector">What was removed</h3>
+<p>The remote inspector crate, <code>ffi_inspector_bridge.rs</code>, <code>type_registry.rs</code>, <code>system_state.svelte.ts</code> and the inspector's TypeScript types were all deleted in <code>a383b89</code>. The inspector's write half (<code>inspector_update_component</code> and friends) edited Bevy components directly, which is exactly the route this design closes: an edit that skips the op path has no undo and no log, and gets overwritten by the next reconcile. The plan retired it and replaced its read half with the Document panel's tree view.</p>
+
+<h2 id="demo"><span class="sec">4.8</span>The starting scene is a transaction</h2>
+<p>The app no longer spawns demo objects in setup systems. <code>demo.rs</code> builds one <code>TransactionInput</code> labelled “open demo scene” and queues it at startup, so the demo scene can be undone, saved and viewed like anything else.</p>
+<snip file="src/document_bridge/demo.rs" lines="20-36" mark="22-30"/>
+<div class="box rust"><span class="tab">Reading the Rust</span>
+<p>Lines 22–30 set up two small generators with closures. <code>next_ids(29)</code> reserves 29 ids up front (one per node the scene creates) and turns them into an iterator. <code>let mut next = move || ids.next().expect("reserved")</code> is a closure that takes ownership of that iterator (<code>move</code>) and returns the next id each time it's called. <code>order</code> works the same way over order keys, returning <code>a0</code>, then <code>a1</code>, then <code>a2</code>. Each <code>Op::Create</code> below then just says <code>id: next()</code> and <code>order: order()</code>.</p>
+<p>The components are built by starting from <code>Default</code> and overwriting fields, as in <code>let mut t = Transform2d::default(); t.x = n(500.0);</code>, then converted with <code>.wrap()</code> into the <code>Component</code> enum from Part 2.</p>
+</div>
+<p>The rest of the file creates the 20 random rects (with a deterministic xorshift generator, so every run looks the same), the square, the circle, the slider and bar (Part 5), the torus, and the timeline with two clips (Part 6).</p>
+
+<h2 id="verify"><span class="sec">4.9</span>How the model checked its work</h2>
+<p>In the same commit as the bridge, the model wrote the <code>run-iron</code> skill (<code>.claude/skills/run-iron/</code>). <code>build.sh</code> builds the WebGL2 wasm, <code>serve.sh</code> runs Vite, and <code>drive.ts</code> is a Playwright script that reads commands from stdin (<code>ddrag</code>, <code>key Meta+z</code>, <code>eval</code>, <code>shot</code>, <code>logs</code>) against headless Chrome. <code>smoke.txt</code> works through the plan's exit criteria in order: drag the square and the torus, undo both, redo one, scrub the slider, scrub the timeline, apply a model edit, and round-trip save/load, checking the bytes match. Every screenshot in this guide comes from that script's last run.</p>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>Changes are <strong>queued</strong> (<code>PendingTransactions</code>, <code>HistoryRequests</code>, <code>PendingLoad</code>, <code>GestureRequests</code>) and applied by <strong><code>sync_document</code></strong> at the start of the next frame.</li>
+  <li>The sync reconciles from the <strong>log</strong>, reading ids from ops and inverses, so anything that applied a transaction by any route gets drawn.</li>
+  <li>The reconciler reads <strong>resolved</strong> values, so bindings, previews and clips all render with no special handling.</li>
+  <li>A drag moves the entity optimistically and writes <strong>one</strong> transaction on release. Bound or animated axes are locked.</li>
+</ul>
+</div>

@@ -122,6 +122,12 @@ pub struct PendingLoad(pub Option<Document>);
 #[derive(Resource, Default)]
 pub struct DocumentDirty(pub bool);
 
+/// The last version the reconciler has caught up to. Anything the log holds
+/// past it, however it was applied (queued transaction, undo, a synchronous
+/// FFI apply from the model surface), is reconciled on the next sync.
+#[derive(Resource, Default)]
+pub struct SyncedVersion(pub iron_document::Version);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryOp {
     Undo,
@@ -146,6 +152,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<HistoryRequests>()
             .init_resource::<PendingLoad>()
             .init_resource::<GestureRequests>()
+            .init_resource::<SyncedVersion>()
             .add_systems(Startup, (materialize::setup_mesh_assets, render::setup_document_layer, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking.
@@ -159,12 +166,13 @@ impl Plugin for DocumentPlugin {
 
 /// Apply every pending transaction and history request, then reconcile the
 /// nodes they touched.
-fn sync_document(
+pub(crate) fn sync_document(
     mut store: ResMut<DocumentStore>,
     mut pending: ResMut<PendingTransactions>,
     mut history: ResMut<HistoryRequests>,
     mut load: ResMut<PendingLoad>,
     mut gestures: ResMut<GestureRequests>,
+    mut synced: ResMut<SyncedVersion>,
     mut map: ResMut<NodeMap>,
     mut dirty: ResMut<DocumentDirty>,
     mut commands: Commands,
@@ -176,12 +184,13 @@ fn sync_document(
         && load.0.is_none()
         && gestures.0.is_empty()
         && !store.0.has_changes()
+        && store.0.document().version() == synced.0
     {
         return;
     }
     let now = time.elapsed().as_millis() as u64;
     let mut affected: BTreeSet<NodeId> = BTreeSet::new();
-    let version_before = store.0.document().version();
+    let version_before = synced.0;
     if let Some(doc) = load.0.take() {
         // Everything materialised belongs to the old document. Tear it all
         // down rather than diffing: ids may coincide with different types.
@@ -191,6 +200,7 @@ fn sync_document(
             }
         }
         store.0 = Store::with_document(doc);
+        synced.0 = store.0.document().version();
         affected.extend(store.0.document().live_nodes().map(|n| n.id));
         info!(
             "loaded document v{} ({} live nodes)",
@@ -203,26 +213,21 @@ fn sync_document(
             input.ts = now;
         }
         let label = input.label.clone();
-        match store.0.apply(input) {
-            Ok(_) => note_applied(&store.0, &mut affected),
-            Err(errors) => {
-                for e in errors {
-                    warn!("transaction {label:?} rejected: {e}");
-                }
+        if let Err(errors) = store.0.apply(input) {
+            for e in errors {
+                warn!("transaction {label:?} rejected: {e}");
             }
         }
     }
     for g in gestures.0.drain(..) {
         match g {
-            GestureRequest::Commit(label) => match store.0.commit_gesture(label, iron_document::Actor::Human, now) {
-                None => {}
-                Some(Ok(_)) => note_applied(&store.0, &mut affected),
-                Some(Err(errors)) => {
+            GestureRequest::Commit(label) => {
+                if let Some(Err(errors)) = store.0.commit_gesture(label, iron_document::Actor::Human, now) {
                     for e in errors {
                         warn!("gesture rejected: {e}");
                     }
                 }
-            },
+            }
             GestureRequest::Cancel => store.0.cancel_gesture(),
         }
     }
@@ -233,7 +238,7 @@ fn sync_document(
         };
         match result {
             None => info!("nothing to {op:?}"),
-            Some(Ok(_)) => note_applied(&store.0, &mut affected),
+            Some(Ok(_)) => {}
             Some(Err(errors)) => {
                 for e in errors {
                     warn!("{op:?} rejected: {e}");
@@ -241,6 +246,14 @@ fn sync_document(
             }
         }
     }
+    // Everything the log gained since the last sync, whoever applied it.
+    for tx in store.0.history().log().filter(|tx| tx.version > synced.0) {
+        info!("applied {:?} ({} ops, {:?}) -> v{}", tx.label, tx.ops.len(), tx.actor, tx.version.0);
+        for op in tx.ops.iter().chain(tx.inverse.iter()) {
+            collect_ids(op, &mut affected);
+        }
+    }
+    synced.0 = store.0.document().version();
     // Resolved values that moved: bindings re-evaluated, or a gesture
     // previewed. Their nodes are rewritten like any other change.
     for change in store.0.drain_changes() {
@@ -263,17 +276,6 @@ fn sync_document(
     materialize::reconcile(&store.0, &affected, &mut map, &mut commands, &assets);
     map.paint_index = paint_order(&store.0);
     dirty.0 = true;
-}
-
-/// Record the nodes the most recently applied transaction touched. Ops name
-/// what was asked for; the inverse names everything that actually changed (a
-/// subtree delete lists each node).
-fn note_applied(store: &Store, affected: &mut BTreeSet<NodeId>) {
-    let tx = store.history().log().last().expect("just applied");
-    info!("applied {:?} ({} ops) -> v{}", tx.label, tx.ops.len(), tx.version.0);
-    for op in tx.ops.iter().chain(tx.inverse.iter()) {
-        collect_ids(op, affected);
-    }
 }
 
 fn collect_ids(op: &Op, out: &mut BTreeSet<NodeId>) {

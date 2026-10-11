@@ -346,11 +346,58 @@ measure first.
   placed where the evaluator can see it, so a slider scrub updates its dependents every
   frame without a transaction (doc 02 invariant 8).
 - **A bound leaf has no drag handle.** A previewed value on a bound leaf is never
-  written, and a position drag of a node whose `x` or `y` is bound is not written either
-  (the reconciler snaps it back). This is doc 02 §8.2's "reject" policy; detach-to-literal
-  and model-mediated repair are later choices.
+  written, and a drag locks any axis whose leaf is bound (or clip-driven at the current
+  time) for the whole gesture, so the node moves only along its free axis and nothing
+  snaps on release. This is doc 02 §9.2 ("do not offer a handle on a derived composite")
+  and §8.2's "reject" policy; detach-to-literal and model-mediated repair are later
+  choices.
 - **Resolved changes are the reconciler's third input** after ops and history: after each
   sync, leaves whose resolved value moved name the nodes to rewrite.
+
+### 5.11 Scripted time (decided in step 6)
+
+- **`Slot::Animated` stays reserved.** An animated property is not a slot variant but a
+  fact about relations: a leaf is animated when a live clip's `animates` edge targets its
+  node and the clip's `prop` names it. The authored constant remains the value outside the
+  clip. This is doc 05's "target is a projection of an edge" taken literally, and it keeps
+  `by_target` the single answer to "why is this moving".
+- **Sampling is a layer in the graph.** `time::sample(doc, t)` produces the value of every
+  clip-driven leaf at `t`; the graph reads the gesture overlay first, then a binding's
+  resolved value, then the animated layer, then the constant. Bindings that read an
+  animated leaf re-evaluate when the playhead moves. Before a clip starts the leaf shows
+  its authored value; after it ends the clip holds `to`.
+- **The playhead is runtime state**, held by the store, never saved. The timeline panel
+  owns scrubbing and pushes the time into the store each frame it changes.
+- **Clip endpoints are `ValueKind::Any`**: they take the target leaf's kind, and a mismatch
+  (or a clip targeting a bound leaf) is a reported error, drawn red in the timeline, never
+  a silent skip.
+- **A clip-driven leaf has no drag handle at that time**, like a bound one: the write is
+  refused and logged. Doc 05 §5.2's mode control is the eventual answer.
+- **Relations get `data.offset`** for staggering, as doc 05 §3 asks.
+
+### 5.12 The model surface (decided in step 7)
+
+- **Where it runs:** next to the wasm, in the worker (or on the main thread in that
+  mode), so a store call is a function call. The shell sends `modelEdit` and `modelAsk`
+  messages and gets structured results; `window.__iron.edit/ask` expose the same for
+  driving.
+- **`document_apply` is synchronous** and answers with every error in one round trip
+  (doc 04 §9.5). It takes an `expect_version` for compare-and-swap (§9.6). The bridge
+  reconciles from the log rather than from what it queued, so a synchronous apply from any
+  caller is picked up on the next frame.
+- **Placement and ids stay Rust's.** The surface asks for `next_ids`, `next_relation_ids`,
+  and `place(parent, after, count)`; order keys never cross as arithmetic.
+- **Coercion is schema-driven, not Zod.** The registry schema names every field's kind;
+  the parser resolves bare attribute names to `component.field` when unambiguous and
+  coerces liberally by kind. `{= expr}` in any attribute is a binding. Unknown attributes
+  are errors, never stripped.
+- **Rejections are markup**: `<edit-failed applied="none" version="N">` with one
+  `<error>` per problem, fed back for exactly one retry.
+- **Transport is a one-method interface.** The first implementation calls the Claude API
+  from the browser with a user-supplied key kept in localStorage, streaming, adaptive
+  thinking, the manifest as a cached system prompt. A local sidecar (`claude -p`, or the
+  document as MCP tools for Claude Code) is the next transport and needs no change above
+  it.
 
 ## 6. Operations and history
 
@@ -531,8 +578,8 @@ Exit criteria, in order:
 | 3 | intents: drag → transaction; coalescing; undo wired to keyboard | criterion 1. **Done 2026-09-18**: the shell maps Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (or Ctrl+Y) to `undo`/`redo` FFI calls; the sync applies them as history transactions and reconciles like any other. Verified by the `run-iron` smoke script |
 | 4 | load/save FFI; Svelte shell reads a tree view | criterion 2. **Done 2026-09-18**: `document_save` / `document_load` / `document_view` FFI; the shell's Document panel shows the tree view and refreshes on `documentChanged`; `window.__iron` exposes save/load/view for driving. The inspector (crate, FFI bridge, TypeScript client) is removed. Round trip verified byte-identical by the smoke script |
 | 5 | `Slot::Bound`, minimal expression evaluator (`Ref`, `Bin`, `Call` with two floor functions), slider node | criterion 3. **Done 2026-09-18**: `expr.rs` (doc 02 §4 grammar minus `Get`; literals, refs, arithmetic, comparison, `? :`, calls into a nine-function floor), `graph.rs` (height-ordered evaluation with equality cutoff, gesture overlay), slider node with scrub-to-preview and one `set slider` transaction on release, demo bar bound to it. See §5.10 |
-| 6 | `clip` node, relations, `Timing`, playhead drives `Animated` slots; timeline panel reads the document | criterion 4 |
-| 7 | TypeScript model surface: manifest from the registry, `<edit>` parser, Zod schemas, apply via FFI | criterion 5 |
+| 6 | `clip` node, relations, `Timing`, playhead drives `Animated` slots; timeline panel reads the document | criterion 4. **Done 2026-09-18**: `time.rs` samples clips through `animates` relations into the graph's animated layer; the timeline panel draws clip rows from the document and scrubbing pushes the playhead into the store; views answer "why is this moving" with `<driven-by>`. See §5.11 |
+| 7 | TypeScript model surface: manifest from the registry, `<edit>` parser, Zod schemas, apply via FFI | criterion 5. **Done 2026-09-18**: `src-ui/model/` (manifest generated from `document_schema()`, `<edit>` parser with schema-driven coercion instead of Zod, `applyEdit` through a synchronous `document_apply` with compare-and-swap, one-retry agent loop, pluggable transport with the Claude API first). See §5.12 |
 
 Steps 1 and 2 are the spine. Step 5 is the first point at which doc 03 §5.1's decision
 ("Layer 2 is the reactive interpreter") becomes code. The raster cache (doc 07 §10) follows

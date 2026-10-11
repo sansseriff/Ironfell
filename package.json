@@ -17,5 +17,9 @@
     "typescript": "~5.7.2",
     "vite": "^6.2.0",
     "vite-plugin-preload": "^0.4.2"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
+    "fast-xml-parser": "^5.11.1"
   }
 }

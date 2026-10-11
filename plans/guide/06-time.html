@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 6 · Scripted time: clips on a timeline — Iron&#x27;s Document Spine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron's Document Spine <span>· a guide to the Sept 18 work</span></a><div class="pager"><a href="05-reactive.html" aria-label="Previous part">&larr;</a><span class="here">Part 6 of 7</span><a href="07-model.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>The shape of the change</a></li><li><a href="02-document.html"><span class="num">2</span>What the document is made of</a></li><li><a href="03-ops.html"><span class="num">3</span>Changing it: ops, transactions, undo</a></li><li><a href="04-bridge.html"><span class="num">4</span>Into Bevy: the reconciler and writeback</a></li><li><a href="05-reactive.html"><span class="num">5</span>Bindings and the reactive graph</a></li><li><a href="06-time.html" aria-current="page"><span class="num">6</span>Scripted time: clips on a timeline</a></li><li><a href="07-model.html"><span class="num">7</span>The model surface</a></li><li><a href="08-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 6 of 7 · <span class="chip sys-time">Scripted time</span></p>
+  <h1>Scripted time: clips on a timeline</h1>
+  <p class="lede">Step 6's exit criterion: <em>scrubbing the timeline plays the clip, and the “why is this moving?” query on the torus answers with the clip.</em> The interesting part isn't the interpolation, which is simple arithmetic. It's where animation lives in the document, and how it slots into the reactive graph from Part 5 without a new mechanism.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 2 (relations, <code>ValueKind::Any</code>) and Part 5 (the four read layers, <code>invalidate</code>, <code>changes</code>).</div>
+    <div><b>Files</b><code>src/iron_document/src/time.rs</code> (uncommitted), the time half of <code>lib.rs</code>, <code>graph.rs</code>'s <code>set_animated</code>, <code>src/bevy_app/timeline.rs</code>, <code>view.rs</code>, and <code>tests/time.rs</code>.</div>
+  </div>
+</header>
+
+<h2 id="naive"><span class="sec">6.1</span>Where does an animation live?</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version A</span><p><strong>On the property.</strong> Give the slot keyframes: <code>transform3d.rot = Animated { keys: [...] }</code>. This is what <code>Slot::Animated</code> was reserved for in step 1. It's easy to sample. But the animation isn't a <em>thing</em>: you can't select it, retime it on a timeline, or ask “what is animating the torus?” without scanning every slot of every node.</p></div>
+  <div class="box naive"><span class="tab">The simple version B</span><p><strong>In Bevy.</strong> Use Bevy's animation system, or the old <code>TimelineState</code>-driven demo code. The animation then lives outside the document: it isn't saved, the model can't see it, undo can't touch it.</p></div>
+</div>
+<div class="box built"><span class="tab">What was built</span>
+<p>Vision doc 05 §3 argues that <strong>a clip's target is a projection of an edge</strong>. So:</p>
+<ul>
+  <li>A <strong>clip is a node</strong> (type <code>clip</code>, child of a <code>timeline</code>) with two components: <code>Timing { start, dur, easing }</code> and <code>Clip { prop, from, to }</code>.</li>
+  <li>Its <strong>target is a relation</strong>: <code>clip ─animates→ torus</code>, stored in the relations table and indexed by target, so “what drives the torus?” is one lookup.</li>
+  <li><strong>Sampling produces a layer</strong>. For the current playhead, <code>time::sample</code> computes the value of every animated leaf, and those values sit in the reactive graph's animated layer (layer 3 of the four in Part 5). The authored constant is untouched, and bindings that read an animated leaf follow it.</li>
+</ul>
+<p>So <code>Slot::Animated</code> stays reserved. “Animated” is a fact about relations, not a kind of slot. The plan records this decision in §5.11.</p>
+</div>
+
+<h2 id="data"><span class="sec">6.2</span>The data</h2>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:159">src/iron_document/src/component.rs</a><span class="range">lines 159–173</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173</pre><pre class="src"><code class="language-rust">/// Scripted time (doc 05 §2): a start and a duration on a track.
+Timing / &quot;timing&quot; =&gt; Timing {
+    start: Number = Value::Number(0.0),
+    dur: Number = Value::Number(1.0),
+    easing: Enum = Value::Enum(&quot;linear&quot;.to_owned()),
+}
+
+/// What a clip does to its target. Endpoints stay literal (doc 05 §2.1)
+/// and take the target leaf&#x27;s kind. The target itself is a relation, not
+/// a field (doc 05 §3).
+Clip / &quot;clip&quot; =&gt; Clip {
+    prop: Str = Value::Str(String::new()),
+    from: Any = Value::Number(0.0),
+    to: Any = Value::Number(1.0),
+}</code></pre></div></div></figure>
+<p><code>prop</code> is a leaf path written as a string (<code>"transform3d.rot"</code>). <code>from</code> and <code>to</code> are declared <code>Any</code>, because their kind is whatever the target leaf's kind is: a <code>Vec3</code> for the torus's rotation, a <code>Number</code> for the square's x. The registry makes <code>timeline</code> a node that admits only <code>clip</code> children (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/registry.rs:112" title="src/iron_document/src/registry.rs:112"><code>registry.rs:112</code></a>). The demo scene builds a timeline with two clips and links them:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:183">src/document_bridge/demo.rs</a><span class="range">lines 183–188</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:2"></span><pre class="gutter" aria-hidden="true">183
+184
+185
+186
+187
+188</pre><pre class="src"><code class="language-rust">let spin = next();
+ops.push(clip(spin, &quot;spin&quot;, 1.0, 3.0, &quot;ease_in_out&quot;, &quot;transform3d.rot&quot;, Value::Vec3([0.0, 0.0, 0.0]), Value::Vec3([0.0, std::f64::consts::TAU, 0.0])));
+let slide = next();
+ops.push(clip(slide, &quot;slide&quot;, 0.5, 2.0, &quot;linear&quot;, &quot;transform2d.x&quot;, Value::Number(500.0), Value::Number(700.0)));
+ops.push(Op::Link { rel: Relation { id: rel_ids[0], from: spin, to: torus, rel: RelKind::Animates, data: BTreeMap::new() } });
+ops.push(Op::Link { rel: Relation { id: rel_ids[1], from: slide, to: square, rel: RelKind::Animates, data: BTreeMap::new() } });</code></pre></div></div></figure>
+<p>“spin” turns the torus a full revolution about y between 1 s and 4 s with ease-in-out. “slide” moves the square's x from 500 to 700 between 0.5 s and 2.5 s. The <code>Link</code> ops (187–188) are what connect each clip to its target. Neither clip has a field naming the target.</p>
+
+<h2 id="sample"><span class="sec">6.3</span>Sampling: one time in, one layer out</h2>
+<p><code>time.rs</code> has three functions. The two small ones are the maths:</p>
+<figure class="code"><figcaption><span class="chip sys-time">Scripted time</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/time.rs:30">src/iron_document/src/time.rs</a><span class="range">lines 30–69</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69</pre><pre class="src"><code class="language-rust">pub fn ease(name: &amp;str, u: f64) -&gt; f64 {
+    let u = u.clamp(0.0, 1.0);
+    match name {
+        &quot;ease_in&quot; =&gt; u * u,
+        &quot;ease_out&quot; =&gt; 1.0 - (1.0 - u) * (1.0 - u),
+        &quot;ease_in_out&quot; =&gt; {
+            if u &lt; 0.5 {
+                2.0 * u * u
+            } else {
+                1.0 - (-2.0 * u + 2.0).powi(2) / 2.0
+            }
+        }
+        _ =&gt; u,
+    }
+}
+
+/// Interpolate two values of one kind. Discrete kinds step at the end.
+pub fn lerp(from: &amp;Value, to: &amp;Value, u: f64) -&gt; Option&lt;Value&gt; {
+    use Value::*;
+    let l = |a: f64, b: f64| a + (b - a) * u;
+    Some(match (from, to) {
+        (Number(a), Number(b)) =&gt; Number(l(*a, *b)),
+        (Vec2(a), Vec2(b)) =&gt; Vec2([l(a[0], b[0]), l(a[1], b[1])]),
+        (Vec3(a), Vec3(b)) =&gt; Vec3([l(a[0], b[0]), l(a[1], b[1]), l(a[2], b[2])]),
+        (Color(a), Color(b)) =&gt; Color([
+            l(a[0] as f64, b[0] as f64) as f32,
+            l(a[1] as f64, b[1] as f64) as f32,
+            l(a[2] as f64, b[2] as f64) as f32,
+            l(a[3] as f64, b[3] as f64) as f32,
+        ]),
+        (a, b) if a.kind() == b.kind() =&gt; {
+            if u &lt; 1.0 {
+                a.clone()
+            } else {
+                b.clone()
+            }
+        }
+        _ =&gt; return None,
+    })
+}</code></pre></div></div></figure>
+<p><code>ease</code> reshapes progress <code>u</code> (0 to 1) with a named curve. <code>lerp</code> interpolates between two values of the same kind: numbers, vectors and colours smoothly, and anything else (a bool, a string) by stepping to <code>to</code> at the end. Mismatched kinds return <code>None</code>. The third function does the work:</p>
+<figure class="code"><figcaption><span class="chip sys-time">Scripted time</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/time.rs:71">src/iron_document/src/time.rs</a><span class="range">lines 71–136</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:23;--len:1"></span><span class="band" style="--from:27;--len:6"></span><span class="band" style="--from:39;--len:4"></span><span class="band" style="--from:45;--len:12"></span><span class="band" style="--from:59;--len:3"></span><pre class="gutter" aria-hidden="true">71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136</pre><pre class="src"><code class="language-rust">pub fn sample(doc: &amp;Document, t: f64) -&gt; Sample {
+    let mut out = Sample::default();
+    let Some(clip_ty) = TypeId::lookup(&quot;clip&quot;) else { return out };
+    for clip_id in doc.nodes_of_type(clip_ty) {
+        let (Some(timing), Some(clip)) = (doc.get::&lt;Timing&gt;(clip_id), doc.get::&lt;Clip&gt;(clip_id)) else {
+            continue;
+        };
+        let num = |s: &amp;crate::value::Slot, d: f64| s.constant().and_then(|v| v.as_f64()).unwrap_or(d);
+        let start = num(&amp;timing.start, 0.0);
+        let dur = num(&amp;timing.dur, 0.0);
+        let easing = timing.easing.constant().and_then(|v| v.as_str()).unwrap_or(&quot;linear&quot;).to_owned();
+        let prop = clip.prop.constant().and_then(|v| v.as_str()).unwrap_or(&quot;&quot;);
+        let path: LeafPath = match prop.parse() {
+            Ok(p) =&gt; p,
+            Err(e) =&gt; {
+                out.errors.insert(clip_id, format!(&quot;prop {prop:?}: {e}&quot;));
+                continue;
+            }
+        };
+        let (Some(from), Some(to)) = (clip.from.constant(), clip.to.constant()) else {
+            out.errors.insert(clip_id, &quot;from/to must be constants&quot;.into());
+            continue;
+        };
+        for rel in doc.relations_from(clip_id).filter(|r| r.rel == RelKind::Animates) {
+            if !doc.is_live(rel.to) {
+                continue;
+            }
+            let offset = rel.data.get(&quot;offset&quot;).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let s = start + offset;
+            if t &lt; s {
+                continue;
+            }
+            let u = if dur &lt;= 0.0 { 1.0 } else { ((t - s) / dur).min(1.0) };
+            let leaf = Leaf { node: rel.to, path };
+            match doc.leaf(rel.to, path) {
+                None =&gt; {
+                    out.errors.insert(clip_id, format!(&quot;{} has no {}&quot;, rel.to, path));
+                    continue;
+                }
+                Some(slot) if slot.expr().is_some() =&gt; {
+                    out.errors.insert(clip_id, format!(&quot;{leaf} is bound; a clip cannot also drive it&quot;));
+                    continue;
+                }
+                Some(slot) =&gt; {
+                    let kind = slot.constant().map(|v| v.kind());
+                    if from.kind() != to.kind() || Some(from.kind()) != kind {
+                        out.errors.insert(
+                            clip_id,
+                            format!(
+                                &quot;from/to are {}/{}, but {leaf} is {}&quot;,
+                                from.kind().name(),
+                                to.kind().name(),
+                                kind.map(|k| k.name()).unwrap_or(&quot;?&quot;)
+                            ),
+                        );
+                        continue;
+                    }
+                }
+            }
+            if let Some(v) = lerp(from, to, ease(&amp;easing, u)) {
+                out.values.insert(leaf, v);
+            }
+        }
+    }
+    out
+}</code></pre></div></div></figure>
+<p>For every clip node, and for every <code>animates</code> relation leaving it (line 94):</p>
+<ol class="steps">
+  <li><b>Offset and start.</b> Each relation may carry <code>data.offset</code> to stagger targets (98). <strong>Before the clip starts, the target is skipped</strong> (100–102), so it shows its authored value.</li>
+  <li><b>Progress.</b> <code>u</code> is the fraction of the duration elapsed, capped at 1 (103). <strong>After the clip ends it holds <code>to</code>.</b></li>
+  <li><b>Conflicts are reported, not resolved.</b> A target leaf that doesn't exist, a target that is <em>bound</em> (110–113: the binding would win and the clip could never show), or endpoints of the wrong kind (116–127) each put an error in <code>out.errors</code> under the clip's id. The timeline draws that clip red.</li>
+  <li><b>Value.</b> Ease, interpolate, and record the result for that leaf (130–132).</li>
+</ol>
+<p>A worked example from the slider scene: clip <code>#6</code> runs from 0.5 s for 2 s, 500 → 700, linear.</p>
+<figure class="output"><figcaption>Moving the playhead (real output)</figcaption><pre class="plain"><code>store.set_time(1.5)                        // the playhead moved to 1.5 s
+store.drain_changes() →
+  #4.transform2d.x = 600                   // clip #6: start 0.5, dur 2, 500 → 700, linear
+                                           // u = (1.5 − 0.5) / 2 = 0.5  →  500 + 200 × 0.5</code></pre></figure>
+
+<h2 id="store"><span class="sec">6.4</span>The playhead lives in the store, but isn't saved</h2>
+<figure class="code"><figcaption><span class="chip sys-ops">Ops & history</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:136">src/iron_document/src/lib.rs</a><span class="range">lines 136–156</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156</pre><pre class="src"><code class="language-rust">pub fn time(&amp;self) -&gt; f64 {
+    self.time
+}
+
+/// Move the playhead. Every clip is resampled; leaves whose animated
+/// value moved are reported like any other resolved change.
+pub fn set_time(&amp;mut self, t: f64) {
+    self.time = t;
+    self.resample();
+}
+
+/// Clips that could not be sampled at the current time, by clip node.
+pub fn time_errors(&amp;self) -&gt; &amp;std::collections::BTreeMap&lt;NodeId, String&gt; {
+    &amp;self.time_errors
+}
+
+fn resample(&amp;mut self) {
+    let sample = time::sample(&amp;self.doc, self.time);
+    self.time_errors = sample.errors;
+    self.reactive.set_animated(&amp;self.doc, sample.values);
+}</code></pre></div></div></figure>
+<p><code>Store</code> has a <code>time: f64</code> field and a <code>time_errors</code> map (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:100" title="src/iron_document/src/lib.rs:100"><code>lib.rs:100–102</code></a>). Neither is part of the <code>Document</code>, so neither is saved or undone. The playhead is editor state, like a scroll position. <code>set_time</code> resamples, and <code>resample</code> passes the sample to the graph:</p>
+<figure class="code"><figcaption><span class="chip sys-react">Reactive graph</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:69">src/iron_document/src/graph.rs</a><span class="range">lines 69–96</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:10"></span><span class="band" style="--from:18;--len:8"></span><span class="band" style="--from:26;--len:1"></span><pre class="gutter" aria-hidden="true">69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96</pre><pre class="src"><code class="language-rust">/// Replace the animated layer with a fresh sample; leaves whose value
+/// moved are reported and their dependents re-evaluated.
+pub fn set_animated(&amp;mut self, doc: &amp;Document, sample: BTreeMap&lt;Leaf, Value&gt;) {
+    let mut changed: Vec&lt;Leaf&gt; = Vec::new();
+    for (leaf, v) in &amp;sample {
+        if self.animated.get(leaf) != Some(v) {
+            changed.push(*leaf);
+        }
+    }
+    for leaf in self.animated.keys() {
+        if !sample.contains_key(leaf) {
+            changed.push(*leaf);
+        }
+    }
+    if changed.is_empty() {
+        return;
+    }
+    self.animated = sample;
+    for &amp;l in &amp;changed {
+        // Only visible when no gesture is previewing this leaf.
+        if !self.overlay.contains_key(&amp;l)
+            &amp;&amp; let Some(v) = self.read(doc, l)
+        {
+            self.changes.insert(l, v);
+        }
+    }
+    self.invalidate(doc, changed);
+}</code></pre></div></div></figure>
+<p>It compares the new sample with the old one and collects the leaves whose animated value moved, appeared or disappeared (73–82). If nothing moved it returns early, so scrubbing through a stretch with no active clips costs almost nothing. For each moved leaf it records a change, which is how the reconciler finds out, unless a gesture is currently previewing that leaf (89). Then <code>invalidate</code> (95) re-evaluates any binding that reads an animated leaf. That is how Part 5's machinery gives “a bar bound to an animated value follows the animation” for free.</p>
+<p>The sample is also refreshed after <em>every</em> transaction (in <code>after_transaction</code>, Part 5), because editing a clip's timing, linking a new target or deleting a node all change what the sample should be. The comment there admits this is unconditional: “cheap enough… clips are few”.</p>
+
+<h2 id="panel"><span class="sec">6.5</span>The timeline panel</h2>
+<p><code>TimelineState</code> survived the change, as the plan intended, but its role narrowed to the editor-local playhead plus zoom and duration. The clips themselves now come from the document. Three systems matter:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/timeline.rs:15">src/bevy_app/timeline.rs</a><span class="range">lines 15–24</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">15
+16
+17
+18
+19
+20
+21
+22
+23
+24</pre><pre class="src"><code class="language-rust">impl Plugin for TimelinePlugin {
+    fn build(&amp;self, app: &amp;mut App) {
+        app.init_resource::&lt;TimelineState&gt;()
+            .add_systems(Startup, setup_timeline_scenes)
+            // The playhead is a runtime source of the store: pushed before the
+            // document sync so clip samples land in the same frame.
+            .add_systems(PreUpdate, (scrub_timeline, push_time_to_store.after(scrub_timeline)).before(sync_document))
+            .add_systems(Update, (update_timeline_view, render_timeline_grid));
+    }
+}</code></pre></div></div></figure>
+<p>Scrubbing and pushing the time are ordered <code>.before(sync_document)</code>, so a scrub's new sample is reconciled in the same frame:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/timeline.rs:68">src/bevy_app/timeline.rs</a><span class="range">lines 68–93</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93</pre><pre class="src"><code class="language-rust">/// Pointer down or drag inside the timeline panel moves the playhead.
+pub fn scrub_timeline(
+    pointer: Res&lt;crate::PointerState&gt;,
+    panels: Res&lt;Panels&gt;,
+    mut timeline: ResMut&lt;TimelineState&gt;,
+) {
+    if !pointer.buttons.left {
+        return;
+    }
+    let Some(rect) = panels.rect(TIMELINE_PANEL) else { return };
+    if !rect.contains(pointer.screen) {
+        return;
+    }
+    let t = ((pointer.screen.x - rect.x) as f64 / rect.w as f64 * timeline.duration).clamp(0.0, timeline.duration);
+    if (timeline.current_time - t).abs() &gt; 1e-6 {
+        timeline.current_time = t;
+        timeline.playing = false;
+    }
+}
+
+/// Mirror the panel&#x27;s playhead into the store, which resamples every clip.
+pub fn push_time_to_store(timeline: Res&lt;TimelineState&gt;, mut store: ResMut&lt;DocumentStore&gt;) {
+    if (store.0.time() - timeline.current_time).abs() &gt; 1e-9 {
+        store.0.set_time(timeline.current_time);
+    }
+}</code></pre></div></div></figure>
+<p>Drawing the clip rows reads the document directly, one row per <code>clip</code> node. A row whose clip id appears in <code>store.time_errors()</code> is drawn red:</p>
+<figure class="code"><figcaption><span class="chip sys-bridge">Bevy bridge</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/timeline.rs:218">src/bevy_app/timeline.rs</a><span class="range">lines 218–243</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:5;--len:8"></span><span class="band" style="--from:20;--len:1"></span><pre class="gutter" aria-hidden="true">218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243</pre><pre class="src"><code class="language-rust">// One row per clip node, in document order: a bar from start to
+// start + dur. Rows are the timeline&#x27;s own layout, not document data.
+if let Ok(mut list) = clips.single_mut() {
+    let doc = store.0.document();
+    let clip_ty = TypeId::lookup(&quot;clip&quot;).expect(&quot;registered&quot;);
+    let rows: Vec&lt;(f64, f64, bool)&gt; = doc
+        .nodes_of_type(clip_ty)
+        .filter_map(|id| {
+            let t = doc.get::&lt;Timing&gt;(id)?;
+            let num = |s: &amp;iron_document::Slot, d: f64| s.constant().and_then(|v| v.as_f64()).unwrap_or(d);
+            Some((num(&amp;t.start, 0.0), num(&amp;t.dur, 0.0), store.0.time_errors().contains_key(&amp;id)))
+        })
+        .collect();
+    list.rebuild(|b| {
+        b.clipped(kurbo::Affine::IDENTITY, clip, |b| {
+            for (i, (start, dur, error)) in rows.iter().enumerate() {
+                let y = top + ROW_TOP + i as f64 * ROW_HEIGHT;
+                let x0 = left + start / time_per_pixel;
+                let x1 = left + (start + dur) / time_per_pixel;
+                let bar = kurbo::RoundedRect::new(x0, y, x1.max(x0 + 4.0), y + ROW_HEIGHT - 6.0, 4.0);
+                let color = if *error { [0.85, 0.3, 0.3, 1.0] } else { [0.35, 0.6, 0.9, 1.0] };
+                b.fill(kurbo::Affine::IDENTITY, peniko::Color::new(color), bar);
+            }
+        });
+    });
+}</code></pre></div></div></figure>
+<figure class="shots">
+  <img src="img/after-timeline-scrub.jpg" alt="The app after scrubbing the timeline to about 2.6 seconds: the red playhead line in the timeline panel crosses the two blue clip bars, the dark square has moved right to x=700, and the torus has turned." width="1200" height="750">
+  <figcaption>After the smoke test scrubs to about 2.6 s. The red playhead has passed the end of “slide” (the lower bar, 0.5–2.5 s), so the square holds <code>x=700</code>. The Document panel shows <code>x="650"</code> because the smoke test's earlier drag and redo put 650 there. It is the <em>authored</em> value, and the clip sits on top of it. “spin” (the upper bar) is still turning the torus.</figcaption>
+</figure>
+<div class="box edge"><span class="tab">Why the panel says 650</span>
+<p>The screenshot's panel text says <code>x="650"</code> for the square even though it's drawn at 700, which looks like a contradiction with “views show resolved values”. It isn't. The panel's text is refreshed only on <code>documentChanged</code>, which fires when the <em>version</em> changes (Part 4, 4.4). Scrubbing moves the playhead without creating a transaction, so the panel still shows the text it last fetched. <code>__iron.view()</code>, called after the scrub, does return the animated value; that's what the smoke test's <code>eval</code> line checks. If you want the panel to follow the playhead, it would need a refresh on time changes too.</p>
+</div>
+
+<h2 id="why"><span class="sec">6.6</span>“Why is this moving?”</h2>
+<p>Because a target is a relation, the answer is the <code>by_target</code> index: <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:257" title="src/iron_document/src/document.rs:257"><code>Document::relations_to</code></a>. The view renders it for any node that something drives:</p>
+<figure class="code"><figcaption><span class="chip sys-io">Files & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/view.rs:140">src/iron_document/src/view.rs</a><span class="range">lines 140–144</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">140
+141
+142
+143
+144</pre><pre class="src"><code class="language-rust">let kids = doc.children(id);
+let rels: Vec&lt;_&gt; = doc.relations_from(id).collect();
+// The reverse direction: what drives this node (doc 05 §5.3). Bindings
+// already show as `&lt;attr&gt;.bind`; relations arrive from elsewhere.
+let drivers: Vec&lt;_&gt; = doc.relations_to(id).collect();</code></pre></div></div></figure>
+<figure class="code"><figcaption><span class="chip sys-io">Files & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/view.rs:181">src/iron_document/src/view.rs</a><span class="range">lines 181–190</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">181
+182
+183
+184
+185
+186
+187
+188
+189
+190</pre><pre class="src"><code class="language-rust">for r in drivers {
+    write!(out, &quot;{indent}  &lt;driven-by ref=\&quot;{}\&quot; rel=\&quot;{}\&quot;&quot;, r.from, r.rel.name()).expect(&quot;string write&quot;);
+    if let Some(prop) = doc.get::&lt;crate::component::Clip&gt;(r.from).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()) {
+        write!(out, &quot; prop=\&quot;{}\&quot;&quot;, escape(prop)).expect(&quot;string write&quot;);
+    }
+    for (k, v) in &amp;r.data {
+        write!(out, &quot; {k}=\&quot;{}\&quot;&quot;, escape(&amp;v.to_string())).expect(&quot;string write&quot;);
+    }
+    out.push_str(&quot;/&gt;\n&quot;);
+}</code></pre></div></div></figure>
+<figure class="output"><figcaption>The same scene at t = 1.5 s (real output): x is the sampled 600, and the rect names the clip that drives it</figcaption><pre class="plain"><code>&lt;document version=&quot;2&quot;&gt;
+  &lt;group id=&quot;#1&quot; count=&quot;3&quot;&gt;
+    &lt;slider id=&quot;#2&quot; name=&quot;level&quot; x=&quot;100&quot; y=&quot;600&quot; rot=&quot;0&quot; sx=&quot;1&quot; sy=&quot;1&quot; min=&quot;0&quot; max=&quot;1&quot; step=&quot;0.01&quot; value=&quot;0.8&quot;/&gt;
+    &lt;bar id=&quot;#3&quot; x=&quot;780&quot; y=&quot;400&quot; y.bind=&quot;640 - #2.slider.value * 300&quot; rot=&quot;0&quot; sx=&quot;1&quot; sy=&quot;1&quot; w=&quot;60&quot; h=&quot;240&quot; h.bind=&quot;#2.slider.value * 300&quot;/&gt;
+    &lt;rect id=&quot;#4&quot; x=&quot;600&quot; y=&quot;420&quot; rot=&quot;0&quot; sx=&quot;1&quot; sy=&quot;1&quot; w=&quot;100&quot; h=&quot;100&quot;&gt;
+      &lt;driven-by ref=&quot;#6&quot; rel=&quot;animates&quot; prop=&quot;transform2d.x&quot;/&gt;
+    &lt;/rect&gt;
+  &lt;/group&gt;
+  &lt;timeline id=&quot;#5&quot; count=&quot;1&quot;&gt;
+    &lt;clip id=&quot;#6&quot; start=&quot;0.5&quot; dur=&quot;2&quot; easing=&quot;linear&quot; prop=&quot;transform2d.x&quot; from=&quot;500&quot; to=&quot;700&quot;&gt;
+      &lt;animates to=&quot;#4&quot;/&gt;
+    &lt;/clip&gt;
+  &lt;/timeline&gt;
+&lt;/document&gt;</code></pre></figure>
+<p>A person reading the Document panel, or the model reading its view, sees on the rect <em>both</em> the current value and <code>&lt;driven-by ref="#6" prop="transform2d.x"/&gt;</code>. On the clip it sees the forward edge, <code>&lt;animates to="#4"/&gt;</code>. Bindings show as <code>.bind</code> attributes (Part 5), and clips show as <code>&lt;driven-by&gt;</code>, which covers both reasons a value can differ from what was authored.</p>
+
+<h2 id="drag"><span class="sec">6.7</span>Dragging something a clip is driving</h2>
+<p>If you grab the square while “slide” is driving its x, what should happen? Writing a new authored x would change nothing visible, since the clip wins. Silently creating a keyframe would be worse. Vision doc 05 §5.2 says keyframes must never appear silently. So the rule matches bindings: <strong>at that moment, the leaf has no handle.</strong> <code>interaction_decide_system</code> locks the x axis when <code>reactive().animated()</code> contains it (Part 4), and <code>drag_commit_system</code> refuses to write it and logs why (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/interaction.rs:234" title="src/bevy_app/interaction.rs:234"><code>interaction.rs:234–240</code></a>). Once the playhead is before the clip's start, the leaf is no longer animated and dragging works again. The plan names a “mode control” (constant / bound / animated per property) as the eventual interface for this.</p>
+
+<div class="box edge"><span class="tab">Rough edges</span>
+<ul>
+  <li><strong>Two clips on one leaf: the last one wins, silently.</strong> <code>sample</code> writes <code>out.values.insert(leaf, v)</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/time.rs:131" title="src/iron_document/src/time.rs:131"><code>time.rs:131</code></a>) for each clip in id order, so where two overlap, the higher-numbered clip's value replaces the other's with no error. Clip-vs-binding conflicts are reported; clip-vs-clip conflicts aren't.</li>
+  <li><strong>Some conflicts only show once the clip has started.</strong> The start check (line 100) runs before the target checks, so a clip aimed at a bound leaf turns red only once the playhead passes its start. A malformed <code>prop</code> path is reported at any time, because it's checked earlier (83–89).</li>
+  <li><strong>The panel's text lags a scrub</strong>, as described under the screenshot above.</li>
+</ul>
+</div>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>A <strong>clip</strong> is a node with <code>Timing</code> and <code>Clip</code> components. Its <strong>target</strong> is an <code>animates</code> relation, not a field.</li>
+  <li><code>time::sample(doc, t)</code> produces the <strong>animated layer</strong>. It sits beneath gesture previews and bindings and above constants, and is never saved.</li>
+  <li>The playhead is <strong>runtime state in the store</strong>, pushed by the timeline panel before each sync.</li>
+  <li><code>relations_to</code> answers <strong>“why is this moving?”</strong>, and views render it as <code>&lt;driven-by&gt;</code>.</li>
+</ul>
+</div>
+
+<nav class="nextprev"><a href="05-reactive.html"><small>Previous</small><span>Part 5: Bindings and the reactive graph</span></a><a class="next" href="07-model.html"><small>Next</small><span>Part 7: The model surface</span></a></nav>
+</main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

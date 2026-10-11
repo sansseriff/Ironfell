@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 7 · The model surface — Iron&#x27;s Document Spine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron's Document Spine <span>· a guide to the Sept 18 work</span></a><div class="pager"><a href="06-time.html" aria-label="Previous part">&larr;</a><span class="here">Part 7 of 7</span><a href="08-field-guide.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>The shape of the change</a></li><li><a href="02-document.html"><span class="num">2</span>What the document is made of</a></li><li><a href="03-ops.html"><span class="num">3</span>Changing it: ops, transactions, undo</a></li><li><a href="04-bridge.html"><span class="num">4</span>Into Bevy: the reconciler and writeback</a></li><li><a href="05-reactive.html"><span class="num">5</span>Bindings and the reactive graph</a></li><li><a href="06-time.html"><span class="num">6</span>Scripted time: clips on a timeline</a></li><li><a href="07-model.html" aria-current="page"><span class="num">7</span>The model surface</a></li><li><a href="08-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 7 of 7 · <span class="chip sys-model">Model surface</span> <span class="chip sys-shell">FFI & shell</span></p>
+  <h1>The model surface</h1>
+  <p class="lede">Step 7's exit criterion: <em>the model reads a tree view, emits one <code>&lt;edit&gt;</code> with a <code>&lt;set&gt;</code>, and the change lands in the same undo stack with <code>actor: Model</code>.</em> This part is mostly TypeScript, and it's where the earlier parts pay off. The view already exists (Part 3), transactions are already atomic and report every error (Part 3), and the bridge already picks up any applied transaction from the log (Part 4). What's left is translation: markup in, ops out.</p>
+  <div class="prereq">
+    <div><b>You need</b>Parts 3 and 4, especially the view format, <code>Store::apply</code>'s error list and <code>sync_document</code> reading the log. Parts 5 and 6 explain the <code>.bind</code> and <code>&lt;driven-by&gt;</code> the model will see.</div>
+    <div><b>Files</b><code>src-ui/model/{index,api,schema,edit,manifest,agent,transport}.ts</code> (all uncommitted), the document half of <code>src/web_ffi.rs</code>, and the <code>modelEdit</code>/<code>modelAsk</code> cases in <code>src-ui/worker.ts</code>.</div>
+  </div>
+</header>
+
+<h2 id="naive"><span class="sec">7.1</span>How should a model edit a scene?</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version A</span><p><strong>Hand it the file and take back a new file.</strong> Diff the two to find out what changed. The model has to reproduce everything it <em>didn't</em> mean to change, ids get lost or invented, and diffing has to <em>guess</em> intent (“was this node moved, or deleted and recreated?”). One hallucinated line corrupts the scene.</p></div>
+  <div class="box naive"><span class="tab">The simple version B</span><p><strong>One tool call per op, with JSON schemas.</strong> It's precise, but verbose. Each op needs raw order keys and fully qualified paths (<code>fill.color</code> as <code>{"rgba":[1,0,0,1]}</code>), and a multi-step change is many round trips with no atomicity between them.</p></div>
+</div>
+<div class="box built"><span class="tab">What was built</span>
+<p>Vision doc 04's thesis 6: <strong>read markup, write ops</strong>. The model reads the view from Part 3 and replies with one <code>&lt;edit&gt;</code> block of declarative verbs, each naming its target by id:</p>
+<figure class="plainfig"><pre class="plain"><code class="language-xml">&lt;edit expect-version=&quot;7&quot;&gt;
+  &lt;create id=&quot;$n&quot; type=&quot;rect&quot; parent=&quot;#1&quot; name=&quot;from-model&quot; x=&quot;300&quot; y=&quot;120&quot;
+          w=&quot;{= #O.slider.value * 100}&quot; h=&quot;40&quot; color=&quot;#22aa55&quot;/&gt;
+  &lt;set id=&quot;#N&quot; fill.color=&quot;#ff3333&quot;/&gt;
+&lt;/edit&gt;</code></pre></figure>
+<p>TypeScript turns that into <em>one</em> transaction: it resolves <code>$n</code> to a real id, asks Rust for order keys, maps <code>w</code> to <code>size.w</code> and <code>color</code> to <code>fill.color</code>, coerces <code>#22aa55</code> to a colour, and turns <code>{= …}</code> into a binding. It then applies the transaction synchronously, with a version check. If it's rejected, the model gets back markup naming every error, and one retry.</p>
+</div>
+<p>That is the smoke test’s first edit, with the <code>expect-version</code> check a real model turn would add. Here is its result:</p>
+<figure class="shots">
+  <img src="img/after-model-edit.jpg" alt="The app after the model edit: the circle that was orange is now red, and a new green rect named from-model sits near the top of the viewer, partly behind the FPS overlay. The Document panel reads v9." width="1200" height="750">
+  <figcaption>After <code>__iron.edit(…)</code> from the smoke test: circle <code>#N</code> is red, and the new green rect sits under the FPS overlay near the top. Its width is bound to the slider. The version is now <code>v9</code>, and the panel shows the square at its animated <code>x="700"</code> because this transaction triggered a refresh (see Part 6's note).</figcaption>
+</figure>
+
+<h2 id="where"><span class="sec">7.2</span>Where it runs, and why</h2>
+<p>The model surface is TypeScript, but it runs <strong>in the worker, next to the wasm</strong>, so every question it asks the store (<em>what's the schema, give me a view, reserve three ids</em>) is a plain synchronous function call. The only asynchronous part is the network call to the model. The shell sends a message; the worker handles it:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">FFI & shell</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/worker.ts:197">src-ui/worker.ts</a><span class="range">lines 197–211</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+208
+209
+210
+211</pre><pre class="src"><code class="language-typescript">// Model surface: apply an &lt;edit&gt; as the model, or ask a model for one.
+case &quot;modelEdit&quot;:
+  try {
+    const outcome = modelEdit(glue, this.appHandle, data.xml, data.label);
+    self.postMessage({ ty: &quot;modelEditResult&quot;, requestId: data.requestId, ok: outcome.ok, outcome });
+  } catch (e) {
+    self.postMessage({ ty: &quot;modelEditResult&quot;, requestId: data.requestId, ok: false, error: String(e) });
+  }
+  break;
+
+case &quot;modelAsk&quot;:
+  modelAsk(glue, this.appHandle, data.instruction, { apiKey: data.apiKey, model: data.model })
+    .then((result) =&gt; self.postMessage({ ty: &quot;modelAskResult&quot;, requestId: data.requestId, ok: result.ok, result }))
+    .catch((e) =&gt; self.postMessage({ ty: &quot;modelAskResult&quot;, requestId: data.requestId, ok: false, error: String(e) }));
+  break;</code></pre></div></div></figure>
+<p><code>modelEdit</code> applies markup you supply (the smoke test uses it, and so can you: <code>await __iron.edit('&lt;edit&gt;…&lt;/edit&gt;')</code> in the console). <code>modelAsk</code> runs a full turn with a real model. Both start in <code>model/index.ts</code>, which is two tiny functions wiring the pieces together (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/index.ts:11" title="src-ui/model/index.ts:11"><code>index.ts:11–23</code></a>). The same cases exist in <code>main-thread-adapter.ts</code> for the non-worker mode.</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 300" role="img" aria-label="One model turn. agent.ts builds a manifest from the schema and a full view, sends them to the transport, which streams from the Claude API. The reply's edit block goes to edit.ts, which calls api.ts for ids, order keys and the schema, then document_apply in Rust, which calls Store::apply with a version check. On failure the error markup goes back to the model once. The next frame, sync_document finds the new transaction in the log and reconciles it.">
+  <defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker><marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-edge"/></marker></defs>
+  <rect x="20" y="30" width="170" height="52" rx="5" class="s-model"/><text class="t-mono" x="105" y="52" text-anchor="middle">agent.ts · ask()</text><text class="t-s" x="105" y="70" text-anchor="middle">manifest + full view</text>
+  <rect x="250" y="30" width="170" height="52" rx="5" class="s-model"/><text class="t-mono" x="335" y="52" text-anchor="middle">transport.ts</text><text class="t-s" x="335" y="70" text-anchor="middle">streaming SDK call</text>
+  <rect x="480" y="30" width="150" height="52" rx="5" class="box-fill" stroke-dasharray="4 3"/><text class="t" x="555" y="61" text-anchor="middle">Claude API</text>
+  <rect x="20" y="150" width="170" height="52" rx="5" class="s-model"/><text class="t-mono" x="105" y="172" text-anchor="middle">edit.ts · applyEdit</text><text class="t-s" x="105" y="190" text-anchor="middle">parse → one transaction</text>
+  <rect x="250" y="150" width="170" height="52" rx="5" class="s-model"/><text class="t-mono" x="335" y="172" text-anchor="middle">api.ts</text><text class="t-s" x="335" y="190" text-anchor="middle">thin FFI wrappers</text>
+  <rect x="480" y="150" width="170" height="52" rx="5" class="s-shell"/><text class="t-mono" x="565" y="172" text-anchor="middle">web_ffi.rs</text><text class="t-s" x="565" y="190" text-anchor="middle">document_apply (CAS)</text>
+  <rect x="710" y="150" width="190" height="52" rx="5" class="s-ops"/><text class="t-mono" x="805" y="172" text-anchor="middle">Store::apply</text><text class="t-s" x="805" y="190" text-anchor="middle">actor: model</text>
+  <rect x="710" y="238" width="190" height="46" rx="5" class="s-bridge"/><text class="t-mono" x="805" y="258" text-anchor="middle">sync_document</text><text class="t-s" x="805" y="274" text-anchor="middle">next frame, via the log</text>
+  <line x1="190" y1="56" x2="248" y2="56" class="ln" marker-end="url(#m1)"/>
+  <line x1="420" y1="56" x2="478" y2="56" class="ln" marker-end="url(#m1)"/>
+  <line x1="105" y1="82" x2="105" y2="148" class="ln" marker-end="url(#m1)"/><text class="t-s" x="112" y="120">&lt;edit&gt; from the reply</text>
+  <line x1="190" y1="176" x2="248" y2="176" class="ln" marker-end="url(#m1)"/>
+  <line x1="420" y1="176" x2="478" y2="176" class="ln" marker-end="url(#m1)"/>
+  <line x1="650" y1="176" x2="708" y2="176" class="ln" marker-end="url(#m1)"/>
+  <line x1="805" y1="202" x2="805" y2="236" class="ln" marker-end="url(#m1)"/>
+  <path d="M20,190 H8 V56 H18" class="ln-edge" marker-end="url(#m2)"/>
+  <text class="t-s" x="14" y="228">&lt;edit-failed&gt; → one retry</text>
+</svg>
+<figcaption>One <code>modelAsk</code>. Everything except the Claude API call is synchronous and in-process. The bridge doesn't need telling: the transaction is in the log, and the next <code>sync_document</code> reconciles it (Part 4).</figcaption>
+</figure>
+
+<h2 id="ffi"><span class="sec">7.3</span>What Rust exposes to it</h2>
+<p>Five FFI functions were added for the model surface. The central one applies a transaction <em>now</em> and returns JSON, instead of queueing it like the bridge's queues do:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">FFI & shell</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:425">src/web_ffi.rs</a><span class="range">lines 425–460</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:18;--len:9"></span><span class="band" style="--from:27;--len:4"></span><pre class="gutter" aria-hidden="true">425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455
+456
+457
+458
+459
+460</pre><pre class="src"><code class="language-rust">/// Apply a transaction now and answer synchronously: the model surface needs
+/// every error in one round trip (doc 04 §9.5). `expect_version`, when not
+/// zero, is compare-and-swap: the transaction is refused if the document has
+/// moved since the caller last read it. Returns JSON:
+/// `{&quot;ok&quot;:true,&quot;version&quot;:N}` or `{&quot;ok&quot;:false,&quot;errors&quot;:[...]}`.
+#[wasm_bindgen]
+pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -&gt; String {
+    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
+    let input: iron_document::TransactionInput = match serde_json::from_str(&amp;transaction_json) {
+        Ok(t) =&gt; t,
+        Err(e) =&gt; {
+            return serde_json::json!({&quot;ok&quot;: false, &quot;errors&quot;: [{&quot;op&quot;: null, &quot;kind&quot;: &quot;parse&quot;, &quot;message&quot;: e.to_string()}]})
+                .to_string();
+        }
+    };
+    let Some(mut store) = app.world_mut().get_resource_mut::&lt;crate::document_bridge::DocumentStore&gt;() else {
+        return serde_json::json!({&quot;ok&quot;: false, &quot;errors&quot;: [{&quot;op&quot;: null, &quot;kind&quot;: &quot;no_store&quot;, &quot;message&quot;: &quot;document bridge not installed&quot;}]}).to_string();
+    };
+    let current = store.0.document().version().0 as u32;
+    if expect_version != 0 &amp;&amp; expect_version != current {
+        return serde_json::json!({
+            &quot;ok&quot;: false,
+            &quot;version&quot;: current,
+            &quot;errors&quot;: [{&quot;op&quot;: null, &quot;kind&quot;: &quot;stale&quot;, &quot;message&quot;: format!(&quot;expected version {expect_version}, document is at {current}; re-read before retrying&quot;)}]
+        })
+        .to_string();
+    }
+    let result = match store.0.apply(input) {
+        Ok(applied) =&gt; serde_json::json!({&quot;ok&quot;: true, &quot;version&quot;: applied.version.0}),
+        Err(errors) =&gt; serde_json::json!({&quot;ok&quot;: false, &quot;version&quot;: current, &quot;errors&quot;: errors}),
+    };
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::&lt;ActivityControl&gt;() {
+        active_info.remaining_frames = 10;
+    }
+    result.to_string()
+}</code></pre></div></div></figure>
+<p><code>expect_version</code> is <strong>compare-and-swap</strong>. The model read <code>&lt;document version="7"&gt;</code>. If you dragged something while it was thinking, the document is now at 8, and its edit (based on a stale view) is refused with a <code>stale</code> error telling it to re-read. On success or failure it returns JSON: <code>{"ok":true,"version":9}</code> or the full error list from Part 3.</p>
+<p>The other four keep the store in charge of things only it should decide:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>FFI call</th><th>Returns</th><th>Why the model surface can't do this itself</th></tr></thead>
+  <tbody>
+    <tr><td><a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:464" title="src/web_ffi.rs:464"><code>document_next_ids(n)</code></a></td><td><code>["#U","#V",…]</code></td><td>Ids come from the store's counter (Part 3's id rules).</td></tr>
+    <tr><td><a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:475" title="src/web_ffi.rs:475"><code>document_next_relation_ids(n)</code></a></td><td><code>["r3",…]</code></td><td>Same, for relations.</td></tr>
+    <tr><td><a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:490" title="src/web_ffi.rs:490"><code>document_place(parent, after, count)</code></a></td><td><code>["a4","a5"]</code></td><td>Order keys are the store's business (Part 2). The model says <em>where</em> (“after #M”, “at the end”); Rust computes the keys.</td></tr>
+    <tr><td><a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:527" title="src/web_ffi.rs:527"><code>document_schema()</code></a></td><td>The registry as JSON</td><td>The single source of vocabulary (Part 2, 2.6).</td></tr>
+  </tbody>
+</table></div>
+<p><code>api.ts</code> wraps each in one line, so the rest of the TypeScript never touches the glue directly:</p>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/api.ts:15">src-ui/model/api.ts</a><span class="range">lines 15–40</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40</pre><pre class="src"><code class="language-typescript">export interface DocumentApi {
+  schema(): Schema;
+  view(query: { scope?: string | null; fidelity: &#x27;skeleton&#x27; | &#x27;summary&#x27; | &#x27;full&#x27;; depth?: number | null }): string;
+  version(): number;
+  nextIds(n: number): string[];
+  nextRelationIds(n: number): string[];
+  /** Order keys under `parent` (&#x27;&#x27; = roots) after `after` (&#x27;&#x27; = front, &#x27;end&#x27; = back). */
+  place(parent: string, after: string, count: number): string[];
+  apply(transaction: object, expectVersion: number): ApplyResult;
+}
+
+export function makeDocumentApi(glue: Glue, handle: bigint): DocumentApi {
+  let schema: Schema | null = null;
+  return {
+    schema: () =&gt; (schema ??= JSON.parse(glue.document_schema())),
+    view: (q) =&gt; glue.document_view(handle, JSON.stringify({ scope: null, depth: null, ...q })),
+    version: () =&gt; {
+      const m = glue.document_view(handle, JSON.stringify({ scope: null, fidelity: &#x27;skeleton&#x27;, depth: 0 })).match(/version=&quot;(\d+)&quot;/);
+      return m ? Number(m[1]) : 0;
+    },
+    nextIds: (n) =&gt; JSON.parse(glue.document_next_ids(handle, n)),
+    nextRelationIds: (n) =&gt; JSON.parse(glue.document_next_relation_ids(handle, n)),
+    place: (parent, after, count) =&gt; JSON.parse(glue.document_place(handle, parent, after, count)),
+    apply: (tx, expect) =&gt; JSON.parse(glue.document_apply(handle, JSON.stringify(tx), expect)),
+  };
+}</code></pre></div></div></figure>
+<div class="box edge"><span class="tab">Rough edges</span>
+<ul>
+  <li><code>version()</code> (lines 31–34) gets the version by rendering a skeleton view and matching <code>version="(\d+)"</code> with a regex. It works, but a one-line <code>document_version()</code> FFI would be more direct.</li>
+  <li><code>expect_version == 0</code> means “don't check” (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:444" title="src/web_ffi.rs:444"><code>web_ffi.rs:444</code></a>), so an edit can't compare-and-swap against a brand-new empty document at version 0. That's harmless today, because the demo scene is v1 the moment the app opens.</li>
+</ul>
+</div>
+
+<h2 id="schema"><span class="sec">7.4</span>Attribute names and values: <code>schema.ts</code></h2>
+<p>The model writes <code>x="300"</code>, not <code>transform2d.x = {"number":300}</code>. Two functions bridge the gap, and both are driven by the schema from Rust, so they can't disagree with the validator.</p>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/schema.ts:19">src-ui/model/schema.ts</a><span class="range">lines 19–41</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:19;--len:1"></span><pre class="gutter" aria-hidden="true">19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41</pre><pre class="src"><code class="language-typescript">/**
+ * Resolve an attribute name on a node type to `component.field`. A bare
+ * field name resolves to the first component, in the type&#x27;s declared order,
+ * that has it (so `color` on a rect is `fill.color`, and `stroke.color` must
+ * be written in full); `name` is the Name component&#x27;s text.
+ */
+export function resolveLeaf(schema: Schema, type: string, attr: string): { component: string; field: string; kind: Kind } {
+  if (attr.includes(&#x27;.&#x27;)) {
+    const [component, field] = attr.split(&#x27;.&#x27;, 2);
+    const kind = schema.components[component]?.[field];
+    if (!kind) throw new Error(`unknown leaf &quot;${attr}&quot;`);
+    return { component, field, kind };
+  }
+  if (attr === &#x27;name&#x27;) return { component: &#x27;name&#x27;, field: &#x27;text&#x27;, kind: &#x27;string&#x27; };
+  const spec = schema.types[type];
+  if (!spec) throw new Error(`unknown node type &quot;${type}&quot;`);
+  const hits = spec.components
+    .map((c) =&gt; c.kind)
+    .filter((c) =&gt; schema.components[c]?.[attr] !== undefined);
+  if (hits.length &gt;= 1) return { component: hits[0], field: attr, kind: schema.components[hits[0]][attr] };
+  const all = spec.components.flatMap((c) =&gt; Object.keys(schema.components[c.kind] ?? {}).map((f) =&gt; `${c.kind}.${f}`));
+  throw new Error(`&quot;${attr}&quot; is not a field of ${type}; available: ${all.join(&#x27;, &#x27;)}`);
+}</code></pre></div></div></figure>
+<p><code>resolveLeaf</code> turns a bare field name into a full leaf path. It picks the <em>first</em> component in the type's declared order that has that field, so on a rect <code>color</code> means <code>fill.color</code>, because <code>fill</code> is listed before <code>stroke</code> in the registry. Anything else must be written in full (<code>stroke.color</code>), and an unknown name is an error listing the valid ones.</p>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/schema.ts:46">src-ui/model/schema.ts</a><span class="range">lines 46–88</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:2"></span><pre class="gutter" aria-hidden="true">46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88</pre><pre class="src"><code class="language-typescript">/**
+ * Coerce liberally (doc 04 §9.4): `12`, `&quot;12&quot;`, `12px` are all 12; colours
+ * take `#rrggbb[aa]` or `rgba(...)`; vectors take `1,2` or `[1, 2]`; any
+ * attribute may instead carry a binding as `{= expr}`.
+ */
+export function coerce(kind: Kind, raw: string): SlotJson {
+  const text = raw.trim();
+  const bind = text.match(/^\{=\s*([\s\S]*?)\s*\}$/);
+  if (bind) return { bind: bind[1] };
+  switch (kind) {
+    case &#x27;number&#x27;: {
+      const n = Number(text.replace(/(px|s|deg)$/, &#x27;&#x27;));
+      if (Number.isNaN(n)) throw new Error(`&quot;${raw}&quot; is not a number`);
+      return n;
+    }
+    case &#x27;bool&#x27;:
+      if (/^(true|yes|on|1)$/i.test(text)) return true;
+      if (/^(false|no|off|0)$/i.test(text)) return false;
+      throw new Error(`&quot;${raw}&quot; is not a bool`);
+    case &#x27;string&#x27;:
+      return raw;
+    case &#x27;enum&#x27;:
+      return { enum: text };
+    case &#x27;ref&#x27;:
+      return { ref: text.startsWith(&#x27;#&#x27;) ? text : `#${text}` };
+    case &#x27;color&#x27;:
+      return { rgba: parseColor(text) };
+    case &#x27;vec2&#x27;:
+    case &#x27;vec3&#x27;: {
+      const v = parseVector(text);
+      const n = kind === &#x27;vec2&#x27; ? 2 : 3;
+      if (v.length !== n) throw new Error(`&quot;${raw}&quot; needs ${n} numbers`);
+      return v;
+    }
+    case &#x27;any&#x27;: {
+      if (/^-?\d/.test(text) &amp;&amp; !text.includes(&#x27;,&#x27;)) return Number(text);
+      if (/^[\[(]?\s*-?\d/.test(text) &amp;&amp; text.includes(&#x27;,&#x27;)) return parseVector(text);
+      if (text.startsWith(&#x27;#&#x27;) &amp;&amp; text.length &gt;= 7) return { rgba: parseColor(text) };
+      if (/^(true|false)$/i.test(text)) return text.toLowerCase() === &#x27;true&#x27;;
+      return raw;
+    }
+  }
+}</code></pre></div></div></figure>
+<p><code>coerce</code> is deliberately forgiving about <em>format</em> (vision doc 04 §9.4): <code>"12"</code>, <code>"12px"</code> and <code>"12s"</code> are all 12, and colours may be <code>#rrggbb</code>, <code>#rrggbbaa</code> or <code>rgba(…)</code>. It's strict about <em>meaning</em>: <code>"abc"</code> for a number is an error. And any attribute of any kind may instead be <code>{= expression}</code> (line 53), which becomes <code>{"bind": "…"}</code>, a <code>Slot::Bound</code> once it reaches Rust.</p>
+
+<h2 id="edit"><span class="sec">7.5</span>The edit parser: four passes, one transaction</h2>
+<p><code>parseEdit</code> in <code>edit.ts</code> uses the <code>fast-xml-parser</code> library (a new dependency in <code>package.json</code>) to read the markup, then makes four passes over the verbs:</p>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/edit.ts:67">src-ui/model/edit.ts</a><span class="range">lines 67–119</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:10;--len:14"></span><span class="band" style="--from:25;--len:23"></span><pre class="gutter" aria-hidden="true">67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119</pre><pre class="src"><code class="language-typescript">// Pass 1: verbs in order, with their attributes.
+type Verb = { verb: (typeof VERBS)[number]; attrs: Record&lt;string, string&gt;; index: number };
+const verbs: Verb[] = [];
+for (const child of root.edit as any[]) {
+  const verb = Object.keys(child).find((k) =&gt; k !== &#x27;:@&#x27;);
+  if (!verb) continue;
+  if (!(VERBS as readonly string[]).includes(verb)) throw new EditError(`unknown verb &lt;${verb}&gt;; use ${VERBS.join(&#x27;, &#x27;)}`);
+  verbs.push({ verb: verb as Verb[&#x27;verb&#x27;], attrs: { ...(child[&#x27;:@&#x27;] ?? {}) }, index: verbs.length });
+}
+
+// Pass 2: mint ids for aliases, in order of creation.
+const aliasNames = verbs.filter((v) =&gt; v.verb === &#x27;create&#x27;).map((v) =&gt; v.attrs.id).filter((id) =&gt; id?.startsWith(&#x27;$&#x27;));
+const minted = api.nextIds(aliasNames.length);
+const aliases: Record&lt;string, string&gt; = {};
+aliasNames.forEach((a, i) =&gt; (aliases[a] = minted[i]));
+const resolveId = (raw: string | undefined, what: string, index: number): string =&gt; {
+  if (!raw) throw new EditError(`op ${index}: missing ${what}`, index);
+  if (raw.startsWith(&#x27;$&#x27;)) {
+    const id = aliases[raw];
+    if (!id) throw new EditError(`op ${index}: alias ${raw} is not created in this edit`, index);
+    return id;
+  }
+  return raw.startsWith(&#x27;#&#x27;) || raw.startsWith(&#x27;r&#x27;) ? raw : `#${raw}`;
+};
+
+// Pass 3: placements, batched per (parent, after) so keys are distinct.
+const placementKeys = new Map&lt;string, string[]&gt;();
+const wantPlacement: { key: string; index: number }[] = [];
+const placementOf = (v: Verb): { parent: string; after: string } =&gt; {
+  const parentRaw = v.verb === &#x27;reparent&#x27; ? v.attrs.to : v.attrs.parent;
+  const parent = parentRaw ? resolveId(parentRaw, &#x27;parent&#x27;, v.index) : &#x27;&#x27;;
+  const after = v.attrs.first !== undefined ? &#x27;&#x27; : v.attrs.after ? resolveId(v.attrs.after, &#x27;after&#x27;, v.index) : &#x27;end&#x27;;
+  return { parent, after };
+};
+for (const v of verbs) {
+  if (v.verb === &#x27;create&#x27; || v.verb === &#x27;reparent&#x27;) {
+    const p = placementOf(v);
+    const key = `${p.parent}|${p.after}`;
+    wantPlacement.push({ key, index: v.index });
+  }
+}
+for (const key of new Set(wantPlacement.map((w) =&gt; w.key))) {
+  const count = wantPlacement.filter((w) =&gt; w.key === key).length;
+  const [parent, after] = key.split(&#x27;|&#x27;);
+  // A parent created in this same edit has no children yet; keys start fresh.
+  const keys = minted.includes(parent) ? freshKeys(count) : api.place(parent, after, count);
+  placementKeys.set(key, keys);
+}
+const takeKey = (v: Verb) =&gt; {
+  const p = placementOf(v);
+  const keys = placementKeys.get(`${p.parent}|${p.after}`)!;
+  return { parent: p.parent || null, order: keys.shift()! };
+};</code></pre></div></div></figure>
+<ol class="steps">
+  <li><b>Collect verbs</b> (67–75) in order, rejecting unknown ones (<code>&lt;move&gt;</code> gets “unknown verb; use create, set, add…”).</li>
+  <li><b>Mint aliases</b> (77–90). Every <code>&lt;create id="$something"&gt;</code> gets a real id from <code>api.nextIds</code>, in order, so later verbs in the same edit can say <code>parent="$group"</code> or <code>id="$n"</code>. The model never invents a real id.</li>
+  <li><b>Batch placements</b> (92–119). Creates and reparents are grouped by <em>(parent, after)</em>, and each group asks Rust for all its keys in one <code>api.place</code> call. Batching matters: two creates both going “at the end of #1” must get two <em>different</em> keys in the right order, which separate calls wouldn't give, since the first create hasn't been applied yet. A parent created in the same edit has no children yet, so its keys are generated locally (line 112).</li>
+  <li><b>Build ops</b> (121–203). Each verb becomes op JSON in exactly the shape Rust's <code>Op</code> deserialises (Part 3, 3.2).</li>
+</ol>
+<p>Here is the <code>create</code> and <code>set</code> arm of pass 4. You can see <code>resolveLeaf</code> and <code>coerce</code> doing the work:</p>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/edit.ts:129">src-ui/model/edit.ts</a><span class="range">lines 129–174</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:12;--len:3"></span><span class="band" style="--from:19;--len:2"></span><span class="band" style="--from:37;--len:2"></span><pre class="gutter" aria-hidden="true">129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174</pre><pre class="src"><code class="language-typescript">switch (v.verb) {
+  case &#x27;create&#x27;: {
+    const type = a.type;
+    if (!type) throw at(&#x27;missing type&#x27;);
+    if (!schema.types[type]) throw at(`unknown type &quot;${type}&quot;; types: ${Object.keys(schema.types).join(&#x27;, &#x27;)}`);
+    const id = a.id?.startsWith(&#x27;$&#x27;) ? aliases[a.id] : resolveId(a.id ?? minted[0], &#x27;id&#x27;, v.index);
+    const { parent, order } = takeKey(v);
+    const comps: Record&lt;string, Record&lt;string, SlotJson&gt;&gt; = {};
+    for (const [k, raw] of Object.entries(a)) {
+      if (skip.has(k)) continue;
+      let leaf;
+      try {
+        leaf = resolveLeaf(schema, type, k);
+        comps[leaf.component] ??= {};
+        comps[leaf.component][leaf.field] = coerce(leaf.kind, raw);
+      } catch (e) {
+        throw at(e instanceof Error ? e.message : String(e));
+      }
+    }
+    for (const c of schema.types[type].components) if (c.required) comps[c.kind] ??= {};
+    ops.push({ t: &#x27;create&#x27;, id, ty: type, parent, order, components: Object.entries(comps).map(([k, f]) =&gt; ({ [k]: f })) });
+    break;
+  }
+  case &#x27;set&#x27;:
+  case &#x27;add&#x27;: {
+    const id = resolveId(a.id, &#x27;id&#x27;, v.index);
+    const type = a.type; // optional hint for bare attribute names
+    const pairs: [string, string][] = [];
+    if (a.path) pairs.push([a.path, a.bind !== undefined ? `{= ${a.bind}}` : (a.value ?? &#x27;&#x27;)]);
+    for (const [k, raw] of Object.entries(a)) if (!skip.has(k)) pairs.push([k, raw]);
+    if (pairs.length === 0) throw at(&#x27;nothing to set; give leaf attributes such as x=&quot;10&quot; or path=&quot;size.h&quot; value=&quot;10&quot;&#x27;);
+    const byComp: Record&lt;string, Record&lt;string, SlotJson&gt;&gt; = {};
+    for (const [k, raw] of pairs) {
+      let leaf;
+      try {
+        leaf = k.includes(&#x27;.&#x27;) || !type ? resolveLeafAnyType(schema, k) : resolveLeaf(schema, type, k);
+        const slot = coerce(leaf.kind, raw);
+        if (v.verb === &#x27;set&#x27;) ops.push({ t: &#x27;set&#x27;, id, path: `${leaf.component}.${leaf.field}`, slot });
+        else (byComp[leaf.component] ??= {})[leaf.field] = slot;
+      } catch (e) {
+        throw at(e instanceof Error ? e.message : String(e));
+      }
+    }
+    for (const [comp, fields] of Object.entries(byComp)) ops.push({ t: &#x27;add_comp&#x27;, id, comp: { [comp]: fields } });
+    break;
+  }</code></pre></div></div></figure>
+<p>Line 148 fills in any required component the model didn't mention with an empty object, which Rust fills with defaults, so <code>&lt;create type="rect"/&gt;</code> alone is valid. The verbs map onto ops like this:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Markup verb</th><th>Becomes</th></tr></thead>
+  <tbody>
+    <tr><td><code>&lt;create id="$a" type="rect" parent="#1" after="#M" x="10" …/&gt;</code></td><td><code>Create</code> with components grouped from the attributes</td></tr>
+    <tr><td><code>&lt;set id="#P" x="12" size.h="{= …}"/&gt;</code></td><td>One <code>Set</code> per attribute</td></tr>
+    <tr><td><code>&lt;add id="#N" stroke.width="2"/&gt;</code></td><td><code>AddComp</code> per component named</td></tr>
+    <tr><td><code>&lt;delete id="#3"/&gt;</code></td><td><code>Delete</code> (with its descendants)</td></tr>
+    <tr><td><code>&lt;reparent id="#4" to="#1" first="true"/&gt;</code></td><td><code>Reparent</code> with a key from <code>document_place</code></td></tr>
+    <tr><td><code>&lt;link from="#S" to="#Q" rel="animates" offset="0.5"/&gt;</code></td><td><code>Link</code>; extra attributes become <code>data</code></td></tr>
+    <tr><td><code>&lt;unlink id="r1"/&gt;</code></td><td><code>Unlink</code></td></tr>
+  </tbody>
+</table></div>
+<h3 id="apply-edit">Applying, and answering in the model's terms</h3>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/edit.ts:236">src-ui/model/edit.ts</a><span class="range">lines 236–256</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256</pre><pre class="src"><code class="language-typescript">/** Parse and apply one edit as the model, answering in the model&#x27;s terms. */
+export function applyEdit(api: DocumentApi, xml: string, label = &#x27;model edit&#x27;): EditOutcome {
+  let parsed: ParsedEdit;
+  try {
+    parsed = parseEdit(api, xml);
+  } catch (e) {
+    const err = e instanceof EditError ? e : new EditError(String(e));
+    return { ok: false, failure: failed(api.version(), [{ op: err.line ?? null, kind: &#x27;parse&#x27;, message: err.message }]) };
+  }
+  const result: ApplyResult = api.apply(
+    { label, actor: &#x27;model&#x27;, ts: Date.now(), ops: parsed.ops },
+    parsed.expectVersion,
+  );
+  if (result.ok) return { ok: true, version: result.version, aliases: parsed.aliases };
+  return { ok: false, version: result.version, failure: failed(result.version ?? api.version(), result.errors ?? []) };
+}
+
+function failed(version: number, errors: { op: number | null; kind: string; message: string }[]): string {
+  const lines = errors.map((e) =&gt; `  &lt;error${e.op === null ? &#x27;&#x27; : ` op=&quot;${e.op}&quot;`} kind=&quot;${e.kind}&quot;&gt;${escapeXml(e.message)}&lt;/error&gt;`);
+  return `&lt;edit-failed applied=&quot;none&quot; version=&quot;${version}&quot;&gt;\n${lines.join(&#x27;\n&#x27;)}\n&lt;/edit-failed&gt;`;
+}</code></pre></div></div></figure>
+<p>Parse errors and store errors come back the same way: as an <code>&lt;edit-failed applied="none" version="N"&gt;</code> block with one <code>&lt;error op="…" kind="…"&gt;</code> per problem. The model reads that just as it read the view. The smoke test's deliberately bad edit, <code>&lt;set id="#zz" x="1"/&gt;&lt;set id="#N" radius.r="{= #N.radius.r + 1}"/&gt;</code>, gets back two errors in one reply: <code>#zz</code> doesn't exist, and the binding would depend on itself. Nothing is applied.</p>
+<div class="box edge"><span class="tab">Rough edges</span>
+<ul>
+  <li><strong><code>&lt;create&gt;</code> effectively needs an <code>id</code>.</strong> Without one, line 134 falls back to <code>minted[0]</code>, which is either undefined (a “missing id” error) or the id already given to the first alias (a “already exists” error from Rust). Either way the model gets a clear error, but the manifest could say “id is required”.</li>
+  <li><strong><code>after="$alias"</code> only works when the parent is also new.</strong> If a created node is placed after another node created in the same edit under an <em>existing</em> parent, <code>api.place</code> is asked to place after an id that doesn't exist yet and throws. <code>applyEdit</code> catches that and reports it as a parse error, so it fails safely, not silently.</li>
+</ul>
+</div>
+
+<h2 id="manifest"><span class="sec">7.6</span>What the model is told: the manifest</h2>
+<p>The system prompt is generated from the schema at runtime (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/manifest.ts:8" title="src-ui/model/manifest.ts:8"><code>manifest.ts:8</code></a>). The node types and component fields in it are printed from <code>document_schema()</code>, so they can't drift from what the validator accepts (vision doc 04 §9.7). The fixed prose around them explains the view, the seven verbs, value syntax, the expression grammar and the time model, and ends with the retry contract:</p>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/manifest.ts:38">src-ui/model/manifest.ts</a><span class="range">lines 38–71</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71</pre><pre class="src"><code class="language-typescript">VERBS, inside &lt;edit expect-version=&quot;N&quot;&gt;  (N = the version you read)
+  &lt;create id=&quot;$a&quot; type=&quot;rect&quot; parent=&quot;#1&quot; x=&quot;10&quot; y=&quot;20&quot; w=&quot;30&quot; h=&quot;30&quot; color=&quot;#ff0000&quot;/&gt;
+      $a is an alias you choose; later verbs in the same edit may use it.
+      after=&quot;#id&quot; or first=&quot;true&quot; places it; default is last child. parent omitted = root.
+  &lt;set id=&quot;#P&quot; x=&quot;12&quot; size.h=&quot;{= #O.slider.value * 200}&quot;/&gt;
+      attributes are leaves: component.field, or a bare field name, which means the
+      first of the node&#x27;s components (in the order listed above) that has that field:
+      on a rect, color is fill.color, so a stroke colour is written stroke.color.
+      {= expr} binds the leaf to an expression instead of a value.
+  &lt;add id=&quot;#N&quot; stroke.width=&quot;2&quot;/&gt;            add an optional component with fields
+  &lt;delete id=&quot;#3&quot;/&gt;                          deletes the subtree
+  &lt;reparent id=&quot;#4&quot; to=&quot;#1&quot; after=&quot;#2&quot;/&gt;
+  &lt;link from=&quot;#clip&quot; to=&quot;#node&quot; rel=&quot;animates&quot; offset=&quot;0.5&quot;/&gt;
+  &lt;unlink id=&quot;r1&quot;/&gt;
+
+VALUES
+  numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or
+  0,1.5,0; enums by name (easing: linear ease_in ease_out ease_in_out; host: canvas dom).
+  Document 2D space is y-down with the origin at the viewer&#x27;s top-left, one unit per
+  pixel; rect origin is its top-left corner; circles are centred.
+
+EXPRESSIONS (for {= …} bindings)
+  #id.component.field references a leaf; + - * / % &lt; &lt;= &gt; &gt;= == != &amp;&amp; || !;
+  cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
+  lerp(a,b,t) scale(x,d0,d1,r0,r1). A binding may not depend on itself.
+
+TIME
+  A clip node (child of a timeline) has timing.start, timing.dur, timing.easing and
+  clip.prop (the leaf it drives, e.g. transform2d.x), clip.from, clip.to. It reaches
+  its target through &lt;link from=&quot;#clip&quot; to=&quot;#target&quot; rel=&quot;animates&quot;/&gt;. A leaf may be
+  bound or animated, not both.
+
+If an &lt;edit-failed&gt; block comes back, fix exactly what it names and send one new
+&lt;edit&gt; with the version it reports.`;</code></pre></div></div></figure>
+<p>The plan's step 7 mentioned Zod schemas. The model chose schema-driven coercion instead, recorded in the plan's §5.12: one registry schema drives both the prompt and the parser, so a second schema language would be one more thing that could drift.</p>
+
+<h2 id="agent"><span class="sec">7.7</span>One turn, one retry, one transport</h2>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/agent.ts:21">src-ui/model/agent.ts</a><span class="range">lines 21–51</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:5"></span><span class="band" style="--from:24;--len:4"></span><pre class="gutter" aria-hidden="true">21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51</pre><pre class="src"><code class="language-typescript">export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string): Promise&lt;AskResult&gt; {
+  const system = manifest(api.schema());
+  const view = api.view({ fidelity: &#x27;full&#x27; });
+  const messages: { role: &#x27;user&#x27; | &#x27;assistant&#x27;; content: string }[] = [
+    { role: &#x27;user&#x27;, content: `${view}\n\nREQUEST\n${instruction}` },
+  ];
+  let attempts = 0;
+  let lastEdit: string | null = null;
+  let lastOutcome: EditOutcome | null = null;
+  let note = &#x27;&#x27;;
+  while (attempts &lt; 2) {
+    attempts += 1;
+    let text: string;
+    try {
+      text = (await transport.complete(system, messages)).text;
+    } catch (e) {
+      return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: String(e) };
+    }
+    const edit = extractEdit(text);
+    note = text.replace(edit ?? &#x27;&#x27;, &#x27;&#x27;).trim();
+    if (!edit) {
+      return { ok: false, note, edit: null, outcome: null, attempts, transport: transport.name, error: &#x27;the reply had no &lt;edit&gt; block&#x27; };
+    }
+    lastEdit = edit;
+    lastOutcome = applyEdit(api, edit, `model: ${instruction.slice(0, 60)}`);
+    if (lastOutcome.ok) break;
+    messages.push({ role: &#x27;assistant&#x27;, content: text });
+    messages.push({ role: &#x27;user&#x27;, content: `${lastOutcome.failure}\n\nSend one corrected &lt;edit&gt;.` });
+  }
+  return { ok: !!lastOutcome?.ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name };
+}</code></pre></div></div></figure>
+<p>The whole agent loop fits on one screen. Build the system prompt from the schema and the user message from a full view plus the request (22–26). Call the model. Pull out the <code>&lt;edit&gt;</code> block, which may be surrounded by a sentence of explanation. Apply it with the label <code>"model: &lt;request&gt;"</code>. If it failed, send back the <code>&lt;edit-failed&gt;</code> markup and ask for one corrected edit (47–48). At most two attempts. The transaction's actor is <code>model</code>, so it sits on the same undo stack as your drags, and <kbd>Cmd</kbd>+<kbd>Z</kbd> undoes it.</p>
+<p>How the prompt reaches a model is behind a one-method interface, <code>ModelTransport.complete(system, messages)</code>. The first implementation calls the Claude API directly from the browser:</p>
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/transport.ts:17">src-ui/model/transport.ts</a><span class="range">lines 17–46</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:10;--len:1"></span><span class="band" style="--from:15;--len:7"></span><pre class="gutter" aria-hidden="true">17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46</pre><pre class="src"><code class="language-typescript">export class AnthropicTransport implements ModelTransport {
+  readonly name: string;
+  private client: Anthropic;
+
+  constructor(
+    apiKey: string,
+    private model = &#x27;claude-opus-5&#x27;,
+  ) {
+    this.name = `anthropic:${model}`;
+    // The key is the user&#x27;s own and stays in their browser.
+    this.client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  }
+
+  async complete(system: string, messages: { role: &#x27;user&#x27; | &#x27;assistant&#x27;; content: string }[]) {
+    // Streaming so a large view or a slow turn cannot hit a request timeout.
+    const stream = this.client.messages.stream({
+      model: this.model,
+      max_tokens: 16000,
+      thinking: { type: &#x27;adaptive&#x27; },
+      system: [{ type: &#x27;text&#x27;, text: system, cache_control: { type: &#x27;ephemeral&#x27; } }],
+      messages,
+    });
+    const final = await stream.finalMessage();
+    const text = final.content
+      .filter((b): b is Anthropic.TextBlock =&gt; b.type === &#x27;text&#x27;)
+      .map((b) =&gt; b.text)
+      .join(&#x27;\n&#x27;);
+    return { text, usage: final.usage };
+  }
+}</code></pre></div></div></figure>
+<ul>
+  <li><b>The key is yours.</b> You paste it into the Ask box, and it's stored in this browser's <code>localStorage</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/runtime/document_client.svelte.ts:63" title="src-ui/runtime/document_client.svelte.ts:63"><code>document_client:63–70</code></a>). <code>dangerouslyAllowBrowser</code> acknowledges that it's exposed to page scripts, which is acceptable for a local tool with your own key and not for anything deployed.</li>
+  <li><b>Streaming</b>, so a large view or a long think can't hit a request timeout. <b>Adaptive thinking</b> lets the model decide how much to reason. The system prompt is marked <code>cache_control: ephemeral</code>, so the manifest, which is identical every turn, is cached.</li>
+  <li><b>The default model</b> is <code>claude-opus-5</code>, set in both <code>transport.ts</code> and <code>DocumentClient.modelName</code>.</li>
+</ul>
+<p>The comment at the top of <code>transport.ts</code> names the next transport: a local sidecar using <code>claude -p</code>, or the document exposed as MCP tools so Claude Code can edit a running scene. Only this file would change.</p>
+
+<h2 id="loop"><span class="sec">7.8</span>Closing the loop</h2>
+<p>Look back at Part 1's drag walkthrough. A model edit joins it at step 6: <code>Store::apply</code>, the same validation, the same inverse computation, the same log. From step 7 on, nothing knows or cares that the model wrote it: the reconciler draws it, the Document panel refreshes, <kbd>Cmd</kbd>+<kbd>Z</kbd> undoes it, and <code>save()</code> writes it to disk. That's what the vision documents meant by the op log being “simultaneously undo/redo, the Bevy sync channel, and the LLM invalidation source”, and it's why the model could build steps 5 to 7 in under an hour once the spine existed (the save/load commit is stamped 21:18; the model surface files, 22:01).</p>
+
+<div class="box recap"><span class="tab">The whole series, in five lines</span>
+<ul>
+  <li>The <strong>document</strong> (<code>iron_document</code>) holds all authored state: stable ids, typed components, slots, relations. Its writes are private to the op applier.</li>
+  <li>Every change is a <strong>transaction of ops</strong> that commits entirely or not at all and records its own <strong>inverse</strong>. Undo is just another transaction.</li>
+  <li>The <strong>bridge</strong> reconciles Bevy from the transaction log, and turns gestures into one transaction each.</li>
+  <li>The <strong>reactive graph</strong> layers previews, bindings and clip samples over the constants, and every reader sees the same resolved values.</li>
+  <li>The <strong>model</strong> reads views and writes <code>&lt;edit&gt;</code> markup, which becomes an ordinary transaction with a version check.</li>
+</ul>
+</div>
+
+<nav class="nextprev"><a href="06-time.html"><small>Previous</small><span>Part 6: Scripted time: clips on a timeline</span></a><a class="next" href="08-field-guide.html"><small>Next</small><span>Field guide</span></a></nav>
+</main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

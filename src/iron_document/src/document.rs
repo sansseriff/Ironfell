@@ -118,6 +118,10 @@ impl Document {
         RelationId::from_raw(self.next_rel)
     }
 
+    pub fn next_relation_ids(&self, n: usize) -> Vec<RelationId> {
+        (0..n as u64).map(|i| RelationId::from_raw(self.next_rel + i)).collect()
+    }
+
     /// Any node, live or tombstoned.
     pub fn node(&self, id: NodeId) -> Option<&Node> {
         self.nodes.get(&id)

@@ -43,6 +43,9 @@ pub struct Reactive {
     dependents: BTreeMap<Leaf, BTreeSet<Leaf>>,
     resolved: BTreeMap<Leaf, Value>,
     overlay: BTreeMap<Leaf, Value>,
+    /// Clip-sampled values at the current time (`time.rs`). Read beneath the
+    /// gesture overlay and above the authored constant.
+    animated: BTreeMap<Leaf, Value>,
     changes: BTreeMap<Leaf, Value>,
     /// Errors from the last evaluation pass, by leaf. A leaf in error keeps
     /// its previous resolved value.
@@ -56,7 +59,40 @@ impl Reactive {
     /// Value of any leaf as a reader sees it: the gesture overlay first, then
     /// the resolved value of a binding, then the authored constant.
     pub fn read(&self, doc: &Document, leaf: Leaf) -> Option<Value> {
-        read_with(&self.overlay, &self.resolved, &self.nodes, doc, leaf)
+        read_with(&self.overlay, &self.animated, &self.resolved, &self.nodes, doc, leaf)
+    }
+
+    pub fn animated(&self) -> &BTreeMap<Leaf, Value> {
+        &self.animated
+    }
+
+    /// Replace the animated layer with a fresh sample; leaves whose value
+    /// moved are reported and their dependents re-evaluated.
+    pub fn set_animated(&mut self, doc: &Document, sample: BTreeMap<Leaf, Value>) {
+        let mut changed: Vec<Leaf> = Vec::new();
+        for (leaf, v) in &sample {
+            if self.animated.get(leaf) != Some(v) {
+                changed.push(*leaf);
+            }
+        }
+        for leaf in self.animated.keys() {
+            if !sample.contains_key(leaf) {
+                changed.push(*leaf);
+            }
+        }
+        if changed.is_empty() {
+            return;
+        }
+        self.animated = sample;
+        for &l in &changed {
+            // Only visible when no gesture is previewing this leaf.
+            if !self.overlay.contains_key(&l)
+                && let Some(v) = self.read(doc, l)
+            {
+                self.changes.insert(l, v);
+            }
+        }
+        self.invalidate(doc, changed);
     }
 
     pub fn is_bound(&self, leaf: Leaf) -> bool {
@@ -203,9 +239,10 @@ impl Reactive {
             let expr = self.nodes[&leaf].expr.clone();
             let result = {
                 let overlay = &self.overlay;
+                let animated = &self.animated;
                 let resolved = &self.resolved;
                 let nodes = &self.nodes;
-                expr.eval(&|l| read_with(overlay, resolved, nodes, doc, l))
+                expr.eval(&|l| read_with(overlay, animated, resolved, nodes, doc, l))
             };
             match result {
                 Ok(v) => {
@@ -228,6 +265,7 @@ impl Reactive {
 
 fn read_with(
     overlay: &BTreeMap<Leaf, Value>,
+    animated: &BTreeMap<Leaf, Value>,
     resolved: &BTreeMap<Leaf, Value>,
     nodes: &BTreeMap<Leaf, BoundNode>,
     doc: &Document,
@@ -238,6 +276,9 @@ fn read_with(
     }
     if nodes.contains_key(&leaf) {
         return resolved.get(&leaf).cloned();
+    }
+    if let Some(v) = animated.get(&leaf) {
+        return Some(v.clone());
     }
     doc.leaf(leaf.node, leaf.path)?.constant().cloned()
 }

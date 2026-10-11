@@ -1,0 +1,9 @@
+store.preview(#2, slider.value, 0.8)      // the pointer is scrubbing the slider
+store.drain_changes() →
+  #2.slider.value   = 0.8
+  #3.transform2d.y  = 400                 // 640 - 0.8 * 300
+  #3.size.h         = 240                 // 0.8 * 300
+store.gesture_in_progress() → true        // nothing written to the document yet
+
+store.commit_gesture("set slider", Human, …) →
+  Some(Ok(Applied { version: Version(2), replayed: false }))   // ONE transaction

@@ -1,0 +1,161 @@
+<header class="chapter-head">
+  <p class="kicker">Part 5 of 7 · <chip sys="react"/></p>
+  <h1>Bindings and the reactive graph</h1>
+  <p class="lede">The goal for step 5, from the plan's exit criteria: <em>moving the slider changes the bar's height in the same frame, with no process boundary crossed.</em> That needs a language for “this value is computed from that one”, a way to decide what to recompute and in what order, and a way to preview a value while dragging without writing a transaction every frame.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 2 (<code>Slot::Bound</code>, <code>Leaf</code>), Part 3 (transactions, <code>after_transaction</code>) and Part 4 (the reconciler reads <em>resolved</em> values; the sync drains “changes”).</div>
+    <div><b>Files</b><code>expr.rs</code>, <code>graph.rs</code>, the gesture half of <code>lib.rs</code>, the slider parts of <code>interaction.rs</code>, <code>render.rs</code> and <code>demo.rs</code>, and <code>tests/reactive.rs</code>.</div>
+  </div>
+</header>
+
+<h2 id="naive"><span class="sec">5.1</span>Two simple versions</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version A</span><p><strong>A Bevy system per relationship.</strong> <code>fn bar_follows_slider(…) { bar.h = slider.value * 300 }</code>. It works for the demo. But the relationship lives in Rust code, not in the document, so it isn't saved, the model can't see or edit it, undo can't touch it, and every new relationship means a new system. Vision doc 02's invariant 10 (“no systems are authored”) rules this out.</p></div>
+  <div class="box naive"><span class="tab">The simple version B</span><p><strong>Formula strings, re-evaluated each frame.</strong> Store <code>"slider.value * 300"</code> in the document and evaluate every formula every frame. That fixes saving and visibility, but you re-parse text constantly, recompute formulas whose inputs didn't change, and if formula C reads formula B, C may run before B and briefly show a wrong value (a “glitch”).</p></div>
+</div>
+<div class="box built"><span class="tab">What was built</span>
+<ul>
+  <li><strong>An expression language</strong> (<code>expr.rs</code>). Formulas are stored as a parsed tree, saved and shown as text, and read their inputs through one resolver function.</li>
+  <li><strong>A reactive graph</strong> (<code>graph.rs</code>). Each binding knows exactly which leaves it reads. When a leaf changes, only what depends on it is re-evaluated, in dependency order, and propagation stops early when a result didn't change.</li>
+  <li><strong>A gesture overlay</strong>, inside the graph. While you scrub, the previewed value sits on top of the document and every dependent follows. Release turns the preview into one <code>Set</code> transaction.</li>
+</ul>
+</div>
+
+<h2 id="expr"><span class="sec">5.2</span>Expressions: a tree, not a string</h2>
+<p>The demo bar's two bindings, from <ref file="src/document_bridge/demo.rs" line="125" has="640 - {slider}">demo.rs:125–128</ref>, are <code>640 - #O.slider.value * 300</code> for its top edge and <code>#O.slider.value * 300</code> for its height. As a bar grows it has to move up, since y points down. Parsed, the first becomes this tree:</p>
+<figure class="diagram">
+<svg viewBox="0 0 620 210" role="img" aria-label="The expression 640 minus #O.slider.value times 300 as a tree: Bin Sub at the root, with Lit 640 on the left and Bin Mul on the right; Bin Mul has Ref #O.slider.value and Lit 300 as children.">
+  <rect x="240" y="16" width="140" height="36" rx="5" class="s-react"/><text class="t-mono" x="310" y="39" text-anchor="middle">Bin(Sub, …)</text>
+  <rect x="60" y="92" width="140" height="36" rx="5" class="box-fill"/><text class="t-mono" x="130" y="115" text-anchor="middle">Lit(640)</text>
+  <rect x="400" y="92" width="140" height="36" rx="5" class="s-react"/><text class="t-mono" x="470" y="115" text-anchor="middle">Bin(Mul, …)</text>
+  <rect x="270" y="164" width="190" height="36" rx="5" class="accent-fill"/><text class="t-mono" x="365" y="187" text-anchor="middle">Ref(#O.slider.value)</text>
+  <rect x="480" y="164" width="120" height="36" rx="5" class="box-fill"/><text class="t-mono" x="540" y="187" text-anchor="middle">Lit(300)</text>
+  <line x1="290" y1="52" x2="150" y2="92" class="ln"/><line x1="330" y1="52" x2="450" y2="92" class="ln"/>
+  <line x1="450" y1="128" x2="380" y2="164" class="ln"/><line x1="490" y1="128" x2="530" y2="164" class="ln"/>
+  <text class="t-s" x="20" y="186">deps() = { #O.slider.value }</text>
+</svg>
+<figcaption>The highlighted <code>Ref</code> is the only input. Finding it takes a walk over the tree, with no evaluation, which is what “static dependencies” means.</figcaption>
+</figure>
+<snip file="src/iron_document/src/expr.rs" lines="25-47"/>
+<p>Seven node kinds: a literal value, a reference to a leaf, negation, logical not, a binary operator, <code>cond ? a : b</code>, and a function call. <code>Box&lt;Expr&gt;</code> is how a tree node holds child trees (phrasebook, Part 1).</p>
+<h3 id="deps">Dependencies are read off the tree</h3>
+<snip file="src/iron_document/src/expr.rs" lines="101-131"/>
+<p><code>deps()</code> walks the tree and collects every <code>Ref</code>. This works because the language has no way to compute <em>which</em> leaf to read at runtime: every reference is written literally. That restriction is deliberate (it's why there is no <code>Get</code> yet), because it lets the graph be built without evaluating anything.</p>
+<h3 id="eval">Evaluation goes through one resolver</h3>
+<snip file="src/iron_document/src/expr.rs" lines="133-163" mark="136-136,139-139"/>
+<div class="box rust"><span class="tab">Reading the Rust</span>
+<p><code>read: &amp;dyn Fn(Leaf) -&gt; Option&lt;Value&gt;</code> means “a reference to any function that takes a <code>Leaf</code> and maybe returns a <code>Value</code>”. <code>dyn</code> means the exact function type is decided at runtime. So <code>eval</code> doesn't know where values come from; the caller passes in a lookup. The graph passes a lookup that checks the gesture overlay, resolved bindings, clip samples and constants, in that order (5.5). The tests pass a closure that returns canned values. The comment on line 134 notes that if dependencies ever become dynamic, this resolver is the single place to start recording reads.</p>
+</div>
+<p><code>binary()</code> (<ref file="src/iron_document/src/expr.rs" line="288" has="fn binary">expr.rs:288</ref>) defines what operators mean: arithmetic on numbers, <code>+</code>/<code>-</code> on vectors, vector × number, string concatenation, comparisons, <code>&amp;&amp;</code>/<code>||</code> on booleans. Anything else is a type error, never a silent coercion. The functions available to <code>Call</code> are the <strong>floor</strong>: a fixed list of pure, cheap functions, where adding one means adding one <code>match</code> arm:</p>
+<snip file="src/iron_document/src/expr.rs" lines="347-378"/>
+
+<h3 id="parse">Text in, text out: parser and printer</h3>
+<p>Files and views show a binding as text (<code>{"bind": "640 - #O.slider.value * 300"}</code>), so the tree must be parsable from text and printable back to <em>exactly</em> the same text. <code>lex</code> splits text into tokens: numbers, strings, <code>'enum'</code> literals, <code>#id.component.field</code> references, identifiers, operators. <code>Parser::expr</code> then builds the tree using <em>precedence climbing</em>:</p>
+<snip file="src/iron_document/src/expr.rs" lines="574-614" mark="575-575,605-611"/>
+<p>How to read it, using <code>1 + 2 * 3</code>. <code>expr(0)</code> reads <code>1</code> as the left side, then sees <code>+</code> (precedence 5). It consumes it and calls <code>expr(6)</code> for the right side. That inner call reads <code>2</code>, sees <code>*</code> (precedence 6, not below its minimum of 6), consumes it, reads <code>3</code>, and returns <code>2 * 3</code>. The outer call builds <code>1 + (2 * 3)</code>. The <code>prec + 1</code> on line 610 also makes operators of equal precedence group to the left, so <code>1 - 2 - 3</code> means <code>(1 - 2) - 3</code>. The printer (<ref file="src/iron_document/src/expr.rs" line="175" has="fn write">expr.rs:175</ref>) mirrors this: it adds parentheses only where precedence requires them. The test <ref file="src/iron_document/src/expr.rs" line="695" has="fn parse_print_roundtrip">parse_print_roundtrip</ref> checks that parsing then printing gives back the original text for fourteen cases.</p>
+
+<h2 id="validate"><span class="sec">5.3</span>Validation: no dangling reads, no cycles</h2>
+<p>A binding is checked when a transaction applies, whether it arrives through <code>Set</code>, <code>Create</code> or <code>AddComp</code> (Part 3's <code>set</code> step 2):</p>
+<snip file="src/iron_document/src/op.rs" lines="357-381"/>
+<p>Every leaf it reads must be on a live node that has that component. And it must not reach itself, which <code>binding_cycles</code> checks by following bindings outward from the new expression:</p>
+<snip file="src/iron_document/src/document.rs" lines="219-237"/>
+<p>This is a depth-first search. Start from the new expression's dependencies. For each one that is itself bound, add <em>its</em> dependencies. If the search ever reaches the leaf being bound, it's a cycle. Because every binding is checked this way when it's added, <strong>the graph is always acyclic</strong>, and the evaluator can rely on that. (The cycle message you saw in Part 3 comes from here.)</p>
+
+<h2 id="graph"><span class="sec">5.4</span>The reactive graph</h2>
+<p><code>Reactive</code> lives inside the <code>Store</code> and holds everything derived from bindings:</p>
+<snip file="src/iron_document/src/graph.rs" lines="32-56"/>
+<div class="table-wrap"><table>
+  <thead><tr><th>Field</th><th>Holds</th></tr></thead>
+  <tbody>
+    <tr><td><code>nodes</code></td><td>One entry per bound leaf: its expression, its dependency set and its <em>height</em>.</td></tr>
+    <tr><td><code>dependents</code></td><td>The reverse edges: for any leaf, which bound leaves read it. This is how a change finds what to recompute.</td></tr>
+    <tr><td><code>resolved</code></td><td>The current computed value of every bound leaf.</td></tr>
+    <tr><td><code>overlay</code></td><td>Gesture previews (5.6).</td></tr>
+    <tr><td><code>animated</code></td><td>Clip samples at the current time (Part 6).</td></tr>
+    <tr><td><code>changes</code></td><td>Leaves whose visible value moved since the sync last asked. <code>drain_changes()</code> empties it, and the sync turns it into “affected nodes” (Part 4, 4.4).</td></tr>
+    <tr><td><code>errors</code></td><td>Evaluation errors by leaf. A leaf in error keeps its previous value, and the sync logs a warning.</td></tr>
+  </tbody>
+</table></div>
+<h3 id="heights">Height: the order that avoids glitches</h3>
+<p>A bound leaf's <strong>height</strong> is 1 + the largest height among the bound leaves it reads. A leaf that isn't bound counts as 0. The test scene has a diamond: <code>b = a * 2</code> and <code>c = a + b</code>.</p>
+<figure class="diagram">
+<svg viewBox="0 0 700 200" role="img" aria-label="A diamond dependency. a is the slider value, a constant at height 0. b equals a times 2 at height 1. c equals a plus b at height 2. Arrows go from a to b, a to c, and b to c. Evaluating in height order runs b before c, so c never sees a new a with an old b.">
+  <defs><marker id="d1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="20" y="80" width="170" height="44" rx="5" class="box-fill"/><text class="t-mono" x="105" y="100" text-anchor="middle">a = slider.value</text><text class="t-s" x="105" y="116" text-anchor="middle">constant · height 0</text>
+  <rect x="270" y="20" width="170" height="44" rx="5" class="s-react"/><text class="t-mono" x="355" y="40" text-anchor="middle">b = a * 2</text><text class="t-s" x="355" y="56" text-anchor="middle">size.w · height 1</text>
+  <rect x="510" y="80" width="170" height="44" rx="5" class="s-react"/><text class="t-mono" x="595" y="100" text-anchor="middle">c = a + b</text><text class="t-s" x="595" y="116" text-anchor="middle">size.h · height 2</text>
+  <line x1="190" y1="94" x2="268" y2="54" class="ln" marker-end="url(#d1)"/>
+  <line x1="190" y1="108" x2="508" y2="108" class="ln" marker-end="url(#d1)"/>
+  <line x1="440" y1="54" x2="508" y2="92" class="ln" marker-end="url(#d1)"/>
+  <text class="t-s" x="350" y="160" text-anchor="middle">change a → evaluate b (h1), then c (h2): each once, c sees the new b</text>
+</svg>
+<figcaption>Arrows point from a leaf to the bindings that read it, the direction of the <code>dependents</code> map. Evaluating in height order runs every binding after everything it reads.</figcaption>
+</figure>
+<p>If a changes and you evaluate “whatever depends on a” in arbitrary order, c might run first: it would compute a<sub>new</sub> + b<sub>old</sub>, show that wrong value, then run again after b. Sorting by height guarantees b runs before c, and each runs once. The test <ref file="src/iron_document/tests/reactive.rs" line="112" has="diamond_is_glitch_free">diamond_is_glitch_free_and_cutoff_stops_propagation</ref> checks exactly this by counting evaluations: setting a runs two expressions, not three or four.</p>
+<snip file="src/iron_document/src/graph.rs" lines="201-224"/>
+<p>Heights are computed by repeatedly raising each node's height until nothing changes. Since the graph has no cycles, this finishes within <em>node count</em> rounds; the loop bound is a safety guard.</p>
+<h3 id="rebuild-invalidate">Rebuild vs. invalidate</h3>
+<p>There are two ways the graph updates, and <code>Store::after_transaction</code> picks between them:</p>
+<snip file="src/iron_document/src/lib.rs" lines="233-260" mark="235-239,241-242,244-255"/>
+<ul>
+  <li><strong>Structural</strong> transactions create or delete nodes, add or remove components, or change a binding. They call <code>rebuild</code>, which re-reads every bound slot from the document (<ref file="src/iron_document/src/document.rs" line="204" has="pub fn bound_slots">Document::bound_slots</ref>), rebuilds edges and heights, and re-evaluates everything. It checks both the ops <em>and</em> the inverse, because undoing a binding is also structural.</li>
+  <li><strong>Plain value changes</strong> (a <code>Set</code> of a constant, which is by far the most common, such as a drag) call <code>invalidate</code> with just the leaves that were set.</li>
+</ul>
+<snip file="src/iron_document/src/graph.rs" lines="145-166"/>
+<p><code>invalidate</code> follows <code>dependents</code> outward from the changed leaves to find everything that <em>might</em> need recomputing (<code>dirty</code>), and marks only the <em>direct</em> readers of the changed leaves as definitely needing it (<code>primed</code>). Then it evaluates:</p>
+<snip file="src/iron_document/src/graph.rs" lines="226-263" mark="232-237,250-256"/>
+<p>The dirty set is sorted by height (232–233). A node runs only if it is primed (235–237). When a node's new value <em>differs</em> from its old one (250), its own dependents become primed. When it produced the <em>same</em> value, they don't, and propagation stops there. That is the <strong>equality cutoff</strong>. In the test, a threshold binding <code>w &gt; 100 ? 1 : 0</code> re-evaluates when <code>w</code> goes from 150 to 160, still produces <code>1</code>, and the binding that reads it is never run.</p>
+
+<h2 id="read"><span class="sec">5.5</span>What a reader sees: four layers</h2>
+<p>This short function answers “what is this leaf's value right now?” for the reconciler, views, drag code and the evaluator itself:</p>
+<snip file="src/iron_document/src/graph.rs" lines="266-284"/>
+<figure class="diagram">
+<svg viewBox="0 0 700 214" role="img" aria-label="Four layers read top to bottom: gesture overlay, then a binding's resolved value, then the animated clip sample, then the authored constant. The first layer that has a value wins.">
+  <rect x="20" y="10" width="440" height="42" rx="5" class="s-react"/><text class="t-b" x="36" y="36">1 · gesture overlay</text><text class="t-s" x="448" y="36" text-anchor="end">a slider being scrubbed</text>
+  <rect x="20" y="60" width="440" height="42" rx="5" class="s-react"/><text class="t-b" x="36" y="86">2 · binding's resolved value</text><text class="t-s" x="448" y="86" text-anchor="end">if the leaf is bound</text>
+  <rect x="20" y="110" width="440" height="42" rx="5" class="s-time"/><text class="t-b" x="36" y="136">3 · clip sample at the playhead</text><text class="t-s" x="448" y="136" text-anchor="end">Part 6</text>
+  <rect x="20" y="160" width="440" height="42" rx="5" class="s-store"/><text class="t-b" x="36" y="186">4 · authored constant</text><text class="t-s" x="448" y="186" text-anchor="end">doc.leaf(…).constant()</text>
+  <text class="t" x="490" y="36">first layer with a value wins</text>
+  <line x1="480" y1="46" x2="480" y2="196" class="ln" marker-end="url(#d1)"/>
+</svg>
+<figcaption><code>Store::resolved(id, path)</code> is this function. The reconciler draws with it, so bindings, previews and clips all reach the screen through the same call.</figcaption>
+</figure>
+<p>Note the <code>if nodes.contains_key(&amp;leaf)</code> on line 277: a bound leaf returns its resolved value and <em>never</em> falls through to layer 3. That is why Part 6 reports a clip that targets a bound leaf as an error: the clip's value could never show.</p>
+
+<h2 id="gesture"><span class="sec">5.6</span>Gestures: preview every frame, commit once</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p>Scrubbing the slider submits a <code>Set</code> transaction every frame. The bar follows, but a two-second scrub fills history with 120 “set slider” entries, and undo steps back one frame at a time.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p>The overlay. <code>Store::preview</code> puts a value on top of the document for one leaf, and the graph re-evaluates dependents immediately. <code>commit_gesture</code> turns every previewed value into <strong>one</strong> transaction. <code>cancel_gesture</code> drops them. The document isn't written until release.</p></div>
+</div>
+<snip file="src/iron_document/src/lib.rs" lines="177-231" mark="199-213,225-225"/>
+<p>Commit builds a <code>Set</code> for each previewed leaf that (a) is not bound (lines 203–205: a derived value has no handle, as in Part 4) and (b) actually differs from the document. If nothing qualifies it cancels and returns <code>None</code>, so no empty transaction is recorded. Here is real output from the slider-and-bar scene:</p>
+<out src="preview-changes.txt" title="Previewing, then committing (real values)"/>
+<p>The graph's side is short: <code>preview</code> writes the overlay and invalidates dependents; <code>clear_overlay</code> removes it and reports the values falling back:</p>
+<snip file="src/iron_document/src/graph.rs" lines="168-188"/>
+
+<h3 id="slider">The slider node, end to end</h3>
+<p>The slider is an ordinary node (type <code>slider</code>, components <code>transform2d</code>, <code>size</code> and <code>slider</code>), drawn by the reconciler as a track, a filled part and a knob (<ref file="src/document_bridge/render.rs" line="62" has="Shape2d::Slider">render.rs:62–75</ref>). Pressing on it starts a <code>SliderValue</code> drag instead of a move (<ref file="src/bevy_app/interaction.rs" line="71" has="Shape2d::Slider">interaction.rs:71–74</ref>). While dragging:</p>
+<snip file="src/bevy_app/interaction.rs" lines="142-166" mark="152-153,158-162,163-165"/>
+<p>The pointer is mapped into the slider's own space, turned into a fraction <code>t</code> of the track width, mapped to <code>min..max</code>, snapped to <code>step</code>, and previewed. This system runs inside Bevy with direct access to the <code>Store</code> resource, so no message is sent anywhere, which satisfies vision doc 02's invariant 8 (“the inner loop of a continuous manipulation never crosses a process boundary”). The next frame's <code>sync_document</code> sees <code>has_changes()</code>, and the reconciler redraws the knob and the bar together. On release, <code>drag_commit_system</code> pushes <code>GestureRequest::Commit("set slider")</code> (<ref file="src/bevy_app/interaction.rs" line="217" has="Slider">interaction.rs:217–221</ref>), and the sync calls <code>commit_gesture</code>.</p>
+<figure class="shots">
+  <img src="img/after-slider-scrub.jpg" alt="The app after scrubbing the slider to about 90 percent: the slider knob near the right end of its track, and the tall blue bar on the right extended much higher than at startup." width="1200" height="750">
+  <figcaption>After the smoke test's slider scrub: the knob at about 0.9, and the blue bar bound to it now about 270 units tall. The Document panel reads <code>v7</code>. The whole scrub produced one transaction.</figcaption>
+</figure>
+
+<h2 id="views"><span class="sec">5.7</span>What the view shows</h2>
+<p>Views read through the same four layers, and they add the formula next to the value:</p>
+<out src="scene-view-t0.txt" title="Full view of a slider, a bound bar, and a clip (real output)"/>
+<p><code>h="120" h.bind="#2.slider.value * 300"</code> tells a reader what the value is and why. The model reads the same thing, and learns from its manifest (Part 7) that a leaf with <code>.bind</code> is derived and can't be set directly. The <code>&lt;driven-by&gt;</code> on the rect is Part 6.</p>
+
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>A binding's value <em>kind</em> isn't checked when it's added (<ref file="src/iron_document/src/component.rs" line="239" has="A binding's kind">component.rs:239–240</ref>), because it isn't known until evaluation. Binding <code>fill.color</code> to a number is accepted by <code>apply</code>. The reconciler's <code>Reader::color</code> then gets a <code>Number</code>, returns <code>None</code>, and the shape draws with no fill. No error appears, because evaluation itself succeeded. Kind errors that happen <em>inside</em> an expression (<code>1 + true</code>) do land in <code>reactive.errors</code> and get logged. A check that the resolved value's kind matches the leaf's declared kind, inside <code>evaluate</code>, would close the gap.</p>
+</div>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>A binding is an <strong><code>Expr</code> tree</strong> with <strong>static</strong> dependencies. It's saved and shown as canonical text, and validated at apply time for dangling reads and cycles.</li>
+  <li>The <strong>reactive graph</strong> evaluates in <strong>height order</strong> (no glitches) with an <strong>equality cutoff</strong> (no wasted work). It rebuilds on structural changes and invalidates on value changes.</li>
+  <li>Every read goes through four layers: <strong>overlay → binding → clip → constant</strong>.</li>
+  <li>A slider scrub is a string of <strong>previews</strong> and one <strong>commit</strong>. Bound leaves never get a handle.</li>
+</ul>
+</div>

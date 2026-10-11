@@ -40,6 +40,9 @@ pub enum ValueKind {
     Vec3,
     Enum,
     Ref,
+    /// Only as a declared field kind: the field accepts any value. Used by
+    /// clip endpoints, whose kind is the target leaf's. No value has it.
+    Any,
 }
 
 impl ValueKind {
@@ -53,6 +56,7 @@ impl ValueKind {
             ValueKind::Vec3 => "vec3",
             ValueKind::Enum => "enum",
             ValueKind::Ref => "ref",
+            ValueKind::Any => "any",
         }
     }
 }

@@ -18,6 +18,19 @@
     input.value = "";
   }
 
+  // The model prompt.
+  let instruction = $state('');
+  let askError = $state('');
+  async function send() {
+    askError = '';
+    if (!instruction.trim()) return;
+    try {
+      await doc.ask(instruction);
+    } catch (e) {
+      askError = String(e);
+    }
+  }
+
   // Runtime mode toggle
   let pendingSwitch = $state(false);
   async function toggleMode(event: Event) {
@@ -68,6 +81,37 @@
     {/if}
     <pre class="view">{doc.view}</pre>
     <p class="hint">Drag the square or the torus. Cmd/Ctrl+Z undoes, with Shift redoes.</p>
+
+    <div class="ask">
+      <textarea
+        class="prompt"
+        rows="3"
+        placeholder="Ask the model to change the scene…"
+        bind:value={instruction}
+        onkeydown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
+        }}
+      ></textarea>
+      <div class="row">
+        <button onclick={send} disabled={doc.asking || !doc.apiKey}>{doc.asking ? 'Asking…' : 'Ask'}</button>
+        <input
+          class="key"
+          type="password"
+          placeholder="Anthropic API key"
+          value={doc.apiKey}
+          onchange={(e) => doc.setApiKey((e.currentTarget as HTMLInputElement).value)}
+        />
+      </div>
+      {#if askError}<p class="error">{askError}</p>{/if}
+      {#if doc.lastAsk}
+        <details class="result" open={!doc.lastAsk.ok}>
+          <summary>{doc.lastAsk.ok ? 'applied' : 'not applied'} · {doc.lastAsk.attempts} attempt{doc.lastAsk.attempts === 1 ? '' : 's'} · {doc.lastAsk.transport}</summary>
+          {#if doc.lastAsk.note}<p class="note">{doc.lastAsk.note}</p>{/if}
+          {#if doc.lastAsk.error}<p class="error">{doc.lastAsk.error}</p>{/if}
+          <pre class="edit">{doc.lastAsk.edit ?? ''}{doc.lastAsk.outcome?.failure ? '\n' + doc.lastAsk.outcome.failure : ''}</pre>
+        </details>
+      {/if}
+    </div>
 
     <div class="mode-toggle-container">
       <label class="mode-toggle-label">
@@ -146,9 +190,46 @@
   }
 
   .hint,
-  .error {
+  .error,
+  .note {
     margin: 0;
     font-size: 12px;
+  }
+
+  .ask {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .prompt {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 12px;
+    resize: vertical;
+  }
+
+  .key {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+  }
+
+  .result summary {
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .edit {
+    margin: 4px 0 0;
+    padding: 6px;
+    font-size: 10px;
+    background: #f3f4f7;
+    border-radius: 4px;
+    overflow: auto;
+    max-height: 160px;
+    white-space: pre-wrap;
   }
 
   .error {

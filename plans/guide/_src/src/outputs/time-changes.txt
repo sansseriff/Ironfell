@@ -1,0 +1,4 @@
+store.set_time(1.5)                        // the playhead moved to 1.5 s
+store.drain_changes() →
+  #4.transform2d.x = 600                   // clip #6: start 0.5, dur 2, 500 → 700, linear
+                                           // u = (1.5 − 0.5) / 2 = 0.5  →  500 + 200 × 0.5

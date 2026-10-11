@@ -139,6 +139,9 @@ fn node(
 
     let kids = doc.children(id);
     let rels: Vec<_> = doc.relations_from(id).collect();
+    // The reverse direction: what drives this node (doc 05 §5.3). Bindings
+    // already show as `<attr>.bind`; relations arrive from elsewhere.
+    let drivers: Vec<_> = doc.relations_to(id).collect();
     let at_limit = q.depth.is_some_and(|d| level >= d);
     let shown: &[NodeId] = if at_limit {
         &[]
@@ -163,13 +166,23 @@ fn node(
             write!(out, " {k}=\"{}\"", escape(v)).expect("string write");
         }
     }
-    if shown.is_empty() && rels.is_empty() {
+    if shown.is_empty() && rels.is_empty() && drivers.is_empty() {
         out.push_str("/>\n");
         return;
     }
     out.push_str(">\n");
     for r in rels {
         write!(out, "{indent}  <{} to=\"{}\"", r.rel.name(), r.to).expect("string write");
+        for (k, v) in &r.data {
+            write!(out, " {k}=\"{}\"", escape(&v.to_string())).expect("string write");
+        }
+        out.push_str("/>\n");
+    }
+    for r in drivers {
+        write!(out, "{indent}  <driven-by ref=\"{}\" rel=\"{}\"", r.from, r.rel.name()).expect("string write");
+        if let Some(prop) = doc.get::<crate::component::Clip>(r.from).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()) {
+            write!(out, " prop=\"{}\"", escape(prop)).expect("string write");
+        }
         for (k, v) in &r.data {
             write!(out, " {k}=\"{}\"", escape(&v.to_string())).expect("string write");
         }

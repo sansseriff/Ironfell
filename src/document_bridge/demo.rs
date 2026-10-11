@@ -5,8 +5,9 @@
 use super::PendingTransactions;
 use bevy::prelude::*;
 use iron_document::component::{Fill, Mesh, Name as DocName, Radius, Size, Stroke, Transform2d, Transform3d};
-use iron_document::component::Slider;
-use iron_document::{Actor, Expr, LeafStruct, Op, OrderKey, Slot, TypeId, Value};
+use iron_document::component::{Clip, Slider, Timing};
+use iron_document::{Actor, Expr, LeafStruct, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
+use std::collections::BTreeMap;
 
 pub(super) fn queue_demo_scene(store: Res<super::DocumentStore>, mut pending: ResMut<PendingTransactions>) {
     pending.0.push(demo_scene(&store.0));
@@ -18,7 +19,8 @@ fn n(v: f64) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(26).into_iter();
+    let mut ids = store.document().next_ids(29).into_iter();
+    let rel_ids = store.document().next_relation_ids(2);
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
     let mut order = move || {
@@ -60,6 +62,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     }
 
     // The draggable square.
+    let square = next();
     let mut t = Transform2d::default();
     t.x = n(500.0);
     t.y = n(420.0);
@@ -71,7 +74,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("square".into()));
     ops.push(Op::Create {
-        id: next(),
+        id: square,
         ty: ty("rect"),
         parent: Some(scene),
         order: order(),
@@ -136,17 +139,53 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     });
 
     // The torus.
+    let torus = next();
     let mut t = Transform3d::default();
     t.pos = Slot::Const(Value::Vec3([0.0, 1.5, 0.0]));
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("torus".into()));
     ops.push(Op::Create {
-        id: next(),
+        id: torus,
         ty: ty("mesh"),
         parent: None,
         order: order(),
         components: vec![t.wrap(), Mesh::default().wrap(), name.wrap()],
     });
+
+    // A timeline with two clips (doc 05: scripted time). The clip names its
+    // target through an `animates` relation, not a field.
+    let timeline = next();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("main".into()));
+    ops.push(Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: order(), components: vec![name.wrap()] });
+    let mut clip_order = OrderKey::first();
+    let mut clip = |id, label: &str, start: f64, dur: f64, easing: &str, prop: &str, from: Value, to: Value| {
+        let mut timing = Timing::default();
+        timing.start = n(start);
+        timing.dur = n(dur);
+        timing.easing = Slot::Const(Value::Enum(easing.into()));
+        let mut c = Clip::default();
+        c.prop = Slot::Const(Value::Str(prop.into()));
+        c.from = Slot::Const(from);
+        c.to = Slot::Const(to);
+        let mut name = DocName::default();
+        name.text = Slot::Const(Value::Str(label.into()));
+        let op = Op::Create {
+            id,
+            ty: ty("clip"),
+            parent: Some(timeline),
+            order: clip_order.clone(),
+            components: vec![timing.wrap(), c.wrap(), name.wrap()],
+        };
+        clip_order = OrderKey::after(&clip_order);
+        op
+    };
+    let spin = next();
+    ops.push(clip(spin, "spin", 1.0, 3.0, "ease_in_out", "transform3d.rot", Value::Vec3([0.0, 0.0, 0.0]), Value::Vec3([0.0, std::f64::consts::TAU, 0.0])));
+    let slide = next();
+    ops.push(clip(slide, "slide", 0.5, 2.0, "linear", "transform2d.x", Value::Number(500.0), Value::Number(700.0)));
+    ops.push(Op::Link { rel: Relation { id: rel_ids[0], from: spin, to: torus, rel: RelKind::Animates, data: BTreeMap::new() } });
+    ops.push(Op::Link { rel: Relation { id: rel_ids[1], from: slide, to: square, rel: RelKind::Animates, data: BTreeMap::new() } });
 
     iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops }
 }

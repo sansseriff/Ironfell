@@ -21,6 +21,24 @@ shot after-redo-one
 ddrag 220 612 370 612
 shot after-slider-scrub
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<bar[^>]*>/); return m ? m[0] : v.slice(0, 200); })()
+# The bar's y is bound: a drag moves it in x only and never snaps.
+ddrag 810 500 760 450
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<bar[^>]*>/); return m ? m[0].replace(/ y\.bind=.*/, '') : v.slice(0, 200); })()
+# Exit criterion 4: scrub the timeline to about 2.6 s of 30. The "spin" clip
+# turns the torus and the "slide" clip has moved the square; the torus view
+# names the clip that drives it.
+pdrag timeline 4 30 140 30
+shot after-timeline-scrub
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<mesh[\s\S]*?(\/>|<\/mesh>)/); return m ? m[0].replace(/\s+/g, ' ') : v.slice(0, 200); })()
+# Exit criterion 5: an edit in the model's markup lands on the same undo
+# stack as a model-actor transaction. Create a rect under the scene, bind its
+# width to the slider, and recolour the circle; then a bad edit is rejected
+# with every error named.
+eval (async () => { const r = await __iron.edit('<edit><create id="$n" type="rect" parent="#1" name="from-model" x="300" y="120" w="{= #O.slider.value * 100}" h="40" color="#22aa55"/><set id="#N" fill.color="#ff3333"/></edit>'); return r; })()
+eval (async () => { const r = await __iron.edit('<edit><set id="#zz" x="1"/><set id="#N" radius.r="{= #N.radius.r + 1}"/></edit>'); return r.failure; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="from-model"[^>]*>/); return m ? m[0] : 'not found'; })()
+sleep 800
+shot after-model-edit
 # Exit criterion 2: save, load, save again; the bytes must match.
 eval (async () => { const a = await __iron.save(); await __iron.load(a); await new Promise(r => setTimeout(r, 800)); const b = await __iron.save(); return { roundtrip_equal: a === b, bytes: a.length }; })()
 sleep 500

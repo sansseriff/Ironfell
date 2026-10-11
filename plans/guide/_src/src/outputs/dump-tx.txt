@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "label": "move rect",
+  "actor": "human",
+  "ts": 1,
+  "ops": [
+    {
+      "t": "set",
+      "id": "#2",
+      "path": "transform2d.x",
+      "slot": 200.0
+    }
+  ],
+  "inverse": [
+    {
+      "t": "set",
+      "id": "#2",
+      "path": "transform2d.x",
+      "slot": 120.0
+    }
+  ]
+}

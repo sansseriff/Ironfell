@@ -1,0 +1,33 @@
+<header class="chapter-head">
+  <p class="kicker">Reference</p>
+  <h1>Field guide</h1>
+  <p class="lede">Every function, type, Bevy system and wasm export the new system introduced, with the system it belongs to, where it lives, what it does, and the part that explains it. Type part of a name or a word from the description. Click a system chip to show only that system.</p>
+</header>
+
+<div class="finder">
+  <label for="finder-q" class="kicker" style="display:block;margin-bottom:6px">Search</label>
+  <input id="finder-q" type="search" placeholder="e.g. apply, tombstone, preview, place, driven-by…" autocomplete="off">
+  <div class="filters" role="group" aria-label="Filter by system">
+    <button type="button" class="chip sys-store" data-sys="store" aria-pressed="true">Document model</button>
+    <button type="button" class="chip sys-ops" data-sys="ops" aria-pressed="true">Ops &amp; history</button>
+    <button type="button" class="chip sys-io" data-sys="io" aria-pressed="true">Files &amp; views</button>
+    <button type="button" class="chip sys-react" data-sys="react" aria-pressed="true">Reactive graph</button>
+    <button type="button" class="chip sys-time" data-sys="time" aria-pressed="true">Scripted time</button>
+    <button type="button" class="chip sys-bridge" data-sys="bridge" aria-pressed="true">Bevy bridge</button>
+    <button type="button" class="chip sys-shell" data-sys="shell" aria-pressed="true">FFI &amp; shell</button>
+    <button type="button" class="chip sys-model" data-sys="model" aria-pressed="true">Model surface</button>
+  </div>
+  <p class="count" id="finder-count" aria-live="polite"></p>
+</div>
+
+<div class="table-wrap wide" style="max-width:none">
+<table class="guide">
+  <thead><tr><th>Name</th><th>System</th><th>Where</th><th>What it does</th><th>Explained</th></tr></thead>
+  <tbody>
+<!--GUIDE-ROWS-->
+  </tbody>
+</table>
+</div>
+
+<h2 id="how-to-place">Placing something that isn't listed</h2>
+<p>Private helpers, tests and trait implementations like <code>Display</code> are left out. To place any other name, look at its file: the file-to-system table in <a href="01-orientation.html#map">Part 1</a> covers every file the change touched. Two rules of thumb: anything taking <code>&amp;mut Document</code> is part of the op applier (Part 3), and any function whose parameters are <code>Res</code>, <code>ResMut</code>, <code>Query</code> or <code>Commands</code> is a Bevy system (Part 4).</p>

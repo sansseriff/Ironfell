@@ -25,6 +25,7 @@ pub mod op;
 pub mod order;
 pub mod registry;
 pub mod serial;
+pub mod time;
 pub mod value;
 pub mod view;
 
@@ -96,6 +97,9 @@ pub struct Store {
     history: History,
     recent_keys: VecDeque<(String, Version)>,
     reactive: graph::Reactive,
+    /// The playhead, in seconds. Runtime state, never saved.
+    time: f64,
+    time_errors: std::collections::BTreeMap<NodeId, String>,
 }
 
 impl Default for Store {
@@ -121,9 +125,34 @@ impl Store {
             },
             recent_keys: VecDeque::new(),
             reactive: graph::Reactive::default(),
+            time: 0.0,
+            time_errors: Default::default(),
         };
         store.reactive.rebuild(&store.doc);
+        store.resample();
         store
+    }
+
+    pub fn time(&self) -> f64 {
+        self.time
+    }
+
+    /// Move the playhead. Every clip is resampled; leaves whose animated
+    /// value moved are reported like any other resolved change.
+    pub fn set_time(&mut self, t: f64) {
+        self.time = t;
+        self.resample();
+    }
+
+    /// Clips that could not be sampled at the current time, by clip node.
+    pub fn time_errors(&self) -> &std::collections::BTreeMap<NodeId, String> {
+        &self.time_errors
+    }
+
+    fn resample(&mut self) {
+        let sample = time::sample(&self.doc, self.time);
+        self.time_errors = sample.errors;
+        self.reactive.set_animated(&self.doc, sample.values);
     }
 
     pub fn reactive(&self) -> &graph::Reactive {
@@ -210,6 +239,7 @@ impl Store {
         });
         if structural {
             self.reactive.rebuild(&self.doc);
+            self.resample();
         } else {
             let changed: Vec<Leaf> = tx
                 .ops
@@ -223,6 +253,9 @@ impl Store {
                 })
                 .collect();
             self.reactive.invalidate(&self.doc, changed);
+            // A set on a clip's timing, or a link, changes the sample too.
+            // Cheap enough to do unconditionally: clips are few.
+            self.resample();
         }
     }
 

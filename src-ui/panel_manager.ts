@@ -187,6 +187,8 @@ export class PanelManager {
       case 'documentSaved':
       case 'documentLoaded':
       case 'documentView':
+      case 'modelEditResult':
+      case 'modelAskResult':
         this.docClient.handleMessage(data);
         break;
       case 'probeStats':

@@ -1,0 +1,290 @@
+<header class="chapter-head">
+  <p class="kicker">Part 1 of 7</p>
+  <h1>The shape of the change</h1>
+  <p class="lede">Before looking at any single function, it helps to see the whole move at once: where the truth about the scene used to live, where it lives now, and which files carry it between the two. This part also covers enough Rust to read everything that follows.</p>
+  <div class="prereq">
+    <div><b>You need</b>Nothing beyond knowing the app: the viewer, the timeline, the Svelte panel on the left.</div>
+    <div><b>You'll come away with</b>The one idea behind the change, a map of files by system, a single drag followed end to end, and a Rust phrasebook.</div>
+  </div>
+</header>
+
+<h2 id="one-idea"><span class="sec">1.1</span>The one idea</h2>
+<p><strong>Before September 18, the scene lived inside Bevy. Now it lives in a document, and Bevy displays it.</strong></p>
+<p>Before the change, each demo object was its own Bevy thing. The draggable square was a Bevy <em>resource</em> called <code>DraggableSquare</code> holding a position. The field of small squares was a set of <code>MiniSquare</code> components. The torus was spawned by hand in <code>setup_3d_scene</code>. The timeline's state was a resource called <code>TimelineState</code>. The Svelte inspector could reach into Bevy and overwrite any component directly. Nothing recorded what changed, so there was no undo, no file format, and nothing a language model could read or safely edit.</p>
+<p>The new design puts one object at the centre: a <strong>document</strong> (the <code>Store</code> in the new <code>iron_document</code> crate). It holds every authored fact about the scene. Everything that wants to change the scene submits an <strong>operation</strong> to it: a drag, the undo key, a loaded file, a model's edit. A separate piece of code, the <strong>reconciler</strong>, reads what changed and updates Bevy's entities to match.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 920 350" role="img" aria-label="Before: the inspector and drag systems write Bevy components directly, and state is scattered across resources. After: the shell, drag gestures and the model all send operations into one document store, and the reconciler updates Bevy entities from it.">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+    <marker id="a1b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-accent"/></marker>
+  </defs>
+  <text class="t-b" x="20" y="24">Before: Bevy is the truth</text>
+  <text class="t-b" x="480" y="24">After: the document is the truth</text>
+  <line x1="450" y1="10" x2="450" y2="340" class="ln-dim"/>
+
+  <rect x="20" y="44" width="180" height="50" rx="5" class="box-fill"/>
+  <text class="t" x="110" y="66" text-anchor="middle">Svelte inspector</text>
+  <text class="t-s" x="110" y="83" text-anchor="middle">reads + writes entities</text>
+  <rect x="240" y="44" width="180" height="50" rx="5" class="box-fill"/>
+  <text class="t" x="330" y="66" text-anchor="middle">Drag systems</text>
+  <text class="t-s" x="330" y="83" text-anchor="middle">overlay2d.rs, interaction.rs</text>
+  <rect x="20" y="150" width="400" height="180" rx="6" class="s-old"/>
+  <text class="t-b" x="36" y="174">Bevy ECS</text>
+  <rect x="40" y="190" width="170" height="34" rx="4" class="box-fill"/><text class="t-mono" x="125" y="211" text-anchor="middle">DraggableSquare</text>
+  <rect x="230" y="190" width="170" height="34" rx="4" class="box-fill"/><text class="t-mono" x="315" y="211" text-anchor="middle">MiniSquare × 20</text>
+  <rect x="40" y="236" width="170" height="34" rx="4" class="box-fill"/><text class="t-mono" x="125" y="257" text-anchor="middle">torus (setup_3d_scene)</text>
+  <rect x="230" y="236" width="170" height="34" rx="4" class="box-fill"/><text class="t-mono" x="315" y="257" text-anchor="middle">TimelineState</text>
+  <text class="t-s" x="220" y="304" text-anchor="middle">state scattered across resources; no log, no undo, no file</text>
+  <line x1="110" y1="94" x2="110" y2="148" class="ln" marker-end="url(#a1)"/>
+  <text class="t-s" x="118" y="126">overwrites components</text>
+  <line x1="330" y1="94" x2="330" y2="148" class="ln" marker-end="url(#a1)"/>
+  <text class="t-s" x="338" y="126">mutates directly</text>
+
+  <rect x="470" y="44" width="136" height="50" rx="5" class="s-shell"/>
+  <text class="t" x="538" y="66" text-anchor="middle">Svelte shell</text>
+  <text class="t-s" x="538" y="83" text-anchor="middle">undo · save · load</text>
+  <rect x="624" y="44" width="136" height="50" rx="5" class="s-bridge"/>
+  <text class="t" x="692" y="66" text-anchor="middle">Drag gesture</text>
+  <text class="t-s" x="692" y="83" text-anchor="middle">interaction.rs</text>
+  <rect x="778" y="44" width="136" height="50" rx="5" class="s-model"/>
+  <text class="t" x="846" y="66" text-anchor="middle">Model &lt;edit&gt;</text>
+  <text class="t-s" x="846" y="83" text-anchor="middle">src-ui/model/</text>
+  <rect x="560" y="150" width="264" height="60" rx="6" class="s-store"/>
+  <text class="t-b" x="692" y="175" text-anchor="middle">Document (iron_document::Store)</text>
+  <text class="t-s" x="692" y="194" text-anchor="middle">nodes · components · ops · history</text>
+  <line x1="538" y1="94" x2="610" y2="148" class="ln-accent" marker-end="url(#a1b)"/>
+  <line x1="692" y1="94" x2="692" y2="148" class="ln-accent" marker-end="url(#a1b)"/>
+  <line x1="846" y1="94" x2="774" y2="148" class="ln-accent" marker-end="url(#a1b)"/>
+  <text class="t-s" x="700" y="126">one op on release</text>
+  <text class="t-s" x="478" y="126">ops</text>
+  <text class="t-s" x="820" y="126">ops</text>
+  <rect x="560" y="270" width="264" height="60" rx="6" class="s-bridge"/>
+  <text class="t-b" x="692" y="295" text-anchor="middle">Bevy entities</text>
+  <text class="t-s" x="692" y="314" text-anchor="middle">each tagged Provenance(NodeId)</text>
+  <line x1="692" y1="210" x2="692" y2="268" class="ln" marker-end="url(#a1)"/>
+  <text class="t-s" x="700" y="244">reconcile only the nodes that changed</text>
+</svg>
+<figcaption>The arrows into the document are all the same kind of thing: operations. That is why undo, saving and the model's edits could each be added in an hour or two once the document existed.</figcaption>
+</figure>
+
+<p>An analogy from the shell code you already work in: in Svelte, a <code>$state</code> variable is the truth and the DOM is derived from it. You never edit a DOM node by hand and expect the change to stick, because the next update would overwrite it. The new architecture treats Bevy the way Svelte treats the DOM:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>In Svelte</th><th>In Iron now</th><th>Where</th></tr></thead>
+  <tbody>
+    <tr><td><code>$state</code></td><td>the <code>Store</code> (the document)</td><td><ref file="src/iron_document/src/lib.rs" line="95" has="pub struct Store">lib.rs:95</ref></td></tr>
+    <tr><td>calling a setter</td><td>submitting a transaction of ops</td><td><ref file="src/iron_document/src/lib.rs" line="279" has="pub fn apply">Store::apply</ref></td></tr>
+    <tr><td>Svelte updating the DOM</td><td>the reconciler updating entities</td><td><ref file="src/document_bridge/materialize.rs" line="75" has="fn reconcile">reconcile</ref></td></tr>
+    <tr><td>a DOM node</td><td>a Bevy entity with a <code>Provenance</code> tag</td><td><ref file="src/document_bridge/mod.rs" line="60" has="pub struct Provenance">Provenance</ref></td></tr>
+    <tr><td><code>$derived</code></td><td>a <em>bound</em> slot, recomputed by the reactive graph</td><td>Part 5</td></tr>
+  </tbody>
+</table></div>
+<p>The vision documents make the same comparison with other tools: Blender's scene data vs its evaluated depsgraph, or USD's stage vs Hydra. The name “spine” comes from <code>plans/document-spine.md</code>, the design record the model wrote before coding and then kept updated as each step landed. That file is still the best one-page statement of the decisions. This guide explains the code that implements them.</p>
+
+<h2 id="timeline"><span class="sec">1.2</span>The day, commit by commit</h2>
+<p>The plan split the work into seven steps. The commits follow them closely. Steps 6 and 7 are finished and working in your tree but not committed yet: <code>git status</code> shows <code>src/iron_document/src/time.rs</code> and <code>src-ui/model/</code> as untracked.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Time</th><th>Commit</th><th>Plan step</th><th>What landed</th></tr></thead>
+  <tbody>
+    <tr><td class="num">19:20</td><td><code>177e42c</code></td><td>—</td><td>“before iron document”: the baseline this guide compares against.</td></tr>
+    <tr><td class="num">19:40</td><td><code>42da7f2</code></td><td>1</td><td>The whole <code>iron_document</code> crate: ids, values, components, registry, document, order keys, ops, history, canonical JSON, tree view, and 793 lines of tests. No Bevy yet. <chip sys="store"/> <chip sys="ops"/> <chip sys="io"/></td></tr>
+    <tr><td class="num">21:06</td><td><code>548df68</code></td><td>2, 3</td><td>“undo redo”: <code>src/document_bridge/</code> (sync, reconcile, render, demo scene); drags write back as <code>Set</code> ops; <kbd>Cmd</kbd>+<kbd>Z</kbd> reaches the store. Deleted <code>overlay2d.rs</code> (743 lines) and <code>vello_world_demo.rs</code>. Added the <code>run-iron</code> skill that drives headless Chrome. <chip sys="bridge"/></td></tr>
+    <tr><td class="num">21:18</td><td><code>a383b89</code></td><td>4</td><td>“working save/load”: <code>document_save</code>, <code>document_load</code> and <code>document_view</code> over FFI; the Document panel in Svelte. Deleted the whole remote inspector: crate, FFI bridge, TypeScript types and an 18,909-line JSON fixture. <chip sys="shell"/></td></tr>
+    <tr><td class="num">21:36</td><td><code>d4f2e37</code></td><td>5</td><td>“slider implementation”: the expression language (<code>expr.rs</code>), the reactive graph (<code>graph.rs</code>), gesture previews, a slider node, and a bar whose height is bound to it. <chip sys="react"/></td></tr>
+    <tr><td class="num">≈21:40–22:03</td><td><em>uncommitted</em></td><td>6</td><td><code>time.rs</code>: clips sampled at a playhead through <code>animates</code> relations; timeline rows drawn from the document; <code>&lt;driven-by&gt;</code> in views. <chip sys="time"/></td></tr>
+    <tr><td class="num">≈21:57–22:03</td><td><em>uncommitted</em></td><td>7</td><td><code>src-ui/model/</code>: manifest, <code>&lt;edit&gt;</code> parser, one-retry agent, Claude transport; <code>document_apply</code> and friends in <code>web_ffi.rs</code>. <chip sys="model"/></td></tr>
+  </tbody>
+</table></div>
+<p>The build order is also this guide's reading order. Each step only works because the one before it exists. That is the plan's own argument for building the spine before the raster cache: undo, Bevy sync and model edits all consume one op log, so the log has to exist first.</p>
+
+<figure class="shots">
+  <img src="img/start.jpg" alt="The running app: the Document panel on the left showing an XML-like tree view, the 3D viewer with a field of small coloured squares, an orange circle, a dark square, a torus, a slider and a tall blue bar, and the timeline panel along the bottom with two blue clip bars." width="1200" height="750">
+  <figcaption>The app at startup, from the smoke test the model ran headlessly on the 18th. Everything in the viewer is now a document node, including the slider and the blue bar bound to it. The panel on the left is the document's tree view. The two blue bars in the timeline are clip nodes.</figcaption>
+</figure>
+
+<h2 id="map"><span class="sec">1.3</span>Where everything lives</h2>
+<p>The app runs in two places. The <strong>main thread</strong> runs the Svelte shell. A <strong>web worker</strong> runs one wasm module that contains Bevy, the renderer, the bridge and the document store. The TypeScript model surface also runs in the worker, so its calls into the store are ordinary function calls, not messages.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 920 330" role="img" aria-label="Main thread holds the Svelte panel, the document client and the input manager. They post messages to worker.ts in the web worker. worker.ts calls web_ffi.rs through the wasm glue and hands model requests to the model surface. web_ffi.rs and the Bevy bridge both talk to the iron_document store. The model surface calls the Claude API over the network.">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+  </defs>
+  <rect x="10" y="20" width="290" height="300" rx="8" class="zone"/>
+  <text class="t-b" x="26" y="44">Main thread</text>
+  <rect x="30" y="62" width="250" height="44" rx="5" class="s-shell"/>
+  <text class="t-mono" x="155" y="80" text-anchor="middle">lib/Controls.svelte</text>
+  <text class="t-s" x="155" y="96" text-anchor="middle">Document panel, Ask box</text>
+  <rect x="30" y="122" width="250" height="44" rx="5" class="s-shell"/>
+  <text class="t-mono" x="155" y="140" text-anchor="middle">runtime/document_client.svelte.ts</text>
+  <text class="t-s" x="155" y="156" text-anchor="middle">save · load · view · edit · ask</text>
+  <rect x="30" y="182" width="250" height="44" rx="5" class="s-shell"/>
+  <text class="t-mono" x="155" y="200" text-anchor="middle">runtime/input_manager.ts</text>
+  <text class="t-s" x="155" y="216" text-anchor="middle">pointer, keys, Cmd+Z → "undo"</text>
+  <rect x="30" y="242" width="250" height="44" rx="5" class="s-shell"/>
+  <text class="t-mono" x="155" y="260" text-anchor="middle">panel_manager.ts</text>
+  <text class="t-s" x="155" y="276" text-anchor="middle">routes worker replies</text>
+
+  <rect x="350" y="20" width="560" height="300" rx="8" class="zone"/>
+  <text class="t-b" x="366" y="44">Web worker — one wasm module</text>
+  <rect x="370" y="62" width="160" height="44" rx="5" class="s-shell"/>
+  <text class="t-mono" x="450" y="80" text-anchor="middle">worker.ts</text>
+  <text class="t-s" x="450" y="96" text-anchor="middle">message switch</text>
+  <rect x="370" y="182" width="160" height="44" rx="5" class="s-model"/>
+  <text class="t-mono" x="450" y="200" text-anchor="middle">model/*.ts</text>
+  <text class="t-s" x="450" y="216" text-anchor="middle">edit parser, agent</text>
+  <rect x="370" y="262" width="160" height="40" rx="5" class="box-fill" stroke-dasharray="4 3"/>
+  <text class="t" x="450" y="287" text-anchor="middle">Claude API</text>
+  <rect x="570" y="62" width="150" height="44" rx="5" class="s-shell"/>
+  <text class="t-mono" x="645" y="80" text-anchor="middle">web_ffi.rs</text>
+  <text class="t-s" x="645" y="96" text-anchor="middle">#[wasm_bindgen] calls</text>
+  <rect x="570" y="182" width="150" height="44" rx="5" class="s-bridge"/>
+  <text class="t-mono" x="645" y="200" text-anchor="middle">document_bridge/</text>
+  <text class="t-s" x="645" y="216" text-anchor="middle">+ bevy_app, Bevy</text>
+  <rect x="760" y="122" width="136" height="44" rx="5" class="s-store"/>
+  <text class="t-mono" x="828" y="140" text-anchor="middle">iron_document</text>
+  <text class="t-s" x="828" y="156" text-anchor="middle">the Store</text>
+
+  <line x1="280" y1="144" x2="368" y2="88" class="ln" marker-end="url(#a2)"/>
+  <text class="t-s" x="300" y="108">postMessage</text>
+  <line x1="530" y1="84" x2="568" y2="84" class="ln" marker-end="url(#a2)"/>
+  <line x1="450" y1="106" x2="450" y2="180" class="ln" marker-end="url(#a2)"/>
+  <text class="t-s" x="458" y="148">modelEdit / Ask</text>
+  <line x1="530" y1="196" x2="590" y2="108" class="ln" marker-end="url(#a2)"/>
+  <text class="t-s" x="536" y="146">apply</text>
+  <line x1="450" y1="226" x2="450" y2="260" class="ln" marker-end="url(#a2)"/>
+  <line x1="720" y1="84" x2="770" y2="122" class="ln" marker-end="url(#a2)"/>
+  <text class="t-s" x="726" y="92">save / view</text>
+  <line x1="645" y1="106" x2="645" y2="180" class="ln" marker-end="url(#a2)"/>
+  <text class="t-s" x="652" y="148">queue undo/load</text>
+  <line x1="720" y1="204" x2="770" y2="166" class="ln" marker-end="url(#a2)"/>
+  <text class="t-s" x="726" y="222">sync + reconcile</text>
+</svg>
+<figcaption>Which file talks to which. The store itself (right) knows nothing about Bevy, wasm or the browser. That is why it can be tested natively, with <code>cargo test</code> on your Mac.</figcaption>
+</figure>
+
+<p>Here is every file that is new or substantially changed, grouped by system. This table is the map for the rest of the guide:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>System</th><th>File</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr class="group"><td colspan="3"><chip sys="store"/> What is stored (Part 2)</td></tr>
+    <tr><td></td><td><code>src/iron_document/src/id.rs</code></td><td><code>NodeId</code>, <code>RelationId</code>, <code>Version</code>; base62 rendering like <code>#M</code></td></tr>
+    <tr><td></td><td><code>…/value.rs</code></td><td><code>Value</code> (number, colour, vec3…) and <code>Slot</code> (constant or binding)</td></tr>
+    <tr><td></td><td><code>…/component.rs</code></td><td>The typed components (<code>Transform2d</code>, <code>Fill</code>, <code>Slider</code>…), generated by a macro; <code>LeafPath</code></td></tr>
+    <tr><td></td><td><code>…/registry.rs</code></td><td>The eight node types and which components each allows; the JSON schema</td></tr>
+    <tr><td></td><td><code>…/document.rs</code></td><td>The <code>Document</code>: tables, derived indexes, read methods, crate-private mutators</td></tr>
+    <tr><td></td><td><code>…/order.rs</code></td><td>Fractional sibling-order keys (<code>a0</code>, <code>a0V</code>, <code>a1</code>)</td></tr>
+    <tr class="group"><td colspan="3"><chip sys="ops"/> How it changes (Part 3)</td></tr>
+    <tr><td></td><td><code>…/op.rs</code></td><td>The nine ops, transactions, validation, and the applier that computes inverses</td></tr>
+    <tr><td></td><td><code>…/lib.rs</code></td><td>The <code>Store</code>: apply, undo, redo, history, plus the public API the rest of the app uses</td></tr>
+    <tr class="group"><td colspan="3"><chip sys="io"/> How it gets out (Part 3)</td></tr>
+    <tr><td></td><td><code>…/serial.rs</code></td><td>Canonical JSON save and load</td></tr>
+    <tr><td></td><td><code>…/view.rs</code></td><td>XML-ish tree views at a chosen fidelity</td></tr>
+    <tr class="group"><td colspan="3"><chip sys="bridge"/> Into Bevy (Part 4)</td></tr>
+    <tr><td></td><td><code>src/document_bridge/mod.rs</code></td><td>Resources, <code>DocumentPlugin</code>, and <code>sync_document</code>, the per-frame heart of the bridge</td></tr>
+    <tr><td></td><td><code>src/document_bridge/materialize.rs</code></td><td>The reconciler: node → entity</td></tr>
+    <tr><td></td><td><code>src/document_bridge/render.rs</code></td><td>Draws every 2D node into one Vello display list</td></tr>
+    <tr><td></td><td><code>src/document_bridge/demo.rs</code></td><td>The starting scene, written as one transaction</td></tr>
+    <tr><td></td><td><code>src/bevy_app/interaction.rs</code>, <code>picking.rs</code></td><td>Hit testing, drag, and writeback as ops</td></tr>
+    <tr class="group"><td colspan="3"><chip sys="react"/> Bindings (Part 5)</td></tr>
+    <tr><td></td><td><code>…/expr.rs</code></td><td>Expression tree, parser, printer, evaluator, the floor functions</td></tr>
+    <tr><td></td><td><code>…/graph.rs</code></td><td>The reactive graph: dependencies, heights, evaluation, the gesture overlay</td></tr>
+    <tr class="group"><td colspan="3"><chip sys="time"/> Time (Part 6)</td></tr>
+    <tr><td></td><td><code>…/time.rs</code></td><td>Easing, interpolation, sampling every clip at a time</td></tr>
+    <tr><td></td><td><code>src/bevy_app/timeline.rs</code></td><td>The timeline panel: scrub, push playhead into the store, draw clip rows</td></tr>
+    <tr class="group"><td colspan="3"><chip sys="shell"/> Across the wasm boundary (Parts 4, 7)</td></tr>
+    <tr><td></td><td><code>src/web_ffi.rs</code></td><td><code>document_save/load/view/apply/…</code>, <code>undo</code>, <code>redo</code></td></tr>
+    <tr><td></td><td><code>src-ui/worker.ts</code>, <code>main-thread-adapter.ts</code></td><td>Message cases that call those functions</td></tr>
+    <tr><td></td><td><code>src-ui/runtime/document_client.svelte.ts</code></td><td>Promise-based client, <code>window.__iron</code></td></tr>
+    <tr><td></td><td><code>src-ui/lib/Controls.svelte</code></td><td>The Document panel and the Ask box</td></tr>
+    <tr class="group"><td colspan="3"><chip sys="model"/> The model (Part 7)</td></tr>
+    <tr><td></td><td><code>src-ui/model/*.ts</code></td><td>schema, manifest, edit, api, agent, transport, index</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="a-drag"><span class="sec">1.4</span>One drag, end to end</h2>
+<p>Here is a single interaction followed through every system: you drag the dark square (node <code>#M</code> in the demo scene) and then press <kbd>Cmd</kbd>+<kbd>Z</kbd>. Don't try to understand each step yet. The point is to see that there is one path, and to recognise these names when later parts cover them properly.</p>
+<ol class="steps">
+  <li><b>Pointer down.</b> The main thread posts <code>leftBtDown</code>; <code>worker.ts</code> calls <ref file="src/web_ffi.rs" line="283" has="pub fn left_bt_down">left_bt_down</ref>, which hands Bevy a mouse event. <chip sys="shell"/></li>
+  <li><b>Hit test.</b> <ref file="src/bevy_app/picking.rs" line="44" has="pick_document_2d_system">pick_document_2d_system</ref> maps the cursor into each 2D node's own coordinate space and finds the square. <chip sys="bridge"/></li>
+  <li><b>Drag starts.</b> <ref file="src/bevy_app/interaction.rs" line="22" has="interaction_decide_system">interaction_decide_system</ref> begins a 2D drag. It first asks the store whether <code>x</code> or <code>y</code> are bound or animated, because those axes may not move. <chip sys="bridge"/></li>
+  <li><b>Every frame while dragging.</b> <ref file="src/bevy_app/interaction.rs" line="130" has="drag_apply_system">drag_apply_system</ref> moves the <em>entity's</em> <code>Transform</code> so the square follows the pointer. The document is not touched. This is the “optimistic” half. <chip sys="bridge"/></li>
+  <li><b>Release.</b> <ref file="src/bevy_app/interaction.rs" line="203" has="drag_commit_system">drag_commit_system</ref> compares where the entity ended up with what the document says and queues one transaction, <code>"move rect"</code>, containing <code>Set</code> ops for <code>transform2d.x</code> and <code>transform2d.y</code>. <chip sys="bridge"/></li>
+  <li><b>Next frame: apply.</b> <ref file="src/document_bridge/mod.rs" line="169" has="fn sync_document">sync_document</ref> passes it to <ref file="src/iron_document/src/lib.rs" line="279" has="pub fn apply">Store::apply</ref>. That works on a copy of the document, runs <ref file="src/iron_document/src/op.rs" line="398" has="fn set(">set</ref> for each op (which records the old value as the <em>inverse</em>), and commits the copy only if every op succeeded. <chip sys="ops"/></li>
+  <li><b>Reconcile.</b> The sync reads the new transaction off the history log, collects the node ids it touched, and calls <ref file="src/document_bridge/materialize.rs" line="75" has="fn reconcile">reconcile</ref>, which rewrites the square's <code>Transform</code> from the document. It gets the same value the drag left, so nothing visibly moves. It then tells the shell the version changed, and the Document panel re-reads its view. <chip sys="bridge"/> <chip sys="shell"/></li>
+  <li><b>Undo.</b> <kbd>Cmd</kbd>+<kbd>Z</kbd> is caught in <ref file="src-ui/runtime/input_manager.ts" line="138" has="metaKey">input_manager.ts</ref> and posted as <code>"undo"</code>. That reaches <ref file="src/web_ffi.rs" line="534" has="pub fn undo">undo</ref>, which queues a request, and on the next frame <ref file="src/iron_document/src/lib.rs" line="311" has="pub fn undo">Store::undo</ref> applies the stored inverse as a <em>new</em> transaction labelled <code>"undo: move rect"</code>. The reconciler moves the square back. <chip sys="ops"/></li>
+</ol>
+<p>Every other feature reuses parts of this path. A slider scrub is the same loop with a <em>preview</em> in place of the optimistic transform (Part 5). A model edit enters at step 6 from TypeScript instead of from a drag (Part 7). Loading a file replaces the document and reconciles every node (Part 4).</p>
+
+<h2 id="rust"><span class="sec">1.5</span>A Rust phrasebook for this codebase</h2>
+<p>You don't need all of Rust to read this code. You need about twenty constructs, and each one is shown below with a real line from the new code. If a later excerpt stops you, come back here first.</p>
+
+<h3 id="rust-data">Shapes of data</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>You'll see</th><th>It means</th><th>Real example</th></tr></thead>
+  <tbody>
+    <tr><td><code>pub struct Node { pub id: NodeId, … }</code></td><td>A record with named fields, like a TypeScript interface that is also a class.</td><td><ref file="src/iron_document/src/document.rs" line="18" has="pub struct Node">document.rs:18</ref></td></tr>
+    <tr><td><code>pub struct Version(pub u64);</code></td><td>A <em>tuple struct</em>: one unnamed field, read as <code>.0</code>. When it wraps a single value this is called a <strong>newtype</strong>. It gives a plain number its own type, so a <code>Version</code> can't be passed where a <code>NodeId</code> is expected.</td><td><ref file="src/iron_document/src/id.rs" line="116" has="pub struct Version">id.rs:116</ref>; <code>store.0.apply(…)</code> at <ref file="src/document_bridge/mod.rs" line="216" has="store.0.apply">mod.rs:216</ref></td></tr>
+    <tr><td><code>pub enum Op { Create { … }, Delete { id }, … }</code></td><td>An enum whose variants each carry their own data, like a TypeScript discriminated union <code>{t:'create',…} | {t:'delete',…}</code>.</td><td><ref file="src/iron_document/src/op.rs" line="18" has="pub enum Op">op.rs:18</ref></td></tr>
+    <tr><td><code>#[derive(Clone, Debug, PartialEq)]</code></td><td>“Write the obvious implementation for me”: copying (<code>.clone()</code>), printing with <code>{:?}</code>, comparing with <code>==</code>.</td><td><ref file="src/iron_document/src/document.rs" line="17" has="derive">document.rs:17</ref></td></tr>
+    <tr><td><code>Option&lt;T&gt;</code></td><td>Either <code>Some(value)</code> or <code>None</code>. Rust has no <code>null</code>; this is how “maybe absent” is spelled.</td><td><code>parent: Option&lt;NodeId&gt;</code> at <ref file="src/iron_document/src/document.rs" line="21" has="parent">document.rs:21</ref></td></tr>
+    <tr><td><code>Result&lt;T, E&gt;</code></td><td>Either <code>Ok(value)</code> or <code>Err(error)</code>. Errors are return values, not exceptions.</td><td><code>-&gt; Result&lt;Applied, Vec&lt;ApplyError&gt;&gt;</code> at <ref file="src/iron_document/src/lib.rs" line="279" has="Result">lib.rs:279</ref></td></tr>
+    <tr><td><code>BTreeMap&lt;K, V&gt;</code>, <code>BTreeSet</code>, <code>HashMap</code>, <code>Vec</code>, <code>VecDeque</code></td><td>Sorted map, sorted set, unsorted map, growable array, double-ended queue. The store uses the <em>sorted</em> (BTree) collections nearly everywhere, which is what makes saved files and views come out in a stable order.</td><td><ref file="src/iron_document/src/document.rs" line="72" has="BTreeMap">document.rs:72</ref></td></tr>
+    <tr><td><code>Box&lt;Expr&gt;</code></td><td>A pointer to a heap-allocated value. Needed when a type contains itself, as an expression tree does.</td><td><ref file="src/iron_document/src/expr.rs" line="44" has="Box">expr.rs:44</ref></td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="rust-behaviour">Behaviour</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>You'll see</th><th>It means</th><th>Real example</th></tr></thead>
+  <tbody>
+    <tr><td><code>impl Document { … }</code></td><td>The methods of a type, kept separate from its data.</td><td><ref file="src/iron_document/src/document.rs" line="89" has="impl Document">document.rs:89</ref></td></tr>
+    <tr><td><code>&amp;self</code> / <code>&amp;mut self</code></td><td>The method reads the value / the method may change it. That tells you at a glance whether something is a read or a write: <code>version(&amp;self)</code> cannot change the document, <code>apply(&amp;mut self, …)</code> can.</td><td><ref file="src/iron_document/src/document.rs" line="100" has="&amp;self">document.rs:100</ref>, <ref file="src/iron_document/src/lib.rs" line="279" has="&amp;mut self">lib.rs:279</ref></td></tr>
+    <tr><td><code>&amp;T</code>, <code>&amp;mut T</code>, <code>.clone()</code></td><td>Borrow a value to read it, borrow it to change it, or make an independent copy. <code>Store::run</code> clones the whole document so a failing transaction can be thrown away.</td><td><ref file="src/iron_document/src/lib.rs" line="373" has="self.doc.clone()">lib.rs:373</ref></td></tr>
+    <tr><td><code>pub</code> · <code>pub(crate)</code> · <code>pub(super)</code> · nothing</td><td>Visible everywhere · only inside this crate · only in the parent module · only in this file's module. The store uses <code>pub(crate)</code> to make its mutators unreachable from outside, which is how it guarantees that only ops change the document.</td><td><ref file="src/iron_document/src/document.rs" line="267" has="pub(crate)">document.rs:267</ref></td></tr>
+    <tr><td><code>match x { A =&gt; …, B { id } =&gt; … }</code></td><td>A <code>switch</code> that must handle every case and can pull data out of each variant. Add an op kind and the compiler points at every <code>match</code> that forgot it.</td><td><ref file="src/iron_document/src/op.rs" line="167" has="match op">op.rs:167</ref></td></tr>
+    <tr><td><code>trait LeafStruct { … }</code> + <code>impl LeafStruct for Fill</code></td><td>An interface, and one type's implementation of it.</td><td><ref file="src/iron_document/src/component.rs" line="19" has="pub trait LeafStruct">component.rs:19</ref></td></tr>
+    <tr><td><code>fn get&lt;T: LeafStruct&gt;(…) -&gt; Option&lt;&amp;T&gt;</code></td><td>A generic function: works for any <code>T</code> that implements the trait. <code>doc.get::&lt;Timing&gt;(id)</code> asks for that node's <code>Timing</code> component, typed.</td><td><ref file="src/iron_document/src/document.rs" line="190" has="pub fn get&lt;T: LeafStruct&gt;">document.rs:190</ref></td></tr>
+    <tr><td><code>impl fmt::Display for X</code> / <code>impl FromStr for X</code></td><td>Standard traits. <code>Display</code> is what <code>.to_string()</code> and <code>format!("{x}")</code> call; <code>FromStr</code> is what <code>"…".parse()</code> calls. So <code>"transform2d.x".parse()</code> builds a <code>LeafPath</code>.</td><td><ref file="src/iron_document/src/component.rs" line="357" has="impl FromStr for LeafPath">component.rs:357</ref></td></tr>
+    <tr><td><code>Serialize</code> / <code>Deserialize</code></td><td>The serde library's traits for converting to and from JSON. Most types here write them by hand to control the exact JSON shape.</td><td><ref file="src/iron_document/src/value.rs" line="217" has="impl Serialize for Value">value.rs:217</ref></td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="rust-flow">Control flow shorthands</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>You'll see</th><th>It means</th><th>Real example</th></tr></thead>
+  <tbody>
+    <tr><td><code>let tx = self.run(input)?;</code></td><td>The <code>?</code> operator: “if this is an <code>Err</code> (or <code>None</code>), return it from the current function right now; otherwise unwrap it.” It replaces most error-handling boilerplate.</td><td><ref file="src/iron_document/src/lib.rs" line="288" has="self.run(input)?">lib.rs:288</ref></td></tr>
+    <tr><td><code>if let Some(x) = maybe { … }</code></td><td>“If this matches, bind the inside and run the block.”</td><td><ref file="src/document_bridge/mod.rs" line="194" has="if let Some(doc)">mod.rs:194</ref></td></tr>
+    <tr><td><code>let Some(e) = thing else { return };</code></td><td><em>let-else</em>: “unwrap this or leave the function.” It appears at the top of almost every Bevy system here, as a guard clause.</td><td><ref file="src/bevy_app/interaction.rs" line="211" has="else { return }">interaction.rs:211</ref></td></tr>
+    <tr><td><code>if let A = a &amp;&amp; let B = b</code></td><td><em>Let chains</em>, new in Rust 2024: several matches joined with <code>&amp;&amp;</code>.</td><td><ref file="src/iron_document/src/lib.rs" line="280" has="if let Some(k)">lib.rs:280–281</ref></td></tr>
+    <tr><td><code>|n| n.is_live()</code></td><td>A closure (an arrow function). <code>move |…|</code> means it takes ownership of the variables it uses.</td><td><ref file="src/iron_document/src/document.rs" line="143" has="|n| n.is_live()">document.rs:143</ref></td></tr>
+    <tr><td><code>.iter().filter(…).map(…).collect()</code></td><td>Iterator chains, like JavaScript array methods but lazy: nothing runs until <code>.collect()</code> or a <code>for</code> loop pulls values.</td><td><ref file="src/iron_document/src/lib.rs" line="244" has="let changed">lib.rs:244–254</ref></td></tr>
+    <tr><td><code>-&gt; impl Iterator&lt;Item = &amp;Node&gt;</code></td><td>“Returns something you can loop over that yields <code>&amp;Node</code>.” The exact type is hidden.</td><td><ref file="src/iron_document/src/document.rs" line="142" has="impl Iterator">document.rs:142</ref></td></tr>
+    <tr><td><code>.expect("declared leaf")</code>, <code>.unwrap()</code></td><td>“This can't fail; if it does, crash with this message.” Used where the code already guaranteed success, and the message says why.</td><td><ref file="src/document_bridge/materialize.rs" line="200" has="expect">materialize.rs:200</ref></td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="rust-rare">Three things that look scarier than they are</h3>
+<div class="box rust"><span class="tab">Reading the Rust</span>
+<p><strong>Lifetimes: <code>'a</code>, <code>'d</code>, <code>'static</code>.</strong> A lifetime is the compiler's name for “how long a borrowed reference stays valid”. <code>fn live&lt;'d&gt;(doc: &amp;'d Document, …) -&gt; Result&lt;&amp;'d Node, …&gt;</code> at <ref file="src/iron_document/src/op.rs" line="199" has="fn live&lt;'d&gt;">op.rs:199</ref> says only that the returned <code>&amp;Node</code> points into <code>doc</code> and can't outlive it. <code>&amp;'static str</code> means a string baked into the program, such as a field name in a table. You can read past lifetimes almost every time.</p>
+<p><strong>Macros: anything ending in <code>!</code>.</strong> <code>format!</code>, <code>vec!</code>, <code>write!</code> build strings and lists. <code>macro_rules!</code> <em>defines</em> a macro: a code template the compiler expands before compiling. Two definitions matter here, <code>id_type!</code> and <code>components!</code>, and Part 2 expands both by hand.</p>
+<p><strong>Attributes: <code>#[…]</code>.</strong> <code>#[derive(…)]</code> generates code; <code>#[serde(tag = "t")]</code> tunes JSON; <code>#[wasm_bindgen]</code> exports a function to JavaScript; <code>#[test]</code> marks a test. Bevy adds <code>#[derive(Resource)]</code> and <code>#[derive(Component)]</code>.</p>
+</div>
+
+<h2 id="run-it"><span class="sec">1.6</span>Running it yourself</h2>
+<p>The store has no Bevy dependency, so it builds and tests natively. The workspace defaults to wasm, so pass your Mac's target:</p>
+<raw lang="bash">
+cargo test -p iron_document --target aarch64-apple-darwin
+cargo run  -p iron_document --target aarch64-apple-darwin --example dump
+</raw>
+<p>The second command runs <ref file="src/iron_document/examples/dump.rs" line="1" has="Prints">examples/dump.rs</ref>. It builds a three-node scene, moves the rect, and prints the saved file, the view and the transaction side by side. Its output appears in Part 3. To drive the real app headlessly, use the <code>/run-iron</code> skill the model wrote. Its <code>smoke.txt</code> script exercises every exit criterion in the plan, and the screenshots in this guide come from it.</p>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>The <strong>document</strong> is the truth. Bevy entities are drawn from it and carry a <code>Provenance(NodeId)</code> tag back to it.</li>
+  <li>Everything that changes the scene is a <strong>transaction of ops</strong>. Undo applies the inverse ops as a new transaction.</li>
+  <li>Gestures move entities <em>optimistically</em> and write <strong>one</strong> transaction on release.</li>
+  <li>The store crate is Bevy-free. The bridge in <code>src/document_bridge/</code> is where the two meet.</li>
+</ul>
+</div>

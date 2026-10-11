@@ -32,14 +32,18 @@ const clean = (t: string) => t.replace(/%c/g, "").replace(/ color:.*$/s, "").tri
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => logs.push(clean(m.text())));
 
-let panel = { x: 0, y: 0, w: 0, h: 0 };
-async function readPanel() {
-  panel = await page.evaluate(() => {
-    const el = document.querySelector('[data-panel-id="viewer"]');
+type Rect = { x: number; y: number; w: number; h: number };
+let panel: Rect = { x: 0, y: 0, w: 0, h: 0 };
+async function panelRect(name: string): Promise<Rect> {
+  return page.evaluate((name) => {
+    const el = document.querySelector(`[data-panel-id="${name}"]`);
     if (!el) return { x: 0, y: 0, w: 0, h: 0 };
     const r = el.getBoundingClientRect();
     return { x: r.left, y: r.top, w: r.width, h: r.height };
-  });
+  }, name);
+}
+async function readPanel() {
+  panel = await panelRect("viewer");
   return panel;
 }
 const doc = (x: number, y: number) => ({ x: panel.x + x, y: panel.y + y });
@@ -121,6 +125,12 @@ async function run(line: string) {
       const a = doc(n[0], n[1]);
       const b = doc(n[2], n[3]);
       return drag(a.x, a.y, b.x, b.y, n[4] || 10);
+    }
+    case "pdrag": {
+      // Drag inside a named panel (viewer, timeline, sidebar), panel-relative.
+      const r = await panelRect(rest[0]);
+      const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
+      return drag(r.x + x0, r.y + y0, r.x + x1, r.y + y1, steps || 10);
     }
     case "key":
       return page.keyboard.press(rest[0]);

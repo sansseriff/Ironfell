@@ -2,8 +2,11 @@ use bevy::prelude::*;
 use kurbo;
 use peniko;
 
+use crate::document_bridge::{DocumentStore, sync_document};
 use crate::panels::{Panels, TIMELINE_PANEL};
 use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
+use iron_document::component::Timing;
+use iron_document::TypeId;
 
 /// Timeline plugin: draws the timeline into its panel rect (screen space, clipped).
 /// No dedicated camera/window — the shared full-window vello camera presents it.
@@ -13,6 +16,9 @@ impl Plugin for TimelinePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TimelineState>()
             .add_systems(Startup, setup_timeline_scenes)
+            // The playhead is a runtime source of the store: pushed before the
+            // document sync so clip samples land in the same frame.
+            .add_systems(PreUpdate, (scrub_timeline, push_time_to_store.after(scrub_timeline)).before(sync_document))
             .add_systems(Update, (update_timeline_view, render_timeline_grid));
     }
 }
@@ -51,6 +57,41 @@ pub struct TimelineGridLayer;
 #[derive(Component)]
 pub struct TimelinePlayheadLayer;
 
+/// Clip bars, drawn from the document's `clip` nodes.
+#[derive(Component)]
+pub struct TimelineClipsLayer;
+
+/// Height of one clip row and the gap above the first, in pixels.
+const ROW_HEIGHT: f64 = 22.0;
+const ROW_TOP: f64 = 14.0;
+
+/// Pointer down or drag inside the timeline panel moves the playhead.
+pub fn scrub_timeline(
+    pointer: Res<crate::PointerState>,
+    panels: Res<Panels>,
+    mut timeline: ResMut<TimelineState>,
+) {
+    if !pointer.buttons.left {
+        return;
+    }
+    let Some(rect) = panels.rect(TIMELINE_PANEL) else { return };
+    if !rect.contains(pointer.screen) {
+        return;
+    }
+    let t = ((pointer.screen.x - rect.x) as f64 / rect.w as f64 * timeline.duration).clamp(0.0, timeline.duration);
+    if (timeline.current_time - t).abs() > 1e-6 {
+        timeline.current_time = t;
+        timeline.playing = false;
+    }
+}
+
+/// Mirror the panel's playhead into the store, which resamples every clip.
+pub fn push_time_to_store(timeline: Res<TimelineState>, mut store: ResMut<DocumentStore>) {
+    if (store.0.time() - timeline.current_time).abs() > 1e-9 {
+        store.0.set_time(timeline.current_time);
+    }
+}
+
 fn setup_timeline_scenes(mut commands: Commands) {
     commands.spawn((
         DisplayList::default(),
@@ -61,6 +102,11 @@ fn setup_timeline_scenes(mut commands: Commands) {
         DisplayList::default(),
         VectorLayer::screen(order::TIMELINE_GRID),
         TimelineGridLayer,
+    ));
+    commands.spawn((
+        DisplayList::default(),
+        VectorLayer::screen(order::TIMELINE_CLIPS),
+        TimelineClipsLayer,
     ));
     commands.spawn((
         DisplayList::default(),
@@ -88,13 +134,16 @@ pub fn render_timeline_grid(
         (
             With<TimelineBackgroundLayer>,
             Without<TimelineGridLayer>,
+            Without<TimelineClipsLayer>,
             Without<TimelinePlayheadLayer>,
         ),
     >,
-    mut grid: Query<&mut DisplayList, (With<TimelineGridLayer>, Without<TimelinePlayheadLayer>)>,
-    mut playhead: Query<&mut DisplayList, (With<TimelinePlayheadLayer>, Without<TimelineGridLayer>)>,
+    mut grid: Query<&mut DisplayList, (With<TimelineGridLayer>, Without<TimelinePlayheadLayer>, Without<TimelineClipsLayer>)>,
+    mut clips: Query<&mut DisplayList, (With<TimelineClipsLayer>, Without<TimelineGridLayer>, Without<TimelinePlayheadLayer>)>,
+    mut playhead: Query<&mut DisplayList, (With<TimelinePlayheadLayer>, Without<TimelineGridLayer>, Without<TimelineClipsLayer>)>,
     timeline: Res<TimelineState>,
     panels: Res<Panels>,
+    store: Res<DocumentStore>,
 ) {
     let rect = panels.rect(TIMELINE_PANEL);
 
@@ -115,6 +164,9 @@ pub fn render_timeline_grid(
     // the layers consistent rather than leaving stale content on screen.
     let Some(rect) = rect else {
         for mut list in grid.iter_mut() {
+            list.rebuild(|_| {});
+        }
+        for mut list in clips.iter_mut() {
             list.rebuild(|_| {});
         }
         for mut list in playhead.iter_mut() {
@@ -158,6 +210,33 @@ pub fn render_timeline_grid(
                     }
 
                     time += 0.5;
+                }
+            });
+        });
+    }
+
+    // One row per clip node, in document order: a bar from start to
+    // start + dur. Rows are the timeline's own layout, not document data.
+    if let Ok(mut list) = clips.single_mut() {
+        let doc = store.0.document();
+        let clip_ty = TypeId::lookup("clip").expect("registered");
+        let rows: Vec<(f64, f64, bool)> = doc
+            .nodes_of_type(clip_ty)
+            .filter_map(|id| {
+                let t = doc.get::<Timing>(id)?;
+                let num = |s: &iron_document::Slot, d: f64| s.constant().and_then(|v| v.as_f64()).unwrap_or(d);
+                Some((num(&t.start, 0.0), num(&t.dur, 0.0), store.0.time_errors().contains_key(&id)))
+            })
+            .collect();
+        list.rebuild(|b| {
+            b.clipped(kurbo::Affine::IDENTITY, clip, |b| {
+                for (i, (start, dur, error)) in rows.iter().enumerate() {
+                    let y = top + ROW_TOP + i as f64 * ROW_HEIGHT;
+                    let x0 = left + start / time_per_pixel;
+                    let x1 = left + (start + dur) / time_per_pixel;
+                    let bar = kurbo::RoundedRect::new(x0, y, x1.max(x0 + 4.0), y + ROW_HEIGHT - 6.0, 4.0);
+                    let color = if *error { [0.85, 0.3, 0.3, 1.0] } else { [0.35, 0.6, 0.9, 1.0] };
+                    b.fill(kurbo::Affine::IDENTITY, peniko::Color::new(color), bar);
                 }
             });
         });

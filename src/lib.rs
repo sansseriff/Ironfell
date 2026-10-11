@@ -189,6 +189,10 @@ pub enum DragKind {
 pub struct DragState {
     pub target: Option<Entity>,
     pub kind: Option<DragKind>,
+    /// Axes the gesture may not move: a leaf that is bound or clip-driven
+    /// has no handle (doc 02 §9.2), so it is held still for the whole drag
+    /// rather than moved and snapped back on release.
+    pub locked: [bool; 2],
     pub grab_offset_2d: Vec2,
     pub plane_origin: Vec3,
     pub plane_normal: Vec3,
@@ -200,6 +204,7 @@ impl Default for DragState {
         Self {
             target: None,
             kind: None,
+            locked: [false, false],
             grab_offset_2d: Vec2::ZERO,
             plane_origin: Vec3::ZERO,
             plane_normal: Vec3::Y,

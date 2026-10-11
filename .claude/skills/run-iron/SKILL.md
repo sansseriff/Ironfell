@@ -53,24 +53,37 @@ cd .claude/skills/run-iron && bun run drive.ts < smoke.txt; cd -
 
 `smoke.txt` opens the app, waits for the engine, screenshots, drags the
 square and the torus, undoes both with Cmd+Z, redoes one with Cmd+Shift+Z,
-scrubs the slider and checks the bar bound to it, round-trips the document
-through save and load, and prints the transactions the store applied.
-Expected output, minus screenshot lines:
+scrubs the slider and checks the bar bound to it, scrubs the timeline and
+checks the clip driving the torus, applies one good and one bad edit in the
+model's markup, round-trips the document through save and load, and prints
+the transactions the store applied. Expected output, minus screenshot lines:
 
 ```
 "<bar id=\"#P\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #O.slider.value * 300\" … h=\"270\" h.bind=\"#O.slider.value * 300\" …/>"
-{"roundtrip_equal":true,"bytes":6588}
-"<document version=\"7\"> |   <group id=\"#1\" name=\"scene\" count=\"24\"> | …"
-applied "open demo scene" (26 ops) -> v1
-applied "move rect" (2 ops) -> v2
-applied "move mesh" (1 ops) -> v3
-applied "undo: move mesh" (1 ops) -> v4
-applied "undo: move rect" (2 ops) -> v5
-applied "redo: move rect" (2 ops) -> v6
-applied "set slider" (1 ops) -> v7
-loaded document v7 (26 live nodes)
+"<bar id=\"#P\" name=\"bar\" x=\"730\" y=\"370\""
+"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" … <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+{"ok":true,"version":9,"aliases":{"$n":"#U"}}
+"<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
+"<rect id=\"#U\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"90\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
+{"roundtrip_equal":true,"bytes":7533}
+"<document version=\"9\"> |   <group id=\"#1\" name=\"scene\" count=\"25\"> | …"
+applied "open demo scene" (31 ops, System) -> v1
+applied "move rect" (2 ops, Human) -> v2
+applied "move mesh" (1 ops, Human) -> v3
+applied "undo: move mesh" (1 ops, System) -> v4
+applied "undo: move rect" (2 ops, System) -> v5
+applied "redo: move rect" (2 ops, System) -> v6
+applied "set slider" (1 ops, Human) -> v7
+applied "move bar" (1 ops, Human) -> v8
+applied "model edit" (2 ops, Model) -> v9
+loaded document v9 (30 live nodes)
 (no page errors)
 ```
+
+`__iron.edit(xml)` applies `<edit>` markup exactly as a model reply would be
+applied (see `src-ui/model/edit.ts` for the verbs); `__iron.ask(text)` runs a
+real model turn and needs an Anthropic API key entered in the Document
+panel, so the smoke script does not call it.
 
 `window.__iron` is the document API for `eval`: `await __iron.save()` returns
 the canonical JSON, `await __iron.load(text)` replaces the document, and
@@ -102,6 +115,7 @@ cd -
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
 | `move x y`, `down`, `up`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels |
 | `dmove x y`, `ddrag x0 y0 x1 y1 [steps]` | the same in document 2D space: viewer-panel top-left origin, y-down, the space `transform2d.x/y` are in |
+| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `timeline`, `sidebar`); a drag along the timeline scrubs the playhead over its 30 s |
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |
 | `logs [regex]` | print console output since the last `logs`, optionally filtered; Rust `info!`/`warn!` lines from the worker appear here |
@@ -115,8 +129,11 @@ covers (500,420)–(580,500); the circle is centred at (160,330); the slider
 track runs (100,600)–(400,624) and scrubbing along it previews the value
 through the store; the bar at x=780 has its height and top bound to the
 slider; the torus sits near the viewer centre, about (435,350) at a
-1600×1000 window. Any `<attr>.bind` in a view is a binding; dragging a node
-whose position is bound is not written and snaps back.
+1600×1000 window. The timeline holds a "slide" clip (0.5–2.5 s, square x
+500→700) and a "spin" clip (1–4 s, torus rotation). Any `<attr>.bind` in a
+view is a binding and any `<driven-by>` names a clip; an axis whose leaf is
+bound, or clip-driven at the current time, is locked for the whole drag (the
+bar moves in x only), and a node with both axes locked does not drag.
 
 ## Run (human path)
 

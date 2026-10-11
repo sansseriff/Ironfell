@@ -15,6 +15,8 @@
  *     <link from="#S" to="#Q" rel="animates" offset="0.5"/>
  *     <unlink id="r1"/>
  *   </edit>
+ *
+ *   <edit><link-figures a="#l" b="#Q" keep="#v"/></edit>   (alone: the store builds it)
  */
 import { XMLParser } from 'fast-xml-parser';
 import type { ApplyResult, DocumentApi, SolverSummary } from './api';
@@ -242,8 +244,47 @@ export interface EditOutcome {
   summary?: string;
 }
 
+/** `<link-figures a b keep?>` (ECM §7.2): the store computes the ops, so it
+ *  stands alone in its edit. A merge question comes back as an
+ *  `<edit-failed>` naming both entities and asking for `keep`. */
+const LINK_FIGURES = /^\s*<edit(?:\s[^>]*)?>\s*<link-figures\s([^>]*?)\/?>\s*(?:<\/link-figures>)?\s*<\/edit>\s*$/;
+
+function linkFigures(api: DocumentApi, attrText: string): EditOutcome {
+  const attrs: Record<string, string> = {};
+  for (const m of attrText.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
+  const id = (s: string | undefined) => (s === undefined || s === '' ? '' : s.startsWith('#') ? s : `#${s}`);
+  const version = api.version();
+  if (!attrs.a || !attrs.b) {
+    return { ok: false, failure: failed(version, [{ op: 0, kind: 'parse', message: '<link-figures> needs a="#id" and b="#id"' }]) };
+  }
+  const r = api.link(id(attrs.a), id(attrs.b), id(attrs.keep), 'model');
+  if (r.ok) return { ok: true, version: r.version };
+  if (r.question) {
+    const q = r.question;
+    const entity = (e: typeof q.a) =>
+      `    <entity id="${e.entity}"${e.name ? ` name="${escapeXml(e.name)}"` : ''}${e.def ? ` definition="${escapeXml(e.def)}"` : ''}` +
+      `${e.params.map(([k, v]) => ` ${k}="${escapeXml(v)}"`).join('')} figures="${e.figures.join(' ')}"` +
+      `${e.ports.length ? ` ports="${e.ports.join(' ')}"` : ''}/>`;
+    const collisions = q.port_collisions.length ? `\n    <port-collision names="${q.port_collisions.join(' ')}"/>` : '';
+    return {
+      ok: false,
+      failure:
+        `<edit-failed applied="none" version="${version}">\n` +
+        `  <question kind="merge" a="${id(attrs.a)}" b="${id(attrs.b)}">\n${entity(q.a)}\n${entity(q.b)}${collisions}\n` +
+        `    Both already picture an entity. Resend <link-figures> with keep="${q.a.entity}" or keep="${q.b.entity}"; the other entity is deleted and its figures move to the one kept.\n` +
+        `  </question>\n</edit-failed>`,
+    };
+  }
+  return { ok: false, failure: failed(version, [{ op: 0, kind: 'link', message: r.error ?? 'link failed' }]) };
+}
+
 /** Parse and apply one edit as the model, answering in the model's terms. */
 export function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): EditOutcome {
+  const link = xml.match(LINK_FIGURES);
+  if (link) return linkFigures(api, link[1]);
+  if (/<link-figures[\s/>]/.test(xml)) {
+    return { ok: false, failure: failed(api.version(), [{ op: null, kind: 'parse', message: '<link-figures> must be the only verb in its <edit>' }]) };
+  }
   let parsed: ParsedEdit;
   try {
     parsed = parseEdit(api, xml);

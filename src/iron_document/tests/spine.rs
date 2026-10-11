@@ -618,7 +618,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
     let mut store = s.store;
 
     let full = store
-        .view(&ViewQuery {
+        .view(&ViewQuery { relation: Default::default(),
             scope: None,
             fidelity: Fidelity::Full,
             depth: None,
@@ -639,7 +639,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
 
     // Depth limit: the inner group is shown but its child is not, and that is marked.
     let shallow = store
-        .view(&ViewQuery {
+        .view(&ViewQuery { relation: Default::default(),
             scope: None,
             fidelity: Fidelity::Full,
             depth: Some(1),
@@ -653,7 +653,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
 
     // Skeleton has no leaves.
     let skel = store
-        .view(&ViewQuery {
+        .view(&ViewQuery { relation: Default::default(),
             scope: Some(group),
             fidelity: Fidelity::Skeleton,
             depth: None,
@@ -675,7 +675,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
         });
     }
     store.apply(tx("fill inner", ops)).unwrap();
-    let q = ViewQuery {
+    let q = ViewQuery { relation: Default::default(),
         scope: Some(inner),
         fidelity: Fidelity::Summary,
         depth: None,
@@ -727,7 +727,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
     let rel = relation(&store, clip, rect);
     store.apply(tx("link", vec![Op::Link { rel }])).unwrap();
     let v = store
-        .view(&ViewQuery {
+        .view(&ViewQuery { relation: Default::default(),
             scope: Some(clip),
             fidelity: Fidelity::Full,
             depth: None,
@@ -742,7 +742,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
         .unwrap();
     assert!(
         store
-            .view(&ViewQuery {
+            .view(&ViewQuery { relation: Default::default(),
                 scope: Some(clip),
                 fidelity: Fidelity::Full,
                 depth: None

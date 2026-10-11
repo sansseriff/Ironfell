@@ -61,7 +61,11 @@ bad edit in the model's markup, runs the pendulum through every
 constraint-system phase 3 exit (drag the ball, drag beyond reach, undo,
 a locked arm, an out-of-reach model edit adjusted then refused with
 exact, the length slider, the fix moved to the ball and the platform
-dragged, `.by` markers), round-trips the document through save and load,
+dragged, `.by` markers), runs the stage C1 exit (select the cartoon box,
+shift-click the torus in the assembly panel, Link; the model and
+composition views; hover either to light both; Show in each way; undo the
+link in one step; the model surface's `<link-figures>`, its merge question
+and `keep`), round-trips the document through save and load,
 and prints the transactions the store applied. Expected output, minus
 screenshot lines and the per-frame `solve:` lines:
 
@@ -89,8 +93,21 @@ true
 "<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
 ["<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"280.9…\" x.by=\"#V\" y=\"38.1…\" y.by=\"#V\""]
 "x.by=\"#V\""
-{"roundtrip_equal":true,"bytes":14872}
-"<document version=\"18\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"27\"> | …"
+["#l","#Q"]
+clicked Link
+applied "link" (4 ops, Human) -> v19
+"<entity id=\"#w\" name=\"box\" def=\"#v\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#w\">"
+clicked Show in assembly
+clicked Show in scene
+focus #Q: panel assembly camera frames it
+focus #l: panel viewer pans to centre it
+false
+true
+"<edit-failed applied=\"none\" version=\"21\">\n  <question kind=\"merge\" a=\"#t\" b=\"#Q\">\n    <entity id=\"#s\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#t\"/>\n    <entity id=\"#y\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#s\" or keep=\"#y\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+[true,"<entity id=\"#s\" name=\"bar\" def=\"#o\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#t\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
+{"roundtrip_equal":true,"bytes":15417}
+"<document version=\"23\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"27\"> | …"
 applied "open demo scene" (68 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
@@ -115,7 +132,12 @@ applied "set slider" (1 ops, Human) -> v16
 applied "model edit" (2 ops, Model) -> v17
 applied "move rect" (3 ops, Human) -> v18
 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
-loaded document v18 (56 live nodes)
+applied "link" (4 ops, Human) -> v19
+applied "undo: link" (4 ops, System) -> v20
+applied "link" (4 ops, Model) -> v21
+applied "link" (5 ops, Model) -> v22
+applied "undo: link" (5 ops, System) -> v23
+loaded document v23 (58 live nodes)
 (no page errors)
 ```
 
@@ -189,6 +211,9 @@ cd -
 | `dmove x y`, `ddrag x0 y0 x1 y1 [steps]` | the same in document 2D space: viewer-panel top-left origin, y-down, the space `transform2d.x/y` are in |
 | `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); a drag along the timeline scrubs the playhead over its 30 s |
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
+| `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
+| `pclick <panel> x y` | click inside a named panel, panel-relative |
+| `click <text>` | click the shell button with that accessible name (`Link`, `Show in assembly`) |
 | `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |
 | `logs [regex]` | print console output since the last `logs`, optionally filtered; Rust `info!`/`warn!` lines from the worker appear here |
 | `peek [regex]` | like `logs`, without clearing the buffer |

@@ -1,7 +1,9 @@
 //! Views: typed, elided reads of the document for a model or a host
 //! (plans/document-spine.md §8; doc 04 §6).
 //!
-//! Only the tree relation exists in slice one. Output is XML-ish because
+//! Three relations (ECM §11): the raw tree; the model (entities, their
+//! definitions, parameters and figures); and one composition's layout, with
+//! each figure's entity as an `of` attribute. Output is XML-ish because
 //! nesting is the data. Elision is always marked: a reader must be able to
 //! tell "empty" from "not shown".
 
@@ -22,8 +24,24 @@ pub enum Fidelity {
     Full,
 }
 
+/// Which structure a view walks. JSON: `"tree"`, `"model"`, or
+/// `{"composition": "#4"}`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewRelation {
+    /// Every node under its parent, as stored.
+    #[default]
+    Tree,
+    /// Entities: what things are, and where each is pictured.
+    Model,
+    /// One composition's layout tree; a figure names its entity with `of`.
+    Composition(NodeId),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewQuery {
+    #[serde(default)]
+    pub relation: ViewRelation,
     /// `None` renders every root.
     #[serde(default)]
     pub scope: Option<NodeId>,
@@ -57,6 +75,23 @@ pub fn render_tree(
     q: &ViewQuery,
 ) -> Result<String, ViewError> {
     let mut out = String::new();
+    match q.relation {
+        ViewRelation::Tree => {}
+        ViewRelation::Model => return Ok(render_model(doc, reactive, by, q)),
+        ViewRelation::Composition(c) => {
+            if crate::composition::composition_of(doc, c) != Some(c) {
+                return Err(ViewError(format!("{c} is not a live composition")));
+            }
+            let q = ViewQuery { scope: Some(q.scope.unwrap_or(c)), ..q.clone() };
+            if crate::composition::composition_of(doc, q.scope.expect("set")) != Some(c) {
+                return Err(ViewError(format!("{} is not in composition {c}", q.scope.expect("set"))));
+            }
+            writeln!(out, "<composition-view of=\"{c}\" version=\"{}\">", doc.version().0).expect("string write");
+            node(doc, reactive, by, &q, q.scope.expect("set"), 0, &mut out);
+            out.push_str("</composition-view>\n");
+            return Ok(out);
+        }
+    }
     writeln!(out, "<document version=\"{}\">", doc.version().0).expect("string write");
     let roots: Vec<NodeId> = match q.scope {
         Some(id) => {
@@ -85,6 +120,130 @@ fn node(
 ) {
     let n = doc.live(id).expect("live");
     let indent = "  ".repeat(level as usize + 1);
+    let mut attrs = leaf_attrs(doc, reactive, by, q.fidelity, id);
+    // In a composition view a figure names what it pictures, in place of
+    // the relation element (ECM §11).
+    let as_of = matches!(q.relation, ViewRelation::Composition(_));
+    if as_of && let Some(entity) = crate::composition::figured_by(doc, id) {
+        attrs.push(("of".into(), entity.to_string()));
+    }
+
+    let kids = doc.children(id);
+    let rels: Vec<_> = doc.relations_from(id).filter(|r| !(as_of && r.rel == crate::document::RelKind::Figures)).collect();
+    // The reverse direction: what drives this node (doc 05 §5.3). Bindings
+    // already show as `<attr>.bind`; relations arrive from elsewhere.
+    let drivers: Vec<_> = doc.relations_to(id).collect();
+    let at_limit = q.depth.is_some_and(|d| level >= d);
+    let shown: &[NodeId] = if at_limit {
+        &[]
+    } else if q.fidelity == Fidelity::Summary && kids.len() > SUMMARY_MAX_CHILDREN {
+        &kids[..SUMMARY_SAMPLES]
+    } else {
+        kids
+    };
+    let elided = shown.len() < kids.len();
+    if !kids.is_empty() || matches!(n.ty.spec().children, crate::registry::ChildPolicy::Any) {
+        attrs.push(("count".into(), kids.len().to_string()));
+    }
+    if elided {
+        attrs.push(("elided".into(), String::new()));
+    }
+    write_open(out, &indent, n.ty.name(), &attrs);
+    if shown.is_empty() && rels.is_empty() && drivers.is_empty() {
+        out.push_str("/>\n");
+        return;
+    }
+    out.push_str(">\n");
+    for r in rels {
+        write!(out, "{indent}  <{} to=\"{}\"", r.rel.name(), r.to).expect("string write");
+        for (k, v) in &r.data {
+            write!(out, " {k}=\"{}\"", escape(&v.to_string())).expect("string write");
+        }
+        out.push_str("/>\n");
+    }
+    for r in drivers {
+        write!(out, "{indent}  <driven-by ref=\"{}\" rel=\"{}\"", r.from, r.rel.name()).expect("string write");
+        if let Some(prop) = doc.get::<crate::component::Clip>(r.from).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()) {
+            write!(out, " prop=\"{}\"", escape(prop)).expect("string write");
+        }
+        for (k, v) in &r.data {
+            write!(out, " {k}=\"{}\"", escape(&v.to_string())).expect("string write");
+        }
+        out.push_str("/>\n");
+    }
+    for &k in shown {
+        node(doc, reactive, by, q, k, level + 1, out);
+    }
+    writeln!(out, "{indent}</{}>", n.ty.name()).expect("string write");
+}
+
+fn write_open(out: &mut String, indent: &str, tag: &str, attrs: &[(String, String)]) {
+    write!(out, "{indent}<{tag}").expect("string write");
+    for (k, v) in attrs {
+        if k == "elided" {
+            out.push_str(" elided");
+        } else {
+            write!(out, " {k}=\"{}\"", escape(v)).expect("string write");
+        }
+    }
+}
+
+/// The model view (ECM §11): every live entity with its definition, its
+/// parameters (value, binding, solver marker as in the tree view) and each
+/// figure with the composition it is drawn in. Signals arrive with ports.
+fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &ViewQuery) -> String {
+    use crate::composition;
+    let mut out = String::new();
+    writeln!(out, "<model-view version=\"{}\">", doc.version().0).expect("string write");
+    let entity = crate::registry::TypeId::lookup("entity").expect("registered");
+    let name_of = |n: NodeId| {
+        doc.get::<crate::component::Name>(n).and_then(|c| c.text.constant()).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_owned)
+    };
+    for id in doc.nodes_of_type(entity).filter(|&e| doc.is_live(e)) {
+        if q.scope.is_some_and(|s| s != id) {
+            continue;
+        }
+        let mut attrs = leaf_attrs(doc, reactive, by, q.fidelity, id);
+        let def = doc.get::<crate::component::Instance>(id).and_then(|i| i.def.constant()).and_then(|v| match v {
+            crate::value::Value::Ref(d) => Some(*d),
+            _ => None,
+        });
+        if let Some(d) = def.and_then(name_of) {
+            attrs.push(("definition".into(), d));
+        }
+        let figures = composition::figures_of(doc, id);
+        if figures.is_empty() {
+            write_open(&mut out, "  ", "entity", &attrs);
+            out.push_str("/>\n");
+            continue;
+        }
+        write_open(&mut out, "  ", "entity", &attrs);
+        out.push_str(">\n");
+        for f in figures {
+            let ty = doc.live(f).map(|n| n.ty.name()).unwrap_or("?");
+            let mut fa: Vec<(String, String)> = vec![("id".into(), f.to_string()), ("type".into(), ty.to_owned())];
+            if let Some(n) = name_of(f) {
+                fa.push(("name".into(), n));
+            }
+            if let Some(c) = composition::composition_of(doc, f) {
+                fa.push(("in".into(), c.to_string()));
+                if let Some(n) = name_of(c) {
+                    fa.push(("composition".into(), n));
+                }
+            }
+            write_open(&mut out, "    ", "figure", &fa);
+            out.push_str("/>\n");
+        }
+        out.push_str("  </entity>\n");
+    }
+    out.push_str("</model-view>\n");
+    out
+}
+
+/// A node's id, name and (unless skeleton) leaves: each as its current
+/// value, plus `<attr>.bind` for a binding and `<attr>.by` for a solver
+/// variable.
+fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fidelity: Fidelity, id: NodeId) -> Vec<(String, String)> {
     let mut attrs: Vec<(String, String)> = vec![("id".into(), id.to_string())];
 
     let comps: Vec<&Component> = doc.components_of(id).collect();
@@ -98,7 +257,7 @@ fn node(
             attrs.push(("name".into(), text.to_owned()));
         }
     }
-    if q.fidelity != Fidelity::Skeleton {
+    if fidelity != Fidelity::Skeleton {
         // Attribute names are bare field names unless two components on this
         // node share one, in which case both get the full `kind.field` path.
         let mut seen: Vec<&str> = Vec::new();
@@ -147,61 +306,7 @@ fn node(
         }
     }
 
-    let kids = doc.children(id);
-    let rels: Vec<_> = doc.relations_from(id).collect();
-    // The reverse direction: what drives this node (doc 05 §5.3). Bindings
-    // already show as `<attr>.bind`; relations arrive from elsewhere.
-    let drivers: Vec<_> = doc.relations_to(id).collect();
-    let at_limit = q.depth.is_some_and(|d| level >= d);
-    let shown: &[NodeId] = if at_limit {
-        &[]
-    } else if q.fidelity == Fidelity::Summary && kids.len() > SUMMARY_MAX_CHILDREN {
-        &kids[..SUMMARY_SAMPLES]
-    } else {
-        kids
-    };
-    let elided = shown.len() < kids.len();
-    if !kids.is_empty() || matches!(n.ty.spec().children, crate::registry::ChildPolicy::Any) {
-        attrs.push(("count".into(), kids.len().to_string()));
-    }
-    if elided {
-        attrs.push(("elided".into(), String::new()));
-    }
-
-    write!(out, "{indent}<{}", n.ty.name()).expect("string write");
-    for (k, v) in &attrs {
-        if k == "elided" {
-            out.push_str(" elided");
-        } else {
-            write!(out, " {k}=\"{}\"", escape(v)).expect("string write");
-        }
-    }
-    if shown.is_empty() && rels.is_empty() && drivers.is_empty() {
-        out.push_str("/>\n");
-        return;
-    }
-    out.push_str(">\n");
-    for r in rels {
-        write!(out, "{indent}  <{} to=\"{}\"", r.rel.name(), r.to).expect("string write");
-        for (k, v) in &r.data {
-            write!(out, " {k}=\"{}\"", escape(&v.to_string())).expect("string write");
-        }
-        out.push_str("/>\n");
-    }
-    for r in drivers {
-        write!(out, "{indent}  <driven-by ref=\"{}\" rel=\"{}\"", r.from, r.rel.name()).expect("string write");
-        if let Some(prop) = doc.get::<crate::component::Clip>(r.from).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()) {
-            write!(out, " prop=\"{}\"", escape(prop)).expect("string write");
-        }
-        for (k, v) in &r.data {
-            write!(out, " {k}=\"{}\"", escape(&v.to_string())).expect("string write");
-        }
-        out.push_str("/>\n");
-    }
-    for &k in shown {
-        node(doc, reactive, by, q, k, level + 1, out);
-    }
-    writeln!(out, "{indent}</{}>", n.ty.name()).expect("string write");
+    attrs
 }
 
 fn escape(s: &str) -> String {

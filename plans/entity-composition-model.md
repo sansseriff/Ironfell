@@ -522,6 +522,46 @@ both figures.
   3.2 ms, rAF p95 16.7 ms. No per-panel cost worth the §7.1 fallback at this content
   size. A side effect: the old flake where a press on the ball over the torus picked the
   mesh cannot happen now, since 2D and 3D hits never come from the same panel.
+- *Selection by `NodeId`* — done (§7.2): `SelectionState` holds nodes in pick order
+  (shift-click adds); `document_bridge::Highlights` derives what lights up — a picked
+  node inside a figure stands for the figure's entity, so every figure of it, and a
+  group figure's descendants, light in every panel; 3D outlines read the same set. The
+  shell receives selection and hover as ids. Found on the way: **3D outlines had never
+  rendered** (the `bevy_gizmos_render` feature was missing); now enabled.
+- *Link and Show in* — done. Deviation from the handoff's signature: `Store::link(a, b,
+  keep, actor) -> Result<TransactionInput, LinkError>`, where `LinkError::Question` is
+  the `LinkQuestion` (both entities' name, definition, params, figures, ports, and port
+  collisions), alongside `Invalid` and `AlreadyLinked`; the ops come from
+  `composition::link_ops`. Neither picture has an entity → a `thing` entity named after
+  the first named picture, under `model` (model root, library and `thing` definition are
+  created if missing); one has → the other joins; both have → the question until `keep`,
+  then the other's figures move and it is deleted. One transaction each, so undo is one
+  step. FFI `document_link`, `document_counterparts`, `document_focus`; the shell has a
+  Link button, "Show in ▸" buttons and the merge dialog. **Show in** frames: a 3D panel's
+  camera keeps its direction and backs off to the node's bounds; a 2D panel pans (a
+  per-panel `PanelPans` offset, presentation only — not in the document, not undoable).
+  There is no "open a panel" yet: our panels are fixed, so focus on a composition no
+  panel shows returns an error. Also fixed: a click on a mesh committed a float-noise
+  "move mesh" (moves now wait for 3 px of travel), and a press and release inside one
+  slow frame were lost (edges now come from button events).
+- *Views* — done (§11): `ViewQuery.relation` is `tree` (default), `model`, or
+  `{composition: id}`. The model view lists every entity with its definition (by id and
+  name), parameters and a `<figure>` per picture with its composition; the composition
+  view is that composition's subtree with each figure's entity as `of="#e"`. Golden files
+  `tests/golden/model-view.xml` and `cartoon-view.xml`. `agent.ts` sends the model view,
+  then the tree (deviation: not the model view alone — the tree still holds the library,
+  timelines and loose roots the model must be able to edit). The model surface links with
+  `<link-figures a b keep?>`, alone in its `<edit>`; a merge question comes back as
+  `<edit-failed>` with a `<question kind="merge">` naming both entities and asking for
+  `keep` (ECM I5 as decided). The manifest describes compositions, figures and the verb.
+- *Demo and smoke* — done. **Exit verified** in headless Chrome by the run-iron smoke
+  script (expected output in `SKILL.md`): the 2D scene and 3D assembly side by side;
+  select the box, shift-click the torus, Link → one `link` transaction, the model view
+  lists entity `box` with figures `#l` (scene) and `#Q` (assembly); hovering either
+  lights both (`c1-hover-box.png`, `c1-hover-torus.png`); Show in frames the counterpart
+  each way (`c1-show-in-assembly.png`, `c1-show-in-scene.png`, focus log lines); one undo
+  removes the link; the model surface's link, question and `keep` merge. Native:
+  `tests/compositions.rs` (7 tests).
 
 ### Phase 3 — Ports, connections, scalar signals
 

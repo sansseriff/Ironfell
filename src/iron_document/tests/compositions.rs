@@ -224,3 +224,45 @@ fn linking_two_entities_asks_which_survives_then_merges() {
     assert_eq!(composition::figures_of(doc, ea), vec![t.boxed]);
     assert_eq!(composition::figures_of(doc, eb), vec![t.torus]);
 }
+
+fn golden(name: &str, v: &str) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(name);
+    if std::env::var_os("UPDATE_GOLDEN").is_some() || !path.exists() {
+        std::fs::write(&path, v).unwrap();
+    }
+    let want = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(v, want, "the view the model sees changed; run with UPDATE_GOLDEN=1 if intended");
+}
+
+#[test]
+fn the_model_and_composition_views_match_their_golden_files() {
+    let mut t = two_compositions();
+    let tx = t.store.link(t.boxed, t.torus, None, Actor::Human).unwrap();
+    t.store.apply(tx).unwrap();
+    let (_, entity) = composition::figure_of(t.store.document(), t.boxed).unwrap();
+    let q = |relation| ViewQuery { relation, scope: None, fidelity: Fidelity::Full, depth: None };
+
+    // The model view lists the entity with both figures (the phase 2 exit's
+    // last clause) and where each is drawn.
+    let model = t.store.view(&q(ViewRelation::Model)).unwrap();
+    assert!(model.contains(&format!(r#"<entity id="{entity}" name="box" def="{}" definition="thing">"#, t.thing)), "{model}");
+    assert!(model.contains(&format!(r#"<figure id="{}" type="rect" name="box" in="{}" composition="cartoon"/>"#, t.boxed, t.cartoon)), "{model}");
+    assert!(model.contains(&format!(r#"<figure id="{}" type="mesh" name="torus" in="{}" composition="assembly"/>"#, t.torus, t.assembly)), "{model}");
+    golden("model-view.xml", &model);
+
+    // A composition view is that composition's layout, each figure naming
+    // its entity with `of`; nothing from other compositions.
+    let cartoon = t.store.view(&q(ViewRelation::Composition(t.cartoon))).unwrap();
+    assert!(cartoon.contains(&format!(r#"of="{entity}""#)) && !cartoon.contains("<figures") && !cartoon.contains("torus"), "{cartoon}");
+    golden("cartoon-view.xml", &cartoon);
+    let assembly = t.store.view(&q(ViewRelation::Composition(t.assembly))).unwrap();
+    assert!(assembly.contains(r#"name="torus""#) && assembly.contains(&format!(r#"of="{entity}""#)), "{assembly}");
+
+    // Not a composition: an error a caller can show.
+    assert!(t.store.view(&q(ViewRelation::Composition(t.model))).is_err());
+    // The JSON form the FFI takes.
+    let parsed: ViewQuery = serde_json::from_str(&format!(r#"{{"relation": {{"composition": "{}"}}, "fidelity": "full"}}"#, t.cartoon)).unwrap();
+    assert_eq!(parsed.relation, ViewRelation::Composition(t.cartoon));
+    let parsed: ViewQuery = serde_json::from_str(r#"{"relation": "model", "fidelity": "summary"}"#).unwrap();
+    assert_eq!(parsed.relation, ViewRelation::Model);
+}

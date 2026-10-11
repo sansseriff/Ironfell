@@ -179,9 +179,9 @@ fn bad_clips_are_reported_not_applied() {
 #[test]
 fn views_answer_why_is_this_moving() {
     let Scene { store, rect, clip, .. } = scene("linear");
-    let v = store.view(&ViewQuery { scope: Some(rect), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { relation: Default::default(), scope: Some(rect), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!("<driven-by ref=\"{clip}\" rel=\"animates\" prop=\"transform2d.x\"/>")), "{v}");
-    let v = store.view(&ViewQuery { scope: Some(clip), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { relation: Default::default(), scope: Some(clip), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!("<animates to=\"{rect}\"/>")), "{v}");
     assert!(v.contains("from=\"100\" to=\"300\""), "{v}");
     assert_eq!(store.document().relations_to(rect).count(), 1);

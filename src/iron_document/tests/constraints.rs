@@ -333,7 +333,7 @@ fn a_binding_that_reads_and_feeds_a_cluster_is_a_cycle() {
 #[test]
 fn the_pendulum_view_matches_the_golden_file() {
     let p = pendulum();
-    let v = p.store.view(&ViewQuery { scope: None, fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = p.store.view(&ViewQuery { relation: Default::default(), scope: None, fidelity: Fidelity::Full, depth: None }).unwrap();
     // Solver variables are marked with the cluster that maintains them.
     assert!(v.contains(&format!(r#"x.by="{}""#, p.group)), "{v}");
     assert!(v.contains(r##"<constraint id="#"##) && v.contains(r#"kind="distance""#), "{v}");

@@ -119,6 +119,56 @@ shot pendulum-platform-drag
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const p = v.match(/<rect[^>]*name="platform"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), p && p[0].replace(/ rot=.*/, '')]; })()
 # 8. The view marks the solver's variables with the cluster that keeps them.
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return j && j[0].match(/x\.by="[^"]*"/)[0]; })()
+# Stage C1 (ECM phase 2 exit). The cartoon box (scene, document 520,590
+# 110x70) and the torus (assembly panel, near 166,347) are two compositions
+# side by side. Select the box, shift-click the torus, press Link: one
+# "link" transaction creates one entity with both as figures.
+pclick viewer 575 625
+keydown Shift
+pclick assembly 166 347
+keyup Shift
+sleep 400
+eval __iron.selection()
+click Link
+sleep 600
+peek applied "link"
+# The model view lists the entity with both figures.
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return v.match(/<entity[^>]*name="box"[\s\S]*?<\/entity>/)?.[0]; })()
+# The composition view names the entity with of=.
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:{composition:'#P'}}); return v.match(/<mesh[^>]*>/)?.[0].replace(/ pos=.* asset/, ' … asset'); })()
+# Hovering either picture highlights both: the box outline in the scene and
+# the torus's box in the assembly panel.
+pclick viewer 300 720
+dmove 575 625
+sleep 600
+shot c1-hover-box
+move 1430 350
+sleep 600
+shot c1-hover-torus
+# Show in frames the counterpart: from the box, the assembly camera frames
+# the torus; from the torus, the scene pans the box to its centre.
+pclick viewer 575 625
+sleep 400
+click Show in assembly
+sleep 600
+shot c1-show-in-assembly
+pclick assembly 166 347
+sleep 400
+click Show in scene
+sleep 600
+shot c1-show-in-scene
+peek focus
+# Undo of the link is one step: the entity and both relations go.
+key Meta+z
+sleep 600
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return /name="box"/.test(v); })()
+# The model surface links the same way; when both pictures already have
+# entities it is asked which survives, and answers with keep.
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#l" b="#Q"/></edit>'); return r.ok; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#t" b="#Q"/></edit>'); return r.failure; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#t" b="#Q" keep="#s"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
+key Meta+z
+sleep 400
 # Exit criterion 2: save, load, save again; the bytes must match.
 eval (async () => { const a = await __iron.save(); await __iron.load(a); await new Promise(r => setTimeout(r, 800)); const b = await __iron.save(); return { roundtrip_equal: a === b, bytes: a.length }; })()
 sleep 500

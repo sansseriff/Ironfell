@@ -152,7 +152,7 @@ fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
     assert!(matches!(store.handle(copy, path("transform2d.y")), Handle::Linear { source, .. } if source == Leaf { node: slider, path: path("slider.value") }));
     store.commit_gesture("set slider", Actor::Human, 1).unwrap().unwrap();
     // The view names the definition and shows the parameter and its binding.
-    let v = store.view(&ViewQuery { scope: Some(entity), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { relation: Default::default(), scope: Some(entity), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!(r#"<entity id="{entity}" name="bar" def="{def}" level="0.9" level.bind="{slider}.slider.value" power="1 mW">"#)), "{v}");
     assert!(v.contains(&format!(r#"<driven-by ref="{copy}" rel="figures"/>"#)), "{v}");
     // Everything round-trips through the file.

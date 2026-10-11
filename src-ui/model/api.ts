@@ -22,13 +22,39 @@ export interface ApplyResult {
 
 export interface DocumentApi {
   schema(): Schema;
-  view(query: { scope?: string | null; fidelity: 'skeleton' | 'summary' | 'full'; depth?: number | null }): string;
+  view(query: {
+    scope?: string | null;
+    fidelity: 'skeleton' | 'summary' | 'full';
+    depth?: number | null;
+    /** 'tree' (default), 'model', or { composition: '#4' } (ECM §11). */
+    relation?: 'tree' | 'model' | { composition: string };
+  }): string;
   version(): number;
   nextIds(n: number): string[];
   nextRelationIds(n: number): string[];
   /** Order keys under `parent` ('' = roots) after `after` ('' = front, 'end' = back). */
   place(parent: string, after: string, count: number): string[];
   apply(transaction: object, expectVersion: number): ApplyResult;
+  /** Link two pictures to one entity as `actor` (ECM §7.2). */
+  link(a: string, b: string, keep: string, actor: 'human' | 'model'): LinkResult;
+}
+
+export interface EntitySummary {
+  entity: string;
+  name: string | null;
+  def: string | null;
+  params: [string, string][];
+  figures: string[];
+  ports: string[];
+}
+
+export interface LinkResult {
+  ok: boolean;
+  version?: number;
+  entity?: string | null;
+  error?: string;
+  /** Both pictures already have entities: say which to keep (ECM I5). */
+  question?: { a: EntitySummary; b: EntitySummary; port_collisions: string[] };
 }
 
 export function makeDocumentApi(glue: Glue, handle: bigint): DocumentApi {
@@ -44,5 +70,6 @@ export function makeDocumentApi(glue: Glue, handle: bigint): DocumentApi {
     nextRelationIds: (n) => JSON.parse(glue.document_next_relation_ids(handle, n)),
     place: (parent, after, count) => JSON.parse(glue.document_place(handle, parent, after, count)),
     apply: (tx, expect) => JSON.parse(glue.document_apply(handle, JSON.stringify(tx), expect)),
+    link: (a, b, keep, actor) => JSON.parse((glue as any).document_link(handle, a, b, keep, actor)),
   };
 }

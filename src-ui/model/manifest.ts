@@ -49,6 +49,9 @@ VERBS, inside <edit expect-version="N">  (N = the version you read)
   <reparent id="#4" to="#1" after="#2"/>
   <link from="#clip" to="#node" rel="animates" offset="0.5"/>
   <unlink id="r1"/>
+  <link-figures a="#box" b="#torus"/>          make two pictures pictures of one entity
+      (alone in its <edit>). If both already picture different entities you get a
+      <question>; resend with keep="#entity" naming the one to keep.
 
 VALUES
   numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or
@@ -65,6 +68,15 @@ EXPRESSIONS (for {= …} bindings)
   lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan atan2(y,x) sqrt pow(x,y) hypot(x,y);
   the constant pi; angles in radians; quantity literals 9.58 mW. A binding may not
   depend on itself.
+
+MODEL AND COMPOSITIONS
+  Two views come first. <model-view> lists entities: what things are, each with its
+  definition, its params, and a <figure> for every picture of it with the composition
+  it is drawn in. The <document> tree follows: a composition root (notation, dims 2d
+  or 3d) is one diagram, shown in its own panel; its children are its layout. A node
+  with a figures relation pictures an entity; pictures in different compositions of
+  one entity are the same thing drawn differently. Local geometry (brackets, posts,
+  decoration) has no figures relation. The model root holds entities.
 
 DEFINITIONS
   A library root holds definition nodes. A definition's param_spec children declare

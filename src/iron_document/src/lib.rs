@@ -51,7 +51,7 @@ pub use serial::LoadError;
 pub use solve::{Finger, SolverSummary, Unmet};
 pub use units::Dim;
 pub use value::{Slot, Value, ValueKind};
-pub use view::{Fidelity, ViewError, ViewQuery};
+pub use view::{Fidelity, ViewError, ViewQuery, ViewRelation};
 
 use std::collections::VecDeque;
 

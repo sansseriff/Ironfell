@@ -64,7 +64,7 @@ fn main() {
     println!(
         "=== view (full) ===\n{}",
         store
-            .view(&ViewQuery {
+            .view(&ViewQuery { relation: Default::default(),
                 scope: None,
                 fidelity: Fidelity::Full,
                 depth: None

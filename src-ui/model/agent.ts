@@ -20,7 +20,10 @@ export interface AskResult {
 
 export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string): Promise<AskResult> {
   const system = manifest(api.schema());
-  const view = api.view({ fidelity: 'full' });
+  // The model view first (what things are and where each is drawn, ECM §11),
+  // then the tree, which also holds what no composition does (the library,
+  // timelines, loose roots).
+  const view = `${api.view({ fidelity: 'full', relation: 'model' })}\n${api.view({ fidelity: 'full' })}`;
   const messages: { role: 'user' | 'assistant'; content: string }[] = [
     { role: 'user', content: `${view}\n\nREQUEST\n${instruction}` },
   ];

@@ -140,3 +140,87 @@ fn a_figure_lifts_to_its_entity_through_its_ancestors() {
     t.store.undo(1).unwrap().unwrap();
     assert_eq!(composition::figure_of(t.store.document(), t.boxed), Some((t.group, entity)));
 }
+
+#[test]
+fn linking_two_bare_pictures_creates_one_entity_and_undoes_in_one_step() {
+    let mut t = two_compositions();
+    let tx = t.store.link(t.boxed, t.torus, None, Actor::Human).unwrap();
+    t.store.apply(tx).unwrap();
+    let doc = t.store.document();
+    let (_, entity) = composition::figure_of(doc, t.boxed).unwrap();
+    assert_eq!(composition::figure_of(doc, t.torus), Some((t.torus, entity)));
+    assert_eq!(composition::figures_of(doc, entity), vec![t.boxed, t.torus]);
+    // Named after the first named picture, an instance of `thing`, under model.
+    let e = doc.live(entity).unwrap();
+    assert_eq!((e.ty.name(), e.parent), ("entity", Some(t.model)));
+    let s = composition::summarize(doc, entity);
+    assert_eq!((s.name.as_deref(), s.def.as_deref()), (Some("box"), Some("thing")));
+    // Linking again is a no-op the caller hears about.
+    assert_eq!(t.store.link(t.torus, t.boxed, None, Actor::Human).unwrap_err(), composition::LinkError::AlreadyLinked(entity));
+    // One undo removes the entity and both relations.
+    t.store.undo(1).unwrap().unwrap();
+    assert_eq!(composition::figure_of(t.store.document(), t.boxed), None);
+    assert_eq!(composition::figure_of(t.store.document(), t.torus), None);
+}
+
+#[test]
+fn linking_creates_the_model_library_and_thing_when_missing() {
+    let mut store = Store::new();
+    let ids = store.document().next_ids(3);
+    let k = OrderKey::first();
+    store
+        .apply(tx(
+            "setup",
+            vec![
+                Op::Create { id: ids[0], ty: ty("composition"), parent: None, order: k.clone(), components: vec![named("c").wrap(), comp("free", "2d").wrap()] },
+                Op::Create { id: ids[1], ty: ty("rect"), parent: Some(ids[0]), order: k.clone(), components: vec![Transform2d::default().wrap(), Size::default().wrap()] },
+                Op::Create { id: ids[2], ty: ty("rect"), parent: Some(ids[0]), order: OrderKey::after(&k), components: vec![Transform2d::default().wrap(), Size::default().wrap()] },
+            ],
+        ))
+        .unwrap();
+    let tx = store.link(ids[1], ids[2], None, Actor::Model).unwrap();
+    store.apply(tx).unwrap();
+    let doc = store.document();
+    let model = composition::model_root(doc).unwrap();
+    let entity = doc.children(model)[0];
+    assert_eq!(composition::summarize(doc, entity).name.as_deref(), Some("thing"));
+    doc.check_invariants().unwrap();
+    // Not a picture: the composition itself, or the model.
+    assert!(matches!(store.link(ids[0], ids[1], None, Actor::Model), Err(composition::LinkError::Invalid(_))));
+}
+
+#[test]
+fn linking_two_entities_asks_which_survives_then_merges() {
+    let mut t = two_compositions();
+    // Two entities: the box's and the torus's.
+    let ids = t.store.document().next_ids(2);
+    let rels = t.store.document().next_relation_ids(2);
+    let mut ops = entity_ops(&t, ids[0], &[(rels[0], t.boxed)]);
+    ops.extend(entity_ops(&t, ids[1], &[(rels[1], t.torus)]));
+    // Entities need distinct order keys.
+    if let Op::Create { order, .. } = &mut ops[2] {
+        *order = OrderKey::after(&OrderKey::first());
+    }
+    t.store.apply(tx("two entities", ops)).unwrap();
+    let (ea, eb) = (ids[0], ids[1]);
+    let q = match t.store.link(t.boxed, t.torus, None, Actor::Model) {
+        Err(composition::LinkError::Question(q)) => q,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!((q.a.entity, q.b.entity), (ea, eb));
+    assert_eq!((q.a.figures.clone(), q.b.figures.clone()), (vec![t.boxed], vec![t.torus]));
+    // keep must name one of the two.
+    assert!(matches!(t.store.link(t.boxed, t.torus, Some(t.model), Actor::Model), Err(composition::LinkError::Invalid(_))));
+    // Keep the torus's entity: the box's figure moves to it and the box's
+    // entity is deleted; one undo puts both back.
+    let tx = t.store.link(t.boxed, t.torus, Some(eb), Actor::Model).unwrap();
+    t.store.apply(tx).unwrap();
+    let doc = t.store.document();
+    assert!(!doc.is_live(ea));
+    assert_eq!(composition::figures_of(doc, eb), vec![t.torus, t.boxed]);
+    t.store.undo(1).unwrap().unwrap();
+    let doc = t.store.document();
+    assert!(doc.is_live(ea));
+    assert_eq!(composition::figures_of(doc, ea), vec![t.boxed]);
+    assert_eq!(composition::figures_of(doc, eb), vec![t.torus]);
+}

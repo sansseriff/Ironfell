@@ -189,6 +189,17 @@ class IronWorker {
           }
           break;
 
+        // Document calls that answer with JSON (link, counterparts, focus):
+        // `document_<fn>(handle, ...args)`.
+        case "documentCall":
+          try {
+            const text = (glue as any)[`document_${data.fn}`](this.appHandle, ...data.args);
+            self.postMessage({ ty: "documentCall", requestId: data.requestId, ok: true, text });
+          } catch (e) {
+            self.postMessage({ ty: "documentCall", requestId: data.requestId, ok: false, error: String(e) });
+          }
+          break;
+
         case "documentView":
           try {
             const text = glue.document_view(this.appHandle, JSON.stringify(data.query));

@@ -22,7 +22,10 @@ use iron_document::{DragMode, Handle, LeafPath, Value};
 use crate::bevy_app::picking::panel_camera;
 use crate::bevy_app::scene3d::{ActiveState, PanelCamera};
 use crate::document_bridge::{Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelViews, Provenance, Shape2d, type_of};
-use crate::panels::document_from_screen;
+
+/// How far (window px) the pointer may wander between press and release and
+/// still count as a click.
+const CLICK_SLOP_PX: f32 = 3.0;
 
 /// The entity whose drag just ended, awaiting writeback.
 #[derive(Resource, Default)]
@@ -66,16 +69,6 @@ pub fn interaction_decide_system(
         selection.hovered = hovered_now;
     }
 
-    // Drag end: the finger lifts now; the commit follows next sync.
-    if pointer.just_released_left && drag.target.is_some() {
-        commit.0 = drag.target;
-        drag.target = None;
-        drag.kind = None;
-        if let Some(h) = drag.handle.take() {
-            store.0.end_drag(&h);
-        }
-    }
-
     // Drag begin or click selection start
     if pointer.just_pressed_left {
         if let Some(primary) = hits.primary {
@@ -92,6 +85,7 @@ pub fn interaction_decide_system(
             drag.target = Some(primary);
             drag.handle = None;
             drag.panel = hits.panel.clone();
+            drag.press_screen = pointer.screen;
             let Ok(prov) = provenance.get(primary) else {
                 drag.target = None;
                 return;
@@ -109,7 +103,7 @@ pub fn interaction_decide_system(
                     .panel
                     .as_deref()
                     .and_then(|panel| views.get(panel))
-                    .and_then(|v| document_from_screen(v.rect, pointer.screen))
+                    .and_then(|v| v.to_doc(pointer.screen))
                     .unwrap_or(Vec2::ZERO);
                 let local = transforms
                     .get(primary)
@@ -173,6 +167,18 @@ pub fn interaction_decide_system(
             selection.selected.clear();
         }
     }
+
+    // Drag end, after the press: a click whose press and release share a
+    // frame starts and ends its gesture in that frame. The finger lifts now;
+    // the commit follows next sync.
+    if pointer.just_released_left && drag.target.is_some() {
+        commit.0 = drag.target;
+        drag.target = None;
+        drag.kind = None;
+        if let Some(h) = drag.handle.take() {
+            store.0.end_drag(&h);
+        }
+    }
 }
 
 /// Follow the pointer by previewing the dragged node's leaves in the store.
@@ -189,9 +195,15 @@ pub fn drag_apply_system(
     views: Res<PanelViews>,
 ) {
     let Some(entity) = drag.target else { return };
+    // A click (selection, shift-click to add) moves nothing: positions wait
+    // until the pointer has travelled a few pixels from the press.
+    let travelled = pointer.screen.distance(drag.press_screen) > CLICK_SLOP_PX;
+    if !travelled && matches!(drag.kind, Some(crate::DragKind::Overlay2D | crate::DragKind::World3D)) {
+        return;
+    }
     // The pointer in the drag's panel's document space. Outside the panel
     // the drag holds still rather than jumping.
-    let doc_point = || drag.panel.as_deref().and_then(|p| views.get(p)).and_then(|v| document_from_screen(v.rect, pointer.screen));
+    let doc_point = || drag.panel.as_deref().and_then(|p| views.get(p)).and_then(|v| v.to_doc(pointer.screen));
     let Ok((prov, doc2d)) = nodes.get(entity) else { return };
     let id = prov.0;
     let target = |store: &mut DocumentStore, path: &str, value: Value| {

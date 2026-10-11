@@ -17,7 +17,6 @@
 //! draws in the viewer panel.
 
 use super::{Bounds2d, Doc2d, DocumentChanges, DocumentStore, Highlights, InComposition, NodeMap, PanelViews, Shape2d};
-use crate::panels::document_affine;
 use iron_document::composition::Dims;
 use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
 use bevy::prelude::*;
@@ -82,7 +81,7 @@ pub(super) fn render_document_layer(
     let mut drawn = 0usize;
     list.rebuild(|b| {
         for view in &panels {
-            let base = document_affine(view.rect);
+            let base = view.affine();
             b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| {
                 for &id in &ordered {
                     let Some(e) = map.entity(id) else { continue };

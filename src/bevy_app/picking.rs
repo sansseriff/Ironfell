@@ -3,7 +3,6 @@ use bevy::prelude::*;
 
 use crate::bevy_app::scene3d::{CurrentVolume, PanelCamera};
 use crate::document_bridge::{Doc2d, InComposition, NodeMap, PanelViews, Provenance};
-use crate::panels::document_from_screen;
 use iron_document::composition::Dims;
 
 /// Build a world ray from a window-space cursor position (physical px).
@@ -61,7 +60,7 @@ pub fn pick_document_2d_system(
 ) {
     hits.overlay.clear();
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two) else { return };
-    let Some(p) = document_from_screen(view.rect, pointer.screen) else { return };
+    let Some(p) = view.to_doc(pointer.screen) else { return };
     for (entity, prov, d, global, within) in &nodes {
         if !view.shows(within.0) {
             continue;

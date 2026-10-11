@@ -200,3 +200,68 @@ pub(crate) fn update_aabbes(
         commands.entity(entity).insert(CurrentVolume(aabb));
     }
 }
+
+/// "Show in" (ECM §7.2): frame each requested node in every panel showing
+/// its composition. A 3D panel's camera keeps its viewing direction and
+/// backs off until the node's bounds fill about half the view; a 2D panel
+/// pans so the node's bounds are centred. Presentation only: nothing here
+/// touches the document.
+pub(crate) fn apply_focus(
+    mut requests: ResMut<crate::document_bridge::FocusRequests>,
+    store: Res<crate::document_bridge::DocumentStore>,
+    views: Res<crate::document_bridge::PanelViews>,
+    map: Res<crate::document_bridge::NodeMap>,
+    bounds: Res<crate::document_bridge::Bounds2d>,
+    mut pans: ResMut<crate::document_bridge::PanelPans>,
+    volumes: Query<(&GlobalTransform, Option<&CurrentVolume>)>,
+    mut cameras: Query<(&PanelCamera, &mut Transform, &Projection, Option<&mut CameraController>)>,
+) {
+    use iron_document::composition::{self, Dims};
+    for id in requests.0.drain(..) {
+        let doc = store.0.document();
+        let Some(c) = composition::composition_of(doc, id) else { continue };
+        for view in views.showing(c) {
+            match view.dims {
+                Dims::Two => {
+                    // A group figure has no bounds of its own: its drawn
+                    // descendants' union.
+                    let rect = std::iter::once(id)
+                        .chain(doc.descendants(id))
+                        .filter_map(|n| bounds.0.get(&n).copied())
+                        .reduce(|a, b| a.union(b));
+                    let Some(r) = rect else { continue };
+                    let centre = Vec2::new(r.center().x as f32, r.center().y as f32);
+                    pans.0.insert(view.panel.clone(), Vec2::new(view.rect.w, view.rect.h) * 0.5 - centre);
+                    info!("focus {id}: panel {} pans to centre it", view.panel);
+                }
+                Dims::Three => {
+                    let Some((global, volume)) = map.entity(id).and_then(|e| volumes.get(e).ok()) else { continue };
+                    let (target, radius) = match volume {
+                        Some(v) => {
+                            let (min, max) = (Vec3::from(v.min), Vec3::from(v.max));
+                            ((min + max) * 0.5, ((max - min) * 0.5).length().max(0.1))
+                        }
+                        None => (global.translation(), 1.0),
+                    };
+                    for (pc, mut transform, projection, controller) in &mut cameras {
+                        if pc.panel != view.panel {
+                            continue;
+                        }
+                        let fov = match projection {
+                            Projection::Perspective(p) => p.fov,
+                            _ => 60f32.to_radians(),
+                        };
+                        let dist = (radius / (fov * 0.5).tan() * 2.0).max(radius * 2.0);
+                        let forward = transform.forward().as_vec3();
+                        *transform = Transform::from_translation(target - forward * dist).looking_at(target, Vec3::Y);
+                        if let Some(mut c) = controller {
+                            // The controller caches yaw and pitch; re-read them.
+                            c.initialized = false;
+                        }
+                        info!("focus {id}: panel {} camera frames it", view.panel);
+                    }
+                }
+            }
+        }
+    }
+}

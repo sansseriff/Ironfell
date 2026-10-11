@@ -14,6 +14,10 @@
  *   await __iron.edit('<edit>…</edit>')   -> apply markup as the model would
  *   await __iron.ask('make the circle red') -> a real model turn (needs a key)
  *   await __iron.bench(20, 200)    -> the solver benchmark in this build (JSON)
+ *   __iron.selection()             -> picked node ids, in pick order
+ *   await __iron.link('#a', '#b', keep?) -> link two pictures (ECM §7.2)
+ *   await __iron.counterparts('#a')     -> every picture of #a's entity
+ *   await __iron.focus('#a')       -> "Show in": frame #a in its panels
  */
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
@@ -38,6 +42,15 @@ export class DocumentClient {
   asking = $state(false);
   lastAsk: any = $state(null);
 
+  // What the pointer picked and hovers, as node ids (pushed by the engine).
+  selection: string[] = $state([]);
+  hovered: string[] = $state([]);
+  /** Every picture of the first selected node's entity, for "Show in". */
+  counterparts: { entity: string | null; figures: { node: string; composition: string | null; name: string | null }[] } =
+    $state({ entity: null, figures: [] });
+  /** A pending merge question from Link (ECM I5): the person picks the survivor. */
+  question: any = $state(null);
+
   private post: ((data: any) => void) | null = null;
   private pending = new Map<number, Pending>();
   private nextId = 1;
@@ -60,6 +73,10 @@ export class DocumentClient {
       ask: (instruction: string) => this.ask(instruction),
       bench: async (iterations = 20, repeats = 200) =>
         JSON.parse(await this.request('solveBench', { iterations, repeats })),
+      selection: () => [...this.selection],
+      link: (a: string, b: string, keep = '') => this.link(a, b, keep),
+      counterparts: (node: string) => this.call('counterparts', [node]),
+      focus: (node: string) => this.call('focus', [node]),
     };
   }
 
@@ -90,16 +107,43 @@ export class DocumentClient {
     }
   }
 
+  /** One JSON-answering document FFI call (`document_<fn>`). */
+  async call(fn: string, args: unknown[]): Promise<any> {
+    return JSON.parse(await this.request('documentCall', { fn, args }));
+  }
+
+  /** Link two pictures (ECM §7.2). A merge question is kept in `question`
+   *  for the dialog and returned; answer it by calling again with `keep`. */
+  async link(a: string, b: string, keep = ''): Promise<any> {
+    const r = await this.call('link', [a, b, keep, 'human']);
+    this.question = r.question ? { ...r.question, aNode: a, bNode: b } : null;
+    return r;
+  }
+
+  private async refreshCounterparts(): Promise<void> {
+    const first = this.selection[0];
+    this.counterparts = first ? await this.call('counterparts', [first]) : { entity: null, figures: [] };
+  }
+
   /** Returns true if the message was one of ours. */
   handleMessage(data: any): boolean {
     switch (data?.ty) {
+      case 'selection':
+        this.selection = (data.list ?? []).map(String);
+        void this.refreshCounterparts();
+        return true;
+      case 'hover':
+        this.hovered = (data.list ?? []).map(String);
+        return true;
       case 'documentChanged':
         this.version = data.version;
         void this.refresh();
+        void this.refreshCounterparts();
         return true;
       case 'documentSaved':
       case 'documentLoaded':
       case 'documentView':
+      case 'documentCall':
       case 'solveBench': {
         const p = this.pending.get(data.requestId);
         if (!p) return true;

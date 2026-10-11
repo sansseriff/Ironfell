@@ -187,6 +187,16 @@ export class MainThreadAdapter {
         }
         break;
 
+      // Document calls that answer with JSON (link, counterparts, focus).
+      case "documentCall":
+        try {
+          const text = (glue as any)[`document_${data.fn}`](this.appHandle, ...data.args);
+          this.sendMessage({ ty: "documentCall", requestId: data.requestId, ok: true, text });
+        } catch (e) {
+          this.sendMessage({ ty: "documentCall", requestId: data.requestId, ok: false, error: String(e) });
+        }
+        break;
+
       case "documentView":
         if (this.appHandle !== BigInt(0)) {
           try {

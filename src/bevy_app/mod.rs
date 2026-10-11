@@ -29,7 +29,7 @@ use interaction::{
 };
 use picking::{pick_document_2d_system, pick_world_3d_system, pointer_panel_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
-use scene3d::{render_active_shapes, setup_3d_scene, sync_panel_cameras, update_aabbes};
+use scene3d::{apply_focus, render_active_shapes, setup_3d_scene, sync_panel_cameras, update_aabbes};
 use timeline::TimelinePlugin;
 
 use crate::{
@@ -195,7 +195,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     // Lights and ground; one viewport-scoped camera per 3D composition panel
     // (ECM §7.1). Meshes are document nodes (DocumentPlugin).
     app.add_systems(Startup, setup_3d_scene);
-    app.add_systems(Update, sync_panel_cameras);
+    app.add_systems(Update, (sync_panel_cameras, apply_focus).chain());
 
     // --- STEP 4: UI panels + remaining Update systems -------------------------
     app.add_systems(Startup, ui_panels::setup_ui_panels);

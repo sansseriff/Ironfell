@@ -10,6 +10,8 @@ bevy = { version = "0.19", features = [
     "std",
     "bevy_pbr",
     "bevy_gizmos",
+    # Without it gizmos are recorded but never drawn: 3D selection outlines.
+    "bevy_gizmos_render",
     "tonemapping_luts",
     "bevy_window",
     "bevy_log",

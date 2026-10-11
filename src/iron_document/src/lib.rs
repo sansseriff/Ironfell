@@ -497,6 +497,15 @@ impl Store {
         }
     }
 
+    /// The transaction that links two pictures to one entity (ECM §7.2,
+    /// `composition::link_ops`). Both the UI and the model surface ask the
+    /// same question when the pictures already have different entities:
+    /// `Err(LinkError::Question)` until `keep` names the survivor.
+    pub fn link(&self, a: NodeId, b: NodeId, keep: Option<NodeId>, actor: Actor) -> Result<TransactionInput, composition::LinkError> {
+        let ops = composition::link_ops(self.document(), a, b, keep)?;
+        Ok(TransactionInput { label: "link".into(), actor, ts: 0, idempotency_key: None, ops, exact: false })
+    }
+
     /// Apply a transaction atomically. Either every op applies and the
     /// version advances, or nothing applies and every error is reported.
     pub fn apply(&mut self, input: TransactionInput) -> Result<Applied, Vec<ApplyError>> {

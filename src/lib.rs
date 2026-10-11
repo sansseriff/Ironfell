@@ -201,6 +201,9 @@ pub struct DragState {
     /// The panel the drag started in: its rectangle and camera map the
     /// pointer for the whole gesture, wherever the pointer goes.
     pub panel: Option<String>,
+    /// Where the press happened (window px). A move or 3D drag previews
+    /// nothing until the pointer leaves it, so a click is not a move.
+    pub press_screen: Vec2,
     pub plane_origin: Vec3,
     pub plane_normal: Vec3,
     pub grab_offset_world: Vec3,
@@ -213,6 +216,7 @@ impl Default for DragState {
             kind: None,
             handle: None,
             panel: None,
+            press_screen: Vec2::ZERO,
             plane_origin: Vec3::ZERO,
             plane_normal: Vec3::Y,
             grab_offset_world: Vec3::ZERO,

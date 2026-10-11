@@ -136,6 +136,29 @@ async function run(line: string) {
       const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
       return drag(r.x + x0, r.y + y0, r.x + x1, r.y + y1, steps || 10);
     }
+    case "keydown":
+      await page.keyboard.down(rest[0]);
+      return;
+    case "keyup":
+      await page.keyboard.up(rest[0]);
+      return;
+    case "click": {
+      // Click a DOM element by its visible text (a button in the shell).
+      await page.getByRole("button", { name: rest.join(" ") }).first().click();
+      return out(`clicked ${rest.join(" ")}`);
+    }
+    case "pclick": {
+      // Click inside a named panel, panel-relative.
+      const r = await panelRect(rest[0]);
+      const [x, y] = rest.slice(1).map(Number);
+      await page.mouse.move(r.x + x, r.y + y);
+      await page.waitForTimeout(200);
+      await page.mouse.down();
+      await page.waitForTimeout(200);
+      await page.mouse.up();
+      await page.waitForTimeout(200);
+      return;
+    }
     case "key":
       return page.keyboard.press(rest[0]);
     case "eval":

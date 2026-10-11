@@ -13,10 +13,13 @@
 //! is drawn in, which entity a node pictures, and every picture of an
 //! entity. Nothing is stored that these functions can compute.
 
-use crate::component::Composition;
-use crate::document::{Document, RelKind};
-use crate::id::NodeId;
+use crate::component::{Composition, LeafStruct};
+use crate::document::{Document, RelKind, Relation};
+use crate::id::{NodeId, RelationId};
+use crate::op::Op;
 use crate::registry::TypeId;
+use serde::Serialize;
+use std::collections::BTreeMap;
 
 /// Whether a composition is drawn as 2D vector content or as a 3D scene.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -88,4 +91,203 @@ pub fn figures_of(doc: &Document, entity: NodeId) -> Vec<NodeId> {
 pub fn model_root(doc: &Document) -> Option<NodeId> {
     let model = TypeId::lookup("model").expect("registered");
     doc.roots().iter().copied().find(|&r| doc.live(r).is_some_and(|n| n.ty == model))
+}
+
+// ---------------------------------------------------------------------------
+// Linking (ECM §7.2): two pictures become pictures of one entity.
+
+/// One side of a merge question: enough for a person or the model to pick
+/// which entity survives.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EntitySummary {
+    pub entity: NodeId,
+    pub name: Option<String>,
+    /// The definition's name, or its id when it has none.
+    pub def: Option<String>,
+    /// Parameter name and value, in the file's text form.
+    pub params: Vec<(String, String)>,
+    pub figures: Vec<NodeId>,
+    /// Port names. Ports arrive in ECM phase 3; empty until then, but part
+    /// of the question so collisions are shown where they will matter.
+    pub ports: Vec<String>,
+}
+
+/// Both pictures already have entities: which one survives is asked, never
+/// guessed (ECM I5, decided 2026-10-11).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LinkQuestion {
+    pub a: EntitySummary,
+    pub b: EntitySummary,
+    /// Port names both entities have.
+    pub port_collisions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LinkError {
+    /// The request is malformed: the same node twice, a node that is not a
+    /// live picture in a composition, or `keep` naming neither entity.
+    Invalid(String),
+    /// Both already picture the same entity; nothing to do.
+    AlreadyLinked(NodeId),
+    /// Both picture different entities and `keep` was not given.
+    Question(LinkQuestion),
+}
+
+impl std::fmt::Display for LinkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LinkError::Invalid(m) => f.write_str(m),
+            LinkError::AlreadyLinked(e) => write!(f, "both already figure {e}"),
+            LinkError::Question(q) => write!(
+                f,
+                "both already figure an entity ({} and {}); say which to keep",
+                q.a.entity, q.b.entity
+            ),
+        }
+    }
+}
+
+fn name_of(doc: &Document, id: NodeId) -> Option<String> {
+    let n = doc.get::<crate::component::Name>(id)?.text.constant()?.as_str()?.to_owned();
+    (!n.is_empty()).then_some(n)
+}
+
+pub fn summarize(doc: &Document, entity: NodeId) -> EntitySummary {
+    use crate::component::{Instance, Params};
+    let def = doc.get::<Instance>(entity).and_then(|i| i.def.constant()).and_then(|v| match v {
+        crate::value::Value::Ref(d) => Some(name_of(doc, *d).unwrap_or_else(|| d.to_string())),
+        _ => None,
+    });
+    let params = doc
+        .get::<Params>(entity)
+        .map(|p| {
+            p.field_names()
+                .into_iter()
+                .filter_map(|f| {
+                    p.get(f).map(|s| {
+                        let text = match (s.constant(), s.expr()) {
+                            (Some(v), _) => v.to_string(),
+                            (_, Some(e)) => format!("{{= {e}}}"),
+                            _ => String::new(),
+                        };
+                        (f.to_owned(), text)
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    EntitySummary { entity, name: name_of(doc, entity), def, params, figures: figures_of(doc, entity), ports: Vec::new() }
+}
+
+/// The ops that make `a` and `b` pictures of one entity, as one
+/// transaction (so undo is one step):
+///
+/// - neither pictures anything: a new entity of the generic `thing`
+///   definition, named after the first named picture, under `model` (the
+///   `model` root, a library and the `thing` definition are created too if
+///   the document lacks them);
+/// - one pictures an entity: the other joins it;
+/// - both picture different entities: with `keep` naming one of them, the
+///   other's figures move to it and it is deleted; without, the question.
+pub fn link_ops(doc: &Document, a: NodeId, b: NodeId, keep: Option<NodeId>) -> Result<Vec<Op>, LinkError> {
+    if a == b {
+        return Err(LinkError::Invalid(format!("{a} cannot be linked to itself")));
+    }
+    for n in [a, b] {
+        if !doc.is_live(n) {
+            return Err(LinkError::Invalid(format!("no live node {n}")));
+        }
+        if composition_of(doc, n).is_none_or(|c| c == n) {
+            return Err(LinkError::Invalid(format!("{n} is not a picture inside a composition")));
+        }
+    }
+    let ea = figure_of(doc, a).map(|(_, e)| e);
+    let eb = figure_of(doc, b).map(|(_, e)| e);
+    let figures = |from: NodeId, to: NodeId, id: RelationId| Op::Link {
+        rel: Relation { id, from, to, rel: RelKind::Figures, data: BTreeMap::new() },
+    };
+    match (ea, eb) {
+        (Some(x), Some(y)) if x == y => Err(LinkError::AlreadyLinked(x)),
+        (Some(x), None) => Ok(vec![figures(b, x, doc.next_relation_id())]),
+        (None, Some(y)) => Ok(vec![figures(a, y, doc.next_relation_id())]),
+        (Some(x), Some(y)) => {
+            let (keep, drop) = match keep {
+                Some(k) if k == x => (x, y),
+                Some(k) if k == y => (y, x),
+                Some(k) => return Err(LinkError::Invalid(format!("keep={k} names neither {x} nor {y}"))),
+                None => {
+                    let (sa, sb) = (summarize(doc, x), summarize(doc, y));
+                    let port_collisions = sa.ports.iter().filter(|p| sb.ports.contains(p)).cloned().collect();
+                    return Err(LinkError::Question(LinkQuestion { a: sa, b: sb, port_collisions }));
+                }
+            };
+            let moving: Vec<&Relation> = doc.relations_to(drop).filter(|r| r.rel == RelKind::Figures).collect();
+            let ids = doc.next_relation_ids(moving.len());
+            let mut ops: Vec<Op> = moving.iter().map(|r| Op::Unlink { id: r.id }).collect();
+            ops.extend(moving.iter().zip(ids).map(|(r, id)| figures(r.from, keep, id)));
+            ops.push(Op::Delete { id: drop });
+            Ok(ops)
+        }
+        (None, None) => Ok(new_entity_ops(doc, a, b)),
+    }
+}
+
+/// A `thing` entity for two pictures, creating whatever structure is
+/// missing. Ids are minted in creation order (ascending, as apply requires).
+fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
+    use crate::component::{Instance, Name, Params};
+    use crate::value::{Slot, Value};
+    let ty = |s: &str| TypeId::lookup(s).expect("registered");
+    let named = |s: &str| {
+        let mut n = Name::default();
+        n.text = Slot::Const(Value::Str(s.to_owned()));
+        n.wrap()
+    };
+    let last_root = || doc.roots().last().and_then(|&r| doc.live(r)).map(|n| n.order.clone());
+    let after = |k: Option<crate::order::OrderKey>| k.map_or_else(crate::order::OrderKey::first, |k| crate::order::OrderKey::after(&k));
+
+    let model = model_root(doc);
+    let library = doc.nodes_of_type(ty("library")).find(|&l| doc.is_live(l));
+    let thing = library.and_then(|l| doc.children(l).iter().copied().find(|&d| doc.live(d).is_some_and(|n| n.ty == ty("definition")) && name_of(doc, d).as_deref() == Some("thing")));
+    let wanted = model.is_none() as usize + library.is_none() as usize + thing.is_none() as usize + 1;
+    let mut ids = doc.next_ids(wanted).into_iter();
+    let mut ops = Vec::new();
+    let mut root_key = last_root();
+
+    let model = model.unwrap_or_else(|| {
+        let id = ids.next().expect("reserved");
+        let order = after(root_key.take());
+        root_key = Some(order.clone());
+        ops.push(Op::Create { id, ty: ty("model"), parent: None, order, components: vec![named("model")] });
+        id
+    });
+    let library = library.unwrap_or_else(|| {
+        let id = ids.next().expect("reserved");
+        let order = after(root_key.take());
+        ops.push(Op::Create { id, ty: ty("library"), parent: None, order, components: vec![named("library")] });
+        id
+    });
+    let thing = thing.unwrap_or_else(|| {
+        let id = ids.next().expect("reserved");
+        let last = doc.children(library).last().and_then(|&c| doc.live(c)).map(|n| n.order.clone());
+        ops.push(Op::Create { id, ty: ty("definition"), parent: Some(library), order: after(last), components: vec![named("thing")] });
+        id
+    });
+    let entity = ids.next().expect("reserved");
+    let mut instance = Instance::default();
+    instance.def = Slot::Const(Value::Ref(thing));
+    let name = name_of(doc, a).or_else(|| name_of(doc, b)).unwrap_or_else(|| "thing".to_owned());
+    let last = doc.children(model).last().and_then(|&c| doc.live(c)).map(|n| n.order.clone());
+    ops.push(Op::Create {
+        id: entity,
+        ty: ty("entity"),
+        parent: Some(model),
+        order: after(last),
+        components: vec![instance.wrap(), Params::default().wrap(), named(&name)],
+    });
+    let rels = doc.next_relation_ids(2);
+    for (from, id) in [a, b].into_iter().zip(rels) {
+        ops.push(Op::Link { rel: Relation { id, from, to: entity, rel: RelKind::Figures, data: BTreeMap::new() } });
+    }
+    ops
 }

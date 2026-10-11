@@ -20,22 +20,29 @@ pub fn pointer_collect_system(
     // Apply accumulated delta (already zeroed if no movement this frame)
     pointer.delta = accumulated.delta;
 
-    // Track previous for just_* flags
-    let prev_left = pointer.buttons.left;
-
-    // Process button events for edge detection
+    // Edges come from the events, not from comparing state at frame
+    // boundaries: a slow frame (a shader compiling) can hold a whole click,
+    // press and release, and that must still be a click.
+    pointer.just_pressed_left = false;
+    pointer.just_released_left = false;
     for ev in button_events.read() {
         // independent reader
         match ev.button {
-            MouseButton::Left => pointer.buttons.left = ev.state.is_pressed(),
+            MouseButton::Left => {
+                let down = ev.state.is_pressed();
+                if down && !pointer.buttons.left {
+                    pointer.just_pressed_left = true;
+                }
+                if !down && (pointer.buttons.left || pointer.just_pressed_left) {
+                    pointer.just_released_left = true;
+                }
+                pointer.buttons.left = down;
+            }
             MouseButton::Right => pointer.buttons.right = ev.state.is_pressed(),
             MouseButton::Middle => pointer.buttons.middle = ev.state.is_pressed(),
             _ => {}
         }
     }
-
-    pointer.just_pressed_left = !prev_left && pointer.buttons.left;
-    pointer.just_released_left = prev_left && !pointer.buttons.left;
 
     // Modifiers (simple logical OR of left/right variants)
     use KeyCode::*;

@@ -37,9 +37,23 @@ pub struct PanelView {
     pub layer: usize,
     /// The viewer panel also draws 2D nodes outside every composition.
     pub loose: bool,
+    /// A 2D panel's pan: document space sits at the panel's top-left plus
+    /// this offset (zero until "Show in" frames something).
+    pub pan: Vec2,
 }
 
 impl PanelView {
+    /// Document 2D space to window space, for this panel.
+    pub fn affine(&self) -> kurbo::Affine {
+        kurbo::Affine::translate(((self.rect.x + self.pan.x) as f64, (self.rect.y + self.pan.y) as f64))
+    }
+
+    /// A window-space point in this panel's document space; `None` outside
+    /// the panel.
+    pub fn to_doc(&self, screen: Vec2) -> Option<Vec2> {
+        self.rect.contains(screen).then(|| Vec2::new(screen.x - self.rect.x - self.pan.x, screen.y - self.rect.y - self.pan.y))
+    }
+
     /// Whether a node drawn in `composition` belongs in this panel.
     pub fn shows(&self, composition: Option<NodeId>) -> bool {
         match composition {
@@ -68,6 +82,16 @@ impl PanelViews {
         self.0.iter().filter(move |v| v.composition == Some(composition))
     }
 }
+
+/// Per-panel 2D pans, set by "Show in" (ECM §7.2). Presentation only: not
+/// in the document, not undoable.
+#[derive(Resource, Default, Debug)]
+pub struct PanelPans(pub bevy::platform::collections::HashMap<String, Vec2>);
+
+/// Nodes to frame in every panel showing their composition, queued by the
+/// `document_focus` FFI and served by `bevy_app::scene3d::apply_focus`.
+#[derive(Resource, Default, Debug)]
+pub struct FocusRequests(pub Vec<NodeId>);
 
 /// Composition → render layer, assigned on first use and never reused.
 #[derive(Resource, Debug)]
@@ -117,6 +141,7 @@ fn resolve(doc: &Document, spec: &str) -> Option<NodeId> {
 pub(super) fn resolve_panel_views(
     panels: Res<Panels>,
     store: Res<DocumentStore>,
+    pans: Res<PanelPans>,
     mut layers: ResMut<CompositionLayers>,
     mut views: ResMut<PanelViews>,
 ) {
@@ -134,6 +159,7 @@ pub(super) fn resolve_panel_views(
                 dims,
                 layer: if dims == Dims::Three { layers.of(composition) } else { 0 },
                 loose: id == VIEWER_PANEL,
+                pan: pans.0.get(id).copied().unwrap_or(Vec2::ZERO),
             }
         })
         .collect();

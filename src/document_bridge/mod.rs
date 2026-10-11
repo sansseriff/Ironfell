@@ -33,7 +33,7 @@ use std::collections::BTreeSet;
 
 pub use highlight::{Highlights, update_highlights};
 pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d};
-pub use panel_views::{CompositionLayers, InComposition, PanelView, PanelViews};
+pub use panel_views::{CompositionLayers, FocusRequests, InComposition, PanelPans, PanelView, PanelViews};
 pub use render::DocumentLayer;
 
 /// The authored store, as a resource. Reads go through `.0.document()`;
@@ -182,6 +182,8 @@ impl Plugin for DocumentPlugin {
             .init_resource::<SyncedVersion>()
             .init_resource::<PanelViews>()
             .init_resource::<Highlights>()
+            .init_resource::<PanelPans>()
+            .init_resource::<FocusRequests>()
             .init_resource::<CompositionLayers>()
             .add_systems(Startup, (materialize::setup_mesh_assets, render::setup_document_layer, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is

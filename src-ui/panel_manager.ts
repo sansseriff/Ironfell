@@ -188,6 +188,9 @@ export class PanelManager {
       case 'documentSaved':
       case 'documentLoaded':
       case 'documentView':
+      case 'documentCall':
+      case 'hover':
+      case 'selection':
       case 'modelEditResult':
       case 'modelAskResult':
       case 'solveBench':

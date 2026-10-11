@@ -465,6 +465,111 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
     result.to_string()
 }
 
+/// Link two pictures to one entity (ECM §7.2) and apply it now, as `actor`
+/// ("human" or "model"). `keep` is "" or the entity to keep when both
+/// pictures already have one. Returns JSON: `{"ok":true,"version":N,
+/// "entity":"#e"}`; `{"ok":false,"question":{a,b,port_collisions}}` when
+/// the survivor must be chosen; `{"ok":false,"error":"…"}` otherwise.
+#[wasm_bindgen]
+pub fn document_link(ptr: u64, a: String, b: String, keep: String, actor: String) -> String {
+    use iron_document::composition::{self, LinkError};
+    use iron_document::NodeId;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let parse = |s: &str| s.parse::<NodeId>().map_err(|e| e.to_string());
+    let (a, b) = match (parse(&a), parse(&b)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return serde_json::json!({"ok": false, "error": e}).to_string(),
+    };
+    let keep = if keep.is_empty() {
+        None
+    } else {
+        match parse(&keep) {
+            Ok(k) => Some(k),
+            Err(e) => return serde_json::json!({"ok": false, "error": e}).to_string(),
+        }
+    };
+    let actor = if actor == "model" { iron_document::Actor::Model } else { iron_document::Actor::Human };
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
+    };
+    let result = match store.0.link(a, b, keep, actor) {
+        Err(LinkError::Question(q)) => serde_json::json!({"ok": false, "question": q}),
+        Err(e @ LinkError::AlreadyLinked(entity)) => serde_json::json!({"ok": false, "error": e.to_string(), "entity": entity.to_string()}),
+        Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
+        Ok(tx) => match store.0.apply(tx) {
+            Ok(applied) => {
+                let entity = composition::figure_of(store.0.document(), a).map(|(_, e)| e.to_string());
+                serde_json::json!({"ok": true, "version": applied.version.0, "entity": entity})
+            }
+            Err(errors) => serde_json::json!({"ok": false, "error": errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")}),
+        },
+    };
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    result.to_string()
+}
+
+/// Every picture of the entity `node` stands for, with its composition: what
+/// "Show in" offers (ECM §7.2). JSON `{"entity":"#e"|null,"figures":[{"node",
+/// "composition","name"}]}`.
+#[wasm_bindgen]
+pub fn document_counterparts(ptr: u64, node: String) -> String {
+    use iron_document::composition;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"entity": null, "figures": []}).to_string();
+    };
+    let doc = store.0.document();
+    let Some((_, entity)) = node.parse().ok().and_then(|n| composition::figure_of(doc, n)) else {
+        return serde_json::json!({"entity": null, "figures": []}).to_string();
+    };
+    let figures: Vec<_> = composition::figures_of(doc, entity)
+        .into_iter()
+        .map(|f| {
+            let c = composition::composition_of(doc, f);
+            let name = c
+                .and_then(|c| doc.get::<iron_document::component::Name>(c))
+                .and_then(|n| n.text.constant())
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            serde_json::json!({"node": f.to_string(), "composition": c.map(|c| c.to_string()), "name": name})
+        })
+        .collect();
+    serde_json::json!({"entity": entity.to_string(), "figures": figures}).to_string()
+}
+
+/// "Show in": frame `node` in every open panel showing its composition — a
+/// 3D panel's camera looks at it, a 2D panel pans it to the centre. JSON
+/// `{"ok":true,"panels":[…]}`, or `{"ok":false,"error"}` when no open panel
+/// shows that composition (the shell would open one; ours are fixed).
+#[wasm_bindgen]
+pub fn document_focus(ptr: u64, node: String) -> String {
+    use iron_document::composition;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Ok(id) = node.parse::<iron_document::NodeId>() else {
+        return serde_json::json!({"ok": false, "error": format!("bad id {node:?}")}).to_string();
+    };
+    let Some(c) = app.world().get_resource::<crate::document_bridge::DocumentStore>().and_then(|s| composition::composition_of(s.0.document(), id)) else {
+        return serde_json::json!({"ok": false, "error": format!("{id} is not in a composition")}).to_string();
+    };
+    let panels: Vec<String> = app
+        .world()
+        .get_resource::<crate::document_bridge::PanelViews>()
+        .map(|v| v.showing(c).map(|v| v.panel.clone()).collect())
+        .unwrap_or_default();
+    if panels.is_empty() {
+        return serde_json::json!({"ok": false, "error": format!("no open panel shows composition {c}")}).to_string();
+    }
+    if let Some(mut focus) = app.world_mut().get_resource_mut::<crate::document_bridge::FocusRequests>() {
+        focus.0.push(id);
+    }
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    serde_json::json!({"ok": true, "panels": panels}).to_string()
+}
+
 /// Reserve `n` node ids for a batch of creates: JSON array of id strings.
 #[wasm_bindgen]
 pub fn document_next_ids(ptr: u64, n: u32) -> String {

@@ -27,6 +27,7 @@ pub mod op;
 pub mod order;
 pub mod registry;
 pub mod serial;
+pub mod sym;
 pub mod time;
 pub mod units;
 pub mod value;

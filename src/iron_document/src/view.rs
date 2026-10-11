@@ -99,8 +99,8 @@ fn node(
         let mut seen: Vec<&str> = Vec::new();
         let mut dup: Vec<&str> = Vec::new();
         for c in &comps {
-            for (f, _) in c.fields() {
-                if seen.contains(f) {
+            for f in c.field_names() {
+                if seen.contains(&f) {
                     dup.push(f);
                 } else {
                     seen.push(f);
@@ -111,7 +111,7 @@ fn node(
             if c.kind() == ComponentKind::Name {
                 continue;
             }
-            for (f, _) in c.fields() {
+            for f in c.field_names() {
                 let slot = c.get(f).expect("declared");
                 // A bound slot shows its current value like any other, and
                 // its binding as `<attr>.bind`, so a reader sees both what a
@@ -124,10 +124,10 @@ fn node(
                     .read(doc, leaf)
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "?".to_owned());
-                let key = if dup.contains(f) {
+                let key = if dup.contains(&f) {
                     format!("{}.{f}", c.kind().name())
                 } else {
-                    (*f).to_owned()
+                    f.to_owned()
                 };
                 attrs.push((key.clone(), value));
                 if let Some(e) = slot.expr() {

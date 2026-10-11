@@ -207,7 +207,7 @@ impl Document {
                 .iter()
                 .filter(move |(id, _)| self.is_live(**id))
                 .flat_map(move |(id, comp)| {
-                    kind.fields().iter().filter_map(move |(field, _)| {
+                    comp.field_names().into_iter().filter_map(move |field| {
                         let expr = comp.get(field)?.expr()?;
                         let path = LeafPath::new(*kind, field).expect("declared field");
                         Some((Leaf { node: *id, path }, expr))

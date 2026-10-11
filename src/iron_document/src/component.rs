@@ -8,8 +8,14 @@
 //!
 //! The file format stays generic JSON regardless: each component serialises as
 //! an object of its fields.
+//!
+//! One component, `params`, has fields known only at run time: the parameters
+//! a definition declares (entity-composition-model.md §4). Its field names
+//! are interned (`sym.rs`) so a `LeafPath` into it is as `Copy` as any other.
 
+use crate::sym::intern;
 use crate::value::{Slot, Value, ValueKind};
+use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
@@ -28,7 +34,9 @@ pub trait LeafStruct: Sized + Default + Clone {
 macro_rules! components {
     ( $( $(#[$m:meta])* $variant:ident / $json:literal => $name:ident {
           $( $field:ident : $vk:ident = $default:expr ),* $(,)?
-      } )* ) => {
+      } )*
+      @dynamic { $( $(#[$dm:meta])* $dvariant:ident / $djson:literal => $dname:ident )* }
+    ) => {
         $(
             $(#[$m])*
             #[derive(Clone, Debug, PartialEq)]
@@ -59,43 +67,63 @@ macro_rules! components {
 
         /// The kind of a component, i.e. which struct it is.
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        pub enum ComponentKind { $( $variant, )* }
+        pub enum ComponentKind { $( $variant, )* $( $dvariant, )* }
 
         impl ComponentKind {
-            pub const ALL: &'static [ComponentKind] = &[ $( ComponentKind::$variant, )* ];
+            pub const ALL: &'static [ComponentKind] = &[ $( ComponentKind::$variant, )* $( ComponentKind::$dvariant, )* ];
 
             pub fn name(self) -> &'static str {
-                match self { $( ComponentKind::$variant => $json, )* }
+                match self { $( ComponentKind::$variant => $json, )* $( ComponentKind::$dvariant => $djson, )* }
             }
 
             pub fn from_name(s: &str) -> Option<ComponentKind> {
-                match s { $( $json => Some(ComponentKind::$variant), )* _ => None }
+                match s { $( $json => Some(ComponentKind::$variant), )* $( $djson => Some(ComponentKind::$dvariant), )* _ => None }
             }
 
+            /// The compile-time fields. Empty for a dynamic component, whose
+            /// fields are per instance: see [`Component::field_names`].
             pub fn fields(self) -> &'static [(&'static str, ValueKind)] {
-                match self { $( ComponentKind::$variant => <$name as LeafStruct>::FIELDS, )* }
+                match self { $( ComponentKind::$variant => <$name as LeafStruct>::FIELDS, )* $( ComponentKind::$dvariant => &[], )* }
+            }
+
+            /// Whether this component's fields come from the document rather
+            /// than from this table.
+            pub fn is_dynamic(self) -> bool {
+                match self { $( ComponentKind::$variant => false, )* $( ComponentKind::$dvariant => true, )* }
             }
 
             pub fn default_component(self) -> Component {
-                match self { $( ComponentKind::$variant => Component::$variant($name::default()), )* }
+                match self {
+                    $( ComponentKind::$variant => Component::$variant($name::default()), )*
+                    $( ComponentKind::$dvariant => Component::$dvariant($dname::default()), )*
+                }
             }
         }
 
         /// One authored component of a node.
         #[derive(Clone, Debug, PartialEq)]
-        pub enum Component { $( $variant($name), )* }
+        pub enum Component { $( $variant($name), )* $( $dvariant($dname), )* }
 
         impl Component {
             pub fn kind(&self) -> ComponentKind {
-                match self { $( Component::$variant(_) => ComponentKind::$variant, )* }
+                match self { $( Component::$variant(_) => ComponentKind::$variant, )* $( Component::$dvariant(_) => ComponentKind::$dvariant, )* }
             }
 
             pub fn get(&self, field: &str) -> Option<&Slot> {
-                match self { $( Component::$variant(v) => v.get(field), )* }
+                match self { $( Component::$variant(v) => v.get(field), )* $( Component::$dvariant(v) => v.get(field), )* }
             }
 
             fn get_mut(&mut self, field: &str) -> Option<&mut Slot> {
-                match self { $( Component::$variant(v) => v.get_mut(field), )* }
+                match self { $( Component::$variant(v) => v.get_mut(field), )* $( Component::$dvariant(v) => v.get_mut(field), )* }
+            }
+
+            /// This component's fields, in declaration (or, for a dynamic
+            /// component, name) order.
+            pub fn field_names(&self) -> Vec<&'static str> {
+                match self {
+                    $( Component::$variant(_) => <$name as LeafStruct>::FIELDS.iter().map(|(n, _)| *n).collect(), )*
+                    $( Component::$dvariant(v) => v.field_names(), )*
+                }
             }
         }
     };
@@ -171,6 +199,67 @@ components! {
         from: Any = Value::Number(0.0),
         to: Any = Value::Number(1.0),
     }
+
+    /// Which definition an `entity` instantiates (ECM §4.3).
+    Instance / "instance" => Instance { def: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
+
+    /// One parameter a definition declares (ECM §4.2): the kind its values
+    /// must have (a quantity's dimension comes from the default) and the
+    /// default an instance starts with.
+    ParamSpec / "param_spec" => ParamSpec {
+        kind: Enum = Value::Enum("number".to_owned()),
+        default: Any = Value::Number(0.0),
+    }
+
+    /// A definition's template for one notation (ECM §4.2). Its children are
+    /// the subtree an instance copies; their bindings may read the
+    /// definition's `param_spec.default` leaves, which instantiation rewrites
+    /// to the entity's `params`.
+    Depiction / "depiction" => Depiction { notation: Str = Value::Str("free".to_owned()) }
+
+    @dynamic {
+        /// An entity's parameter values, one slot per `param_spec` of its
+        /// definition, each bindable. Fields are validated against the
+        /// definition at apply time, not here.
+        Params / "params" => Params
+    }
+}
+
+/// The run-time component: a map from interned parameter name to slot.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Params {
+    pub slots: BTreeMap<&'static str, Slot>,
+}
+
+impl Params {
+    pub fn field_names(&self) -> Vec<&'static str> {
+        self.slots.keys().copied().collect()
+    }
+
+    /// Add or replace a parameter.
+    pub fn insert(&mut self, name: &str, slot: Slot) {
+        self.slots.insert(intern(name), slot);
+    }
+}
+
+impl LeafStruct for Params {
+    const KIND: ComponentKind = ComponentKind::Params;
+    const FIELDS: &'static [(&'static str, ValueKind)] = &[];
+    fn get(&self, field: &str) -> Option<&Slot> {
+        self.slots.get(field)
+    }
+    fn get_mut(&mut self, field: &str) -> Option<&mut Slot> {
+        self.slots.get_mut(field)
+    }
+    fn wrap(self) -> Component {
+        Component::Params(self)
+    }
+    fn unwrap_ref(c: &Component) -> Option<&Self> {
+        match c {
+            Component::Params(v) => Some(v),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +281,9 @@ impl fmt::Display for LeafError {
         match self {
             LeafError::UnknownComponent(c) => write!(f, "unknown component {c:?}"),
             LeafError::UnknownField { component, field } => {
+                if component.is_dynamic() {
+                    return write!(f, "{} has no parameter {:?} (parameters come from the definition)", component.name(), field);
+                }
                 let available: Vec<&str> = component.fields().iter().map(|(n, _)| *n).collect();
                 write!(
                     f,
@@ -219,23 +311,32 @@ impl fmt::Display for LeafError {
 impl std::error::Error for LeafError {}
 
 impl Component {
+    /// The compile-time fields; empty for `params`. Prefer
+    /// [`Component::field_names`] to enumerate an instance's leaves.
     pub fn fields(&self) -> &'static [(&'static str, ValueKind)] {
         self.kind().fields()
     }
 
+    /// The declared kind of a field this instance has: the table's for a
+    /// static component, `Any` for a parameter (the definition decides).
+    pub fn field_kind(&self, field: &str) -> Option<ValueKind> {
+        if self.kind().is_dynamic() {
+            return self.get(field).map(|_| ValueKind::Any);
+        }
+        self.kind().fields().iter().find(|(n, _)| *n == field).map(|(_, k)| *k)
+    }
+
     /// Replace one field's slot, checking the value kind. Returns the previous
-    /// slot, which is what an inverse op needs.
+    /// slot, which is what an inverse op needs. A parameter must already
+    /// exist: parameters are created with the component (so an inverse is
+    /// always a `Set` back), and validated against the definition by the
+    /// applier.
     pub fn set(&mut self, field: &str, slot: Slot) -> Result<Slot, LeafError> {
         let kind = self.kind();
-        let expected = kind
-            .fields()
-            .iter()
-            .find(|(n, _)| *n == field)
-            .map(|(_, k)| *k)
-            .ok_or_else(|| LeafError::UnknownField {
-                component: kind,
-                field: field.to_owned(),
-            })?;
+        let expected = self.field_kind(field).ok_or_else(|| LeafError::UnknownField {
+            component: kind,
+            field: field.to_owned(),
+        })?;
         // A binding's kind is only known when it is evaluated; the graph
         // reports a mismatch then. Constants are checked here.
         if let Some(v) = slot.constant()
@@ -256,18 +357,16 @@ impl Component {
     /// Object of `field: slot`, the file and op shape.
     pub fn to_json(&self) -> serde_json::Value {
         let mut m = serde_json::Map::new();
-        for (name, _) in self.fields() {
+        for name in self.field_names() {
             let slot = self.get(name).expect("declared field");
-            m.insert(
-                (*name).to_owned(),
-                serde_json::to_value(slot).expect("slot serialises"),
-            );
+            m.insert(name.to_owned(), serde_json::to_value(slot).expect("slot serialises"));
         }
         serde_json::Value::Object(m)
     }
 
     /// Inverse of [`Component::to_json`]. Missing fields take defaults;
-    /// unknown fields are an error rather than silently dropped.
+    /// unknown fields are an error rather than silently dropped. A `params`
+    /// object defines its fields.
     pub fn from_json(kind: ComponentKind, v: &serde_json::Value) -> Result<Component, String> {
         let obj = v
             .as_object()
@@ -277,7 +376,12 @@ impl Component {
             // Through `Slot`, not `Value`, so `{"bind": …}` becomes a binding.
             let slot: Slot = serde_json::from_value(raw.clone())
                 .map_err(|e| format!("{}.{field}: {e}", kind.name()))?;
-            c.set(field, slot).map_err(|e| e.to_string())?;
+            match &mut c {
+                Component::Params(p) => p.insert(field, slot),
+                _ => {
+                    c.set(field, slot).map_err(|e| e.to_string())?;
+                }
+            }
         }
         Ok(c)
     }
@@ -329,7 +433,15 @@ pub struct LeafPath {
 }
 
 impl LeafPath {
+    /// A path into a declared field, or into any parameter of a dynamic
+    /// component (whether a node has that parameter is checked at use).
     pub fn new(component: ComponentKind, field: &str) -> Result<LeafPath, LeafError> {
+        if component.is_dynamic() {
+            if field.is_empty() {
+                return Err(LeafError::UnknownField { component, field: field.to_owned() });
+            }
+            return Ok(LeafPath { component, field: intern(field) });
+        }
         component
             .fields()
             .iter()
@@ -344,7 +456,11 @@ impl LeafPath {
             })
     }
 
+    /// The declared kind; `Any` for a parameter.
     pub fn kind(&self) -> ValueKind {
+        if self.component.is_dynamic() {
+            return ValueKind::Any;
+        }
         self.component
             .fields()
             .iter()
@@ -434,5 +550,32 @@ mod tests {
         assert!("transform2d.q".parse::<LeafPath>().is_err());
         assert!("nope.x".parse::<LeafPath>().is_err());
         assert!("x".parse::<LeafPath>().is_err());
+        // Parameters are run-time fields: any name is a path, kind Any.
+        let p: LeafPath = "params.waist".parse().unwrap();
+        assert_eq!((p.component, p.field, p.kind()), (ComponentKind::Params, "waist", ValueKind::Any));
+        assert_eq!(p, LeafPath::new(ComponentKind::Params, &String::from("waist")).unwrap());
+        assert!("params.".parse::<LeafPath>().is_err());
+    }
+
+    #[test]
+    fn params_are_a_dynamic_component() {
+        let mut p = Params::default();
+        p.insert("level", Slot::Const(Value::Number(0.4)));
+        p.insert("power", Slot::Const(Value::parse_quantity("9.58 mW").unwrap()));
+        let mut c = p.wrap();
+        assert_eq!(c.field_names(), vec!["level", "power"]);
+        assert_eq!(c.field_kind("level"), Some(ValueKind::Any));
+        assert_eq!(c.field_kind("nope"), None);
+        // Set replaces an existing parameter, any kind, and returns the old slot.
+        let old = c.set("level", Slot::Const(Value::Number(0.9))).unwrap();
+        assert_eq!(old, Slot::Const(Value::Number(0.4)));
+        // Set on a parameter the component lacks is an error, not a create.
+        assert!(matches!(c.set("nope", Slot::Const(Value::Number(1.0))), Err(LeafError::UnknownField { .. })));
+        let j = serde_json::to_string(&c).unwrap();
+        assert_eq!(j, r#"{"params":{"level":0.9,"power":{"q":[0.00958,"W"]}}}"#);
+        let back: Component = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, c);
+        assert_eq!(ComponentKind::Params.fields(), &[]);
+        assert!(ComponentKind::Params.is_dynamic() && !ComponentKind::Size.is_dynamic());
     }
 }

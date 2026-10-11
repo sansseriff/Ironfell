@@ -160,11 +160,16 @@ pub fn schema_json() -> serde_json::Value {
     use serde_json::{Map, Value, json};
     let mut components = Map::new();
     for kind in ComponentKind::ALL {
-        let fields: Map<String, Value> = kind
+        let mut fields: Map<String, Value> = kind
             .fields()
             .iter()
             .map(|(n, k)| ((*n).to_owned(), json!(k.name())))
             .collect();
+        if kind.is_dynamic() {
+            // Fields come from the definition; `*` tells the model surface
+            // to accept any name at kind `any`.
+            fields.insert("*".to_owned(), json!("any"));
+        }
         components.insert(kind.name().to_owned(), Value::Object(fields));
     }
     let mut types = Map::new();

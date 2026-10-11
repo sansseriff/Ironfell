@@ -363,7 +363,7 @@ fn check_binding(
 ) -> Result<(), ApplyError> {
     for dep in expr.deps() {
         live(doc, cx, dep.node).map_err(|e| cx.err(e.kind, format!("binding reads {dep}: {}", e.message)))?;
-        if doc.component(dep.node, dep.path.component).is_none() {
+        let Some(comp) = doc.component(dep.node, dep.path.component) else {
             return Err(cx.err(
                 ErrorKind::UnknownPath,
                 format!(
@@ -372,6 +372,9 @@ fn check_binding(
                     dep.path.component.name()
                 ),
             ));
+        };
+        if comp.get(dep.path.field).is_none() {
+            return Err(cx.err(ErrorKind::UnknownPath, format!("binding reads {dep}, but {} has no such parameter", dep.node)));
         }
     }
     if doc.binding_cycles(target, expr) {
@@ -385,7 +388,7 @@ fn check_binding(
 /// on failure the transaction's working copy is discarded anyway.
 fn check_component_bindings(doc: &Document, cx: &Ctx, id: NodeId, comps: &[Component]) -> Result<(), ApplyError> {
     for c in comps {
-        for (field, _) in c.fields() {
+        for field in c.field_names() {
             if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
                 let path = LeafPath::new(c.kind(), field).expect("declared field");
                 check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;

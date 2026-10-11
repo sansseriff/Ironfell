@@ -25,7 +25,8 @@ export interface Schema {
 export function resolveLeaf(schema: Schema, type: string, attr: string): { component: string; field: string; kind: Kind } {
   if (attr.includes('.')) {
     const [component, field] = attr.split('.', 2);
-    const kind = schema.components[component]?.[field];
+    // A `*` entry means the component's fields are run-time (params).
+    const kind = schema.components[component]?.[field] ?? schema.components[component]?.['*'];
     if (!kind) throw new Error(`unknown leaf "${attr}"`);
     return { component, field, kind };
   }

@@ -209,11 +209,12 @@ function resolveLeafAnyType(schema: ReturnType<DocumentApi['schema']>, attr: str
   if (attr === 'name') return { component: 'name', field: 'text', kind: 'string' as const };
   if (attr.includes('.')) {
     const [component, field] = attr.split('.', 2);
-    const kind = schema.components[component]?.[field];
+    const kind = schema.components[component]?.[field] ?? schema.components[component]?.['*'];
     if (!kind) throw new Error(`unknown leaf "${attr}"`);
     return { component, field, kind };
   }
-  const hits = Object.entries(schema.components).filter(([, fields]) => fields[attr] !== undefined);
+  // Bare names never match a run-time field (`*`): parameters are written params.<name>.
+  const hits = Object.entries(schema.components).filter(([, fields]) => fields[attr] !== undefined && attr !== '*');
   if (hits.length === 1) return { component: hits[0][0], field: attr, kind: hits[0][1][attr] };
   if (hits.length === 0) throw new Error(`unknown leaf "${attr}"`);
   throw new Error(`"${attr}" is ambiguous; write one of ${hits.map(([c]) => `${c}.${attr}`).join(', ')}`);

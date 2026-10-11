@@ -8,7 +8,9 @@
 
 use crate::expr::Expr;
 use crate::id::NodeId;
+use crate::sym::intern;
 use crate::units::{self, Dim};
+use std::collections::BTreeMap;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -30,6 +32,10 @@ pub enum Value {
     /// (entity-composition-model.md §3.1). The display unit is presentation.
     /// Never dimensionless: that is a plain `Number`; see [`Value::quantity`].
     Quantity { si: f64, dim: Dim },
+    /// A small structured value (a beam, a pulse shape), ECM §3.2. `kind`
+    /// names its schema; fields are read with `Expr::Get` (`beam.waist`).
+    /// Field order is canonical (sorted), so files and views are stable.
+    Record { kind: &'static str, fields: BTreeMap<&'static str, Value> },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -43,6 +49,7 @@ pub enum ValueKind {
     Enum,
     Ref,
     Quantity,
+    Record,
     /// Only as a declared field kind: the field accepts any value. Used by
     /// clip endpoints, whose kind is the target leaf's. No value has it.
     Any,
@@ -60,6 +67,7 @@ impl ValueKind {
             ValueKind::Enum => "enum",
             ValueKind::Ref => "ref",
             ValueKind::Quantity => "quantity",
+            ValueKind::Record => "record",
             ValueKind::Any => "any",
         }
     }
@@ -77,6 +85,22 @@ impl Value {
             Value::Enum(_) => ValueKind::Enum,
             Value::Ref(_) => ValueKind::Ref,
             Value::Quantity { .. } => ValueKind::Quantity,
+            Value::Record { .. } => ValueKind::Record,
+        }
+    }
+
+    /// A record of `kind` with the given fields (names interned).
+    pub fn record(kind: &str, fields: impl IntoIterator<Item = (impl AsRef<str>, Value)>) -> Value {
+        Value::Record {
+            kind: intern(kind),
+            fields: fields.into_iter().map(|(k, v)| (intern(k.as_ref()), v)).collect(),
+        }
+    }
+
+    pub fn field(&self, name: &str) -> Option<&Value> {
+        match self {
+            Value::Record { fields, .. } => fields.get(name),
+            _ => None,
         }
     }
 
@@ -216,6 +240,17 @@ impl Value {
                         J::String(s) => Value::parse_quantity(s),
                         _ => Err("q must be [magnitude, \"unit\"] or \"magnitude unit\"".to_owned()),
                     },
+                    // `{"rec": ["kind", {field: value, …}]}`.
+                    "rec" => match inner.as_array().map(Vec::as_slice) {
+                        Some([J::String(kind), J::Object(fields)]) => {
+                            let mut out = BTreeMap::new();
+                            for (k, v) in fields {
+                                out.insert(intern(k), Value::from_json(v).map_err(|e| format!("{kind}.{k}: {e}"))?);
+                            }
+                            Ok(Value::Record { kind: intern(kind), fields: out })
+                        }
+                        _ => Err("rec must be [\"kind\", {fields}]".to_owned()),
+                    },
                     other => Err(format!("unknown value tag {other:?}")),
                 }
             }
@@ -266,6 +301,16 @@ impl fmt::Display for Value {
             Value::Vec3([x, y, z]) => write!(f, "{},{},{}", fmt_num(*x), fmt_num(*y), fmt_num(*z)),
             Value::Ref(id) => write!(f, "{id}"),
             Value::Quantity { si, dim } => f.write_str(&units::format(*si, *dim)),
+            Value::Record { kind, fields } => {
+                write!(f, "{kind}{{")?;
+                for (i, (k, v)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{k}={v}")?;
+                }
+                f.write_str("}")
+            }
         }
     }
 }
@@ -305,6 +350,12 @@ impl Serialize for Value {
             Value::Quantity { si, dim } => {
                 let mut m = s.serialize_map(Some(1))?;
                 m.serialize_entry("q", &(si, dim.canonical_unit()))?;
+                m.end()
+            }
+            Value::Record { kind, fields } => {
+                let fields: BTreeMap<&str, &Value> = fields.iter().map(|(k, v)| (*k, v)).collect();
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("rec", &(kind, fields))?;
                 m.end()
             }
         }
@@ -407,6 +458,7 @@ mod tests {
             Value::parse_quantity("9.58 mW").unwrap(),
             Value::parse_quantity("3 kg*m2/s3").unwrap(),
             Value::parse_quantity("1/s2").unwrap(),
+            Value::record("gaussian_beam", [("waist", Value::parse_quantity("30 um").unwrap()), ("m2", Value::Number(1.1))]),
         ];
         for v in cases {
             let j = serde_json::to_string(&v).unwrap();
@@ -431,5 +483,8 @@ mod tests {
         assert_eq!(Value::Vec2([1.0, 2.5]).to_string(), "1,2.5");
         assert_eq!(Value::parse_quantity("0.00958 W").unwrap().to_string(), "9.58 mW");
         assert_eq!(Value::parse_quantity("1550 nm").unwrap().to_string(), "1.55 µm");
+        let beam = Value::record("gaussian_beam", [("waist", Value::parse_quantity("30 um").unwrap()), ("m2", Value::Number(1.1))]);
+        assert_eq!(beam.to_string(), "gaussian_beam{m2=1.1, waist=30 µm}");
+        assert_eq!(serde_json::to_string(&beam).unwrap(), r#"{"rec":["gaussian_beam",{"m2":1.1,"waist":{"q":[0.000029999999999999997,"m"]}}]}"#);
     }
 }

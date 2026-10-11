@@ -86,6 +86,7 @@ fn inline(doc: &Document, expr: &Expr) -> Expr {
         Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(inline(doc, a)), Box::new(inline(doc, b))),
         Expr::If(c, a, b) => Expr::If(Box::new(inline(doc, c)), Box::new(inline(doc, a)), Box::new(inline(doc, b))),
         Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| inline(doc, a)).collect()),
+        Expr::Get(e, f) => Expr::Get(Box::new(inline(doc, e)), f),
     }
 }
 

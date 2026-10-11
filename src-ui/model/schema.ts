@@ -2,7 +2,7 @@
  * The registry schema as `document_schema()` returns it: the one source for
  * the manifest, attribute resolution, and value coercion.
  */
-export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'enum' | 'ref' | 'quantity' | 'any';
+export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'enum' | 'ref' | 'quantity' | 'record' | 'any';
 
 export interface Schema {
   components: Record<string, Record<string, Kind>>;
@@ -84,6 +84,8 @@ export function coerce(kind: Kind, raw: string): SlotJson {
     case 'quantity':
       if (!QUANTITY.test(text)) throw new Error(`"${raw}" is not a quantity (write a magnitude and a unit, e.g. 9.58 mW)`);
       return { q: text };
+    case 'record':
+      throw new Error(`"${raw}": records are set field by field or by a binding, not as one attribute`);
     case 'color':
       return { rgba: parseColor(text) };
     case 'vec2':

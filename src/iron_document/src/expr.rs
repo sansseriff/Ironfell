@@ -11,9 +11,9 @@
 //!   clamp(#3.slider.value * 2, 0, 1)
 //! ```
 //!
-//! Absent on purpose: field access on structured values (`Get`), collection
-//! verbs, and calls that leave the process. Those arrive with the floor
-//! tranche that needs them and with the cost-tagged invocation node.
+//! Absent on purpose: collection verbs and calls that leave the process.
+//! Those arrive with the floor tranche that needs them and with the
+//! cost-tagged invocation node. `Get` (`beam.waist`) reads a record's field.
 
 use crate::component::LeafPath;
 use crate::id::NodeId;
@@ -46,6 +46,8 @@ pub enum Expr {
     Bin(BinOp, Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
+    /// A field of a record value: `expr.field` (doc 02 §4).
+    Get(Box<Expr>, &'static str),
 }
 
 /// Named numeric constants of the floor. One arm each, like functions.
@@ -125,6 +127,8 @@ impl BinOp {
 
 const PREC_TERNARY: u8 = 0;
 const PREC_UNARY: u8 = 7;
+/// Field access binds tightest: `-a.b` is `-(a.b)`.
+const PREC_GET: u8 = 8;
 
 impl Expr {
     /// Every leaf this expression reads. Static: no evaluation needed.
@@ -155,6 +159,7 @@ impl Expr {
                     a.collect_deps(out);
                 }
             }
+            Expr::Get(e, _) => e.collect_deps(out),
         }
     }
 
@@ -189,6 +194,13 @@ impl Expr {
                 let vals: Result<Vec<Value>, EvalError> = args.iter().map(|a| a.eval(read)).collect();
                 floor::call(name, &vals?)
             }
+            Expr::Get(e, field) => match e.eval(read)? {
+                Value::Record { kind, fields } => fields.get(field).cloned().ok_or_else(|| {
+                    let names: Vec<&str> = fields.keys().copied().collect();
+                    EvalError::Type(format!("{kind} has no field {field:?}; fields: {}", names.join(", ")))
+                }),
+                v => Err(EvalError::Type(format!("cannot read field {field:?} of {}", v.kind().name()))),
+            },
         }
     }
 
@@ -254,6 +266,10 @@ impl Expr {
                     a.write(f, PREC_TERNARY)?;
                 }
                 f.write_str(")")
+            }
+            Expr::Get(e, field) => {
+                e.write(f, PREC_GET)?;
+                write!(f, ".{field}")
             }
         }
     }
@@ -553,6 +569,8 @@ enum Tok {
     Comma,
     Question,
     Colon,
+    /// `.` before an identifier: field access.
+    Dot,
 }
 
 fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
@@ -563,6 +581,10 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
         let c = b[i];
         match c {
             b' ' | b'\t' | b'\n' | b'\r' => i += 1,
+            b'.' if b.get(i + 1).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_') => {
+                out.push(Tok::Dot);
+                i += 1;
+            }
             b'0'..=b'9' | b'.' => {
                 let start = i;
                 while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.' || b[i] == b'e' || b[i] == b'E') {
@@ -822,8 +844,21 @@ impl Parser {
                 self.next();
                 Ok(Expr::Not(Box::new(self.unary()?)))
             }
-            _ => self.primary(),
+            _ => self.postfix(),
         }
+    }
+
+    /// A primary followed by any number of `.field` accesses.
+    fn postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut e = self.primary()?;
+        while self.peek() == Some(&Tok::Dot) {
+            self.next();
+            match self.next() {
+                Some(Tok::Ident(name)) => e = Expr::Get(Box::new(e), crate::sym::intern(&name)),
+                got => return Err(ParseError(format!("expected a field name after '.', got {got:?}"))),
+            }
+        }
+        Ok(e)
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
@@ -924,6 +959,9 @@ mod tests {
             "-3 N",
             "3 kg/s3 / 2 s",
             "max(1 W, 2 W) > 0.5 W ? 1 : 0",
+            "#3.params.beam.waist * 2",
+            "-#3.params.beam.waist",
+            "#3.params.beam.m2 + 1",
         ];
         for text in cases {
             let e = Expr::parse(text).unwrap_or_else(|err| panic!("{text}: {err}"));
@@ -1020,5 +1058,21 @@ mod tests {
         // Printing uses the canonical unit so the round trip is exact.
         assert_eq!(Expr::parse("9.58 mW").unwrap().to_string(), "0.00958 W");
         assert_eq!(Expr::parse("1 min").unwrap().to_string(), "60 s");
+    }
+
+    #[test]
+    fn get_reads_record_fields() {
+        let beam = Value::record("gaussian_beam", [("waist", Value::parse_quantity("30 um").unwrap()), ("m2", Value::Number(1.1))]);
+        let read = |l: Leaf| -> Option<Value> { (l == leaf(3, "params.beam")).then(|| beam.clone()) };
+        let ev = |t: &str| Expr::parse(t).unwrap().eval(&read);
+        assert_eq!(ev("#3.params.beam.waist * 2").unwrap(), Value::parse_quantity("60 um").unwrap());
+        assert_eq!(ev("#3.params.beam.m2").unwrap(), Value::Number(1.1));
+        let err = ev("#3.params.beam.power").unwrap_err().to_string();
+        assert!(err.contains("no field") && err.contains("waist"), "{err}");
+        assert!(ev("#3.params.beam.waist.x").unwrap_err().to_string().contains("cannot read field"));
+        // Dependencies are the record leaf, not the field.
+        let d = Expr::parse("#3.params.beam.waist").unwrap().deps();
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![leaf(3, "params.beam")]);
+        assert_eq!(Expr::parse("#3.params.beam.waist").unwrap(), Expr::Get(Box::new(Expr::Ref(leaf(3, "params.beam"))), "waist"));
     }
 }

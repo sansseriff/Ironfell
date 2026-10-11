@@ -303,6 +303,29 @@ pub(crate) fn sync_document(
     dirty.0 = true;
 }
 
+/// The in-frame half of a gesture (constraint-system.md §8.2). `sync_document`
+/// runs in `PreUpdate`, but drags preview in `PostUpdate`; without this pass
+/// every previewed value would reach the screen a frame behind the pointer.
+/// It drains the resolved changes the previews produced (the dragged leaves
+/// and every binding that read them) and rewrites those entities, scheduled
+/// before transform propagation so rendering sees them this frame. Values
+/// only: a preview never changes the tree, so the paint order stands.
+pub(crate) fn reconcile_gesture(
+    mut store: ResMut<DocumentStore>,
+    mut map: ResMut<NodeMap>,
+    mut dirty: ResMut<DocumentDirty>,
+    mut commands: Commands,
+    assets: Option<Res<MeshAssets>>,
+) {
+    if !store.0.has_changes() {
+        return;
+    }
+    let affected: BTreeSet<NodeId> = store.0.drain_changes().into_iter().map(|c| c.leaf.node).collect();
+    let Some(assets) = assets else { return };
+    materialize::reconcile(&store.0, &affected, &mut map, &mut commands, &assets);
+    dirty.0 = true;
+}
+
 fn collect_ids(op: &Op, out: &mut BTreeSet<NodeId>) {
     match op {
         Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } => {

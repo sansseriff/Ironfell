@@ -1,22 +1,45 @@
 //! Selection, hover, and drag.
 //!
-//! A drag is an intent (plans/document-spine.md §10): the entity's `Transform`
-//! moves every frame so the view keeps up with the pointer, and one labelled
-//! transaction is queued on release. The reconciler then rewrites the entity
-//! from the store, which lands on the same value.
+//! A drag is an intent (plans/document-spine.md §10) carried by the store's
+//! gesture overlay: every frame the pointer's position is previewed through
+//! `Store::preview_target`, the bridge reconciles the affected nodes before
+//! transforms propagate (`document_bridge::reconcile_gesture`), and one
+//! labelled transaction closes the gesture on release. Nothing here writes a
+//! Bevy `Transform`; everything the drag moves, including nodes bound to the
+//! dragged one, moves through the store in the same frame (roadmap stage A,
+//! constraint-system.md §8.2).
+//!
+//! A leaf's handle decides what a drag may do (`iron_document::Handle`): an
+//! authored constant is previewed directly; a leaf bound linearly to one
+//! constant source previews that source; anything else locks its axis for
+//! the whole gesture, so it is held still rather than moved and snapped back.
 
 use bevy::prelude::*;
-use iron_document::{Actor, LeafPath, Op, Slot, Value};
+use iron_document::{Handle, LeafPath, Value};
 
 use crate::bevy_app::scene3d::ActiveState;
-use crate::document_bridge::{
-    Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, PendingTransactions, Provenance, Shape2d, type_of,
-};
+use crate::document_bridge::{Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, Provenance, Shape2d, type_of};
 use crate::panels::{Panels, VIEWER_PANEL, document_from_screen};
 
 /// The entity whose drag just ended, awaiting writeback.
 #[derive(Resource, Default)]
 pub struct PendingCommit(pub Option<Entity>);
+
+fn leaf(s: &str) -> LeafPath {
+    s.parse().expect("declared leaf")
+}
+
+/// Whether the leaf has a handle now; the reason is logged when it does not,
+/// which is the "why can't I move this" answer until the inspector shows it.
+fn locked(store: &DocumentStore, id: iron_document::NodeId, path: LeafPath) -> bool {
+    match store.0.handle(id, path) {
+        Handle::Locked(reason) => {
+            info!("{id}.{path} locked for this drag: {reason}");
+            true
+        }
+        _ => false,
+    }
+}
 
 // Decide drag start/stop and update selection based on pointer hits.
 pub fn interaction_decide_system(
@@ -58,22 +81,18 @@ pub fn interaction_decide_system(
             selection.last_primary = Some(primary);
             drag.target = Some(primary);
             drag.locked = [false, false];
-
-            // Which leaves the gesture would write, and whether they have a
-            // handle right now. Bound and clip-driven leaves do not.
-            let no_handle = |leaf: &str| -> bool {
-                let Ok(prov) = provenance.get(primary) else { return false };
-                let path: LeafPath = leaf.parse().expect("declared leaf");
-                let l = iron_document::Leaf { node: prov.0, path };
-                store.0.reactive().is_bound(l) || store.0.reactive().animated().contains_key(&l)
+            let Ok(prov) = provenance.get(primary) else {
+                drag.target = None;
+                return;
             };
+            let id = prov.0;
 
             if doc2d.get(primary).is_ok_and(|d| matches!(d.shape, Shape2d::Slider { .. })) {
                 // Scrubbing the value, not moving the control. The first
                 // preview happens in drag_apply this same frame.
                 drag.kind = Some(crate::DragKind::SliderValue);
             } else if doc2d.contains(primary) {
-                drag.locked = [no_handle("transform2d.x"), no_handle("transform2d.y")];
+                drag.locked = [locked(&store, id, leaf("transform2d.x")), locked(&store, id, leaf("transform2d.y"))];
                 drag.kind = if drag.locked == [true, true] { None } else { Some(crate::DragKind::Overlay2D) };
                 if drag.kind.is_none() {
                     drag.target = None;
@@ -86,7 +105,7 @@ pub fn interaction_decide_system(
                     .unwrap_or(Vec2::ZERO);
                 let origin = transforms.get(primary).map(|g| g.translation().truncate()).unwrap_or(Vec2::ZERO);
                 drag.grab_offset_2d = origin - p;
-            } else if no_handle("transform3d.pos") {
+            } else if locked(&store, id, leaf("transform3d.pos")) {
                 drag.kind = None;
                 drag.target = None;
             } else {
@@ -125,19 +144,30 @@ pub fn interaction_decide_system(
     }
 }
 
-/// Move the dragged entity to follow the pointer. Optimistic: this writes
-/// the entity, not the store.
+/// Follow the pointer by previewing the dragged node's leaves in the store.
+/// The gesture reconcile pass that runs right after this rewrites the
+/// entity (and everything bound to it) before transforms propagate, so the
+/// view keeps up with the pointer with no frame of lag.
 pub fn drag_apply_system(
     pointer: Res<crate::PointerState>,
     drag: Res<crate::DragState>,
-    mut query: Query<(&mut Transform, Option<&ChildOf>)>,
+    parents: Query<Option<&ChildOf>>,
     globals: Query<&GlobalTransform>,
-    sliders: Query<(&Provenance, &Doc2d)>,
+    nodes: Query<(&Provenance, Option<&Doc2d>)>,
     mut store: ResMut<DocumentStore>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::bevy_app::scene3d::MainCamera3D>>,
     panels: Res<Panels>,
 ) {
     let Some(entity) = drag.target else { return };
+    let Ok((prov, doc2d)) = nodes.get(entity) else { return };
+    let id = prov.0;
+    let target = |store: &mut DocumentStore, path: &str, value: Value| {
+        if let Err(reason) = store.0.preview_target(id, leaf(path), value) {
+            // Handles are read at press time, so this only happens if the
+            // document changed under the drag (a model edit mid-gesture).
+            warn!("{id}.{path}: {reason}");
+        }
+    };
     match drag.kind {
         Some(crate::DragKind::SliderValue) => {
             // Pointer x along the track, in the slider's own space, becomes a
@@ -146,13 +176,10 @@ pub fn drag_apply_system(
             let Some(p) = panels.rect(VIEWER_PANEL).and_then(|r| document_from_screen(r, pointer.screen)) else {
                 return;
             };
-            let Ok((prov, d)) = sliders.get(entity) else { return };
-            let Shape2d::Slider { w, .. } = d.shape else { return };
+            let Some(Shape2d::Slider { w, .. }) = doc2d.map(|d| d.shape) else { return };
             let Ok(global) = globals.get(entity) else { return };
             let local = global.affine().inverse().transform_point3(p.extend(0.0));
             let t = (local.x / w.max(1.0)).clamp(0.0, 1.0) as f64;
-            let id = prov.0;
-            let leaf = |s: &str| -> LeafPath { s.parse().expect("declared leaf") };
             let num = |s: &str, d: f64| store.0.resolved(id, leaf(s)).and_then(|v| v.as_f64()).unwrap_or(d);
             let (min, max, step) = (num("slider.min", 0.0), num("slider.max", 1.0), num("slider.step", 0.0));
             let mut value = min + t * (max - min);
@@ -169,17 +196,17 @@ pub fn drag_apply_system(
                 return;
             };
             let target_global = p + drag.grab_offset_2d;
-            let Ok((mut transform, parent)) = query.get_mut(entity) else { return };
-            // The transform is local to the parent; map the global target back.
-            let local = match parent.and_then(|c| globals.get(c.parent()).ok()) {
+            // transform2d is local to the parent; map the global target back.
+            let parent = parents.get(entity).ok().flatten().and_then(|c| globals.get(c.parent()).ok());
+            let local = match parent {
                 Some(pg) => pg.affine().inverse().transform_point3(target_global.extend(0.0)),
                 None => target_global.extend(0.0),
             };
-            if !drag.locked[0] && transform.translation.x != local.x {
-                transform.translation.x = local.x;
+            if !drag.locked[0] {
+                target(&mut store, "transform2d.x", Value::Number(local.x as f64));
             }
-            if !drag.locked[1] && transform.translation.y != local.y {
-                transform.translation.y = local.y;
+            if !drag.locked[1] {
+                target(&mut store, "transform2d.y", Value::Number(local.y as f64));
             }
         }
         Some(crate::DragKind::World3D) => {
@@ -188,73 +215,30 @@ pub fn drag_apply_system(
             else {
                 return;
             };
-            if let Some(hit_pos) = intersect_ray_plane(ray, drag.plane_origin, drag.plane_normal)
-                && let Ok((mut transform, _)) = query.get_mut(entity)
-            {
-                transform.translation = hit_pos + drag.grab_offset_world;
+            if let Some(hit_pos) = intersect_ray_plane(ray, drag.plane_origin, drag.plane_normal) {
+                let p = hit_pos + drag.grab_offset_world;
+                target(&mut store, "transform3d.pos", Value::Vec3([p.x as f64, p.y as f64, p.z as f64]));
             }
         }
         _ => {}
     }
 }
 
-/// Write the released entity's position home as one transaction. Skipped
-/// when nothing moved, so a click is not a "move".
+/// Close the gesture: the store turns its previews into one transaction
+/// (or none, when nothing moved, so a click is not a "move"). The label is
+/// in the user's vocabulary: "move rect", "set slider".
 pub fn drag_commit_system(
     mut commit: ResMut<PendingCommit>,
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
-    mut pending: ResMut<PendingTransactions>,
     mut gestures: ResMut<GestureRequests>,
-    query: Query<(&Provenance, &Transform, Option<&Doc2d>)>,
+    query: Query<Option<&Doc2d>>,
 ) {
     let Some(entity) = commit.0.take() else { return };
-    let Ok((prov, transform, doc2d)) = query.get(entity) else { return };
+    let Ok(doc2d) = query.get(entity) else { return };
     let Some(ty) = type_of(&store.0, &map, entity) else { return };
-    let doc = store.0.document();
-    let id = prov.0;
-    let path = |s: &str| -> LeafPath { s.parse().expect("declared leaf") };
-    if doc2d.is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. })) {
-        // The store holds the previewed value; one transaction closes it.
-        gestures.0.push(GestureRequest::Commit(format!("set {ty}")));
-        return;
-    }
-    let mut ops = Vec::new();
-    if doc2d.is_some() {
-        let t = transform.translation;
-        for (leaf, value) in [("transform2d.x", t.x), ("transform2d.y", t.y)] {
-            let p = path(leaf);
-            let Some(slot) = doc.leaf(id, p) else { continue };
-            if slot.expr().is_some() {
-                // A bound leaf has no handle without a disambiguation policy
-                // (doc 02 §8.2); the reconciler snaps the entity back.
-                info!("{id}.{p} is bound; drag not written");
-                continue;
-            }
-            if store.0.reactive().animated().contains_key(&iron_document::Leaf { node: id, path: p }) {
-                // A clip is driving this leaf at the current time. Writing
-                // the authored value would change nothing visible and a
-                // keyframe must never be created silently (doc 05 §5.2).
-                info!("{id}.{p} is animated at t={}; drag not written", store.0.time());
-                continue;
-            }
-            let current = slot.constant().and_then(|v| v.as_f64());
-            if current != Some(value as f64) {
-                ops.push(Op::Set { id, path: p, slot: Slot::Const(Value::Number(value as f64)) });
-            }
-        }
-    } else {
-        let p = path("transform3d.pos");
-        let t = transform.translation;
-        let value = Value::Vec3([t.x as f64, t.y as f64, t.z as f64]);
-        let current = doc.leaf(id, p).and_then(|s| s.constant());
-        if current != Some(&value) {
-            ops.push(Op::Set { id, path: p, slot: Slot::Const(value) });
-        }
-    }
-    if !ops.is_empty() {
-        pending.push(format!("move {ty}"), Actor::Human, ops);
-    }
+    let verb = if doc2d.is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. })) { "set" } else { "move" };
+    gestures.0.push(GestureRequest::Commit(format!("{verb} {ty}")));
 }
 
 // Utility: ray-plane intersection (plane defined by point & normal). Returns world hit.

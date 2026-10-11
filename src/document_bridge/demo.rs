@@ -19,7 +19,7 @@ fn n(v: f64) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(29).into_iter();
+    let mut ids = store.document().next_ids(30).into_iter();
     let rel_ids = store.document().next_relation_ids(2);
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
@@ -186,6 +186,28 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     ops.push(clip(slide, "slide", 0.5, 2.0, "linear", "transform2d.x", Value::Number(500.0), Value::Number(700.0)));
     ops.push(Op::Link { rel: Relation { id: rel_ids[0], from: spin, to: torus, rel: RelKind::Animates, data: BTreeMap::new() } });
     ops.push(Op::Link { rel: Relation { id: rel_ids[1], from: slide, to: square, rel: RelKind::Animates, data: BTreeMap::new() } });
+
+    // A shadow of the square, bound to its position: it follows the square
+    // during a drag (roadmap stage A), and dragging the shadow moves the
+    // square through linear inversion of `x = #square.x + 100`.
+    let shadow = next();
+    let mut t = Transform2d::default();
+    t.x = Slot::Bound(Expr::parse(&format!("{square}.transform2d.x + 100")).expect("demo binding"));
+    t.y = Slot::Bound(Expr::parse(&format!("{square}.transform2d.y")).expect("demo binding"));
+    let mut s = Size::default();
+    s.w = n(80.0);
+    s.h = n(80.0);
+    let mut f = Fill::default();
+    f.color = Slot::Const(Value::Color([0.2, 0.2, 0.2, 0.35]));
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("shadow".into()));
+    ops.push(Op::Create {
+        id: shadow,
+        ty: ty("rect"),
+        parent: Some(scene),
+        order: order(),
+        components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
+    });
 
     iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops }
 }

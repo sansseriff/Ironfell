@@ -4,7 +4,22 @@
 nav
 ready
 shot start
-ddrag 540 460 690 360
+# Stage A exit: the shadow rect, bound to the square's position, follows it
+# during the drag, not after. The drag is spelled out so a screenshot and a
+# view can be taken mid-gesture; the view reads the gesture overlay.
+dmove 540 460
+down
+sleep 300
+dmove 600 420
+sleep 300
+dmove 660 380
+sleep 400
+shot mid-drag-bound-follows
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const a = v.match(/<rect[^>]*name="square"[^>]*>/); const b = v.match(/<rect[^>]*name="shadow"[^>]*>/); return [a && a[0].replace(/ rot=.*/, ''), b && b[0].replace(/ rot=.*/, '')]; })()
+dmove 690 360
+sleep 300
+up
+sleep 600
 shot after-square-drag
 ddrag 435 350 315 410
 shot after-torus-drag
@@ -21,9 +36,13 @@ shot after-redo-one
 ddrag 220 612 370 612
 shot after-slider-scrub
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<bar[^>]*>/); return m ? m[0] : v.slice(0, 200); })()
-# The bar's y is bound: a drag moves it in x only and never snaps.
-ddrag 810 500 760 450
+# Stage A, linear binding inversion: the bar's y is bound to
+# `640 - slider.value * 300`, so dragging the bar down by 30 sets the slider
+# to 0.8 and the bar's height follows; x is a constant and moves directly.
+# One "move bar" transaction carries both.
+ddrag 810 500 760 530
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<bar[^>]*>/); return m ? m[0].replace(/ y\.bind=.*/, '') : v.slice(0, 200); })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<slider[^>]*name="level"[^>]*>/); return m ? m[0].replace(/.* value=/, 'value=') : v.slice(0, 200); })()
 # Exit criterion 4: scrub the timeline to about 2.6 s of 30. The "spin" clip
 # turns the torus and the "slide" clip has moved the square; the torus view
 # names the clip that drives it.
@@ -44,6 +63,6 @@ eval (async () => { const a = await __iron.save(); await __iron.load(a); await n
 sleep 500
 shot after-load
 eval document.querySelector("pre.view")?.textContent.split("\n").slice(0, 4).join(" | ")
-logs applied|rejected|loaded document|nothing to|panicked|binding
+logs applied|rejected|loaded document|nothing to|panicked|binding|locked|differs
 errors
 quit

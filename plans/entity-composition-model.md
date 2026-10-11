@@ -354,6 +354,34 @@ limitation until render-to-texture), with the derived default view; (4) the `mai
 demo and smoke (link the box to the torus inside the viewer); (5) render-to-texture,
 then 2D in 3D as a plane.
 
+**Progress (2026-10-11):**
+
+- *Types* — done: `embed` (`embed.source`, optional `embed_camera.camera`, optional
+  `frame { x0 y0 x1 y1 }` — corner names, so a bare `x` on an embed still means its
+  position; placement components are listed first for the same reason) and `camera`
+  (`transform3d`, `camera { fov aspect near far }`). Loops are refused on create, set and
+  reparent (`composition::validate_embed`). Deviation: the field is `source`, not `of`,
+  because the composition view already uses `of=` for "this figure pictures entity".
+  Tests: `tests/embeds.rs`.
+- *2D in 2D* — done: the 2D layer and picker walk a panel's composition and recurse into
+  2D embeds (`document_bridge::nest`), placed by the embed's transform, clipped to its
+  frame or content bounds (computed from shapes, so it shows on the first frame). A hit
+  carries the affine into its composition's space, so drags work through rotated and
+  scaled embeds (checked: a 0.3 rad, 0.8× embed maps a drag exactly).
+- *3D in 2D* — done as a camera viewport at the embed's on-screen bounding box
+  (`EmbedViews`, `scene3d::sync_embed_cameras`), beneath the 2D layer; the 2D layer draws
+  the embed's frame. A named camera node poses it and its aspect sets the shape;
+  otherwise the derived default view frames the composition's meshes and holds still
+  until the content leaves the framed sphere (re-framing every frame would chase a drag).
+  Picking casts from that camera, and the 3D drag uses it. Camera orders come from a
+  free pool between -9 and 9 (orders only grew before, and the vector composite at 10
+  must stay on top). Show in locates a node through embeds and pans the panel to it.
+- *Main layout* — done: the viewer shows `main`, which embeds `scene` at the origin and
+  `assembly` as a camera view; the C1 exit runs there in the smoke script.
+- *Not done:* render-to-texture (so rotation, 2D under a 3D view, and 2D in 3D as a
+  plane); selecting an embed itself (a modifier or its frame); an "open/enter"
+  composition gesture; embeds inside 3D compositions.
+
 **Open:** whether definitions converge with embeds. An embed is a parameterless,
 live component; a definition instance is a parameterised copy that may diverge after
 placement. A template could instead *be* a composition that figures embed with the

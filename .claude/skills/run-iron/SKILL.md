@@ -61,8 +61,8 @@ bad edit in the model's markup, runs the pendulum through every
 constraint-system phase 3 exit (drag the ball, drag beyond reach, undo,
 a locked arm, an out-of-reach model edit adjusted then refused with
 exact, the length slider, the fix moved to the ball and the platform
-dragged, `.by` markers), runs the stage C1 exit (select the cartoon box,
-shift-click the torus in the assembly panel, Link; the model and
+dragged, `.by` markers), runs the stage C1 exit in the main layout
+(select the cartoon box, shift-click the torus in the embedded 3D view, Link; the model and
 composition views; hover either to light both; Show in each way; undo the
 link in one step; the model surface's `<link-figures>`, its merge question
 and `keep`), round-trips the document through save and load,
@@ -178,11 +178,16 @@ applied transaction.
 Screenshots land in `.claude/skills/run-iron/screenshots/<name>.png`. Look at
 them; a frame showing only "Loading..." means the engine never came up.
 
-The layout has one panel per composition (ECM §7.1): `viewer` shows the 2D
-`scene` composition (and loose 2D roots such as the pendulum), `assembly`
-on the right shows the 3D `assembly` composition through its own camera.
-`?panels=1` drops the assembly panel; `?panels=4` adds a second view of
-each (`scene-2`, `assembly-2`), for measuring per-panel cost.
+The viewer shows the 2D `main` composition (ECM §7.4), which embeds the
+`scene` composition at the origin (so document coordinates read the same
+in the viewer) and the 3D `assembly` composition as a camera view at
+document (815,10), 200×350, through the derived default view that frames
+the torus. Loose 2D roots such as the pendulum draw in the viewer too. The
+right panel is a placeholder. `?panels=2` makes it an `assembly` panel
+with its own camera; `?panels=4` adds a second view of each, for
+measuring per-panel cost. A 3D view inside 2D is a camera viewport beneath
+the 2D layer: axis-aligned, and 2D content over it (the square after the
+timeline scrub) draws on top.
 
 `GPU=1 bun run drive.ts …` runs Chrome on the machine's GPU (ANGLE/Metal)
 instead of SwiftShader, which caps the app near 10 fps. Use it for frame
@@ -234,10 +239,10 @@ with one parameter, `level`, and a template rect; the `model` root holds an
 entity instantiated from it (its `level` bound to the slider) and the scene
 holds the rect that figures it, whose y and h read the entity's params. The
 template itself is never drawn. `scene` (#1) is a 2D composition; the torus
-lives in a 3D composition, `assembly`; the purple cartoon `box` covers
-(520,590)–(630,660); the pendulum group is a loose root, drawn in the viewer. The "shadow" rect at (600,420) has x and y bound to the square's;
-the torus sits near the viewer centre, about (435,350) at a 1600×1000
-window. The timeline holds a "slide" clip (0.5–2.5 s, square x 500→700)
+lives in a 3D composition, `assembly`, seen through `main`'s embed, near
+document (915,188); the purple cartoon `box` covers (520,590)–(630,660);
+the pendulum group is a loose root, drawn in the viewer. The "shadow" rect
+at (600,420) has x and y bound to the square's. The timeline holds a "slide" clip (0.5–2.5 s, square x 500→700)
 and a "spin" clip (1–4 s, torus rotation). Any `<attr>.bind` in a view is a
 binding and any `<driven-by>` names a clip.
 

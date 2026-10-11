@@ -1,5 +1,5 @@
 # Default flow: open, wait, screenshot, drag the square (document 500,420 80x80)
-# and the torus (near the viewer centre), undo both, redo one, then round-trip
+# and the torus (in the assembly panel), undo both, redo one, then round-trip
 # the document through save and load and show the transactions that applied.
 nav
 ready
@@ -25,7 +25,9 @@ sleep 300
 up
 sleep 600
 shot after-square-drag
-ddrag 435 350 315 410
+# The torus is in the 3D "assembly" composition, in its own panel (C1):
+# panel-relative coordinates, the torus near (166,347) at 1600x1000.
+pdrag assembly 166 347 120 420
 shot after-torus-drag
 key Meta+z
 key Meta+z

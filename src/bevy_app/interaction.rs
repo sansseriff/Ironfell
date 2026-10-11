@@ -19,9 +19,10 @@
 use bevy::prelude::*;
 use iron_document::{DragMode, Handle, LeafPath, Value};
 
-use crate::bevy_app::scene3d::ActiveState;
-use crate::document_bridge::{Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, Provenance, Shape2d, type_of};
-use crate::panels::{Panels, VIEWER_PANEL, document_from_screen};
+use crate::bevy_app::picking::panel_camera;
+use crate::bevy_app::scene3d::{ActiveState, PanelCamera};
+use crate::document_bridge::{Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelViews, Provenance, Shape2d, type_of};
+use crate::panels::document_from_screen;
 
 /// The entity whose drag just ended, awaiting writeback.
 #[derive(Resource, Default)]
@@ -50,12 +51,12 @@ pub fn interaction_decide_system(
     mut drag: ResMut<crate::DragState>,
     mut selection: ResMut<crate::SelectionState>,
     mut commit: ResMut<PendingCommit>,
-    cameras: Query<(&Camera, &GlobalTransform), With<crate::bevy_app::scene3d::MainCamera3D>>,
+    cameras: Query<(&Camera, &GlobalTransform, &PanelCamera)>,
     transforms: Query<&GlobalTransform>,
     doc2d: Query<&Doc2d>,
     provenance: Query<&Provenance>,
     mut store: ResMut<DocumentStore>,
-    panels: Res<Panels>,
+    views: Res<PanelViews>,
 ) {
     // Hover follows the primary hit. Written only on change so downstream
     // change detection (and the outbound FFI) stays quiet while hovering.
@@ -86,6 +87,7 @@ pub fn interaction_decide_system(
             selection.last_primary = Some(primary);
             drag.target = Some(primary);
             drag.handle = None;
+            drag.panel = hits.panel.clone();
             let Ok(prov) = provenance.get(primary) else {
                 drag.target = None;
                 return;
@@ -99,9 +101,11 @@ pub fn interaction_decide_system(
             } else if doc2d.contains(primary) {
                 // The grab point in the node's local space is the anchor the
                 // store drags by (a finger on it, for a constrained node).
-                let p = panels
-                    .rect(VIEWER_PANEL)
-                    .and_then(|r| document_from_screen(r, pointer.screen))
+                let p = drag
+                    .panel
+                    .as_deref()
+                    .and_then(|panel| views.get(panel))
+                    .and_then(|v| document_from_screen(v.rect, pointer.screen))
                     .unwrap_or(Vec2::ZERO);
                 let local = transforms
                     .get(primary)
@@ -136,7 +140,7 @@ pub fn interaction_decide_system(
                 drag.kind = Some(crate::DragKind::World3D);
                 // Establish drag plane for 3D: if ctrl held -> fixed XZ plane (normal Y).
                 // Otherwise plane passes through object and is camera-facing (normal = camera forward).
-                if let Ok((camera, cam_tf)) = cameras.single() {
+                if let Some((camera, cam_tf)) = panel_camera(&cameras, drag.panel.as_deref()) {
                     let cam_forward = cam_tf.forward().as_vec3();
                     let plane_normal = if pointer.modifiers.ctrl { Vec3::Y } else { cam_forward };
                     drag.plane_normal = plane_normal.normalize_or_zero();
@@ -178,10 +182,13 @@ pub fn drag_apply_system(
     globals: Query<&GlobalTransform>,
     nodes: Query<(&Provenance, Option<&Doc2d>)>,
     mut store: ResMut<DocumentStore>,
-    cameras: Query<(&Camera, &GlobalTransform), With<crate::bevy_app::scene3d::MainCamera3D>>,
-    panels: Res<Panels>,
+    cameras: Query<(&Camera, &GlobalTransform, &PanelCamera)>,
+    views: Res<PanelViews>,
 ) {
     let Some(entity) = drag.target else { return };
+    // The pointer in the drag's panel's document space. Outside the panel
+    // the drag holds still rather than jumping.
+    let doc_point = || drag.panel.as_deref().and_then(|p| views.get(p)).and_then(|v| document_from_screen(v.rect, pointer.screen));
     let Ok((prov, doc2d)) = nodes.get(entity) else { return };
     let id = prov.0;
     let target = |store: &mut DocumentStore, path: &str, value: Value| {
@@ -196,7 +203,7 @@ pub fn drag_apply_system(
             // Pointer x along the track, in the slider's own space, becomes a
             // value previewed through the store; anything bound to it follows
             // in the same frame, and nothing is written until release.
-            let Some(p) = panels.rect(VIEWER_PANEL).and_then(|r| document_from_screen(r, pointer.screen)) else {
+            let Some(p) = doc_point() else {
                 return;
             };
             let Some(Shape2d::Slider { w, .. }) = doc2d.map(|d| d.shape) else { return };
@@ -215,7 +222,7 @@ pub fn drag_apply_system(
             }
         }
         Some(crate::DragKind::Overlay2D) => {
-            let Some(p) = panels.rect(VIEWER_PANEL).and_then(|r| document_from_screen(r, pointer.screen)) else {
+            let Some(p) = doc_point() else {
                 return;
             };
             let Some(h) = &drag.handle else { return };
@@ -238,7 +245,7 @@ pub fn drag_apply_system(
             let _ = target;
         }
         Some(crate::DragKind::World3D) => {
-            let Ok((camera, cam_tf)) = cameras.single() else { return };
+            let Some((camera, cam_tf)) = panel_camera(&cameras, drag.panel.as_deref()) else { return };
             let Some(ray) = crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, pointer.screen)
             else {
                 return;

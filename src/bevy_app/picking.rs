@@ -1,9 +1,10 @@
 use bevy::math::bounding::RayCast3d;
 use bevy::prelude::*;
 
-use crate::bevy_app::scene3d::{CurrentVolume, MainCamera3D};
-use crate::document_bridge::{Doc2d, NodeMap, Provenance};
-use crate::panels::{Panels, VIEWER_PANEL, document_from_screen};
+use crate::bevy_app::scene3d::{CurrentVolume, PanelCamera};
+use crate::document_bridge::{Doc2d, InComposition, NodeMap, PanelViews, Provenance};
+use crate::panels::document_from_screen;
+use iron_document::composition::Dims;
 
 /// Build a world ray from a window-space cursor position (physical px).
 /// The camera renders into a viewport sub-rect, so the position is translated to
@@ -37,21 +38,34 @@ pub fn camera_ray_from_window_px(
         .map(Ray3d::from)
 }
 
-/// Hit-test the document's 2D nodes. The cursor is mapped into document space,
-/// then into each node's local space through the inverse of its global
-/// transform, so rotated and scaled shapes pick correctly. Depth is the
-/// node's painter index: later in preorder means on top.
+/// Which composition panel the pointer is over (ECM §7.1: picking maps the
+/// pointer to a panel first). Both pickers hit only what that panel shows.
+pub fn pointer_panel_system(pointer: Res<crate::PointerState>, views: Res<PanelViews>, mut hits: ResMut<crate::PointerHits>) {
+    let now = views.at(pointer.screen).map(|v| v.panel.as_str());
+    if hits.panel.as_deref() != now {
+        hits.panel = now.map(str::to_owned);
+    }
+}
+
+/// Hit-test the document's 2D nodes in the 2D panel under the pointer. The
+/// cursor is mapped into document space, then into each node's local space
+/// through the inverse of its global transform, so rotated and scaled shapes
+/// pick correctly. Depth is the node's painter index: later in preorder
+/// means on top.
 pub fn pick_document_2d_system(
     pointer: Res<crate::PointerState>,
-    panels: Res<Panels>,
+    views: Res<PanelViews>,
     map: Res<NodeMap>,
-    nodes: Query<(Entity, &Provenance, &Doc2d, &GlobalTransform)>,
+    nodes: Query<(Entity, &Provenance, &Doc2d, &GlobalTransform, &InComposition)>,
     mut hits: ResMut<crate::PointerHits>,
 ) {
     hits.overlay.clear();
-    let Some(rect) = panels.rect(VIEWER_PANEL) else { return };
-    let Some(p) = document_from_screen(rect, pointer.screen) else { return };
-    for (entity, prov, d, global) in &nodes {
+    let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two) else { return };
+    let Some(p) = document_from_screen(view.rect, pointer.screen) else { return };
+    for (entity, prov, d, global, within) in &nodes {
+        if !view.shows(within.0) {
+            continue;
+        }
         let local = global.affine().inverse().transform_point3(p.extend(0.0));
         if d.shape.contains_local(local.truncate()) {
             let z = map.paint_index(prov.0).unwrap_or(0) as f32;
@@ -61,25 +75,37 @@ pub fn pick_document_2d_system(
     hits.overlay.sort_by(|a, b| b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal));
 }
 
-// 3D picking using AABB intersection along view ray.
+/// The camera of a 3D composition panel.
+pub fn panel_camera<'a>(
+    cameras: &'a Query<(&Camera, &GlobalTransform, &PanelCamera)>,
+    panel: Option<&str>,
+) -> Option<(&'a Camera, &'a GlobalTransform)> {
+    let panel = panel?;
+    cameras.iter().find(|(_, _, pc)| pc.panel == panel).map(|(c, t, _)| (c, t))
+}
+
+// 3D picking using AABB intersection along the ray of the 3D panel under
+// the pointer, against that panel's composition (and loose 3D nodes).
 pub fn pick_world_3d_system(
     pointer: Res<crate::PointerState>,
-    cameras: Query<(&Camera, &GlobalTransform), With<MainCamera3D>>,
-    query: Query<(Entity, &CurrentVolume)>,
+    views: Res<PanelViews>,
+    cameras: Query<(&Camera, &GlobalTransform, &PanelCamera)>,
+    query: Query<(Entity, &CurrentVolume, &InComposition)>,
     mut hits: ResMut<crate::PointerHits>,
 ) {
     hits.world3d.clear();
-    let Ok((camera, cam_transform)) = cameras.single() else {
-        return;
-    };
-    // Build ray from pointer screen pos (viewport-aware)
+    let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Three) else { return };
+    let Some((camera, cam_transform)) = panel_camera(&cameras, Some(&view.panel)) else { return };
     let Some(ray) = camera_ray_from_window_px(camera, cam_transform, pointer.screen) else {
         return;
     };
+    let composition = view.composition;
     let ray_cast = RayCast3d::from_ray(ray, 10_000.0);
-    for (entity, vol) in query.iter() {
+    for (entity, vol, within) in query.iter() {
+        if within.0.is_some() && within.0 != composition {
+            continue;
+        }
         if let Some(dist) = ray_cast.aabb_intersection_at(&vol.0) {
-            // using underlying Aabb3d
             hits.world3d.push(crate::Hit3D {
                 entity,
                 distance: dist,
@@ -93,7 +119,7 @@ pub fn pick_world_3d_system(
     });
 }
 
-/// The 2D layer composites over the 3D viewport, so a 2D hit wins.
+/// One panel is under the pointer, so at most one of the two pickers hit.
 pub fn resolve_primary_hit_system(mut hits: ResMut<crate::PointerHits>) {
     hits.primary = hits
         .overlay

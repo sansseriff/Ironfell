@@ -153,6 +153,19 @@ applied transaction.
 Screenshots land in `.claude/skills/run-iron/screenshots/<name>.png`. Look at
 them; a frame showing only "Loading..." means the engine never came up.
 
+The layout has one panel per composition (ECM §7.1): `viewer` shows the 2D
+`scene` composition (and loose 2D roots such as the pendulum), `assembly`
+on the right shows the 3D `assembly` composition through its own camera.
+`?panels=1` drops the assembly panel; `?panels=4` adds a second view of
+each (`scene-2`, `assembly-2`), for measuring per-panel cost.
+
+`GPU=1 bun run drive.ts …` runs Chrome on the machine's GPU (ANGLE/Metal)
+instead of SwiftShader, which caps the app near 10 fps. Use it for frame
+times: `__probeReset()`, act, then `__probe()` logs and stores
+`__lastProbeStats` (`effectiveFps`, `tickMs`, `rafDeltaMs`). Measured
+2026-10-11 at 1600×1000, idle: 60 fps at 1, 2 and 4 panels, worker tick
+p50 3.2 / 3.0 / 3.2 ms.
+
 The driver reads one command per line, so a heredoc is a script:
 
 ```bash
@@ -174,13 +187,13 @@ cd -
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
 | `move x y`, `down`, `up`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels |
 | `dmove x y`, `ddrag x0 y0 x1 y1 [steps]` | the same in document 2D space: viewer-panel top-left origin, y-down, the space `transform2d.x/y` are in |
-| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `timeline`, `sidebar`); a drag along the timeline scrubs the playhead over its 30 s |
+| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); a drag along the timeline scrubs the playhead over its 30 s |
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |
 | `logs [regex]` | print console output since the last `logs`, optionally filtered; Rust `info!`/`warn!` lines from the worker appear here |
 | `peek [regex]` | like `logs`, without clearing the buffer |
 | `errors` | print uncaught page errors |
-| `panel` | print the viewer panel rect |
+| `panel [name]` | print a panel's rect (default the viewer) |
 | `sleep ms` | wait |
 | `quit` | close the browser |
 

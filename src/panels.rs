@@ -3,14 +3,20 @@
 //! The DOM is the layout engine. JS measures each panel placeholder and posts its
 //! rectangle (physical pixels, top-left origin, full-window coordinates) through the
 //! `set_panel_viewport` FFI. Rust consumes these rects:
-//! - the `viewer` panel drives `MainCamera3D.viewport` and anchors document 2D space
+//! - a `composition` panel shows one composition (ECM §7.1): its 2D content
+//!   drawn and picked inside the rect, or a 3D camera viewport on its layer
+//!   (`document_bridge::panel_views` resolves which)
 //! - vello panels (timeline, overlay) draw in screen space clipped to their rect
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use kurbo;
 
+/// The first composition panel. It also draws 2D nodes outside every
+/// composition (loose roots from older files).
 pub const VIEWER_PANEL: &str = "viewer";
+/// The kind of a panel that shows one composition.
+pub const COMPOSITION_PANEL: &str = "composition";
 pub const TIMELINE_PANEL: &str = "timeline";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,6 +50,10 @@ impl PanelRect {
 #[derive(Debug, Clone)]
 pub struct Panel {
     pub kind: String,
+    /// For a composition panel, the composition it shows: a node id
+    /// (`#4`), a composition name, or empty for the first one with the
+    /// right dimensions.
+    pub composition: String,
     pub rect: PanelRect,
 }
 
@@ -55,11 +65,12 @@ pub struct Panels {
 }
 
 impl Panels {
-    pub fn upsert(&mut self, id: &str, kind: &str, rect: PanelRect) {
+    pub fn upsert(&mut self, id: &str, kind: &str, composition: &str, rect: PanelRect) {
         self.map.insert(
             id.to_owned(),
             Panel {
                 kind: kind.to_owned(),
+                composition: composition.to_owned(),
                 rect,
             },
         );

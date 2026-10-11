@@ -18,7 +18,11 @@ mkdirSync(SHOTS, { recursive: true });
 const browser: Browser = await chromium.launch({
   executablePath: CHROME,
   headless: true,
-  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--no-sandbox"],
+  // GPU=1 uses the machine's GPU (ANGLE on Metal) instead of SwiftShader,
+  // for frame-time measurements; SwiftShader caps the app near 10 fps.
+  args: process.env.GPU
+    ? ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist", "--no-sandbox"]
+    : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--no-sandbox"],
 });
 const page: Page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
 
@@ -103,7 +107,7 @@ async function run(line: string) {
     case "sleep":
       return page.waitForTimeout(n[0] ?? 500);
     case "panel":
-      return out(JSON.stringify(await readPanel()));
+      return out(JSON.stringify(rest[0] ? await panelRect(rest[0]) : await readPanel()));
     case "shot": {
       const file = `${SHOTS}${rest[0] ?? "shot"}.png`;
       await page.screenshot({ path: file });

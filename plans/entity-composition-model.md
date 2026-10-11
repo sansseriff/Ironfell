@@ -491,6 +491,38 @@ box to the torus creates one entity; hovering either highlights both; Show in fr
 the counterpart; undo of the link is one step; the model view lists the entity with
 both figures.
 
+**Progress (branch `document-spine`, 2026-10-11):**
+
+- *Rename* — done first (handoff task 0): `depiction` → `template` (node type and
+  component), `depicts` → `figures`; file schema 3, schemas 1 and 2 load with the old
+  names mapped (`serial::renamed`). Test: `definitions.rs` loads a schema-2 spelling.
+- *Types and roots* — done: `composition` (name; `composition { notation, dims }`, dims
+  `2d|3d`) and `model` (children: entity) are **root-only** (`TypeSpec::root_only`, so a
+  nested one is refused on apply and on load). `composition.rs` holds the reads:
+  `composition_of`, `compositions`, `dims`, `figured_by`, `figure_of` (lifts a node
+  through its ancestors to the figure and entity, stopping at the composition), and
+  `figures_of`. Migration as in §5, with one deviation the handoff asked for: the
+  pendulum group stays a loose root rather than moving under `scene`; loose 2D roots
+  draw in the viewer panel. The demo gains a 3D `assembly` composition holding the
+  torus, a cartoon `box` in `scene`, and a `model` root holding the bar's entity.
+  Entities are not *required* to live under `model` (older files keep theirs where they
+  are). Tests: `tests/compositions.rs`.
+- *Panels per composition* — done (§7.1): the shell's `BevyPanel` takes a `composition`
+  (node id with `#`, or name); `set_panel_viewport` carries it; `document_bridge::
+  panel_views` resolves every `composition`-kind panel each frame into `PanelViews`
+  (composition, dims, render layer). Layer 0 is shared scenery (ground, lights) plus
+  loose 3D nodes; each composition gets its own layer on first use. One `Camera3d` per
+  3D panel (`scene3d::sync_panel_cameras`), clear colour `None` (a clear load op wipes
+  the whole shared target, erasing panels drawn earlier; the background camera clears
+  once); the free-look controller goes to the first. The 2D layer loops over 2D panels
+  with each one's offset and clip; picking finds the panel under the pointer first and
+  hits only what it shows; a drag keeps the panel it started in. The sidebar became the
+  assembly panel (decided with the user). **Measured** with headless Chrome on the GPU
+  (`GPU=1`, 1600×1000, `?panels=1|2|4`): 60 fps in all three, worker tick p50 3.2 / 3.0 /
+  3.2 ms, rAF p95 16.7 ms. No per-panel cost worth the §7.1 fallback at this content
+  size. A side effect: the old flake where a press on the ball over the torus picked the
+  mesh cannot happen now, since 2D and 3D hits never come from the same panel.
+
 ### Phase 3 — Ports, connections, scalar signals
 
 Port kinds (`optical_power`, `rf_voltage`, `electrical`, `heat_flow`, `value`),

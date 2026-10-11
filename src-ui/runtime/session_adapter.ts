@@ -7,6 +7,9 @@ export type RuntimeMode = 'worker' | 'main';
 export interface PanelRectMsg {
   id: string;
   kind: string;
+  /** The composition a "composition" panel shows: a node id ("#4") or a
+   *  composition name; "" lets Rust choose. */
+  composition: string;
   x: number;
   y: number;
   w: number;

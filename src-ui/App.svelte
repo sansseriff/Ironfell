@@ -9,6 +9,11 @@
 
   const ui_state = new UIState();
 
+  // `?panels=1|2|4`: how many composition panels, for measuring per-panel
+  // cost (ECM §7.1). 2 is the default layout: the 2D scene and the 3D
+  // assembly. 1 drops the assembly; 4 adds a second view of each.
+  const panelCount = Number(new URLSearchParams(location.search).get("panels") ?? "2");
+
   let canvasEl: HTMLCanvasElement;
 
   // SplitPane drags don't resize the canvas — they only move panel rects.
@@ -25,7 +30,7 @@
   });
 </script>
 
-<!-- Layout: left HTML panel | center 3D viewer | right vello UI panel, timeline across the bottom -->
+<!-- Layout: left HTML panel | the 2D "scene" composition | the 3D "assembly" composition, timeline across the bottom -->
 
 {#snippet controlsPane()}
   <div class="controls-pane">
@@ -34,11 +39,27 @@
 {/snippet}
 
 {#snippet viewer()}
-  <BevyPanel id="viewer" kind="viewer" />
+  {#if panelCount >= 4}
+    <div class="quad">
+      <BevyPanel id="viewer" kind="composition" composition="scene" />
+      <BevyPanel id="scene-2" kind="composition" composition="scene" />
+    </div>
+  {:else}
+    <BevyPanel id="viewer" kind="composition" composition="scene" />
+  {/if}
 {/snippet}
 
 {#snippet sidebar()}
-  <BevyPanel id="sidebar" kind="ui" />
+  {#if panelCount <= 1}
+    <BevyPanel id="sidebar" kind="ui" />
+  {:else if panelCount >= 4}
+    <div class="quad">
+      <BevyPanel id="assembly" kind="composition" composition="assembly" />
+      <BevyPanel id="assembly-2" kind="composition" composition="assembly" />
+    </div>
+  {:else}
+    <BevyPanel id="assembly" kind="composition" composition="assembly" />
+  {/if}
 {/snippet}
 
 {#snippet centerRight()}
@@ -152,6 +173,14 @@
     background-color: var(--body-color);
     border: 1px solid var(--outer-border-color);
     box-shadow: 0 8px 24px rgba(16, 36, 94, 0.12);
+  }
+
+  .quad {
+    display: grid;
+    grid-template-rows: 1fr 1fr;
+    gap: 4px;
+    width: 100%;
+    height: 100%;
   }
 
   .loading {

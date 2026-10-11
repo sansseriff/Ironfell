@@ -1,7 +1,7 @@
 //! Node → entity. One function per node type, and a reconcile pass that
 //! spawns, despawns, or rewrites the entities for a set of touched nodes.
 
-use super::{NodeMap, Provenance};
+use super::{CompositionLayers, InComposition, NodeMap, Provenance};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
@@ -76,6 +76,7 @@ pub(super) fn reconcile(
     store: &Store,
     affected: &BTreeSet<NodeId>,
     map: &mut NodeMap,
+    layers: &mut CompositionLayers,
     commands: &mut Commands,
     assets: &MeshAssets,
 ) {
@@ -87,7 +88,7 @@ pub(super) fn reconcile(
         match (doc.live(id), map.entity(id)) {
             (Some(_), None) => {
                 if drawable(doc, id)
-                    && let Some(e) = spawn(store, id, commands, assets)
+                    && let Some(e) = spawn(store, id, layers, commands, assets)
                 {
                     map.insert(id, e);
                 }
@@ -100,7 +101,7 @@ pub(super) fn reconcile(
             }
             (Some(_), Some(e)) => {
                 if let Ok(mut ec) = commands.get_entity(e) {
-                    write_values(store, id, &mut ec, assets);
+                    write_values(store, id, layers, &mut ec, assets);
                 }
             }
             (None, None) => {}
@@ -138,7 +139,7 @@ fn drawable(doc: &iron_document::Document, id: NodeId) -> bool {
 
 /// Spawn the entity for a live node, or `None` for node types that have no
 /// runtime form (clip, timeline, entity, the library types).
-fn spawn(store: &Store, id: NodeId, commands: &mut Commands, assets: &MeshAssets) -> Option<Entity> {
+fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &mut Commands, assets: &MeshAssets) -> Option<Entity> {
     let node = store.document().live(id)?;
     let mut ec = match node.ty.name() {
         "group" => commands.spawn((Provenance(id), Name::new(format!("group {id}")), Visibility::default())),
@@ -155,21 +156,24 @@ fn spawn(store: &Store, id: NodeId, commands: &mut Commands, assets: &MeshAssets
                 MeshMaterial3d(assets.material.clone()),
                 Shape::Box(bounds),
                 ActiveState::default(),
-                RenderLayers::layer(0),
             ))
         }
         _ => return None,
     };
-    write_values(store, id, &mut ec, assets);
+    write_values(store, id, layers, &mut ec, assets);
     Some(ec.id())
 }
 
 /// Rewrite every derived component from the node's current *resolved* values:
 /// a bound slot contributes what its binding evaluates to, a previewed slot
 /// what the gesture says. Authored constants are read the same way.
-fn write_values(store: &Store, id: NodeId, ec: &mut EntityCommands, assets: &MeshAssets) {
+fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &mut EntityCommands, assets: &MeshAssets) {
     let Some(node) = store.document().live(id) else { return };
     let r = Reader { store, id };
+    // Which panel draws it: 2D panels filter on this; 3D content goes on its
+    // composition's render layer, which only that composition's cameras see.
+    let composition = iron_document::composition::composition_of(store.document(), id);
+    ec.insert(InComposition(composition));
     match node.ty.name() {
         "group" => {
             ec.insert(r.transform_2d());
@@ -199,7 +203,7 @@ fn write_values(store: &Store, id: NodeId, ec: &mut EntityCommands, assets: &Mes
             if asset != "torus" {
                 warn!("{id}: unknown mesh asset {asset:?}; showing torus");
             }
-            ec.insert(Mesh3d(assets.torus.clone()));
+            ec.insert((Mesh3d(assets.torus.clone()), RenderLayers::layer(layers.of(composition))));
         }
         _ => {}
     }

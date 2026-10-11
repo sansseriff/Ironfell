@@ -3,13 +3,15 @@
   import { controllerManager } from "../controller-manager.svelte";
 
   // A Bevy panel is an empty placeholder div: the DOM lays it out, and its
-  // rectangle is mirrored to a camera viewport / vello region in Rust.
-  let { id, kind }: { id: string; kind: string } = $props();
+  // rectangle is mirrored to a camera viewport / vello region in Rust. A
+  // "composition" panel shows one composition (ECM §7.1), named by node id
+  // or by name; "" lets Rust pick the first one with matching dimensions.
+  let { id, kind, composition = "" }: { id: string; kind: string; composition?: string } = $props();
 
   let el: HTMLDivElement;
 
   onMount(() => {
-    controllerManager.registerPanel(id, kind, el);
+    controllerManager.registerPanel(id, kind, el, composition);
   });
 
   onDestroy(() => {

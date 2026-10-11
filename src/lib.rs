@@ -163,6 +163,8 @@ pub struct Hit3D {
 
 #[derive(Resource, Debug, Default)]
 pub struct PointerHits {
+    /// The composition panel under the pointer; hits come only from it.
+    pub panel: Option<String>,
     pub overlay: Vec<Hit2D>,
     pub world3d: Vec<Hit3D>,
     pub primary: Option<Entity>,
@@ -193,6 +195,9 @@ pub struct DragState {
     /// constraint cluster, per axis, or not at all) and the grab point in
     /// the node's local space (constraint-system.md §8).
     pub handle: Option<iron_document::DragHandle>,
+    /// The panel the drag started in: its rectangle and camera map the
+    /// pointer for the whole gesture, wherever the pointer goes.
+    pub panel: Option<String>,
     pub plane_origin: Vec3,
     pub plane_normal: Vec3,
     pub grab_offset_world: Vec3,
@@ -204,6 +209,7 @@ impl Default for DragState {
             target: None,
             kind: None,
             handle: None,
+            panel: None,
             plane_origin: Vec3::ZERO,
             plane_normal: Vec3::Y,
             grab_offset_world: Vec3::ZERO,

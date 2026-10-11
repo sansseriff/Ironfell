@@ -82,7 +82,7 @@ export class MainThreadAdapter {
 
       case "setPanelViewport":
         if (this.appHandle !== BigInt(0)) {
-          glue.set_panel_viewport(this.appHandle, data.id, data.kind, data.x, data.y, data.w, data.h);
+          glue.set_panel_viewport(this.appHandle, data.id, data.kind, data.composition ?? "", data.x, data.y, data.w, data.h);
         }
         break;
 

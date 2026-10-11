@@ -95,15 +95,16 @@ pub fn init_bevy_app_with_canvas(
 }
 
 /// Upsert a panel rectangle (physical px, top-left origin, window coordinates).
-/// The `kind` decides what the panel drives ("viewer" = 3D camera viewport,
-/// "timeline" = timeline vello region, ...).
+/// The `kind` decides what the panel drives ("composition" = one
+/// composition, 2D or 3D, named by `composition`; "timeline" = the timeline
+/// vello region; "ui" = a placeholder background).
 #[wasm_bindgen]
-pub fn set_panel_viewport(ptr: u64, id: String, kind: String, x: f32, y: f32, w: f32, h: f32) {
+pub fn set_panel_viewport(ptr: u64, id: String, kind: String, composition: String, x: f32, y: f32, w: f32, h: f32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     let Some(mut panels) = app.world_mut().get_resource_mut::<Panels>() else {
         return;
     };
-    panels.upsert(&id, &kind, PanelRect { x, y, w, h });
+    panels.upsert(&id, &kind, &composition, PanelRect { x, y, w, h });
 
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;

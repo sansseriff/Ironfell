@@ -27,9 +27,9 @@ use interaction::{
     PendingCommit, drag_apply_system, drag_commit_system, interaction_decide_system,
     outbound_hover_system, outbound_selection_system, selection_reflect_system,
 };
-use picking::{pick_document_2d_system, pick_world_3d_system, resolve_primary_hit_system};
+use picking::{pick_document_2d_system, pick_world_3d_system, pointer_panel_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
-use scene3d::{render_active_shapes, setup_3d_scene, update_aabbes};
+use scene3d::{render_active_shapes, setup_3d_scene, sync_panel_cameras, update_aabbes};
 use timeline::TimelinePlugin;
 
 use crate::{
@@ -191,11 +191,11 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     // the end of Startup.
     app.add_systems(PostStartup, adopt_backend_camera_for_ui);
 
-    // --- STEP 3: 3D scene + viewport camera ----------------------------------
-    // MainCamera3D (viewport-scoped, driven by the "viewer" panel rect), lights
-    // and ground. Meshes are document nodes (DocumentPlugin).
+    // --- STEP 3: 3D scene + panel cameras ------------------------------------
+    // Lights and ground; one viewport-scoped camera per 3D composition panel
+    // (ECM §7.1). Meshes are document nodes (DocumentPlugin).
     app.add_systems(Startup, setup_3d_scene);
-    app.add_systems(Update, apply_viewer_viewport);
+    app.add_systems(Update, sync_panel_cameras);
 
     // --- STEP 4: UI panels + remaining Update systems -------------------------
     app.add_systems(Startup, ui_panels::setup_ui_panels);
@@ -208,8 +208,9 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             accumulate_cursor_delta_system,
             accumulate_custom_scroll_system,
             pointer_collect_system.after(accumulate_cursor_delta_system),
-            pick_document_2d_system.after(pointer_collect_system),
-            pick_world_3d_system.after(pointer_collect_system),
+            pointer_panel_system.after(pointer_collect_system),
+            pick_document_2d_system.after(pointer_panel_system),
+            pick_world_3d_system.after(pointer_panel_system),
             resolve_primary_hit_system
                 .after(pick_document_2d_system)
                 .after(pick_world_3d_system),
@@ -311,56 +312,4 @@ fn adopt_backend_camera_for_ui(
         return;
     };
     commands.entity(camera.0).insert(bevy::ui::IsDefaultUiCamera);
-}
-
-/// Mirror the "viewer" panel rect (posted from JS) onto the 3D camera's viewport.
-/// The camera stays inactive until the panel exists; the rect is clamped to the
-/// window so resize races can never produce an out-of-bounds viewport.
-fn apply_viewer_viewport(
-    panels: Res<crate::panels::Panels>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut cameras: Query<&mut Camera, With<scene3d::MainCamera3D>>,
-) {
-    let Ok(mut camera) = cameras.single_mut() else {
-        return;
-    };
-    let Ok(window) = windows.single() else {
-        return;
-    };
-
-    let Some(rect) = panels.rect(crate::panels::VIEWER_PANEL) else {
-        if camera.is_active {
-            camera.is_active = false;
-        }
-        return;
-    };
-
-    let win_w = window.resolution.physical_width();
-    let win_h = window.resolution.physical_height();
-    if win_w == 0 || win_h == 0 {
-        return;
-    }
-
-    let x = (rect.x.max(0.0) as u32).min(win_w.saturating_sub(1));
-    let y = (rect.y.max(0.0) as u32).min(win_h.saturating_sub(1));
-    let w = (rect.w.max(1.0) as u32).min(win_w - x).max(1);
-    let h = (rect.h.max(1.0) as u32).min(win_h - y).max(1);
-
-    let viewport = bevy::camera::Viewport {
-        physical_position: UVec2::new(x, y),
-        physical_size: UVec2::new(w, h),
-        ..default()
-    };
-
-    let changed = match &camera.viewport {
-        Some(v) => v.physical_position != viewport.physical_position
-            || v.physical_size != viewport.physical_size,
-        None => true,
-    };
-    if changed {
-        camera.viewport = Some(viewport);
-    }
-    if !camera.is_active {
-        camera.is_active = true;
-    }
 }

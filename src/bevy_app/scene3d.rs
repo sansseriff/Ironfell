@@ -5,9 +5,12 @@ use bevy::camera::visibility::RenderLayers;
 use std::ops::Deref;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 
-// Marker for 3D main camera
-#[derive(Component)]
-pub(crate) struct MainCamera3D;
+/// The camera of one 3D composition panel (ECM §7.1). It renders the
+/// scenery layer (0) and its composition's layer into the panel's rect.
+#[derive(Component, Debug)]
+pub(crate) struct PanelCamera {
+    pub panel: String,
+}
 
 /// A marker component for our shapes so we can query them separately from the ground plane
 #[derive(Component, Clone)]
@@ -38,8 +41,9 @@ impl Deref for CurrentVolume {
     }
 }
 
-/// Lights, ground and the viewer camera. Content (the torus) is a document
-/// node, materialised by `document_bridge`, not spawned here.
+/// Lights and ground, on the scenery layer every 3D panel renders. Content
+/// (the torus) is a document node, materialised by `document_bridge`, and
+/// cameras come and go with panels (`sync_panel_cameras`).
 pub(crate) fn setup_3d_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -71,30 +75,84 @@ pub(crate) fn setup_3d_scene(
         MeshMaterial3d(materials.add(Color::srgb(0.75, 0.75, 0.75))),
     ));
 
-    // Camera renders into the "viewer" panel's viewport rect; it stays inactive
-    // until JS posts that panel (see apply_viewer_viewport in bevy_app/mod.rs).
-    let camera = Camera {
-        order: 0,
-        clear_color: ClearColorConfig::Default,
-        is_active: false,
-        ..default()
-    };
-    commands.spawn((
-        Camera3d::default(),
-        bevy::render::view::Msaa::Off,
-        Tonemapping::BlenderFilmic,
-        camera,
-        CameraController::default(),
-        MainCamera3D,
-        RenderLayers::layer(0),
-        Projection::Perspective(PerspectiveProjection {
-            fov: 60.0_f32.to_radians(),
-            near: 0.1,
-            far: 1000.0,
+}
+
+/// One `Camera3d` per 3D composition panel: spawned when the panel appears,
+/// its viewport and layers kept equal to the panel's, despawned with it.
+/// The first camera gets the free-look controller (one at a time: the
+/// controller drives a single camera).
+pub(crate) fn sync_panel_cameras(
+    mut commands: Commands,
+    views: Res<crate::document_bridge::PanelViews>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut cameras: Query<(Entity, &PanelCamera, &mut Camera, &mut RenderLayers)>,
+    controlled: Query<(), With<CameraController>>,
+) {
+    use iron_document::composition::Dims;
+    let Ok(window) = windows.single() else { return };
+    let (win_w, win_h) = (window.resolution.physical_width(), window.resolution.physical_height());
+    if win_w == 0 || win_h == 0 {
+        return;
+    }
+    let wanted: Vec<_> = views.0.iter().filter(|v| v.dims == Dims::Three).collect();
+    for (e, pc, ..) in &cameras {
+        if !wanted.iter().any(|v| v.panel == pc.panel) {
+            commands.entity(e).despawn();
+        }
+    }
+    let mut has_controller = !controlled.is_empty();
+    // Cameras sharing an order make Bevy skip one, and panels arrive in any
+    // order, so each new camera goes above every existing one.
+    let mut next_order = cameras.iter().map(|(_, _, c, _)| c.order + 1).max().unwrap_or(0);
+    for view in &wanted {
+        // Clamped to the window so resize races can never produce an
+        // out-of-bounds viewport.
+        let r = view.rect;
+        let x = (r.x.max(0.0) as u32).min(win_w.saturating_sub(1));
+        let y = (r.y.max(0.0) as u32).min(win_h.saturating_sub(1));
+        let w = (r.w.max(1.0) as u32).min(win_w - x).max(1);
+        let h = (r.h.max(1.0) as u32).min(win_h - y).max(1);
+        let viewport = bevy::camera::Viewport {
+            physical_position: UVec2::new(x, y),
+            physical_size: UVec2::new(w, h),
             ..default()
-        }),
-        Transform::from_xyz(0.0, 18., 18.).looking_at(Vec3::new(0., 0., 0.), Vec3::Y),
-    ));
+        };
+        let layers = RenderLayers::from_layers(&[0, view.layer]);
+        if let Some((_, _, mut camera, mut current)) = cameras.iter_mut().find(|(_, pc, ..)| pc.panel == view.panel) {
+            let moved = camera.viewport.as_ref().is_none_or(|v| v.physical_position != viewport.physical_position || v.physical_size != viewport.physical_size);
+            if moved {
+                camera.viewport = Some(viewport);
+            }
+            if *current != layers {
+                *current = layers;
+            }
+            continue;
+        }
+        let mut ec = commands.spawn((
+            Camera3d::default(),
+            bevy::render::view::Msaa::Off,
+            Tonemapping::BlenderFilmic,
+            // No clear: a clear load op wipes the whole shared target, not
+            // just this viewport, erasing panels drawn before it. The
+            // background camera (order -10) clears the window once.
+            Camera { order: next_order, clear_color: ClearColorConfig::None, viewport: Some(viewport), ..default() },
+            PanelCamera { panel: view.panel.clone() },
+            layers,
+            Projection::Perspective(PerspectiveProjection {
+                fov: 60.0_f32.to_radians(),
+                near: 0.1,
+                far: 1000.0,
+                ..default()
+            }),
+            Transform::from_xyz(0.0, 7.0, 9.0).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
+            Name::new(format!("panel camera {}", view.panel)),
+        ));
+        next_order += 1;
+        if !has_controller {
+            ec.insert(CameraController::default());
+            has_controller = true;
+        }
+    }
 }
 
 pub(crate) fn render_active_shapes(

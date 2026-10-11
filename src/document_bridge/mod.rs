@@ -21,6 +21,7 @@
 
 mod demo;
 mod materialize;
+mod panel_views;
 mod render;
 
 use bevy::platform::collections::HashMap;
@@ -30,6 +31,7 @@ use iron_document::{Document, NodeId, Op, Store, TransactionInput, TypeId};
 use std::collections::BTreeSet;
 
 pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d};
+pub use panel_views::{CompositionLayers, InComposition, PanelView, PanelViews};
 pub use render::DocumentLayer;
 
 /// The authored store, as a resource. Reads go through `.0.document()`;
@@ -176,10 +178,12 @@ impl Plugin for DocumentPlugin {
             .init_resource::<PendingLoad>()
             .init_resource::<GestureRequests>()
             .init_resource::<SyncedVersion>()
+            .init_resource::<PanelViews>()
+            .init_resource::<CompositionLayers>()
             .add_systems(Startup, (materialize::setup_mesh_assets, render::setup_document_layer, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking.
-            .add_systems(PreUpdate, sync_document)
+            .add_systems(PreUpdate, (sync_document, panel_views::resolve_panel_views).chain())
             .add_systems(
                 PostUpdate,
                 (
@@ -223,6 +227,7 @@ pub(crate) fn sync_document(
     mut synced: ResMut<SyncedVersion>,
     mut map: ResMut<NodeMap>,
     mut changes: ResMut<DocumentChanges>,
+    mut layers: ResMut<CompositionLayers>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
@@ -341,7 +346,7 @@ pub(crate) fn sync_document(
         warn!("mesh assets missing; cannot reconcile");
         return;
     };
-    materialize::reconcile(&store.0, &affected, &mut map, &mut commands, &assets);
+    materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets);
     if structure {
         map.paint_index = paint_order(&store.0);
     }
@@ -360,6 +365,7 @@ pub(crate) fn reconcile_gesture(
     mut store: ResMut<DocumentStore>,
     mut map: ResMut<NodeMap>,
     mut changes: ResMut<DocumentChanges>,
+    mut layers: ResMut<CompositionLayers>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
 ) {
@@ -368,7 +374,7 @@ pub(crate) fn reconcile_gesture(
     }
     let affected: BTreeSet<NodeId> = store.0.drain_changes().into_iter().map(|c| c.leaf.node).collect();
     let Some(assets) = assets else { return };
-    materialize::reconcile(&store.0, &affected, &mut map, &mut commands, &assets);
+    materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets);
     changes.nodes.extend(affected);
 }
 
@@ -392,7 +398,14 @@ fn collect_ids(op: &Op, out: &mut BTreeSet<NodeId>) -> bool {
             out.insert(*id);
             false
         }
-        Op::Link { .. } | Op::Unlink { .. } => false,
+        // A `figures` link changes what a figure highlights with, so both
+        // ends redraw. An unlink's inverse is the link, which names them.
+        Op::Link { rel } => {
+            out.insert(rel.from);
+            out.insert(rel.to);
+            false
+        }
+        Op::Unlink { .. } => false,
     }
 }
 

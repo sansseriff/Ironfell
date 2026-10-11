@@ -6,6 +6,7 @@ import { DocumentClient } from './runtime/document_client.svelte';
 interface PanelEntry {
   id: string;
   kind: string;
+  composition: string;
   el: HTMLElement;
   ro: ResizeObserver;
 }
@@ -82,11 +83,11 @@ export class PanelManager {
   }
 
   /** Register a Bevy panel placeholder. Safe to call before or after boot. */
-  registerPanel(id: string, kind: string, el: HTMLElement): void {
+  registerPanel(id: string, kind: string, el: HTMLElement, composition = ""): void {
     this.unregisterPanel(id);
     const ro = new ResizeObserver(() => this.postPanelRect(id));
     ro.observe(el);
-    this.panels.set(id, { id, kind, el, ro });
+    this.panels.set(id, { id, kind, composition, el, ro });
     this.postPanelRect(id);
   }
 
@@ -263,6 +264,7 @@ export class PanelManager {
     const msg: PanelRectMsg = {
       id: entry.id,
       kind: entry.kind,
+      composition: entry.composition,
       x: Math.max(0, Math.round((rect.left - canvasRect.left) * dpr)),
       y: Math.max(0, Math.round((rect.top - canvasRect.top) * dpr)),
       w: Math.max(1, Math.round(rect.width * dpr)),

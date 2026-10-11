@@ -34,8 +34,8 @@ class ControllerManagerClass {
     }
   }
 
-  registerPanel(id: string, kind: string, el: HTMLElement): void {
-    this.manager.registerPanel(id, kind, el);
+  registerPanel(id: string, kind: string, el: HTMLElement, composition = ""): void {
+    this.manager.registerPanel(id, kind, el, composition);
   }
 
   unregisterPanel(id: string): void {

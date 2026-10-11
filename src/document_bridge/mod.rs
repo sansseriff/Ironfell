@@ -159,8 +159,33 @@ impl Plugin for DocumentPlugin {
             .add_systems(PreUpdate, sync_document)
             .add_systems(
                 PostUpdate,
-                render::render_document_layer.after(TransformSystems::Propagate),
+                (
+                    render::render_document_layer.after(TransformSystems::Propagate),
+                    // The store's world transforms must agree with Bevy's
+                    // (constraint-system.md §4.3); checked whenever one moves.
+                    check_world_affine.after(TransformSystems::Propagate),
+                ),
             );
+    }
+}
+
+/// Compare `Store::world_affine` with Bevy's `GlobalTransform` for every 2D
+/// entity whose transform changed this frame. The native test in `geom.rs`
+/// pins the arithmetic; this catches drift in what the bridge feeds it
+/// (parent links, missing components, unit conversions). Tolerance is f32
+/// precision relative to the largest coefficient.
+fn check_world_affine(
+    store: Res<DocumentStore>,
+    moved: Query<(&Provenance, &GlobalTransform), (With<Doc2d>, Changed<GlobalTransform>)>,
+) {
+    for (prov, global) in &moved {
+        let bevy = iron_document::Affine2(render::affine_of(global).as_coeffs());
+        let ours = store.0.world_affine(prov.0);
+        let scale = ours.0.iter().fold(1.0f64, |m, v| m.max(v.abs()));
+        let diff = ours.max_diff(&bevy);
+        if diff > 1e-4 * scale {
+            warn!("{}: store world affine {:?} differs from Bevy {:?} by {diff}", prov.0, ours.0, bevy.0);
+        }
     }
 }
 

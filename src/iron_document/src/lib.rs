@@ -19,6 +19,7 @@
 pub mod component;
 pub mod document;
 pub mod expr;
+pub mod geom;
 pub mod graph;
 pub mod id;
 pub mod op;
@@ -32,6 +33,7 @@ pub mod view;
 pub use component::{Component, ComponentKind, LeafError, LeafPath, LeafStruct};
 pub use document::{Document, Node, RelKind, Relation};
 pub use expr::{Expr, Leaf};
+pub use geom::Affine2;
 pub use graph::ResolvedChange;
 pub use id::{NodeId, RelationId, Version};
 pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
@@ -167,6 +169,13 @@ impl Store {
 
     pub fn has_changes(&self) -> bool {
         self.reactive.has_changes()
+    }
+
+    /// The node's local space to document 2D space, through every live
+    /// ancestor, reading resolved values (previews, bindings, clips). Equal
+    /// to the materialised entity's `GlobalTransform`; see `geom`.
+    pub fn world_affine(&self, id: NodeId) -> Affine2 {
+        geom::world_affine(&self.doc, &|l| self.reactive.read(&self.doc, l), id)
     }
 
     /// Leaves whose resolved value changed since the last drain.

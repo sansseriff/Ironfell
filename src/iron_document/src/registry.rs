@@ -2,7 +2,10 @@
 //! the model-facing manifest and the DOM host (plans/document-spine.md §5.7).
 //!
 //! Adding a node type is a Rust change. That is the correct place for it: the
-//! vocabulary is code, the bindings over it are data (doc 02 §9.6).
+//! vocabulary is code, the bindings over it are data (doc 02 §9.6). The
+//! registry holds *primitives only* (entity-composition-model.md §4.2):
+//! domain things such as a bar chart, a laser or a fiber are definitions in
+//! the document's library, built from these primitives.
 
 use crate::component::ComponentKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -94,14 +97,38 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // Definitions as data (entity-composition-model.md §4): the structural
+    // types a library is made of. None of them is drawn.
     TypeSpec {
-        name: "bar",
-        components: &[
-            (K::Transform2d, true),
-            (K::Size, true),
-            (K::Fill, false),
-            (K::Name, false),
-        ],
+        name: "library",
+        components: &[(K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["definition"]),
+    },
+    TypeSpec {
+        name: "definition",
+        components: &[(K::Name, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["param_spec", "depiction"]),
+    },
+    TypeSpec {
+        name: "param_spec",
+        components: &[(K::Name, true), (K::ParamSpec, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // A template: its subtree is what an instance copies.
+    TypeSpec {
+        name: "depiction",
+        components: &[(K::Depiction, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Any,
+    },
+    // An instance of a definition; its depictions point at it with
+    // `depicts` relations. Ports arrive as children in a later phase.
+    TypeSpec {
+        name: "entity",
+        components: &[(K::Instance, true), (K::Params, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
@@ -168,11 +195,16 @@ pub fn schema_json() -> serde_json::Value {
     use serde_json::{Map, Value, json};
     let mut components = Map::new();
     for kind in ComponentKind::ALL {
-        let fields: Map<String, Value> = kind
+        let mut fields: Map<String, Value> = kind
             .fields()
             .iter()
             .map(|(n, k)| ((*n).to_owned(), json!(k.name())))
             .collect();
+        if kind.is_dynamic() {
+            // Fields come from the definition; `*` tells the model surface
+            // to accept any name at kind `any`.
+            fields.insert("*".to_owned(), json!("any"));
+        }
         components.insert(kind.name().to_owned(), Value::Object(fields));
     }
     let mut types = Map::new();

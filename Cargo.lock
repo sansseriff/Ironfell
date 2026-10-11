@@ -3069,9 +3069,14 @@ dependencies = [
 name = "iron_document"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "iron_solve"
+version = "0.1.0"
 
 [[package]]
 name = "ironfell"
@@ -3084,6 +3089,7 @@ dependencies = [
  "console_error_panic_hook",
  "console_log",
  "iron_document",
+ "iron_solve",
  "js-sys",
  "kurbo",
  "log",

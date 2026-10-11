@@ -53,6 +53,8 @@ pub enum RelKind {
     During,
     AlignsTo,
     References,
+    /// A visual node is a picture of an entity (ECM §5).
+    Depicts,
 }
 
 impl RelKind {
@@ -63,6 +65,7 @@ impl RelKind {
             RelKind::During => "during",
             RelKind::AlignsTo => "aligns_to",
             RelKind::References => "references",
+            RelKind::Depicts => "depicts",
         }
     }
 }
@@ -207,7 +210,7 @@ impl Document {
                 .iter()
                 .filter(move |(id, _)| self.is_live(**id))
                 .flat_map(move |(id, comp)| {
-                    kind.fields().iter().filter_map(move |(field, _)| {
+                    comp.field_names().into_iter().filter_map(move |field| {
                         let expr = comp.get(field)?.expr()?;
                         let path = LeafPath::new(*kind, field).expect("declared field");
                         Some((Leaf { node: *id, path }, expr))

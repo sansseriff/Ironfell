@@ -122,6 +122,8 @@ pub enum ErrorKind {
     UnknownPath,
     TypeMismatch,
     UnknownRelation,
+    /// An entity's instance or params disagree with its definition.
+    BadInstance,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -303,7 +305,17 @@ fn create(
         doc.advance_next_id(id);
     }
     check_component_bindings(doc, cx, id, comps)?;
+    check_entity(doc, cx, id)?;
     Ok(vec![Op::Delete { id }])
+}
+
+/// An entity's instance and params must agree with its definition; checked
+/// whenever either is created, set, or added (ECM §4.3).
+fn check_entity(doc: &Document, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
+    if doc.live(id).is_some_and(|n| n.ty.name() == "entity") {
+        crate::definition::validate_entity(doc, id).map_err(|e| cx.err(ErrorKind::BadInstance, e))?;
+    }
+    Ok(())
 }
 
 fn delete(doc: &mut Document, cx: &Ctx, id: NodeId) -> Result<Vec<Op>, ApplyError> {
@@ -363,7 +375,7 @@ fn check_binding(
 ) -> Result<(), ApplyError> {
     for dep in expr.deps() {
         live(doc, cx, dep.node).map_err(|e| cx.err(e.kind, format!("binding reads {dep}: {}", e.message)))?;
-        if doc.component(dep.node, dep.path.component).is_none() {
+        let Some(comp) = doc.component(dep.node, dep.path.component) else {
             return Err(cx.err(
                 ErrorKind::UnknownPath,
                 format!(
@@ -372,6 +384,9 @@ fn check_binding(
                     dep.path.component.name()
                 ),
             ));
+        };
+        if comp.get(dep.path.field).is_none() {
+            return Err(cx.err(ErrorKind::UnknownPath, format!("binding reads {dep}, but {} has no such parameter", dep.node)));
         }
     }
     if doc.binding_cycles(target, expr) {
@@ -385,7 +400,7 @@ fn check_binding(
 /// on failure the transaction's working copy is discarded anyway.
 fn check_component_bindings(doc: &Document, cx: &Ctx, id: NodeId, comps: &[Component]) -> Result<(), ApplyError> {
     for c in comps {
-        for (field, _) in c.fields() {
+        for field in c.field_names() {
             if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
                 let path = LeafPath::new(c.kind(), field).expect("declared field");
                 check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
@@ -415,6 +430,9 @@ fn set(
     let old = comp
         .set(path.field, slot.clone())
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
+    if matches!(path.component, ComponentKind::Params | ComponentKind::Instance) {
+        check_entity(doc, cx, id)?;
+    }
     Ok(vec![Op::Set {
         id,
         path,
@@ -444,6 +462,7 @@ fn add_comp(
     }
     doc.insert_component(id, comp.clone());
     check_component_bindings(doc, cx, id, std::slice::from_ref(comp))?;
+    check_entity(doc, cx, id)?;
     Ok(vec![Op::RemoveComp { id, kind }])
 }
 

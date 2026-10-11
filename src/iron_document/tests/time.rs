@@ -59,7 +59,7 @@ fn scene(easing: &str) -> Scene {
                 Op::Create { id: rect, ty: ty("rect"), parent: None, order: k0.clone(), components: vec![t.wrap(), Size::default().wrap()] },
                 Op::Create {
                     id: bar,
-                    ty: ty("bar"),
+                    ty: ty("rect"),
                     parent: None,
                     order: OrderKey::after(&k0),
                     components: vec![Transform2d::default().wrap(), s.wrap(), Fill::default().wrap()],

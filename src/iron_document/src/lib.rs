@@ -17,27 +17,35 @@
 //! ```
 
 pub mod component;
+pub mod definition;
 pub mod document;
 pub mod expr;
+pub mod geom;
 pub mod graph;
+pub mod handle;
 pub mod id;
 pub mod op;
 pub mod order;
 pub mod registry;
 pub mod serial;
+pub mod sym;
 pub mod time;
+pub mod units;
 pub mod value;
 pub mod view;
 
 pub use component::{Component, ComponentKind, LeafError, LeafPath, LeafStruct};
 pub use document::{Document, Node, RelKind, Relation};
 pub use expr::{Expr, Leaf};
+pub use geom::Affine2;
 pub use graph::ResolvedChange;
+pub use handle::Handle;
 pub use id::{NodeId, RelationId, Version};
 pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
 pub use order::OrderKey;
 pub use registry::{ChildPolicy, Host, TypeId, TypeSpec};
 pub use serial::LoadError;
+pub use units::Dim;
 pub use value::{Slot, Value, ValueKind};
 pub use view::{Fidelity, ViewError, ViewQuery};
 
@@ -169,6 +177,13 @@ impl Store {
         self.reactive.has_changes()
     }
 
+    /// The node's local space to document 2D space, through every live
+    /// ancestor, reading resolved values (previews, bindings, clips). Equal
+    /// to the materialised entity's `GlobalTransform`; see `geom`.
+    pub fn world_affine(&self, id: NodeId) -> Affine2 {
+        geom::world_affine(&self.doc, &|l| self.reactive.read(&self.doc, l), id)
+    }
+
     /// Leaves whose resolved value changed since the last drain.
     pub fn drain_changes(&mut self) -> Vec<ResolvedChange> {
         self.reactive.drain_changes()
@@ -179,6 +194,22 @@ impl Store {
     /// [`Store::commit_gesture`].
     pub fn preview(&mut self, id: NodeId, path: LeafPath, value: Value) {
         self.reactive.preview(&self.doc, Leaf { node: id, path }, value);
+    }
+
+    /// How a gesture on this leaf would be realised right now: directly, by
+    /// inverting a linear binding onto its one constant source, or not at
+    /// all (see `handle`).
+    pub fn handle(&self, id: NodeId, path: LeafPath) -> Handle {
+        handle::handle(&self.doc, &self.reactive, Leaf { node: id, path })
+    }
+
+    /// Preview a *target* value for a leaf through its handle: a constant is
+    /// previewed as is; a linearly bound leaf previews its source so the
+    /// binding re-evaluates to `value`. `Err` with the reason when locked.
+    pub fn preview_target(&mut self, id: NodeId, path: LeafPath, value: Value) -> Result<(), String> {
+        let (target, v) = handle::resolve_target(&self.doc, &self.reactive, Leaf { node: id, path }, value)?;
+        self.reactive.preview(&self.doc, target, v);
+        Ok(())
     }
 
     pub fn gesture_in_progress(&self) -> bool {

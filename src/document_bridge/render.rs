@@ -4,8 +4,15 @@
 //! `plans/document-spine.md` §10: many small primitives share one DisplayList
 //! entity and the layer rebuilds when any of them changed. Finer chunking is
 //! the raster cache's job later (doc 07 §4.2).
+//!
+//! What triggers a rebuild is the reconciler's changed-node set
+//! ([`DocumentChanges`]), not a boolean: the layer knows which nodes moved,
+//! keeps every node's document-space bounds ([`Bounds2d`]), and reports the
+//! nodes and the damage rectangle it redrew for. That is the plumbing
+//! roadmap stage H turns into culling and damage-driven invalidation; today
+//! the whole layer is still re-encoded.
 
-use super::{Doc2d, DocumentDirty, DocumentStore, NodeMap, Shape2d};
+use super::{Bounds2d, Doc2d, DocumentChanges, DocumentStore, NodeMap, Shape2d};
 use crate::panels::{Panels, VIEWER_PANEL, document_affine};
 use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
 use bevy::prelude::*;
@@ -18,22 +25,30 @@ pub(super) fn setup_document_layer(mut commands: Commands) {
     commands.spawn((DisplayList::default(), VectorLayer::screen(order::DOCUMENT_2D), DocumentLayer));
 }
 
+/// How many changed node ids a redraw line names before summarising.
+const LOG_IDS: usize = 12;
+
 pub(super) fn render_document_layer(
     mut layers: Query<&mut DisplayList, With<DocumentLayer>>,
     nodes: Query<(&Doc2d, &GlobalTransform)>,
-    moved: Query<Entity, (With<Doc2d>, Changed<GlobalTransform>)>,
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
-    mut dirty: ResMut<DocumentDirty>,
+    mut changes: ResMut<DocumentChanges>,
+    mut bounds: ResMut<Bounds2d>,
     panels: Res<Panels>,
     selection: Res<crate::SelectionState>,
 ) {
     let Ok(mut list) = layers.single_mut() else { return };
-    let needs_rebuild = dirty.0 || panels.is_changed() || selection.is_changed() || !moved.is_empty();
-    if !needs_rebuild {
+    let reason = if !changes.is_empty() {
+        "document"
+    } else if panels.is_changed() {
+        "panel layout"
+    } else if selection.is_changed() {
+        "selection"
+    } else {
         return;
-    }
-    dirty.0 = false;
+    };
+    let changed = changes.take();
 
     let Some(panel) = panels.rect(VIEWER_PANEL) else {
         list.rebuild(|_| {});
@@ -50,12 +65,30 @@ pub(super) fn render_document_layer(
         stack.extend(doc.children(id).iter().rev().copied());
     }
 
+    // Damage: the old and new bounds of every changed node (what a box tree's
+    // commit would report), plus the bounds of changed nodes that vanished.
+    let mut damage: Option<kurbo::Rect> = None;
+    let mut grow = |r: kurbo::Rect| damage = Some(damage.map_or(r, |d| d.union(r)));
+    for id in &changed.nodes {
+        if let Some(old) = bounds.0.get(id) {
+            grow(*old);
+        }
+        if doc.live(*id).is_none() {
+            bounds.0.remove(id);
+        }
+    }
+
+    let mut drawn = 0usize;
     list.rebuild(|b| {
         b.clipped(kurbo::Affine::IDENTITY, panel.to_kurbo(), |b| {
             for &id in &ordered {
                 let Some(e) = map.entity(id) else { continue };
                 let Ok((d, global)) = nodes.get(e) else { continue };
-                let affine = base * affine_of(global);
+                drawn += 1;
+                // Node-local placement; `base` adds the panel offset only at
+                // emit time, so bounds stay in document space.
+                let local = affine_of(global);
+                let affine = base * local;
                 let shape = match d.shape {
                     Shape2d::Rect { w, h } => kurbo::Rect::new(0.0, 0.0, w as f64, h as f64).into_path(0.1),
                     Shape2d::Circle { r } => kurbo::Circle::new((0.0, 0.0), r as f64).into_path(0.1),
@@ -86,11 +119,31 @@ pub(super) fn render_document_layer(
                 let hovered = selection.hovered.contains_key(&e);
                 if selected || hovered {
                     let c = if selected { [0.1, 0.4, 1.0, 1.0] } else { [0.1, 0.4, 1.0, 0.5] };
-                    b.stroke(affine, kurbo::Stroke::new(2.0), peniko::Color::new(c), shape);
+                    b.stroke(affine, kurbo::Stroke::new(2.0), peniko::Color::new(c), shape.clone());
                 }
+                // Document-space bounds, widened by the thickest stroke that
+                // could touch this node (its own, or the 2px highlight).
+                let pad = d.stroke.map_or(0.0, |(_, w)| w as f64 * 0.5).max(1.0);
+                let rect = local.transform_rect_bbox(shape.bounding_box()).inflate(pad, pad);
+                if changed.nodes.contains(&id) {
+                    grow(rect);
+                }
+                bounds.0.insert(id, rect);
             }
         });
     });
+
+    let mut ids: Vec<String> = changed.nodes.iter().take(LOG_IDS).map(|id| id.to_string()).collect();
+    if changed.nodes.len() > LOG_IDS {
+        ids.push(format!("+{} more", changed.nodes.len() - LOG_IDS));
+    }
+    let damage = damage.map(|r| format!("{:.0},{:.0}–{:.0},{:.0}", r.x0, r.y0, r.x1, r.y1)).unwrap_or_else(|| "none".into());
+    info!(
+        "redraw ({reason}{}): {} of {drawn} nodes changed [{}]; damage {damage}",
+        if changed.structure { ", structure" } else { "" },
+        changed.nodes.len(),
+        ids.join(" "),
+    );
 }
 
 /// The 2D part of a global transform as a kurbo affine.

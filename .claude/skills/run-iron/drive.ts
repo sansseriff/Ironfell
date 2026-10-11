@@ -145,6 +145,13 @@ async function run(line: string) {
       logs = [];
       return out(shown.join("\n") || "(no new console output)");
     }
+    case "peek": {
+      // Like `logs`, but leaves the buffer alone, so a later `logs` still
+      // sees everything.
+      await page.waitForTimeout(500);
+      const re = rest.length ? new RegExp(rest.join(" ")) : null;
+      return out(logs.filter((l) => !re || re.test(l)).join("\n") || "(no matching console output)");
+    }
     case "errors":
       return out(errors.join("\n") || "(no page errors)");
     case "quit":

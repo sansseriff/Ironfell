@@ -11,9 +11,9 @@
 //!   clamp(#3.slider.value * 2, 0, 1)
 //! ```
 //!
-//! Absent on purpose: field access on structured values (`Get`), collection
-//! verbs, and calls that leave the process. Those arrive with the floor
-//! tranche that needs them and with the cost-tagged invocation node.
+//! Absent on purpose: collection verbs and calls that leave the process.
+//! Those arrive with the floor tranche that needs them and with the
+//! cost-tagged invocation node. `Get` (`beam.waist`) reads a record's field.
 
 use crate::component::LeafPath;
 use crate::id::NodeId;
@@ -38,12 +38,42 @@ impl fmt::Display for Leaf {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     Lit(Value),
+    /// A named constant (`pi`). Kept symbolic so it prints as written.
+    Const(Constant),
     Ref(Leaf),
     Neg(Box<Expr>),
     Not(Box<Expr>),
     Bin(BinOp, Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
+    /// A field of a record value: `expr.field` (doc 02 §4).
+    Get(Box<Expr>, &'static str),
+}
+
+/// Named numeric constants of the floor. One arm each, like functions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Constant {
+    Pi,
+}
+
+impl Constant {
+    pub const ALL: &'static [Constant] = &[Constant::Pi];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Constant::Pi => "pi",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Constant> {
+        Constant::ALL.iter().copied().find(|c| c.name() == s)
+    }
+
+    pub fn value(self) -> f64 {
+        match self {
+            Constant::Pi => std::f64::consts::PI,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +127,8 @@ impl BinOp {
 
 const PREC_TERNARY: u8 = 0;
 const PREC_UNARY: u8 = 7;
+/// Field access binds tightest: `-a.b` is `-(a.b)`.
+const PREC_GET: u8 = 8;
 
 impl Expr {
     /// Every leaf this expression reads. Static: no evaluation needed.
@@ -108,7 +140,7 @@ impl Expr {
 
     fn collect_deps(&self, out: &mut BTreeSet<Leaf>) {
         match self {
-            Expr::Lit(_) => {}
+            Expr::Lit(_) | Expr::Const(_) => {}
             Expr::Ref(l) => {
                 out.insert(*l);
             }
@@ -127,6 +159,22 @@ impl Expr {
                     a.collect_deps(out);
                 }
             }
+            Expr::Get(e, _) => e.collect_deps(out),
+        }
+    }
+
+    /// The same expression with every reference passed through `f`. Used
+    /// when a template is copied: its references move to the copy.
+    pub fn map_refs(&self, f: &dyn Fn(Leaf) -> Leaf) -> Expr {
+        match self {
+            Expr::Lit(_) | Expr::Const(_) => self.clone(),
+            Expr::Ref(l) => Expr::Ref(f(*l)),
+            Expr::Neg(e) => Expr::Neg(Box::new(e.map_refs(f))),
+            Expr::Not(e) => Expr::Not(Box::new(e.map_refs(f))),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(a.map_refs(f)), Box::new(b.map_refs(f))),
+            Expr::If(c, a, b) => Expr::If(Box::new(c.map_refs(f)), Box::new(a.map_refs(f)), Box::new(b.map_refs(f))),
+            Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.map_refs(f)).collect()),
+            Expr::Get(e, field) => Expr::Get(Box::new(e.map_refs(f)), field),
         }
     }
 
@@ -136,9 +184,11 @@ impl Expr {
     pub fn eval(&self, read: &dyn Fn(Leaf) -> Option<Value>) -> Result<Value, EvalError> {
         match self {
             Expr::Lit(v) => Ok(v.clone()),
+            Expr::Const(c) => Ok(Value::Number(c.value())),
             Expr::Ref(l) => read(*l).ok_or(EvalError::Unresolved(*l)),
             Expr::Neg(e) => match e.eval(read)? {
                 Value::Number(n) => Ok(Value::Number(-n)),
+                Value::Quantity { si, dim } => Ok(Value::Quantity { si: -si, dim }),
                 v => Err(EvalError::Type(format!("cannot negate {}", v.kind().name()))),
             },
             Expr::Not(e) => match e.eval(read)? {
@@ -159,6 +209,13 @@ impl Expr {
                 let vals: Result<Vec<Value>, EvalError> = args.iter().map(|a| a.eval(read)).collect();
                 floor::call(name, &vals?)
             }
+            Expr::Get(e, field) => match e.eval(read)? {
+                Value::Record { kind, fields } => fields.get(field).cloned().ok_or_else(|| {
+                    let names: Vec<&str> = fields.keys().copied().collect();
+                    EvalError::Type(format!("{kind} has no field {field:?}; fields: {}", names.join(", ")))
+                }),
+                v => Err(EvalError::Type(format!("cannot read field {field:?} of {}", v.kind().name()))),
+            },
         }
     }
 
@@ -175,6 +232,7 @@ impl Expr {
     fn write(&self, f: &mut fmt::Formatter<'_>, parent: u8) -> fmt::Result {
         match self {
             Expr::Lit(v) => write_lit(v, f),
+            Expr::Const(c) => f.write_str(c.name()),
             Expr::Ref(l) => write!(f, "{l}"),
             Expr::Neg(e) => {
                 f.write_str("-")?;
@@ -224,6 +282,10 @@ impl Expr {
                 }
                 f.write_str(")")
             }
+            Expr::Get(e, field) => {
+                e.write(f, PREC_GET)?;
+                write!(f, ".{field}")
+            }
         }
     }
 }
@@ -242,6 +304,8 @@ fn write_lit(v: &Value, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         ),
         Value::Color([r, g, b, a]) => write!(f, "rgba({r}, {g}, {b}, {a})"),
         Value::Ref(id) => write!(f, "ref({id})"),
+        // The exact magnitude in the canonical unit, so parse(print(q)) == q.
+        Value::Quantity { si, dim } => write!(f, "{} {}", crate::value::fmt_num(*si), dim.canonical_unit()),
         other => write!(f, "{other}"),
     }
 }
@@ -285,18 +349,42 @@ impl fmt::Display for EvalError {
 }
 impl std::error::Error for EvalError {}
 
+/// `a <op> b` on two numbers or quantities, dimension-checked: `+ - %` and
+/// comparisons need equal dimensions (a plain number is dimensionless, so
+/// `9.58 mW + 2` is an error and `9.58 mW * 2` is not); `*` and `/` combine
+/// them, and a result whose dimension cancels is a plain number.
+fn quantity_op(op: BinOp, a: &Value, b: &Value) -> Option<Result<Value, EvalError>> {
+    let (x, dx) = a.as_quantity()?;
+    let (y, dy) = b.as_quantity()?;
+    let same = || {
+        if dx == dy {
+            Ok(())
+        } else {
+            Err(EvalError::Type(format!("cannot combine {} {} {}", a.describe(), op.symbol(), b.describe())))
+        }
+    };
+    Some(match op {
+        BinOp::Add => same().map(|_| Value::quantity(x + y, dx)),
+        BinOp::Sub => same().map(|_| Value::quantity(x - y, dx)),
+        BinOp::Mod => same().map(|_| Value::quantity(x % y, dx)),
+        BinOp::Mul => Ok(Value::quantity(x * y, dx.mul(dy))),
+        BinOp::Div => Ok(Value::quantity(x / y, dx.div(dy))),
+        BinOp::Lt => same().map(|_| Value::Bool(x < y)),
+        BinOp::Le => same().map(|_| Value::Bool(x <= y)),
+        BinOp::Gt => same().map(|_| Value::Bool(x > y)),
+        BinOp::Ge => same().map(|_| Value::Bool(x >= y)),
+        _ => return None,
+    })
+}
+
 fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
     use Value::*;
     let num = |x: &Value| x.as_f64();
+    if let Some(r) = quantity_op(op, &a, &b) {
+        return r;
+    }
     Ok(match op {
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => match (&a, &b) {
-            (Number(x), Number(y)) => Number(match op {
-                BinOp::Add => x + y,
-                BinOp::Sub => x - y,
-                BinOp::Mul => x * y,
-                BinOp::Div => x / y,
-                _ => x % y,
-            }),
             (Vec2(x), Vec2(y)) if matches!(op, BinOp::Add | BinOp::Sub) => {
                 let s = if op == BinOp::Add { 1.0 } else { -1.0 };
                 Vec2([x[0] + s * y[0], x[1] + s * y[1]])
@@ -332,49 +420,136 @@ fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
 /// (doc 02 §6). Each is one arm; adding one is a Rust change by design.
 pub mod floor {
     use super::{EvalError, Value};
+    use crate::units::Dim;
 
-    pub const NAMES: &[&str] = &["abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale"];
+    pub const NAMES: &[&str] = &[
+        "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt",
+        "pow", "hypot",
+    ];
 
-    fn nums(func: &str, args: &[Value], n: usize) -> Result<Vec<f64>, EvalError> {
+    /// Magnitudes and dimensions of `n` number-or-quantity arguments.
+    fn args_of(func: &str, args: &[Value], n: usize) -> Result<Vec<(f64, Dim)>, EvalError> {
         if args.len() != n {
             return Err(EvalError::Arity { func: func.to_owned(), expected: n, got: args.len() });
         }
         args.iter()
-            .map(|v| v.as_f64().ok_or_else(|| EvalError::Type(format!("{func} takes numbers, got {}", v.kind().name()))))
+            .map(|v| v.as_quantity().ok_or_else(|| EvalError::Type(format!("{func} takes numbers, got {}", v.kind().name()))))
             .collect()
     }
 
+    /// Every listed argument must share one dimension; returns it.
+    fn same(func: &str, a: &[(f64, Dim)], which: &[usize]) -> Result<Dim, EvalError> {
+        let d = a[which[0]].1;
+        for &i in which {
+            if a[i].1 != d {
+                return Err(EvalError::Type(format!(
+                    "{func}: arguments must share a dimension, got {} and {}",
+                    describe(d),
+                    describe(a[i].1)
+                )));
+            }
+        }
+        Ok(d)
+    }
+
+    fn plain(func: &str, a: &[(f64, Dim)], which: &[usize]) -> Result<(), EvalError> {
+        for &i in which {
+            if !a[i].1.is_none() {
+                return Err(EvalError::Type(format!("{func}: argument {} must be a plain number, got {}", i + 1, describe(a[i].1))));
+            }
+        }
+        Ok(())
+    }
+
+    fn describe(d: Dim) -> String {
+        if d.is_none() { "a plain number".to_owned() } else { d.canonical_unit() }
+    }
+
     pub fn call(func: &str, args: &[Value]) -> Result<Value, EvalError> {
-        let n = |k| nums(func, args, k);
-        Ok(Value::Number(match func {
-            "abs" => n(1)?[0].abs(),
-            "floor" => n(1)?[0].floor(),
-            "ceil" => n(1)?[0].ceil(),
-            "round" => n(1)?[0].round(),
+        let n = |k| args_of(func, args, k);
+        let q = Value::quantity;
+        Ok(match func {
+            "abs" => {
+                let a = n(1)?;
+                q(a[0].0.abs(), a[0].1)
+            }
+            "floor" => {
+                let a = n(1)?;
+                q(a[0].0.floor(), a[0].1)
+            }
+            "ceil" => {
+                let a = n(1)?;
+                q(a[0].0.ceil(), a[0].1)
+            }
+            "round" => {
+                let a = n(1)?;
+                q(a[0].0.round(), a[0].1)
+            }
             "min" => {
                 let a = n(2)?;
-                a[0].min(a[1])
+                q(a[0].0.min(a[1].0), same(func, &a, &[0, 1])?)
             }
             "max" => {
                 let a = n(2)?;
-                a[0].max(a[1])
+                q(a[0].0.max(a[1].0), same(func, &a, &[0, 1])?)
             }
             "clamp" => {
                 let a = n(3)?;
-                a[0].clamp(a[1].min(a[2]), a[2].max(a[1]))
+                q(a[0].0.clamp(a[1].0.min(a[2].0), a[2].0.max(a[1].0)), same(func, &a, &[0, 1, 2])?)
             }
             "lerp" => {
                 let a = n(3)?;
-                a[0] + (a[1] - a[0]) * a[2]
+                plain(func, &a, &[2])?;
+                q(a[0].0 + (a[1].0 - a[0].0) * a[2].0, same(func, &a, &[0, 1])?)
             }
             // scale(x, d0, d1, r0, r1): linear map of x from [d0, d1] to [r0, r1].
             "scale" => {
                 let a = n(5)?;
-                let t = if a[2] == a[1] { 0.0 } else { (a[0] - a[1]) / (a[2] - a[1]) };
-                a[3] + (a[4] - a[3]) * t
+                same(func, &a, &[0, 1, 2])?;
+                let t = if a[2].0 == a[1].0 { 0.0 } else { (a[0].0 - a[1].0) / (a[2].0 - a[1].0) };
+                q(a[3].0 + (a[4].0 - a[3].0) * t, same(func, &a, &[3, 4])?)
+            }
+            // Trigonometry in radians, matching `transform2d.rot`.
+            "sin" | "cos" | "tan" => {
+                let a = n(1)?;
+                plain(func, &a, &[0])?;
+                let x = a[0].0;
+                Value::Number(match func {
+                    "sin" => x.sin(),
+                    "cos" => x.cos(),
+                    _ => x.tan(),
+                })
+            }
+            // atan2(y, x), the usual argument order; any shared dimension.
+            "atan2" => {
+                let a = n(2)?;
+                same(func, &a, &[0, 1])?;
+                Value::Number(a[0].0.atan2(a[1].0))
+            }
+            "sqrt" => {
+                let a = n(1)?;
+                let d = a[0].1.sqrt().ok_or_else(|| EvalError::Type(format!("sqrt of {} has no unit", describe(a[0].1))))?;
+                q(a[0].0.sqrt(), d)
+            }
+            "pow" => {
+                let a = n(2)?;
+                plain(func, &a, &[1])?;
+                let (x, dx) = a[0];
+                let e = a[1].0;
+                if dx.is_none() {
+                    Value::Number(x.powf(e))
+                } else if e.fract() == 0.0 && e.abs() <= 127.0 {
+                    q(x.powf(e), dx.pow(e as i8))
+                } else {
+                    return Err(EvalError::Type(format!("pow of {} needs an integer exponent, got {e}", describe(dx))));
+                }
+            }
+            "hypot" => {
+                let a = n(2)?;
+                q(a[0].0.hypot(a[1].0), same(func, &a, &[0, 1])?)
             }
             _ => return Err(EvalError::UnknownFunction(func.to_owned())),
-        }))
+        })
     }
 }
 
@@ -395,6 +570,8 @@ impl std::error::Error for ParseError {}
 #[derive(Debug, Clone, PartialEq)]
 enum Tok {
     Num(f64),
+    /// A quantity literal (a number followed by a unit), already in SI.
+    Lit(Value),
     Str(String),
     Enum(String),
     Ident(String),
@@ -407,6 +584,8 @@ enum Tok {
     Comma,
     Question,
     Colon,
+    /// `.` before an identifier: field access.
+    Dot,
 }
 
 fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
@@ -417,13 +596,70 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
         let c = b[i];
         match c {
             b' ' | b'\t' | b'\n' | b'\r' => i += 1,
+            b'.' if b.get(i + 1).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_') => {
+                out.push(Tok::Dot);
+                i += 1;
+            }
             b'0'..=b'9' | b'.' => {
                 let start = i;
                 while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.' || b[i] == b'e' || b[i] == b'E') {
                     i += 1;
                 }
                 let s = &text[start..i];
-                out.push(Tok::Num(s.parse().map_err(|_| ParseError(format!("bad number {s:?}")))?));
+                let n: f64 = s.parse().map_err(|_| ParseError(format!("bad number {s:?}")))?;
+                // A unit after a number makes a quantity literal: `9.58 mW`,
+                // `3 kg*m2/s3`. The longest run of unit characters that
+                // parses as a unit is taken; otherwise the number stands
+                // alone and whatever follows lexes as usual.
+                let mut j = i;
+                while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
+                    j += 1;
+                }
+                let unit_start = j;
+                let mut k = unit_start;
+                while k < b.len() {
+                    let c = text[k..].chars().next().expect("in bounds");
+                    if c.is_alphanumeric() || matches!(c, '*' | '·' | '/' | '^' | 'µ' | 'μ' | '°' | 'Ω') || (c == '-' && k > unit_start) {
+                        k += c.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let mut matched = None;
+                let mut end = k;
+                while end > unit_start {
+                    let cand = &text[unit_start..end];
+                    if !cand.starts_with(|c: char| c.is_alphabetic() || matches!(c, 'µ' | 'μ' | '°' | 'Ω')) {
+                        break;
+                    }
+                    if !text[end..].trim_start().starts_with('(')
+                        && let Ok(u) = crate::units::parse_unit(cand)
+                        && !(u.dim.is_none() && u.factor == 1.0 && Constant::from_name(cand).is_some())
+                    {
+                        matched = Some(u);
+                        break;
+                    }
+                    // Shorten at the previous separator or character boundary.
+                    end = cand[..cand.len() - cand.chars().last().map_or(1, char::len_utf8)]
+                        .rfind(|c: char| !(c.is_alphanumeric() || matches!(c, 'µ' | 'μ' | '°' | 'Ω')))
+                        .map(|p| unit_start + p)
+                        .unwrap_or(unit_start);
+                    if end == unit_start && cand.len() > 1 {
+                        // Last try: the leading identifier alone.
+                        let ident_len = cand.find(|c: char| !(c.is_alphabetic() || matches!(c, 'µ' | 'μ' | '°' | 'Ω'))).unwrap_or(cand.len());
+                        if ident_len > 0 && ident_len < cand.len() {
+                            end = unit_start + ident_len;
+                            continue;
+                        }
+                    }
+                }
+                match matched {
+                    Some(u) => {
+                        i = end;
+                        out.push(Tok::Lit(Value::quantity(n * u.factor, u.dim)));
+                    }
+                    None => out.push(Tok::Num(n)),
+                }
             }
             b'"' => {
                 let mut s = String::new();
@@ -623,13 +859,27 @@ impl Parser {
                 self.next();
                 Ok(Expr::Not(Box::new(self.unary()?)))
             }
-            _ => self.primary(),
+            _ => self.postfix(),
         }
+    }
+
+    /// A primary followed by any number of `.field` accesses.
+    fn postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut e = self.primary()?;
+        while self.peek() == Some(&Tok::Dot) {
+            self.next();
+            match self.next() {
+                Some(Tok::Ident(name)) => e = Expr::Get(Box::new(e), crate::sym::intern(&name)),
+                got => return Err(ParseError(format!("expected a field name after '.', got {got:?}"))),
+            }
+        }
+        Ok(e)
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
         match self.next() {
             Some(Tok::Num(n)) => Ok(Expr::Lit(Value::Number(n))),
+            Some(Tok::Lit(v)) => Ok(Expr::Lit(v)),
             Some(Tok::Str(s)) => Ok(Expr::Lit(Value::Str(s))),
             Some(Tok::Enum(s)) => Ok(Expr::Lit(Value::Enum(s))),
             Some(Tok::Ref(l)) => Ok(Expr::Ref(l)),
@@ -660,6 +910,11 @@ impl Parser {
             Some(Tok::Ident(name)) => match name.as_str() {
                 "true" => Ok(Expr::Lit(Value::Bool(true))),
                 "false" => Ok(Expr::Lit(Value::Bool(false))),
+                // A bare constant name. `pi(` is still a call, and fails at
+                // eval as an unknown function.
+                c if self.peek() != Some(&Tok::LParen) && Constant::from_name(c).is_some() => {
+                    Ok(Expr::Const(Constant::from_name(c).expect("checked")))
+                }
                 _ => {
                     self.expect(Tok::LParen)?;
                     let mut args = Vec::new();
@@ -708,6 +963,20 @@ mod tests {
             "[1, 2] * 2",
             "1 - (2 - 3)",
             "(1 < 2 ? 3 : 4) + 1",
+            "sin(#3.transform2d.rot) * 120",
+            "atan2(#4.transform2d.y, #4.transform2d.x)",
+            "hypot(3, 4) + sqrt(2) + pow(2, 10)",
+            "cos(pi / 2) + tan(0)",
+            "pi * 2",
+            "-pi",
+            "0.00958 W * 2",
+            "1550 m + 2 m",
+            "-3 N",
+            "3 kg/s3 / 2 s",
+            "max(1 W, 2 W) > 0.5 W ? 1 : 0",
+            "#3.params.beam.waist * 2",
+            "-#3.params.beam.waist",
+            "#3.params.beam.m2 + 1",
         ];
         for text in cases {
             let e = Expr::parse(text).unwrap_or_else(|err| panic!("{text}: {err}"));
@@ -746,5 +1015,79 @@ mod tests {
         assert!(matches!(ev("1 + true").unwrap_err(), EvalError::Type(_)));
         assert!(matches!(ev("nope(1)").unwrap_err(), EvalError::UnknownFunction(_)));
         assert!(matches!(ev("clamp(1)").unwrap_err(), EvalError::Arity { .. }));
+    }
+
+    #[test]
+    fn trig_roots_and_pi() {
+        let read = |_: Leaf| -> Option<Value> { None };
+        let ev = |t: &str| Expr::parse(t).unwrap().eval(&read).unwrap().as_f64().unwrap();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+        assert!(close(ev("pi"), std::f64::consts::PI));
+        assert!(close(ev("sin(pi / 2)"), 1.0));
+        assert!(close(ev("cos(pi)"), -1.0));
+        assert!(close(ev("tan(pi / 4)"), 1.0));
+        assert!(close(ev("atan2(1, 1)"), std::f64::consts::FRAC_PI_4));
+        assert!(close(ev("atan2(1, 0)"), std::f64::consts::FRAC_PI_2), "atan2 takes (y, x)");
+        assert!(close(ev("sqrt(16)"), 4.0));
+        assert!(close(ev("pow(2, 10)"), 1024.0));
+        assert!(close(ev("hypot(3, 4)"), 5.0));
+        assert!(Expr::parse("pi").unwrap().deps().is_empty());
+        // `pi(` parses as a call and is rejected at eval, like any unknown function.
+        assert!(matches!(Expr::parse("pi()").unwrap().eval(&read).unwrap_err(), EvalError::UnknownFunction(_)));
+        assert!(Expr::parse("tau").is_err(), "unknown bare identifiers do not parse");
+    }
+
+    #[test]
+    fn quantities_are_dimension_checked() {
+        let read = |_: Leaf| -> Option<Value> { None };
+        let ev = |t: &str| Expr::parse(t).unwrap().eval(&read);
+        let q = |t: &str| Value::parse_quantity(t).unwrap();
+        // The stage B exit: mW + nm is an error, mW * 2 is not.
+        let err = ev("9.58 mW + 1 nm").unwrap_err().to_string();
+        assert!(err.contains("W") && err.contains("m"), "{err}");
+        assert_eq!(ev("9.58 mW * 2").unwrap(), q("19.16 mW"));
+        assert_eq!(ev("2 * 9.58 mW").unwrap(), q("0.01916 W"));
+        assert!(ev("9.58 mW + 2").unwrap_err().to_string().contains("plain number"));
+        assert_eq!(ev("9.58 mW + 0.42 mW").unwrap(), q("10 mW"));
+        assert_eq!(ev("1 W / 1 W").unwrap(), Value::Number(1.0), "a cancelled dimension is a plain number");
+        assert_eq!(ev("3 V * 2 A").unwrap(), q("6 W"));
+        assert_eq!(ev("6 W / 2 A").unwrap(), q("3 V"));
+        assert_eq!(ev("1 km > 999 m").unwrap(), Value::Bool(true));
+        assert!(ev("1 km > 999 s").is_err());
+        assert_eq!(ev("sqrt(4 m*m)").unwrap(), q("2 m"));
+        assert!(ev("sqrt(2 m)").is_err());
+        assert_eq!(ev("pow(2 m, 3)").unwrap(), q("8 m3"));
+        assert!(ev("pow(2 m, 0.5)").is_err());
+        assert_eq!(ev("hypot(3 m, 4 m)").unwrap(), q("5 m"));
+        assert!(ev("sin(1 m)").is_err());
+        assert_eq!(ev("sin(90 deg)").unwrap(), Value::Number(1.0), "angles are plain numbers in radians");
+        assert_eq!(ev("clamp(5 W, 0 W, 2 W)").unwrap(), q("2 W"));
+        assert!(ev("clamp(5 W, 0, 2)").is_err());
+        assert_eq!(ev("lerp(0 W, 10 W, 0.25)").unwrap(), q("2.5 W"));
+        assert!(ev("lerp(0 W, 10 W, 1 s)").is_err());
+        assert_eq!(ev("scale(5 mW, 0 W, 10 mW, 0, 100)").unwrap(), Value::Number(50.0));
+        assert_eq!(ev("abs(-3 N)").unwrap(), q("3 N"));
+        // A number before a non-unit identifier is still a syntax error.
+        assert!(Expr::parse("2 furlongs").is_err());
+        assert!(Expr::parse("2 pi").is_err());
+        // Printing uses the canonical unit so the round trip is exact.
+        assert_eq!(Expr::parse("9.58 mW").unwrap().to_string(), "0.00958 W");
+        assert_eq!(Expr::parse("1 min").unwrap().to_string(), "60 s");
+    }
+
+    #[test]
+    fn get_reads_record_fields() {
+        let beam = Value::record("gaussian_beam", [("waist", Value::parse_quantity("30 um").unwrap()), ("m2", Value::Number(1.1))]);
+        let read = |l: Leaf| -> Option<Value> { (l == leaf(3, "params.beam")).then(|| beam.clone()) };
+        let ev = |t: &str| Expr::parse(t).unwrap().eval(&read);
+        assert_eq!(ev("#3.params.beam.waist * 2").unwrap(), Value::parse_quantity("60 um").unwrap());
+        assert_eq!(ev("#3.params.beam.m2").unwrap(), Value::Number(1.1));
+        let err = ev("#3.params.beam.power").unwrap_err().to_string();
+        assert!(err.contains("no field") && err.contains("waist"), "{err}");
+        assert!(ev("#3.params.beam.waist.x").unwrap_err().to_string().contains("cannot read field"));
+        // Dependencies are the record leaf, not the field.
+        let d = Expr::parse("#3.params.beam.waist").unwrap().deps();
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![leaf(3, "params.beam")]);
+        assert_eq!(Expr::parse("#3.params.beam.waist").unwrap(), Expr::Get(Box::new(Expr::Ref(leaf(3, "params.beam"))), "waist"));
     }
 }

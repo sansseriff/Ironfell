@@ -52,33 +52,49 @@ cd .claude/skills/run-iron && bun run drive.ts < smoke.txt; cd -
 ```
 
 `smoke.txt` opens the app, waits for the engine, screenshots, drags the
-square and the torus, undoes both with Cmd+Z, redoes one with Cmd+Shift+Z,
-scrubs the slider and checks the bar bound to it, scrubs the timeline and
-checks the clip driving the torus, applies one good and one bad edit in the
-model's markup, round-trips the document through save and load, and prints
-the transactions the store applied. Expected output, minus screenshot lines:
+square (step by step, with a mid-drag screenshot and view showing the
+shadow rect bound to it following) and the torus, undoes both with Cmd+Z,
+redoes one with Cmd+Shift+Z, scrubs the slider and checks the bar bound to
+it, drags the bar so its bound y inverts onto the slider, scrubs the
+timeline and checks the clip driving the torus, applies one good and one
+bad edit in the model's markup, round-trips the document through save and
+load, and prints the transactions the store applied. Expected output, minus
+screenshot lines:
 
 ```
-"<bar id=\"#P\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #O.slider.value * 300\" … h=\"270\" h.bind=\"#O.slider.value * 300\" …/>"
-"<bar id=\"#P\" name=\"bar\" x=\"730\" y=\"370\""
-"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" … <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#U"}}
+["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#T\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
+redraw (document): 2 of 25 nodes changed [#M #T]; damage 499,379–741,501
+redraw (document): 2 of 25 nodes changed [#M #T]; damage 559,339–801,461
+"<rect id=\"#a\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #Z.params.level * 300\" … h=\"270\" h.bind=\"#Z.params.level * 300\" …>"
+"<rect id=\"#a\" name=\"bar\" x=\"730\" y=\"400\""
+"value=\"0.8\"/>"
+"<mesh id=\"#P\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" … <driven-by ref=\"#R\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+{"ok":true,"version":9,"aliases":{"$n":"#b"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#U\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"90\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
-{"roundtrip_equal":true,"bytes":7533}
-"<document version=\"9\"> |   <group id=\"#1\" name=\"scene\" count=\"25\"> | …"
-applied "open demo scene" (31 ops, System) -> v1
+"<rect id=\"#b\" name=\"from-model\" x=\"300\" y=\"120\" … w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" …/>"
+{"roundtrip_equal":true,"bytes":8877}
+"<document version=\"9\"> |   <group id=\"#1\" name=\"scene\" count=\"27\"> | …"
+applied "open demo scene" (40 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
 applied "undo: move rect" (2 ops, System) -> v5
 applied "redo: move rect" (2 ops, System) -> v6
 applied "set slider" (1 ops, Human) -> v7
-applied "move bar" (1 ops, Human) -> v8
+applied "move rect" (2 ops, Human) -> v8
 applied "model edit" (2 ops, Model) -> v9
-loaded document v9 (30 live nodes)
+loaded document v9 (37 live nodes)
 (no page errors)
 ```
+
+Any `locked for this drag` line names an axis the drag held still and why;
+any `differs from Bevy` line means the store's world transform disagrees
+with the entity's and is a bug. Every rebuild of the 2D layer logs one
+`redraw (<reason>): N of M nodes changed [ids]; damage x0,y0–x1,y1` line:
+the reason is `document` (the reconciler's changed-node set, with
+`, structure` when the tree's shape changed), `panel layout`, or
+`selection`; the damage is the union of the changed nodes' old and new
+document-space bounds.
 
 `__iron.edit(xml)` applies `<edit>` markup exactly as a model reply would be
 applied (see `src-ui/model/edit.ts` for the verbs); `__iron.ask(text)` runs a
@@ -87,7 +103,13 @@ panel, so the smoke script does not call it.
 
 `window.__iron` is the document API for `eval`: `await __iron.save()` returns
 the canonical JSON, `await __iron.load(text)` replaces the document, and
-`await __iron.view({fidelity:'summary', depth: 2})` renders a view. The
+`await __iron.view({fidelity:'summary', depth: 2})` renders a view.
+`await __iron.bench(20, 200)` runs the constraint solver's benchmark
+(`iron_solve::bench`, a 12-variable chain) in this build and returns its
+per-solve time in microseconds, for comparison with the native
+`cargo run -p iron_solve --release --example bench --target aarch64-apple-darwin`.
+Under SwiftShader the number is still meaningful: the solver is CPU work in
+the worker, not rendering. The
 Document panel on the left shows the full tree view and refreshes on every
 applied transaction.
 
@@ -119,6 +141,7 @@ cd -
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |
 | `logs [regex]` | print console output since the last `logs`, optionally filtered; Rust `info!`/`warn!` lines from the worker appear here |
+| `peek [regex]` | like `logs`, without clearing the buffer |
 | `errors` | print uncaught page errors |
 | `panel` | print the viewer panel rect |
 | `sleep ms` | wait |
@@ -128,12 +151,23 @@ Where things are in the demo scene, in document space: the draggable square
 covers (500,420)–(580,500); the circle is centred at (160,330); the slider
 track runs (100,600)–(400,624) and scrubbing along it previews the value
 through the store; the bar at x=780 has its height and top bound to the
-slider; the torus sits near the viewer centre, about (435,350) at a
-1600×1000 window. The timeline holds a "slide" clip (0.5–2.5 s, square x
-500→700) and a "spin" clip (1–4 s, torus rotation). Any `<attr>.bind` in a
-view is a binding and any `<driven-by>` names a clip; an axis whose leaf is
-bound, or clip-driven at the current time, is locked for the whole drag (the
-bar moves in x only), and a node with both axes locked does not drag.
+slider through a definition: the library (a root) holds a `bar` definition
+with one parameter, `level`, and a template rect; the scene holds an entity
+instantiated from it (its `level` bound to the slider) and the rect that
+depicts it, whose y and h read the entity's params. The template itself is
+never drawn. The "shadow" rect at (600,420) has x and y bound to the square's;
+the torus sits near the viewer centre, about (435,350) at a 1600×1000
+window. The timeline holds a "slide" clip (0.5–2.5 s, square x 500→700)
+and a "spin" clip (1–4 s, torus rotation). Any `<attr>.bind` in a view is a
+binding and any `<driven-by>` names a clip.
+
+Every position drag goes through the store's gesture overlay, so anything
+bound to the dragged node follows in the same frame and a view taken
+mid-drag shows the previewed values. A leaf bound linearly to one constant
+leaf (the bar's y to the slider, the shadow's x to the square) inverts: the
+drag sets that source, and the commit writes it. Any other bound axis, or
+one clip-driven at the current time, is locked for the whole drag and the
+console says why; a node with both axes locked does not drag.
 
 ## Run (human path)
 
@@ -151,8 +185,10 @@ run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-21 tests pass (13 unit, 8 integration). The host target is required because
-`.cargo/config.toml` defaults the whole workspace to wasm.
+66 tests pass (30 unit, 36 integration). The host target is required because
+`.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
+has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
+tests).
 
 ## Gotchas
 

@@ -189,6 +189,7 @@ export class PanelManager {
       case 'documentView':
       case 'modelEditResult':
       case 'modelAskResult':
+      case 'solveBench':
         this.docClient.handleMessage(data);
         break;
       case 'probeStats':

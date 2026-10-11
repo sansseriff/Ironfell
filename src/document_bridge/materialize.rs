@@ -6,7 +6,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use iron_document::{ComponentKind, LeafPath, NodeId, Store, Value};
+use iron_document::{ComponentKind, LeafPath, NodeId, Store, TypeId, Value};
 use std::collections::BTreeSet;
 
 use crate::bevy_app::scene3d::{ActiveState, Shape};
@@ -86,7 +86,9 @@ pub(super) fn reconcile(
     for &id in affected {
         match (doc.live(id), map.entity(id)) {
             (Some(_), None) => {
-                if let Some(e) = spawn(store, id, commands, assets) {
+                if drawable(doc, id)
+                    && let Some(e) = spawn(store, id, commands, assets)
+                {
                     map.insert(id, e);
                 }
             }
@@ -120,13 +122,27 @@ pub(super) fn reconcile(
     }
 }
 
+/// A node under a `library` is a definition's template, shown only when
+/// instantiated; nothing in a library is materialised.
+fn drawable(doc: &iron_document::Document, id: NodeId) -> bool {
+    let library = TypeId::lookup("library").expect("registered");
+    let mut cur = Some(id);
+    while let Some(n) = cur.and_then(|c| doc.live(c)) {
+        if n.ty == library {
+            return false;
+        }
+        cur = n.parent;
+    }
+    true
+}
+
 /// Spawn the entity for a live node, or `None` for node types that have no
-/// runtime form yet (slider, bar, clip, timeline).
+/// runtime form (clip, timeline, entity, the library types).
 fn spawn(store: &Store, id: NodeId, commands: &mut Commands, assets: &MeshAssets) -> Option<Entity> {
     let node = store.document().live(id)?;
     let mut ec = match node.ty.name() {
         "group" => commands.spawn((Provenance(id), Name::new(format!("group {id}")), Visibility::default())),
-        "rect" | "circle" | "bar" | "slider" => {
+        "rect" | "circle" | "slider" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
         "mesh" => {
@@ -158,7 +174,7 @@ fn write_values(store: &Store, id: NodeId, ec: &mut EntityCommands, assets: &Mes
         "group" => {
             ec.insert(r.transform_2d());
         }
-        "rect" | "circle" | "bar" | "slider" => {
+        "rect" | "circle" | "slider" => {
             ec.insert(r.transform_2d());
             let shape = match node.ty.name() {
                 "circle" => Shape2d::Circle { r: r.num("radius.r", 50.0) },

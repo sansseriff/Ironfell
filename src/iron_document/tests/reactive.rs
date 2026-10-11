@@ -59,7 +59,7 @@ fn scene() -> Scene {
                 },
                 Op::Create {
                     id: bar,
-                    ty: ty("bar"),
+                    ty: ty("rect"),
                     parent: None,
                     order: OrderKey::after(&OrderKey::first()),
                     components: vec![t.wrap(), s.wrap(), Fill::default().wrap()],

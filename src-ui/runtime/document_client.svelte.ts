@@ -13,6 +13,7 @@
  *   await __iron.view({fidelity:'summary', depth: 2})
  *   await __iron.edit('<edit>…</edit>')   -> apply markup as the model would
  *   await __iron.ask('make the circle red') -> a real model turn (needs a key)
+ *   await __iron.bench(20, 200)    -> the solver benchmark in this build (JSON)
  */
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
@@ -57,6 +58,8 @@ export class DocumentClient {
       view: (q: ViewQuery) => this.request('documentView', { query: { scope: null, depth: null, ...q } }),
       edit: (xml: string, label?: string) => this.edit(xml, label),
       ask: (instruction: string) => this.ask(instruction),
+      bench: async (iterations = 20, repeats = 200) =>
+        JSON.parse(await this.request('solveBench', { iterations, repeats })),
     };
   }
 
@@ -96,7 +99,8 @@ export class DocumentClient {
         return true;
       case 'documentSaved':
       case 'documentLoaded':
-      case 'documentView': {
+      case 'documentView':
+      case 'solveBench': {
         const p = this.pending.get(data.requestId);
         if (!p) return true;
         this.pending.delete(data.requestId);

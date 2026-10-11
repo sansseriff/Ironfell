@@ -15,7 +15,11 @@ use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::transform::TransformSystems;
 use crate::vector::{VectorCamera, VectorPlugin};
-use crate::document_bridge::DocumentPlugin;
+use crate::document_bridge::{DocumentPlugin, reconcile_gesture};
+
+/// The drag's preview, reconcile and command flush, in that order.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct GestureSystems;
 
 pub use input_accum::*;
 // Bring required items into scope from submodules
@@ -215,20 +219,24 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
         PostUpdate,
         (
             interaction_decide_system,
-            // Land before propagation so downstream transform consumers see
-            // the corrected value in the same frame.
-            drag_apply_system
+            // A drag previews into the store, the bridge rewrites the
+            // affected entities, and the deferred inserts are applied, all
+            // before propagation so transform consumers and the 2D layer see
+            // this frame's pointer position (constraint-system.md §8.2).
+            (drag_apply_system, reconcile_gesture, ApplyDeferred)
+                .chain()
+                .in_set(GestureSystems)
                 .after(interaction_decide_system)
                 .before(TransformSystems::Propagate),
-            // Writeback: the released drag becomes one queued transaction,
+            // Writeback: the released drag becomes one gesture commit,
             // applied by the document sync next frame.
-            drag_commit_system.after(drag_apply_system),
-            update_aabbes.after(drag_apply_system),
+            drag_commit_system.after(GestureSystems),
+            update_aabbes.after(GestureSystems),
             selection_reflect_system.after(interaction_decide_system),
             outbound_hover_system.after(interaction_decide_system),
             outbound_selection_system.after(interaction_decide_system),
             render_active_shapes
-                .after(drag_apply_system)
+                .after(GestureSystems)
                 .after(selection_reflect_system),
         ),
     );

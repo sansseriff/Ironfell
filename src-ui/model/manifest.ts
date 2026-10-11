@@ -52,14 +52,28 @@ VERBS, inside <edit expect-version="N">  (N = the version you read)
 
 VALUES
   numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or
-  0,1.5,0; enums by name (easing: linear ease_in ease_out ease_in_out; host: canvas dom).
+  0,1.5,0; enums by name (easing: linear ease_in ease_out ease_in_out; host: canvas dom);
+  quantities as a magnitude and unit, 9.58 mW or 1550 nm (SI units with prefixes;
+  compound like kg*m2/s3). Plain numbers are dimensionless: 2 mW * 3 works,
+  2 mW + 3 is an error, and so is adding mW to nm. Angles are plain radians.
   Document 2D space is y-down with the origin at the viewer's top-left, one unit per
   pixel; rect origin is its top-left corner; circles are centred.
 
 EXPRESSIONS (for {= …} bindings)
   #id.component.field references a leaf; + - * / % < <= > >= == != && || !;
   cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
-  lerp(a,b,t) scale(x,d0,d1,r0,r1). A binding may not depend on itself.
+  lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan atan2(y,x) sqrt pow(x,y) hypot(x,y);
+  the constant pi; angles in radians; quantity literals 9.58 mW. A binding may not
+  depend on itself.
+
+DEFINITIONS
+  A library root holds definition nodes. A definition's param_spec children declare
+  its parameters (name, kind, default); a depiction child's subtree is the template
+  for one notation, and may bind to a param_spec's default. An entity instantiates
+  a definition: instance.def names it and params.<name> holds one value per
+  parameter, each bindable (params.level="{= #O.slider.value}"). Its picture is an
+  ordinary node with a depicts relation to the entity; its bindings read the
+  entity's params. Setting an unknown or wrongly typed parameter is rejected.
 
 TIME
   A clip node (child of a timeline) has timing.start, timing.dur, timing.easing and

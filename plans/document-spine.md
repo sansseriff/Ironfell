@@ -332,7 +332,8 @@ measure first.
   canonical and the parser is its inverse, tested by round trip. The grammar is doc 02
   §4 without `Get`: literals, `#id.component.field` references, unary and binary
   operators, `cond ? a : b`, and `name(args)` into the floor (`abs floor ceil round min
-  max clamp lerp scale`). Adding a floor function is one match arm.
+  max clamp lerp scale`, and since roadmap stage A `sin cos tan atan2 sqrt pow hypot`
+  with the constant `pi`). Adding a floor function is one match arm.
 - **Dependencies are static** (`Expr::deps`). The graph is rebuilt after any structural
   transaction and walked from changed leaves otherwise. Evaluation is height-ordered with
   equality cutoff; every read goes through one resolver, the hook for tracked reads if
@@ -345,12 +346,19 @@ measure first.
   transaction and `cancel_gesture` drops it. This is doc 04 §3.5's coalescing buffer
   placed where the evaluator can see it, so a slider scrub updates its dependents every
   frame without a transaction (doc 02 invariant 8).
-- **A bound leaf has no drag handle.** A previewed value on a bound leaf is never
-  written, and a drag locks any axis whose leaf is bound (or clip-driven at the current
-  time) for the whole gesture, so the node moves only along its free axis and nothing
-  snaps on release. This is doc 02 §9.2 ("do not offer a handle on a derived composite")
-  and §8.2's "reject" policy; detach-to-literal and model-mediated repair are later
-  choices.
+- **A bound leaf has no drag handle, unless its binding inverts.** A previewed value on
+  a bound leaf is never written. A drag locks any axis whose leaf is clip-driven at the
+  current time, or bound to anything other than an expression linear in exactly one
+  constant leaf, for the whole gesture, so the node moves only along its free axes and
+  nothing snaps on release. This is doc 02 §9.2 ("do not offer a handle on a derived
+  composite") and §8.2's "reject" policy; detach-to-literal and model-mediated repair
+  are later choices. *Amended 2026-10-10 (roadmap stage A):* a leaf bound linearly to
+  one constant leaf (`x = 2·v + 10`) gets a handle that previews and commits that leaf
+  (`handle.rs`, `Store::preview_target`); a leaf in a constraint cluster will get one
+  from the solver (`constraint-system.md`). All position drags, 2D and 3D, now go
+  through `Store::preview`, with an in-frame reconcile pass before transform
+  propagation (`document_bridge::reconcile_gesture`), so bound nodes follow during the
+  drag.
 - **Resolved changes are the reconciler's third input** after ops and history: after each
   sync, leaves whose resolved value moved name the nodes to rewrite.
 
@@ -632,7 +640,7 @@ All native, in `iron_document`:
 
 | Item | Reserved by |
 |---|---|
-| Units as a value type (doc 06 §5) | a `Value::Quantity` variant, unconstructed |
+| Units as a value type (doc 06 §5) | ~~a `Value::Quantity` variant, unconstructed~~ **Done 2026-10-10** (roadmap stage B): `Value::Quantity { si, dim }` and `units.rs`; see `entity-composition-model.md` §3 and §12 phase 1 |
 | Content hashes and the context ledger (doc 04 §4.3, §8) | `version` exists; hashes wait for measurement |
 | Components with local state and the FSM (doc 06 §1–2) | `Slot` and the registry admit new kinds without changing ops |
 | Collaboration / CRDT | `NodeId` newtype; the op log |

@@ -1,0 +1,10 @@
+[package]
+name = "iron_solve"
+version = "0.1.0"
+edition = "2024"
+description = "Small dense constraint solver: numbered variables, tiered residual terms, damped least squares. Knows nothing about documents or renderers."
+
+# No dependencies, by design (plans/constraint-system.md §5): the crate knows
+# only variables and residual functions, so it compiles and tests natively,
+# runs in wasm, and can be swapped for another solver behind the same shape.
+[dependencies]

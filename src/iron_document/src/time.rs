@@ -51,6 +51,7 @@ pub fn lerp(from: &Value, to: &Value, u: f64) -> Option<Value> {
         (Number(a), Number(b)) => Number(l(*a, *b)),
         (Vec2(a), Vec2(b)) => Vec2([l(a[0], b[0]), l(a[1], b[1])]),
         (Vec3(a), Vec3(b)) => Vec3([l(a[0], b[0]), l(a[1], b[1]), l(a[2], b[2])]),
+        (Quantity { si: a, dim: da }, Quantity { si: b, dim: db }) if da == db => Quantity { si: l(*a, *b), dim: *da },
         (Color(a), Color(b)) => Color([
             l(a[0] as f64, b[0] as f64) as f32,
             l(a[1] as f64, b[1] as f64) as f32,

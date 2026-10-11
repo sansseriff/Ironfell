@@ -170,11 +170,14 @@ pub struct PointerHits {
     pub primary: Option<Entity>,
 }
 
+/// What the pointer picked, as document nodes (ECM §7.2). Selecting or
+/// hovering a figure means its entity; `document_bridge::Highlights` derives
+/// every node that lights up for it, in every panel.
 #[derive(Resource, Debug, Default)]
 pub struct SelectionState {
-    pub selected: HashMap<Entity, ()>,
-    pub hovered: HashMap<Entity, ()>,
-    pub last_primary: Option<Entity>,
+    /// In pick order: shift-click adds, so a Link knows its two figures.
+    pub selected: Vec<iron_document::NodeId>,
+    pub hovered: Option<iron_document::NodeId>,
 }
 
 #[derive(Debug, Clone, Copy)]

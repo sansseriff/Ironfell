@@ -20,6 +20,7 @@
 //!   are re-examined.
 
 mod demo;
+mod highlight;
 mod materialize;
 mod panel_views;
 mod render;
@@ -30,6 +31,7 @@ use bevy::transform::TransformSystems;
 use iron_document::{Document, NodeId, Op, Store, TransactionInput, TypeId};
 use std::collections::BTreeSet;
 
+pub use highlight::{Highlights, update_highlights};
 pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d};
 pub use panel_views::{CompositionLayers, InComposition, PanelView, PanelViews};
 pub use render::DocumentLayer;
@@ -179,6 +181,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<GestureRequests>()
             .init_resource::<SyncedVersion>()
             .init_resource::<PanelViews>()
+            .init_resource::<Highlights>()
             .init_resource::<CompositionLayers>()
             .add_systems(Startup, (materialize::setup_mesh_assets, render::setup_document_layer, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is

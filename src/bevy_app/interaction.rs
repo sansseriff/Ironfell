@@ -58,15 +58,12 @@ pub fn interaction_decide_system(
     mut store: ResMut<DocumentStore>,
     views: Res<PanelViews>,
 ) {
-    // Hover follows the primary hit. Written only on change so downstream
-    // change detection (and the outbound FFI) stays quiet while hovering.
-    let hovered_now: Option<Entity> = hits.primary;
-    let hovered_before = selection.hovered.keys().next().copied();
-    if hovered_now != hovered_before {
-        selection.hovered.clear();
-        if let Some(e) = hovered_now {
-            selection.hovered.insert(e, ());
-        }
+    // Hover follows the primary hit, as a document node. Written only on
+    // change so downstream change detection (and the outbound FFI) stays
+    // quiet while hovering.
+    let hovered_now = hits.primary.and_then(|e| provenance.get(e).ok()).map(|p| p.0);
+    if selection.hovered != hovered_now {
+        selection.hovered = hovered_now;
     }
 
     // Drag end: the finger lifts now; the commit follows next sync.
@@ -82,9 +79,16 @@ pub fn interaction_decide_system(
     // Drag begin or click selection start
     if pointer.just_pressed_left {
         if let Some(primary) = hits.primary {
-            selection.selected.clear();
-            selection.selected.insert(primary, ());
-            selection.last_primary = Some(primary);
+            // Shift adds to the selection (Link takes two figures); a plain
+            // press replaces it.
+            if let Ok(prov) = provenance.get(primary) {
+                if !pointer.modifiers.shift {
+                    selection.selected.clear();
+                }
+                if !selection.selected.contains(&prov.0) {
+                    selection.selected.push(prov.0);
+                }
+            }
             drag.target = Some(primary);
             drag.handle = None;
             drag.panel = hits.panel.clone();
@@ -165,9 +169,8 @@ pub fn interaction_decide_system(
                     }
                 }
             }
-        } else {
+        } else if !selection.selected.is_empty() {
             selection.selected.clear();
-            selection.last_primary = None;
         }
     }
 }
@@ -289,17 +292,18 @@ fn intersect_ray_plane(ray: Ray3d, plane_point: Vec3, plane_normal: Vec3) -> Opt
     Some(ray.origin + ray.direction * t)
 }
 
-// Reflect selection & hover state into ActiveState components for rendering outlines.
+// Reflect the highlights into ActiveState components for 3D outlines, so a
+// mesh lights up when a figure of its entity is picked in any panel.
 pub fn selection_reflect_system(
-    selection: Res<crate::SelectionState>,
-    mut query: Query<(Entity, &mut ActiveState)>,
+    highlights: Res<crate::document_bridge::Highlights>,
+    mut query: Query<(&Provenance, &mut ActiveState)>,
 ) {
-    if !selection.is_changed() {
+    if !highlights.is_changed() {
         return;
     }
-    for (entity, mut active) in &mut query {
-        active.selected = selection.selected.contains_key(&entity);
-        active.hover = selection.hovered.contains_key(&entity);
+    for (prov, mut active) in &mut query {
+        active.selected = highlights.selected.contains(&prov.0);
+        active.hover = highlights.hovered.contains(&prov.0);
     }
 }
 
@@ -309,8 +313,8 @@ pub fn outbound_hover_system(selection: Res<crate::SelectionState>) {
         return;
     }
     let arr = js_sys::Array::new();
-    for (entity, _) in selection.hovered.iter() {
-        arr.push(&wasm_bindgen::JsValue::from(entity.to_bits()));
+    for id in selection.hovered.iter() {
+        arr.push(&wasm_bindgen::JsValue::from(id.to_string()));
     }
     crate::web_ffi::send_hover_from_worker(arr);
 }
@@ -320,8 +324,8 @@ pub fn outbound_selection_system(selection: Res<crate::SelectionState>) {
         return;
     }
     let arr = js_sys::Array::new();
-    for (entity, _) in selection.selected.iter() {
-        arr.push(&wasm_bindgen::JsValue::from(entity.to_bits()));
+    for id in selection.selected.iter() {
+        arr.push(&wasm_bindgen::JsValue::from(id.to_string()));
     }
     crate::web_ffi::send_selection_from_worker(arr);
 }

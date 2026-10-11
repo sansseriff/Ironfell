@@ -233,7 +233,12 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             // applied by the document sync next frame.
             drag_commit_system.after(GestureSystems),
             update_aabbes.after(GestureSystems),
-            selection_reflect_system.after(interaction_decide_system),
+            // Highlights before the 2D layer draws (after propagation) and
+            // before the 3D outlines read them.
+            crate::document_bridge::update_highlights
+                .after(interaction_decide_system)
+                .before(TransformSystems::Propagate),
+            selection_reflect_system.after(crate::document_bridge::update_highlights),
             outbound_hover_system.after(interaction_decide_system),
             outbound_selection_system.after(interaction_decide_system),
             render_active_shapes

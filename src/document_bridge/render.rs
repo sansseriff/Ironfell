@@ -16,7 +16,7 @@
 //! and clipped by its rectangle (ECM §7.1); a node outside every composition
 //! draws in the viewer panel.
 
-use super::{Bounds2d, Doc2d, DocumentChanges, DocumentStore, InComposition, NodeMap, PanelViews, Shape2d};
+use super::{Bounds2d, Doc2d, DocumentChanges, DocumentStore, Highlights, InComposition, NodeMap, PanelViews, Shape2d};
 use crate::panels::document_affine;
 use iron_document::composition::Dims;
 use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
@@ -41,14 +41,14 @@ pub(super) fn render_document_layer(
     mut changes: ResMut<DocumentChanges>,
     mut bounds: ResMut<Bounds2d>,
     views: Res<PanelViews>,
-    selection: Res<crate::SelectionState>,
+    highlights: Res<Highlights>,
 ) {
     let Ok(mut list) = layers.single_mut() else { return };
     let reason = if !changes.is_empty() {
         "document"
     } else if views.is_changed() {
         "panel layout"
-    } else if selection.is_changed() {
+    } else if highlights.is_changed() {
         "selection"
     } else {
         return;
@@ -121,8 +121,8 @@ pub(super) fn render_document_layer(
                             b.stroke(affine, kurbo::Stroke::new(w as f64), peniko::Color::new(c), shape.clone());
                         }
                     }
-                    let selected = selection.selected.contains_key(&e);
-                    let hovered = selection.hovered.contains_key(&e);
+                    let selected = highlights.selected.contains(&id);
+                    let hovered = highlights.hovered.contains(&id);
                     if selected || hovered {
                         let c = if selected { [0.1, 0.4, 1.0, 1.0] } else { [0.1, 0.4, 1.0, 0.5] };
                         b.stroke(affine, kurbo::Stroke::new(2.0), peniko::Color::new(c), shape.clone());

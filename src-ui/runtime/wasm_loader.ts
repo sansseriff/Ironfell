@@ -16,6 +16,8 @@ import type { Backend } from './backend_policy';
  *   ?bevy=classic      initialize classic Vello instead of Vello Hybrid;
  *                      this deliberately pays classic's deferred startup cost.
  *                      Requires a build with the `classic` cargo feature.
+ *   ?bevy=always       render every frame (render on demand off), to compare
+ *                      pacing and latency on a real display
  *   ?bevy=alpha        add the alpha-blending stress fixture; combine as
  *                      ?bevy=alpha,classic to run that variant with classic
  * No param = the normal Vello Hybrid app.
@@ -30,6 +32,7 @@ export function variantFlagsFromUrl(): number {
     if (parts.includes('empty')) flags |= 4; // VARIANT_EMPTY
     if (parts.includes('alpha')) flags |= 16; // VARIANT_ALPHA_STRESS
     if (parts.includes('classic')) flags |= 32; // VARIANT_CLASSIC_BACKEND
+    if (parts.includes('always')) flags |= 64; // VARIANT_ALWAYS_RENDER
     return flags;
 }
 

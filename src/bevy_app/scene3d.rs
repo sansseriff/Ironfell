@@ -445,8 +445,8 @@ pub(crate) struct ViewImage {
     /// The quad pasting it into the window; none for a 3D embed, whose
     /// texture the 2D view that embeds it draws instead.
     composite: Option<Entity>,
-    /// Rendered last frame: the texture's content is newer than any 2D view
-    /// that drew it, so its version moves on (see `EmbedImages`).
+    /// Renders this frame: its version moves on, so the 2D view drawing it
+    /// re-renders in step (see `EmbedImages`).
     was_active: bool,
     version: u32,
     material: Handle<crate::vector::view_composite::ViewCompositeMaterial>,
@@ -513,9 +513,6 @@ pub(crate) fn sync_view_images(
                 {
                     m.rect = rect;
                 }
-                if v.was_active {
-                    v.version = v.version.wrapping_add(1);
-                }
                 if v.fresh > 0 {
                     v.fresh -= 1;
                     dirty = true;
@@ -526,6 +523,12 @@ pub(crate) fn sync_view_images(
                 v.awake = if dirty { 3 } else { v.awake.saturating_sub(1) };
                 awake = Some(v.awake);
                 v.was_active = dirty || v.awake > 0;
+                // Rendering this frame: the 2D view that draws this texture
+                // re-renders this frame too, inside the render graph after
+                // this camera (`render_textured_scenes`).
+                if v.was_active {
+                    v.version = v.version.wrapping_add(1);
+                }
                 if let Some(ec) = embed {
                     published.insert(ec.key.clone(), crate::document_bridge::EmbedImage { image: v.image.clone(), size, version: v.version });
                 }

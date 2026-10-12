@@ -254,6 +254,23 @@ The window still pays one full-window composite pass and present on a frame that
 changes something; the custom final pass (§5's remaining item) is the next lever if
 that ever shows.
 
+### Latency fixes (2026-10-11, after a report of more lag on a real display)
+
+- The vector backend's `render_scene` and Bevy's `render_system` (which runs every
+  camera and composites the window) shared `RenderSystems::Render` with no order between
+  them; if Vello ran second, every 2D change reached the window a frame late. Now
+  ordered before it.
+- A 2D view that draws a 3D view's texture was a frame behind its camera (Vello rendered
+  before the graph, so it sampled last frame's image). Such views now render inside the
+  window camera's `Core2d` schedule, before its main pass: after every 3D camera, in the
+  same submission, each with its own `vello_hybrid::Renderer` (a renderer's queued
+  buffer writes land before the whole submission, so two targets sharing one would
+  overwrite each other). The texture version now moves on the frame its camera renders.
+- `?bevy=always` turns render on demand off, to compare pacing and latency on a real
+  display. Headless (GPU, vsync) pacing is a steady 16.7 ms in idle, 2D drag and 3D drag
+  at 1600×1000 and 5K, with and without these fixes, so the report is not reproduced
+  headless.
+
 ## 6. Migration order (after the spike)
 
 1. Composition panels (2D and 3D) onto views and the compositor; drop window-sized

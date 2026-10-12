@@ -58,6 +58,9 @@ pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
 /// a Hybrid-only plugin set so classic's eager compute-pipeline creation cannot
 /// affect cold start.
 pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
+/// Render every frame (`?bevy=always`): render on demand off, for comparing
+/// frame pacing and latency against it on a real display.
+pub const VARIANT_ALWAYS_RENDER: u32 = 1 << 6;
 
 /// Build the app around an already-created canvas.
 ///
@@ -171,8 +174,10 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     // Every view renders into its own texture and the window only composites
     // them (plans/view-textures.md), so a frame that changed nothing visible
     // need not render at all.
-    app.init_resource::<crate::RedrawNeeded>();
-    app.add_systems(Last, crate::decide_redraw);
+    if variant_flags & VARIANT_ALWAYS_RENDER == 0 {
+        app.init_resource::<crate::RedrawNeeded>();
+        app.add_systems(Last, crate::decide_redraw);
+    }
 
     // ============================ RE-ENABLE LADDER =============================
     // flags=0 escalation for the 5K frame-skip hunt. Uncomment ONE step at a time,

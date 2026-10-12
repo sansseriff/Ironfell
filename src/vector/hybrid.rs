@@ -142,6 +142,18 @@ impl Plugin for HybridBackend {
                 (prepare_scene, render_scene)
                     .chain()
                     .in_set(RenderSystems::Render)
+                    // Before Bevy runs its cameras and composites the window:
+                    // unordered, the window could paste last frame's 2D.
+                    .before(bevy::render::renderer::render_system)
+                    .run_if(resource_exists::<RenderDevice>),
+            )
+            // Views that draw a 3D view's texture render inside the window
+            // camera's schedule: after every 3D camera has rendered this
+            // frame, before the window composite, in the same submission.
+            .add_systems(
+                bevy::core_pipeline::Core2d,
+                render_textured_scenes
+                    .before(bevy::core_pipeline::Core2dSystems::MainPass)
                     .run_if(resource_exists::<RenderDevice>),
             );
     }
@@ -619,6 +631,11 @@ struct TargetScene {
     rendered: bool,
     /// Other views' textures this scene draws, bound at render time.
     textures: Vec<(TextureId, Handle<Image>, UVec2)>,
+    /// A target that draws textures renders inside the render graph, in its
+    /// shared submission, so it has its own renderer: the queue writes a
+    /// renderer stages for its buffers land before the whole submission, and
+    /// two targets sharing one would overwrite each other's.
+    own: Option<(Renderer, Resources)>,
 }
 
 /// Rebuild each target's scene, but only when one of its layers changed.
@@ -668,7 +685,7 @@ fn prepare_scene(
         // size should clamp rather than wrap.
         let (w, h) = (tsize.x.min(u16::MAX as u32) as u16, tsize.y.min(u16::MAX as u32) as u16);
         let HybridInner { targets, scratch, .. } = &mut *state;
-        let target = targets.entry(key).or_insert_with(|| TargetScene { scene: Scene::new(w, h), size: tsize, rendered: false, textures: Vec::new() });
+        let target = targets.entry(key).or_insert_with(|| TargetScene { scene: Scene::new(w, h), size: tsize, rendered: false, textures: Vec::new(), own: None });
         // Reuse the allocation; `reset_and_resize` keeps its buffers.
         target.scene.reset_and_resize(w, h);
         target.size = tsize;
@@ -864,31 +881,14 @@ fn render_scene(
     let convert = convert.get_or_insert_with(|| Convert::new(device.wgpu_device()));
     // Converted copies nobody draws any more.
     converted.retain(|id, _| targets.values().any(|t| t.textures.iter().any(|(_, h, _)| h.id() == *id)));
+    let _ = (&convert, &converted);
     for (key, t) in targets.iter_mut() {
-        if t.rendered {
+        // Targets that draw other views' textures render in the graph
+        // (`render_textured_scenes`), once those views have.
+        if t.rendered || !t.textures.is_empty() {
             continue;
         }
-        // Other views' textures this target draws, converted for Vello: a
-        // Bevy camera writes an sRGB texture (sampled as linear), Vello wants
-        // sRGB-encoded premultiplied bytes it can read raw.
-        let mut bindings = vello_hybrid::TextureBindings::new();
-        let mut missing = false;
-        for (id, handle, size) in &t.textures {
-            let Some(src) = gpu_images.get(handle) else {
-                missing = true;
-                continue;
-            };
-            let entry = converted.entry(handle.id()).or_insert_with(|| convert.target(device.wgpu_device(), *size));
-            if entry.2 != *size {
-                *entry = convert.target(device.wgpu_device(), *size);
-            }
-            convert.run(device.wgpu_device(), queue.as_ref(), &src.texture_view, &entry.1);
-            bindings.insert(*id, entry.1.clone());
-        }
-        if missing {
-            // A texture not on the GPU yet; try again next frame.
-            continue;
-        }
+        let bindings = vello_hybrid::TextureBindings::new();
         let handle = match key {
             None => target.as_ref().map(|t| &t.0),
             Some(e) => views.0.get(e).map(|v| &v.image),
@@ -1022,13 +1022,12 @@ impl Convert {
         (texture, view, size)
     }
 
-    fn run(&self, device: &wgpu::Device, queue: &wgpu::Queue, src: &wgpu::TextureView, dst: &wgpu::TextureView) {
+    fn record(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, src: &wgpu::TextureView, dst: &wgpu::TextureView) {
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("view texture convert"),
             layout: &self.layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) }],
         });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("view texture convert") });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("view texture convert"),
@@ -1047,6 +1046,79 @@ impl Convert {
             pass.set_bind_group(0, &bind, &[]);
             pass.draw(0..3, 0..1);
         }
-        queue.submit([encoder.finish()]);
+    }
+}
+
+/// Render the targets that draw other views' textures (3D compositions seen
+/// in 2D), inside the window camera's schedule: every 3D camera has recorded
+/// its pass by now, so the texture is this frame's and the 2D view that draws
+/// it shows it this frame. Each texture is converted for Vello first (a Bevy
+/// camera writes sRGB that samples as linear; Vello reads raw sRGB-encoded,
+/// premultiplied bytes), all into the graph's encoder.
+fn render_textured_scenes(
+    renderer: Res<HybridRenderer>,
+    views: Res<ExtractedViews>,
+    target: Option<Res<HybridTargetView>>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
+    device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
+    mut ctx: bevy::render::renderer::RenderContext,
+) {
+    let mut state = renderer.0.lock().expect("hybrid renderer lock");
+    let window = state.size;
+    if window.x == 0 || window.y == 0 {
+        return;
+    }
+    let HybridInner { targets, convert, converted, .. } = &mut *state;
+    let convert = convert.get_or_insert_with(|| Convert::new(device.wgpu_device()));
+    converted.retain(|id, _| targets.values().any(|t| t.textures.iter().any(|(_, h, _)| h.id() == *id)));
+    for (key, t) in targets.iter_mut() {
+        if t.rendered || t.textures.is_empty() {
+            continue;
+        }
+        let handle = match key {
+            None => target.as_ref().map(|t| &t.0),
+            Some(e) => views.0.get(e).map(|v| &v.image),
+        };
+        let Some(gpu_image) = handle.and_then(|h| gpu_images.get(h)) else { continue };
+        let mut bindings = vello_hybrid::TextureBindings::new();
+        let mut missing = false;
+        for (id, image, size) in &t.textures {
+            let Some(src) = gpu_images.get(image) else {
+                missing = true;
+                continue;
+            };
+            let entry = converted.entry(image.id()).or_insert_with(|| convert.target(device.wgpu_device(), *size));
+            if entry.2 != *size {
+                *entry = convert.target(device.wgpu_device(), *size);
+            }
+            convert.record(device.wgpu_device(), ctx.command_encoder(), &src.texture_view, &entry.1);
+            bindings.insert(*id, entry.1.clone());
+        }
+        if missing {
+            // A texture not on the GPU yet; try again next frame.
+            continue;
+        }
+        let (own, resources) = t.own.get_or_insert_with(|| {
+            Renderer::new_with(
+                device.wgpu_device(),
+                &RenderTargetConfig { format: TARGET_FORMAT, width: window.x, height: window.y },
+                RenderSettings::default(),
+            )
+        });
+        if let Err(err) = own.render(
+            &t.scene,
+            resources,
+            device.wgpu_device(),
+            queue.as_ref(),
+            ctx.command_encoder(),
+            &RenderSize { width: t.size.x, height: t.size.y },
+            &gpu_image.texture_view,
+            &bindings,
+        ) {
+            error!("vello_hybrid render failed: {err}");
+            continue;
+        }
+        t.rendered = true;
     }
 }

@@ -240,6 +240,20 @@ panel) until step 4. The smoke script's output is unchanged.
   3D cameras' tonemapping shifts plane colours slightly; tiled, demand-driven plane
   textures (§4) remain the extension; selecting or moving the plane itself.
 
+### After step 4: where it stands (measured 2026-10-11)
+
+GPU, unthrottled, frames per second (old = before the spike, same session conditions):
+
+| | 1600×1000, old → now | 5K, old → now |
+|---|---|---|
+| idle, 1/2/4 panels | 677 / 555 / 500 → ≈6500–7200 (0.1 ms, nothing rendered) | 233 / 191 / 183 → ≈6100–6800 |
+| a 3D view moving every frame, 2 panels | 651 → 963 (+48%) | 195 → 303 (+55%) |
+| same, 4 panels | 500 → 893 (+79%) | 184 → 339 (+84%) |
+
+The window still pays one full-window composite pass and present on a frame that
+changes something; the custom final pass (§5's remaining item) is the next lever if
+that ever shows.
+
 ## 6. Migration order (after the spike)
 
 1. Composition panels (2D and 3D) onto views and the compositor; drop window-sized

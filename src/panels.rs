@@ -122,3 +122,43 @@ pub fn document_from_screen(rect: PanelRect, screen: Vec2) -> Option<Vec2> {
 pub fn document_affine(rect: PanelRect) -> kurbo::Affine {
     kurbo::Affine::translate((rect.x as f64, rect.y as f64))
 }
+
+
+/// A vector view that covers one named panel (plans/view-textures.md): its
+/// layers render into a texture the panel's size. While the panel does not
+/// exist the view has no rectangle, and its layers draw nowhere.
+#[derive(Component, Debug, Clone)]
+pub struct PanelVectorView {
+    pub panel: String,
+}
+
+pub fn sync_panel_vector_views(
+    mut commands: Commands,
+    panels: Res<Panels>,
+    mut views: Query<(Entity, &PanelVectorView, Option<&mut crate::vector::VectorView>)>,
+) {
+    for (e, pv, view) in &mut views {
+        match (panels.rect(&pv.panel), view) {
+            (Some(r), view) => {
+                let next = crate::vector::VectorView {
+                    pos: UVec2::new(r.x.max(0.0) as u32, r.y.max(0.0) as u32),
+                    size: UVec2::new(r.w.max(1.0) as u32, r.h.max(1.0) as u32),
+                };
+                match view {
+                    Some(mut v) => {
+                        if *v != next {
+                            *v = next;
+                        }
+                    }
+                    None => {
+                        commands.entity(e).insert(next);
+                    }
+                }
+            }
+            (None, Some(_)) => {
+                commands.entity(e).remove::<crate::vector::VectorView>();
+            }
+            (None, None) => {}
+        }
+    }
+}

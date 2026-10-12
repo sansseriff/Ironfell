@@ -93,7 +93,11 @@ pub struct HybridTarget {
     pub image: Handle<Image>,
     /// Entity holding the clip-space quad and its compositing material.
     pub composite: Entity,
+    /// The texture's size: the window's while any layer draws into it, 1×1
+    /// once every layer has a view of its own.
     pub size: UVec2,
+    /// The window's size, which the renderer is configured for.
+    pub window: UVec2,
 }
 
 /// Per-layer counters, for deciding what to cache later and for telling apart
@@ -191,6 +195,7 @@ fn setup_target(
         .id();
 
     commands.insert_resource(HybridTarget {
+        window: size,
         image,
         composite,
         size,
@@ -234,14 +239,30 @@ fn sync_target(
     mut target: ResMut<HybridTarget>,
     composites: Query<&MeshMaterial2d<VectorCompositeMaterial>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    layers: Query<&VectorLayer>,
+    mut visibility: Query<&mut Visibility>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
-    let size = UVec2::new(
+    let window = UVec2::new(
         window.resolution.physical_width().max(1),
         window.resolution.physical_height().max(1),
     );
+    if target.window != window {
+        target.window = window;
+    }
+    // A window-sized texture, rendered and pasted every time it changes,
+    // only while some layer still draws into it; otherwise a 1×1 stub and a
+    // hidden quad (plans/view-textures.md).
+    let used = layers.iter().any(|l| l.view.is_none());
+    let size = if used { window } else { UVec2::ONE };
+    if let Ok(mut v) = visibility.get_mut(target.composite) {
+        let want = if used { Visibility::Visible } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
 
     let Ok(material) = composites.get(target.composite) else {
         return;
@@ -360,6 +381,8 @@ struct ExtractedLayers {
     /// Targets whose layers changed; cleared as each scene is rebuilt.
     dirty: bevy::platform::collections::HashSet<TargetKey>,
     target_size: UVec2,
+    /// The window's size, which the renderer is configured for.
+    window_size: UVec2,
     /// Last camera mapping used to build the mirror; see `extract_layers`.
     view: Option<ViewMapping>,
 }
@@ -423,6 +446,9 @@ fn extract_layers(
         extracted.target_size = target.size;
         extracted.dirty.insert(None);
     }
+    if let Some(target) = target.as_ref() {
+        extracted.window_size = target.window;
+    }
 
     // World layers need the camera mapping, which depends on the target size, so
     // it is resolved once here rather than per layer.
@@ -432,7 +458,7 @@ fn extract_layers(
         .map(|t| t.translation().truncate())
         .unwrap_or(Vec2::ZERO);
     let view = ViewMapping {
-        half: extracted.target_size.as_vec2() * 0.5,
+        half: extracted.window_size.as_vec2() * 0.5,
         camera: camera_translation,
     };
 
@@ -599,13 +625,14 @@ fn prepare_scene(
     mut stats: ResMut<VectorStats>,
 ) {
     let size = extracted.target_size;
-    if size.x == 0 || size.y == 0 {
+    let window = extracted.window_size;
+    if size.x == 0 || size.y == 0 || window.x == 0 || window.y == 0 {
         return;
     }
     let mut state = renderer.0.lock().expect("hybrid renderer lock");
 
-    if state.size != size {
-        state.size = size;
+    if state.size != window {
+        state.size = window;
         // The renderer is built against a fixed target config, and the view
         // belongs to a texture that no longer exists, so a resize retires both.
         state.inner = None;

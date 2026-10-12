@@ -199,8 +199,8 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     app.add_systems(Update, (sync_panel_cameras, apply_focus).chain());
 
     // --- STEP 4: UI panels + remaining Update systems -------------------------
-    app.add_systems(Startup, ui_panels::setup_ui_panels);
     app.add_systems(Update, ui_panels::render_ui_panels);
+    app.add_systems(PostUpdate, crate::panels::sync_panel_vector_views);
 
     // --- STEP 5: input/picking/interaction pipelines --------------------------
     app.add_systems(

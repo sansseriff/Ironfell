@@ -225,6 +225,11 @@ async function run(line: string) {
       await page.waitForTimeout(500);
       return out(`dragged tab ${title}`);
     }
+    case "wheel":
+      // wheel dx dy: scroll at the pointer (hold Control for a pinch-zoom).
+      await page.mouse.wheel(n[0], n[1]);
+      await page.waitForTimeout(400);
+      return;
     case "dclick":
     case "ddblclick": {
       // Click (or double-click) at a document point in the viewer, paced

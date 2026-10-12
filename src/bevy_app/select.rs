@@ -98,6 +98,8 @@ enum Gesture {
     Marquee { view: PanelView, start: Point, prefix: Vec<NodeId>, roots: Vec<NodeId>, base: Vec<Reach> },
     /// A drag `interaction::drag_apply_system` runs (3D, planes, sliders).
     Legacy,
+    /// Space-drag: the view's pan follows the pointer.
+    Pan { panel: String, start: Vec2, pan: Vec2 },
 }
 
 enum AfterPress {
@@ -604,6 +606,8 @@ pub struct ToolDoc<'w, 's> {
     map: Res<'w, NodeMap>,
     globals: Query<'w, 's, &'static GlobalTransform>,
     nodes: Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
+    view_cameras: ResMut<'w, crate::document_bridge::ViewCameras>,
+    keyboard: Res<'w, ButtonInput<KeyCode>>,
 }
 
 /// What the drags the box does not run need (`interaction`).
@@ -628,7 +632,8 @@ pub fn select_tool_system(
     legacy: LegacyDrag,
 ) {
     let tool = &mut *tool;
-    let ToolDoc { mut store, mut gestures, mut pending, map, globals, nodes } = docp;
+    let ToolDoc { mut store, mut gestures, mut pending, map, globals, nodes, mut view_cameras, keyboard } = docp;
+    let space = keyboard.pressed(KeyCode::Space);
     let LegacyDrag { mut drag, mut commit, provenance, cameras, planes } = legacy;
     // Keep a reach for every selected node, dropping the rest.
     {
@@ -779,6 +784,12 @@ pub fn select_tool_system(
         let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
         'press: {
             let Some(view) = view else { break 'press };
+            // Space held: the press pans the view instead.
+            if space && view.dims == Dims::Two {
+                let pan = view_cameras.0.get(&view.panel).map_or(Vec2::ZERO, |c| c.pan);
+                tool.gesture = Gesture::Pan { panel: view.panel.clone(), start: pointer.screen, pan };
+                break 'press;
+            }
             // The selection's grips come first.
             if view.dims == Dims::Two {
                 let mine = movers(&reaches, &view.panel);
@@ -975,6 +986,9 @@ pub fn select_tool_system(
             }
         }
         match &tool.gesture {
+            Gesture::Pan { panel, start, pan } => {
+                view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
+            }
             Gesture::Move { start, view, drags, .. } => {
                 let p = doc_point(view);
                 let mut d = p - *start;
@@ -1094,7 +1108,7 @@ pub fn select_tool_system(
                     }
                 }
             }
-            Gesture::Idle => {}
+            Gesture::Pan { .. } | Gesture::Idle => {}
         }
     }
 
@@ -1103,7 +1117,7 @@ pub fn select_tool_system(
         let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
         let reaches = selected_reaches(&sel, tool);
         let view = hits.panel.as_deref().and_then(|p| views.get(p));
-        let mut cursor = "default".to_owned();
+        let mut cursor = if space { "grab" } else { "default" }.to_owned();
         let mut on_grip = false;
         if let Some(view) = view.filter(|v| v.dims == Dims::Two) {
             let mine = movers(&reaches, &view.panel);
@@ -1116,7 +1130,9 @@ pub fn select_tool_system(
                 let f = view.affine() * frame;
                 let grip = grip_at(f, screen, geo.resizable(&rp), geo.rotatable(&tp));
                 on_grip = matches!(grip, Some(Grip::Resize(..) | Grip::Rotate(..)));
-                cursor = cursor_for(f, grip);
+                if !space {
+                    cursor = cursor_for(f, grip);
+                }
             }
         }
         let hover = match (view, top_hit(&hits)) {
@@ -1134,8 +1150,14 @@ pub fn select_tool_system(
             crate::web_ffi::send_cursor_from_worker(cursor.clone());
             tool.cursor = cursor;
         }
-    } else if !matches!(tool.gesture, Gesture::Press { .. }) && tool.hover.is_some() {
-        tool.hover = None;
+    } else {
+        if !matches!(tool.gesture, Gesture::Press { .. }) && tool.hover.is_some() {
+            tool.hover = None;
+        }
+        if matches!(tool.gesture, Gesture::Pan { .. }) && tool.cursor != "grabbing" {
+            crate::web_ffi::send_cursor_from_worker("grabbing".into());
+            tool.cursor = "grabbing".into();
+        }
     }
     let hovered = tool.hover.as_ref().map(Reach::node);
     if sel.hovered != hovered {
@@ -1317,4 +1339,99 @@ pub fn draw_select_overlay(
             });
         });
     }
+}
+
+/// Zoom limits, window px per document px.
+const ZOOM: (f32, f32) = (0.05, 64.0);
+
+/// Keep `doc` (document px) under `screen` (window px) at zoom `z`.
+fn pan_keeping(view: &PanelView, doc: Vec2, screen: Vec2, z: f32) -> Vec2 {
+    screen - Vec2::new(view.rect.x, view.rect.y) - doc * z
+}
+
+/// Pan and zoom 2D views, Figma's way: the wheel or a trackpad pans (Shift
+/// turns vertical into horizontal), Ctrl/Cmd+wheel and pinch zoom about the
+/// pointer, Shift+1 fits the content, Shift+0 is 100%, Cmd/Ctrl +/− zoom
+/// about the view's centre. Space-drag pans (`select_tool_system`).
+#[allow(clippy::too_many_arguments)]
+pub fn navigate_views(
+    pointer: Res<crate::PointerState>,
+    hits: Res<crate::PointerHits>,
+    scroll: Res<crate::bevy_app::AccumulatedScroll>,
+    views: Res<PanelViews>,
+    tool: Res<SelectTool>,
+    sel: Res<crate::SelectionState>,
+    mut keys: ResMut<ToolKeys>,
+    mut cameras: ResMut<crate::document_bridge::ViewCameras>,
+    store: Res<DocumentStore>,
+    map: Res<NodeMap>,
+    globals: Query<&'static GlobalTransform>,
+    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
+) {
+    let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
+    if let Some(view) = under
+        && scroll.delta != Vec2::ZERO
+    {
+        let px = match scroll.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => scroll.delta * 16.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta,
+        };
+        let camera = cameras.0.entry(view.panel.clone()).or_default();
+        if pointer.modifiers.ctrl || pointer.modifiers.meta {
+            let doc = (pointer.screen - Vec2::new(view.rect.x, view.rect.y) - camera.pan) / camera.zoom;
+            let z = (camera.zoom * (-px.y * 0.01).exp()).clamp(ZOOM.0, ZOOM.1);
+            camera.pan = pan_keeping(view, doc, pointer.screen, z);
+            camera.zoom = z;
+        } else {
+            let d = if pointer.modifiers.shift && px.x == 0.0 { Vec2::new(px.y, 0.0) } else { px };
+            camera.pan -= d;
+        }
+    }
+
+    // The zoom keys act on the view under the pointer, else the one holding
+    // the selection, else the main viewer.
+    let target = under
+        .or_else(|| sel.selected.first().and_then(|id| tool.reach.get(id)).and_then(|r| views.get(&r.panel)))
+        .or_else(|| views.get(crate::panels::VIEWER_PANEL))
+        .filter(|v| v.dims == Dims::Two)
+        .cloned();
+    let mut rest = Vec::new();
+    for (key, m) in std::mem::take(&mut keys.0) {
+        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoomfit" | "zoom100" | "zoomin" | "zoomout")) else {
+            rest.push((key, m));
+            continue;
+        };
+        let size = Vec2::new(view.rect.w, view.rect.h);
+        let centre = Vec2::new(view.rect.x, view.rect.y) + size * 0.5;
+        let camera = cameras.0.entry(view.panel.clone()).or_default();
+        let at_centre = (size * 0.5 - camera.pan) / camera.zoom;
+        match key.as_str() {
+            "zoomfit" => {
+                let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+                let roots = nest::panel_roots(&store.0.document(), view);
+                let Some(r) = roots
+                    .iter()
+                    .filter_map(|&n| geo.frame(&[n]))
+                    .map(|f| f.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)))
+                    .reduce(|a, b| a.union(b))
+                else {
+                    continue;
+                };
+                let z = ((size.x / (r.width() as f32 * 1.1)).min(size.y / (r.height() as f32 * 1.1))).clamp(ZOOM.0, ZOOM.1);
+                let c = Vec2::new(r.center().x as f32, r.center().y as f32);
+                camera.pan = pan_keeping(view, c, centre, z);
+                camera.zoom = z;
+            }
+            "zoom100" => {
+                camera.pan = pan_keeping(view, at_centre, centre, 1.0);
+                camera.zoom = 1.0;
+            }
+            _ => {
+                let z = (camera.zoom * if key == "zoomin" { 2.0 } else { 0.5 }).clamp(ZOOM.0, ZOOM.1);
+                camera.pan = pan_keeping(view, at_centre, centre, z);
+                camera.zoom = z;
+            }
+        }
+    }
+    keys.0 = rest;
 }

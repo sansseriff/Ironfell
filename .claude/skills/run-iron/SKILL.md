@@ -282,6 +282,7 @@ cd -
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
 | `pclick <panel> x y` | click inside a named panel, panel-relative |
+| `wheel dx dy` | scroll at the pointer: pans a 2D view; hold `Control` (`keydown Control`) to zoom about the pointer, as a pinch does |
 | `tab <title>` | activate the dock tab with that title (`Pendulum`, `Assembly`, …) |
 | `dragtab <title> x y` | drag a dock tab to a window point: a group's edge splits, its centre or tab bar stacks |
 | `dclick x y`, `ddblclick x y` | click or double-click at a document point in the viewer (the select tool: a double-click enters a group or embed) |

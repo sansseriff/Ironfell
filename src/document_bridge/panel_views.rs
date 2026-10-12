@@ -37,21 +37,23 @@ pub struct PanelView {
     pub layer: usize,
     /// The viewer panel also draws 2D nodes outside every composition.
     pub loose: bool,
-    /// A 2D panel's pan: document space sits at the panel's top-left plus
-    /// this offset (zero until "Show in" frames something).
+    /// A 2D view's pan: document space's origin sits at the panel's
+    /// top-left plus this offset, in window px (`ViewCameras`).
     pub pan: Vec2,
+    /// A 2D view's zoom: window px per document px.
+    pub zoom: f32,
 }
 
 impl PanelView {
     /// Document 2D space to window space, for this panel.
     pub fn affine(&self) -> kurbo::Affine {
-        kurbo::Affine::translate(((self.rect.x + self.pan.x) as f64, (self.rect.y + self.pan.y) as f64))
+        kurbo::Affine::translate(((self.rect.x + self.pan.x) as f64, (self.rect.y + self.pan.y) as f64)) * kurbo::Affine::scale(self.zoom as f64)
     }
 
     /// A window-space point in this panel's document space; `None` outside
     /// the panel.
     pub fn to_doc(&self, screen: Vec2) -> Option<Vec2> {
-        self.rect.contains(screen).then(|| Vec2::new(screen.x - self.rect.x - self.pan.x, screen.y - self.rect.y - self.pan.y))
+        self.rect.contains(screen).then(|| (Vec2::new(screen.x - self.rect.x - self.pan.x, screen.y - self.rect.y - self.pan.y)) / self.zoom)
     }
 
     /// Whether a node drawn in `composition` belongs in this panel.
@@ -83,10 +85,24 @@ impl PanelViews {
     }
 }
 
-/// Per-panel 2D pans, set by "Show in" (ECM §7.2). Presentation only: not
-/// in the document, not undoable.
+/// How each 2D view looks at its composition: a pan and a zoom, set by
+/// scrolling, pinching, Space-drag, the zoom keys and "Show in"
+/// (`bevy_app::select::navigate_views`). Presentation only, workspace
+/// state (plans/panels-and-session.md): not in the document, not undoable.
 #[derive(Resource, Default, Debug)]
-pub struct PanelPans(pub bevy::platform::collections::HashMap<String, Vec2>);
+pub struct ViewCameras(pub bevy::platform::collections::HashMap<String, ViewCamera>);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewCamera {
+    pub pan: Vec2,
+    pub zoom: f32,
+}
+
+impl Default for ViewCamera {
+    fn default() -> Self {
+        ViewCamera { pan: Vec2::ZERO, zoom: 1.0 }
+    }
+}
 
 /// Nodes to frame in every panel showing their composition, queued by the
 /// `document_focus` FFI and served by `bevy_app::scene3d::apply_focus`.
@@ -141,7 +157,7 @@ fn resolve(doc: &Document, spec: &str) -> Option<NodeId> {
 pub(super) fn resolve_panel_views(
     panels: Res<Panels>,
     store: Res<DocumentStore>,
-    pans: Res<PanelPans>,
+    cameras: Res<ViewCameras>,
     mut layers: ResMut<CompositionLayers>,
     mut views: ResMut<PanelViews>,
 ) {
@@ -159,7 +175,8 @@ pub(super) fn resolve_panel_views(
                 dims,
                 layer: if dims == Dims::Three { layers.of(composition) } else { 0 },
                 loose: id == VIEWER_PANEL,
-                pan: pans.0.get(id).copied().unwrap_or(Vec2::ZERO),
+                pan: cameras.0.get(id).map_or(Vec2::ZERO, |c| c.pan),
+                zoom: cameras.0.get(id).map_or(1.0, |c| c.zoom),
             }
         })
         .collect();

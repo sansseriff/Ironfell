@@ -138,6 +138,9 @@ export class InputManager {
 
         this.listen(canvas, 'wheel', (e: WheelEvent) => {
             e.preventDefault();
+            // Ctrl/Cmd+wheel zooms a 2D view; a trackpad pinch arrives as
+            // Ctrl+wheel too.
+            this.sendMods(InputManager.mods(e));
             this.post({ ty: 'mouseWheel', dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode });
         }, { passive: false });
     }
@@ -160,6 +163,19 @@ export class InputManager {
             if (!editing && (InputManager.TOOL_KEYS.includes(key) || selectAll)) {
                 event.preventDefault();
                 this.post({ ty: 'toolKey', key, m: InputManager.mods(event) });
+                return;
+            }
+            // View zoom (Figma's keys): Shift+1 fit, Shift+0 100%, Cmd/Ctrl
+            // +/- in and out (instead of the browser's page zoom).
+            const command = event.metaKey || event.ctrlKey;
+            const zoom = event.shiftKey && event.code === 'Digit1' ? 'zoomfit'
+                : event.shiftKey && event.code === 'Digit0' ? 'zoom100'
+                : command && (key === '=' || key === '+') ? 'zoomin'
+                : command && key === '-' ? 'zoomout'
+                : null;
+            if (!editing && zoom) {
+                event.preventDefault();
+                this.post({ ty: 'toolKey', key: zoom, m: InputManager.mods(event) });
                 return;
             }
         }

@@ -213,7 +213,7 @@ pub(crate) fn apply_focus(
     bounds: Res<crate::document_bridge::Bounds2d>,
     nodes: Query<(&'static crate::document_bridge::Doc2d, &'static GlobalTransform)>,
     globals: Query<&'static GlobalTransform>,
-    mut pans: ResMut<crate::document_bridge::PanelPans>,
+    mut view_cameras: ResMut<crate::document_bridge::ViewCameras>,
     volumes: Query<(&GlobalTransform, Option<&CurrentVolume>)>,
     mut cameras: Query<(&PanelCamera, &mut Transform, &Projection, Option<&mut CameraController>)>,
 ) {
@@ -224,11 +224,12 @@ pub(crate) fn apply_focus(
         for view in &views.0 {
             match view.dims {
                 Dims::Two => {
-                    // `locate` answers in the panel's un-panned document
-                    // space, so the pan is absolute.
+                    // `locate` answers in the panel's document space, so
+                    // the pan is absolute; the zoom is kept.
                     let Some(r) = crate::document_bridge::nest::locate(&store.0, &map, &nodes, &globals, &bounds.0, view, id) else { continue };
                     let centre = Vec2::new(r.center().x as f32, r.center().y as f32);
-                    pans.0.insert(view.panel.clone(), Vec2::new(view.rect.w, view.rect.h) * 0.5 - centre);
+                    let camera = view_cameras.0.entry(view.panel.clone()).or_default();
+                    camera.pan = Vec2::new(view.rect.w, view.rect.h) * 0.5 - centre * camera.zoom;
                     info!("focus {id}: panel {} pans to centre it", view.panel);
                 }
                 Dims::Three if view.composition == target => {

@@ -216,10 +216,21 @@ Two input fixes came with it:
   (`left_bt_down_at`). On a slow frame, later moves no longer drag the press along
   with them.
 
+**Pan and zoom per 2D view (2026-10-12)**, Figma's controls (`select::navigate_views`):
+- the wheel or a trackpad pans, and Shift turns vertical scrolling horizontal;
+- Ctrl/Cmd+wheel and pinch zoom about the pointer;
+- Space-drag pans;
+- Shift+1 fits the content, Shift+0 sets 100%, and Cmd/Ctrl +/− zoom about the centre.
+
+Each view's pan and zoom live in `ViewCameras`, which replaced the Show-in-only pans.
+Every 2D path (drawing, picking, the select tool, 3D embed textures) goes through
+`PanelView::affine`, so they follow. The 3D camera controller now acts only on the view
+under the pointer. Not yet saved with the layout.
+
 Follow-ups:
 
-- **Pan and zoom per 2D view.** A composition opened in a narrow split shows its space
-  from the origin and clips the rest.
+- **Save each view's pan and zoom** with the workspace layout.
+
 - **Show in activates or opens the tab** that shows the counterpart's composition,
   instead of only panning views already visible.
 - **The FPS overlay** is drawn over the window's top-left, which is now the Main tab.

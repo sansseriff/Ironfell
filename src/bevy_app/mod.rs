@@ -229,6 +229,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     app.add_systems(
         PostUpdate,
         (
+            select::navigate_views.before(select::select_tool_system),
             select::select_tool_system,
             // A drag previews into the store, the bridge rewrites the
             // affected entities, and the deferred inserts are applied, all

@@ -127,13 +127,19 @@ fn run_camera_controller(
     mut toggle_cursor_grab: Local<bool>,
     mut mouse_cursor_grab: Local<bool>,
     mut last_mouse_position: Local<Option<Vec2>>, // Added to track mouse delta
-    mut query: Query<(&mut Transform, &mut CameraController), With<Camera>>,
+    mut query: Query<(&mut Transform, &mut CameraController, Option<&crate::bevy_app::scene3d::PanelCamera>), With<Camera>>,
+    hits: Res<crate::PointerHits>,
 ) {
     let dt = time.delta_secs();
 
-    let Ok((mut transform, mut controller)) = query.single_mut() else {
+    let Ok((mut transform, mut controller, panel)) = query.single_mut() else {
         return;
     };
+    // Keys and the wheel fly the camera of the view under the pointer only:
+    // elsewhere they pan 2D views or belong to the select tool.
+    if panel.is_some_and(|p| hits.panel.as_deref() != Some(p.panel.as_str())) {
+        return;
+    }
 
     if !controller.initialized {
         let (yaw, pitch, _roll) = transform.rotation.to_euler(EulerRot::YXZ);

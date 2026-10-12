@@ -499,6 +499,41 @@ The existing model surface (`src-ui/model/`) gains:
 - definitions and port kinds in `document_schema()`, so `manifest.ts` describes them;
 - quantity attributes (`power="9.58 mW"`) parsed in `edit.ts` by the schema's kind.
 
+### 6.1 Port variables: one-way signals and across/through pairs (decided 2026-10-12)
+
+The conservative-ports question (vision 09 §13.2, roadmap §7 item 5) is decided: **both,
+in one general interface.** A port kind declares a bundle of variables, each one of:
+
+- **`out` / `in`**: a one-way signal. Optical power along a fiber is one; a
+  back-reflection is a second one-way signal running the other way.
+- **`across` + `through`**: an acausal pair, as in Modelica, Simscape and SPICE.
+  Temperature and heat flow, voltage and current.
+
+A connection compiles to both kinds of graph node:
+
+- **One-way variables become dataflow edges:** the in-port's signal is its partner's
+  out-port signal. They are evaluated like bindings, every frame, and cycles are
+  rejected.
+- **Pairs become equations:** across values are equal at the joint, and through values
+  sum to zero. With the behaviours' own equations, these form a cluster solved by
+  `iron_solve`, which already groups independent equations into clusters. Loops are
+  allowed, as they are for any cluster.
+
+**Editing from either end is not a port feature.** It is the store's existing
+gesture machinery: dragging a derived reading (the meter's `port.signal`) pins it as a
+finger, and the solver moves the free parameter upstream (the laser's power) through
+the behaviour equations. This generalises linear binding inversion to any chain the
+solver can invert.
+
+**Geometry stays out of ports.** Placement constraints (a mount bolted to a table) may
+share the solver, but never travel through physical ports. Physics flows through ports
+and models; placement goes through constraints (vision 09 §1).
+
+Order inside phase 3:
+1. The port-spec format with both variable kinds, so files never need migrating.
+2. One-way signals and dragging the meter's reading: laser → fiber → meter.
+3. Pairs solved as equations, with a thermal or electrical example.
+
 ---
 
 ## 12. Phases and exit criteria

@@ -346,7 +346,8 @@ vocabulary.
    working system to try (§5).
 2. **Conservative ports.** Heat and current are exchanged, not sent. Modelica handles
    this with across and through variables. Do we need it, or are directed signals plus
-   explicit models enough for teaching?
+   explicit models enough for teaching? **Decided 2026-10-12:** both. A port kind
+   declares one-way and across/through variables; see ECM §6.1.
 3. **Definition scope.** Built-in definitions in code, user and LLM definitions in a
    project library, a shared library across projects. Where do they live, and how are
    they versioned?

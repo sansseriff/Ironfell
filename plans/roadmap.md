@@ -231,6 +231,9 @@ Long term, one of these should be the authority (CS open question I5).
    (CS U2).
 4. **Stage E, path handles:** leaves on the point, or child nodes with their own ids.
 5. **Stage F, conservative ports:** directed signals only, or across and through pairs
-   for heat and current (vision 09 §13.2).
+   for heat and current (vision 09 §13.2). **Decided 2026-10-12:** both, in one port
+   interface: a port kind declares one-way and across/through variables; connections
+   compile to dataflow edges and to solver equations; editing from either end goes
+   through the gesture solver (ECM §6.1).
 6. **Deferred by agreement:** how strictly compositions must stay consistent (vision 09
    §13.1).

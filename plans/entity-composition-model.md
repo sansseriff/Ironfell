@@ -379,7 +379,7 @@ then 2D in 3D as a plane.
 - *Main layout* — done: the viewer shows `main`, which embeds `scene` at the origin and
   `assembly` as a camera view; the C1 exit runs there in the smoke script.
 - *Not done:* render-to-texture (so rotation, 2D under a 3D view, and 2D in 3D as a
-  plane); selecting an embed itself (a modifier or its frame); an "open/enter"
+  plane), now part of a general move to view textures (`view-textures.md`); selecting an embed itself (a modifier or its frame); an "open/enter"
   composition gesture; embeds inside 3D compositions.
 
 **Open:** whether definitions converge with embeds. An embed is a parameterless,

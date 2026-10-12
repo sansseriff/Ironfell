@@ -16,7 +16,9 @@ needs `GPU=1` for any frame-time measurement (see `SKILL.md`).
 request: Figma's semantics, recorded in `plans/select-tool.md`. A plain click on a group
 (the pendulum) now selects the group, and the smoke script holds Cmd for the IK steps.
 The pen tool comes next and should reuse `select.rs`'s chains and its preview-and-commit
-pattern.
+pattern. **2026-10-12:** `plans/panels-and-session.md` records the agreed direction for
+panels, inspectors and the session tier (selection as relations in a `session` root);
+nothing there is built yet.
 
 ---
 

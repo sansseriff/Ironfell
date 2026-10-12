@@ -88,7 +88,6 @@ pub(crate) fn sync_panel_cameras(
     mut cameras: Query<(Entity, &PanelCamera, &mut Camera, &mut RenderLayers, Option<&mut ScreenRect>)>,
     others: Query<&Camera, Without<PanelCamera>>,
     controlled: Query<(), With<CameraController>>,
-    view_tex: Res<ViewTextures>,
 ) {
     use iron_document::composition::Dims;
     let Ok(window) = windows.single() else { return };
@@ -132,7 +131,8 @@ pub(crate) fn sync_panel_cameras(
             // No clear: a clear load op wipes the whole shared target, not
             // just this viewport, erasing panels drawn before it. The
             // background camera (order -10) clears the window once.
-            Camera { order: free_order(&mut used), clear_color: ClearColorConfig::None, viewport: (!view_tex.0).then_some(viewport.clone()), ..default() },
+            Camera { order: free_order(&mut used), ..default() },
+            ScreenRect::of(&viewport),
             PanelCamera { panel: view.panel.clone() },
             layers,
             Projection::Perspective(PerspectiveProjection {
@@ -144,9 +144,6 @@ pub(crate) fn sync_panel_cameras(
             Transform::from_xyz(0.0, 7.0, 9.0).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
             Name::new(format!("panel camera {}", view.panel)),
         ));
-        if view_tex.0 {
-            ec.insert(ScreenRect::of(&viewport));
-        }
         if !has_controller {
             ec.insert(CameraController::default());
             has_controller = true;
@@ -306,7 +303,6 @@ pub(crate) fn sync_embed_cameras(
     volumes: Query<(&CurrentVolume, &crate::document_bridge::InComposition)>,
     mut cams: Query<(Entity, &mut EmbedCam, &mut Camera, &mut RenderLayers, &mut Transform, &mut Projection, Option<&mut ScreenRect>)>,
     others: Query<&Camera, Without<EmbedCam>>,
-    view_tex: Res<ViewTextures>,
 ) {
     let Ok(window) = windows.single() else { return };
     let (win_w, win_h) = (window.resolution.physical_width(), window.resolution.physical_height());
@@ -330,22 +326,18 @@ pub(crate) fn sync_embed_cameras(
         let entity = match cams.iter().find(|(_, c, ..)| c.key == view.key).map(|(e, ..)| e) {
             Some(e) => e,
             None => {
-                let mut ec = commands.spawn((
+                commands.spawn((
                         Camera3d::default(),
                         bevy::render::view::Msaa::Off,
                         Tonemapping::BlenderFilmic,
-                        // No clear, as for panel cameras: the background
-                        // camera clears the window once.
-                        Camera { order: free_order(&mut used), clear_color: ClearColorConfig::None, viewport: (!view_tex.0).then_some(viewport.clone()), ..default() },
+                        Camera { order: free_order(&mut used), ..default() },
+                        ScreenRect::of(&viewport),
                         EmbedCam { key: view.key.clone(), framed: None },
                         layers.clone(),
                         Projection::Perspective(PerspectiveProjection { fov: DEFAULT_FOV, near: 0.1, far: 1000.0, ..default() }),
                         Transform::from_translation(DEFAULT_VIEW_FROM * 10.0).looking_at(Vec3::ZERO, Vec3::Y),
                         Name::new(format!("embed camera {}", view.key)),
                     ));
-                if view_tex.0 {
-                    ec.insert(ScreenRect::of(&viewport));
-                }
                 // Posed from next frame, once the components exist.
                 continue;
             }
@@ -410,10 +402,6 @@ pub(crate) fn sync_embed_cameras(
 // renders into its own texture sized to its rectangle, pasted into the
 // window by a composite quad, and renders only when what it shows changed.
 
-/// Whether 3D cameras render into their own textures (`?bevy=views`).
-#[derive(Resource, Clone, Copy, Debug)]
-pub(crate) struct ViewTextures(pub bool);
-
 /// Where a texture-backed camera's output goes in the window. Written by the
 /// camera sync systems in place of a viewport.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -428,19 +416,13 @@ impl ScreenRect {
     }
 }
 
-/// A window viewport, or (texture mode) the screen rectangle.
-fn place(camera: &mut Mut<Camera>, screen: Option<Mut<ScreenRect>>, viewport: &bevy::camera::Viewport) {
-    match screen {
-        Some(mut s) => {
-            let next = ScreenRect::of(viewport);
-            if *s != next {
-                *s = next;
-            }
-        }
-        None => {
-            if camera.viewport.as_ref().is_none_or(|v| v.physical_position != viewport.physical_position || v.physical_size != viewport.physical_size) {
-                camera.viewport = Some(viewport.clone());
-            }
+/// Keep a camera's screen rectangle current (its texture, viewport and
+/// composite follow in `sync_view_images`).
+fn place(_camera: &mut Mut<Camera>, screen: Option<Mut<ScreenRect>>, viewport: &bevy::camera::Viewport) {
+    if let Some(mut s) = screen {
+        let next = ScreenRect::of(viewport);
+        if *s != next {
+            *s = next;
         }
     }
 }
@@ -512,7 +494,7 @@ pub(crate) fn sync_view_images(
             }
             existing => {
                 // A new texture: first use, or the size crossed a bucket.
-                let image = images.add(Image::new_target_texture(want.x, want.y, <bevy::render::render_resource::TextureFormat as bevy::image::BevyDefault>::bevy_default(), None));
+                let image = images.add(Image::new_target_texture(want.x, want.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None));
                 match existing {
                     Some(mut v) => {
                         if let Some(mut m) = materials.get_mut(&v.material) {

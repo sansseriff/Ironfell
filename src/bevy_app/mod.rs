@@ -12,7 +12,6 @@ mod alpha_stress;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
-use bevy::camera::visibility::RenderLayers;
 use bevy::transform::TransformSystems;
 use crate::vector::{VectorCamera, VectorPlugin};
 use crate::document_bridge::{DocumentPlugin, reconcile_gesture};
@@ -22,7 +21,6 @@ use crate::document_bridge::{DocumentPlugin, reconcile_gesture};
 struct GestureSystems;
 
 pub use input_accum::*;
-pub(crate) use scene3d::ViewTextures as ViewTexturesMode;
 pub(crate) use scene3d::ScreenRect as ScreenRectMarker;
 // Bring required items into scope from submodules
 use interaction::{
@@ -59,10 +57,6 @@ pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
 /// a Hybrid-only plugin set so classic's eager compute-pipeline creation cannot
 /// affect cold start.
 pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
-/// Render 3D views into textures sized to their rectangle and composite
-/// them, instead of window-sized viewport cameras (`?bevy=views`;
-/// plans/view-textures.md spike).
-pub const VARIANT_VIEW_TEXTURES: u32 = 1 << 6;
 
 /// Build the app around an already-created canvas.
 ///
@@ -173,15 +167,11 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
 
     init_shared_resources(&mut app);
     announce_canvas_window(&mut app);
-    app.insert_resource(scene3d::ViewTextures(variant_flags & VARIANT_VIEW_TEXTURES != 0));
-    app.insert_resource(crate::vector::VectorRetain(variant_flags & VARIANT_VIEW_TEXTURES != 0));
-    if variant_flags & VARIANT_VIEW_TEXTURES != 0 {
-        // One camera on the window: the composite camera clears it, and the
-        // background camera, which only cleared, sleeps.
-        app.add_systems(PostStartup, single_window_camera.after(adopt_backend_camera_for_ui));
-        app.init_resource::<crate::RedrawNeeded>();
-        app.add_systems(Last, crate::decide_redraw);
-    }
+    // Every view renders into its own texture and the window only composites
+    // them (plans/view-textures.md), so a frame that changed nothing visible
+    // need not render at all.
+    app.init_resource::<crate::RedrawNeeded>();
+    app.add_systems(Last, crate::decide_redraw);
 
     // ============================ RE-ENABLE LADDER =============================
     // flags=0 escalation for the 5K frame-skip hunt. Uncomment ONE step at a time,
@@ -189,13 +179,9 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     // The first step where rafDeltaMs.p95 blows up while tickMs stays low is the
     // culprit. Each step assumes the previous steps stay enabled.
 
-    // --- STEP 1: background camera only -------------------------------------
-    // One full-window Camera2d. This alone switches the render graph from the
-    // trivial no-camera clear to the full camera pipeline at 5K: main-pass
-    // texture allocation, MSAA (default = 4x!), tonemapping, final upscale blit.
-    // A/B within this step: spawn with `Msaa::Off` (see setup_background_camera)
-    // to separate "camera pipeline" from "4x multisampled 5K target".
-    app.add_systems(Startup, setup_background_camera);
+    // --- STEP 1 (retired): a background camera ------------------------------
+    // The window has one camera now, the vector composite camera, which clears
+    // to the background itself (plans/view-textures.md).
 
     // --- STEP 2: vector backend camera ---------------------------------------
     // The backend spawns and owns its full-window compositing camera (order 10).
@@ -262,8 +248,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
                 .after(selection_reflect_system)
                 // Before frusta and visibility: a camera woken this frame
                 // must be culled and lit as an active view this frame.
-                .before(bevy::camera::visibility::VisibilitySystems::UpdateFrusta)
-                .run_if(|v: Res<scene3d::ViewTextures>| v.0),
+                .before(bevy::camera::visibility::VisibilitySystems::UpdateFrusta),
             // Highlights before the 2D layer draws (after propagation) and
             // before the 3D outlines read them.
             crate::document_bridge::update_highlights
@@ -306,47 +291,6 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<crate::SelectionState>();
     app.init_resource::<crate::DragState>();
     app.init_resource::<PendingCommit>();
-}
-
-/// Full-window helper cameras for the single-canvas architecture, split so the
-/// re-enable ladder can bring them back one at a time:
-/// - background camera (order -10) clears the whole window to the app background color
-/// - vello camera (order 10) draws the full-window vello texture on top, no clear
-///
-/// The 3D viewer camera (order 0, viewport-scoped) is spawned in `setup_3d_scene`.
-///
-/// STEP 1 (ladder): background camera only. For the MSAA A/B, add
-/// `bevy::render::view::Msaa::Off` to the spawn below — cameras default to
-/// Msaa::Sample4, which at 5K means a 4x multisampled full-window main texture.
-fn setup_background_camera(mut commands: Commands) {
-    commands.spawn((
-        Camera2d,
-        bevy::render::view::Msaa::Off,
-        Camera {
-            order: -10,
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.97, 0.97, 0.97)),
-            ..default()
-        },
-        RenderLayers::none(),
-        Name::new("Background Camera"),
-    ));
-}
-
-/// With view textures, the window needs one camera: the vector composite
-/// camera clears to the background and pastes every view, and the background
-/// camera (a second full-window clear and blit) is turned off.
-fn single_window_camera(
-    vector: Option<Res<VectorCamera>>,
-    mut cameras: Query<(Entity, &mut Camera, Option<&Name>)>,
-) {
-    let composite = vector.map(|v| v.0);
-    for (e, mut camera, name) in &mut cameras {
-        if Some(e) == composite {
-            camera.clear_color = ClearColorConfig::Default;
-        } else if name.is_some_and(|n| n.as_str() == "Background Camera") {
-            camera.is_active = false;
-        }
-    }
 }
 
 /// STEP 2 (ladder): let bevy_ui draw into the backend's compositing camera.

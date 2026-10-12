@@ -34,7 +34,6 @@ pub mod view_composite;
 // going through here, so this list stays scoped to the authoring side.
 pub use backend::{BackendKind, VectorLayer, VectorView, order};
 pub use composite::{VECTOR_LAYER, VectorCamera};
-pub use hybrid::VectorRetain;
 pub use display_list::{DisplayList, DisplayListBuilder, DisplayListRebuild};
 
 use bevy::prelude::*;

@@ -36,7 +36,7 @@ pub use highlight::{Highlights, update_highlights};
 pub use nest::{EmbedView, EmbedViews};
 pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d};
 pub use panel_views::{CompositionLayers, FocusRequests, InComposition, PanelPans, PanelView, PanelViews};
-pub use render::DocumentLayer;
+pub use render::DocumentPanelLayer;
 
 /// The authored store, as a resource. Reads go through `.0.document()`;
 /// writes go through [`PendingTransactions`], never through here.
@@ -188,7 +188,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<EmbedViews>()
             .init_resource::<FocusRequests>()
             .init_resource::<CompositionLayers>()
-            .add_systems(Startup, (materialize::setup_mesh_assets, render::setup_document_layer, demo::queue_demo_scene))
+            .add_systems(Startup, (materialize::setup_mesh_assets, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking.
             .add_systems(PreUpdate, (sync_document, panel_views::resolve_panel_views).chain())

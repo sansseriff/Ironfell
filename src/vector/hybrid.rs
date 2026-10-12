@@ -117,19 +117,11 @@ pub struct VectorStats {
     pub layer_rebuilds: HashMap<Entity, u64>,
 }
 
-/// Whether the backend keeps its texture between frames and re-renders only
-/// after a scene rebuild (plans/view-textures.md S3). Off, it renders every
-/// frame, as it always has.
-#[derive(Resource, Clone, Copy, Debug, Default, bevy::render::extract_resource::ExtractResource)]
-pub struct VectorRetain(pub bool);
-
 pub struct HybridBackend;
 
 impl Plugin for HybridBackend {
     fn build(&self, app: &mut App) {
-        app.init_resource::<VectorRetain>()
-            .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<VectorRetain>::default())
-            .add_systems(PostStartup, setup_target)
+        app.add_systems(PostStartup, setup_target)
             .add_systems(PostUpdate, (sync_target, sync_views));
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -766,14 +758,12 @@ fn refill(scratch: &mut BezPath, els: impl Iterator<Item = PathEl>) {
 /// keeps last frame's pixels and costs nothing.
 fn render_scene(
     renderer: Res<HybridRenderer>,
-    retain: Option<Res<VectorRetain>>,
     target: Option<Res<HybridTargetView>>,
     views: Res<ExtractedViews>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
 ) {
-    let retain = retain.is_some_and(|r| r.0);
     let mut state = renderer.0.lock().expect("hybrid renderer lock");
     let size = state.size;
     if size.x == 0 || size.y == 0 {
@@ -820,7 +810,7 @@ fn render_scene(
     let HybridInner { inner, targets, .. } = &mut *state;
     let (renderer_inner, resources) = inner.as_mut().expect("created above");
     for (key, t) in targets.iter_mut() {
-        if retain && t.rendered {
+        if t.rendered {
             continue;
         }
         let handle = match key {

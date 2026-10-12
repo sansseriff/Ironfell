@@ -189,12 +189,20 @@ measuring per-panel cost. A 3D view inside 2D is a camera viewport beneath
 the 2D layer: axis-aligned, and 2D content over it (the square after the
 timeline scrub) draws on top.
 
-`GPU=1 bun run drive.ts …` runs Chrome on the machine's GPU (ANGLE/Metal)
-instead of SwiftShader, which caps the app near 10 fps. Use it for frame
-times: `__probeReset()`, act, then `__probe()` logs and stores
-`__lastProbeStats` (`effectiveFps`, `tickMs`, `rafDeltaMs`). Measured
-2026-10-11 at 1600×1000, idle: 60 fps at 1, 2 and 4 panels, worker tick
-p50 3.2 / 3.0 / 3.2 ms.
+Driver environment: `GPU=1` runs Chrome on the machine's GPU (ANGLE/Metal)
+instead of SwiftShader, which caps the app near 10 fps; `UNTHROTTLED=1`
+lifts vsync and the frame-rate limit so frames per second shows
+throughput; `SIZE=2560x1440@2` sets the window and device scale (that one
+is 5K); `URL=…` replaces the default page. For frame times:
+`__probeReset()`, act, then `__probe()` logs and stores `__lastProbeStats`
+(`effectiveFps`, `tickMs`, `rafDeltaMs`).
+
+Every view renders into its own texture and the window only composites
+(`plans/view-textures.md`), and a frame that changes nothing visible is not
+rendered at all (render on demand), so an idle app costs ≈0.1 ms per tick
+at any size. A frame that keeps rendering while nothing moves means
+something writes state every frame; `crate::decide_redraw` lists what
+counts as a change.
 
 The driver reads one command per line, so a heredoc is a script:
 

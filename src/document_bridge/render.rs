@@ -25,16 +25,9 @@ use bevy::prelude::*;
 use iron_document::NodeId;
 use kurbo::Shape as _;
 
-#[derive(Component)]
-pub struct DocumentLayer;
-
-pub(super) fn setup_document_layer(mut commands: Commands) {
-    commands.spawn((DisplayList::default(), VectorLayer::screen(order::DOCUMENT_2D), DocumentLayer));
-}
-
-/// With view textures (`?bevy=views`), one document layer per 2D panel, each
-/// its own [`VectorView`]: it renders into a texture the panel's size and
-/// re-renders only when its own content changed (plans/view-textures.md).
+/// One document layer per 2D panel, each its own [`VectorView`]: it renders
+/// into a texture the panel's size and re-renders only when its own content
+/// changed (plans/view-textures.md).
 #[derive(Component, Debug)]
 pub struct DocumentPanelLayer {
     pub panel: String,
@@ -44,11 +37,9 @@ pub struct DocumentPanelLayer {
 pub(super) fn sync_document_views(
     mut commands: Commands,
     views: Res<PanelViews>,
-    view_tex: Option<Res<crate::bevy_app::ViewTexturesMode>>,
     mut layers: Query<(Entity, &DocumentPanelLayer, &mut VectorView)>,
 ) {
-    let on = view_tex.is_some_and(|v| v.0);
-    let wanted: Vec<_> = if on { views.0.iter().filter(|v| v.dims == Dims::Two).collect() } else { Vec::new() };
+    let wanted: Vec<_> = views.0.iter().filter(|v| v.dims == Dims::Two).collect();
     for (e, layer, _) in &layers {
         if !wanted.iter().any(|v| v.panel == layer.panel) {
             commands.entity(e).despawn();
@@ -75,8 +66,7 @@ pub(super) fn sync_document_views(
 const LOG_IDS: usize = 12;
 
 pub(super) fn render_document_layer(
-    mut layers: Query<&mut DisplayList, (With<DocumentLayer>, Without<DocumentPanelLayer>)>,
-    mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer), Without<DocumentLayer>>,
+    mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer)>,
     new_panels: Query<(), Added<DocumentPanelLayer>>,
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
     globals: Query<&'static GlobalTransform>,
@@ -87,7 +77,6 @@ pub(super) fn render_document_layer(
     views: Res<PanelViews>,
     highlights: Res<Highlights>,
 ) {
-    let Ok(mut list) = layers.single_mut() else { return };
     let reason = if !changes.is_empty() {
         "document"
     } else if views.is_changed() {
@@ -117,25 +106,14 @@ pub(super) fn render_document_layer(
     }
 
     let mut cx = Draw { store: &store.0, doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, changed: &changed.nodes, bounds: &mut bounds.0, damage, drawn: 0 };
-    if panel_layers.is_empty() {
-        // One window-sized layer for every 2D panel, each clipped to its rect.
-        list.rebuild(|b| {
-            for view in views.0.iter().filter(|v| v.dims == Dims::Two) {
-                let roots = nest::panel_roots(doc, view);
-                b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), 0));
-            }
+    // A layer per panel: a panel whose content is unchanged rebuilds to the
+    // same commands, so its view does not re-render.
+    for (mut panel_list, layer) in &mut panel_layers {
+        let Some(view) = views.get(&layer.panel) else { continue };
+        let roots = nest::panel_roots(doc, view);
+        panel_list.rebuild(|b| {
+            b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), 0));
         });
-    } else {
-        // A layer per panel: a panel whose content is unchanged rebuilds to
-        // the same commands, so its view does not re-render.
-        list.rebuild(|_| {});
-        for (mut panel_list, layer) in &mut panel_layers {
-            let Some(view) = views.get(&layer.panel) else { continue };
-            let roots = nest::panel_roots(doc, view);
-            panel_list.rebuild(|b| {
-                b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), 0));
-            });
-        }
     }
     let (drawn, damage) = (cx.drawn, cx.damage);
 

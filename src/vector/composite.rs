@@ -34,10 +34,11 @@ fn spawn_vector_camera(mut commands: Commands) {
             Camera2d,
             bevy::render::view::Msaa::Off,
             Camera {
-                // Above the background camera (-10) and the 3D viewer (0), so
-                // vector output lands on top of both.
+                // The window's one camera: it clears to the background and
+                // pastes every view's texture (plans/view-textures.md). Above
+                // every 3D view camera, which all render into textures.
                 order: 10,
-                clear_color: ClearColorConfig::None,
+                clear_color: ClearColorConfig::Default,
                 ..default()
             },
             RenderLayers::layer(VECTOR_LAYER),

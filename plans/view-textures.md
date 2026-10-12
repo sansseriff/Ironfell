@@ -1,8 +1,9 @@
 # View textures: everything renders to a texture sized to where it is seen
 
-**Status:** Proposed 2026-10-11, decided with the user: spike and measure first, then
-migrate renderer by renderer, converting each only where measurement shows no loss at
-reasonable screen sizes.
+**Status:** Decided 2026-10-11 (spike, measure, then migrate). Spike done; migration
+steps 1–2 done: 2D and 3D composition views render to their own textures, the window
+has one camera, render on demand, and the old window-sized path is removed. Remaining:
+3D embeds drawn inside 2D, 2D in 3D, the timeline, and the custom final pass.
 **Relates to:** `entity-composition-model.md` §7.4 (embedded compositions, step 5),
 `bevy-vello-hybrid-design.md` (the vector backend), `roadmap.md` stage H (render
 invalidation), the 5K frame-pacing notes (`perf-grid-runbook.md`).
@@ -190,6 +191,15 @@ So the answer to the 5K overhead is mostly render on demand: an idle frame costs
 main world's update (≈0.1 ms) at any resolution. A frame that changes still pays one
 full-window composite pass and present; a custom final pass (no window-sized
 intermediate textures, no blit) is the remaining step if that shows up.
+
+### Migration step 2 (2026-10-11): the old path is gone
+
+Views are the only path: 3D cameras always render to textures (`ScreenRect`, no window
+viewports), the vector backend always retains, the background camera is removed (the
+composite camera clears the window), render on demand is always on, and the document
+bridge always draws one layer per 2D panel. `?bevy=views` is gone. The window-sized
+vector target remains only for layers without a view (the timeline and the placeholder
+panel) until step 4. The smoke script's output is unchanged.
 
 ## 6. Migration order (after the spike)
 

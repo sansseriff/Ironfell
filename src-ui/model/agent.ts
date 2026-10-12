@@ -24,8 +24,13 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
   // then the tree, which also holds what no composition does (the library,
   // timelines, loose roots).
   const view = `${api.view({ fidelity: 'full', relation: 'model' })}\n${api.view({ fidelity: 'full' })}`;
+  // What the person has selected, so "this" and "the selected one" resolve.
+  const picked = api.selection();
+  const selection = picked.length
+    ? `SELECTED\n${picked.map((p) => `${p.node} (${p.type ?? 'node'}${p.name ? ` "${p.name}"` : ''})`).join('\n')}\n\n`
+    : '';
   const messages: { role: 'user' | 'assistant'; content: string }[] = [
-    { role: 'user', content: `${view}\n\nREQUEST\n${instruction}` },
+    { role: 'user', content: `${view}\n\n${selection}REQUEST\n${instruction}` },
   ];
   let attempts = 0;
   let lastEdit: string | null = null;

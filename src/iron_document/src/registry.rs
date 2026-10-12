@@ -131,6 +131,23 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["entity"]),
     },
+    // The session tier (plans/panels-and-session.md): state that is not
+    // content. Its ids come from their own range; it is never saved and
+    // never in undo, and views of the document leave it out.
+    TypeSpec {
+        name: "session",
+        components: &[(K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["selection"]),
+    },
+    // One viewer's selection: `selects` relations to the selected nodes,
+    // in pick order.
+    TypeSpec {
+        name: "selection",
+        components: &[(K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     // One diagram (ECM §5, §7): a root whose subtree one panel shows.
     TypeSpec {
         name: "composition",
@@ -230,7 +247,7 @@ impl TypeSpec {
 
     /// Types that only exist as roots: the model tree and compositions.
     pub fn root_only(&self) -> bool {
-        matches!(self.name, "model" | "composition")
+        matches!(self.name, "model" | "composition" | "session")
     }
 
     pub fn admits_child(&self, child: TypeId) -> bool {

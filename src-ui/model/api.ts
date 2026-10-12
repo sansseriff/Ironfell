@@ -37,6 +37,8 @@ export interface DocumentApi {
   apply(transaction: object, expectVersion: number): ApplyResult;
   /** Link two pictures to one entity as `actor` (ECM §7.2). */
   link(a: string, b: string, keep: string, actor: 'human' | 'model'): LinkResult;
+  /** What the person has selected, in pick order (the session tier). */
+  selection(): { node: string; type: string | null; name: string | null }[];
 }
 
 export interface EntitySummary {
@@ -71,5 +73,6 @@ export function makeDocumentApi(glue: Glue, handle: bigint): DocumentApi {
     place: (parent, after, count) => JSON.parse(glue.document_place(handle, parent, after, count)),
     apply: (tx, expect) => JSON.parse(glue.document_apply(handle, JSON.stringify(tx), expect)),
     link: (a, b, keep, actor) => JSON.parse((glue as any).document_link(handle, a, b, keep, actor)),
+    selection: () => JSON.parse((glue as any).document_selection(handle)),
   };
 }

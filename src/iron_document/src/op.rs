@@ -297,13 +297,11 @@ fn create(
         }
         Some(_) => true,
         None => {
-            if id < doc.next_id() {
+            let next = if id.is_session() { doc.next_session_ids(1)[0] } else { doc.next_id() };
+            if id < next {
                 return Err(cx.err(
                     ErrorKind::BadId,
-                    format!(
-                        "{id} is below the allocation counter {}; reserve ids from next_id",
-                        doc.next_id()
-                    ),
+                    format!("{id} is below the allocation counter {next}; reserve ids from next_id"),
                 ));
             }
             false

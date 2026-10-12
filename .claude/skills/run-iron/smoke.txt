@@ -211,6 +211,9 @@ ready
 eval window.sq = async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="square"[^>]*>/)[0]; const n = (k) => Number(m.match(new RegExp(' ' + k + '="([^"]+)"'))[1]); return { x: Math.round(n('x')), y: Math.round(n('y')), w: Math.round(n('w')), h: Math.round(n('h')), deg: Math.round(n('rot') * 180 / Math.PI) }; }
 dclick 540 460
 eval __iron.selection()
+# The selection is recorded in the store's session tier, with how the node
+# was reached: the panel and the chain through the scene's embed.
+eval (async () => (await __iron.session()).map(s => `${s.node} ${s.panel} [${s.chain}]`))()
 # The bottom-right corner (580,500) dragged by +40,+20.
 ddrag 580 500 620 520
 eval sq()

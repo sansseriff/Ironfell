@@ -11,6 +11,11 @@ use std::str::FromStr;
 
 const ALPHABET: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+/// Session-tier ids (plans/panels-and-session.md) start here: session nodes
+/// and relations are allocated from their own range, so they never shift
+/// the ids of content, and nothing at or above it is ever saved.
+pub const SESSION_BASE: u64 = 1 << 40;
+
 pub(crate) fn base62(mut n: u64) -> String {
     if n == 0 {
         return "0".to_owned();
@@ -58,6 +63,10 @@ macro_rules! id_type {
             }
             pub(crate) fn raw(self) -> u64 {
                 self.0
+            }
+            /// In the session tier: never saved, never in undo.
+            pub fn is_session(self) -> bool {
+                self.0 >= SESSION_BASE
             }
         }
 

@@ -58,6 +58,9 @@ pub enum RelKind {
     /// A constraint node to one of its operands; `data.role` names the
     /// operand's role and `data.anchor` the point in its local space.
     Constrains,
+    /// A session's `selection` node to a selected node (session tier, never
+    /// saved): `data.panel` and `data.chain` say how it was reached.
+    Selects,
 }
 
 impl RelKind {
@@ -70,6 +73,7 @@ impl RelKind {
             RelKind::References => "references",
             RelKind::Figures => "figures",
             RelKind::Constrains => "constrains",
+            RelKind::Selects => "selects",
         }
     }
 }
@@ -81,6 +85,9 @@ pub struct Document {
     relations: BTreeMap<RelationId, Relation>,
     next_id: u64,
     next_rel: u64,
+    /// The session tier's own counters (`id::SESSION_BASE` and up).
+    next_session_id: u64,
+    next_session_rel: u64,
     version: Version,
 
     // Derived. Rebuilt incrementally by the mutators, wholesale by `reindex`.
@@ -127,6 +134,17 @@ impl Document {
 
     pub fn next_relation_ids(&self, n: usize) -> Vec<RelationId> {
         (0..n as u64).map(|i| RelationId::from_raw(self.next_rel + i)).collect()
+    }
+
+    /// Ids for session-tier nodes, from their own range.
+    pub fn next_session_ids(&self, n: usize) -> Vec<NodeId> {
+        let base = self.next_session_id.max(crate::id::SESSION_BASE);
+        (0..n as u64).map(|i| NodeId::from_raw(base + i)).collect()
+    }
+
+    pub fn next_session_relation_ids(&self, n: usize) -> Vec<RelationId> {
+        let base = self.next_session_rel.max(crate::id::SESSION_BASE);
+        (0..n as u64).map(|i| RelationId::from_raw(base + i)).collect()
     }
 
     /// Any node, live or tombstoned.
@@ -276,11 +294,19 @@ impl Document {
     }
 
     pub(crate) fn advance_next_id(&mut self, past: NodeId) {
-        self.next_id = self.next_id.max(past.raw() + 1);
+        if past.is_session() {
+            self.next_session_id = self.next_session_id.max(past.raw() + 1);
+        } else {
+            self.next_id = self.next_id.max(past.raw() + 1);
+        }
     }
 
     pub(crate) fn advance_next_relation_id(&mut self, past: RelationId) {
-        self.next_rel = self.next_rel.max(past.raw() + 1);
+        if past.is_session() {
+            self.next_session_rel = self.next_session_rel.max(past.raw() + 1);
+        } else {
+            self.next_rel = self.next_rel.max(past.raw() + 1);
+        }
     }
 
     pub(crate) fn insert_node(&mut self, node: Node, comps: Vec<Component>) {

@@ -163,6 +163,7 @@ loaded document v25 (70 live nodes)
 (no page errors)
 undefined
 ["#M"]
+["#M viewer [#o #M]"]
 {"x":500,"y":420,"w":120,"h":100,"deg":0}
 {"x":553,"y":392,"w":120,"h":100,"deg":45}
 {"x":500,"y":420,"w":80,"h":80,"deg":0}

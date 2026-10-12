@@ -54,7 +54,7 @@ pub fn affine_of(global: &GlobalTransform) -> kurbo::Affine {
 pub fn panel_roots(doc: &Document, view: &PanelView) -> Vec<NodeId> {
     let mut roots: Vec<NodeId> = view.composition.map(|c| doc.children(c).to_vec()).unwrap_or_default();
     if view.loose {
-        let structural = ["composition", "model", "library", "timeline"].map(|t| TypeId::lookup(t).expect("registered"));
+        let structural = ["composition", "model", "library", "timeline", "session"].map(|t| TypeId::lookup(t).expect("registered"));
         roots.extend(doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !structural.contains(&n.ty))));
     }
     roots

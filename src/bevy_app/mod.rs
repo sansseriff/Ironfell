@@ -231,6 +231,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
         (
             select::navigate_views.before(select::select_tool_system),
             select::select_tool_system,
+            select::sync_session_selection.after(select::select_tool_system),
             // A drag previews into the store, the bridge rewrites the
             // affected entities, and the deferred inserts are applied, all
             // before propagation so transform consumers and the 2D layer see

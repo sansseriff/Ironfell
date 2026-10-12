@@ -1,7 +1,8 @@
 # Panels, inspectors and session state
 
-**Status:** design note, 2026-10-12. The dock presenter and views are built (see "Built
-so far" at the end); the session tier and the inspector are not. It came out of a conversation
+**Status:** design note, 2026-10-12. Built: the dock presenter and views, pan and zoom,
+and the session tier with the selection (see "Built so far" at the end). Not yet built:
+the workspace root, the inspector, and selection in undo. It came out of a conversation
 after the select tool (plans/select-tool.md) and records the direction agreed there. It
 revises one earlier verdict, in document-spine.md §4; see "What this changes" below.
 
@@ -227,6 +228,25 @@ Every 2D path (drawing, picking, the select tool, 3D embed textures) goes throug
 `PanelView::affine`, so they follow. The 3D camera controller now acts only on the view
 under the pointer. Not yet saved with the layout.
 
+**The session tier and the selection (2026-10-12)**, `iron_document`:
+- **Session nodes and relations get ids from their own range** (`id::SESSION_BASE`), so
+  content ids never shift. `serial::save` and the tree views leave them out.
+- **`Store::apply_session` applies session ops** without a transaction, so the
+  document's version, history and undo don't see them. It rolls back on error and
+  bumps `session_version`.
+- **The selection is a `selection` node under a `session` root**, with ordered `selects`
+  relations whose `data` holds the panel and the chain the select tool reached the node
+  through (`Store::selection`, `Store::set_selection`).
+- **Tests:** `tests/session.rs`.
+
+In the app:
+- `bevy_app::select::sync_session_selection` writes the select tool's selection there
+  each frame it changes, and reads back changes made elsewhere.
+- `document_selection` (`__iron.session()`) returns the selection.
+- The model gets a `SELECTED` block with each request, so "the selected one" resolves.
+
+Selection in undo, with merging, is still to come; the representation is ready for it.
+
 Follow-ups:
 
 - **Save each view's pan and zoom** with the workspace layout.
@@ -235,5 +255,4 @@ Follow-ups:
   instead of only panning views already visible.
 - **The FPS overlay** is drawn over the window's top-left, which is now the Main tab.
   It belongs in a view, or behind a toggle.
-- **The workspace moves into the store** (its own root), then the session root and the
-  inspector.
+- **The workspace moves into the store** (its own root), then the inspector.

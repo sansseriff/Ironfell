@@ -18,6 +18,7 @@
  *   await __iron.link('#a', '#b', keep?) -> link two pictures (ECM §7.2)
  *   await __iron.counterparts('#a')     -> every picture of #a's entity
  *   await __iron.focus('#a')       -> "Show in": frame #a in its panels
+ *   await __iron.session()         -> the session's selection [{node, panel, chain, …}]
  */
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
@@ -78,6 +79,9 @@ export class DocumentClient {
       link: (a: string, b: string, keep = '') => this.link(a, b, keep),
       counterparts: (node: string) => this.call('counterparts', [node]),
       focus: (node: string) => this.call('focus', [node]),
+      // The selection as the store's session records it, with how each
+      // node was reached (panel, chain).
+      session: () => this.call('selection', []),
     };
   }
 

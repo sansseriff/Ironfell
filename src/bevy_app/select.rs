@@ -1435,3 +1435,59 @@ pub fn navigate_views(
     }
     keys.0 = rest;
 }
+
+/// The selection's record is the store's session tier (a `selection` node
+/// with `selects` relations, plans/panels-and-session.md); `SelectionState`
+/// and the tool's reaches are the frame's working copy. Whatever changed
+/// the session elsewhere (a load, the shell, later undo) is read back;
+/// otherwise a change here is written there, once per frame.
+pub fn sync_session_selection(
+    mut store: ResMut<DocumentStore>,
+    mut sel: ResMut<crate::SelectionState>,
+    mut tool: ResMut<SelectTool>,
+    mut seen: Local<Option<u64>>,
+) {
+    let version = store.0.session_version();
+    if seen.is_some_and(|v| v != version) {
+        let doc = store.0.document();
+        let mut reach = HashMap::default();
+        let ids: Vec<NodeId> = store
+            .0
+            .selection()
+            .into_iter()
+            .map(|(id, data)| {
+                let panel = data.get("panel").and_then(|v| v.as_str()).map(str::to_owned);
+                let chain: Option<Vec<NodeId>> = data.get("chain").and_then(|v| v.as_str()).map(|c| c.split(' ').filter_map(|s| s.parse().ok()).collect());
+                if let (Some(panel), Some(chain)) = (panel, chain)
+                    && chain.last() == Some(&id)
+                    && chain.iter().all(|&n| doc.live(n).is_some())
+                {
+                    reach.insert(id, Reach { panel, chain });
+                }
+                id
+            })
+            .collect();
+        if sel.selected != ids {
+            sel.selected = ids;
+        }
+        tool.reach = reach;
+    } else if sel.is_changed() {
+        let items: Vec<(NodeId, std::collections::BTreeMap<String, Value>)> = sel
+            .selected
+            .iter()
+            .map(|id| {
+                let mut data = std::collections::BTreeMap::new();
+                if let Some(r) = tool.reach.get(id) {
+                    data.insert("panel".to_owned(), Value::Str(r.panel.clone()));
+                    data.insert("chain".to_owned(), Value::Str(r.chain.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" ")));
+                }
+                (*id, data)
+            })
+            .collect();
+        if let Err(e) = store.0.set_selection(&items) {
+            warn!("selection not recorded in the session: {e}");
+        }
+    }
+    *seen = Some(store.0.session_version());
+}
+

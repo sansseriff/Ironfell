@@ -100,7 +100,8 @@ pub fn render_tree(
             }
             vec![id]
         }
-        None => doc.roots().to_vec(),
+        // The session tier is not part of the document a model reads.
+        None => doc.roots().iter().copied().filter(|r| !r.is_session()).collect(),
     };
     for id in roots {
         node(doc, reactive, by, q, id, 0, &mut out);
@@ -132,7 +133,7 @@ fn node(
     let rels: Vec<_> = doc.relations_from(id).filter(|r| !(as_of && r.rel == crate::document::RelKind::Figures)).collect();
     // The reverse direction: what drives this node (doc 05 §5.3). Bindings
     // already show as `<attr>.bind`; relations arrive from elsewhere.
-    let drivers: Vec<_> = doc.relations_to(id).collect();
+    let drivers: Vec<_> = doc.relations_to(id).filter(|r| !r.from.is_session()).collect();
     let at_limit = q.depth.is_some_and(|d| level >= d);
     let shown: &[NodeId] = if at_limit {
         &[]

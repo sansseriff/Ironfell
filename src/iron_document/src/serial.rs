@@ -55,7 +55,8 @@ pub fn save(doc: &Document) -> String {
 
     out.push_str(" \"nodes\": {");
     let mut first = true;
-    for (id, n) in doc.raw_nodes() {
+    // The session tier (selection and the like) is never saved.
+    for (id, n) in doc.raw_nodes().iter().filter(|(id, _)| !id.is_session()) {
         out.push_str(if first { "\n" } else { ",\n" });
         first = false;
         out.push_str(&format!("  \"{id}\": {}", n_compact(&node_json(n))));
@@ -65,14 +66,14 @@ pub fn save(doc: &Document) -> String {
     out.push_str(" \"components\": {");
     let mut first_kind = true;
     for (kind, table) in doc.raw_components() {
-        if table.is_empty() {
+        if table.keys().all(|id| id.is_session()) {
             continue;
         }
         out.push_str(if first_kind { "\n" } else { ",\n" });
         first_kind = false;
         out.push_str(&format!("  \"{}\": {{", kind.name()));
         let mut first = true;
-        for (id, c) in table {
+        for (id, c) in table.iter().filter(|(id, _)| !id.is_session()) {
             out.push_str(if first { "\n" } else { ",\n" });
             first = false;
             out.push_str(&format!("   \"{id}\": {}", n_compact(&c.to_json())));
@@ -83,7 +84,7 @@ pub fn save(doc: &Document) -> String {
 
     out.push_str(" \"relations\": [");
     let mut first = true;
-    for r in doc.relations() {
+    for r in doc.relations().filter(|r| !r.id.is_session() && !r.from.is_session() && !r.to.is_session()) {
         out.push_str(if first { "\n" } else { ",\n" });
         first = false;
         out.push_str(&format!(

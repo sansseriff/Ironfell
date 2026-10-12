@@ -157,6 +157,9 @@ pub struct Store {
     drivers: std::collections::BTreeSet<Leaf>,
     /// Active drag drivers.
     fingers: Vec<Finger>,
+    /// Bumped by every session-tier change (`apply_session`), which leaves
+    /// the document's version alone.
+    session_version: u64,
 }
 
 impl Default for Store {
@@ -187,6 +190,7 @@ impl Store {
             clusters: Default::default(),
             drivers: Default::default(),
             fingers: Vec::new(),
+            session_version: 0,
         };
         store.reactive.rebuild(&store.doc);
         store.resample();
@@ -450,6 +454,93 @@ impl Store {
         self.drivers.clear();
         self.fingers.clear();
         self.reactive.clear_overlay(&self.doc);
+    }
+
+    // ---- The session tier (plans/panels-and-session.md) ----------------
+
+    /// Apply session-tier ops: nodes, relations and leaves in the session's
+    /// id range only. Not a transaction: the document's version, history and
+    /// undo never see it, and it is never saved. All or nothing: an error
+    /// rolls back the ops already applied.
+    pub fn apply_session(&mut self, ops: Vec<Op>) -> Result<(), ApplyError> {
+        let stamp = self.doc.version();
+        let mut undo: Vec<Op> = Vec::new();
+        let mut structural = false;
+        for (i, op) in ops.iter().enumerate() {
+            let in_session = match op {
+                Op::Create { id, parent, .. } => id.is_session() && parent.is_none_or(|p| p.is_session()),
+                Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddComp { id, .. } | Op::RemoveComp { id, .. } => id.is_session(),
+                Op::Link { rel } => rel.id.is_session() && rel.from.is_session(),
+                Op::Unlink { id } => id.is_session(),
+            };
+            let result = if in_session {
+                op::apply_op(&mut self.doc, i, op, stamp)
+            } else {
+                Err(ApplyError { op: i, kind: ErrorKind::BadId, message: "not a session-tier op".into() })
+            };
+            match result {
+                Ok(inverse) => undo.extend(inverse),
+                Err(e) => {
+                    for inv in undo.iter().rev() {
+                        let _ = op::apply_op(&mut self.doc, i, inv, stamp);
+                    }
+                    return Err(e);
+                }
+            }
+            structural |= matches!(op, Op::Create { .. } | Op::Delete { .. });
+        }
+        if structural {
+            self.reactive.rebuild(&self.doc);
+        }
+        self.session_version += 1;
+        Ok(())
+    }
+
+    pub fn session_version(&self) -> u64 {
+        self.session_version
+    }
+
+    fn live_of_type(&self, name: &str) -> Option<NodeId> {
+        let ty = TypeId::lookup(name)?;
+        self.doc.live_nodes().find(|n| n.ty == ty).map(|n| n.id)
+    }
+
+    /// The selected nodes, in pick order, with how each was reached
+    /// (`data.panel`, `data.chain`). Deleted nodes drop out.
+    pub fn selection(&self) -> Vec<(NodeId, std::collections::BTreeMap<String, Value>)> {
+        let Some(sel) = self.live_of_type("selection") else { return Vec::new() };
+        self.doc
+            .relations_from(sel)
+            .filter(|r| r.rel == RelKind::Selects && self.doc.is_live(r.to))
+            .map(|r| (r.to, r.data.clone()))
+            .collect()
+    }
+
+    /// Replace the selection: one session change, nothing when it is
+    /// already this. The session root and its `selection` node are created
+    /// on first use.
+    pub fn set_selection(&mut self, items: &[(NodeId, std::collections::BTreeMap<String, Value>)]) -> Result<(), ApplyError> {
+        if self.selection() == items {
+            return Ok(());
+        }
+        let mut ops = Vec::new();
+        let sel = match self.live_of_type("selection") {
+            Some(sel) => sel,
+            None => {
+                let ids = self.doc.next_session_ids(2);
+                let ty = |n: &str| TypeId::lookup(n).expect("registered");
+                ops.push(Op::Create { id: ids[0], ty: ty("session"), parent: None, order: OrderKey::first(), components: vec![] });
+                ops.push(Op::Create { id: ids[1], ty: ty("selection"), parent: Some(ids[0]), order: OrderKey::first(), components: vec![] });
+                ids[1]
+            }
+        };
+        for r in self.doc.relations_from(sel).filter(|r| r.rel == RelKind::Selects) {
+            ops.push(Op::Unlink { id: r.id });
+        }
+        for ((to, data), id) in items.iter().zip(self.doc.next_session_relation_ids(items.len())) {
+            ops.push(Op::Link { rel: Relation { id, from: sel, to: *to, rel: RelKind::Selects, data: data.clone() } });
+        }
+        self.apply_session(ops)
     }
 
     /// Keep the graph in step with a transaction that just applied.

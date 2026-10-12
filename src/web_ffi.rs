@@ -581,6 +581,35 @@ pub fn document_focus(ptr: u64, node: String) -> String {
     serde_json::json!({"ok": true}).to_string()
 }
 
+/// The session's selection, in pick order: JSON `[{"node","type","name",
+/// "panel","chain"}]`. For the model surface and the shell; the record is
+/// the store's session tier (plans/panels-and-session.md).
+#[wasm_bindgen]
+pub fn document_selection(ptr: u64) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return "[]".into();
+    };
+    let doc = store.0.document();
+    let list: Vec<serde_json::Value> = store
+        .0
+        .selection()
+        .into_iter()
+        .map(|(id, data)| {
+            let name = doc.get::<iron_document::component::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+            let s = |k: &str| data.get(k).and_then(|v| v.as_str()).map(str::to_owned);
+            serde_json::json!({
+                "node": id.to_string(),
+                "type": doc.live(id).map(|n| n.ty.name()),
+                "name": name,
+                "panel": s("panel"),
+                "chain": s("chain"),
+            })
+        })
+        .collect();
+    serde_json::Value::Array(list).to_string()
+}
+
 /// Every composition, for the shell's "open a view" menu: JSON
 /// `[{"id","name","dims"}]` in root order. A view is a window onto one of
 /// these (plans/panels-and-session.md).

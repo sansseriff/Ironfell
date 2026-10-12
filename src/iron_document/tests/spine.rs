@@ -797,3 +797,34 @@ fn ops_and_transactions_roundtrip_through_json() {
         }
     );
 }
+
+/// Deleting a group whose children bind to each other undoes in one step:
+/// the restored children are checked once all of them exist, so one may
+/// read a sibling that is recreated after it (the select tool's Delete).
+#[test]
+fn deleting_a_subtree_with_sibling_bindings_undoes() {
+    let mut store = Store::new();
+    let ids = store.document().next_ids(3);
+    let (g, b, a) = (ids[0], ids[1], ids[2]);
+    let k0 = OrderKey::first();
+    let k1 = OrderKey::after(&k0);
+    let mut ta = Transform2d::default();
+    // `a` comes first in sibling order and reads `b`, which comes after it.
+    ta.x = Slot::Bound(Expr::parse(&format!("{b}.transform2d.x + 10")).unwrap());
+    let rect = |t: Transform2d| vec![t.wrap(), Size::default().wrap()];
+    store
+        .apply(tx(
+            "scene",
+            vec![
+                Op::Create { id: g, ty: ty("group"), parent: None, order: k0.clone(), components: vec![Transform2d::default().wrap()] },
+                Op::Create { id: b, ty: ty("rect"), parent: Some(g), order: k1.clone(), components: rect(Transform2d::default()) },
+                Op::Create { id: a, ty: ty("rect"), parent: Some(g), order: k0.clone(), components: rect(ta) },
+            ],
+        ))
+        .unwrap();
+    let before = live_content(&store);
+    store.apply(tx("delete group", vec![Op::Delete { id: g }])).unwrap();
+    assert!(store.document().live(a).is_none());
+    store.undo(0).expect("something to undo").expect("undo applies");
+    assert_eq!(live_content(&store), before);
+}

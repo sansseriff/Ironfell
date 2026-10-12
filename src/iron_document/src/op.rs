@@ -329,9 +329,23 @@ fn create(
         );
         doc.advance_next_id(id);
     }
-    check_component_bindings(doc, cx, id, comps)?;
-    check_entity(doc, cx, id)?;
+    // Bindings and entity rules are checked once the whole transaction has
+    // applied (`check_created`): a restored subtree's nodes may read each
+    // other in any order.
     Ok(vec![Op::Delete { id }])
+}
+
+/// The checks a `Create` defers to the end of its transaction: its bindings
+/// read live leaves without a cycle, and an entity or embed is valid.
+pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Version) -> Result<(), ApplyError> {
+    let Op::Create { id, .. } = op else { return Ok(()) };
+    let cx = Ctx { index, stamp };
+    if doc.live(*id).is_none() {
+        return Ok(());
+    }
+    let comps: Vec<Component> = doc.components_of(*id).cloned().collect();
+    check_component_bindings(doc, &cx, *id, &comps)?;
+    check_entity(doc, &cx, *id)
 }
 
 /// An entity's instance and params must agree with its definition; checked

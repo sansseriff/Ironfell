@@ -735,6 +735,13 @@ impl Store {
                 Err(e) => errors.push(e),
             }
         }
+        if errors.is_empty() {
+            for (i, op) in input.ops.iter().enumerate() {
+                if let Err(e) = op::check_created(&work, i, op, stamp) {
+                    errors.push(e);
+                }
+            }
+        }
         if !errors.is_empty() {
             return Err(errors);
         }

@@ -115,6 +115,46 @@ scale 2); idle and dragging; 1, 2 and 4 panels; old path and new. Record frames 
 second, worker tick time, and allocated texture bytes. A renderer moves to view textures
 only if it is no slower at 1600×1000 and 2560×1440.
 
+### Spike results (2026-10-11)
+
+Built behind `?bevy=views` (`VARIANT_VIEW_TEXTURES`): S1 (every 3D camera, panel or
+embed, renders into its own image sized to its rectangle in 64 px buckets, pasted by a
+`ViewCompositeMaterial` quad texel for pixel; picking and drags map window px into the
+camera's own px) and S3 (a texture-backed 3D camera renders only when its rectangle,
+pose, lens, or 3D content on its layers changed, staying awake three frames after a
+change; the vector backend skips `render_scene` when the scene was not rebuilt). S2
+(per-view vector targets) is not built: the vector texture is still window-sized, but
+no longer re-rendered when nothing changed.
+
+Measured with headless Chrome on the GPU, vsync and frame-rate limit off, the main
+layout plus `?panels=`; frames per second, idle (the scrub phase is short, so its
+numbers mostly repeat idle and are omitted). Both paths in the same session:
+
+| window | panels | old | views | change |
+|---|---|---|---|---|
+| 1600×1000 | 1 | 677 | 1143 | +69% |
+| 1600×1000 | 2 | 555 | 910 | +64% |
+| 1600×1000 | 4 | 500 | 845 | +69% |
+| 2560×1440 @2 (5K) | 1 | 233 | 303 | +30% |
+| 2560×1440 @2 (5K) | 2 | 191 | 237 | +24% |
+| 2560×1440 @2 (5K) | 4 | 183 | 261 | +43% |
+
+Worker CPU per tick also falls (5K, 4 panels: p50 2.9 → 1.9 ms). Run-to-run variation
+is roughly ±10% (the old path measured 730 and 677 fps in two runs of the same case).
+The smoke script passes on the views path with identical output. Two bugs found and
+fixed: a camera woken for one frame rendered with per-view state from before it slept
+(dark, no ground) until the system ran before frusta and visibility and kept woken views
+awake a few frames; and (both paths) a clipped embed reframes its camera to the clipped
+strip instead of cropping the full view (not yet fixed).
+
+**What remains window-sized:** the background camera's clear, the vector composite
+camera's main textures and full-window composite quad, and the window present. At 5K
+an idle frame still costs ≈3.3 ms with nothing re-rendering, which is that overhead; S2
+and a single compositor pass are where it goes.
+
+**Conclusion:** convert. Retention is the largest single win, and it only exists
+because each view keeps its own texture.
+
 ## 6. Migration order (after the spike)
 
 1. Composition panels (2D and 3D) onto views and the compositor; drop window-sized

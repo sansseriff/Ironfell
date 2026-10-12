@@ -1,7 +1,7 @@
 use bevy::math::bounding::RayCast3d;
 use bevy::prelude::*;
 
-use crate::bevy_app::scene3d::{CurrentVolume, EmbedCam, PanelCamera};
+use crate::bevy_app::scene3d::{CurrentVolume, EmbedCam, PanelCamera, ScreenRect, camera_origin};
 use crate::document_bridge::{Doc2d, DocumentStore, EmbedViews, InComposition, NodeMap, PanelViews, nest};
 use iron_document::NodeId;
 use iron_document::composition::Dims;
@@ -120,7 +120,7 @@ pub fn pick_world_3d_system(
     pointer: Res<crate::PointerState>,
     views: Res<PanelViews>,
     embeds: Res<EmbedViews>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&PanelCamera>, Option<&EmbedCam>)>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&PanelCamera>, Option<&EmbedCam>, Option<&ScreenRect>)>,
     query: Query<(Entity, &CurrentVolume, &InComposition)>,
     mut hits: ResMut<crate::PointerHits>,
 ) {
@@ -128,19 +128,20 @@ pub fn pick_world_3d_system(
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)) else { return };
     let (camera_entity, composition, loose) = match view.dims {
         Dims::Three => {
-            let Some((e, ..)) = cameras.iter().find(|(_, _, _, pc, _)| pc.is_some_and(|pc| pc.panel == view.panel)) else { return };
+            let Some((e, ..)) = cameras.iter().find(|(_, _, _, pc, ..)| pc.is_some_and(|pc| pc.panel == view.panel)) else { return };
             (e, view.composition, true)
         }
         Dims::Two => {
             let p = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
             // The last one listed is drawn last, so it is on top.
             let Some(ev) = embeds.0.iter().rev().find(|v| v.panel == view.panel && v.rect.contains(p)) else { return };
-            let Some((e, ..)) = cameras.iter().find(|(_, _, _, _, ec)| ec.is_some_and(|ec| ec.key == ev.key)) else { return };
+            let Some((e, ..)) = cameras.iter().find(|(_, _, _, _, ec, _)| ec.is_some_and(|ec| ec.key == ev.key)) else { return };
             (e, Some(ev.source), false)
         }
     };
-    let Ok((_, camera, cam_transform, ..)) = cameras.get(camera_entity) else { return };
-    let Some(ray) = camera_ray_from_window_px(camera, cam_transform, pointer.screen) else {
+    let Ok((_, camera, cam_transform, _, _, screen)) = cameras.get(camera_entity) else { return };
+    // A texture-backed camera's pixels start at its rectangle's corner.
+    let Some(ray) = camera_ray_from_window_px(camera, cam_transform, pointer.screen - camera_origin(screen)) else {
         return;
     };
     let ray_cast = RayCast3d::from_ray(ray, 10_000.0);

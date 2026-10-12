@@ -10,7 +10,8 @@ import { chromium, type Browser, type Page } from "playwright-core";
 import { mkdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-const DEFAULT_URL = "http://localhost:5173/Ironfell/?gfx=webgl2";
+// URL=… overrides it, e.g. to run the smoke script with ?bevy=views.
+const DEFAULT_URL = process.env.URL ?? "http://localhost:5173/Ironfell/?gfx=webgl2";
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const SHOTS = new URL("./screenshots/", import.meta.url).pathname;
 mkdirSync(SHOTS, { recursive: true });
@@ -20,11 +21,19 @@ const browser: Browser = await chromium.launch({
   headless: true,
   // GPU=1 uses the machine's GPU (ANGLE on Metal) instead of SwiftShader,
   // for frame-time measurements; SwiftShader caps the app near 10 fps.
-  args: process.env.GPU
-    ? ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist", "--no-sandbox"]
-    : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--no-sandbox"],
+  // UNTHROTTLED=1 lifts vsync and the frame-rate limit, so frames per
+  // second measures throughput instead of sitting at 60.
+  args: [
+    ...(process.env.GPU
+      ? ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist", "--no-sandbox"]
+      : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--no-sandbox"]),
+    ...(process.env.UNTHROTTLED ? ["--disable-gpu-vsync", "--disable-frame-rate-limit"] : []),
+  ],
 });
-const page: Page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 1 });
+// SIZE=2560x1440@2 sets the window and device scale (that one is 5K).
+const [sizeSpec, dprSpec] = (process.env.SIZE ?? "1600x1000@1").split("@");
+const [vw, vh] = sizeSpec.split("x").map(Number);
+const page: Page = await browser.newPage({ viewport: { width: vw, height: vh }, deviceScaleFactor: Number(dprSpec ?? 1) });
 
 // Console output. Playwright forwards the worker's console on the page
 // channel too, so one listener sees both. Rust logs arrive with %c colour

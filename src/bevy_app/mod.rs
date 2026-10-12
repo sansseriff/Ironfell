@@ -29,7 +29,7 @@ use interaction::{
 };
 use picking::{pick_document_2d_system, pick_world_3d_system, pointer_panel_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
-use scene3d::{apply_focus, render_active_shapes, setup_3d_scene, sync_embed_cameras, sync_panel_cameras, update_aabbes};
+use scene3d::{apply_focus, render_active_shapes, setup_3d_scene, sync_embed_cameras, sync_panel_cameras, sync_view_images, update_aabbes};
 use timeline::TimelinePlugin;
 
 use crate::{
@@ -57,6 +57,10 @@ pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
 /// a Hybrid-only plugin set so classic's eager compute-pipeline creation cannot
 /// affect cold start.
 pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
+/// Render 3D views into textures sized to their rectangle and composite
+/// them, instead of window-sized viewport cameras (`?bevy=views`;
+/// plans/view-textures.md spike).
+pub const VARIANT_VIEW_TEXTURES: u32 = 1 << 6;
 
 /// Build the app around an already-created canvas.
 ///
@@ -167,6 +171,8 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
 
     init_shared_resources(&mut app);
     announce_canvas_window(&mut app);
+    app.insert_resource(scene3d::ViewTextures(variant_flags & VARIANT_VIEW_TEXTURES != 0));
+    app.insert_resource(crate::vector::VectorRetain(variant_flags & VARIANT_VIEW_TEXTURES != 0));
 
     // ============================ RE-ENABLE LADDER =============================
     // flags=0 escalation for the 5K frame-skip hunt. Uncomment ONE step at a time,
@@ -238,6 +244,17 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             sync_embed_cameras
                 .after(crate::document_bridge::nest::collect_embed_views)
                 .after(update_aabbes),
+            // Texture-backed cameras (`?bevy=views`): targets, composites and
+            // whether each renders this frame. After everything that moves
+            // what they show, including the gizmo highlight state.
+            sync_view_images
+                .after(sync_embed_cameras)
+                .after(TransformSystems::Propagate)
+                .after(selection_reflect_system)
+                // Before frusta and visibility: a camera woken this frame
+                // must be culled and lit as an active view this frame.
+                .before(bevy::camera::visibility::VisibilitySystems::UpdateFrusta)
+                .run_if(|v: Res<scene3d::ViewTextures>| v.0),
             // Highlights before the 2D layer draws (after propagation) and
             // before the 3D outlines read them.
             crate::document_bridge::update_highlights

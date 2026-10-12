@@ -16,6 +16,9 @@ import type { Backend } from './backend_policy';
  *   ?bevy=classic      initialize classic Vello instead of Vello Hybrid;
  *                      this deliberately pays classic's deferred startup cost.
  *                      Requires a build with the `classic` cargo feature.
+ *   ?bevy=views        render composition panels into panel-sized textures
+ *                      (plans/view-textures.md spike) instead of window-sized
+ *                      viewport cameras
  *   ?bevy=alpha        add the alpha-blending stress fixture; combine as
  *                      ?bevy=alpha,classic to run that variant with classic
  * No param = the normal Vello Hybrid app.
@@ -30,6 +33,7 @@ export function variantFlagsFromUrl(): number {
     if (parts.includes('empty')) flags |= 4; // VARIANT_EMPTY
     if (parts.includes('alpha')) flags |= 16; // VARIANT_ALPHA_STRESS
     if (parts.includes('classic')) flags |= 32; // VARIANT_CLASSIC_BACKEND
+    if (parts.includes('views')) flags |= 64; // VARIANT_VIEW_TEXTURES
     return flags;
 }
 

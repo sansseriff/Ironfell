@@ -27,12 +27,14 @@ mod composite;
 mod composite_material;
 mod display_list;
 mod hybrid;
+pub mod view_composite;
 
 // Re-exported: what app drawing code needs. Backends reach into the submodules
 // directly (`display_list::DrawCmd`, ...) rather than
 // going through here, so this list stays scoped to the authoring side.
 pub use backend::{BackendKind, VectorLayer, order};
-pub use composite::VectorCamera;
+pub use composite::{VECTOR_LAYER, VectorCamera};
+pub use hybrid::VectorRetain;
 pub use display_list::{DisplayList, DisplayListBuilder, DisplayListRebuild};
 
 use bevy::prelude::*;
@@ -68,7 +70,7 @@ impl VectorPlugin {
 impl Plugin for VectorPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.backend)
-            .add_plugins(composite::CompositePlugin);
+            .add_plugins((composite::CompositePlugin, view_composite::ViewCompositePlugin));
 
         // `VelloPlugin` creates the classic renderer and all of its compute
         // pipelines in `Plugin::finish`, so selecting Hybrid must omit it

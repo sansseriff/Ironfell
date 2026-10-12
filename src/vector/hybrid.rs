@@ -116,11 +116,19 @@ pub struct VectorStats {
     pub layer_rebuilds: HashMap<Entity, u64>,
 }
 
+/// Whether the backend keeps its texture between frames and re-renders only
+/// after a scene rebuild (plans/view-textures.md S3). Off, it renders every
+/// frame, as it always has.
+#[derive(Resource, Clone, Copy, Debug, Default, bevy::render::extract_resource::ExtractResource)]
+pub struct VectorRetain(pub bool);
+
 pub struct HybridBackend;
 
 impl Plugin for HybridBackend {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostStartup, setup_target)
+        app.init_resource::<VectorRetain>()
+            .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<VectorRetain>::default())
+            .add_systems(PostStartup, setup_target)
             .add_systems(PostUpdate, sync_target);
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
@@ -451,6 +459,8 @@ struct HybridInner {
     /// Scratch path buffer, so shape conversion allocates once rather than
     /// once per shape per rebuild.
     scratch: BezPath,
+    /// The texture holds the current scene: with retention, nothing to do.
+    rendered: bool,
 }
 
 /// Rebuild the merged scene, but only when a layer actually changed.
@@ -515,6 +525,7 @@ fn prepare_scene(
     }
 
     extracted.dirty = false;
+    state.rendered = false;
     stats.scene_rebuilds += 1;
     stats.layers_culled = culled;
     stats.commands_emitted = emitted;
@@ -615,6 +626,7 @@ fn refill(scratch: &mut BezPath, els: impl Iterator<Item = PathEl>) {
 /// Render the merged scene into the backend's own texture.
 fn render_scene(
     renderer: Res<HybridRenderer>,
+    retain: Option<Res<VectorRetain>>,
     target: Option<Res<HybridTargetView>>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     device: Res<RenderDevice>,
@@ -630,6 +642,9 @@ fn render_scene(
     let mut state = renderer.0.lock().expect("hybrid renderer lock");
     let size = state.size;
     if size.x == 0 || size.y == 0 || state.scene.is_none() {
+        return;
+    }
+    if retain.is_some_and(|r| r.0) && state.rendered {
         return;
     }
 
@@ -699,4 +714,5 @@ fn render_scene(
         return;
     }
     queue.submit([encoder.finish()]);
+    state.rendered = true;
 }

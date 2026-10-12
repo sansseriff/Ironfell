@@ -53,7 +53,7 @@ pub fn interaction_decide_system(
     mut drag: ResMut<crate::DragState>,
     mut selection: ResMut<crate::SelectionState>,
     mut commit: ResMut<PendingCommit>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform)>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&crate::bevy_app::scene3d::ScreenRect>)>,
     transforms: Query<&GlobalTransform>,
     doc2d: Query<&Doc2d>,
     provenance: Query<&Provenance>,
@@ -144,7 +144,8 @@ pub fn interaction_decide_system(
                 drag.kind = Some(crate::DragKind::World3D);
                 // Establish drag plane for 3D: if ctrl held -> fixed XZ plane (normal Y).
                 // Otherwise plane passes through object and is camera-facing (normal = camera forward).
-                if let Some((_, camera, cam_tf)) = drag.camera.and_then(|c| cameras.get(c).ok()) {
+                if let Some((_, camera, cam_tf, screen)) = drag.camera.and_then(|c| cameras.get(c).ok()) {
+                    let local = pointer.screen - crate::bevy_app::scene3d::camera_origin(screen);
                     let cam_forward = cam_tf.forward().as_vec3();
                     let plane_normal = if pointer.modifiers.ctrl { Vec3::Y } else { cam_forward };
                     drag.plane_normal = plane_normal.normalize_or_zero();
@@ -154,7 +155,7 @@ pub fn interaction_decide_system(
                         drag.plane_origin = cam_tf.translation();
                     }
                     if let Some(ray) =
-                        crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, pointer.screen)
+                        crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, local)
                     {
                         if let Some(hit_pos) = intersect_ray_plane(ray, drag.plane_origin, drag.plane_normal) {
                             if let Ok(ent_tf) = transforms.get(primary) {
@@ -197,7 +198,7 @@ pub fn drag_apply_system(
     globals: Query<&GlobalTransform>,
     nodes: Query<(&Provenance, Option<&Doc2d>)>,
     mut store: ResMut<DocumentStore>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform)>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&crate::bevy_app::scene3d::ScreenRect>)>,
     views: Res<PanelViews>,
 ) {
     let Some(entity) = drag.target else { return };
@@ -269,8 +270,9 @@ pub fn drag_apply_system(
             let _ = target;
         }
         Some(crate::DragKind::World3D) => {
-            let Some((_, camera, cam_tf)) = drag.camera.and_then(|c| cameras.get(c).ok()) else { return };
-            let Some(ray) = crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, pointer.screen)
+            let Some((_, camera, cam_tf, screen)) = drag.camera.and_then(|c| cameras.get(c).ok()) else { return };
+            let local = pointer.screen - crate::bevy_app::scene3d::camera_origin(screen);
+            let Some(ray) = crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, local)
             else {
                 return;
             };

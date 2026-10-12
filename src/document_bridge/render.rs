@@ -20,7 +20,7 @@
 
 use super::{Bounds2d, Doc2d, DocumentChanges, DocumentStore, Highlights, NodeMap, PanelViews, Shape2d, nest};
 use iron_document::composition::Dims;
-use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
+use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, VectorView, order};
 use bevy::prelude::*;
 use iron_document::NodeId;
 use kurbo::Shape as _;
@@ -32,11 +32,52 @@ pub(super) fn setup_document_layer(mut commands: Commands) {
     commands.spawn((DisplayList::default(), VectorLayer::screen(order::DOCUMENT_2D), DocumentLayer));
 }
 
+/// With view textures (`?bevy=views`), one document layer per 2D panel, each
+/// its own [`VectorView`]: it renders into a texture the panel's size and
+/// re-renders only when its own content changed (plans/view-textures.md).
+#[derive(Component, Debug)]
+pub struct DocumentPanelLayer {
+    pub panel: String,
+}
+
+/// Keep one panel layer per 2D composition panel, at the panel's rectangle.
+pub(super) fn sync_document_views(
+    mut commands: Commands,
+    views: Res<PanelViews>,
+    view_tex: Option<Res<crate::bevy_app::ViewTexturesMode>>,
+    mut layers: Query<(Entity, &DocumentPanelLayer, &mut VectorView)>,
+) {
+    let on = view_tex.is_some_and(|v| v.0);
+    let wanted: Vec<_> = if on { views.0.iter().filter(|v| v.dims == Dims::Two).collect() } else { Vec::new() };
+    for (e, layer, _) in &layers {
+        if !wanted.iter().any(|v| v.panel == layer.panel) {
+            commands.entity(e).despawn();
+        }
+    }
+    for view in wanted {
+        let r = view.rect;
+        let next = VectorView { pos: UVec2::new(r.x.max(0.0) as u32, r.y.max(0.0) as u32), size: UVec2::new(r.w.max(1.0) as u32, r.h.max(1.0) as u32) };
+        match layers.iter_mut().find(|(_, l, _)| l.panel == view.panel) {
+            Some((_, _, mut v)) => {
+                if *v != next {
+                    *v = next;
+                }
+            }
+            None => {
+                let e = commands.spawn((DisplayList::default(), next, DocumentPanelLayer { panel: view.panel.clone() })).id();
+                commands.entity(e).insert(VectorLayer::screen(order::DOCUMENT_2D).in_view(e));
+            }
+        }
+    }
+}
+
 /// How many changed node ids a redraw line names before summarising.
 const LOG_IDS: usize = 12;
 
 pub(super) fn render_document_layer(
-    mut layers: Query<&mut DisplayList, With<DocumentLayer>>,
+    mut layers: Query<&mut DisplayList, (With<DocumentLayer>, Without<DocumentPanelLayer>)>,
+    mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer), Without<DocumentLayer>>,
+    new_panels: Query<(), Added<DocumentPanelLayer>>,
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
     globals: Query<&'static GlobalTransform>,
     store: Res<DocumentStore>,
@@ -53,6 +94,8 @@ pub(super) fn render_document_layer(
         "panel layout"
     } else if highlights.is_changed() {
         "selection"
+    } else if !new_panels.is_empty() {
+        "new view"
     } else {
         return;
     };
@@ -74,12 +117,26 @@ pub(super) fn render_document_layer(
     }
 
     let mut cx = Draw { store: &store.0, doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, changed: &changed.nodes, bounds: &mut bounds.0, damage, drawn: 0 };
-    list.rebuild(|b| {
-        for view in views.0.iter().filter(|v| v.dims == Dims::Two) {
+    if panel_layers.is_empty() {
+        // One window-sized layer for every 2D panel, each clipped to its rect.
+        list.rebuild(|b| {
+            for view in views.0.iter().filter(|v| v.dims == Dims::Two) {
+                let roots = nest::panel_roots(doc, view);
+                b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), 0));
+            }
+        });
+    } else {
+        // A layer per panel: a panel whose content is unchanged rebuilds to
+        // the same commands, so its view does not re-render.
+        list.rebuild(|_| {});
+        for (mut panel_list, layer) in &mut panel_layers {
+            let Some(view) = views.get(&layer.panel) else { continue };
             let roots = nest::panel_roots(doc, view);
-            b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), 0));
+            panel_list.rebuild(|b| {
+                b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), 0));
+            });
         }
-    });
+    }
     let (drawn, damage) = (cx.drawn, cx.damage);
 
     let mut ids: Vec<String> = changed.nodes.iter().take(LOG_IDS).map(|id| id.to_string()).collect();

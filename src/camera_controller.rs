@@ -237,11 +237,15 @@ fn run_camera_controller(
             controller.velocity = Vec3::ZERO;
         }
     }
-    let forward = *transform.forward();
-    let right = *transform.right();
-    transform.translation += controller.velocity.x * dt * right
-        + controller.velocity.y * dt * Vec3::Y
-        + controller.velocity.z * dt * forward;
+    // Only when moving: writing the transform at rest would mark the camera
+    // changed every frame, and a view that only redraws on change never idles.
+    if controller.velocity != Vec3::ZERO {
+        let forward = *transform.forward();
+        let right = *transform.right();
+        transform.translation += controller.velocity.x * dt * right
+            + controller.velocity.y * dt * Vec3::Y
+            + controller.velocity.z * dt * forward;
+    }
 
     // Handle cursor grab
     // Note: Directly manipulating window.cursor_options might need to be

@@ -195,6 +195,7 @@ impl Plugin for DocumentPlugin {
             .add_systems(
                 PostUpdate,
                 (
+                    render::sync_document_views.before(render::render_document_layer),
                     render::render_document_layer.after(TransformSystems::Propagate),
                     // The store's world transforms must agree with Bevy's
                     // (constraint-system.md §4.3); checked whenever one moves.

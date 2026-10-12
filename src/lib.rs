@@ -94,9 +94,85 @@ impl WorkerApp {
         }
     }
 
+/// One frame. With render on demand (`RedrawNeeded`), the main world runs,
+    /// decides at the end of its schedule whether anything the window shows
+    /// changed, and only then are the render world's extraction and rendering
+    /// run; otherwise the window keeps its last picture. The same steps as
+    /// `App::update`, with the sub-apps made conditional.
+    pub fn frame(&mut self) {
+        if !self.app.world().contains_resource::<RedrawNeeded>() {
+            self.app.update();
+            return;
+        }
+        let subs = self.app.sub_apps_mut();
+        subs.main.run_default_schedule();
+        let redraw = subs.main.world().get_resource::<RedrawNeeded>().is_none_or(|r| r.now);
+        if redraw {
+            for (_, sub) in subs.sub_apps.iter_mut() {
+                sub.extract(subs.main.world_mut());
+                sub.update();
+            }
+        }
+        subs.main.world_mut().clear_trackers();
+    }
+
     pub fn to_physical_size(&self, x: f32, y: f32) -> Vec2 {
         Vec2::new(x * self.scale_factor, y * self.scale_factor)
     }
+}
+
+/// Render on demand (plans/view-textures.md): whether this frame changed
+/// anything the window shows. When it did not, the frame loop runs only the
+/// main world and the window keeps its last picture, so an idle frame costs
+/// no GPU work at any resolution. Only installed with view textures, where
+/// every view keeps its own texture between frames.
+#[derive(Resource, Debug)]
+pub(crate) struct RedrawNeeded {
+    pub now: bool,
+    /// Frames still to render after the last change: per-view state settles
+    /// over a frame or two, as for a woken 3D view.
+    linger: u8,
+}
+
+impl Default for RedrawNeeded {
+    fn default() -> Self {
+        // Render the first frames unconditionally while everything appears.
+        RedrawNeeded { now: true, linger: 30 }
+    }
+}
+
+/// Decide, at the end of the main world's frame, whether to render it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn decide_redraw(
+    mut redraw: ResMut<RedrawNeeded>,
+    texture_cameras: Query<&Camera, With<crate::bevy_app::ScreenRectMarker>>,
+    lists: Query<(), Or<(Changed<crate::vector::DisplayList>, Changed<crate::vector::VectorView>)>>,
+    ui: Query<(), Or<(Changed<Text>, Changed<TextSpan>, Changed<Node>, Changed<Visibility>)>>,
+    cameras: Query<(), Or<(Added<Camera>, Changed<Camera>)>>,
+    mut removed_cameras: RemovedComponents<Camera>,
+    mut removed_lists: RemovedComponents<crate::vector::DisplayList>,
+    panels: Res<crate::panels::Panels>,
+    windows: Query<(), Changed<Window>>,
+    mut images: MessageReader<AssetEvent<Image>>,
+    mut meshes: MessageReader<AssetEvent<Mesh>>,
+    mut materials: MessageReader<AssetEvent<crate::vector::view_composite::ViewCompositeMaterial>>,
+) {
+    let changed = texture_cameras.iter().any(|c| c.is_active)
+        || !lists.is_empty()
+        || !ui.is_empty()
+        || !cameras.is_empty()
+        || removed_cameras.read().count() > 0
+        || removed_lists.read().count() > 0
+        || panels.is_changed()
+        || !windows.is_empty()
+        || images.read().count() > 0
+        || meshes.read().count() > 0
+        || materials.read().count() > 0;
+    if changed {
+        redraw.linger = redraw.linger.max(3);
+    }
+    redraw.now = redraw.linger > 0;
+    redraw.linger = redraw.linger.saturating_sub(1);
 }
 
 /// Frame / animation driving data retained from the original ActiveInfo.

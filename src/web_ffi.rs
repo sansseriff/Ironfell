@@ -227,7 +227,7 @@ pub fn enter_frame_with_mouse(ptr: u64, mouse_x: f32, mouse_y: f32, has_mouse_up
             app.cleanup();
         }
     } else {
-        app.update();
+        app.frame();
     }
 }
 
@@ -741,7 +741,7 @@ pub fn enter_frame(ptr: u64) {
             app.cleanup();
         }
     } else {
-        app.update();
+        app.frame();
     }
 }
 

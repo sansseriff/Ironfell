@@ -59,7 +59,8 @@ use vello_hybrid::{
 };
 use wgpu::TextureFormat;
 
-use super::backend::{LayerSpace, VectorLayer};
+use super::backend::{LayerSpace, VectorLayer, VectorView};
+use super::view_composite::{MODE_PREMULTIPLIED_RAW, ViewCompositeMaterial, bucket, unit_quad};
 use super::composite::{VECTOR_LAYER, VectorCamera};
 use super::composite_material::{VectorCompositeMaterial, fullscreen_quad};
 use super::display_list::{Brush, DisplayList, DrawCmd, Shape};
@@ -129,7 +130,7 @@ impl Plugin for HybridBackend {
         app.init_resource::<VectorRetain>()
             .add_plugins(bevy::render::extract_resource::ExtractResourcePlugin::<VectorRetain>::default())
             .add_systems(PostStartup, setup_target)
-            .add_systems(PostUpdate, sync_target);
+            .add_systems(PostUpdate, (sync_target, sync_views));
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -137,7 +138,8 @@ impl Plugin for HybridBackend {
         render_app
             .init_resource::<ExtractedLayers>()
             .init_resource::<VectorStats>()
-            .add_systems(ExtractSchedule, (extract_target, extract_layers))
+            .init_resource::<ExtractedViews>()
+            .add_systems(ExtractSchedule, (extract_target, extract_views, extract_layers).chain())
             .add_systems(
                 Render,
                 (prepare_scene, render_scene)
@@ -263,6 +265,78 @@ fn sync_target(
     target.size = size;
 }
 
+/// A view's texture and the quad that pastes it into the window.
+#[derive(Component, Debug)]
+pub struct ViewTarget2d {
+    image: Handle<Image>,
+    bucket: UVec2,
+    material: Handle<ViewCompositeMaterial>,
+}
+
+/// The view whose texture a composite quad pastes.
+#[derive(Component, Debug)]
+struct ViewCompositeOf(Entity);
+
+/// Give every [`VectorView`] a texture (bucketed, so a pane drag rarely
+/// reallocates) and a composite quad over its rectangle, and retire both
+/// with the view.
+fn sync_views(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ViewCompositeMaterial>>,
+    mut quad: Local<Option<Handle<Mesh>>>,
+    mut views: Query<(Entity, Ref<VectorView>, Option<&mut ViewTarget2d>)>,
+    composites: Query<(Entity, &ViewCompositeOf)>,
+) {
+    let quad = quad.get_or_insert_with(|| meshes.add(unit_quad())).clone();
+    for (entity, view, target) in &mut views {
+        let size = view.size.max(UVec2::ONE);
+        let want = bucket(size);
+        let rect = Vec4::new(view.pos.x as f32, view.pos.y as f32, size.x as f32, size.y as f32);
+        let params = Vec4::new(want.x as f32, want.y as f32, MODE_PREMULTIPLIED_RAW, 0.0);
+        match target {
+            Some(mut t) => {
+                if t.bucket != want {
+                    t.image = images.add(new_target_image(want));
+                    t.bucket = want;
+                    if let Some(mut m) = materials.get_mut(&t.material) {
+                        m.texture = t.image.clone();
+                        m.params = params;
+                        m.rect = rect;
+                    }
+                } else if view.is_changed()
+                    && let Some(mut m) = materials.get_mut(&t.material)
+                {
+                    m.rect = rect;
+                }
+            }
+            None => {
+                let image = images.add(new_target_image(want));
+                let material = materials.add(ViewCompositeMaterial { texture: image.clone(), rect, params });
+                commands.spawn((
+                    Mesh2d(quad.clone()),
+                    MeshMaterial2d(material.clone()),
+                    // Over 3D views (z = -1) and the window-sized vector
+                    // texture (z = 0).
+                    Transform::from_xyz(0.0, 0.0, 0.5),
+                    RenderLayers::layer(VECTOR_LAYER),
+                    bevy::camera::visibility::NoFrustumCulling,
+                    Visibility::Visible,
+                    ViewCompositeOf(entity),
+                    Name::new("vector view composite"),
+                ));
+                commands.entity(entity).insert(ViewTarget2d { image, bucket: want, material });
+            }
+        }
+    }
+    for (e, of) in &composites {
+        if views.get(of.0).is_err() {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Extraction
 // ---------------------------------------------------------------------------
@@ -274,7 +348,13 @@ struct ExtractedLayer {
     transform: Affine,
     cmds: Vec<DrawCmd>,
     bounds: Option<Rect>,
+    /// The view whose texture it renders into; `None` is the window target.
+    view: Option<Entity>,
 }
+
+/// Where a target's scene goes: the window-sized texture (`None`) or one
+/// view's own texture (plans/view-textures.md).
+type TargetKey = Option<Entity>;
 
 /// Render-world mirror of every vector layer.
 ///
@@ -284,12 +364,25 @@ struct ExtractedLayer {
 #[derive(Resource, Default)]
 struct ExtractedLayers {
     layers: HashMap<Entity, ExtractedLayer>,
-    /// Set when the mirror changed; cleared once the scene is rebuilt.
-    dirty: bool,
+    /// Targets whose layers changed; cleared as each scene is rebuilt.
+    dirty: bevy::platform::collections::HashSet<TargetKey>,
     target_size: UVec2,
     /// Last camera mapping used to build the mirror; see `extract_layers`.
     view: Option<ViewMapping>,
 }
+
+/// One view's texture, mirrored for the render world.
+#[derive(Clone, Debug, PartialEq)]
+struct ExtractedView {
+    /// Window px of the view's top-left: screen layers are offset by it.
+    pos: UVec2,
+    /// The texture's (bucketed) size, which is the scene's size.
+    bucket: UVec2,
+    image: Handle<Image>,
+}
+
+#[derive(Resource, Default)]
+struct ExtractedViews(HashMap<Entity, ExtractedView>);
 
 /// Mirror of [`HybridTarget::image`], so the render world can find the texture.
 #[derive(Resource)]
@@ -298,6 +391,28 @@ struct HybridTargetView(Handle<Image>);
 fn extract_target(mut commands: Commands, target: Extract<Option<Res<HybridTarget>>>) {
     if let Some(target) = target.as_ref() {
         commands.insert_resource(HybridTargetView(target.image.clone()));
+    }
+}
+
+fn extract_views(
+    mut extracted: ResMut<ExtractedViews>,
+    mut layers: ResMut<ExtractedLayers>,
+    views: Extract<Query<(Entity, &VectorView, &ViewTarget2d)>>,
+) {
+    let mut seen = 0usize;
+    for (e, view, target) in views.iter() {
+        seen += 1;
+        let next = ExtractedView { pos: view.pos, bucket: target.bucket, image: target.image.clone() };
+        if extracted.0.get(&e) != Some(&next) {
+            // Moved, resized or re-targeted: its scene's offset or size, or
+            // the texture it goes into, changed.
+            extracted.0.insert(e, next);
+            layers.dirty.insert(Some(e));
+        }
+    }
+    if seen != extracted.0.len() {
+        let live: bevy::platform::collections::HashSet<Entity> = views.iter().map(|(e, ..)| e).collect();
+        extracted.0.retain(|e, _| live.contains(e));
     }
 }
 
@@ -313,7 +428,7 @@ fn extract_layers(
         && extracted.target_size != target.size
     {
         extracted.target_size = target.size;
-        extracted.dirty = true;
+        extracted.dirty.insert(None);
     }
 
     // World layers need the camera mapping, which depends on the target size, so
@@ -345,11 +460,15 @@ fn extract_layers(
         // that "moves" changes nothing about what this backend draws. Only
         // world layers care, and restricting the test to them is not an
         // optimisation but a correctness statement about what feeds the output.
-        //
         let moved = layer.space == LayerSpace::World && (global.is_changed() || view_moved);
+        let retargeted = extracted.layers.get(&entity).is_some_and(|l| l.view != layer.view);
         // `is_added` covers the first frame, when the mirror has no entry yet.
-        if !list.is_changed() && !moved && extracted.layers.contains_key(&entity) {
+        if !list.is_changed() && !moved && !retargeted && extracted.layers.contains_key(&entity) {
             continue;
+        }
+        if let Some(old) = extracted.layers.get(&entity) {
+            let old_view = old.view;
+            extracted.dirty.insert(old_view);
         }
         extracted.layers.insert(
             entity,
@@ -358,9 +477,10 @@ fn extract_layers(
                 transform: layer_transform(layer.space, &global, view),
                 cmds: list.cmds().to_vec(),
                 bounds: list.bounds(),
+                view: layer.view,
             },
         );
-        extracted.dirty = true;
+        extracted.dirty.insert(layer.view);
         *stats.layer_rebuilds.entry(entity).or_insert(0) += 1;
     }
 
@@ -369,8 +489,9 @@ fn extract_layers(
     if seen != extracted.layers.len() {
         let live: bevy::platform::collections::HashSet<Entity> =
             layers.iter().map(|(e, ..)| e).collect();
+        let gone: Vec<TargetKey> = extracted.layers.iter().filter(|(e, _)| !live.contains(*e)).map(|(_, l)| l.view).collect();
+        extracted.dirty.extend(gone);
         extracted.layers.retain(|e, _| live.contains(e));
-        extracted.dirty = true;
     }
 }
 
@@ -434,7 +555,7 @@ fn layer_transform(space: LayerSpace, global: &GlobalTransform, view: ViewMappin
 // Render world
 // ---------------------------------------------------------------------------
 
-/// The renderer, its persistent resources, and the retained scene.
+/// The renderer, its persistent resources, and one retained scene per target.
 ///
 /// Behind a `Mutex` because `vello_hybrid::Scene` holds `RefCell`/`OnceCell`
 /// internally and so is `Send` but not `Sync`, while Bevy resources must be
@@ -452,21 +573,30 @@ impl Default for HybridRenderer {
 #[derive(Default)]
 struct HybridInner {
     /// Created lazily: constructing a `Renderer` needs the device, which does
-    /// not exist when the plugin is built.
+    /// not exist when the plugin is built. One renderer serves every target:
+    /// `render` takes the size per call.
     inner: Option<(Renderer, Resources)>,
-    scene: Option<Scene>,
+    /// The window-sized target's size, which the renderer was configured for.
     size: UVec2,
+    targets: HashMap<TargetKey, TargetScene>,
     /// Scratch path buffer, so shape conversion allocates once rather than
     /// once per shape per rebuild.
     scratch: BezPath,
+}
+
+/// One target's retained scene.
+struct TargetScene {
+    scene: Scene,
+    size: UVec2,
     /// The texture holds the current scene: with retention, nothing to do.
     rendered: bool,
 }
 
-/// Rebuild the merged scene, but only when a layer actually changed.
+/// Rebuild each target's scene, but only when one of its layers changed.
 fn prepare_scene(
     renderer: Res<HybridRenderer>,
     mut extracted: ResMut<ExtractedLayers>,
+    views: Res<ExtractedViews>,
     mut stats: ResMut<VectorStats>,
 ) {
     let size = extracted.target_size;
@@ -475,64 +605,71 @@ fn prepare_scene(
     }
     let mut state = renderer.0.lock().expect("hybrid renderer lock");
 
-    let resized = state.size != size;
-    if resized {
+    if state.size != size {
         state.size = size;
         // The renderer is built against a fixed target config, and the view
         // belongs to a texture that no longer exists, so a resize retires both.
         state.inner = None;
+        extracted.dirty.insert(None);
     }
-    if !extracted.dirty && !resized && state.scene.is_some() {
-        return;
-    }
+    // Targets that went away.
+    state.targets.retain(|k, _| k.is_none_or(|e| views.0.contains_key(&e)));
 
-    // `Scene::new` takes u16; a 5K display is well inside that, but a bad
-    // window size should clamp rather than wrap.
-    let (w, h) = (
-        size.x.min(u16::MAX as u32) as u16,
-        size.y.min(u16::MAX as u32) as u16,
-    );
-    match state.scene.as_mut() {
-        // Reuse the allocation; `reset_and_resize` keeps its buffers.
-        Some(scene) => scene.reset_and_resize(w, h),
-        None => state.scene = Some(Scene::new(w, h)),
-    }
-
-    // Painter order across layers is explicit; within a layer it is emission
-    // order. Sorting a handful of entries every rebuild is cheaper than keeping
-    // a sorted structure correct across insertions and removals.
-    let mut ordered: Vec<&ExtractedLayer> = extracted.layers.values().collect();
-    ordered.sort_by_key(|l| l.order);
-
-    let viewport = Rect::new(0.0, 0.0, size.x as f64, size.y as f64);
-    let HybridInner { scene, scratch, .. } = &mut *state;
-    let scene = scene.as_mut().expect("scene created above");
-
+    let mut keys: Vec<TargetKey> = vec![None];
+    keys.extend(views.0.keys().map(|&e| Some(e)));
     let mut culled = 0_u32;
     let mut emitted = 0_u32;
-    for layer in ordered {
-        // A layer whose content cannot touch the viewport costs nothing. This is
-        // the cheapest form of the culling described in Tranche C, and it works
-        // because `bounds` is conservative.
-        if let Some(bounds) = layer.bounds {
-            let device_bounds = layer.transform.transform_rect_bbox(bounds);
-            if device_bounds.intersect(viewport).is_zero_area() {
-                culled += 1;
-                continue;
+    let mut rebuilt = false;
+    for key in keys {
+        let (offset, tsize) = match key {
+            None => (UVec2::ZERO, size),
+            Some(e) => {
+                let v = &views.0[&e];
+                (v.pos, v.bucket)
             }
+        };
+        let fresh = !state.targets.contains_key(&key);
+        if !fresh && !extracted.dirty.contains(&key) {
+            continue;
         }
-        emitted += emit_layer(scene, layer, scratch);
-    }
+        extracted.dirty.remove(&key);
+        rebuilt = true;
+        // `Scene::new` takes u16; a 5K display is well inside that, but a bad
+        // size should clamp rather than wrap.
+        let (w, h) = (tsize.x.min(u16::MAX as u32) as u16, tsize.y.min(u16::MAX as u32) as u16);
+        let HybridInner { targets, scratch, .. } = &mut *state;
+        let target = targets.entry(key).or_insert_with(|| TargetScene { scene: Scene::new(w, h), size: tsize, rendered: false });
+        // Reuse the allocation; `reset_and_resize` keeps its buffers.
+        target.scene.reset_and_resize(w, h);
+        target.size = tsize;
+        target.rendered = false;
 
-    extracted.dirty = false;
-    state.rendered = false;
-    stats.scene_rebuilds += 1;
-    stats.layers_culled = culled;
-    stats.commands_emitted = emitted;
-    debug!(
-        "hybrid scene rebuild #{}: {emitted} commands, {culled} layers culled",
-        stats.scene_rebuilds
-    );
+        // Painter order across layers is explicit; within a layer it is
+        // emission order.
+        let mut ordered: Vec<&ExtractedLayer> = extracted.layers.values().filter(|l| l.view == key).collect();
+        ordered.sort_by_key(|l| l.order);
+        // A view's scene starts at its own top-left: screen layers, authored
+        // in window px, shift by the view's position.
+        let to_target = Affine::translate((-(offset.x as f64), -(offset.y as f64)));
+        let viewport = Rect::new(0.0, 0.0, tsize.x as f64, tsize.y as f64);
+        for layer in ordered {
+            // A layer whose content cannot touch the viewport costs nothing.
+            if let Some(bounds) = layer.bounds {
+                let device_bounds = (to_target * layer.transform).transform_rect_bbox(bounds);
+                if device_bounds.intersect(viewport).is_zero_area() {
+                    culled += 1;
+                    continue;
+                }
+            }
+            emitted += emit_layer(&mut target.scene, layer, to_target, scratch);
+        }
+    }
+    if rebuilt {
+        stats.scene_rebuilds += 1;
+        stats.layers_culled = culled;
+        stats.commands_emitted = emitted;
+        debug!("hybrid rebuild #{}: {emitted} commands, {culled} layers culled", stats.scene_rebuilds);
+    }
 }
 
 /// Emit one layer's contribution into the merged scene.
@@ -545,7 +682,8 @@ fn prepare_scene(
 /// is only the atlas and its eviction policy.
 ///
 /// Returns the number of commands emitted.
-fn emit_layer(scene: &mut Scene, layer: &ExtractedLayer, scratch: &mut BezPath) -> u32 {
+fn emit_layer(scene: &mut Scene, layer: &ExtractedLayer, to_target: Affine, scratch: &mut BezPath) -> u32 {
+    let base = to_target * layer.transform;
     let mut emitted = 0;
     for cmd in &layer.cmds {
         match cmd {
@@ -556,7 +694,7 @@ fn emit_layer(scene: &mut Scene, layer: &ExtractedLayer, scratch: &mut BezPath) 
                 shape,
             } => {
                 let Brush::Solid(color) = brush;
-                scene.set_transform(layer.transform * *transform);
+                scene.set_transform(base * *transform);
                 scene.set_fill_rule(*fill_rule);
                 scene.set_paint(*color);
                 match shape {
@@ -576,7 +714,7 @@ fn emit_layer(scene: &mut Scene, layer: &ExtractedLayer, scratch: &mut BezPath) 
                 shape,
             } => {
                 let Brush::Solid(color) = brush;
-                scene.set_transform(layer.transform * *transform);
+                scene.set_transform(base * *transform);
                 scene.set_paint(*color);
                 scene.set_stroke(style.clone());
                 match shape {
@@ -588,7 +726,7 @@ fn emit_layer(scene: &mut Scene, layer: &ExtractedLayer, scratch: &mut BezPath) 
                 }
             }
             DrawCmd::PushClip { transform, shape } => {
-                scene.set_transform(layer.transform * *transform);
+                scene.set_transform(base * *transform);
                 fill_scratch(scratch, shape);
                 scene.push_clip_layer(scratch);
             }
@@ -623,28 +761,22 @@ fn refill(scratch: &mut BezPath, els: impl Iterator<Item = PathEl>) {
     scratch.extend(els);
 }
 
-/// Render the merged scene into the backend's own texture.
+/// Render each target's scene into its texture: the window-sized one, and
+/// every view's own. With retention, a target whose scene did not change
+/// keeps last frame's pixels and costs nothing.
 fn render_scene(
     renderer: Res<HybridRenderer>,
     retain: Option<Res<VectorRetain>>,
     target: Option<Res<HybridTargetView>>,
+    views: Res<ExtractedViews>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
 ) {
-    let Some(target) = target else { return };
-    let Some(gpu_image) = gpu_images.get(&target.0) else {
-        // The image lands in the render world an asset-extraction tick after it
-        // is created; skipping until then is normal, not an error.
-        return;
-    };
-
+    let retain = retain.is_some_and(|r| r.0);
     let mut state = renderer.0.lock().expect("hybrid renderer lock");
     let size = state.size;
-    if size.x == 0 || size.y == 0 || state.scene.is_none() {
-        return;
-    }
-    if retain.is_some_and(|r| r.0) && state.rendered {
+    if size.x == 0 || size.y == 0 {
         return;
     }
 
@@ -685,34 +817,42 @@ fn render_scene(
             },
         ));
     }
-    let HybridInner { inner, scene, .. } = &mut *state;
+    let HybridInner { inner, targets, .. } = &mut *state;
     let (renderer_inner, resources) = inner.as_mut().expect("created above");
-    let scene = scene.as_ref().expect("checked above");
-
-    let mut encoder =
-        device
+    for (key, t) in targets.iter_mut() {
+        if retain && t.rendered {
+            continue;
+        }
+        let handle = match key {
+            None => target.as_ref().map(|t| &t.0),
+            Some(e) => views.0.get(e).map(|v| &v.image),
+        };
+        let Some(gpu_image) = handle.and_then(|h| gpu_images.get(h)) else {
+            // The image lands in the render world an asset-extraction tick
+            // after it is created; skipping until then is normal.
+            continue;
+        };
+        // One encoder and submit per target: consecutive renders reuse the
+        // renderer's upload buffers.
+        let mut encoder = device
             .wgpu_device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("vello_hybrid"),
-            });
-    // Note: `render` clears `view` before drawing. That is why this backend owns
-    // an offscreen texture instead of writing into Bevy's `ViewTarget`.
-    if let Err(err) = renderer_inner.render(
-        scene,
-        resources,
-        device.wgpu_device(),
-        queue.as_ref(),
-        &mut encoder,
-        &RenderSize {
-            width: size.x,
-            height: size.y,
-        },
-        &gpu_image.texture_view,
-        &vello_hybrid::TextureBindings::new(),
-    ) {
-        error!("vello_hybrid render failed: {err}");
-        return;
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("vello_hybrid") });
+        // Note: `render` clears `view` before drawing. That is why this backend
+        // owns its targets instead of writing into Bevy's `ViewTarget`.
+        if let Err(err) = renderer_inner.render(
+            &t.scene,
+            resources,
+            device.wgpu_device(),
+            queue.as_ref(),
+            &mut encoder,
+            &RenderSize { width: t.size.x, height: t.size.y },
+            &gpu_image.texture_view,
+            &vello_hybrid::TextureBindings::new(),
+        ) {
+            error!("vello_hybrid render failed: {err}");
+            continue;
+        }
+        queue.submit([encoder.finish()]);
+        t.rendered = true;
     }
-    queue.submit([encoder.finish()]);
-    state.rendered = true;
 }

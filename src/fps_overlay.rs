@@ -129,7 +129,17 @@ fn update_fps_display(
     diagnostics: Res<DiagnosticsStore>,
     query: Single<Entity, With<FpsText>>,
     mut writer: TextUiWriter,
+    time: Res<Time<Real>>,
+    mut last: Local<f64>,
 ) {
+    // Four times a second: rewriting the text every frame would mark the UI
+    // changed every frame, and the window would never be idle
+    // (plans/view-textures.md, render on demand).
+    let now = time.elapsed_secs_f64();
+    if now - *last < 0.25 {
+        return;
+    }
+    *last = now;
     let text_entity = *query;
 
     if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {

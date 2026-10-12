@@ -50,6 +50,19 @@ pub enum LayerSpace {
 pub struct VectorLayer {
     pub space: LayerSpace,
     pub order: i32,
+    /// The view this layer renders into on its own (an entity carrying
+    /// [`VectorView`]); `None` draws into the window-sized target.
+    pub view: Option<Entity>,
+}
+
+/// A rectangle of the window whose layers render into a texture of their
+/// own, sized to it, and are pasted back texel for pixel
+/// (plans/view-textures.md). Screen layers keep window coordinates; the
+/// backend offsets them by `pos`.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VectorView {
+    pub pos: UVec2,
+    pub size: UVec2,
 }
 
 impl VectorLayer {
@@ -57,13 +70,21 @@ impl VectorLayer {
         Self {
             space: LayerSpace::Screen,
             order,
+            view: None,
         }
+    }
+
+    /// Render into `view`'s own texture instead of the window-sized one.
+    pub fn in_view(mut self, view: Entity) -> Self {
+        self.view = Some(view);
+        self
     }
 
     pub fn world(order: i32) -> Self {
         Self {
             space: LayerSpace::World,
             order,
+            view: None,
         }
     }
 }

@@ -155,6 +155,42 @@ and a single compositor pass are where it goes.
 **Conclusion:** convert. Retention is the largest single win, and it only exists
 because each view keeps its own texture.
 
+### Migration step 1 (2026-10-11): 2D views, one window camera, render on demand
+
+- **2D views.** `VectorLayer` takes an optional `view` (an entity with `VectorView {
+  pos, size }`); the hybrid backend keeps a retained scene, a bucketed texture and a
+  "rendered" flag per target (layers without a view keep the window-sized target), and
+  re-renders a target only when one of its layers changed. One `Renderer` serves every
+  target (`render` takes the size per call); each target gets its own encoder and
+  submit, since consecutive renders reuse the renderer's upload buffers. Under
+  `?bevy=views` the document bridge spawns one document layer per 2D panel, each its
+  own view; a panel whose content did not change rebuilds to the same commands, so its
+  view does not re-render.
+- **One window camera.** The background camera is off; the vector composite camera
+  clears the window and pastes every view.
+- **Render on demand.** `RedrawNeeded`, decided at the end of the main schedule (an
+  active texture camera; a changed display list, view, UI text or node; camera,
+  window, panel or asset changes; three frames of linger after any change).
+  `WorkerApp::frame` runs the main schedule, then extraction and rendering only when
+  needed, then clears change trackers, so a quiet frame presents nothing and the
+  canvas keeps its picture. Two things that wrote state every frame had to stop: the
+  FPS overlay (now 4 Hz) and the free-look controller (wrote the camera's transform at
+  rest).
+
+Measured as before (GPU, unthrottled), frames per second:
+
+| | 1600×1000 | 2560×1440 @2 (5K) |
+|---|---|---|
+| idle, 1/2/4 panels, views | ≈5500–6100 (0.1 ms, nothing rendered) | ≈5300–5900 |
+| idle, 1/2/4 panels, old | 677 / 555 / 500 | 233 / 191 / 183 |
+| 3D view moving every frame (W held), 2 panels, views / old | 985 / 651 (three runs each) | 274 / 195 |
+| same, 4 panels, views / old | 585 / 500 | 294 / 184 |
+
+So the answer to the 5K overhead is mostly render on demand: an idle frame costs the
+main world's update (≈0.1 ms) at any resolution. A frame that changes still pays one
+full-window composite pass and present; a custom final pass (no window-sized
+intermediate textures, no blit) is the remaining step if that shows up.
+
 ## 6. Migration order (after the spike)
 
 1. Composition panels (2D and 3D) onto views and the compositor; drop window-sized

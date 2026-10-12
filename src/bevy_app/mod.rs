@@ -22,6 +22,8 @@ use crate::document_bridge::{DocumentPlugin, reconcile_gesture};
 struct GestureSystems;
 
 pub use input_accum::*;
+pub(crate) use scene3d::ViewTextures as ViewTexturesMode;
+pub(crate) use scene3d::ScreenRect as ScreenRectMarker;
 // Bring required items into scope from submodules
 use interaction::{
     PendingCommit, drag_apply_system, drag_commit_system, interaction_decide_system,
@@ -173,6 +175,13 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     announce_canvas_window(&mut app);
     app.insert_resource(scene3d::ViewTextures(variant_flags & VARIANT_VIEW_TEXTURES != 0));
     app.insert_resource(crate::vector::VectorRetain(variant_flags & VARIANT_VIEW_TEXTURES != 0));
+    if variant_flags & VARIANT_VIEW_TEXTURES != 0 {
+        // One camera on the window: the composite camera clears it, and the
+        // background camera, which only cleared, sleeps.
+        app.add_systems(PostStartup, single_window_camera.after(adopt_backend_camera_for_ui));
+        app.init_resource::<crate::RedrawNeeded>();
+        app.add_systems(Last, crate::decide_redraw);
+    }
 
     // ============================ RE-ENABLE LADDER =============================
     // flags=0 escalation for the 5K frame-skip hunt. Uncomment ONE step at a time,
@@ -321,6 +330,23 @@ fn setup_background_camera(mut commands: Commands) {
         RenderLayers::none(),
         Name::new("Background Camera"),
     ));
+}
+
+/// With view textures, the window needs one camera: the vector composite
+/// camera clears to the background and pastes every view, and the background
+/// camera (a second full-window clear and blit) is turned off.
+fn single_window_camera(
+    vector: Option<Res<VectorCamera>>,
+    mut cameras: Query<(Entity, &mut Camera, Option<&Name>)>,
+) {
+    let composite = vector.map(|v| v.0);
+    for (e, mut camera, name) in &mut cameras {
+        if Some(e) == composite {
+            camera.clear_color = ClearColorConfig::Default;
+        } else if name.is_some_and(|n| n.as_str() == "Background Camera") {
+            camera.is_active = false;
+        }
+    }
 }
 
 /// STEP 2 (ladder): let bevy_ui draw into the backend's compositing camera.

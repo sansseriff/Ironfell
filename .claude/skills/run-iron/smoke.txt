@@ -27,8 +27,9 @@ sleep 600
 shot after-square-drag
 # The torus is in the 3D "assembly" composition, which the viewer's `main`
 # composition embeds as a camera view at (815,10) 200x350; the derived
-# default view centres the torus near document (915,188).
-ddrag 915 188 880 240
+# default view frames the torus and the card plane, the torus near
+# document (875,200).
+ddrag 875 200 845 245
 shot after-torus-drag
 key Meta+z
 key Meta+z
@@ -120,14 +121,26 @@ shot pendulum-platform-drag
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const p = v.match(/<rect[^>]*name="platform"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), p && p[0].replace(/ rot=.*/, '')]; })()
 # 8. The view marks the solver's variables with the cluster that keeps them.
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return j && j[0].match(/x\.by="[^"]*"/)[0]; })()
+# A 2D composition inside a 3D one (ECM §7.4; view-textures step 4): the
+# `card` composition is a plane beside the torus in the assembly, drawn in
+# perspective. Find its dot by hovering (picking goes 2D view -> 3D view ->
+# plane -> 2D card), then drag it: the pointer maps through the plane.
+eval (async () => { const v = await __iron.view({fidelity:'full'}); window.__dot = v.match(/<circle id="([^"]+)" name="card dot"/)[1]; return window.__dot; })()
+hunt 900 120 1010 230 5 __iron.hovered().includes(window.__dot)
+dragfound 15 0
+sleep 600
+shot card-dot-dragged
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<circle[^>]*name="card dot" x="([^"]+)"/); return Number(m[1]) > 60; })()
+key Meta+z
+sleep 400
 # Stage C1 (ECM phase 2 exit), in the main layout (ECM §7.4): the cartoon
 # box (scene, document 520,590 110x70) and the torus (the assembly's view,
-# near 915,188) are two compositions side by side in one viewer. Select the
+# near 875,200) are two compositions side by side in one viewer. Select the
 # box, shift-click the torus, press Link: one "link" transaction creates
 # one entity with both as figures.
 pclick viewer 575 625
 keydown Shift
-pclick viewer 915 188
+pclick viewer 875 200
 keyup Shift
 sleep 400
 eval __iron.selection()
@@ -144,18 +157,18 @@ pclick viewer 300 720
 dmove 575 625
 sleep 600
 shot c1-hover-box
-dmove 915 188
+dmove 875 200
 sleep 600
 shot c1-hover-torus
 # Show in frames the counterpart: from the box, the viewer pans the
-# assembly's view to its centre; from the torus (now at the centre,
-# 513,373), it pans the box there.
+# assembly's view to its centre (the torus then near 473,388); from the
+# torus, it pans the box to the centre.
 pclick viewer 575 625
 sleep 400
 click Show in assembly
 sleep 600
 shot c1-show-in-assembly
-pclick viewer 513 373
+pclick viewer 473 388
 sleep 400
 click Show in scene
 sleep 600
@@ -168,8 +181,8 @@ eval (async () => { const v = await __iron.view({fidelity:'full', relation:'mode
 # The model surface links the same way; when both pictures already have
 # entities it is asked which survives, and answers with keep.
 eval (async () => { const r = await __iron.edit('<edit><link-figures a="#l" b="#Q"/></edit>'); return r.ok; })()
-eval (async () => { const r = await __iron.edit('<edit><link-figures a="#w" b="#Q"/></edit>'); return r.failure; })()
-eval (async () => { const r = await __iron.edit('<edit><link-figures a="#w" b="#Q" keep="#v"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#11" b="#Q"/></edit>'); return r.failure; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#11" b="#Q" keep="#10"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
 key Meta+z
 sleep 400
 # Exit criterion 2: save, load, save again; the bytes must match.

@@ -232,6 +232,9 @@ pub struct Hit2D {
     /// From the panel's document space into the hit node's composition
     /// space: identity unless the node was reached through embeds.
     pub space: kurbo::Affine,
+    /// Reached through a plane in 3D (camera, plane entity): the pointer maps
+    /// into the composition by a ray, not an affine.
+    pub through: Option<(Entity, Entity)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -290,6 +293,8 @@ pub struct DragState {
     pub space: kurbo::Affine,
     /// For a 3D drag, the camera that maps the pointer to a ray.
     pub camera: Option<Entity>,
+    /// For a 2D drag through a plane in 3D: the camera and the plane.
+    pub through: Option<(Entity, Entity)>,
     /// Where the press happened (window px). A move or 3D drag previews
     /// nothing until the pointer leaves it, so a click is not a move.
     pub press_screen: Vec2,
@@ -307,6 +312,7 @@ impl Default for DragState {
             panel: None,
             space: kurbo::Affine::IDENTITY,
             camera: None,
+            through: None,
             press_screen: Vec2::ZERO,
             plane_origin: Vec3::ZERO,
             plane_normal: Vec3::Y,

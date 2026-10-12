@@ -24,6 +24,7 @@ mod highlight;
 mod materialize;
 pub mod nest;
 mod panel_views;
+pub mod planes;
 mod render;
 
 use bevy::platform::collections::HashMap;
@@ -189,6 +190,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<EmbedImages>()
             .init_resource::<FocusRequests>()
             .init_resource::<CompositionLayers>()
+            .add_plugins(planes::PlanePlugin)
             .add_systems(Startup, (materialize::setup_mesh_assets, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking.
@@ -197,6 +199,9 @@ impl Plugin for DocumentPlugin {
                 PostUpdate,
                 (
                     render::sync_document_views.before(render::render_document_layer),
+                    // Planes: after transforms (they project their corners)
+                    // and before the 2D layer draws their views.
+                    planes::sync_planes.after(TransformSystems::Propagate).before(render::render_document_layer),
                     render::render_document_layer.after(TransformSystems::Propagate),
                     // The store's world transforms must agree with Bevy's
                     // (constraint-system.md §4.3); checked whenever one moves.

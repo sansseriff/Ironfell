@@ -144,6 +144,10 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
     let mut ec = match node.ty.name() {
         // An embed is placed like a group; what it shows is drawn through it
         // (`nest`), never parented to it.
+        // An embed inside a 3D composition is a plane in it (ECM §7.4): 3D
+        // content the composition's cameras see; `planes` gives it its mesh
+        // and texture.
+        "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Transform::default(), Visibility::default())),
         "group" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
         "rect" | "circle" | "slider" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
@@ -179,6 +183,9 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
     let composition = iron_document::composition::composition_of(store.document(), id);
     ec.insert(InComposition(composition));
     match node.ty.name() {
+        "embed" if in_3d(store, id) => {
+            ec.insert((r.transform_3d(), RenderLayers::layer(layers.of(composition))));
+        }
         "group" | "embed" => {
             ec.insert(r.transform_2d());
         }
@@ -293,4 +300,10 @@ fn uv_debug_texture() -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     )
+}
+
+/// Whether a node sits in a 3D composition.
+fn in_3d(store: &Store, id: NodeId) -> bool {
+    use iron_document::composition::{self, Dims};
+    composition::composition_of(store.document(), id).and_then(|c| composition::dims(store.document(), c)) == Some(Dims::Three)
 }

@@ -66,8 +66,9 @@ pub(super) fn sync_document_views(
 const LOG_IDS: usize = 12;
 
 pub fn render_document_layer(
-    mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer)>,
-    new_panels: Query<(), Added<DocumentPanelLayer>>,
+    mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer), Without<super::planes::PlaneLayer>>,
+    mut plane_layers: Query<(&mut DisplayList, &super::planes::PlaneLayer, &VectorView), Without<DocumentPanelLayer>>,
+    new_panels: Query<(), Or<(Added<DocumentPanelLayer>, Changed<super::planes::PlaneLayer>)>>,
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
     globals: Query<&'static GlobalTransform>,
     store: Res<DocumentStore>,
@@ -116,6 +117,16 @@ pub fn render_document_layer(
         let roots = nest::panel_roots(doc, view);
         panel_list.rebuild(|b| {
             b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), &view.panel, 0));
+        });
+    }
+    // A plane's view: its composition's region, at its density, into its
+    // own texture (`planes`).
+    for (mut plane_list, layer, vview) in &mut plane_layers {
+        let roots: Vec<NodeId> = doc.children(layer.source).to_vec();
+        let key = format!("plane/{}", layer.embed);
+        let clip = kurbo::Rect::new(0.0, 0.0, vview.size.x as f64, vview.size.y as f64);
+        plane_list.rebuild(|b| {
+            b.clipped(kurbo::Affine::IDENTITY, clip, |b| cx.walk(b, &roots, layer.affine(), &key, 0));
         });
     }
     let (drawn, damage) = (cx.drawn, cx.damage);

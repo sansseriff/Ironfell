@@ -71,15 +71,15 @@ screenshot lines and the per-frame `solve:` lines:
 
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-redraw (document): 2 of 36 nodes changed [#M #U]; damage 499,379–741,501
-redraw (document): 2 of 36 nodes changed [#M #U]; damage 559,339–801,461
-"<rect id=\"#w\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #v.params.level * 300\" … h=\"270\" h.bind=\"#v.params.level * 300\" …>"
-"<rect id=\"#w\" name=\"bar\" x=\"730\" y=\"400\""
+redraw (document): 2 of 39 nodes changed [#M #U]; damage 499,379–741,501
+redraw (document): 2 of 39 nodes changed [#M #U]; damage 559,339–801,461
+"<rect id=\"#11\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #10.params.level * 300\" … h=\"270\" h.bind=\"#10.params.level * 300\" …>"
+"<rect id=\"#11\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#x"}}
+{"ok":true,"version":9,"aliases":{"$n":"#12"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#x\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#12\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<circle id=\"#a\" name=\"ball\" x=\"440.43…\" x.by=\"#V\" y=\"298.93…\" y.by=\"#V\""," rot=\"-1.11…\""," h=\"238.93…\""]
 "move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<circle id=\"#a\" name=\"ball\" x=\"323.85…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -93,19 +93,22 @@ true
 "<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
 ["<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"280.96…\" x.by=\"#V\" y=\"38.16…\" y.by=\"#V\""]
 "x.by=\"#V\""
+"#s"
+found at … (a point on the card dot; varies with the sweep)
+true
 ["#l","#Q"]
-applied "link" (4 ops, Human) -> v19
-"<entity id=\"#z\" name=\"box\" def=\"#y\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#z\">"
+applied "link" (4 ops, Human) -> v21
+"<entity id=\"#14\" name=\"box\" def=\"#13\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#14\">"
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"21\">\n  <question kind=\"merge\" a=\"#w\" b=\"#Q\">\n    <entity id=\"#v\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#w\"/>\n    <entity id=\"#11\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#v\" or keep=\"#11\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
-[true,"<entity id=\"#v\" name=\"bar\" def=\"#r\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#w\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":15962}
-"<document version=\"23\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"27\"> | …"
-applied "open demo scene" (71 ops, System) -> v1
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#16\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#16\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+[true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#11\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
+{"roundtrip_equal":true,"bytes":17132}
+"<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"27\"> | …"
+applied "open demo scene" (76 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -129,14 +132,14 @@ applied "set slider" (1 ops, Human) -> v16
 applied "model edit" (2 ops, Model) -> v17
 applied "move rect" (3 ops, Human) -> v18
 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
-applied "link" (4 ops, Human) -> v19
-"link" by Human: cluster #V re-solved; moved 1 node(s): #W
-applied "undo: link" (5 ops, System) -> v20
-applied "link" (4 ops, Model) -> v21
-"link" by Model: cluster #V re-solved; moved 1 node(s): #W
-applied "link" (5 ops, Model) -> v22
-applied "undo: link" (5 ops, System) -> v23
-loaded document v23 (61 live nodes)
+applied "move circle" (2 ops, Human) -> v19
+applied "undo: move circle" (2 ops, System) -> v20
+applied "link" (4 ops, Human) -> v21
+applied "undo: link" (4 ops, System) -> v22
+applied "link" (4 ops, Model) -> v23
+applied "link" (5 ops, Model) -> v24
+applied "undo: link" (5 ops, System) -> v25
+loaded document v25 (66 live nodes)
 (no page errors)
 ```
 
@@ -182,7 +185,8 @@ The viewer shows the 2D `main` composition (ECM §7.4), which embeds the
 `scene` composition at the origin (so document coordinates read the same
 in the viewer) and the 3D `assembly` composition as a camera view at
 document (815,10), 200×350, through the derived default view that frames
-the torus. Loose 2D roots such as the pendulum draw in the viewer too. The
+the torus and the card plane. Loose 2D roots such as the pendulum draw in
+the viewer too. The
 right panel is a placeholder. `?panels=2` makes it an `assembly` panel
 with its own camera; `?panels=4` adds a second view of each, for
 measuring per-panel cost. A 3D view inside 2D is its camera's texture,
@@ -231,6 +235,8 @@ cd -
 | `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
 | `pclick <panel> x y` | click inside a named panel, panel-relative |
 | `click <text>` | click the shell button with that accessible name (`Link`, `Show in assembly`) |
+| `hunt x0 y0 x1 y1 step <js>` | sweep the pointer over a document-space grid until `<js>` is truthy (e.g. `__iron.hovered().includes(id)`); prints where. For targets whose screen position is hard to predict, such as a shape on a plane in 3D |
+| `dragfound dx dy` | drag from the last `hunt` hit by (dx, dy) document px |
 | `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |
 | `logs [regex]` | print console output since the last `logs`, optionally filtered; Rust `info!`/`warn!` lines from the worker appear here |
 | `peek [regex]` | like `logs`, without clearing the buffer |
@@ -249,7 +255,8 @@ entity instantiated from it (its `level` bound to the slider) and the scene
 holds the rect that figures it, whose y and h read the entity's params. The
 template itself is never drawn. `scene` (#1) is a 2D composition; the torus
 lives in a 3D composition, `assembly`, seen through `main`'s embed, near
-document (915,188); the purple cartoon `box` covers (520,590)–(630,660);
+document (875,200), beside the `card` composition (a 2D card with a dot and
+a bar) shown in the assembly as a plane in perspective; the purple cartoon `box` covers (520,590)–(630,660);
 the pendulum group is a loose root, drawn in the viewer. The "shadow" rect
 at (600,420) has x and y bound to the square's. The timeline holds a "slide" clip (0.5–2.5 s, square x 500→700)
 and a "spin" clip (1–4 s, torus rotation). Any `<attr>.bind` in a view is a

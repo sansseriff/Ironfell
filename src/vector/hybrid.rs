@@ -60,7 +60,7 @@ use vello_hybrid::{
 };
 use wgpu::TextureFormat;
 
-use super::backend::{LayerSpace, VectorLayer, VectorView};
+use super::backend::{LayerSpace, Offscreen, VectorLayer, VectorView};
 use super::view_composite::{MODE_PREMULTIPLIED_RAW, ViewCompositeMaterial, bucket, unit_quad};
 use super::composite::{VECTOR_LAYER, VectorCamera};
 use super::composite_material::{VectorCompositeMaterial, fullscreen_quad};
@@ -282,8 +282,9 @@ fn sync_target(
 /// A view's texture and the quad that pastes it into the window.
 #[derive(Component, Debug)]
 pub struct ViewTarget2d {
-    image: Handle<Image>,
-    bucket: UVec2,
+    pub image: Handle<Image>,
+    /// The texture's size; the view fills its top-left `VectorView::size`.
+    pub bucket: UVec2,
     material: Handle<ViewCompositeMaterial>,
 }
 
@@ -300,11 +301,11 @@ fn sync_views(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ViewCompositeMaterial>>,
     mut quad: Local<Option<Handle<Mesh>>>,
-    mut views: Query<(Entity, Ref<VectorView>, Option<&mut ViewTarget2d>)>,
+    mut views: Query<(Entity, Ref<VectorView>, Option<&mut ViewTarget2d>, Has<Offscreen>)>,
     composites: Query<(Entity, &ViewCompositeOf)>,
 ) {
     let quad = quad.get_or_insert_with(|| meshes.add(unit_quad())).clone();
-    for (entity, view, target) in &mut views {
+    for (entity, view, target, offscreen) in &mut views {
         let size = view.size.max(UVec2::ONE);
         let want = bucket(size);
         let rect = Vec4::new(view.pos.x as f32, view.pos.y as f32, size.x as f32, size.y as f32);
@@ -328,6 +329,10 @@ fn sync_views(
             None => {
                 let image = images.add(new_target_image(want));
                 let material = materials.add(ViewCompositeMaterial { texture: image.clone(), rect, params });
+                commands.entity(entity).insert(ViewTarget2d { image, bucket: want, material: material.clone() });
+                if offscreen {
+                    continue;
+                }
                 commands.spawn((
                     Mesh2d(quad.clone()),
                     MeshMaterial2d(material.clone()),
@@ -340,7 +345,6 @@ fn sync_views(
                     ViewCompositeOf(entity),
                     Name::new("vector view composite"),
                 ));
-                commands.entity(entity).insert(ViewTarget2d { image, bucket: want, material });
             }
         }
     }

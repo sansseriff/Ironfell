@@ -384,7 +384,9 @@ then 2D in 3D as a plane.
   (rotation and scale work; 2D content sits over or under it by order; a clipped embed
   is cropped, no longer reframed). Picking treats the 3D view as opaque and casts
   through the embed's inverse transform.
-- *Not done:* 2D in 3D as a plane (`view-textures.md` step 4); selecting an embed itself
+- *2D in 3D as a plane* — done 2026-10-11 (`view-textures.md` step 4): rendering,
+  derived texture density, picking and drags through the plane.
+- *Not done:* selecting an embed itself
   (a modifier or its frame); an "open/enter" composition gesture; embeds inside 3D
   compositions.
 

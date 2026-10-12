@@ -47,6 +47,7 @@ page.on("console", (m) => logs.push(clean(m.text())));
 
 type Rect = { x: number; y: number; w: number; h: number };
 let panel: Rect = { x: 0, y: 0, w: 0, h: 0 };
+let found: { x: number; y: number } | null = null;
 async function panelRect(name: string): Promise<Rect> {
   return page.evaluate((name) => {
     const el = document.querySelector(`[data-panel-id="${name}"]`);
@@ -144,6 +145,35 @@ async function run(line: string) {
       const r = await panelRect(rest[0]);
       const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
       return drag(r.x + x0, r.y + y0, r.x + x1, r.y + y1, steps || 10);
+    }
+    case "hunt": {
+      // hunt x0 y0 x1 y1 step <js>: sweep the pointer over a grid in
+      // document space until <js> (evaluated in the page) is truthy; prints
+      // and remembers where (for `dragfound`). For targets whose screen
+      // position is hard to predict, such as a shape on a plane in 3D.
+      const [x0, y0, x1, y1, st] = rest.slice(0, 5).map(Number);
+      const expr = rest.slice(5).join(" ");
+      for (let y = y0; y <= y1; y += st) {
+        for (let x = x0; x <= x1; x += st) {
+          const p = doc(x, y);
+          await page.mouse.move(p.x, p.y);
+          await page.waitForTimeout(120);
+          if (await page.evaluate(expr)) {
+            found = { x, y };
+            return out(`found at ${x} ${y}`);
+          }
+        }
+      }
+      found = null;
+      return out("not found");
+    }
+    case "dragfound": {
+      // dragfound dx dy: drag from the last `hunt` hit by (dx, dy).
+      if (!found) return out("nothing found to drag");
+      const [dx, dy] = rest.map(Number);
+      const a = doc(found.x, found.y);
+      const b = doc(found.x + dx, found.y + dy);
+      return drag(a.x, a.y, b.x, b.y, 10);
     }
     case "keydown":
       await page.keyboard.down(rest[0]);

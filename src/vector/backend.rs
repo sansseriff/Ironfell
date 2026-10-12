@@ -65,6 +65,11 @@ pub struct VectorView {
     pub size: UVec2,
 }
 
+/// A [`VectorView`] whose texture is used elsewhere (a 2D composition on a
+/// plane in 3D) rather than pasted into the window.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Offscreen;
+
 impl VectorLayer {
     pub fn screen(order: i32) -> Self {
         Self {

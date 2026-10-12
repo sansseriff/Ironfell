@@ -22,6 +22,31 @@ use iron_document::{DragMode, Handle, LeafPath, Value};
 use crate::bevy_app::scene3d::ActiveState;
 use crate::document_bridge::{Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelViews, Provenance, Shape2d, type_of};
 
+type DragCameras<'w, 's> = Query<'w, 's, (Entity, &'static Camera, &'static GlobalTransform, Option<&'static crate::bevy_app::scene3d::ScreenRect>, Option<&'static crate::bevy_app::scene3d::PointerToCamera>)>;
+
+/// The pointer as document px in the dragged node's composition: through the
+/// panel and any embeds (an affine), or through a plane in 3D (a ray from
+/// the camera that showed it, meeting the plane).
+fn drag_point(
+    drag: &crate::DragState,
+    views: &PanelViews,
+    screen: Vec2,
+    cameras: &DragCameras,
+    planes: &Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane)>,
+) -> Option<Vec2> {
+    if let Some((camera, plane)) = drag.through {
+        let (_, cam, cam_tf, rect, to_camera) = cameras.get(camera).ok()?;
+        let local = crate::bevy_app::scene3d::to_camera_px(screen, rect, to_camera);
+        let ray = crate::bevy_app::picking::camera_ray_from_window_px(cam, cam_tf, local)?;
+        let (pt, p) = planes.get(plane).ok()?;
+        let (_, q) = crate::bevy_app::picking::ray_plane_doc(ray, pt, p)?;
+        return Some(Vec2::new(q.x as f32, q.y as f32));
+    }
+    let p = drag.panel.as_deref().and_then(|p| views.get(p)).and_then(|v| v.to_doc(screen))?;
+    let q = drag.space * kurbo::Point::new(p.x as f64, p.y as f64);
+    Some(Vec2::new(q.x as f32, q.y as f32))
+}
+
 /// How far (window px) the pointer may wander between press and release and
 /// still count as a click.
 const CLICK_SLOP_PX: f32 = 3.0;
@@ -53,12 +78,13 @@ pub fn interaction_decide_system(
     mut drag: ResMut<crate::DragState>,
     mut selection: ResMut<crate::SelectionState>,
     mut commit: ResMut<PendingCommit>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&crate::bevy_app::scene3d::ScreenRect>, Option<&crate::bevy_app::scene3d::PointerToCamera>)>,
+    cameras: DragCameras,
     transforms: Query<&GlobalTransform>,
     doc2d: Query<&Doc2d>,
     provenance: Query<&Provenance>,
     mut store: ResMut<DocumentStore>,
     views: Res<PanelViews>,
+    planes: Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane)>,
 ) {
     // Hover follows the primary hit, as a document node. Written only on
     // change so downstream change detection (and the outbound FFI) stays
@@ -86,6 +112,7 @@ pub fn interaction_decide_system(
             drag.panel = hits.panel.clone();
             // The pointer reaches an embedded node through its embeds.
             drag.space = hits.overlay.iter().find(|h| h.entity == primary).map_or(kurbo::Affine::IDENTITY, |h| h.space);
+            drag.through = hits.overlay.iter().find(|h| h.entity == primary).and_then(|h| h.through);
             drag.camera = hits.world3d.iter().find(|h| h.entity == primary).map(|h| h.camera);
             drag.press_screen = pointer.screen;
             let Ok(prov) = provenance.get(primary) else {
@@ -101,16 +128,7 @@ pub fn interaction_decide_system(
             } else if doc2d.contains(primary) {
                 // The grab point in the node's local space is the anchor the
                 // store drags by (a finger on it, for a constrained node).
-                let p = drag
-                    .panel
-                    .as_deref()
-                    .and_then(|panel| views.get(panel))
-                    .and_then(|v| v.to_doc(pointer.screen))
-                    .map(|p| {
-                        let q = drag.space * kurbo::Point::new(p.x as f64, p.y as f64);
-                        Vec2::new(q.x as f32, q.y as f32)
-                    })
-                    .unwrap_or(Vec2::ZERO);
+                let p = drag_point(&drag, &views, pointer.screen, &cameras, &planes).unwrap_or(Vec2::ZERO);
                 let local = transforms
                     .get(primary)
                     .map(|g| g.affine().inverse().transform_point3(p.extend(0.0)))
@@ -198,8 +216,9 @@ pub fn drag_apply_system(
     globals: Query<&GlobalTransform>,
     nodes: Query<(&Provenance, Option<&Doc2d>)>,
     mut store: ResMut<DocumentStore>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&crate::bevy_app::scene3d::ScreenRect>, Option<&crate::bevy_app::scene3d::PointerToCamera>)>,
+    cameras: DragCameras,
     views: Res<PanelViews>,
+    planes: Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane)>,
 ) {
     let Some(entity) = drag.target else { return };
     // A click (selection, shift-click to add) moves nothing: positions wait
@@ -210,10 +229,7 @@ pub fn drag_apply_system(
     }
     // The pointer in the drag's panel's document space. Outside the panel
     // the drag holds still rather than jumping.
-    let doc_point = || drag.panel.as_deref().and_then(|p| views.get(p)).and_then(|v| v.to_doc(pointer.screen)).map(|p| {
-        let q = drag.space * kurbo::Point::new(p.x as f64, p.y as f64);
-        Vec2::new(q.x as f32, q.y as f32)
-    });
+    let doc_point = || drag_point(&drag, &views, pointer.screen, &cameras, &planes);
     let Ok((prov, doc2d)) = nodes.get(entity) else { return };
     let id = prov.0;
     let target = |store: &mut DocumentStore, path: &str, value: Value| {

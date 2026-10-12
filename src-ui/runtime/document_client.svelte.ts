@@ -74,6 +74,7 @@ export class DocumentClient {
       bench: async (iterations = 20, repeats = 200) =>
         JSON.parse(await this.request('solveBench', { iterations, repeats })),
       selection: () => [...this.selection],
+      hovered: () => [...this.hovered],
       link: (a: string, b: string, keep = '') => this.link(a, b, keep),
       counterparts: (node: string) => this.call('counterparts', [node]),
       focus: (node: string) => this.call('focus', [node]),

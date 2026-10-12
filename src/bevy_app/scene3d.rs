@@ -301,6 +301,7 @@ pub(crate) fn sync_embed_cameras(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     poses: Query<&GlobalTransform, Without<EmbedCam>>,
     volumes: Query<(&CurrentVolume, &crate::document_bridge::InComposition)>,
+    planes: Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane, &crate::document_bridge::InComposition), Without<EmbedCam>>,
     mut cams: Query<(Entity, &mut EmbedCam, &mut Camera, &mut RenderLayers, &mut Transform, &mut Projection, Option<&mut ScreenRect>, Option<&mut PointerToCamera>)>,
     others: Query<&Camera, Without<EmbedCam>>,
 ) {
@@ -368,10 +369,19 @@ pub(crate) fn sync_embed_cameras(
             // from a fixed direction, re-framing only when the content
             // leaves what was framed.
             None => {
+                // Meshes, and the corners of planes (2D compositions in it).
+                let plane_corners = planes.iter().filter(|(_, _, within)| within.0 == Some(view.source)).flat_map(|(gt, plane, _)| {
+                    let (w, h) = ((plane.region.width() / crate::document_bridge::planes::PX_PER_UNIT) as f32, (plane.region.height() / crate::document_bridge::planes::PX_PER_UNIT) as f32);
+                    [Vec3::ZERO, Vec3::new(w, 0.0, 0.0), Vec3::new(w, -h, 0.0), Vec3::new(0.0, -h, 0.0)].map(|c| {
+                        let p = gt.transform_point(c);
+                        (p, p)
+                    })
+                });
                 let bounds = volumes
                     .iter()
                     .filter(|(_, within)| within.0 == Some(view.source))
                     .map(|(v, _)| (Vec3::from(v.min), Vec3::from(v.max)))
+                    .chain(plane_corners)
                     .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)));
                 let (centre, radius) = match bounds {
                     Some((lo, hi)) => ((lo + hi) * 0.5, ((hi - lo) * 0.5).length().max(0.25)),

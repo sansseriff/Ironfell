@@ -22,6 +22,7 @@ struct GestureSystems;
 
 pub use input_accum::*;
 pub(crate) use scene3d::ScreenRect as ScreenRectMarker;
+pub(crate) use scene3d::ActiveState as ActiveStateMarker;
 // Bring required items into scope from submodules
 use interaction::{
     PendingCommit, drag_apply_system, drag_commit_system, interaction_decide_system,

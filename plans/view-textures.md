@@ -3,7 +3,7 @@
 **Status:** Decided 2026-10-11 (spike, measure, then migrate). Spike done; migration
 steps 1–2 done: 2D and 3D composition views render to their own textures, the window
 has one camera, render on demand, and the old window-sized path is removed. Remaining:
-2D in 3D, the timeline, and the custom final pass.
+the custom final pass, and the §4 extension.
 **Relates to:** `entity-composition-model.md` §7.4 (embedded compositions, step 5),
 `bevy-vello-hybrid-design.md` (the vector backend), `roadmap.md` stage H (render
 invalidation), the 5K frame-pacing notes (`perf-grid-runbook.md`).
@@ -217,6 +217,28 @@ panel) until step 4. The smoke script's output is unchanged.
   (and render on demand sees the changed display list).
 - Picking: a 3D embed is opaque to the 2D picker; the 3D picker casts through its
   camera with the pointer mapped by the inverse transform, so rotated views pick.
+
+### Migration step 4 (2026-10-11): timeline, UI panels, 2D in 3D
+
+- **Timeline and UI panels** render into views sized to their panels
+  (`PanelVectorView`). With no layer left in the window-sized vector target, it shrinks
+  to 1×1 and its full-window composite is hidden.
+- **2D in 3D** (`document_bridge::planes`): an embed of a 2D composition inside a 3D
+  one is a plane at 100 document px per world unit, content top-left at the embed's
+  origin, facing +Z. Its content renders through the same draw walk as a panel into an
+  `Offscreen` vector view; its texture density is derived from the cameras that see it
+  (the largest on-screen px per document px at any corner, stepped by √2, 0.25–4×,
+  4096 max), so it sharpens as the camera comes close. An unlit, double-sided,
+  premultiplied material decodes Vello's sRGB bytes; when the plane's content changes,
+  the 3D views showing it wake up. The derived default view frames planes as well as
+  meshes. Picking: the 3D picker intersects the ray with each plane in front of every
+  mesh, maps the hit to document px and runs the 2D pick there; a drag that started on
+  a plane maps the pointer by the same ray every frame, so dragging works in perspective.
+  The demo's `card` composition is a plane beside the torus; the smoke script hovers and
+  drags its dot through main → assembly view → plane → card.
+- *Not yet:* mipmaps on plane textures (minification aliasing at grazing angles); the
+  3D cameras' tonemapping shifts plane colours slightly; tiled, demand-driven plane
+  textures (§4) remain the extension; selecting or moving the plane itself.
 
 ## 6. Migration order (after the spike)
 

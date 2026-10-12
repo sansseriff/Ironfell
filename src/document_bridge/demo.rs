@@ -20,7 +20,7 @@ fn n(v: f64) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(56).into_iter();
+    let mut ids = store.document().next_ids(61).into_iter();
     let rel_ids = store.document().next_relation_ids(11);
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
@@ -371,6 +371,46 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("assembly view".into()));
     ops.push(Op::Create { id: assembly_embed, ty: ty("embed"), parent: Some(main), order: OrderKey::after(&OrderKey::first()), components: vec![embed(assembly), t.wrap(), s.wrap(), name.wrap()] });
+
+    // A 2D composition shown in the 3D assembly as a plane (ECM §7.4): a
+    // small card beside the torus, 160×100 px, so 1.6×1 world units.
+    let card = next();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("card".into()));
+    ops.push(Op::Create { id: card, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    let card_shape = |id, ty_name: &str, x: f64, y: f64, w: f64, h: f64, c: [f32; 4], label: &str, key: OrderKey| {
+        let mut t = Transform2d::default();
+        t.x = n(x);
+        t.y = n(y);
+        let mut f = Fill::default();
+        f.color = Slot::Const(Value::Color(c));
+        let mut name = DocName::default();
+        name.text = Slot::Const(Value::Str(label.into()));
+        let geometry = if ty_name == "circle" {
+            let mut r = Radius::default();
+            r.r = n(w);
+            r.wrap()
+        } else {
+            let mut sz = Size::default();
+            sz.w = n(w);
+            sz.h = n(h);
+            sz.wrap()
+        };
+        Op::Create { id, ty: ty(ty_name), parent: Some(card), order: key, components: vec![t.wrap(), geometry, f.wrap(), name.wrap()] }
+    };
+    let k0 = OrderKey::first();
+    let k1 = OrderKey::after(&k0);
+    let k2 = OrderKey::after(&k1);
+    ops.push(card_shape(next(), "rect", 0.0, 0.0, 160.0, 100.0, [0.16, 0.22, 0.42, 1.0], "card panel", k0));
+    ops.push(card_shape(next(), "circle", 40.0, 50.0, 22.0, 0.0, [0.98, 0.78, 0.2, 1.0], "card dot", k1));
+    ops.push(card_shape(next(), "rect", 75.0, 42.0, 70.0, 16.0, [0.92, 0.94, 0.98, 1.0], "card bar", k2));
+    let card_plane = next();
+    let mut t = Transform3d::default();
+    t.pos = Slot::Const(Value::Vec3([1.3, 2.6, -0.6]));
+    t.rot = Slot::Const(Value::Vec3([0.0, -0.5, 0.0]));
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("card plane".into()));
+    ops.push(Op::Create { id: card_plane, ty: ty("embed"), parent: Some(assembly), order: order(), components: vec![embed(card), t.wrap(), name.wrap()] });
 
     // The library: a `bar` definition with one parameter, `level`, and a
     // "free" template whose rect binds its top and height to the

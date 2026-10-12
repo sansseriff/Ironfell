@@ -28,6 +28,7 @@ pub mod handle;
 pub mod id;
 pub mod op;
 pub mod order;
+pub mod port;
 pub mod registry;
 pub mod serial;
 pub mod solve;

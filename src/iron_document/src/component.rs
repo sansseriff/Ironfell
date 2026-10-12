@@ -270,6 +270,23 @@ components! {
         far: Number = Value::Number(1000.0),
     }
 
+    /// A port on an entity, or a definition's spec for one (ECM §6.1). `kind`
+    /// names a port kind (`port::KINDS`), which declares its variables: a
+    /// one-way `signal`, or an `across`/`through` pair. An out-port's signal
+    /// is the definition's behaviour, a binding; an in-port's is its
+    /// connection partner's, derived by the graph, never stored.
+    Port / "port" => Port {
+        kind: Str = Value::Str("value".to_owned()),
+        dir: Enum = Value::Enum("in".to_owned()),
+        signal: Any = Value::Number(0.0),
+        across: Any = Value::Number(0.0),
+        through: Any = Value::Number(0.0),
+    }
+
+    /// A connection between two ports (ECM §6): its ends are two `connects`
+    /// relations. `domain` is informational; the ports' kinds decide.
+    Connection / "connection" => Connection { domain: Str = Value::Str(String::new()) }
+
     /// A composition root (ECM §5): one diagram in one notation, 2D or 3D.
     /// Its subtree is layout, figures and composition-local geometry.
     Composition / "composition" => Composition {

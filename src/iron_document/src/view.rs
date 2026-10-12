@@ -213,13 +213,36 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
             attrs.push(("definition".into(), d));
         }
         let figures = composition::figures_of(doc, id);
-        if figures.is_empty() {
+        let ports: Vec<NodeId> = doc.children(id).iter().copied().filter(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "port")).collect();
+        if figures.is_empty() && ports.is_empty() {
             write_open(&mut out, "  ", "entity", &attrs);
             out.push_str("/>\n");
             continue;
         }
         write_open(&mut out, "  ", "entity", &attrs);
         out.push_str(">\n");
+        // Ports with their live values (ECM §6.1): a one-way kind shows its
+        // signal, a pair its across and through.
+        for p in ports {
+            let port = doc.get::<crate::component::Port>(p);
+            let text = |slot: Option<&crate::value::Slot>| slot.and_then(|s| s.constant()).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            let kind = text(port.map(|c| &c.kind));
+            let mut pa: Vec<(String, String)> = vec![("id".into(), p.to_string())];
+            if let Some(n) = name_of(p) {
+                pa.push(("name".into(), n));
+            }
+            pa.push(("kind".into(), kind.clone()));
+            pa.push(("dir".into(), text(port.map(|c| &c.dir))));
+            let read = |f: &str| f.parse::<crate::component::LeafPath>().ok().and_then(|path| reactive.read(doc, crate::expr::Leaf { node: p, path })).map(|v| v.to_string());
+            let pair = crate::port::kind(&kind).is_some_and(|k| k.flow == crate::port::Flow::Pair);
+            for f in if pair { &["across", "through"][..] } else { &["signal"][..] } {
+                if let Some(v) = read(&format!("port.{f}")) {
+                    pa.push(((*f).into(), v));
+                }
+            }
+            write_open(&mut out, "    ", "port", &pa);
+            out.push_str("/>\n");
+        }
         for f in figures {
             let ty = doc.live(f).map(|n| n.ty.name()).unwrap_or("?");
             let mut fa: Vec<(String, String)> = vec![("id".into(), f.to_string()), ("type".into(), ty.to_owned())];
@@ -236,6 +259,21 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
             out.push_str("/>\n");
         }
         out.push_str("  </entity>\n");
+    }
+    // Connections, as `entity.port` names for both ends.
+    let connection = crate::registry::TypeId::lookup("connection").expect("registered");
+    let end_name = |p: NodeId| {
+        let owner = doc.live(p).and_then(|n| n.parent);
+        format!("{}.{}", owner.and_then(name_of).unwrap_or_else(|| owner.map(|o| o.to_string()).unwrap_or_default()), name_of(p).unwrap_or_else(|| p.to_string()))
+    };
+    for c in doc.nodes_of_type(connection).filter(|&c| doc.is_live(c)) {
+        let Some((a, b)) = crate::port::ends(doc, c) else { continue };
+        let mut ca: Vec<(String, String)> = vec![("id".into(), c.to_string()), ("a".into(), end_name(a)), ("b".into(), end_name(b))];
+        if let Some(k) = doc.get::<crate::component::Port>(a).and_then(|p| p.kind.constant()).and_then(|v| v.as_str()) {
+            ca.push(("kind".into(), k.to_owned()));
+        }
+        write_open(&mut out, "  ", "connection", &ca);
+        out.push_str("/>\n");
     }
     out.push_str("</model-view>\n");
     out

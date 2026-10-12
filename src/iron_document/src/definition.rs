@@ -134,37 +134,21 @@ pub struct Placement {
 }
 
 /// Ops that instantiate `def`: an entity named `name` with every parameter
-/// at its default, a copy of the `notation` template with its bindings
-/// rewritten onto the entity, and a `figures` relation from each copied
-/// root to the entity. Ids and relation ids are taken from `doc`, so these
-/// ops must be applied before anything else allocates.
+/// at its default, one `port` per `port_spec` with its behaviour binding
+/// rewritten onto the entity (ECM §6.1), a copy of the `notation` template
+/// with its bindings rewritten the same way, and a `figures` relation from
+/// each copied root to the entity. Ids and relation ids are taken from
+/// `doc`, so these ops must be applied before anything else allocates.
 pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
     let specs = params_of(doc, def)?;
+    let port_specs: Vec<NodeId> = doc.children(def).iter().copied().filter(|&c| doc.live(c).is_some_and(|n| n.ty == ty("port_spec"))).collect();
     let template = template_of(doc, def, notation).ok_or_else(|| format!("{def} has no template for notation {notation:?}"))?;
-    let roots: Vec<NodeId> = doc.children(template).to_vec();
-    let mut copied: Vec<NodeId> = Vec::new();
-    for &r in &roots {
-        copied.push(r);
-        copied.extend(doc.descendants(r));
-    }
-    let ids = doc.next_ids(1 + copied.len());
+    let (roots, copied) = template_nodes(doc, template);
+    let ids = doc.next_ids(1 + port_specs.len() + copied.len());
     let entity = ids[0];
-    let new_id: BTreeMap<NodeId, NodeId> = copied.iter().copied().zip(ids[1..].iter().copied()).collect();
+    let mut new_id: BTreeMap<NodeId, NodeId> = port_specs.iter().copied().zip(ids[1..].iter().copied()).collect();
+    new_id.extend(copied.iter().copied().zip(ids[1 + port_specs.len()..].iter().copied()));
     let rel_ids = doc.next_relation_ids(roots.len());
-
-    // Every spec's default leaf becomes the entity's parameter; every
-    // reference between template nodes follows the copy.
-    let rewrite = |leaf: Leaf| -> Leaf {
-        if leaf.path.component == ComponentKind::ParamSpec
-            && let Some(spec) = specs.iter().find(|s| s.spec == leaf.node)
-        {
-            return Leaf { node: entity, path: LeafPath::new(ComponentKind::Params, spec.name).expect("parameter path") };
-        }
-        match new_id.get(&leaf.node) {
-            Some(&n) => Leaf { node: n, path: leaf.path },
-            None => leaf,
-        }
-    };
 
     let mut ops = Vec::new();
     let mut instance = Instance::default();
@@ -185,39 +169,109 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
         },
         components: vec![instance.wrap(), params.wrap(), entity_name.wrap()],
     });
+    for &spec in &port_specs {
+        let node = doc.live(spec).expect("live port_spec");
+        ops.push(Op::Create { id: new_id[&spec], ty: ty("port"), parent: Some(entity), order: node.order.clone(), components: rewritten(doc, spec, &specs, entity, &new_id) });
+    }
+    ops.extend(copy_template(doc, &specs, entity, &new_id, &roots, &copied, place.figure_parent, place.figure_after.clone(), &rel_ids));
+    Ok((entity, ops))
+}
 
-    let mut key = place.figure_after.clone();
-    for &old in &copied {
+/// Ops that draw an existing entity in another notation: a copy of its
+/// definition's `notation` template under `parent` (after `after`), its
+/// bindings reading the entity's parameters and ports, each root a figure
+/// of the entity (ECM §5: one entity, many figures).
+pub fn place_figures(doc: &Document, entity: NodeId, notation: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Result<Vec<Op>, String> {
+    let def = doc
+        .get::<Instance>(entity)
+        .and_then(|i| i.def.constant())
+        .and_then(|v| v.as_ref())
+        .ok_or_else(|| format!("{entity} is not an entity with a definition"))?;
+    let specs = params_of(doc, def)?;
+    let template = template_of(doc, def, notation).ok_or_else(|| format!("{def} has no template for notation {notation:?}"))?;
+    let (roots, copied) = template_nodes(doc, template);
+    // Each port_spec maps to the entity's port of the same name.
+    let mut new_id: BTreeMap<NodeId, NodeId> = BTreeMap::new();
+    for &spec in doc.children(def).iter().filter(|&&c| doc.live(c).is_some_and(|n| n.ty == ty("port_spec"))) {
+        let port = doc.children(entity).iter().copied().find(|&p| name_of(doc, p) == name_of(doc, spec)).ok_or_else(|| format!("{entity} has no port named like {spec}"))?;
+        new_id.insert(spec, port);
+    }
+    new_id.extend(copied.iter().copied().zip(doc.next_ids(copied.len())));
+    let rel_ids = doc.next_relation_ids(roots.len());
+    Ok(copy_template(doc, &specs, entity, &new_id, &roots, &copied, parent, after, &rel_ids))
+}
+
+/// A template's roots, and every node to copy (roots and descendants).
+fn template_nodes(doc: &Document, template: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
+    let roots: Vec<NodeId> = doc.children(template).to_vec();
+    let mut copied: Vec<NodeId> = Vec::new();
+    for &r in &roots {
+        copied.push(r);
+        copied.extend(doc.descendants(r));
+    }
+    (roots, copied)
+}
+
+/// A node's components with every binding rewritten: a spec's default
+/// becomes the entity's parameter; a reference to a copied node (or a
+/// port_spec) follows it.
+fn rewritten(doc: &Document, old: NodeId, specs: &[ParamInfo], entity: NodeId, new_id: &BTreeMap<NodeId, NodeId>) -> Vec<Component> {
+    let rewrite = |leaf: Leaf| -> Leaf {
+        if leaf.path.component == ComponentKind::ParamSpec
+            && let Some(spec) = specs.iter().find(|s| s.spec == leaf.node)
+        {
+            return Leaf { node: entity, path: LeafPath::new(ComponentKind::Params, spec.name).expect("parameter path") };
+        }
+        match new_id.get(&leaf.node) {
+            Some(&n) => Leaf { node: n, path: leaf.path },
+            None => leaf,
+        }
+    };
+    doc.components_of(old)
+        .map(|c| {
+            let mut c = c.clone();
+            for field in c.field_names() {
+                if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
+                    let rewritten = expr.map_refs(&rewrite);
+                    c.set(field, Slot::Bound(rewritten)).expect("field exists");
+                }
+            }
+            c
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_template(
+    doc: &Document,
+    specs: &[ParamInfo],
+    entity: NodeId,
+    new_id: &BTreeMap<NodeId, NodeId>,
+    roots: &[NodeId],
+    copied: &[NodeId],
+    parent: Option<NodeId>,
+    after: Option<OrderKey>,
+    rel_ids: &[crate::id::RelationId],
+) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let mut key = after;
+    for &old in copied {
         let node = doc.live(old).expect("copied node is live");
-        let is_root = roots.contains(&old);
-        let (parent, order) = if is_root {
+        let (p, order) = if roots.contains(&old) {
             key = Some(match &key {
                 Some(k) => OrderKey::after(k),
                 None => OrderKey::first(),
             });
-            (place.figure_parent, key.clone().expect("just set"))
+            (parent, key.clone().expect("just set"))
         } else {
             (node.parent.map(|p| new_id[&p]), node.order.clone())
         };
-        let components: Vec<Component> = doc
-            .components_of(old)
-            .map(|c| {
-                let mut c = c.clone();
-                for field in c.field_names() {
-                    if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
-                        let rewritten = expr.map_refs(&rewrite);
-                        c.set(field, Slot::Bound(rewritten)).expect("field exists");
-                    }
-                }
-                c
-            })
-            .collect();
-        ops.push(Op::Create { id: new_id[&old], ty: node.ty, parent, order, components });
+        ops.push(Op::Create { id: new_id[&old], ty: node.ty, parent: p, order, components: rewritten(doc, old, specs, entity, new_id) });
     }
     for (i, &r) in roots.iter().enumerate() {
         ops.push(Op::Link {
             rel: Relation { id: rel_ids[i], from: new_id[&r], to: entity, rel: RelKind::Figures, data: BTreeMap::new() },
         });
     }
-    Ok((entity, ops))
+    ops
 }

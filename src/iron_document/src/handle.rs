@@ -43,10 +43,12 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
     if reactive.animated().contains_key(&leaf) {
         return Handle::Locked(format!("{leaf} is driven by a clip at the current time"));
     }
-    let Some(expr) = slot.expr() else {
+    // A connection's in-port has no binding of its own but resolves through
+    // its partner (`port::derived_signals`), so it inverts like one.
+    let Some(expr) = slot.expr().or_else(|| reactive.expr_of(leaf)) else {
         return Handle::Direct;
     };
-    let inlined = inline(doc, expr);
+    let inlined = inline(doc, reactive, expr);
     let read = |l: Leaf| reactive.read(doc, l);
     // Candidates: constant number leaves the (inlined) expression reads.
     // Clip-driven and non-number leaves are knowns for the drag.
@@ -55,7 +57,7 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
         .into_iter()
         .filter(|d| {
             !reactive.animated().contains_key(d)
-                && doc.leaf(d.node, d.path).and_then(|s| s.constant()).is_some_and(|v| v.kind() == ValueKind::Number)
+                && doc.leaf(d.node, d.path).and_then(|s| s.constant()).is_some_and(|v| matches!(v.kind(), ValueKind::Number | ValueKind::Quantity))
         })
         .collect();
     match free.as_slice() {
@@ -65,6 +67,16 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
             _ => Handle::Locked(format!("{leaf} is bound non-linearly to {source}")),
         },
         many => {
+            // Several free leaves, but if the value is linear in exactly one
+            // of them (a laser's power, where a fiber's length and loss sit
+            // in an exponent), that one is the handle: the others are held.
+            let linear_in: Vec<(Leaf, f64, f64)> = many
+                .iter()
+                .filter_map(|&s| linear(&inlined, s, &read).filter(|(a, b)| *a != 0.0 && a.is_finite() && b.is_finite()).map(|(a, b)| (s, a, b)))
+                .collect();
+            if let [(source, a, b)] = linear_in.as_slice() {
+                return Handle::Linear { source: *source, a: *a, b: *b };
+            }
             let names: Vec<String> = many.iter().map(|l| l.to_string()).collect();
             Handle::Locked(format!("{leaf} is bound to {} free leaves ({})", many.len(), names.join(", ")))
         }
@@ -74,19 +86,30 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
 /// Replace every reference to a bound leaf with that leaf's expression, so
 /// the result reads only constants and clip-driven leaves. Bindings form a
 /// DAG (checked at apply time), so this terminates.
-fn inline(doc: &Document, expr: &Expr) -> Expr {
+fn inline(doc: &Document, reactive: &Reactive, expr: &Expr) -> Expr {
+    let i = |e: &Expr| Box::new(inline(doc, reactive, e));
     match expr {
-        Expr::Ref(l) => match doc.leaf(l.node, l.path).and_then(|s| s.expr()) {
-            Some(inner) => inline(doc, inner),
+        Expr::Ref(l) => match doc.leaf(l.node, l.path).and_then(|s| s.expr()).or_else(|| reactive.expr_of(*l)) {
+            Some(inner) => inline(doc, reactive, inner),
             None => expr.clone(),
         },
         Expr::Lit(_) | Expr::Const(_) => expr.clone(),
-        Expr::Neg(e) => Expr::Neg(Box::new(inline(doc, e))),
-        Expr::Not(e) => Expr::Not(Box::new(inline(doc, e))),
-        Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(inline(doc, a)), Box::new(inline(doc, b))),
-        Expr::If(c, a, b) => Expr::If(Box::new(inline(doc, c)), Box::new(inline(doc, a)), Box::new(inline(doc, b))),
-        Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| inline(doc, a)).collect()),
-        Expr::Get(e, f) => Expr::Get(Box::new(inline(doc, e)), f),
+        Expr::Neg(e) => Expr::Neg(i(e)),
+        Expr::Not(e) => Expr::Not(i(e)),
+        Expr::Bin(op, a, b) => Expr::Bin(*op, i(a), i(b)),
+        Expr::If(c, a, b) => Expr::If(i(c), i(a), i(b)),
+        Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| inline(doc, reactive, a)).collect()),
+        Expr::Get(e, f) => Expr::Get(i(e), f),
+    }
+}
+
+/// A number's value, or a quantity's magnitude in SI units: the scale a
+/// linear handle works in.
+fn magnitude(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => Some(*n),
+        Value::Quantity { si, .. } => Some(*si),
+        _ => None,
     }
 }
 
@@ -95,7 +118,7 @@ fn inline(doc: &Document, expr: &Expr) -> Expr {
 /// number at all). Symbolic, so a function that happens to be straight on
 /// the sampled interval is still rejected.
 pub fn linear(expr: &Expr, var: Leaf, read: &dyn Fn(Leaf) -> Option<Value>) -> Option<(f64, f64)> {
-    let known = |e: &Expr| -> Option<(f64, f64)> { e.eval(read).ok()?.as_f64().map(|v| (0.0, v)) };
+    let known = |e: &Expr| -> Option<(f64, f64)> { magnitude(&e.eval(read).ok()?).map(|v| (0.0, v)) };
     let depends = |e: &Expr| e.deps().contains(&var);
     if !depends(expr) {
         return known(expr);
@@ -152,8 +175,14 @@ pub fn resolve_target(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Va
     match handle(doc, reactive, leaf) {
         Handle::Direct => Ok((leaf, value)),
         Handle::Linear { source, a, b } => {
-            let y = value.as_f64().ok_or_else(|| format!("{leaf}: a linear handle takes a number, got {}", value.kind().name()))?;
-            Ok((source, Value::Number((y - b) / a)))
+            let y = magnitude(&value).ok_or_else(|| format!("{leaf}: a linear handle takes a number or quantity, got {}", value.kind().name()))?;
+            // The source keeps its own kind: a quantity stays one, in SI.
+            let x = (y - b) / a;
+            let v = match doc.leaf(source.node, source.path).and_then(|s| s.constant()) {
+                Some(Value::Quantity { dim, .. }) => Value::Quantity { si: x, dim: *dim },
+                _ => Value::Number(x),
+            };
+            Ok((source, v))
         }
         Handle::Locked(reason) => Err(reason),
     }

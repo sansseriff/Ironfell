@@ -336,6 +336,16 @@ fn create(
 /// The checks a `Create` defers to the end of its transaction: its bindings
 /// read live leaves without a cycle, and an entity or embed is valid.
 pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Version) -> Result<(), ApplyError> {
+    // A connection is checked once both of its ends exist (ECM §6.1).
+    if let Op::Link { rel } = op
+        && rel.rel == crate::document::RelKind::Connects
+    {
+        let cx = Ctx { index, stamp };
+        if doc.is_live(rel.from) {
+            crate::port::validate_connection(doc, rel.from).map_err(|e| cx.err(ErrorKind::BadParent, e))?;
+        }
+        return Ok(());
+    }
     let Op::Create { id, .. } = op else { return Ok(()) };
     let cx = Ctx { index, stamp };
     if doc.live(*id).is_none() {

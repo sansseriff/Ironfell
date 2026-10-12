@@ -58,6 +58,8 @@ pub enum RelKind {
     /// A constraint node to one of its operands; `data.role` names the
     /// operand's role and `data.anchor` the point in its local space.
     Constrains,
+    /// A connection to one of its two ports; `data.end` is `a` or `b`.
+    Connects,
     /// A session's `selection` node to a selected node (session tier, never
     /// saved): `data.panel` and `data.chain` say how it was reached.
     Selects,
@@ -73,6 +75,7 @@ impl RelKind {
             RelKind::References => "references",
             RelKind::Figures => "figures",
             RelKind::Constrains => "constrains",
+            RelKind::Connects => "connects",
             RelKind::Selects => "selects",
         }
     }

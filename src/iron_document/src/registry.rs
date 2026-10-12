@@ -130,7 +130,7 @@ static TYPES: &[TypeSpec] = &[
         name: "definition",
         components: &[(K::Name, true)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["param_spec", "template"]),
+        children: ChildPolicy::Only(&["param_spec", "port_spec", "template"]),
     },
     TypeSpec {
         name: "param_spec",
@@ -150,7 +150,28 @@ static TYPES: &[TypeSpec] = &[
         name: "model",
         components: &[(K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["entity"]),
+        children: ChildPolicy::Only(&["entity", "connection"]),
+    },
+    // A definition's port (ECM §6.1): instantiation copies it onto the
+    // entity as a `port`, its behaviour binding rewritten.
+    TypeSpec {
+        name: "port_spec",
+        components: &[(K::Name, true), (K::Port, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    TypeSpec {
+        name: "port",
+        components: &[(K::Name, true), (K::Port, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // Two ports joined: two `connects` relations, ends `a` and `b`.
+    TypeSpec {
+        name: "connection",
+        components: &[(K::Connection, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
     },
     // The session tier (plans/panels-and-session.md): state that is not
     // content. Its ids come from their own range; it is never saved and
@@ -207,7 +228,7 @@ static TYPES: &[TypeSpec] = &[
         name: "entity",
         components: &[(K::Instance, true), (K::Params, true), (K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::None,
+        children: ChildPolicy::Only(&["port"]),
     },
     // A relationship between operand nodes, solved in whatever direction a
     // drag chooses (constraint-system.md §4). Never materialised as content;

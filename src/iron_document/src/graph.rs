@@ -99,6 +99,12 @@ impl Reactive {
         self.nodes.contains_key(&leaf)
     }
 
+    /// The expression a leaf resolves through: its binding, or the signal a
+    /// connection derives for it.
+    pub fn expr_of(&self, leaf: Leaf) -> Option<&Expr> {
+        self.nodes.get(&leaf).map(|n| &n.expr)
+    }
+
     /// Every leaf `leaf` reads, directly or through other bindings.
     pub fn transitive_deps(&self, leaf: Leaf) -> BTreeSet<Leaf> {
         let mut out = BTreeSet::new();
@@ -129,7 +135,10 @@ impl Reactive {
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
-        for (leaf, expr) in doc.bound_slots() {
+        // Stored bindings, then the signals connections derive (`port`):
+        // an in-port reads its partner, evaluated like any binding.
+        let derived = crate::port::derived_signals(doc);
+        for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
             let deps = expr.deps();
             for d in &deps {
                 self.dependents.entry(*d).or_default().insert(leaf);

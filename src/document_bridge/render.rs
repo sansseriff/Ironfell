@@ -65,7 +65,7 @@ pub(super) fn sync_document_views(
 /// How many changed node ids a redraw line names before summarising.
 const LOG_IDS: usize = 12;
 
-pub(super) fn render_document_layer(
+pub fn render_document_layer(
     mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer)>,
     new_panels: Query<(), Added<DocumentPanelLayer>>,
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
@@ -76,6 +76,7 @@ pub(super) fn render_document_layer(
     mut bounds: ResMut<Bounds2d>,
     views: Res<PanelViews>,
     highlights: Res<Highlights>,
+    embed_images: Res<super::EmbedImages>,
 ) {
     let reason = if !changes.is_empty() {
         "document"
@@ -85,6 +86,8 @@ pub(super) fn render_document_layer(
         "selection"
     } else if !new_panels.is_empty() {
         "new view"
+    } else if embed_images.is_changed() {
+        "embedded view"
     } else {
         return;
     };
@@ -105,14 +108,14 @@ pub(super) fn render_document_layer(
         }
     }
 
-    let mut cx = Draw { store: &store.0, doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, changed: &changed.nodes, bounds: &mut bounds.0, damage, drawn: 0 };
+    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, changed: &changed.nodes, bounds: &mut bounds.0, damage, drawn: 0 };
     // A layer per panel: a panel whose content is unchanged rebuilds to the
     // same commands, so its view does not re-render.
     for (mut panel_list, layer) in &mut panel_layers {
         let Some(view) = views.get(&layer.panel) else { continue };
         let roots = nest::panel_roots(doc, view);
         panel_list.rebuild(|b| {
-            b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), 0));
+            b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), &view.panel, 0));
         });
     }
     let (drawn, damage) = (cx.drawn, cx.damage);
@@ -134,6 +137,7 @@ pub(super) fn render_document_layer(
 /// recurses into 2D embeds through their placement, clipped to their region.
 struct Draw<'a, 'w, 's> {
     store: &'a iron_document::Store,
+    embed_images: &'a super::EmbedImages,
     doc: &'a iron_document::Document,
     map: &'a NodeMap,
     nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
@@ -146,19 +150,26 @@ struct Draw<'a, 'w, 's> {
 }
 
 impl Draw<'_, '_, '_> {
-    fn walk(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, depth: u32) {
+    fn walk(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, key: &str, depth: u32) {
         for id in nest::preorder(self.doc, roots) {
             if nest::is_embed(self.doc, id) {
-                if depth < nest::MAX_DEPTH
-                    && let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id)
-                {
+                if depth >= nest::MAX_DEPTH {
+                    continue;
+                }
+                let key = format!("{key}/{id}");
+                if let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id) {
                     let inner = base * e.placement;
                     let kids: Vec<NodeId> = self.doc.children(e.source).to_vec();
-                    b.clipped(inner, e.region, |b| self.walk(b, &kids, inner, depth + 1));
+                    b.clipped(inner, e.region, |b| self.walk(b, &kids, inner, &key, depth + 1));
                 } else if let Some((_, _, w, h)) = nest::embed_3d(self.store, id) {
-                    // The 3D view itself is a camera viewport beneath this
-                    // layer (`EmbedViews`); the layer draws its frame.
+                    // The 3D view: its camera's texture (`EmbedImages`), drawn
+                    // in painter order under the embed's whole transform, so
+                    // it rotates, scales and clips like the 2D around it.
                     let placement = self.map.entity(id).and_then(|e| self.globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+                    if let Some(img) = self.embed_images.0.get(&key) {
+                        let to_embed = kurbo::Affine::scale_non_uniform(w / img.size.x.max(1) as f64, h / img.size.y.max(1) as f64);
+                        b.texture(base * placement * to_embed, img.image.clone(), img.size, img.version);
+                    }
                     let frame = kurbo::Rect::new(0.0, 0.0, w, h);
                     let lit = self.highlights.selected.contains(&id) || self.highlights.hovered.contains(&id);
                     let c = if lit { [0.1, 0.4, 1.0, 1.0] } else { [0.55, 0.57, 0.62, 1.0] };

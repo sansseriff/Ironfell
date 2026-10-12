@@ -183,6 +183,9 @@ fn replay_display_lists(
                     ));
                 }
                 DrawCmd::PopLayer => scene.pop_layer(),
+                // Texture views (3D compositions seen from 2D) are drawn by the
+                // hybrid backend only; classic shows nothing there for now.
+                DrawCmd::Texture { .. } => {}
             }
         }
     }

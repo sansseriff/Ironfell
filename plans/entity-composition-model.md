@@ -378,9 +378,15 @@ then 2D in 3D as a plane.
   must stay on top). Show in locates a node through embeds and pans the panel to it.
 - *Main layout* — done: the viewer shows `main`, which embeds `scene` at the origin and
   `assembly` as a camera view; the C1 exit runs there in the smoke script.
-- *Not done:* render-to-texture (so rotation, 2D under a 3D view, and 2D in 3D as a
-  plane), now part of a general move to view textures (`view-textures.md`); selecting an embed itself (a modifier or its frame); an "open/enter"
-  composition gesture; embeds inside 3D compositions.
+- *3D in 2D as a texture* — done 2026-10-11 (`view-textures.md` migration step 3): the
+  embed's camera renders the whole embed at its on-screen scale into its own texture,
+  and the 2D view draws that texture in painter order under the embed's full transform
+  (rotation and scale work; 2D content sits over or under it by order; a clipped embed
+  is cropped, no longer reframed). Picking treats the 3D view as opaque and casts
+  through the embed's inverse transform.
+- *Not done:* 2D in 3D as a plane (`view-textures.md` step 4); selecting an embed itself
+  (a modifier or its frame); an "open/enter" composition gesture; embeds inside 3D
+  compositions.
 
 **Open:** whether definitions converge with embeds. An embed is a parameterless,
 live component; a definition instance is a parameterised copy that may diverge after

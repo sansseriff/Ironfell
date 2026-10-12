@@ -246,6 +246,9 @@ pub struct Hit3D {
 pub struct PointerHits {
     /// The composition panel under the pointer; hits come only from it.
     pub panel: Option<String>,
+    /// The 3D embed under the pointer when nothing 2D is drawn over it there
+    /// (its `EmbedView` key): the 3D picker casts through its camera.
+    pub embed: Option<String>,
     pub overlay: Vec<Hit2D>,
     pub world3d: Vec<Hit3D>,
     pub primary: Option<Entity>,

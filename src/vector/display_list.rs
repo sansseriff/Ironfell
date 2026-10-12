@@ -106,6 +106,16 @@ pub enum DrawCmd {
         brush: Brush,
         shape: Shape,
     },
+    /// Another view's texture (a 3D composition seen from 2D, ECM §7.4):
+    /// its top-left `size` texels drawn into the rectangle `(0, 0)–size`
+    /// under `transform`. `version` changes whenever the texture's content
+    /// does, so the list compares unequal and the view re-renders.
+    Texture {
+        transform: Affine,
+        image: Handle<Image>,
+        size: UVec2,
+        version: u32,
+    },
     /// Begin a clip layer. Always balanced by [`DrawCmd::PopLayer`].
     PushClip {
         transform: Affine,
@@ -172,6 +182,9 @@ impl DisplayList {
                     let half = style.width * 0.5;
                     transform.transform_rect_bbox(shape.bounding_box().inflate(half, half))
                 }
+                DrawCmd::Texture { transform, size, .. } => {
+                    transform.transform_rect_bbox(Rect::new(0.0, 0.0, size.x as f64, size.y as f64))
+                }
                 DrawCmd::PopLayer => continue,
             };
             acc = Some(match acc {
@@ -223,6 +236,11 @@ impl DisplayListBuilder<'_> {
             brush: brush.into(),
             shape: shape.into(),
         });
+    }
+
+    /// Draw another view's texture; see [`DrawCmd::Texture`].
+    pub fn texture(&mut self, transform: Affine, image: Handle<Image>, size: UVec2, version: u32) {
+        self.out.push(DrawCmd::Texture { transform, image, size, version });
     }
 
     /// Run `f` with everything it draws clipped to `shape`.

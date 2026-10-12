@@ -185,9 +185,10 @@ document (815,10), 200×350, through the derived default view that frames
 the torus. Loose 2D roots such as the pendulum draw in the viewer too. The
 right panel is a placeholder. `?panels=2` makes it an `assembly` panel
 with its own camera; `?panels=4` adds a second view of each, for
-measuring per-panel cost. A 3D view inside 2D is a camera viewport beneath
-the 2D layer: axis-aligned, and 2D content over it (the square after the
-timeline scrub) draws on top.
+measuring per-panel cost. A 3D view inside 2D is its camera's texture,
+drawn in painter order under the embed's whole transform: it rotates and
+scales with the embed, covers what is under it (the square after the
+timeline scrub slides beneath it), and the 2D picker treats it as opaque.
 
 Driver environment: `GPU=1` runs Chrome on the machine's GPU (ANGLE/Metal)
 instead of SwiftShader, which caps the app near 10 fps; `UNTHROTTLED=1`

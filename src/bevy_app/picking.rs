@@ -1,7 +1,7 @@
 use bevy::math::bounding::RayCast3d;
 use bevy::prelude::*;
 
-use crate::bevy_app::scene3d::{CurrentVolume, EmbedCam, PanelCamera, ScreenRect, camera_origin};
+use crate::bevy_app::scene3d::{CurrentVolume, EmbedCam, PanelCamera, PointerToCamera, ScreenRect, to_camera_px};
 use crate::document_bridge::{Doc2d, DocumentStore, EmbedViews, InComposition, NodeMap, PanelViews, nest};
 use iron_document::NodeId;
 use iron_document::composition::Dims;
@@ -52,10 +52,12 @@ pub fn pointer_panel_system(pointer: Res<crate::PointerState>, views: Res<PanelV
 /// embedded composition's space (inside its region only), then into each
 /// node's local space through the inverse of its global transform, so
 /// rotated, scaled and embedded shapes all pick. Depth is painter order of
-/// the walk: later means on top.
+/// the walk: later means on top. A 3D embed is opaque: 2D content under it
+/// does not pick where it shows, and the 3D picker takes over there.
 pub fn pick_document_2d_system(
     pointer: Res<crate::PointerState>,
     views: Res<PanelViews>,
+    embeds: Res<EmbedViews>,
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
@@ -63,14 +65,21 @@ pub fn pick_document_2d_system(
     mut hits: ResMut<crate::PointerHits>,
 ) {
     hits.overlay.clear();
+    hits.embed = None;
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two) else { return };
     let Some(p) = view.to_doc(pointer.screen) else { return };
     let doc = store.0.document();
     let roots = nest::panel_roots(doc, view);
-    let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, z: 0, out: Vec::new() };
-    walk.walk(&roots, kurbo::Point::new(p.x as f64, p.y as f64), kurbo::Affine::IDENTITY, 0);
+    let screen = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
+    let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, screen, z: 0, out: Vec::new(), embed: None };
+    walk.walk(&roots, kurbo::Point::new(p.x as f64, p.y as f64), kurbo::Affine::IDENTITY, &view.panel, 0);
     let mut out = walk.out;
+    // Whatever a 3D embed covers is not hit; whatever is drawn over it is.
+    if let Some((_, z)) = &walk.embed {
+        out.retain(|h| h.z > *z);
+    }
     out.sort_by(|a, b| b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal));
+    hits.embed = walk.embed.map(|(k, _)| k);
     hits.overlay = out;
 }
 
@@ -79,26 +88,35 @@ struct Pick<'a, 'w, 's> {
     map: &'a NodeMap,
     nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
     globals: &'a Query<'w, 's, &'static GlobalTransform>,
+    embeds: &'a EmbedViews,
+    /// The pointer in window px, for 3D embeds (`EmbedView::texture_point`).
+    screen: kurbo::Point,
     z: u32,
     out: Vec<crate::Hit2D>,
+    /// The topmost 3D embed under the pointer, and its painter depth.
+    embed: Option<(String, f32)>,
 }
 
 impl Pick<'_, '_, '_> {
     /// `p` is in the current composition's space; `space` maps the panel's
     /// document space into it.
-    fn walk(&mut self, roots: &[NodeId], p: kurbo::Point, space: kurbo::Affine, depth: u32) {
+    fn walk(&mut self, roots: &[NodeId], p: kurbo::Point, space: kurbo::Affine, key: &str, depth: u32) {
         for id in nest::preorder(self.doc, roots) {
             self.z += 1;
             if nest::is_embed(self.doc, id) {
-                if depth < nest::MAX_DEPTH
-                    && let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id)
-                {
+                if depth >= nest::MAX_DEPTH {
+                    continue;
+                }
+                let key = format!("{key}/{id}");
+                if let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id) {
                     let inv = e.placement.inverse();
                     let q = inv * p;
                     if e.region.contains(q) {
                         let kids: Vec<NodeId> = self.doc.children(e.source).to_vec();
-                        self.walk(&kids, q, inv * space, depth + 1);
+                        self.walk(&kids, q, inv * space, &key, depth + 1);
                     }
+                } else if self.embeds.0.iter().any(|v| v.key == key && v.texture_point(self.screen).is_some()) {
+                    self.embed = Some((key, self.z as f32));
                 }
                 continue;
             }
@@ -120,7 +138,7 @@ pub fn pick_world_3d_system(
     pointer: Res<crate::PointerState>,
     views: Res<PanelViews>,
     embeds: Res<EmbedViews>,
-    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&PanelCamera>, Option<&EmbedCam>, Option<&ScreenRect>)>,
+    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&PanelCamera>, Option<&EmbedCam>, Option<&ScreenRect>, Option<&PointerToCamera>)>,
     query: Query<(Entity, &CurrentVolume, &InComposition)>,
     mut hits: ResMut<crate::PointerHits>,
 ) {
@@ -132,16 +150,15 @@ pub fn pick_world_3d_system(
             (e, view.composition, true)
         }
         Dims::Two => {
-            let p = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
-            // The last one listed is drawn last, so it is on top.
-            let Some(ev) = embeds.0.iter().rev().find(|v| v.panel == view.panel && v.rect.contains(p)) else { return };
-            let Some((e, ..)) = cameras.iter().find(|(_, _, _, _, ec, _)| ec.is_some_and(|ec| ec.key == ev.key)) else { return };
+            // The 3D embed the 2D picker found on top under the pointer.
+            let Some(ev) = hits.embed.as_deref().and_then(|k| embeds.0.iter().find(|v| v.key == k)) else { return };
+            let Some((e, ..)) = cameras.iter().find(|(_, _, _, _, ec, ..)| ec.is_some_and(|ec| ec.key == ev.key)) else { return };
             (e, Some(ev.source), false)
         }
     };
-    let Ok((_, camera, cam_transform, _, _, screen)) = cameras.get(camera_entity) else { return };
-    // A texture-backed camera's pixels start at its rectangle's corner.
-    let Some(ray) = camera_ray_from_window_px(camera, cam_transform, pointer.screen - camera_origin(screen)) else {
+    let Ok((_, camera, cam_transform, _, _, screen, to_camera)) = cameras.get(camera_entity) else { return };
+    // Window px → the camera's own texture px.
+    let Some(ray) = camera_ray_from_window_px(camera, cam_transform, to_camera_px(pointer.screen, screen, to_camera)) else {
         return;
     };
     let ray_cast = RayCast3d::from_ray(ray, 10_000.0);

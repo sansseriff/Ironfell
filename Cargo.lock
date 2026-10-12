@@ -3098,6 +3098,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "vello_common",
  "vello_hybrid",
  "wasm-bindgen",
  "wasm-bindgen-futures",

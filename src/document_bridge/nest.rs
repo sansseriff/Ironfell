@@ -114,26 +114,45 @@ pub fn is_embed(doc: &Document, id: NodeId) -> bool {
 pub const EMBED_3D_SIZE: (f64, f64) = (320.0, 240.0);
 
 /// A 3D composition seen from a 2D one (ECM §7.4), resolved for one frame:
-/// where on screen, which composition, through which camera node (none:
-/// the derived default view), and the shape's aspect.
+/// which composition, through which camera node (none: the derived default
+/// view), at what texture size, and how window pixels map onto it. The
+/// camera renders the embed's whole shape into its texture; the 2D view
+/// draws that texture under the embed's transform, clipped like any other
+/// content (plans/view-textures.md, migration step 3).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EmbedView {
     /// Panel id plus the chain of embeds that reaches it: stable while the
     /// layout is, so its Bevy camera survives from frame to frame.
     pub key: String,
     pub panel: String,
-    /// Window px, already clipped to the panel and to enclosing embeds.
-    pub rect: kurbo::Rect,
+    /// Texture px: the embed's size at its on-screen scale.
+    pub size: UVec2,
+    /// Window px → texture px (through the panel, enclosing embeds, and this
+    /// embed's own transform, which may rotate or scale).
+    pub to_texture: kurbo::Affine,
+    /// The visible part, window px: the embed's bounds clipped to the panel
+    /// and to enclosing embeds.
+    pub clip: kurbo::Rect,
     pub source: NodeId,
     pub camera: Option<NodeId>,
     pub layer: usize,
-    /// Width over height of the embed's own (unclipped) shape.
-    pub aspect: f64,
+}
+
+impl EmbedView {
+    /// A window point on this view, in its texture's px, if it shows there.
+    pub fn texture_point(&self, screen: kurbo::Point) -> Option<kurbo::Point> {
+        if !self.clip.contains(screen) {
+            return None;
+        }
+        let q = self.to_texture * screen;
+        (q.x >= 0.0 && q.y >= 0.0 && q.x <= self.size.x as f64 && q.y <= self.size.y as f64).then_some(q)
+    }
 }
 
 /// Every 3D embed reachable from the 2D composition panels, recomputed each
-/// frame after transforms propagate. The 2D layer leaves these rectangles
-/// to the cameras that `bevy_app::scene3d::sync_embed_cameras` keeps.
+/// frame after transforms propagate. Their cameras are kept by
+/// `bevy_app::scene3d::sync_embed_cameras`; the 2D layer draws their
+/// textures (`EmbedImages`).
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct EmbedViews(pub Vec<EmbedView>);
 
@@ -205,12 +224,17 @@ fn collect(
             let kids: Vec<NodeId> = doc.children(e.source).to_vec();
             collect(store, map, nodes, globals, layers, view, &kids, inner, clip, &key, depth + 1, found);
         } else if let Some((source, camera, w, h)) = embed_3d(store, id) {
-            // Axis-aligned on screen: a rotated embed shows its bounding box
-            // until 3D views render to a texture.
-            let rect = (base * placement).transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w, h)).intersect(clip);
-            if rect.width() >= 1.0 && rect.height() >= 1.0 {
-                found.push(EmbedView { key, panel: view.panel.clone(), rect, source, camera, layer: layers.of(Some(source)), aspect: w / h.max(1e-6) });
+            let to_window = base * placement;
+            let visible = to_window.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w, h)).intersect(clip);
+            if visible.width() < 1.0 || visible.height() < 1.0 {
+                continue;
             }
+            // Texture px follow the embed's on-screen scale, so it stays
+            // sharp at any zoom; the whole embed renders, the clip crops.
+            let s = to_window.determinant().abs().sqrt().max(1e-6);
+            let size = UVec2::new(((w * s).ceil() as u32).clamp(1, 4096), ((h * s).ceil() as u32).clamp(1, 4096));
+            let to_texture = kurbo::Affine::scale_non_uniform(size.x as f64 / w, size.y as f64 / h) * to_window.inverse();
+            found.push(EmbedView { key, panel: view.panel.clone(), size, to_texture, clip: visible, source, camera, layer: layers.of(Some(source)) });
         }
     }
 }
@@ -275,3 +299,18 @@ pub fn locate(
     let roots = panel_roots(doc, view);
     walk(store, map, nodes, globals, &roots, kurbo::Affine::IDENTITY, target?, &own, node, 0)
 }
+
+/// One 3D embed's rendered texture, as the 2D layer draws it: the image, its
+/// size in texels, and a version that changes whenever the image's content
+/// does (so the 2D view that draws it re-renders).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmbedImage {
+    pub image: Handle<Image>,
+    pub size: UVec2,
+    pub version: u32,
+}
+
+/// Every 3D embed's texture, by `EmbedView::key`. Written by
+/// `bevy_app::scene3d::sync_view_images`, read by the 2D layer.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct EmbedImages(pub std::collections::BTreeMap<String, EmbedImage>);

@@ -301,14 +301,10 @@ pub(crate) fn sync_embed_cameras(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     poses: Query<&GlobalTransform, Without<EmbedCam>>,
     volumes: Query<(&CurrentVolume, &crate::document_bridge::InComposition)>,
-    mut cams: Query<(Entity, &mut EmbedCam, &mut Camera, &mut RenderLayers, &mut Transform, &mut Projection, Option<&mut ScreenRect>)>,
+    mut cams: Query<(Entity, &mut EmbedCam, &mut Camera, &mut RenderLayers, &mut Transform, &mut Projection, Option<&mut ScreenRect>, Option<&mut PointerToCamera>)>,
     others: Query<&Camera, Without<EmbedCam>>,
 ) {
-    let Ok(window) = windows.single() else { return };
-    let (win_w, win_h) = (window.resolution.physical_width(), window.resolution.physical_height());
-    if win_w == 0 || win_h == 0 {
-        return;
-    }
+    let _ = windows;
     for (e, cam, ..) in &cams {
         if !embeds.0.iter().any(|v| v.key == cam.key) {
             commands.entity(e).despawn();
@@ -316,12 +312,10 @@ pub(crate) fn sync_embed_cameras(
     }
     let mut used: Vec<isize> = others.iter().map(|c| c.order).chain(cams.iter().map(|(_, _, c, ..)| c.order)).collect();
     for view in &embeds.0 {
-        let r = view.rect;
-        let x = (r.x0.max(0.0) as u32).min(win_w.saturating_sub(1));
-        let y = (r.y0.max(0.0) as u32).min(win_h.saturating_sub(1));
-        let w = (r.width().max(1.0) as u32).min(win_w - x).max(1);
-        let h = (r.height().max(1.0) as u32).min(win_h - y).max(1);
-        let viewport = bevy::camera::Viewport { physical_position: UVec2::new(x, y), physical_size: UVec2::new(w, h), ..default() };
+        // The whole embed at its on-screen scale, into the camera's texture;
+        // the 2D view crops it (no reframing to a clipped strip).
+        let (w, h) = (view.size.x.max(1), view.size.y.max(1));
+        let viewport = bevy::camera::Viewport { physical_position: UVec2::ZERO, physical_size: view.size.max(UVec2::ONE), ..default() };
         let layers = RenderLayers::from_layers(&[0, view.layer]);
         let entity = match cams.iter().find(|(_, c, ..)| c.key == view.key).map(|(e, ..)| e) {
             Some(e) => e,
@@ -332,6 +326,7 @@ pub(crate) fn sync_embed_cameras(
                         Tonemapping::BlenderFilmic,
                         Camera { order: free_order(&mut used), ..default() },
                         ScreenRect::of(&viewport),
+                        PointerToCamera(view.to_texture),
                         EmbedCam { key: view.key.clone(), framed: None },
                         layers.clone(),
                         Projection::Perspective(PerspectiveProjection { fov: DEFAULT_FOV, near: 0.1, far: 1000.0, ..default() }),
@@ -342,8 +337,13 @@ pub(crate) fn sync_embed_cameras(
                 continue;
             }
         };
-        let Ok((_, mut cam, mut camera, mut current, mut transform, mut projection, screen)) = cams.get_mut(entity) else { continue };
+        let Ok((_, mut cam, mut camera, mut current, mut transform, mut projection, screen, pointer)) = cams.get_mut(entity) else { continue };
         place(&mut camera, screen, &viewport);
+        if let Some(mut p) = pointer
+            && p.0 != view.to_texture
+        {
+            p.0 = view.to_texture;
+        }
         if *current != layers {
             *current = layers;
         }
@@ -432,7 +432,13 @@ fn place(_camera: &mut Mut<Camera>, screen: Option<Mut<ScreenRect>>, viewport: &
 pub(crate) struct ViewImage {
     image: Handle<Image>,
     bucket: UVec2,
-    composite: Entity,
+    /// The quad pasting it into the window; none for a 3D embed, whose
+    /// texture the 2D view that embeds it draws instead.
+    composite: Option<Entity>,
+    /// Rendered last frame: the texture's content is newer than any 2D view
+    /// that drew it, so its version moves on (see `EmbedImages`).
+    was_active: bool,
+    version: u32,
     material: Handle<crate::vector::view_composite::ViewCompositeMaterial>,
     /// Frames still to render whatever happens: a new texture is not on the
     /// GPU for a frame or two.
@@ -443,9 +449,22 @@ pub(crate) struct ViewImage {
     awake: u8,
 }
 
-/// Window px → this camera's own target px.
-pub(crate) fn camera_origin(view: Option<&ScreenRect>) -> Vec2 {
-    view.map_or(Vec2::ZERO, |s| s.pos.as_vec2())
+/// For a camera whose texture is drawn inside a 2D view (a 3D embed), the
+/// map from window px to its own texture px, through every transform on the
+/// way (it may rotate and scale).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PointerToCamera(pub kurbo::Affine);
+
+/// Window px → this camera's own target px: through the embed's mapping, or
+/// offset by the panel rectangle's corner.
+pub(crate) fn to_camera_px(screen: Vec2, rect: Option<&ScreenRect>, pointer: Option<&PointerToCamera>) -> Vec2 {
+    match pointer {
+        Some(p) => {
+            let q = p.0 * kurbo::Point::new(screen.x as f64, screen.y as f64);
+            Vec2::new(q.x as f32, q.y as f32)
+        }
+        None => screen - rect.map_or(Vec2::ZERO, |s| s.pos.as_vec2()),
+    }
 }
 
 /// Keep each texture-backed camera's target, viewport and composite equal to
@@ -459,16 +478,18 @@ pub(crate) fn sync_view_images(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<crate::vector::view_composite::ViewCompositeMaterial>>,
     mut quad: Local<Option<Handle<Mesh>>>,
-    mut cams: Query<(Entity, Ref<ScreenRect>, &mut Camera, Option<&mut ViewImage>, &RenderLayers, Ref<GlobalTransform>, Ref<Projection>)>,
+    mut cams: Query<(Entity, Ref<ScreenRect>, &mut Camera, Option<&mut ViewImage>, &RenderLayers, Ref<GlobalTransform>, Ref<Projection>, Option<&EmbedCam>)>,
     content: Query<(&RenderLayers, Ref<GlobalTransform>, Ref<ActiveState>), With<crate::document_bridge::Doc3d>>,
     mut removed: RemovedComponents<crate::document_bridge::Doc3d>,
     composites: Query<(Entity, &ViewCompositeOf)>,
     clear: Res<ClearColor>,
+    mut embed_images: ResMut<crate::document_bridge::EmbedImages>,
 ) {
+    let mut published = std::collections::BTreeMap::new();
     use crate::vector::view_composite::{MODE_STRAIGHT_SRGB, ViewCompositeMaterial, bucket, unit_quad};
     let quad = quad.get_or_insert_with(|| meshes.add(unit_quad())).clone();
     let removed_any = removed.read().count() > 0;
-    for (entity, screen, mut camera, view, layers, pose, projection) in &mut cams {
+    for (entity, screen, mut camera, view, layers, pose, projection, embed) in &mut cams {
         let size = screen.size.max(UVec2::ONE);
         let want = bucket(size);
         let rect = Vec4::new(screen.pos.x as f32, screen.pos.y as f32, size.x as f32, size.y as f32);
@@ -482,6 +503,9 @@ pub(crate) fn sync_view_images(
                 {
                     m.rect = rect;
                 }
+                if v.was_active {
+                    v.version = v.version.wrapping_add(1);
+                }
                 if v.fresh > 0 {
                     v.fresh -= 1;
                     dirty = true;
@@ -491,6 +515,10 @@ pub(crate) fn sync_view_images(
                 }
                 v.awake = if dirty { 3 } else { v.awake.saturating_sub(1) };
                 awake = Some(v.awake);
+                v.was_active = dirty || v.awake > 0;
+                if let Some(ec) = embed {
+                    published.insert(ec.key.clone(), crate::document_bridge::EmbedImage { image: v.image.clone(), size, version: v.version });
+                }
             }
             existing => {
                 // A new texture: first use, or the size crossed a bucket.
@@ -505,10 +533,13 @@ pub(crate) fn sync_view_images(
                         v.image = image.clone();
                         v.bucket = want;
                         v.fresh = 2;
+                        v.was_active = true;
                     }
                     None => {
                         let material = materials.add(ViewCompositeMaterial { texture: image.clone(), rect, params });
-                        let composite = commands
+                        // A 3D embed's texture is drawn by the 2D view that
+                        // embeds it; only panel cameras paste into the window.
+                        let composite = embed.is_none().then(|| commands
                             .spawn((
                                 Mesh2d(quad.clone()),
                                 MeshMaterial2d(material.clone()),
@@ -521,8 +552,8 @@ pub(crate) fn sync_view_images(
                                 ViewCompositeOf(entity),
                                 Name::new("view composite"),
                             ))
-                            .id();
-                        commands.entity(entity).insert(ViewImage { image: image.clone(), bucket: want, composite, material, fresh: 2, awake: 0 });
+                            .id());
+                        commands.entity(entity).insert(ViewImage { image: image.clone(), bucket: want, composite, material, fresh: 2, awake: 0, was_active: true, version: 0 });
                     }
                 }
                 commands.entity(entity).insert(bevy::camera::RenderTarget::from(image));
@@ -541,6 +572,9 @@ pub(crate) fn sync_view_images(
         if camera.is_active != active {
             camera.is_active = active;
         }
+    }
+    if embed_images.0 != published {
+        embed_images.0 = published;
     }
     // A camera that went away takes its composite with it.
     for (e, of) in &composites {

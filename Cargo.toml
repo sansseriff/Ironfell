@@ -104,6 +104,9 @@ peniko = "0.6.1"
 vello_hybrid = { version = "0.2.0", default-features = false, features = [
     "wgpu",
 ] }
+# For `RectU16` (texture-rect source regions), which `vello_hybrid` uses but
+# does not re-export. Same version as `vello_hybrid` resolves.
+vello_common = { version = "0.2.0", default-features = false }
 
 # Pin app-surface: it must resolve to the SAME wgpu major as bevy_render, or the
 # two end up with incompatible wgpu types. bevy 0.19 -> wgpu 29, and app-surface

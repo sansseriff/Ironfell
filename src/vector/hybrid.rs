@@ -53,9 +53,10 @@ use bevy::window::PrimaryWindow;
 use kurbo::{Affine, BezPath, PathEl, Rect, Shape as _};
 use peniko::Fill;
 use std::sync::Mutex;
+use vello_common::geometry::RectU16;
 use vello_hybrid::{
     LayersConfig, MemorySettings, RenderSettings, RenderSize, RenderTargetConfig, Renderer,
-    Resources, Scene, SizeU16,
+    Resources, SampleRect, Scene, SizeU16, TextureId,
 };
 use wgpu::TextureFormat;
 
@@ -574,6 +575,10 @@ struct HybridInner {
     /// Scratch path buffer, so shape conversion allocates once rather than
     /// once per shape per rebuild.
     scratch: BezPath,
+    /// The pass that turns a Bevy camera's image into what Vello samples.
+    convert: Option<Convert>,
+    /// Converted copies of other views' textures, by source image.
+    converted: HashMap<AssetId<Image>, (wgpu::Texture, wgpu::TextureView, UVec2)>,
 }
 
 /// One target's retained scene.
@@ -582,6 +587,8 @@ struct TargetScene {
     size: UVec2,
     /// The texture holds the current scene: with retention, nothing to do.
     rendered: bool,
+    /// Other views' textures this scene draws, bound at render time.
+    textures: Vec<(TextureId, Handle<Image>, UVec2)>,
 }
 
 /// Rebuild each target's scene, but only when one of its layers changed.
@@ -630,11 +637,12 @@ fn prepare_scene(
         // size should clamp rather than wrap.
         let (w, h) = (tsize.x.min(u16::MAX as u32) as u16, tsize.y.min(u16::MAX as u32) as u16);
         let HybridInner { targets, scratch, .. } = &mut *state;
-        let target = targets.entry(key).or_insert_with(|| TargetScene { scene: Scene::new(w, h), size: tsize, rendered: false });
+        let target = targets.entry(key).or_insert_with(|| TargetScene { scene: Scene::new(w, h), size: tsize, rendered: false, textures: Vec::new() });
         // Reuse the allocation; `reset_and_resize` keeps its buffers.
         target.scene.reset_and_resize(w, h);
         target.size = tsize;
         target.rendered = false;
+        target.textures.clear();
 
         // Painter order across layers is explicit; within a layer it is
         // emission order.
@@ -653,7 +661,7 @@ fn prepare_scene(
                     continue;
                 }
             }
-            emitted += emit_layer(&mut target.scene, layer, to_target, scratch);
+            emitted += emit_layer(&mut target.scene, &mut target.textures, layer, to_target, scratch);
         }
     }
     if rebuilt {
@@ -674,7 +682,7 @@ fn prepare_scene(
 /// is only the atlas and its eviction policy.
 ///
 /// Returns the number of commands emitted.
-fn emit_layer(scene: &mut Scene, layer: &ExtractedLayer, to_target: Affine, scratch: &mut BezPath) -> u32 {
+fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, UVec2)>, layer: &ExtractedLayer, to_target: Affine, scratch: &mut BezPath) -> u32 {
     let base = to_target * layer.transform;
     let mut emitted = 0;
     for cmd in &layer.cmds {
@@ -723,6 +731,19 @@ fn emit_layer(scene: &mut Scene, layer: &ExtractedLayer, to_target: Affine, scra
                 scene.push_clip_layer(scratch);
             }
             DrawCmd::PopLayer => scene.pop_layer(),
+            DrawCmd::Texture { transform, image, size, .. } => {
+                let id = texture_id(image);
+                if !textures.iter().any(|(t, ..)| *t == id) {
+                    textures.push((id, image.clone(), *size));
+                }
+                scene.set_transform(base * *transform);
+                let (w, h) = (size.x.min(u16::MAX as u32) as u16, size.y.min(u16::MAX as u32) as u16);
+                scene.draw_texture_rects(
+                    id,
+                    peniko::ImageQuality::Medium,
+                    [SampleRect { source_region: RectU16::new(0, 0, w, h), transform: Affine::IDENTITY }],
+                );
+            }
         }
         emitted += 1;
     }
@@ -807,10 +828,34 @@ fn render_scene(
             },
         ));
     }
-    let HybridInner { inner, targets, .. } = &mut *state;
+    let HybridInner { inner, targets, convert, converted, .. } = &mut *state;
     let (renderer_inner, resources) = inner.as_mut().expect("created above");
+    let convert = convert.get_or_insert_with(|| Convert::new(device.wgpu_device()));
+    // Converted copies nobody draws any more.
+    converted.retain(|id, _| targets.values().any(|t| t.textures.iter().any(|(_, h, _)| h.id() == *id)));
     for (key, t) in targets.iter_mut() {
         if t.rendered {
+            continue;
+        }
+        // Other views' textures this target draws, converted for Vello: a
+        // Bevy camera writes an sRGB texture (sampled as linear), Vello wants
+        // sRGB-encoded premultiplied bytes it can read raw.
+        let mut bindings = vello_hybrid::TextureBindings::new();
+        let mut missing = false;
+        for (id, handle, size) in &t.textures {
+            let Some(src) = gpu_images.get(handle) else {
+                missing = true;
+                continue;
+            };
+            let entry = converted.entry(handle.id()).or_insert_with(|| convert.target(device.wgpu_device(), *size));
+            if entry.2 != *size {
+                *entry = convert.target(device.wgpu_device(), *size);
+            }
+            convert.run(device.wgpu_device(), queue.as_ref(), &src.texture_view, &entry.1);
+            bindings.insert(*id, entry.1.clone());
+        }
+        if missing {
+            // A texture not on the GPU yet; try again next frame.
             continue;
         }
         let handle = match key {
@@ -837,12 +882,140 @@ fn render_scene(
             &mut encoder,
             &RenderSize { width: t.size.x, height: t.size.y },
             &gpu_image.texture_view,
-            &vello_hybrid::TextureBindings::new(),
+            &bindings,
         ) {
             error!("vello_hybrid render failed: {err}");
             continue;
         }
         queue.submit([encoder.finish()]);
         t.rendered = true;
+    }
+}
+
+/// A stable Vello texture id for a Bevy image.
+fn texture_id(image: &Handle<Image>) -> TextureId {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    image.id().hash(&mut h);
+    TextureId(h.finish())
+}
+
+/// sRGB texture (as a Bevy camera writes it) → UNORM texture of sRGB-encoded,
+/// premultiplied bytes (as Vello samples it). One full-target triangle per
+/// texture, run whenever a scene that draws it re-renders.
+struct Convert {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+}
+
+const CONVERT_WGSL: &str = r#"
+@group(0) @binding(0) var src: texture_2d<f32>;
+
+struct VOut { @builtin(position) pos: vec4<f32> };
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> VOut {
+    var p = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    var o: VOut;
+    o.pos = vec4(p[i], 0.0, 1.0);
+    return o;
+}
+
+fn encode(c: vec3<f32>) -> vec3<f32> {
+    return select(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, c > vec3(0.0031308));
+}
+
+@fragment
+fn fs(in: VOut) -> @location(0) vec4<f32> {
+    // Texel for pixel; the sRGB source decodes to linear on load.
+    let c = textureLoad(src, vec2<i32>(in.pos.xy), 0);
+    return vec4(encode(c.rgb) * c.a, c.a);
+}
+"#;
+
+impl Convert {
+    fn new(device: &wgpu::Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("view texture convert"),
+            source: wgpu::ShaderSource::Wgsl(CONVERT_WGSL.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("view texture convert"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("view texture convert"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("view texture convert"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &[Some(wgpu::ColorTargetState { format: TARGET_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        Convert { pipeline, layout }
+    }
+
+    fn target(&self, device: &wgpu::Device, size: UVec2) -> (wgpu::Texture, wgpu::TextureView, UVec2) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("view texture (converted)"),
+            size: wgpu::Extent3d { width: size.x.max(1), height: size.y.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TARGET_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view, size)
+    }
+
+    fn run(&self, device: &wgpu::Device, queue: &wgpu::Queue, src: &wgpu::TextureView, dst: &wgpu::TextureView) {
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("view texture convert"),
+            layout: &self.layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) }],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("view texture convert") });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("view texture convert"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: dst,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit([encoder.finish()]);
     }
 }

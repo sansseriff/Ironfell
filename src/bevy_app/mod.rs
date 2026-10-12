@@ -211,7 +211,8 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             pointer_collect_system.after(accumulate_cursor_delta_system),
             pointer_panel_system.after(pointer_collect_system),
             pick_document_2d_system.after(pointer_panel_system),
-            pick_world_3d_system.after(pointer_panel_system),
+            // After the 2D picker, which finds the 3D embed on top.
+            pick_world_3d_system.after(pick_document_2d_system),
             resolve_primary_hit_system
                 .after(pick_document_2d_system)
                 .after(pick_world_3d_system),
@@ -248,7 +249,10 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
                 .after(selection_reflect_system)
                 // Before frusta and visibility: a camera woken this frame
                 // must be culled and lit as an active view this frame.
-                .before(bevy::camera::visibility::VisibilitySystems::UpdateFrusta),
+                .before(bevy::camera::visibility::VisibilitySystems::UpdateFrusta)
+                // The 2D layer draws 3D embeds' textures by the versions
+                // published here.
+                .before(crate::document_bridge::render_document_layer),
             // Highlights before the 2D layer draws (after propagation) and
             // before the 3D outlines read them.
             crate::document_bridge::update_highlights

@@ -3,7 +3,7 @@
 **Status:** Decided 2026-10-11 (spike, measure, then migrate). Spike done; migration
 steps 1–2 done: 2D and 3D composition views render to their own textures, the window
 has one camera, render on demand, and the old window-sized path is removed. Remaining:
-3D embeds drawn inside 2D, 2D in 3D, the timeline, and the custom final pass.
+2D in 3D, the timeline, and the custom final pass.
 **Relates to:** `entity-composition-model.md` §7.4 (embedded compositions, step 5),
 `bevy-vello-hybrid-design.md` (the vector backend), `roadmap.md` stage H (render
 invalidation), the 5K frame-pacing notes (`perf-grid-runbook.md`).
@@ -200,6 +200,23 @@ composite camera clears the window), render on demand is always on, and the docu
 bridge always draws one layer per 2D panel. `?bevy=views` is gone. The window-sized
 vector target remains only for layers without a view (the timeline and the placeholder
 panel) until step 4. The smoke script's output is unchanged.
+
+### Migration step 3 (2026-10-11): 3D embeds drawn inside 2D
+
+- `DrawCmd::Texture { transform, image, size, version }`: a 2D view draws another
+  view's texture with `vello_hybrid`'s `draw_texture_rects`. A Bevy camera writes an
+  sRGB texture that samples as linear, and Vello samples raw sRGB-encoded premultiplied
+  bytes, and WebGL2 cannot reinterpret a texture's format through a view, so the backend
+  runs a one-triangle conversion pass into a UNORM copy before binding it.
+- The embed's camera renders the **whole** embed at its on-screen scale (`EmbedView` now
+  carries a texture size, a window→texture affine and the visible clip), which fixes
+  the clipped-embed reframing bug: clipping crops.
+- Timing: the vector backend renders before Bevy's render graph, so a 2D view samples
+  the 3D texture from the previous frame. The texture's `version` moves on the frame
+  after its camera rendered, so the 2D view re-renders once more with the final image
+  (and render on demand sees the changed display list).
+- Picking: a 3D embed is opaque to the 2D picker; the 3D picker casts through its
+  camera with the pointer mapped by the inverse transform, so rotated views pick.
 
 ## 6. Migration order (after the spike)
 

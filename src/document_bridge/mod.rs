@@ -33,10 +33,10 @@ use iron_document::{Document, NodeId, Op, Store, TransactionInput, TypeId};
 use std::collections::BTreeSet;
 
 pub use highlight::{Highlights, update_highlights};
-pub use nest::{EmbedView, EmbedViews};
+pub use nest::{EmbedImage, EmbedImages, EmbedView, EmbedViews};
 pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d};
 pub use panel_views::{CompositionLayers, FocusRequests, InComposition, PanelPans, PanelView, PanelViews};
-pub use render::DocumentPanelLayer;
+pub use render::{DocumentPanelLayer, render_document_layer};
 
 /// The authored store, as a resource. Reads go through `.0.document()`;
 /// writes go through [`PendingTransactions`], never through here.
@@ -186,6 +186,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<Highlights>()
             .init_resource::<PanelPans>()
             .init_resource::<EmbedViews>()
+            .init_resource::<EmbedImages>()
             .init_resource::<FocusRequests>()
             .init_resource::<CompositionLayers>()
             .add_systems(Startup, (materialize::setup_mesh_assets, demo::queue_demo_scene))

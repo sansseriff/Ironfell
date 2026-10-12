@@ -59,6 +59,23 @@ pub const MOD_META: u8 = 8;
 #[derive(Resource, Default)]
 pub struct ToolKeys(pub Vec<(String, u8)>);
 
+/// Which tool the pointer drives (Figma's keys: V select, P pen).
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ActiveTool {
+    #[default]
+    Select,
+    Pen,
+}
+
+impl ActiveTool {
+    pub fn name(self) -> &'static str {
+        match self {
+            ActiveTool::Select => "select",
+            ActiveTool::Pen => "pen",
+        }
+    }
+}
+
 /// Window px the pointer may travel and still click.
 const SLOP: f32 = 3.0;
 /// Seconds and window px between two clicks that make a double-click.
@@ -69,6 +86,8 @@ const CORNER_HIT: f64 = 6.0;
 const EDGE_HIT: f64 = 4.0;
 const ROTATE_HIT: f64 = 22.0;
 const HANDLE: f64 = 7.0;
+/// How near (window px) a press must land to a path's point or handle end.
+const POINT_HIT: f64 = 6.0;
 /// Rotation snap with Shift.
 const SNAP: f64 = std::f64::consts::PI / 12.0;
 
@@ -100,6 +119,9 @@ enum Gesture {
     Legacy,
     /// Space-drag: the view's pan follows the pointer.
     Pan { panel: String, start: Vec2, pan: Vec2 },
+    /// A path point's handle: `out` or in, mirrored to the other unless Alt;
+    /// `to_local` maps window px into the path's space.
+    Handle { point: NodeId, out: bool, to_local: Affine, at: Point },
 }
 
 enum AfterPress {
@@ -145,6 +167,9 @@ enum Kind {
     Group,
     /// Nothing to write (a slider with no `size`).
     Fixed,
+    /// A path: its points and their handles move, so its stroke keeps its
+    /// width.
+    Points,
 }
 
 /// One node a resize or rotation writes, as it was when the gesture began.
@@ -156,21 +181,23 @@ struct Part {
     parent: Affine,
     trs: [f64; 5],
     bounds: Rect,
+    /// A path's points: id, position, in and out handles (path space).
+    points: Vec<(NodeId, Point, kurbo::Vec2, kurbo::Vec2)>,
 }
 
 /// Read access to everything geometry needs.
-struct Geo<'a, 'w, 's> {
-    store: &'a Store,
-    map: &'a NodeMap,
-    globals: &'a Query<'w, 's, &'static GlobalTransform>,
-    nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
+pub(crate) struct Geo<'a, 'w, 's> {
+    pub store: &'a Store,
+    pub map: &'a NodeMap,
+    pub globals: &'a Query<'w, 's, &'static GlobalTransform>,
+    pub nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
 }
 
 fn kaffine(a: iron_document::Affine2) -> Affine {
     Affine::new(a.0)
 }
 
-fn leaf(s: &str) -> LeafPath {
+pub(crate) fn leaf(s: &str) -> LeafPath {
     s.parse().expect("declared leaf")
 }
 
@@ -193,11 +220,11 @@ impl Geo<'_, '_, '_> {
         self.store.resolved(id, leaf(path)).and_then(|v| v.as_f64())
     }
 
-    fn ty(&self, id: NodeId) -> &'static str {
+    pub(crate) fn ty(&self, id: NodeId) -> &'static str {
         self.doc().live(id).map(|n| n.ty.name()).unwrap_or("")
     }
 
-    fn world(&self, id: NodeId) -> Affine {
+    pub(crate) fn world(&self, id: NodeId) -> Affine {
         kaffine(self.store.world_affine(id))
     }
 
@@ -207,7 +234,7 @@ impl Geo<'_, '_, '_> {
 
     /// Panel document px ← the space the chain's node is placed in (its
     /// composition's). `None` through anything 3D.
-    fn space(&self, chain: &[NodeId]) -> Option<Affine> {
+    pub(crate) fn space(&self, chain: &[NodeId]) -> Option<Affine> {
         let doc = self.doc();
         let mut a = Affine::IDENTITY;
         let (last, outer) = chain.split_last()?;
@@ -237,7 +264,7 @@ impl Geo<'_, '_, '_> {
                     return Some((Rect::new(0.0, 0.0, self.num(id, "size.w")?, self.num(id, "size.h")?), Kind::Sized { aspect: false }));
                 }
                 let (d, _) = self.map.entity(id).and_then(|e| self.nodes.get(e).ok())?;
-                let Shape2d::Slider { w, h, .. } = d.shape else { return None };
+                let Shape2d::Slider { w, h, .. } = d.shape.clone() else { return None };
                 Some((Rect::new(0.0, 0.0, w as f64, h as f64), Kind::Fixed))
             }
             "circle" => {
@@ -250,6 +277,11 @@ impl Geo<'_, '_, '_> {
                 }
                 let e = nest::embed_2d(doc, self.map, self.globals, self.nodes, id)?;
                 Some((e.region, Kind::Window { frame: self.has(id, K::Frame) }))
+            }
+            "path" => {
+                let (outline, _) = crate::document_bridge::path_outline(self.store, id);
+                let r = outline.control_box();
+                (r.width() > 0.0 || r.height() > 0.0 || outline.elements().len() > 0).then_some((r, Kind::Points))
             }
             "group" => {
                 let inv = self.world(id).inverse();
@@ -308,7 +340,19 @@ impl Geo<'_, '_, '_> {
             return;
         }
         let parent = self.doc().live(id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| self.world(p));
-        out.push(Part { id, kind, parent: space * parent, trs: self.trs(id), bounds });
+        let points = if kind == Kind::Points { self.points(id) } else { Vec::new() };
+        out.push(Part { id, kind, parent: space * parent, trs: self.trs(id), bounds, points });
+    }
+
+    /// A path's points, in order: id, position, in and out handles.
+    pub(crate) fn points(&self, path: NodeId) -> Vec<(NodeId, Point, kurbo::Vec2, kurbo::Vec2)> {
+        let n = |c: NodeId, l: &str| self.num(c, l).unwrap_or(0.0);
+        self.doc()
+            .children(path)
+            .iter()
+            .filter(|&&c| self.ty(c) == "point")
+            .map(|&c| (c, Point::new(n(c, "transform2d.x"), n(c, "transform2d.y")), kurbo::Vec2::new(n(c, "handles.ix"), n(c, "handles.iy")), kurbo::Vec2::new(n(c, "handles.ox"), n(c, "handles.oy"))))
+            .collect()
     }
 
     /// Whether a leaf can follow a gesture right now.
@@ -322,6 +366,7 @@ impl Geo<'_, '_, '_> {
                 Kind::Sized { .. } => self.free(p.id, "size.w") || self.free(p.id, "size.h"),
                 Kind::Circle => self.free(p.id, "radius.r"),
                 Kind::Window { frame } => frame,
+                Kind::Points => true,
                 Kind::Group | Kind::Fixed => false,
             })
     }
@@ -347,17 +392,19 @@ fn decompose(f: Affine, trs: [f64; 5]) -> (f64, f64, f64, f64, f64, bool) {
 }
 
 impl Part {
-    /// The leaf values that apply `a` (panel document px) to this node.
-    fn apply(&self, a: Affine, resize: bool) -> Vec<(&'static str, f64)> {
+    /// The leaf values that apply `a` (panel document px) to this node, or
+    /// to its points.
+    fn apply(&self, a: Affine, resize: bool) -> Vec<(NodeId, &'static str, f64)> {
         let [x, y, rot, sx, sy] = self.trs;
         let q = self.parent.inverse() * a * self.parent;
         let l = Affine::translate((x, y)) * Affine::rotate(rot) * Affine::scale_non_uniform(sx, sy);
         let mut out = Vec::new();
+        let id = self.id;
         // Every leaf the gesture may drive, not only the ones that differ
         // from the start: one that returns there must be previewed back.
         let mut put = |path: &'static str, _start: f64, new: f64| {
             if new.is_finite() {
-                out.push((path, new));
+                out.push((id, path, new));
             }
         };
         let (bw, bh) = (self.bounds.width(), self.bounds.height());
@@ -389,6 +436,21 @@ impl Part {
                 put("frame.y0", self.bounds.y0, r.y0);
                 put("frame.x1", self.bounds.x1, r.x1);
                 put("frame.y1", self.bounds.y1, r.y1);
+            }
+            (true, Kind::Points) => {
+                // Path space to path space; handles take the linear part.
+                let m = l.inverse() * q * l;
+                let [a0, b0, c0, d0, _, _] = m.as_coeffs();
+                let lin = |v: kurbo::Vec2| kurbo::Vec2::new(a0 * v.x + c0 * v.y, b0 * v.x + d0 * v.y);
+                for &(pid, p, hi, ho) in &self.points {
+                    let np = m * p;
+                    out.push((pid, "transform2d.x", np.x));
+                    out.push((pid, "transform2d.y", np.y));
+                    if hi != kurbo::Vec2::ZERO || ho != kurbo::Vec2::ZERO {
+                        let (ni, no) = (lin(hi), lin(ho));
+                        out.extend([(pid, "handles.ix", ni.x), (pid, "handles.iy", ni.y), (pid, "handles.ox", no.x), (pid, "handles.oy", no.y)]);
+                    }
+                }
             }
             (true, _) => {}
             (false, _) => {
@@ -579,13 +641,13 @@ fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
 }
 
 /// The topmost hit under the pointer: its chain and how it was hit.
-enum Source {
+pub(crate) enum Source {
     Overlay(usize),
     World(usize),
     Embed3d,
 }
 
-fn top_hit(hits: &crate::PointerHits) -> Option<(Vec<NodeId>, Source)> {
+pub(crate) fn top_hit(hits: &crate::PointerHits) -> Option<(Vec<NodeId>, Source)> {
     if let Some(h) = hits.overlay.first() {
         return Some((h.chain.clone(), Source::Overlay(0)));
     }
@@ -628,6 +690,7 @@ pub fn select_tool_system(
     mut keys: ResMut<ToolKeys>,
     mut sel: ResMut<crate::SelectionState>,
     views: Res<PanelViews>,
+    active: Res<ActiveTool>,
     docp: ToolDoc,
     legacy: LegacyDrag,
 ) {
@@ -763,13 +826,25 @@ pub fn select_tool_system(
                         moved.push(r.node());
                     }
                 }
-                let writes: Vec<(NodeId, &'static str, f64)> = parts.iter().flat_map(|p| p.apply(Affine::translate(d), false).into_iter().map(move |(l, v)| (p.id, l, v))).collect();
+                let writes: Vec<(NodeId, &'static str, f64)> = parts.iter().flat_map(|p| p.apply(Affine::translate(d), false)).collect();
                 let label = format!("nudge {}", type_label(doc, &moved));
                 preview_writes(&mut store.0, writes);
                 gestures.0.push(GestureRequest::Commit(label));
             }
             _ => {}
         }
+    }
+
+    // The pen has the pointer (`pen`); a gesture already under way finishes.
+    if *active == ActiveTool::Pen && matches!(tool.gesture, Gesture::Idle) {
+        if tool.hover.take().is_some() || sel.hovered.is_some() {
+            sel.hovered = None;
+        }
+        if tool.cursor != "crosshair" {
+            crate::web_ffi::send_cursor_from_worker("crosshair".into());
+            tool.cursor = "crosshair".into();
+        }
+        return;
     }
 
     let now = time.elapsed_secs_f64();
@@ -789,6 +864,43 @@ pub fn select_tool_system(
                 let pan = view_cameras.0.get(&view.panel).map_or(Vec2::ZERO, |c| c.pan);
                 tool.gesture = Gesture::Pan { panel: view.panel.clone(), start: pointer.screen, pan };
                 break 'press;
+            }
+            // A lone selected path shows its points and handles, which come
+            // before the box's grips: a point drags through the store like
+            // any node, a handle writes the point's `handles` leaves.
+            if view.dims == Dims::Two
+                && let [r] = movers(&reaches, &view.panel)[..]
+                && geo.ty(r.node()) == "path"
+                && let Some(space) = geo.space(&r.chain)
+            {
+                let path = r.node();
+                let to_screen = view.affine() * space * geo.world(path);
+                let mut hit: Option<(NodeId, Point, Option<bool>)> = None;
+                for (pid, p, hi, ho) in geo.points(path) {
+                    for (out, h) in [(true, ho), (false, hi)] {
+                        if hit.is_none() && h != kurbo::Vec2::ZERO && (to_screen * (p + h)).distance(screen) <= POINT_HIT {
+                            hit = Some((pid, p, Some(out)));
+                        }
+                    }
+                    if hit.is_none() && (to_screen * p).distance(screen) <= POINT_HIT {
+                        hit = Some((pid, p, None));
+                    }
+                }
+                match hit {
+                    Some((point, at, Some(out))) => {
+                        tool.gesture = Gesture::Handle { point, out, to_local: to_screen.inverse(), at };
+                        break 'press;
+                    }
+                    Some((point, _, None)) => {
+                        let start = doc_point(&view);
+                        let inv = space.inverse();
+                        let anchor = geo.world(point).inverse() * (inv * start);
+                        let h = store.0.begin_drag(point, [anchor.x, anchor.y]);
+                        tool.gesture = if h.is_locked() { Gesture::Idle } else { Gesture::Move { label: "move point".into(), start, view: view.clone(), drags: vec![(h, inv)] } };
+                        break 'press;
+                    }
+                    None => {}
+                }
             }
             // The selection's grips come first.
             if view.dims == Dims::Two {
@@ -989,6 +1101,16 @@ pub fn select_tool_system(
             Gesture::Pan { panel, start, pan } => {
                 view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
             }
+            Gesture::Handle { point, out, to_local, at } => {
+                let v = *to_local * screen - *at;
+                let (mine, other) = if *out { (("handles.ox", "handles.oy"), ("handles.ix", "handles.iy")) } else { (("handles.ix", "handles.iy"), ("handles.ox", "handles.oy")) };
+                let mut writes = vec![(*point, mine.0, v.x), (*point, mine.1, v.y)];
+                // Smooth unless Alt breaks the handles apart.
+                if !mods(MOD_ALT) {
+                    writes.extend([(*point, other.0, -v.x), (*point, other.1, -v.y)]);
+                }
+                preview_writes(&mut store.0, writes);
+            }
             Gesture::Move { start, view, drags, .. } => {
                 let p = doc_point(view);
                 let mut d = p - *start;
@@ -1046,7 +1168,7 @@ pub fn select_tool_system(
                     }
                 };
                 let resize = matches!(kind, TransformKind::Resize { .. });
-                let writes: Vec<(NodeId, &'static str, f64)> = parts.iter().flat_map(|part| part.apply(a, resize).into_iter().map(move |(l, v)| (part.id, l, v))).collect();
+                let writes: Vec<(NodeId, &'static str, f64)> = parts.iter().flat_map(|part| part.apply(a, resize)).collect();
                 preview_writes(&mut store.0, writes);
             }
             Gesture::Marquee { view, start, prefix, roots, base } => {
@@ -1097,6 +1219,7 @@ pub fn select_tool_system(
                 gestures.0.push(GestureRequest::Commit(label));
             }
             Gesture::Transform { label, .. } => gestures.0.push(GestureRequest::Commit(label)),
+            Gesture::Handle { .. } => gestures.0.push(GestureRequest::Commit("move handle".into())),
             Gesture::Marquee { .. } => tool.marquee = None,
             Gesture::Legacy => {
                 if drag.target.is_some() {
@@ -1167,7 +1290,7 @@ pub fn select_tool_system(
 
 /// Preview each leaf that differs from what it reads now. A locked leaf
 /// holds still; why is logged at debug level, every frame it is asked.
-fn preview_writes(store: &mut Store, writes: Vec<(NodeId, &'static str, f64)>) {
+pub(crate) fn preview_writes(store: &mut Store, writes: Vec<(NodeId, &'static str, f64)>) {
     for (id, path, v) in writes {
         let current = store.resolved(id, leaf(path)).and_then(|x| x.as_f64());
         if current.is_some_and(|c| (c - v).abs() < 1e-9) {
@@ -1274,6 +1397,8 @@ pub fn draw_select_overlay(
     map: Res<NodeMap>,
     globals: Query<&'static GlobalTransform>,
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
+    pen: Res<crate::bevy_app::pen::PenTool>,
+    active: Res<ActiveTool>,
 ) {
     for (e, o, _) in &overlays {
         if !panel_layers.iter().any(|(_, l)| l.panel == o.panel) {
@@ -1327,6 +1452,57 @@ pub fn draw_select_overlay(
                         let r = Rect::new(-HANDLE * 0.5, -HANDLE * 0.5, HANDLE * 0.5, HANDLE * 0.5);
                         b.fill(at, fill, r);
                         b.stroke(at, thin.clone(), blue, r);
+                    }
+                }
+                // A path's points and handles: the lone selected path's, and
+                // the one the pen is drawing.
+                let white = peniko::Color::new([1.0, 1.0, 1.0, 1.0]);
+                let draw_points = |b: &mut crate::vector::DisplayListBuilder<'_>, to_screen: Affine, path: NodeId| {
+                    for (_, p, hi, ho) in geo.points(path) {
+                        let c = to_screen * p;
+                        for h in [hi, ho].into_iter().filter(|h| *h != kurbo::Vec2::ZERO) {
+                            let e = to_screen * (p + h);
+                            b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Line::new(c, e));
+                            b.fill(Affine::IDENTITY, white, kurbo::Circle::new(e, 3.0));
+                            b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(e, 3.0));
+                        }
+                        let r = Rect::from_center_size(c, (6.0, 6.0));
+                        b.fill(Affine::IDENTITY, white, r);
+                        b.stroke(Affine::IDENTITY, thin.clone(), blue, r);
+                    }
+                };
+                if *active == ActiveTool::Select
+                    && let [r] = movers(&reaches, &o.panel)[..]
+                    && geo.ty(r.node()) == "path"
+                    && let Some(space) = geo.space(&r.chain)
+                {
+                    draw_points(b, to_screen * space * geo.world(r.node()), r.node());
+                }
+                if *active == ActiveTool::Pen
+                    && let Some((path, panel, to_comp)) = pen.path.as_ref().filter(|(id, p, _)| p == &o.panel && geo.doc().live(*id).is_some())
+                {
+                    let _ = panel;
+                    let to_screen = to_screen * to_comp.inverse() * geo.world(*path);
+                    draw_points(b, to_screen, *path);
+                    // The line from the last point to the pointer.
+                    if let (Some((_, p, _, ho)), Some((_, at))) = (geo.points(*path).last().copied(), pen.pointer.as_ref().filter(|(pp, _)| pp == &o.panel)) {
+                        let from = to_screen * p;
+                        let mut line = kurbo::BezPath::new();
+                        line.move_to(from);
+                        if ho == kurbo::Vec2::ZERO { line.line_to(*at) } else { line.curve_to(to_screen * (p + ho), *at, *at) }
+                        b.stroke(Affine::IDENTITY, thin.clone(), blue, line);
+                    }
+                }
+                if *active == ActiveTool::Pen
+                    && let Some((panel, start, now)) = &pen.press
+                    && panel == &o.panel
+                    && start.distance(*now) > 3.0
+                {
+                    let back = *start - (*now - *start);
+                    b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Line::new(back, *now));
+                    for e in [back, *now] {
+                        b.fill(Affine::IDENTITY, white, kurbo::Circle::new(e, 3.0));
+                        b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(e, 3.0));
                     }
                 }
                 if let Some((p, r)) = &tool.marquee

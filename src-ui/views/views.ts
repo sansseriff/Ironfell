@@ -37,7 +37,7 @@ export const NOTATIONS: Record<Notation, NotationDef> = {
   composition: { label: 'Composition', canvas: 'composition' },
   timeline: { label: 'Timeline', canvas: 'timeline' },
   markup: { label: 'Document', html: DocumentView },
-  selection: { label: 'Selection', html: SelectionView },
+  selection: { label: 'Inspector', html: SelectionView },
   conversation: { label: 'Model', html: ModelView },
 };
 
@@ -45,7 +45,7 @@ export const NOTATIONS: Record<Notation, NotationDef> = {
 export const FIXED_VIEWS: { title: string; spec: ViewSpec }[] = [
   { title: 'Timeline', spec: { source: 'timeline', notation: 'timeline' } },
   { title: 'Document', spec: { source: 'document', notation: 'markup' } },
-  { title: 'Selection', spec: { source: 'selection', notation: 'selection' } },
+  { title: 'Inspector', spec: { source: 'selection', notation: 'selection' } },
   { title: 'Model', spec: { source: 'document', notation: 'conversation' } },
 ];
 

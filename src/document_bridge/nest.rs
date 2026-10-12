@@ -30,9 +30,10 @@ pub struct Embed2d {
 
 /// A node's shape as a path in its own local space.
 pub fn shape_path(shape: &Shape2d) -> kurbo::BezPath {
-    match *shape {
-        Shape2d::Rect { w, h } | Shape2d::Slider { w, h, .. } => kurbo::Rect::new(0.0, 0.0, w as f64, h as f64).into_path(0.1),
-        Shape2d::Circle { r } => kurbo::Circle::new((0.0, 0.0), r as f64).into_path(0.1),
+    match shape {
+        &Shape2d::Rect { w, h } | &Shape2d::Slider { w, h, .. } => kurbo::Rect::new(0.0, 0.0, w as f64, h as f64).into_path(0.1),
+        &Shape2d::Circle { r } => kurbo::Circle::new((0.0, 0.0), r as f64).into_path(0.1),
+        Shape2d::Path { outline, .. } => (**outline).clone(),
     }
 }
 

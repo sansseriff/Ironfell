@@ -196,6 +196,9 @@ export class PanelManager {
       case 'solveBench':
         this.docClient.handleMessage(data);
         break;
+      case 'tool':
+        this.docClient.tool = data.tool;
+        break;
       case 'cursor':
         if (this.canvas) this.canvas.style.cursor = cssCursor(data.cursor);
         break;

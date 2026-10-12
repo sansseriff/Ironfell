@@ -201,7 +201,7 @@ impl Draw<'_, '_, '_> {
         let local = affine_of(global);
         let affine = base * local;
         let shape = nest::shape_path(&d.shape);
-        if let Shape2d::Slider { w, h, t } = d.shape {
+        if let Shape2d::Slider { w, h, t } = d.shape.clone() {
             // Track, filled part, knob. The hit shape stays the whole w×h
             // box so the knob is easy to grab.
             let (w, h, t) = (w as f64, h as f64, t as f64);
@@ -214,7 +214,9 @@ impl Draw<'_, '_, '_> {
             b.fill(affine, peniko::Color::new([1.0, 1.0, 1.0, 1.0]), knob);
             b.stroke(affine, kurbo::Stroke::new(1.5), peniko::Color::new([0.3, 0.3, 0.35, 1.0]), knob);
         } else {
-            if let Some(c) = d.fill {
+            // An open path has no inside to fill.
+            let open = matches!(&d.shape, Shape2d::Path { closed: false, .. });
+            if let Some(c) = d.fill.filter(|_| !open) {
                 b.fill(affine, peniko::Color::new(c), shape.clone());
             }
             if let Some((c, w)) = d.stroke {

@@ -247,12 +247,22 @@ In the app:
 
 Selection in undo, with merging, is still to come; the representation is ready for it.
 
+**A first inspector (2026-10-12).** The Selection view is now the Inspector. It shows
+the first selected node's components and fields (`document_inspect`).
+- A bound field shows its binding.
+- A field edited through a linear binding says which source it moves.
+- A locked field is disabled, with the reason.
+- Setting a field is one transaction through the field's handle
+  (`document_inspect_set`). Setting the shadow's bound x, for example, moves the square.
+
+This is HTML, not yet the bound session composition this note describes. The semantics
+are the same: edits go through handles and locks show why. The representation moves
+to the session composition when hybrid views exist.
+
 Follow-ups:
 
 - **Save each view's pan and zoom** with the workspace layout.
 
 - **Show in activates or opens the tab** that shows the counterpart's composition,
   instead of only panning views already visible.
-- **The FPS overlay** is drawn over the window's top-left, which is now the Main tab.
-  It belongs in a view, or behind a toggle.
 - **The workspace moves into the store** (its own root), then the inspector.

@@ -265,6 +265,45 @@ eval (async () => { const v = await __iron.view({fidelity:'full'}); return /name
 key Meta+z
 sleep 500
 eval (async () => { const v = await __iron.view({fidelity:'full'}); return /name="pendulum"/.test(v); })()
+# The pen (stage E's exit, bevy_app/pen.rs), in the Controls tab: P, a
+# corner, a smooth point dragged out, a corner, then the first point again
+# closes the path. Each point is one transaction; undo takes back the close.
+tab Controls
+key p
+sleep 400
+eval document.querySelector('.tools button.active')?.title
+dclick 200 200
+ddrag 420 200 480 260
+dclick 300 380
+dclick 200 200
+sleep 500
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const p = v.match(/<path[^>]*>/)[0]; return [p.match(/closed="[^"]*"/)[0], (v.match(/<point /g) || []).length, v.match(/<point[^>]*ix="-60"[^>]*>/) ? 'smooth point' : 'no handles']; })()
+key Meta+z
+sleep 400
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<path[^>]*>/)[0].match(/closed="[^"]*"/)[0]; })()
+# V selects again; the path's points are drawn and drag one at a time.
+key v
+dclick 300 380
+eval __iron.selection()
+ddrag 300 380 330 420
+sleep 400
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<point[^>]*>/g)[2].replace(/ rot=.*/, ''); })()
+shot pen-path
+# The inspector (src-ui/views/html/SelectionView.svelte): the square's width
+# set in its field is one "set size.w"; the shadow's x is bound to the
+# square's, so setting it moves the square through the binding.
+tab Main
+eval window.setField = (leaf, text) => { let comp = ''; for (const el of document.querySelectorAll('.inspector .component, .inspector .field')) { if (el.classList.contains('component')) comp = el.textContent; else if (comp + '.' + el.querySelector('.label').textContent === leaf) { const i = el.querySelector('input'); i.value = text; i.dispatchEvent(new Event('change', { bubbles: true })); return true; } } return false; }
+dclick 540 460
+sleep 600
+eval setField('size.w', '160')
+sleep 800
+dclick 650 460
+sleep 600
+eval setField('transform2d.x', '720')
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect[^>]*name="square"[^>]*>/)[0].replace(/ color.*/, ''); })()
+shot inspector
 # The dock (src-ui/views): opening a tab gives its view a canvas panel and
 # takes the hidden Main tab's away.
 tab Pendulum

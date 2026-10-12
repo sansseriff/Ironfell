@@ -15,7 +15,6 @@ impl Plugin for FPSOverlayPlugin {
             (
                 update_fps_display,
                 update_backend_display,
-                position_fps_overlay,
             ),
         );
     }
@@ -25,14 +24,14 @@ impl Plugin for FPSOverlayPlugin {
 #[derive(Component)]
 struct FpsText;
 
-/// Root node of the overlay, repositioned to track the viewer panel.
+/// Root node of the overlay, in the window's bottom-right corner.
 #[derive(Component)]
 struct FpsRoot;
 
 fn setup_ui(mut commands: Commands) {
     let font = TextFont {
         // bevy 0.19 made text size a unit-carrying enum rather than a bare f32.
-        font_size: bevy::text::FontSize::Px(30.0),
+        font_size: bevy::text::FontSize::Px(12.0),
 
         ..Default::default()
     };
@@ -41,7 +40,11 @@ fn setup_ui(mut commands: Commands) {
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                padding: UiRect::all(Val::Px(20.0)),
+                padding: UiRect::all(Val::Px(6.0)),
+                // The window's bottom-right corner, over the timeline: out
+                // of every composition view's way.
+                right: Val::Px(8.0),
+                bottom: Val::Px(8.0),
                 ..default()
             },
             BackgroundColor(Color::BLACK.with_alpha(0.75)),
@@ -80,25 +83,6 @@ fn setup_ui(mut commands: Commands) {
                     p.spawn((TextSpan::new(""), font.clone(), TextColor(LIME.into())));
                 });
         });
-}
-
-/// Keep the overlay in the upper-left corner of the 3D viewer panel (the UI camera is
-/// full-window, so node coordinates are window coordinates; scale factor is 1.0 so
-/// logical px == physical px).
-fn position_fps_overlay(
-    panels: Res<crate::panels::Panels>,
-    mut roots: Query<&mut Node, With<FpsRoot>>,
-) {
-    if !panels.is_changed() {
-        return;
-    }
-    let Some(rect) = panels.rect(crate::panels::VIEWER_PANEL) else {
-        return;
-    };
-    for mut node in roots.iter_mut() {
-        node.left = Val::Px(rect.x + 8.0);
-        node.top = Val::Px(rect.y + 8.0);
-    }
 }
 
 /// Show the active 2D vector backend, and colour it so a glance is enough.

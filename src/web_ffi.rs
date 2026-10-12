@@ -49,6 +49,9 @@ extern "C" {
     /// `rotate:<degrees>` for the shell's rotation cursor.
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_cursor_from_worker(cursor: String);
+    /// The active tool changed (`select`, `pen`): the shell's toolbar.
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_tool_from_worker(tool: String);
 }
 
 /// Build the Bevy app around the canvas it will render into.
@@ -608,6 +611,112 @@ pub fn document_selection(ptr: u64) -> String {
         })
         .collect();
     serde_json::Value::Array(list).to_string()
+}
+
+/// The inspector's description of a node (plans/panels-and-session.md, a
+/// first HTML inspector): its type and name, and every component's fields
+/// with the value a reader sees, the binding if bound, and how an edit
+/// would land (`direct`, `via` a linear binding's source, or `locked` with
+/// the reason). JSON `{"node","type","name","components":[{"kind",
+/// "fields":[{"leaf","field","kind","text","bind","edit","via","why"}]}]}`.
+#[wasm_bindgen]
+pub fn document_inspect(ptr: u64, node: String) -> String {
+    use iron_document::Handle;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return "null".into();
+    };
+    let Ok(id) = node.parse::<iron_document::NodeId>() else { return "null".into() };
+    let doc = store.0.document();
+    let Some(n) = doc.live(id) else { return "null".into() };
+    let name = doc.get::<iron_document::component::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    let components: Vec<serde_json::Value> = doc
+        .components_of(id)
+        .filter(|c| c.kind().name() != "name")
+        .map(|c| {
+            let kind = c.kind();
+            let fields: Vec<serde_json::Value> = c
+                .field_names()
+                .into_iter()
+                .filter_map(|field| {
+                    let path = iron_document::LeafPath::new(kind, field).ok()?;
+                    let slot = c.get(field)?;
+                    let value = store.0.resolved(id, path);
+                    let (edit, via, why) = match store.0.handle(id, path) {
+                        Handle::Direct => ("direct", None, None),
+                        Handle::Linear { source, .. } => ("via", Some(source.to_string()), None),
+                        Handle::Locked(reason) => ("locked", None, Some(reason)),
+                    };
+                    Some(serde_json::json!({
+                        "leaf": format!("{}.{field}", kind.name()),
+                        "field": field,
+                        "kind": value.as_ref().map(|v| format!("{:?}", v.kind()).to_lowercase()),
+                        "text": value.as_ref().map(|v| v.to_string()),
+                        "bind": slot.expr().map(|e| e.to_string()),
+                        "edit": edit,
+                        "via": via,
+                        "why": why,
+                    }))
+                })
+                .collect();
+            serde_json::json!({"kind": kind.name(), "fields": fields})
+        })
+        .collect();
+    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components}).to_string()
+}
+
+/// Set one leaf from the inspector: `text` parsed by the leaf's current
+/// kind, applied through its handle (a linearly bound leaf moves its
+/// source) as one transaction, "set <leaf>". JSON `{"ok":true,"version"}`
+/// or `{"ok":false,"error"}`.
+#[wasm_bindgen]
+pub fn document_inspect_set(ptr: u64, node: String, leaf: String, text: String) -> String {
+    use iron_document::Value;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    let Ok(id) = node.parse::<iron_document::NodeId>() else { return fail(format!("bad id {node:?}")) };
+    let Ok(path) = leaf.parse::<iron_document::LeafPath>() else { return fail(format!("no leaf {leaf:?}")) };
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    let Some(current) = store.0.resolved(id, path) else { return fail(format!("{id} has no {leaf}")) };
+    let t = text.trim();
+    let nums = |n: usize| -> Option<Vec<f64>> {
+        let v: Vec<f64> = t.split(',').map(|x| x.trim().parse().ok()).collect::<Option<_>>()?;
+        (v.len() == n).then_some(v)
+    };
+    let value = match current {
+        Value::Number(_) => t.parse().ok().map(Value::Number),
+        Value::Bool(_) => t.parse().ok().map(Value::Bool),
+        Value::Str(_) => Some(Value::Str(t.to_owned())),
+        Value::Enum(_) => Some(Value::Enum(t.to_owned())),
+        Value::Vec2(_) => nums(2).map(|v| Value::Vec2([v[0], v[1]])),
+        Value::Vec3(_) => nums(3).map(|v| Value::Vec3([v[0], v[1], v[2]])),
+        Value::Color(c) => {
+            let h = t.trim_start_matches('#');
+            let ch = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok().map(|b| b as f32 / 255.0);
+            match h.len() {
+                6 => Some(Value::Color([ch(0).unwrap_or(0.0), ch(2).unwrap_or(0.0), ch(4).unwrap_or(0.0), c[3]])),
+                8 => Some(Value::Color([ch(0).unwrap_or(0.0), ch(2).unwrap_or(0.0), ch(4).unwrap_or(0.0), ch(6).unwrap_or(1.0)])),
+                _ => None,
+            }
+        }
+        Value::Quantity { .. } => Value::parse_quantity(t).ok(),
+        _ => None,
+    };
+    let Some(value) = value else { return fail(format!("{t:?} is not a {:?}", current.kind())) };
+    if let Err(reason) = store.0.preview_target(id, path, value) {
+        store.0.cancel_gesture();
+        return fail(reason);
+    }
+    let now = js_sys::Date::now() as u64;
+    let result = match store.0.commit_gesture(format!("set {leaf}"), iron_document::Actor::Human, now) {
+        None => serde_json::json!({"ok": true, "version": store.0.document().version().0}),
+        Some(Ok(applied)) => serde_json::json!({"ok": true, "version": applied.version.0}),
+        Some(Err(errors)) => serde_json::json!({"ok": false, "error": errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")}),
+    };
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    result.to_string()
 }
 
 /// Every composition, for the shell's "open a view" menu: JSON

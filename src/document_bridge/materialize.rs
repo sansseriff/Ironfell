@@ -21,7 +21,7 @@ pub struct Doc2d {
     pub stroke: Option<([f32; 4], f32)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Shape2d {
     /// Spans `(0, 0)` to `(w, h)`: the node origin is the top-left corner.
     Rect { w: f32, h: f32 },
@@ -30,15 +30,67 @@ pub enum Shape2d {
     /// A scalar-on-a-track control (doc 02 §9.3): a `w`×`h` track with the
     /// knob at fraction `t` along it.
     Slider { w: f32, h: f32, t: f32 },
+    /// A path through its points (stage E), in the path's local space.
+    Path { outline: std::sync::Arc<kurbo::BezPath>, closed: bool, filled: bool },
 }
+
+/// How near (local px) the pointer must come to a path's line to hit it.
+const PATH_HIT: f64 = 5.0;
 
 impl Shape2d {
     pub fn contains_local(&self, p: Vec2) -> bool {
-        match *self {
-            Shape2d::Rect { w, h } | Shape2d::Slider { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
-            Shape2d::Circle { r } => p.length_squared() <= r * r,
+        match self {
+            &Shape2d::Rect { w, h } | &Shape2d::Slider { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
+            &Shape2d::Circle { r } => p.length_squared() <= r * r,
+            Shape2d::Path { outline, closed, filled } => {
+                use kurbo::{ParamCurveNearest, Shape};
+                let q = kurbo::Point::new(p.x as f64, p.y as f64);
+                if *closed && *filled && outline.winding(q) != 0 {
+                    return true;
+                }
+                outline.segments().any(|s| s.nearest(q, 0.01).distance_sq <= PATH_HIT * PATH_HIT)
+            }
         }
     }
+}
+
+/// A path node's outline from its `point` children, in sibling order: a
+/// line between two points, a cubic where either handle is non-zero.
+pub fn path_outline(store: &Store, id: NodeId) -> (kurbo::BezPath, bool) {
+    let doc = store.document();
+    let num = |n: NodeId, leaf: &str| leaf.parse::<LeafPath>().ok().and_then(|p| store.resolved(n, p)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let point_ty = TypeId::lookup("point").expect("registered");
+    let points: Vec<(kurbo::Point, kurbo::Vec2, kurbo::Vec2)> = doc
+        .children(id)
+        .iter()
+        .filter(|&&c| doc.live(c).is_some_and(|n| n.ty == point_ty))
+        .map(|&c| {
+            (
+                kurbo::Point::new(num(c, "transform2d.x"), num(c, "transform2d.y")),
+                kurbo::Vec2::new(num(c, "handles.ix"), num(c, "handles.iy")),
+                kurbo::Vec2::new(num(c, "handles.ox"), num(c, "handles.oy")),
+            )
+        })
+        .collect();
+    let closed = store.resolved(id, "path.closed".parse().expect("declared")).is_some_and(|v| v == Value::Bool(true));
+    let mut path = kurbo::BezPath::new();
+    let Some(first) = points.first() else { return (path, closed) };
+    path.move_to(first.0);
+    let segment = |path: &mut kurbo::BezPath, a: &(kurbo::Point, kurbo::Vec2, kurbo::Vec2), b: &(kurbo::Point, kurbo::Vec2, kurbo::Vec2)| {
+        if a.2 == kurbo::Vec2::ZERO && b.1 == kurbo::Vec2::ZERO {
+            path.line_to(b.0);
+        } else {
+            path.curve_to(a.0 + a.2, b.0 + b.1, b.0);
+        }
+    };
+    for w in points.windows(2) {
+        segment(&mut path, &w[0], &w[1]);
+    }
+    if closed && points.len() > 2 {
+        segment(&mut path, points.last().expect("non-empty"), first);
+        path.close_path();
+    }
+    (path, closed)
 }
 
 /// Marker for materialised 3D nodes.
@@ -82,6 +134,16 @@ pub(super) fn reconcile(
 ) {
     let doc = store.document();
     let _ = ComponentKind::ALL; // keep the import meaningful for readers
+    // A point has no entity of its own: its path is redrawn instead.
+    let point_ty = TypeId::lookup("point").expect("registered");
+    let mut with_paths = affected.clone();
+    for &id in affected {
+        let point = doc.node(id).is_some_and(|n| n.ty == point_ty);
+        if point && let Some(parent) = doc.node(id).and_then(|n| n.parent) {
+            with_paths.insert(parent);
+        }
+    }
+    let affected = &with_paths;
 
     // Pass 1: existence and values. Hierarchy waits until every entity exists.
     for &id in affected {
@@ -149,7 +211,7 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         // and texture.
         "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Transform::default(), Visibility::default())),
         "group" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
-        "rect" | "circle" | "slider" => {
+        "rect" | "circle" | "slider" | "path" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
         // A camera node is a pose: embeds that name it look through it.
@@ -189,10 +251,15 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
         "group" | "embed" => {
             ec.insert(r.transform_2d());
         }
-        "rect" | "circle" | "slider" => {
+        "rect" | "circle" | "slider" | "path" => {
             ec.insert(r.transform_2d());
             let shape = match node.ty.name() {
                 "circle" => Shape2d::Circle { r: r.num("radius.r", 50.0) },
+                "path" => {
+                    let (outline, closed) = path_outline(store, id);
+                    let filled = closed && r.color("fill.color").is_some();
+                    Shape2d::Path { outline: std::sync::Arc::new(outline), closed, filled }
+                }
                 "slider" => {
                     let (min, max) = (r.num("slider.min", 0.0), r.num("slider.max", 1.0));
                     let value = r.num("slider.value", 0.0);

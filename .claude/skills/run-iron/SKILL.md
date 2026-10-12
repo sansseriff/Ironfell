@@ -82,7 +82,9 @@ and prints the transactions the store applied. Then, on a fresh app, it
 runs the select tool (stage E, plans/select-tool.md): click, a corner
 resize, a Shift-snapped rotation, undo of both, a group's click /
 double-click / Esc / Esc, a marquee, arrow nudges, and delete of the
-pendulum undone in one step. Expected output, minus screenshot lines,
+pendulum undone in one step; then the pen (a path drawn, closed, the close
+undone, a point dragged) and the inspector (a width set, a bound x set
+through its binding). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
@@ -153,10 +155,13 @@ applied "model edit" (2 ops, Model) -> v17
 applied "move rect" (3 ops, Human) -> v18
 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
 applied "move circle" (2 ops, Human) -> v19
-applied "undo: move circle" (2 ops, System) -> v20
+"move circle" by Human: cluster #V re-solved; moved 1 node(s): #W
+applied "undo: move circle" (3 ops, System) -> v20
 applied "link" (4 ops, Human) -> v21
-applied "undo: link" (4 ops, System) -> v22
+"link" by Human: cluster #V re-solved; moved 1 node(s): #W
+applied "undo: link" (5 ops, System) -> v22
 applied "link" (4 ops, Model) -> v23
+"link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
 loaded document v25 (70 live nodes)
@@ -176,6 +181,17 @@ undefined
 {"x":501,"y":430,"w":80,"h":80,"deg":0}
 true
 true
+tab Controls
+"Pen (P)"
+["closed=\"true\"",3,"smooth point"]
+"closed=\"false\""
+["#16"]
+"<point id=\"#19\" x=\"130\" y=\"220\""
+tab Main
+undefined
+true
+true
+"<rect id=\"#M\" name=\"square\" x=\"620\" y=\"430\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"160\" h=\"80\""
 tab Pendulum
 [true,false]
 tab Main
@@ -189,6 +205,14 @@ applied "nudge rect" (1 ops, Human) -> v6
 applied "nudge rect" (1 ops, Human) -> v7
 applied "delete group" (1 ops, Human) -> v8
 applied "undo: delete group" (16 ops, System) -> v9
+applied "draw path" (2 ops, Human) -> v10
+applied "add point" (1 ops, Human) -> v11
+applied "add point" (1 ops, Human) -> v12
+applied "close path" (1 ops, Human) -> v13
+applied "undo: close path" (1 ops, System) -> v14
+applied "move point" (2 ops, Human) -> v15
+applied "set size.w" (1 ops, Human) -> v16
+applied "set transform2d.x" (1 ops, Human) -> v17
 (no page errors)
 ```
 

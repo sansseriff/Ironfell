@@ -79,6 +79,27 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // A path (roadmap stage E): its points are children, in order.
+    TypeSpec {
+        name: "path",
+        components: &[
+            (K::Transform2d, true),
+            (K::PathShape, true),
+            (K::Fill, false),
+            (K::Stroke, false),
+            (K::Name, false),
+            (K::Host, false),
+        ],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["point"]),
+    },
+    // One anchor of a path, in the path's space, with its handles.
+    TypeSpec {
+        name: "point",
+        components: &[(K::Transform2d, true), (K::Handles, false), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     TypeSpec {
         name: "mesh",
         components: &[(K::Transform3d, true), (K::Mesh, true), (K::Name, false)],

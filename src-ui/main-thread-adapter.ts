@@ -36,6 +36,7 @@ export class MainThreadAdapter {
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
       send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
+      send_tool_from_worker: (tool: string) => this.sendMessage({ ty: "tool", tool }),
       send_cursor_from_worker: (cursor: string) => this.sendMessage({ ty: "cursor", cursor }),
       send_document_changed_from_worker: (version: number) => this.sendMessage({ ty: "documentChanged", version }),
     };

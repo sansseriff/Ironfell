@@ -160,7 +160,9 @@ export class InputManager {
             const target = event.target as HTMLElement | null;
             const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
             const selectAll = key === 'a' && (event.metaKey || event.ctrlKey);
-            if (!editing && (InputManager.TOOL_KEYS.includes(key) || selectAll)) {
+            // Tools, Figma's keys: V select, P pen.
+            const toolSwitch = (key === 'p' || key === 'v') && !event.metaKey && !event.ctrlKey && !event.altKey;
+            if (!editing && (InputManager.TOOL_KEYS.includes(key) || selectAll || toolSwitch)) {
                 event.preventDefault();
                 this.post({ ty: 'toolKey', key, m: InputManager.mods(event) });
                 return;

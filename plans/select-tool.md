@@ -119,6 +119,41 @@ rotation arrow for rotation, which the shell draws (`cssCursor` in `panel_manage
 - **The card plane in the 3D view is a nested embed.** Hover and click select the plane.
   Cmd reaches its content.
 
+## The pen and paths (2026-10-12)
+
+Stage E's exit: draw, close and edit a path; each click is one transaction; undo per
+point. `bevy_app/pen.rs`, with the types in `iron_document`.
+
+**How a path is stored.** A `path` node holds a `path` component (`closed`) and its
+`point` children, in sibling order. Each point has a `transform2d` (its position in the
+path's space) and `handles` (`ix iy ox oy`, relative to the point; zero is a corner).
+The handles are leaves on the point, as decided in roadmap §7 item 4, so a handle can
+be bound like any other value. The bridge builds the outline from the points
+(`materialize::path_outline`): a line where both handles are zero, a cubic otherwise.
+A point's change redraws its path.
+
+**Picking.** A click hits a closed, filled path's inside, or any path within 5 px of
+its line.
+
+**The pen tool.** Figma's: P picks it, V returns to select, and the toolbar in each
+composition tab bar shows which is active.
+- A click places a corner. A click-drag places a smooth point: the out-handle follows
+  the drag, the in-handle mirrors it, and Shift keeps the handle on an axis.
+- Clicking the first point closes the path.
+- Enter or Esc finishes the path open. Esc with nothing drawn returns to select.
+- **One transaction per point:** "draw path" makes the path with its first point,
+  then each "add point", then "close path". Undo takes back one.
+- The line to the pointer and the handle being dragged are overlay drawing, never
+  stored.
+- A new path goes into the artboard under the press (a top-level embed's composition)
+  or the view's own composition.
+
+**Editing.** A lone selected path shows its points and handles.
+- A point drags through `Store::begin_drag` like any node ("move point").
+- A handle drags its leaves ("move handle"), mirrored unless Alt.
+- Resizing a path moves its points and scales its handles (`Kind::Points`), so the
+  stroke keeps its width.
+
 ## Not yet
 
 - Alt-drag to duplicate. The store has no copy op yet; instantiation is the nearest.
@@ -132,5 +167,6 @@ rotation arrow for rotation, which the shell draws (`cssCursor` in `panel_manage
 - Resizing a 2D embed that has no `frame`. It would need an `AddComp` in the same
   gesture; the current commit makes only `Set`s.
 - The tool-context resource and the hit-test interface of roadmap §4 are still implicit:
-  `SelectTool` and `PointerHits` play those roles. Extract them when the pen tool needs a
-  second tool.
+  `ActiveTool`, `SelectTool`, `PenTool` and `PointerHits` play those roles.
+- For the pen: adding points to an existing open path, inserting a point on a segment,
+  deleting a point while keeping the path, and converting between corner and smooth.

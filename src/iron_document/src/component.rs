@@ -162,6 +162,20 @@ components! {
 
     Radius / "radius" => Radius { r: Number = Value::Number(50.0) }
 
+    /// A path's outline (roadmap stage E): its `point` children in sibling
+    /// order, joined by lines or curves, closed back to the first or not.
+    PathShape / "path" => PathShape { closed: Bool = Value::Bool(false) }
+
+    /// A path point's Bézier handles, relative to the point: `i` leads into
+    /// it, `o` out of it. Zero handles make a corner. Leaves on the point,
+    /// not child nodes (roadmap §7 item 4), so each can be bound.
+    Handles / "handles" => Handles {
+        ix: Number = Value::Number(0.0),
+        iy: Number = Value::Number(0.0),
+        ox: Number = Value::Number(0.0),
+        oy: Number = Value::Number(0.0),
+    }
+
     Fill / "fill" => Fill {
         color: Color = Value::Color([0.5, 0.5, 0.5, 1.0]),
         opacity: Number = Value::Number(1.0),

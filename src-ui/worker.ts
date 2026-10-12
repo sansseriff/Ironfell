@@ -37,6 +37,7 @@ class IronWorker {
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
       send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
+      send_tool_from_worker: (tool: string) => self.postMessage({ ty: "tool", tool }),
       send_cursor_from_worker: (cursor: string) => self.postMessage({ ty: "cursor", cursor }),
       send_document_changed_from_worker: (version: number) => self.postMessage({ ty: "documentChanged", version }),
     };

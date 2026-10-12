@@ -49,6 +49,8 @@ export class DocumentClient {
   /** Every picture of the first selected node's entity, for "Show in". */
   counterparts: { entity: string | null; figures: { node: string; composition: string | null; name: string | null }[] } =
     $state({ entity: null, figures: [] });
+  /** The tool the pointer drives (`select`, `pen`), as the engine reports it. */
+  tool = $state('select');
   /** A pending merge question from Link (ECM I5): the person picks the survivor. */
   question: any = $state(null);
 
@@ -92,6 +94,11 @@ export class DocumentClient {
     } catch {
       // storage unavailable
     }
+  }
+
+  /** Pick a tool, as its key would (V select, P pen). */
+  setTool(tool: 'select' | 'pen') {
+    this.post?.({ ty: 'toolKey', key: tool === 'pen' ? 'p' : 'v', m: 0 });
   }
 
   /** Apply `<edit>` markup as the model would. Resolves with the outcome. */

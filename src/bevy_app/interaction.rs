@@ -101,7 +101,7 @@ pub fn drag_apply_system(
             let Some(p) = doc_point() else {
                 return;
             };
-            let Some(Shape2d::Slider { w, .. }) = doc2d.map(|d| d.shape) else { return };
+            let Some(Shape2d::Slider { w, .. }) = doc2d.map(|d| d.shape.clone()) else { return };
             let Ok(global) = globals.get(entity) else { return };
             let local = global.affine().inverse().transform_point3(p.extend(0.0));
             let t = (local.x / w.max(1.0)).clamp(0.0, 1.0) as f64;

@@ -9,9 +9,10 @@ import { createDockview, themeLight, type DockviewApi, type IContentRenderer, ty
 import { mount, unmount } from 'svelte';
 import ViewPanel from './ViewPanel.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
+import Toolbar from './Toolbar.svelte';
 import type { ViewSpec } from './views';
 
-const STORAGE_KEY = 'iron.workspace.v1';
+const STORAGE_KEY = 'iron.workspace.v2';
 
 /** The layout to start from: the main viewer with each composition in a
  *  tab beside it, HTML views left and right, the timeline across the bottom.
@@ -32,7 +33,7 @@ function defaultLayout(api: DockviewApi) {
   view('timeline', 'Timeline', { source: 'timeline', notation: 'timeline' }, { direction: 'below' }, { initialHeight: 220 });
   view('document', 'Document', { source: 'document', notation: 'markup' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
   view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
-  view('selection', 'Selection', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 180 });
+  view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 200 });
 }
 
 let current: DockviewApi | null = null;
@@ -55,6 +56,21 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
             target: element,
             props: { id: params.api.id, spec: (params.params as { spec: ViewSpec }).spec, api: params.api },
           });
+        },
+        dispose() {
+          if (instance) unmount(instance);
+          instance = null;
+        },
+      };
+    },
+    createLeftHeaderActionComponent: (group): IHeaderActionsRenderer => {
+      const element = document.createElement('div');
+      element.style.height = '100%';
+      let instance: Record<string, any> | null = null;
+      return {
+        element,
+        init() {
+          instance = mount(Toolbar, { target: element, props: { group } });
         },
         dispose() {
           if (instance) unmount(instance);

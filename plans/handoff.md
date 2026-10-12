@@ -26,9 +26,10 @@ built since:
 - the pen tool, with path and point nodes;
 - a first HTML inspector.
 
-The ports decision is recorded (ECM §6.1). Stage F's ports, connections and one-way
-signals are built (ECM §12 phase 3 notes). Next: across/through pairs solved as
-equations (ECM §6.1 step 3).
+The ports decision is recorded (ECM §6.1). Stage F's phase 3 is built: ports, connections, one-way
+signals, two-way editing through the chain, and across/through pairs solved as equations
+(ECM §12 phase 3 notes). Next: ECM phase 4 (consistency and encapsulation) or phase 5
+(time-domain signals and the modulator demo); ask the user which.
 
 ---
 

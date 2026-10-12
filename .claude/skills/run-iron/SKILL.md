@@ -87,21 +87,21 @@ undone, a point dragged), the inspector (a width set, a bound x set
 through its binding), and stage F's optics chain (laser → fiber → meter in
 the Optics and Schematic tabs: the fiber lengthened by its slider dims both
 gauges, the gauge dragged sets the laser's power back through the chain,
-an rf_voltage output refused by the meter's optical input). Expected output,
-minus screenshot lines,
+an rf_voltage output refused by the meter's optical input; the Thermal tab's
+heater, link and sink solved as an across/through network, the heater's power
+doubled by its slider). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-redraw (document): 2 of 39 nodes changed [#M #U]; damage 499,379–741,501
 redraw (document): 2 of 39 nodes changed [#M #U]; damage 559,339–801,461
 "<rect id=\"#11\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #10.params.level * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#10.params.level * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#11\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.64…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#23"}}
+{"ok":true,"version":9,"aliases":{"$n":"#2m"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#23\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#2m\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<circle id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<circle id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -121,19 +121,19 @@ true
 ["#l","#Q"]
 clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#25\" name=\"box\" def=\"#24\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#25\">"
+"<entity id=\"#2o\" name=\"box\" def=\"#2n\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#2o\">"
 clicked Show in assembly
 clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#27\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#27\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#2q\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#2q\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#11\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":31394}
+{"roundtrip_equal":true,"bytes":40739}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (159 ops, System) -> v1
+applied "open demo scene" (216 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -159,13 +159,16 @@ applied "model edit" (2 ops, Model) -> v17
 applied "move rect" (3 ops, Human) -> v18
 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
 applied "move circle" (2 ops, Human) -> v19
-applied "undo: move circle" (2 ops, System) -> v20
+"move circle" by Human: cluster #V re-solved; moved 1 node(s): #W
+applied "undo: move circle" (3 ops, System) -> v20
 applied "link" (4 ops, Human) -> v21
-applied "undo: link" (4 ops, System) -> v22
+"link" by Human: cluster #V re-solved; moved 1 node(s): #W
+applied "undo: link" (5 ops, System) -> v22
 applied "link" (4 ops, Model) -> v23
+"link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (129 live nodes)
+loaded document v25 (174 live nodes)
 (no page errors)
 undefined
 ["#M"]
@@ -187,8 +190,8 @@ tab Controls
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
-["#23"]
-"<point id=\"#26\" x=\"130\" y=\"220\""
+["#2m"]
+"<point id=\"#2p\" x=\"130\" y=\"220\""
 tab Main
 undefined
 true
@@ -198,15 +201,19 @@ tab Optics
 undefined
 undefined
 [190.6,71.5]
-["power=\"10 mW\"","signal=\"7.94… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
+["power=\"10 mW\"","signal=\"7.94… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>"]]
 [75.9,28.5]
-["power=\"15.78… mW\"","signal=\"4.99… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
+["power=\"15.78… mW\"","signal=\"4.99… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>"]]
 "<edit-failed applied=\"none\" version=\"19\">\n  <error op=\"2\" kind=\"bad_connection\">#…: cannot connect rf_voltage (#…) to optical_power (#…); a connection joins ports of one kind</error>\n</edit-failed>"
+tab Thermal
+undefined
+["out 303.15 K -5 W","a 303.15 K 5 W","b 293.15 K -5 W","p 293.15 K 5 W"]
+["out 313.15 K -10 W","a 313.15 K 10 W","b 293.15 K -10 W","p 293.15 K 10 W"]
 tab Pendulum
 [true,false]
 tab Main
 [false,true]
-applied "open demo scene" (159 ops, System) -> v1
+applied "open demo scene" (216 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -225,11 +232,13 @@ applied "set size.w" (1 ops, Human) -> v16
 applied "set transform2d.x" (1 ops, Human) -> v17
 applied "set slider" (1 ops, Human) -> v18
 applied "resize rect" (1 ops, Human) -> v19
+applied "set slider" (1 ops, Human) -> v20
 (no page errors)
 ```
 
 Solved values carry solver noise in their last digits (shown as `…`
-above); everything else is exact. After the platform drag the pendulum is
+above); everything else is exact. The square's drag logs one or two `redraw
+(document)` lines, depending on how many frames land before the `peek`. After the platform drag the pendulum is
 not always fully settled, so a later transaction (the links) may log a
 `"link" by …: cluster #V re-solved; moved 1 node(s): #W` line and its undo
 one op more; that is the under-converged solve noted in

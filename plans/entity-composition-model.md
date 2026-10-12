@@ -725,8 +725,30 @@ Every exit was verified by the smoke script's stage F section:
 compositions. They are separate tabs by default, and the smoke script measures values,
 not two panels on screen.
 
-Step 3 (across/through pairs as solver equations, a thermal or electrical example) is
-next.
+**Step 3 done 2026-10-12: across/through pairs as solver equations.**
+- **Behaviour equations:** `equation` nodes (`equation.lhs` = `equation.rhs`, expressions
+  over ports and parameters) live on definitions and are copied onto entities like
+  ports.
+- **The network** (`port::network`) takes every pair port's unbound across and through
+  values as unknowns. Its equations are:
+  - each connection net's: across values equal, through values summing to zero, and an
+    unconnected terminal carrying no flow;
+  - every entity's behaviour equations.
+- **Solving:** `Store::resolve_physics` solves the network with `iron_solve` after every
+  transaction, preview and playhead move. The solution goes in the graph's physics
+  layer, which is derived and never stored, so bindings read it in the same pass. A
+  network that does not converge keeps its last solution (`Store::physics_error`).
+- **Editing:** solved values are locked against direct edits. Edits go through a source
+  or a parameter. Pinning a solved value as a finger, to edit from the other end, is
+  not built.
+- **Demo:** a heater, a thermal link and an ambient sink in the **Thermal** tab, with
+  sliders for power and resistance and gauges for the temperature rise and the heat
+  flow.
+- **Verified** by `tests/ports.rs` (`a_heater_settles_through_its_thermal_link`) and the
+  smoke script's thermal section.
+
+**Next for this phase's area:** pins on solved values (drag the heater's temperature,
+solve for its power), electrical parts, and adapters between port kinds.
 
 ### Phase 4 — Consistency and encapsulation
 

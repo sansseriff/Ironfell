@@ -504,6 +504,9 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     // drawn as a cartoon and as a schematic (ECM phase 3). Built last, from
     // a scratch store holding everything above, so every earlier id stays.
     ops.extend(optics(store, &ops, library, model));
+    // Stage F step 3: a heater, a thermal link and an ambient sink, solved
+    // as an across/through network (ECM §6.1).
+    ops.extend(thermal(store, &ops, library, model));
 
     iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false }
 }
@@ -569,9 +572,11 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         let mut p = Port::default();
         p.kind = Slot::Const(Value::Str(kind.into()));
         p.dir = Slot::Const(Value::Enum(dir.into()));
-        if let Some(e) = signal {
-            p.signal = Slot::Bound(Expr::parse(&e).expect("demo behaviour"));
-        }
+        // In the kind's unit, so the template's own bindings evaluate.
+        p.signal = match signal {
+            Some(e) => Slot::Bound(Expr::parse(&e).expect("demo behaviour")),
+            None => Slot::Const(Value::parse_quantity("0 W").expect("quantity")),
+        };
         p.wrap()
     };
     let template = |notation: &str| {
@@ -750,3 +755,173 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     ]);
     out
 }
+
+/// A thermal network (ECM §6.1 step 3): a heater (a heat source), a thermal
+/// link (ΔT = R·Q) and an ambient sink (a fixed temperature), each a
+/// definition with `heat_flow` ports and behaviour equations, connected and
+/// solved together. Sliders set the heater's power and the link's
+/// resistance; gauges show the heater's temperature rise and the heat flow.
+fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: NodeId) -> Vec<Op> {
+    use iron_document::component::{Equation, Port};
+    let ty = |s: &str| TypeId::lookup(s).expect("registered type");
+    let mut scratch = iron_document::Store::with_document(base.document().clone());
+    scratch
+        .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: before.to_vec(), exact: false })
+        .expect("demo scene applies");
+    let mut out: Vec<Op> = Vec::new();
+    let mut phase = |scratch: &mut iron_document::Store, ops: Vec<Op>| {
+        scratch
+            .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
+            .expect("thermal demo applies");
+        out.extend(ops);
+    };
+    let after = |s: &iron_document::Store, parent: Option<NodeId>| {
+        let doc = s.document();
+        let kids = match parent {
+            Some(p) => doc.children(p).to_vec(),
+            None => doc.roots().to_vec(),
+        };
+        kids.last().and_then(|&k| doc.live(k)).map(|n| n.order.clone())
+    };
+    let next_key = |k: Option<OrderKey>| k.map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+    let key = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let named = |s: &str| {
+        let mut n = DocName::default();
+        n.text = Slot::Const(Value::Str(s.into()));
+        n.wrap()
+    };
+    let rect = |id: NodeId, parent: NodeId, order: OrderKey, x: f64, y: f64, w: Slot, h: f64, c: [f32; 4], name: &str| {
+        let mut t = Transform2d::default();
+        t.x = n(x);
+        t.y = n(y);
+        let mut sz = Size::default();
+        sz.w = w;
+        sz.h = n(h);
+        let mut f = Fill::default();
+        f.color = Slot::Const(Value::Color(c));
+        Op::Create { id, ty: ty("rect"), parent: Some(parent), order, components: vec![t.wrap(), sz.wrap(), f.wrap(), named(name)] }
+    };
+    let bound = |e: String| Slot::Bound(Expr::parse(&e).expect("demo binding"));
+    let port = |name: &str| {
+        let mut p = Port::default();
+        p.kind = Slot::Const(Value::Str("heat_flow".into()));
+        p.dir = Slot::Const(Value::Enum("both".into()));
+        // In the kind's units: the template's gauges read these, and an
+        // instance's are solved (the physics layer reads over them).
+        p.across = Slot::Const(Value::parse_quantity("293.15 K").expect("quantity"));
+        p.through = Slot::Const(Value::parse_quantity("0 W").expect("quantity"));
+        vec![named(name), p.wrap()]
+    };
+    let equation = |lhs: String, rhs: String| {
+        let mut e = Equation::default();
+        e.lhs = Slot::Bound(Expr::parse(&lhs).expect("demo equation"));
+        e.rhs = Slot::Bound(Expr::parse(&rhs).expect("demo equation"));
+        e.wrap()
+    };
+    let spec = |id: NodeId, parent: NodeId, order: OrderKey, name: &str, default: &str| {
+        let mut p = ParamSpec::default();
+        p.kind = Slot::Const(Value::Enum("quantity".into()));
+        p.default = Slot::Const(Value::parse_quantity(default).expect("quantity"));
+        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, components: vec![p.wrap(), named(name)] }
+    };
+    let template = |id: NodeId, parent: NodeId, order: OrderKey| {
+        let mut t = Template::default();
+        t.notation = Slot::Const(Value::Str("cartoon".into()));
+        Op::Create { id, ty: ty("template"), parent: Some(parent), order, components: vec![t.wrap()] }
+    };
+
+    // The composition.
+    let comp = scratch.document().next_ids(1)[0];
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    let root_key = next_key(after(&scratch, None));
+    phase(&mut scratch, vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: root_key, components: vec![named("thermal"), c.wrap()] }]);
+
+    // Definitions, in creation order (ids ascend).
+    let ids = scratch.document().next_ids(23);
+    let mut it = ids.into_iter();
+    let mut next = move || it.next().expect("reserved");
+    let (heater, power, h_out, h_eq, h_t, h_body, h_track, h_rise, h_flow) = (next(), next(), next(), next(), next(), next(), next(), next(), next());
+    let (link, r, l_a, l_b, l_eq1, l_eq2, l_t, l_body) = (next(), next(), next(), next(), next(), next(), next(), next());
+    let (ambient, t, a_p, a_eq, a_t, a_body) = (next(), next(), next(), next(), next(), next());
+    let k0 = next_key(after(&scratch, Some(library)));
+    let k1 = OrderKey::after(&k0);
+    let k2 = OrderKey::after(&k1);
+    phase(&mut scratch, vec![
+        Op::Create { id: heater, ty: ty("definition"), parent: Some(library), order: k0, components: vec![named("heater")] },
+        spec(power, heater, key(0), "power", "5 W"),
+        Op::Create { id: h_out, ty: ty("port_spec"), parent: Some(heater), order: key(1), components: port("out") },
+        Op::Create { id: h_eq, ty: ty("equation"), parent: Some(heater), order: key(2), components: vec![equation(format!("{h_out}.port.through"), format!("-{power}.param_spec.default"))] },
+        template(h_t, heater, key(3)),
+        rect(h_body, h_t, key(0), 60.0, 110.0, n(120.0), 90.0, [0.86, 0.3, 0.15, 1.0], "heater"),
+        rect(h_track, h_t, key(1), 60.0, 240.0, n(300.0), 14.0, [0.85, 0.86, 0.9, 1.0], "track"),
+        // The temperature rise above 20 °C: 6 px per kelvin.
+        rect(h_rise, h_t, key(2), 60.0, 240.0, bound(format!("clamp(({h_out}.port.across - 293.15 K) / 1 K * 6, 0, 300)")), 14.0, [0.9, 0.2, 0.1, 1.0], "temperature"),
+        // The heat leaving the heater: 12 px per watt.
+        rect(h_flow, h_t, key(3), 60.0, 266.0, bound(format!("clamp(-{h_out}.port.through / 1 W * 12, 0, 300)")), 10.0, [0.95, 0.65, 0.15, 1.0], "heat flow"),
+        Op::Create { id: link, ty: ty("definition"), parent: Some(library), order: k1, components: vec![named("thermal link")] },
+        spec(r, link, key(0), "r", "2 K/W"),
+        Op::Create { id: l_a, ty: ty("port_spec"), parent: Some(link), order: key(1), components: port("a") },
+        Op::Create { id: l_b, ty: ty("port_spec"), parent: Some(link), order: key(2), components: port("b") },
+        Op::Create { id: l_eq1, ty: ty("equation"), parent: Some(link), order: key(3), components: vec![equation(format!("{l_a}.port.through + {l_b}.port.through"), "0 W".into())] },
+        Op::Create { id: l_eq2, ty: ty("equation"), parent: Some(link), order: key(4), components: vec![equation(format!("{l_a}.port.across - {l_b}.port.across"), format!("{r}.param_spec.default * {l_a}.port.through"))] },
+        template(l_t, link, key(5)),
+        rect(l_body, l_t, key(0), 180.0, 140.0, n(150.0), 30.0, [0.55, 0.57, 0.62, 1.0], "link"),
+        Op::Create { id: ambient, ty: ty("definition"), parent: Some(library), order: k2, components: vec![named("ambient")] },
+        spec(t, ambient, key(0), "t", "293.15 K"),
+        Op::Create { id: a_p, ty: ty("port_spec"), parent: Some(ambient), order: key(1), components: port("p") },
+        Op::Create { id: a_eq, ty: ty("equation"), parent: Some(ambient), order: key(2), components: vec![equation(format!("{a_p}.port.across"), format!("{t}.param_spec.default"))] },
+        template(a_t, ambient, key(3)),
+        rect(a_body, a_t, key(0), 330.0, 95.0, n(140.0), 120.0, [0.55, 0.75, 0.95, 1.0], "sink"),
+    ]);
+
+    let mut entities = Vec::new();
+    for (def, name) in [(heater, "heater"), (link, "thermal link"), (ambient, "ambient")] {
+        let place = Placement { entity_parent: Some(model), entity_after: after(&scratch, Some(model)), figure_parent: Some(comp), figure_after: after(&scratch, Some(comp)) };
+        let (e, ops) = definition::instantiate(scratch.document(), def, "cartoon", name, &place).expect("thermal instantiates");
+        phase(&mut scratch, ops);
+        entities.push(e);
+    }
+    let port_of = |s: &iron_document::Store, e: NodeId, name: &str| {
+        let doc = s.document();
+        doc.children(e).iter().copied().find(|&p| doc.get::<DocName>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).expect("port")
+    };
+    for (from, to) in [((entities[0], "out"), (entities[1], "a")), ((entities[1], "b"), (entities[2], "p"))] {
+        let (a, b) = (port_of(&scratch, from.0, from.1), port_of(&scratch, to.0, to.1));
+        let id = scratch.document().next_ids(1)[0];
+        let rels = scratch.document().next_relation_ids(2);
+        let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
+        let order = next_key(after(&scratch, Some(model)));
+        let mut c = iron_document::component::Connection::default();
+        c.domain = Slot::Const(Value::Str("thermal".into()));
+        phase(&mut scratch, vec![
+            Op::Create { id, ty: ty("connection"), parent: Some(model), order, components: vec![c.wrap()] },
+            Op::Link { rel: Relation { id: rels[0], from: id, to: a, rel: RelKind::Connects, data: end("a") } },
+            Op::Link { rel: Relation { id: rels[1], from: id, to: b, rel: RelKind::Connects, data: end("b") } },
+        ]);
+    }
+    // The controls: heater power 0–20 W, link resistance 0.5–5 K/W.
+    let ids = scratch.document().next_ids(2);
+    let slider = |id: NodeId, y: f64, min: f64, max: f64, value: f64, name: &str, order: OrderKey| {
+        let mut sl = Slider::default();
+        sl.min = n(min);
+        sl.max = n(max);
+        sl.step = n(0.1);
+        sl.value = n(value);
+        let mut tr = Transform2d::default();
+        tr.x = n(60.0);
+        tr.y = n(y);
+        let mut sz = Size::default();
+        sz.w = n(300.0);
+        sz.h = n(24.0);
+        Op::Create { id, ty: ty("slider"), parent: Some(comp), order, components: vec![tr.wrap(), sz.wrap(), sl.wrap(), named(name)] }
+    };
+    let k = next_key(after(&scratch, Some(comp)));
+    phase(&mut scratch, vec![slider(ids[0], 320.0, 0.0, 20.0, 5.0, "heater power", k.clone()), slider(ids[1], 370.0, 0.5, 5.0, 2.0, "link resistance", OrderKey::after(&k))]);
+    phase(&mut scratch, vec![
+        Op::Set { id: entities[0], path: "params.power".parse().expect("parameter"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 W", ids[0])).expect("demo binding")) },
+        Op::Set { id: entities[1], path: "params.r".parse().expect("parameter"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 K/W", ids[1])).expect("demo binding")) },
+    ]);
+    out
+}
+

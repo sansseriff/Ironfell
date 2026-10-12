@@ -312,7 +312,7 @@ shot inspector
 # sets the laser's power back through the fiber and the power slider; an
 # rf_voltage output cannot drive the meter's optical input.
 tab Optics
-eval window.readings = async () => { const v = await __iron.view({fidelity:'full'}); return [...v.matchAll(/<rect[^>]*name="reading"[^>]*w="([^"]+)"/g)].map(m => Number(m[1])).filter(w => !isNaN(w)).map(w => Math.round(w * 10) / 10); }
+eval window.readings = async () => { const v = await __iron.view({fidelity:'full'}); return [...v.matchAll(/<rect[^>]*name="reading"[^>]*w="([^"]+)"/g)].map(m => Number(m[1])).filter(w => w > 0).map(w => Math.round(w * 10) / 10); }
 eval window.optics = async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [v.match(/<entity[^>]*name="laser"[^>]*>/)[0].match(/power="[^"]*"/)[0], v.match(/<entity[^>]*name="meter"[\s\S]*?<\/entity>/)[0].match(/signal="[^"]*"/)[0], v.match(/<connection[^>]*>/g).map(c => c.replace(/ id="[^"]*"/, ''))]; }
 eval readings()
 eval optics()
@@ -325,6 +325,17 @@ sleep 400
 eval optics()
 eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); const laser = v.match(/<entity id="([^"]+)" name="laser"/)[1]; const meterIn = v.match(/<entity[^>]*name="meter"[\s\S]*?<port id="([^"]+)"/)[1]; const model = (await __iron.view({fidelity:'skeleton'})).match(/<model id="([^"]+)"/)[1]; const r = await __iron.edit(`<edit><create id="$p" type="port" parent="${laser}" name="rf" kind="rf_voltage" dir="out"/><create id="$c" type="connection" parent="${model}"/><link from="$c" to="$p" rel="connects" end="a"/><link from="$c" to="${meterIn}" rel="connects" end="b"/></edit>`); return r.failure.replace(/#\w+/g, '#…'); })()
 shot optics
+# Stage F step 3 (ECM §6.1): across/through pairs solved as equations. A
+# heater, a 2 K/W thermal link and an ambient sink at 293.15 K: the heater
+# settles 10 K above ambient at 5 W; its power slider to 10 W doubles that,
+# every port's temperature and heat flow from one solve.
+tab Thermal
+eval window.heat = async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [...v.matchAll(/<port[^>]*kind="heat_flow"[^>]*>/g)].map(p => p[0].match(/name="([^"]+)"/)[1] + ' ' + p[0].match(/across="([^"]+)"/)[1] + ' ' + p[0].match(/through="([^"]+)"/)[1]); }
+eval heat()
+ddrag 135 332 210 332
+sleep 500
+eval heat()
+shot thermal
 # The dock (src-ui/views): opening a tab gives its view a canvas panel and
 # takes the hidden Main tab's away.
 tab Pendulum

@@ -12,7 +12,7 @@ import AddViewMenu from './AddViewMenu.svelte';
 import Toolbar from './Toolbar.svelte';
 import type { ViewSpec } from './views';
 
-const STORAGE_KEY = 'iron.workspace.v2';
+const STORAGE_KEY = 'iron.workspace.v3';
 
 /** The layout to start from: the main viewer with each composition in a
  *  tab beside it, HTML views left and right, the timeline across the bottom.
@@ -27,6 +27,8 @@ function defaultLayout(api: DockviewApi) {
     ['controls', 'Controls'],
     ['assembly', 'Assembly'],
     ['card', 'Card'],
+    ['optics', 'Optics'],
+    ['schematic', 'Schematic'],
   ]) {
     view(id, title, { source: id, notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' }, { inactive: true });
   }

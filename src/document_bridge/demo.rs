@@ -500,5 +500,253 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let level_path: LeafPath = "params.level".parse().expect("parameter path");
     ops.push(Op::Set { id: entity, path: level_path, slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).expect("demo binding")) });
 
+    // Stage F: laser → fiber → power meter, each a definition with ports,
+    // drawn as a cartoon and as a schematic (ECM phase 3). Built last, from
+    // a scratch store holding everything above, so every earlier id stays.
+    ops.extend(optics(store, &ops, library, model));
+
     iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false }
+}
+
+/// The optics chain (ECM §6.1, phase 3's exit): definitions `laser`, `fiber`
+/// and `meter` with `optical_power` ports and behaviours; one entity each;
+/// figures in an `optics` (cartoon) and a `schematic` composition; two
+/// connections. A slider sets the laser's power and one the fiber's length;
+/// the meter's gauge in both compositions reads its in-port, and dragging a
+/// gauge's edge sets the power slider back through the chain.
+fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: NodeId) -> Vec<Op> {
+    use iron_document::component::{Connection, Handles, PathShape, Port};
+    let ty = |s: &str| TypeId::lookup(s).expect("registered type");
+    let mut scratch = iron_document::Store::with_document(base.document().clone());
+    scratch
+        .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: before.to_vec(), exact: false })
+        .expect("demo scene applies");
+    let mut out: Vec<Op> = Vec::new();
+    // Apply a phase to the scratch store and keep its ops.
+    let mut phase = |scratch: &mut iron_document::Store, ops: Vec<Op>| {
+        scratch
+            .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
+            .expect("optics demo applies");
+        out.extend(ops);
+    };
+    let last = |s: &iron_document::Store, parent: Option<NodeId>| {
+        let doc = s.document();
+        let kids = match parent {
+            Some(p) => doc.children(p).to_vec(),
+            None => doc.roots().to_vec(),
+        };
+        kids.last().and_then(|&k| doc.live(k)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order))
+    };
+    let named = |s: &str| {
+        let mut n = DocName::default();
+        n.text = Slot::Const(Value::Str(s.into()));
+        n.wrap()
+    };
+    let at = |x: f64, y: f64| {
+        let mut t = Transform2d::default();
+        t.x = n(x);
+        t.y = n(y);
+        t.wrap()
+    };
+    let size = |w: f64, h: f64| {
+        let mut s = Size::default();
+        s.w = n(w);
+        s.h = n(h);
+        s.wrap()
+    };
+    let fill = |c: [f32; 4]| {
+        let mut f = Fill::default();
+        f.color = Slot::Const(Value::Color(c));
+        f.wrap()
+    };
+    let stroke = |c: [f32; 4], w: f64| {
+        let mut s = Stroke::default();
+        s.color = Slot::Const(Value::Color(c));
+        s.width = n(w);
+        s.wrap()
+    };
+    let port = |kind: &str, dir: &str, signal: Option<String>| {
+        let mut p = Port::default();
+        p.kind = Slot::Const(Value::Str(kind.into()));
+        p.dir = Slot::Const(Value::Enum(dir.into()));
+        if let Some(e) = signal {
+            p.signal = Slot::Bound(Expr::parse(&e).expect("demo behaviour"));
+        }
+        p.wrap()
+    };
+    let template = |notation: &str| {
+        let mut t = Template::default();
+        t.notation = Slot::Const(Value::Str(notation.into()));
+        t.wrap()
+    };
+    let composition = |dims: &str| {
+        let mut c = Composition::default();
+        c.dims = Slot::Const(Value::Enum(dims.into()));
+        c.wrap()
+    };
+    let key = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let rect_op = |id: NodeId, parent: NodeId, order: OrderKey, comps: Vec<iron_document::Component>| Op::Create { id, ty: ty("rect"), parent: Some(parent), order, components: comps };
+
+    // The two compositions.
+    let ids = scratch.document().next_ids(2);
+    let (cartoon, schematic) = (ids[0], ids[1]);
+    let k0 = last(&scratch, None);
+    let k1 = OrderKey::after(&k0);
+    phase(&mut scratch, vec![
+        Op::Create { id: cartoon, ty: ty("composition"), parent: None, order: k0, components: vec![named("optics"), composition("2d")] },
+        Op::Create { id: schematic, ty: ty("composition"), parent: None, order: k1, components: vec![named("schematic"), composition("2d")] },
+    ]);
+
+    // Definitions. Each template draws its part of the picture where it sits
+    // in the layout, cartoon and schematic alike.
+    let gauge = |id: NodeId, parent: NodeId, order: OrderKey, input: NodeId, x: f64, y: f64, scale: f64, c: [f32; 4]| {
+        let mut s = Size::default();
+        s.w = Slot::Bound(Expr::parse(&format!("{input}.port.signal / 1 mW * {scale}")).expect("demo binding"));
+        s.h = n(14.0);
+        rect_op(id, parent, order, vec![at(x, y), s.wrap(), fill(c), named("reading")])
+    };
+    let ids = scratch.document().next_ids(28);
+    let mut it = ids.into_iter();
+    let mut next = move || it.next().expect("reserved");
+    let (laser, power, laser_out, laser_cartoon, laser_schematic) = (next(), next(), next(), next(), next());
+    let (fiber, loss, length, fiber_in, fiber_out, fiber_cartoon, fiber_schematic) = (next(), next(), next(), next(), next(), next(), next());
+    let (meter, meter_in, meter_cartoon, meter_schematic) = (next(), next(), next(), next());
+    // In the order they are created below: ids must ascend.
+    let (laser_body, laser_beam) = (next(), next());
+    let (fiber_path, fiber_a, fiber_b) = (next(), next(), next());
+    let (dial, track, reading) = (next(), next(), next());
+    let (laser_block, fiber_block, meter_block, schematic_reading) = (next(), next(), next(), next());
+    let def_key = last(&scratch, Some(library));
+    let spec = |id: NodeId, parent: NodeId, order: OrderKey, name: &str, default: Value| {
+        let mut p = ParamSpec::default();
+        p.kind = Slot::Const(Value::Enum(if matches!(default, Value::Quantity { .. }) { "quantity".into() } else { "number".into() }));
+        p.default = Slot::Const(default);
+        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, components: vec![p.wrap(), named(name)] }
+    };
+    let mut ops = vec![
+        Op::Create { id: laser, ty: ty("definition"), parent: Some(library), order: def_key.clone(), components: vec![named("laser")] },
+        spec(power, laser, key(0), "power", Value::parse_quantity("10 mW").expect("quantity")),
+        Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser), order: key(1), components: vec![named("out"), port("optical_power", "out", Some(format!("{power}.param_spec.default")))] },
+        Op::Create { id: laser_cartoon, ty: ty("template"), parent: Some(laser), order: key(2), components: vec![template("cartoon")] },
+        Op::Create { id: laser_schematic, ty: ty("template"), parent: Some(laser), order: key(3), components: vec![template("schematic")] },
+        Op::Create { id: fiber, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&def_key), components: vec![named("fiber")] },
+        spec(loss, fiber, key(0), "loss_db_per_km", Value::Number(0.5)),
+        spec(length, fiber, key(1), "length_km", Value::Number(2.0)),
+        Op::Create { id: fiber_in, ty: ty("port_spec"), parent: Some(fiber), order: key(2), components: vec![named("in"), port("optical_power", "in", None)] },
+        Op::Create {
+            id: fiber_out,
+            ty: ty("port_spec"),
+            parent: Some(fiber),
+            order: key(3),
+            components: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.param_spec.default * {length}.param_spec.default / 10)")))],
+        },
+        Op::Create { id: fiber_cartoon, ty: ty("template"), parent: Some(fiber), order: key(4), components: vec![template("cartoon")] },
+        Op::Create { id: fiber_schematic, ty: ty("template"), parent: Some(fiber), order: key(5), components: vec![template("schematic")] },
+        Op::Create { id: meter, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&OrderKey::after(&def_key)), components: vec![named("meter")] },
+        Op::Create { id: meter_in, ty: ty("port_spec"), parent: Some(meter), order: key(0), components: vec![named("in"), port("optical_power", "in", None)] },
+        Op::Create { id: meter_cartoon, ty: ty("template"), parent: Some(meter), order: key(1), components: vec![template("cartoon")] },
+        Op::Create { id: meter_schematic, ty: ty("template"), parent: Some(meter), order: key(2), components: vec![template("schematic")] },
+    ];
+    // Cartoon: the laser's body and a beam whose opacity follows the power.
+    ops.push(rect_op(laser_body, laser_cartoon, key(0), vec![at(60.0, 140.0), size(130.0, 70.0), fill([0.18, 0.2, 0.26, 1.0]), named("body")]));
+    let mut beam = Fill::default();
+    beam.color = Slot::Const(Value::Color([0.95, 0.15, 0.1, 1.0]));
+    beam.opacity = Slot::Bound(Expr::parse(&format!("clamp({power}.param_spec.default / 20 mW, 0.15, 1)")).expect("demo binding"));
+    ops.push(rect_op(laser_beam, laser_cartoon, key(1), vec![at(190.0, 168.0), size(50.0, 14.0), beam.wrap(), named("beam")]));
+    // The fiber: a curve from the laser to the meter.
+    let mut shape = PathShape::default();
+    shape.closed = Slot::Const(Value::Bool(false));
+    ops.push(Op::Create { id: fiber_path, ty: ty("path"), parent: Some(fiber_cartoon), order: key(0), components: vec![at(240.0, 175.0), shape.wrap(), stroke([0.96, 0.7, 0.15, 1.0], 6.0), named("fiber")] });
+    let point = |id: NodeId, order: OrderKey, x: f64, y: f64, ox: f64, oy: f64| {
+        let mut h = Handles::default();
+        h.ix = n(-ox);
+        h.iy = n(-oy);
+        h.ox = n(ox);
+        h.oy = n(oy);
+        Op::Create { id, ty: ty("point"), parent: Some(fiber_path), order, components: vec![at(x, y), h.wrap()] }
+    };
+    ops.push(point(fiber_a, key(0), 0.0, 0.0, 90.0, 120.0));
+    ops.push(point(fiber_b, key(1), 270.0, 0.0, 90.0, -120.0));
+    // The meter: a dial, a gauge track, and the reading.
+    let mut dial_r = Radius::default();
+    dial_r.r = n(55.0);
+    ops.push(Op::Create { id: dial, ty: ty("circle"), parent: Some(meter_cartoon), order: key(0), components: vec![at(600.0, 175.0), dial_r.wrap(), fill([0.88, 0.9, 0.94, 1.0]), stroke([0.3, 0.32, 0.38, 1.0], 3.0), named("dial")] });
+    ops.push(rect_op(track, meter_cartoon, key(1), vec![at(540.0, 260.0), size(240.0, 14.0), fill([0.85, 0.86, 0.9, 1.0]), named("track")]));
+    ops.push(gauge(reading, meter_cartoon, key(2), meter_in, 540.0, 260.0, 24.0, [0.15, 0.7, 0.35, 1.0]));
+    // Schematic: blocks, and the meter's reading as a bar under its block.
+    let block = |id: NodeId, parent: NodeId, x: f64, w: f64| rect_op(id, parent, key(0), vec![at(x, 100.0), size(w, 50.0), fill([1.0, 1.0, 1.0, 1.0]), stroke([0.1, 0.1, 0.12, 1.0], 2.0), named("block")]);
+    ops.push(block(laser_block, laser_schematic, 60.0, 90.0));
+    ops.push(block(fiber_block, fiber_schematic, 240.0, 120.0));
+    ops.push(block(meter_block, meter_schematic, 450.0, 90.0));
+    ops.push(gauge(schematic_reading, meter_schematic, key(1), meter_in, 450.0, 170.0, 9.0, [0.1, 0.45, 0.9, 1.0]));
+    phase(&mut scratch, ops);
+
+    // Entities: each instantiated in the cartoon, then drawn again in the
+    // schematic.
+    let mut entities = Vec::new();
+    for (def, name) in [(laser, "laser"), (fiber, "fiber"), (meter, "meter")] {
+        let doc = scratch.document();
+        let place = Placement {
+            entity_parent: Some(model),
+            entity_after: doc.children(model).last().and_then(|&c| doc.live(c)).map(|c| c.order.clone()),
+            figure_parent: Some(cartoon),
+            figure_after: doc.children(cartoon).last().and_then(|&c| doc.live(c)).map(|c| c.order.clone()),
+        };
+        let (e, ops) = definition::instantiate(scratch.document(), def, "cartoon", name, &place).expect("optics instantiates");
+        phase(&mut scratch, ops);
+        let after = scratch.document().children(schematic).last().and_then(|&c| scratch.document().live(c)).map(|c| c.order.clone());
+        let ops = definition::place_figures(scratch.document(), e, "schematic", Some(schematic), after).expect("schematic figures");
+        phase(&mut scratch, ops);
+        entities.push(e);
+    }
+    let port_of = |s: &iron_document::Store, e: NodeId, name: &str| {
+        let doc = s.document();
+        doc.children(e).iter().copied().find(|&p| doc.get::<DocName>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).expect("port")
+    };
+
+    // The connections, and their wires in the schematic.
+    for (i, (from, to)) in [((entities[0], "out"), (entities[1], "in")), ((entities[1], "out"), (entities[2], "in"))].into_iter().enumerate() {
+        let (a, b) = (port_of(&scratch, from.0, from.1), port_of(&scratch, to.0, to.1));
+        let id = scratch.document().next_ids(2);
+        let rels = scratch.document().next_relation_ids(3);
+        let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
+        let (x0, x1) = if i == 0 { (150.0, 240.0) } else { (360.0, 450.0) };
+        let mut shape = PathShape::default();
+        shape.closed = Slot::Const(Value::Bool(false));
+        let wire_key = last(&scratch, Some(schematic));
+        let model_key = last(&scratch, Some(model));
+        let mut c = Connection::default();
+        c.domain = Slot::Const(Value::Str("optical".into()));
+        phase(&mut scratch, vec![
+            Op::Create { id: id[0], ty: ty("connection"), parent: Some(model), order: model_key, components: vec![c.wrap()] },
+            Op::Link { rel: Relation { id: rels[0], from: id[0], to: a, rel: RelKind::Connects, data: end("a") } },
+            Op::Link { rel: Relation { id: rels[1], from: id[0], to: b, rel: RelKind::Connects, data: end("b") } },
+            Op::Create { id: id[1], ty: ty("path"), parent: Some(schematic), order: wire_key, components: vec![at(x0, 125.0), shape.wrap(), stroke([0.1, 0.1, 0.12, 1.0], 2.0), named("wire")] },
+            Op::Link { rel: Relation { id: rels[2], from: id[1], to: id[0], rel: RelKind::Figures, data: BTreeMap::new() } },
+        ]);
+        let pts = scratch.document().next_ids(2);
+        phase(&mut scratch, vec![
+            Op::Create { id: pts[0], ty: ty("point"), parent: Some(id[1]), order: key(0), components: vec![at(0.0, 0.0), Handles::default().wrap()] },
+            Op::Create { id: pts[1], ty: ty("point"), parent: Some(id[1]), order: key(1), components: vec![at(x1 - x0, 0.0), Handles::default().wrap()] },
+        ]);
+    }
+
+    // The controls, in the cartoon: the laser's power (0–20 mW) and the
+    // fiber's length (0–20 km) follow two sliders.
+    let ids = scratch.document().next_ids(2);
+    let slider_op = |id: NodeId, y: f64, value: f64, name: &str, order: OrderKey| {
+        let mut sl = Slider::default();
+        sl.min = n(0.0);
+        sl.max = n(20.0);
+        sl.step = n(0.1);
+        sl.value = n(value);
+        Op::Create { id, ty: ty("slider"), parent: Some(cartoon), order, components: vec![at(60.0, y), size(300.0, 24.0), sl.wrap(), named(name)] }
+    };
+    let k = last(&scratch, Some(cartoon));
+    phase(&mut scratch, vec![slider_op(ids[0], 340.0, 10.0, "laser power", k.clone()), slider_op(ids[1], 390.0, 2.0, "fiber length", OrderKey::after(&k))]);
+    phase(&mut scratch, vec![
+        Op::Set { id: entities[0], path: "params.power".parse().expect("parameter"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 mW", ids[0])).expect("demo binding")) },
+        Op::Set { id: entities[1], path: "params.length_km".parse().expect("parameter"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value", ids[1])).expect("demo binding")) },
+    ]);
+    out
 }

@@ -691,6 +691,43 @@ composition. Raising the laser's power or the fiber's length changes the meter r
 in both panels in the same frame. Connecting `rf_voltage` to `optical_power` is
 rejected. The model view shows the chain.
 
+**Done 2026-10-12 (steps 1 and 2 of §6.1).** In `iron_document`:
+- **Types and components:** `port_spec`, `port` and `connection`, the `port` and
+  `connection` components, and the `connects` relation.
+- **Port kinds** (`port.rs`): `value`, `optical_power`, `rf_voltage` (one-way);
+  `electrical`, `heat_flow` (pairs, carried but not yet solved).
+- **Signals:** an in-port's signal is a binding the graph derives from its connection
+  (`port::derived_signals`), never stored. An out-port's signal is its definition's
+  behaviour, copied at instantiation, which now creates the entity's ports.
+- **`definition::place_figures`** draws an existing entity in a second notation.
+- **Connections are checked after the transaction** (`ErrorKind::BadConnection`): one
+  kind, out to in, one feed per input, no signal loop.
+- **Handles** follow derived signals and quantities. With several free sources they
+  pick the only one the value is linear in, so the meter's reading inverts to the
+  laser's power while the fiber's length and loss, which sit in an exponent, hold.
+- **Views:** the model view lists ports with live signals, and connections as
+  `entity.port` names.
+- **Tests:** `tests/ports.rs`.
+
+In the app:
+- **The demo** has `laser`, `fiber` and `meter` definitions with cartoon and schematic
+  templates, in the **Optics** and **Schematic** tabs.
+- **Sliders** drive the laser's power and the fiber's length.
+- **Dragging the meter gauge's edge** sets the power slider back through the chain.
+- **The model surface's manifest** explains ports and connections.
+
+Every exit was verified by the smoke script's stage F section:
+- lengthening the fiber dims both gauges in one transaction;
+- the model view lists the chain;
+- an `rf_voltage` output to the meter's optical input is `bad_connection`.
+
+**Deviation:** the exit's "same frame" is met by one transaction resolving both
+compositions. They are separate tabs by default, and the smoke script measures values,
+not two panels on screen.
+
+Step 3 (across/through pairs as solver equations, a thermal or electrical example) is
+next.
+
 ### Phase 4 — Consistency and encapsulation
 
 Obligations, ghost lines, the tray, `omits`, `Store::encapsulate`, drill-in panels and

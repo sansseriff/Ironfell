@@ -828,7 +828,16 @@ impl Store {
             }
         }
         if errors.is_empty() {
+            // A connection is reported once, however many of its links the
+            // transaction holds.
+            let mut connections = std::collections::BTreeSet::new();
             for (i, op) in input.ops.iter().enumerate() {
+                if let Op::Link { rel } = op
+                    && rel.rel == RelKind::Connects
+                    && !connections.insert(rel.from)
+                {
+                    continue;
+                }
                 if let Err(e) = op::check_created(&work, i, op, stamp) {
                     errors.push(e);
                 }

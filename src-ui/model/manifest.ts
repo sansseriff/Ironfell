@@ -93,6 +93,21 @@ DEFINITIONS
   ordinary node with a figures relation to the entity; its bindings read the
   entity's params. Setting an unknown or wrongly typed parameter is rejected.
 
+PORTS AND SIGNALS
+  An entity has port children (name; port.kind, port.dir in|out, port.signal), one per
+  port_spec of its definition. Kinds: optical_power (W), rf_voltage (V), value carry a
+  one-way signal; electrical and heat_flow carry an across/through pair. An out port's
+  signal is the definition's behaviour (a binding over params and in-ports); an in
+  port's signal is whatever its connection's out port carries. To connect, create a
+  connection under the model root with two links, ends a and b:
+  <create id="$c" type="connection" parent="#model"/>
+  <link from="$c" to="#laser_out" rel="connects" end="a"/>
+  <link from="$c" to="#fiber_in" rel="connects" end="b"/>
+  A connection joins two ports of one kind, an out to an in, and an in port takes
+  one connection; anything else is rejected as bad_connection. Readers bind to a
+  port's signal ({= #port.port.signal / 1 mW}). The model view lists every port with
+  its live signal and every connection as entity.port names.
+
 CONSTRAINTS
   A constraint node (kind: coincident distance pin fix angle horizontal vertical;
   value; enabled) names its operands with constrains relations

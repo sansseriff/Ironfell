@@ -146,6 +146,9 @@ pub enum ErrorKind {
     /// A constraint's kind, roles, anchors or operands are wrong, or it
     /// duplicates another.
     BadConstraint,
+    /// A connection joins ports that cannot be joined: two kinds, two
+    /// inputs, an input already fed, or a signal loop (ECM §6.1).
+    BadConnection,
     /// The required constraints cannot all hold after this transaction (or,
     /// with `exact`, a requested value could not be honoured).
     Unsatisfiable,
@@ -342,7 +345,7 @@ pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Versio
     {
         let cx = Ctx { index, stamp };
         if doc.is_live(rel.from) {
-            crate::port::validate_connection(doc, rel.from).map_err(|e| cx.err(ErrorKind::BadParent, e))?;
+            crate::port::validate_connection(doc, rel.from).map_err(|e| cx.err(ErrorKind::BadConnection, e))?;
         }
         return Ok(());
     }

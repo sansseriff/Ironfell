@@ -26,7 +26,9 @@ built since:
 - the pen tool, with path and point nodes;
 - a first HTML inspector.
 
-The ports decision is recorded (ECM §6.1). **Stage F is next.**
+The ports decision is recorded (ECM §6.1). Stage F's ports, connections and one-way
+signals are built (ECM §12 phase 3 notes). Next: across/through pairs solved as
+equations (ECM §6.1 step 3).
 
 ---
 

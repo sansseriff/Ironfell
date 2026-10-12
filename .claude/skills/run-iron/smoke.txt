@@ -277,17 +277,18 @@ ddrag 420 200 480 260
 dclick 300 380
 dclick 200 200
 sleep 500
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const p = v.match(/<path[^>]*>/)[0]; return [p.match(/closed="[^"]*"/)[0], (v.match(/<point /g) || []).length, v.match(/<point[^>]*ix="-60"[^>]*>/) ? 'smooth point' : 'no handles']; })()
+eval window.penPath = async () => (await __iron.view({fidelity:'full'})).match(/<path[^>]*name="path"[\s\S]*?<\/path>/)[0]
+eval (async () => { const p = await penPath(); return [p.match(/closed="[^"]*"/)[0], (p.match(/<point /g) || []).length, p.match(/<point[^>]*ix="-60"[^>]*>/) ? 'smooth point' : 'no handles']; })()
 key Meta+z
 sleep 400
-eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<path[^>]*>/)[0].match(/closed="[^"]*"/)[0]; })()
+eval (async () => (await penPath()).match(/closed="[^"]*"/)[0])()
 # V selects again; the path's points are drawn and drag one at a time.
 key v
 dclick 300 380
 eval __iron.selection()
 ddrag 300 380 330 420
 sleep 400
-eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<point[^>]*>/g)[2].replace(/ rot=.*/, ''); })()
+eval (async () => (await penPath()).match(/<point[^>]*>/g)[2].replace(/ rot=.*/, ''))()
 shot pen-path
 # The inspector (src-ui/views/html/SelectionView.svelte): the square's width
 # set in its field is one "set size.w"; the shadow's x is bound to the
@@ -304,6 +305,26 @@ eval setField('transform2d.x', '720')
 sleep 800
 eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect[^>]*name="square"[^>]*>/)[0].replace(/ color.*/, ''); })()
 shot inspector
+# Stage F (ECM phase 3, §6.1): laser → fiber → power meter, three entities
+# with optical_power ports, drawn in the Optics (cartoon) and Schematic tabs.
+# Lengthening the fiber to 10 km with its slider dims the meter's gauge in
+# both compositions in one transaction; dragging the cartoon gauge's edge
+# sets the laser's power back through the fiber and the power slider; an
+# rf_voltage output cannot drive the meter's optical input.
+tab Optics
+eval window.readings = async () => { const v = await __iron.view({fidelity:'full'}); return [...v.matchAll(/<rect[^>]*name="reading"[^>]*w="([^"]+)"/g)].map(m => Number(m[1])).filter(w => !isNaN(w)).map(w => Math.round(w * 10) / 10); }
+eval window.optics = async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [v.match(/<entity[^>]*name="laser"[^>]*>/)[0].match(/power="[^"]*"/)[0], v.match(/<entity[^>]*name="meter"[\s\S]*?<\/entity>/)[0].match(/signal="[^"]*"/)[0], v.match(/<connection[^>]*>/g).map(c => c.replace(/ id="[^"]*"/, ''))]; }
+eval readings()
+eval optics()
+ddrag 90 402 210 402
+sleep 400
+eval readings()
+dclick 580 267
+ddrag 616 267 660 267
+sleep 400
+eval optics()
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); const laser = v.match(/<entity id="([^"]+)" name="laser"/)[1]; const meterIn = v.match(/<entity[^>]*name="meter"[\s\S]*?<port id="([^"]+)"/)[1]; const model = (await __iron.view({fidelity:'skeleton'})).match(/<model id="([^"]+)"/)[1]; const r = await __iron.edit(`<edit><create id="$p" type="port" parent="${laser}" name="rf" kind="rf_voltage" dir="out"/><create id="$c" type="connection" parent="${model}"/><link from="$c" to="$p" rel="connects" end="a"/><link from="$c" to="${meterIn}" rel="connects" end="b"/></edit>`); return r.failure.replace(/#\w+/g, '#…'); })()
+shot optics
 # The dock (src-ui/views): opening a tab gives its view a canvas panel and
 # takes the hidden Main tab's away.
 tab Pendulum

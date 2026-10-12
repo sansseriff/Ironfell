@@ -43,6 +43,9 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
     if reactive.animated().contains_key(&leaf) {
         return Handle::Locked(format!("{leaf} is driven by a clip at the current time"));
     }
+    if reactive.physics().contains_key(&leaf) {
+        return Handle::Locked(format!("{leaf} is solved by its across/through network; change a source or a parameter instead"));
+    }
     // A connection's in-port has no binding of its own but resolves through
     // its partner (`port::derived_signals`), so it inverts like one.
     let Some(expr) = slot.expr().or_else(|| reactive.expr_of(leaf)) else {

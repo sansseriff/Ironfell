@@ -161,6 +161,7 @@ pub struct Store {
     /// Bumped by every session-tier change (`apply_session`), which leaves
     /// the document's version alone.
     session_version: u64,
+    physics_error: Option<String>,
 }
 
 impl Default for Store {
@@ -192,10 +193,12 @@ impl Store {
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: 0,
+            physics_error: None,
         };
         store.reactive.rebuild(&store.doc);
         store.resample();
         store.rebuild_clusters();
+        store.resolve_physics();
         store
     }
 
@@ -327,6 +330,7 @@ impl Store {
         if !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
         }
+        self.resolve_physics();
     }
 
     /// Clips that could not be sampled at the current time, by clip node.
@@ -376,6 +380,7 @@ impl Store {
         if !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
         }
+        self.resolve_physics();
     }
 
     /// How a gesture on this leaf would be realised right now: directly, by
@@ -497,6 +502,79 @@ impl Store {
         Ok(())
     }
 
+    /// Solve the across/through network (ECM §6.1, step 3) and put its
+    /// solution in the graph's physics layer: derived, never stored, read by
+    /// bindings like any value. Run after every change. A network that does
+    /// not converge keeps its previous solution and says why.
+    pub fn resolve_physics(&mut self) {
+        let net = crate::port::network(&self.doc);
+        if net.unknowns.is_empty() {
+            if !self.reactive.physics().is_empty() {
+                self.reactive.set_physics(&self.doc, Default::default());
+            }
+            self.physics_error = None;
+            return;
+        }
+        let magnitude = |v: &Value| match v {
+            Value::Number(n) => Some(*n),
+            Value::Quantity { si, .. } => Some(*si),
+            _ => None,
+        };
+        let index: std::collections::BTreeMap<Leaf, usize> = net.unknowns.iter().enumerate().map(|(i, (l, _))| (*l, i)).collect();
+        let x0: Vec<f64> = net.unknowns.iter().map(|(l, _)| self.reactive.physics().get(l).and_then(magnitude).unwrap_or(0.0)).collect();
+        let solution = {
+            let doc = &self.doc;
+            let reactive = &self.reactive;
+            let unknowns = &net.unknowns;
+            let mut problem = iron_solve::Problem::uniform(x0, 1.0);
+            for eq in &net.equations {
+                match eq {
+                    crate::port::Equation::Linear(coefs) => {
+                        let vars: Vec<usize> = coefs.iter().map(|(i, _)| *i).collect();
+                        let k: Vec<f64> = coefs.iter().map(|(_, c)| *c).collect();
+                        problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars, 1, move |v, out| {
+                            out[0] = v.iter().zip(&k).map(|(x, c)| x * c).sum();
+                        }));
+                    }
+                    crate::port::Equation::Expr { lhs, rhs, .. } => {
+                        let mut vars: Vec<usize> = lhs.deps().into_iter().chain(rhs.deps()).filter_map(|l| index.get(&l).copied()).collect();
+                        vars.sort();
+                        vars.dedup();
+                        if vars.is_empty() {
+                            continue;
+                        }
+                        let (lhs, rhs, index) = (lhs.clone(), rhs.clone(), index.clone());
+                        problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars.clone(), 1, move |v, out| {
+                            let read = |l: Leaf| match index.get(&l).and_then(|i| vars.iter().position(|j| j == i)) {
+                                Some(pos) => Some(Value::quantity(v[pos], unknowns[vars[pos]].1)),
+                                None => reactive.read(doc, l),
+                            };
+                            let side = |e: &Expr| e.eval(&read).ok().as_ref().and_then(magnitude);
+                            out[0] = match (side(&lhs), side(&rhs)) {
+                                (Some(a), Some(b)) => a - b,
+                                _ => 1e6,
+                            };
+                        }));
+                    }
+                }
+            }
+            let options = iron_solve::Options { max_iterations: 100, ..Default::default() };
+            iron_solve::solve(&problem, &options)
+        };
+        if solution.status != iron_solve::Status::Converged {
+            self.physics_error = Some(format!("the across/through network does not settle (residual {:.3e})", solution.max_required_residual));
+            return;
+        }
+        self.physics_error = None;
+        let values = net.unknowns.iter().zip(&solution.vars).map(|((l, dim), x)| (*l, Value::quantity(*x, *dim))).collect();
+        self.reactive.set_physics(&self.doc, values);
+    }
+
+    /// Why the across/through network kept its last solution, if it did.
+    pub fn physics_error(&self) -> Option<&str> {
+        self.physics_error.as_deref()
+    }
+
     pub fn session_version(&self) -> u64 {
         self.session_version
     }
@@ -547,7 +625,8 @@ impl Store {
     /// Keep the graph in step with a transaction that just applied.
     fn after_transaction(&mut self, tx: &Transaction) {
         let structural = tx.ops.iter().chain(tx.inverse.iter()).any(|op| match op {
-            Op::Create { .. } | Op::Delete { .. } | Op::AddComp { .. } | Op::RemoveComp { .. } => true,
+            // A link can be a connection's end, which derives a signal.
+            Op::Create { .. } | Op::Delete { .. } | Op::AddComp { .. } | Op::RemoveComp { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
             Op::Set { slot, .. } => slot.expr().is_some(),
             _ => false,
         });
@@ -572,6 +651,7 @@ impl Store {
             self.resample();
         }
         self.rebuild_clusters();
+        self.resolve_physics();
     }
 
     pub fn document(&self) -> &Document {

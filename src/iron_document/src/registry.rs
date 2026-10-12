@@ -130,7 +130,7 @@ static TYPES: &[TypeSpec] = &[
         name: "definition",
         components: &[(K::Name, true)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["param_spec", "port_spec", "template"]),
+        children: ChildPolicy::Only(&["param_spec", "port_spec", "equation", "template"]),
     },
     TypeSpec {
         name: "param_spec",
@@ -163,6 +163,13 @@ static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "port",
         components: &[(K::Name, true), (K::Port, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // A behaviour equation over ports and parameters (ECM §6.1).
+    TypeSpec {
+        name: "equation",
+        components: &[(K::Equation, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
@@ -228,7 +235,7 @@ static TYPES: &[TypeSpec] = &[
         name: "entity",
         components: &[(K::Instance, true), (K::Params, true), (K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port"]),
+        children: ChildPolicy::Only(&["port", "equation"]),
     },
     // A relationship between operand nodes, solved in whatever direction a
     // drag chooses (constraint-system.md §4). Never materialised as content;

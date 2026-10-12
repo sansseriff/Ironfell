@@ -219,3 +219,87 @@ fn connections_must_join_one_kind_one_way_once() {
     let err = lab.connect(rf, spare).unwrap_err();
     assert!(err[0].message.contains("cannot connect rf_voltage"), "{err:?}");
 }
+
+/// Across/through pairs (ECM §6.1 step 3): a 5 W heater, a 2 K/W thermal
+/// link, and an ambient at 293.15 K. The connections' equations (equal
+/// temperature, heat summing to zero) and each part's behaviour equation
+/// are solved together: the heater sits at 303.15 K and 5 W flows.
+#[test]
+fn a_heater_settles_through_its_thermal_link() {
+    use iron_document::component::Equation;
+    let mut store = Store::new();
+    let q = |s: &str| Value::parse_quantity(s).unwrap();
+    let k = |n: u32| (0..n).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let ids = store.document().next_ids(19);
+    let [library, model, heater, power, h_out, h_eq, h_t, link, r, l_a, l_b, l_eq1, l_eq2, l_t, ambient, t, a_p, a_eq, a_t] = ids.try_into().unwrap();
+    let param = |id, parent, order, name: &str, v: Value| {
+        let mut p = ParamSpec::default();
+        p.kind = Slot::Const(Value::Enum("quantity".into()));
+        p.default = Slot::Const(v);
+        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, components: vec![p.wrap(), named(name)] }
+    };
+    let pspec = |id, parent, order, name: &str| Op::Create { id, ty: ty("port_spec"), parent: Some(parent), order, components: vec![named(name), port("heat_flow", "in", None)] };
+    let eq = |id, parent, order, lhs: String, rhs: String| {
+        let mut e = Equation::default();
+        e.lhs = Slot::Bound(Expr::parse(&lhs).unwrap());
+        e.rhs = Slot::Bound(Expr::parse(&rhs).unwrap());
+        Op::Create { id, ty: ty("equation"), parent: Some(parent), order, components: vec![e.wrap()] }
+    };
+    let template = |id, parent, order| {
+        let mut t = Template::default();
+        t.notation = Slot::Const(Value::Str("cartoon".into()));
+        Op::Create { id, ty: ty("template"), parent: Some(parent), order, components: vec![t.wrap()] }
+    };
+    let def = |id, name: &str, order| Op::Create { id, ty: ty("definition"), parent: Some(library), order, components: vec![named(name)] };
+    store
+        .apply(tx(
+            "thermal library",
+            vec![
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k(0), components: vec![named("library")] },
+                Op::Create { id: model, ty: ty("model"), parent: None, order: k(1), components: vec![named("model")] },
+                def(heater, "heater", k(0)),
+                param(power, heater, k(0), "power", q("5 W")),
+                pspec(h_out, heater, k(1), "out"),
+                eq(h_eq, heater, k(2), format!("{h_out}.port.through"), format!("-{power}.param_spec.default")),
+                template(h_t, heater, k(3)),
+                def(link, "link", k(1)),
+                param(r, link, k(0), "r", q("2 K/W")),
+                pspec(l_a, link, k(1), "a"),
+                pspec(l_b, link, k(2), "b"),
+                eq(l_eq1, link, k(3), format!("{l_a}.port.through + {l_b}.port.through"), "0 W".into()),
+                eq(l_eq2, link, k(4), format!("{l_a}.port.across - {l_b}.port.across"), format!("{r}.param_spec.default * {l_a}.port.through")),
+                template(l_t, link, k(5)),
+                def(ambient, "ambient", k(2)),
+                param(t, ambient, k(0), "t", q("293.15 K")),
+                pspec(a_p, ambient, k(1), "p"),
+                eq(a_eq, ambient, k(2), format!("{a_p}.port.across"), format!("{t}.param_spec.default")),
+                template(a_t, ambient, k(3)),
+            ],
+        ))
+        .unwrap();
+    let mut entities = Vec::new();
+    for (def, name) in [(heater, "heater"), (link, "link"), (ambient, "ambient")] {
+        let after = store.document().children(model).last().map(|&c| store.document().live(c).unwrap().order.clone());
+        let place = Placement { entity_parent: Some(model), entity_after: after, figure_parent: None, figure_after: None };
+        let (e, ops) = definition::instantiate(store.document(), def, "cartoon", name, &place).unwrap();
+        store.apply(tx(name, ops)).unwrap();
+        entities.push(e);
+    }
+    let mut lab = Lab { store, laser: entities[0], fiber: entities[1], meter: entities[2], model };
+    let (h, la, lb, amb) = (lab.port(lab.laser, "out"), lab.port(lab.fiber, "a"), lab.port(lab.fiber, "b"), lab.port(lab.meter, "p"));
+    lab.connect(h, la).unwrap();
+    lab.connect(lb, amb).unwrap();
+    let across = |s: &Store, p: NodeId| watts(&s.resolved(p, path("port.across")).unwrap());
+    let through = |s: &Store, p: NodeId| watts(&s.resolved(p, path("port.through")).unwrap());
+    assert_eq!(lab.store.physics_error(), None);
+    assert!((across(&lab.store, h) - 303.15).abs() < 1e-6, "{}", across(&lab.store, h));
+    assert!((through(&lab.store, la) - 5.0).abs() < 1e-6, "{}", through(&lab.store, la));
+    // More power, hotter heater, in the same transaction.
+    lab.store.apply(tx("10 W", vec![Op::Set { id: lab.laser, path: path("params.power"), slot: Slot::Const(q("10 W")) }])).unwrap();
+    assert!((across(&lab.store, h) - 313.15).abs() < 1e-6, "{}", across(&lab.store, h));
+    // A solved value is not edited directly.
+    assert!(lab.store.handle(h, path("port.across")).is_locked());
+    // The model view shows the pair.
+    let view = lab.store.view(&ViewQuery { scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
+    assert!(view.contains(r#"kind="heat_flow""#) && view.contains("across=") && view.contains("through="), "{view}");
+}

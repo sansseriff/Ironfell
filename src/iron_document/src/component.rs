@@ -283,6 +283,15 @@ components! {
         through: Any = Value::Number(0.0),
     }
 
+    /// A behaviour equation of a definition or entity (ECM §6.1): `lhs` and
+    /// `rhs` are expressions over its ports' across and through values and
+    /// its parameters, solved with the connections' equations, never in a
+    /// fixed direction.
+    Equation / "equation" => Equation {
+        lhs: Any = Value::Number(0.0),
+        rhs: Any = Value::Number(0.0),
+    }
+
     /// A connection between two ports (ECM §6): its ends are two `connects`
     /// relations. `domain` is informational; the ports' kinds decide.
     Connection / "connection" => Connection { domain: Str = Value::Str(String::new()) }

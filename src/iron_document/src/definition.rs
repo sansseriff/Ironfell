@@ -141,7 +141,8 @@ pub struct Placement {
 /// `doc`, so these ops must be applied before anything else allocates.
 pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
     let specs = params_of(doc, def)?;
-    let port_specs: Vec<NodeId> = doc.children(def).iter().copied().filter(|&c| doc.live(c).is_some_and(|n| n.ty == ty("port_spec"))).collect();
+    // Ports and behaviour equations are copied onto the entity.
+    let port_specs: Vec<NodeId> = doc.children(def).iter().copied().filter(|&c| doc.live(c).is_some_and(|n| n.ty == ty("port_spec") || n.ty == ty("equation"))).collect();
     let template = template_of(doc, def, notation).ok_or_else(|| format!("{def} has no template for notation {notation:?}"))?;
     let (roots, copied) = template_nodes(doc, template);
     let ids = doc.next_ids(1 + port_specs.len() + copied.len());
@@ -171,7 +172,8 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
     });
     for &spec in &port_specs {
         let node = doc.live(spec).expect("live port_spec");
-        ops.push(Op::Create { id: new_id[&spec], ty: ty("port"), parent: Some(entity), order: node.order.clone(), components: rewritten(doc, spec, &specs, entity, &new_id) });
+        let copied_ty = if node.ty == ty("port_spec") { ty("port") } else { node.ty };
+        ops.push(Op::Create { id: new_id[&spec], ty: copied_ty, parent: Some(entity), order: node.order.clone(), components: rewritten(doc, spec, &specs, entity, &new_id) });
     }
     ops.extend(copy_template(doc, &specs, entity, &new_id, &roots, &copied, place.figure_parent, place.figure_after.clone(), &rel_ids));
     Ok((entity, ops))

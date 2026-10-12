@@ -198,6 +198,22 @@ async function run(line: string) {
       await page.waitForTimeout(200);
       return;
     }
+    case "dclick":
+    case "ddblclick": {
+      // Click (or double-click) at a document point in the viewer, paced
+      // like a drag so press and release land in different frames.
+      const p = doc(n[0], n[1]);
+      await page.mouse.move(p.x, p.y);
+      await page.waitForTimeout(200);
+      for (let i = 0; i < (cmd === "ddblclick" ? 2 : 1); i++) {
+        await page.mouse.down();
+        await page.waitForTimeout(80);
+        await page.mouse.up();
+        await page.waitForTimeout(120);
+      }
+      await page.waitForTimeout(200);
+      return;
+    }
     case "key":
       return page.keyboard.press(rest[0]);
     case "eval":

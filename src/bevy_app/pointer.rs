@@ -9,6 +9,7 @@ pub fn pointer_collect_system(
     mut button_events: MessageReader<MouseButtonInput>,
     keys: Res<ButtonInput<KeyCode>>,
     accumulated: Res<AccumulatedCursorDelta>,
+    shell: Res<crate::bevy_app::select::ShellModifiers>,
     mut pointer: ResMut<crate::PointerState>,
 ) {
     // Update position from the last cursor event this frame (if any)
@@ -44,10 +45,13 @@ pub fn pointer_collect_system(
         }
     }
 
-    // Modifiers (simple logical OR of left/right variants)
+    // Modifiers: keys Bevy saw, or what the shell reports (it alone sees
+    // Alt and Cmd).
+    use crate::bevy_app::select::{MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT};
     use KeyCode::*;
-    pointer.modifiers.shift = keys.pressed(ShiftLeft) || keys.pressed(ShiftRight);
-    pointer.modifiers.ctrl = keys.pressed(ControlLeft) || keys.pressed(ControlRight);
-    pointer.modifiers.alt = keys.pressed(AltLeft) || keys.pressed(AltRight);
-    pointer.modifiers.meta = keys.pressed(SuperLeft) || keys.pressed(SuperRight);
+    let m = shell.0;
+    pointer.modifiers.shift = keys.pressed(ShiftLeft) || keys.pressed(ShiftRight) || m & MOD_SHIFT != 0;
+    pointer.modifiers.ctrl = keys.pressed(ControlLeft) || keys.pressed(ControlRight) || m & MOD_CTRL != 0;
+    pointer.modifiers.alt = keys.pressed(AltLeft) || keys.pressed(AltRight) || m & MOD_ALT != 0;
+    pointer.modifiers.meta = keys.pressed(SuperLeft) || keys.pressed(SuperRight) || m & MOD_META != 0;
 }

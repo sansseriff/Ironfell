@@ -58,7 +58,8 @@ redoes one with Cmd+Shift+Z, scrubs the slider and checks the bar bound to
 it, drags the bar so its bound y inverts onto the slider, scrubs the
 timeline and checks the clip driving the torus, applies one good and one
 bad edit in the model's markup, runs the pendulum through every
-constraint-system phase 3 exit (drag the ball, drag beyond reach, undo,
+constraint-system phase 3 exit with Cmd held, since the pendulum is a
+group and a plain click selects all of it (drag the ball, drag beyond reach, undo,
 a locked arm, an out-of-reach model edit adjusted then refused with
 exact, the length slider, the fix moved to the ball and the platform
 dragged, `.by` markers), runs the stage C1 exit in the main layout
@@ -66,8 +67,12 @@ dragged, `.by` markers), runs the stage C1 exit in the main layout
 composition views; hover either to light both; Show in each way; undo the
 link in one step; the model surface's `<link-figures>`, its merge question
 and `keep`), round-trips the document through save and load,
-and prints the transactions the store applied. Expected output, minus
-screenshot lines and the per-frame `solve:` lines:
+and prints the transactions the store applied. Then, on a fresh app, it
+runs the select tool (stage E, plans/select-tool.md): click, a corner
+resize, a Shift-snapped rotation, undo of both, a group's click /
+double-click / Esc / Esc, a marquee, arrow nudges, and delete of the
+pendulum undone in one step. Expected output, minus screenshot lines,
+`nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
@@ -140,6 +145,29 @@ applied "link" (4 ops, Model) -> v23
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
 loaded document v25 (66 live nodes)
+(no page errors)
+undefined
+["#M"]
+{"x":500,"y":420,"w":120,"h":100,"deg":0}
+{"x":553,"y":392,"w":120,"h":100,"deg":45}
+{"x":500,"y":420,"w":80,"h":80,"deg":0}
+["#V"]
+["#a"]
+["#V"]
+[]
+["#o","#V"]
+{"x":501,"y":430,"w":80,"h":80,"deg":0}
+false
+true
+applied "open demo scene" (76 ops, System) -> v1
+applied "resize rect" (2 ops, Human) -> v2
+applied "rotate rect" (3 ops, Human) -> v3
+applied "undo: rotate rect" (3 ops, System) -> v4
+applied "undo: resize rect" (2 ops, System) -> v5
+applied "nudge rect" (1 ops, Human) -> v6
+applied "nudge rect" (1 ops, Human) -> v7
+applied "delete group" (1 ops, Human) -> v8
+applied "undo: delete group" (16 ops, System) -> v9
 (no page errors)
 ```
 
@@ -234,6 +262,7 @@ cd -
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
 | `pclick <panel> x y` | click inside a named panel, panel-relative |
+| `dclick x y`, `ddblclick x y` | click or double-click at a document point in the viewer (the select tool: a double-click enters a group or embed) |
 | `click <text>` | click the shell button with that accessible name (`Link`, `Show in assembly`) |
 | `hunt x0 y0 x1 y1 step <js>` | sweep the pointer over a document-space grid until `<js>` is truthy (e.g. `__iron.hovered().includes(id)`); prints where. For targets whose screen position is hard to predict, such as a shape on a plane in 3D |
 | `dragfound dx dy` | drag from the last `hunt` hit by (dx, dy) document px |

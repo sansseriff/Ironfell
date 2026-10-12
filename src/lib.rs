@@ -225,9 +225,13 @@ pub struct PointerState {
     pub just_released_left: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Hit2D {
     pub entity: Entity,
+    /// The hit node as reached from the panel: from the panel composition's
+    /// top level down to the node, through every embed on the way
+    /// (`bevy_app::select`). Selection rules pick a node along it.
+    pub chain: Vec<iron_document::NodeId>,
     pub z: f32,
     /// From the panel's document space into the hit node's composition
     /// space: identity unless the node was reached through embeds.
@@ -237,9 +241,11 @@ pub struct Hit2D {
     pub through: Option<(Entity, Entity)>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Hit3D {
     pub entity: Entity,
+    /// As for [`Hit2D::chain`]; through the 3D embed when one was looked into.
+    pub chain: Vec<iron_document::NodeId>,
     pub distance: f32,
     /// The camera the ray was cast from: a 3D panel's, or a 3D embed's.
     pub camera: Entity,
@@ -252,6 +258,8 @@ pub struct PointerHits {
     /// The 3D embed under the pointer when nothing 2D is drawn over it there
     /// (its `EmbedView` key): the 3D picker casts through its camera.
     pub embed: Option<String>,
+    /// That embed's own chain (it ends with the embed node).
+    pub embed_chain: Vec<iron_document::NodeId>,
     pub overlay: Vec<Hit2D>,
     pub world3d: Vec<Hit3D>,
     pub primary: Option<Entity>,

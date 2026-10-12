@@ -45,6 +45,10 @@ extern "C" {
     /// applied). The shell re-reads whatever views it shows.
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_document_changed_from_worker(version: u32);
+    /// The canvas cursor the select tool wants: a CSS cursor name, or
+    /// `rotate:<degrees>` for the shell's rotation cursor.
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_cursor_from_worker(cursor: String);
 }
 
 /// Build the Bevy app around the canvas it will render into.
@@ -655,6 +659,28 @@ fn history_request(ptr: u64, op: crate::document_bridge::HistoryOp) {
     }
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
+    }
+}
+
+/// The modifier keys held, as `bevy_app::select` bits (Shift 1, Ctrl 2,
+/// Alt 4, Cmd 8). Sent with every pointer event and modifier key change.
+#[wasm_bindgen]
+pub fn set_modifiers(ptr: u64, bits: u8) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    if let Some(mut m) = app.world_mut().get_resource_mut::<crate::bevy_app::select::ShellModifiers>()
+        && m.0 != bits
+    {
+        m.0 = bits;
+    }
+}
+
+/// A select-tool shortcut the shell decided: Escape, Enter, Tab, an arrow,
+/// Delete or Backspace, or `a` with Cmd/Ctrl, with the modifier bits.
+#[wasm_bindgen]
+pub fn tool_key(ptr: u64, key: String, bits: u8) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    if let Some(mut keys) = app.world_mut().get_resource_mut::<crate::bevy_app::select::ToolKeys>() {
+        keys.0.push((key.to_lowercase(), bits));
     }
 }
 

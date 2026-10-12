@@ -60,6 +60,17 @@ export class InputManager {
 
     private post(data: any) { this.poster?.post(data); }
 
+    /** Modifier bits for the select tool: Shift 1, Ctrl 2, Alt 4, Cmd 8. */
+    private static mods(e: { shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean }): number {
+        return (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+    }
+    private lastMods = 0;
+    private sendMods(m: number) {
+        if (m === this.lastMods) return;
+        this.lastMods = m;
+        this.post({ ty: 'modifiers', m });
+    }
+
     private listen<K extends keyof HTMLElementEventMap>(
         target: HTMLElement | Window,
         type: string,
@@ -87,7 +98,8 @@ export class InputManager {
         this.listen(window, 'scroll', () => refreshRect(true), { passive: true });
 
         const moveMsg: any = { ty: 'mousemove', x: 0, y: 0 };
-        const send = (cx: number, cy: number) => {
+        const send = (cx: number, cy: number, ev?: PointerEvent) => {
+            if (ev) this.sendMods(InputManager.mods(ev));
             refreshRect();
             moveMsg.x = cx - rect.left;
             moveMsg.y = cy - rect.top;
@@ -101,10 +113,10 @@ export class InputManager {
                 // Rust consumes one cursor position per rendered frame, so posting the
                 // whole history only creates worker-queue backlog. Keep the newest point.
                 const latest = coalesced[coalesced.length - 1];
-                send(latest.clientX, latest.clientY);
+                send(latest.clientX, latest.clientY, ev);
                 return;
             }
-            send(ev.clientX, ev.clientY);
+            send(ev.clientX, ev.clientY, ev);
         };
 
         if (this.options.enableRaw && 'onpointerrawupdate' in window) {
@@ -116,9 +128,13 @@ export class InputManager {
         this.listen(canvas, 'pointerdown', (e: PointerEvent) => {
             refreshRect();
             const x = e.clientX - rect.left; const y = e.clientY - rect.top;
+            this.sendMods(InputManager.mods(e));
             this.post({ ty: 'leftBtDown', x, y });
         });
-        this.listen(canvas, 'pointerup', () => this.post({ ty: 'leftBtUp' }));
+        this.listen(canvas, 'pointerup', (e: PointerEvent) => {
+            this.sendMods(InputManager.mods(e));
+            this.post({ ty: 'leftBtUp' });
+        });
 
         this.listen(canvas, 'wheel', (e: WheelEvent) => {
             e.preventDefault();
@@ -131,8 +147,22 @@ export class InputManager {
         this.listen(window, 'keyup', (e: KeyboardEvent) => this.onKeyUp(e));
     }
 
+    /** Select-tool shortcuts, sent as commands with their modifiers. */
+    private static TOOL_KEYS = ['escape', 'enter', 'tab', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'delete', 'backspace'];
+
     private onKeyDown(event: KeyboardEvent) {
         const key = event.key.toLowerCase();
+        this.sendMods(InputManager.mods(event));
+        {
+            const target = event.target as HTMLElement | null;
+            const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+            const selectAll = key === 'a' && (event.metaKey || event.ctrlKey);
+            if (!editing && (InputManager.TOOL_KEYS.includes(key) || selectAll)) {
+                event.preventDefault();
+                this.post({ ty: 'toolKey', key, m: InputManager.mods(event) });
+                return;
+            }
+        }
         // Editor commands are decided here and sent as commands, not keys:
         // Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z or Ctrl+Y redoes.
         if ((event.metaKey || event.ctrlKey) && (key === 'z' || key === 'y')) {
@@ -172,6 +202,7 @@ export class InputManager {
 
     private onKeyUp(event: KeyboardEvent) {
         const key = event.key.toLowerCase();
+        this.sendMods(InputManager.mods(event));
         if (this.keyPressed.has(key)) {
             this.keyPressed.delete(key);
             this.post({ ty: 'keyup', key });

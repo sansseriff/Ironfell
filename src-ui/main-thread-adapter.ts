@@ -36,6 +36,7 @@ export class MainThreadAdapter {
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
       send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
+      send_cursor_from_worker: (cursor: string) => this.sendMessage({ ty: "cursor", cursor }),
       send_document_changed_from_worker: (version: number) => this.sendMessage({ ty: "documentChanged", version }),
     };
 
@@ -122,8 +123,17 @@ export class MainThreadAdapter {
 
       case "leftBtDown":
         if (this.appHandle !== BigInt(0)) {
+          if (typeof data.x === "number") glue.mouse_move(this.appHandle, data.x, data.y);
           glue.left_bt_down(this.appHandle);
         }
+        break;
+
+      case "modifiers":
+        if (this.appHandle !== BigInt(0)) glue.set_modifiers(this.appHandle, data.m);
+        break;
+
+      case "toolKey":
+        if (this.appHandle !== BigInt(0)) glue.tool_key(this.appHandle, data.key, data.m);
         break;
 
       case "leftBtUp":

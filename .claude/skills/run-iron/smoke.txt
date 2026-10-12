@@ -69,6 +69,10 @@ shot after-model-edit
 # CS phase 3, the pendulum (document space: platform (240,40)-(400,60), hinge
 # (320,60), joints every 100 px down, ball at (320,360) r=14, length slider
 # (100,660)-(400,684), height bar at x=700).
+# The pendulum is a group, so a plain click selects the whole group (Figma's
+# rule; bevy_app/select.rs). Cmd held reaches its parts directly: deep
+# select, for every pendulum step below.
+keydown Meta
 # 1. Drag the ball: the arms follow every frame and the height bar tracks it;
 #    a mid-drag view shows the previewed joints and the arm's solved rotation.
 dmove 320 360
@@ -97,6 +101,7 @@ eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.
 # Undo both drags returns every part.
 key Meta+z
 key Meta+z
+keydown Meta
 sleep 500
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), j && j[0].replace(/ rot=.*/, '')]; })()
 # 6. A node whose position is bound (arm1) does not drag; the reason shows.
@@ -107,6 +112,7 @@ peek locked for this drag
 eval (async () => { const r = await __iron.edit('<edit><set id="#a" x="900"/></edit>'); return r.summary; })()
 eval (async () => { const r = await __iron.edit('<edit exact="true"><set id="#a" x="900"/></edit>'); return r.failure; })()
 key Meta+z
+keydown Meta
 sleep 400
 # 5. Scrub the length slider to about 1.2: the links re-solve live and the
 #    release is one "set slider" transaction.
@@ -119,15 +125,19 @@ eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.
 ddrag 260 50 300 50
 shot pendulum-platform-drag
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const p = v.match(/<rect[^>]*name="platform"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), p && p[0].replace(/ rot=.*/, '')]; })()
+keyup Meta
 # 8. The view marks the solver's variables with the cluster that keeps them.
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return j && j[0].match(/x\.by="[^"]*"/)[0]; })()
 # A 2D composition inside a 3D one (ECM §7.4; view-textures step 4): the
 # `card` composition is a plane beside the torus in the assembly, drawn in
 # perspective. Find its dot by hovering (picking goes 2D view -> 3D view ->
-# plane -> 2D card), then drag it: the pointer maps through the plane.
+# plane -> 2D card), then drag it: the pointer maps through the plane. The
+# plane is an embed inside the view, so its content is Cmd (deep) away.
+keydown Meta
 eval (async () => { const v = await __iron.view({fidelity:'full'}); window.__dot = v.match(/<circle id="([^"]+)" name="card dot"/)[1]; return window.__dot; })()
 hunt 900 120 1010 230 5 __iron.hovered().includes(window.__dot)
 dragfound 15 0
+keyup Meta
 sleep 600
 shot card-dot-dragged
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<circle[^>]*name="card dot" x="([^"]+)"/); return Number(m[1]) > 60; })()
@@ -191,5 +201,62 @@ sleep 500
 shot after-load
 eval document.querySelector("pre.view")?.textContent.split("\n").slice(0, 4).join(" | ")
 logs applied|rejected|loaded document|nothing to|panicked|binding|locked|differs|by Human|by Model
+errors
+# Stage E, the select tool (plans/select-tool.md), on a fresh app so the
+# viewer is unpanned: Figma's click, double-click, Esc, marquee, the box's
+# corner resize and Shift-snapped rotation, nudge, and delete, each one
+# transaction that undoes in one step.
+nav
+ready
+eval window.sq = async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="square"[^>]*>/)[0]; const n = (k) => Number(m.match(new RegExp(' ' + k + '="([^"]+)"'))[1]); return { x: Math.round(n('x')), y: Math.round(n('y')), w: Math.round(n('w')), h: Math.round(n('h')), deg: Math.round(n('rot') * 180 / Math.PI) }; }
+dclick 540 460
+eval __iron.selection()
+# The bottom-right corner (580,500) dragged by +40,+20.
+ddrag 580 500 620 520
+eval sq()
+# Just outside the top-right corner rotates; Shift snaps to 15°.
+keydown Shift
+ddrag 632 408 680 470
+keyup Shift
+eval sq()
+shot select-rotated
+key Meta+z
+key Meta+z
+sleep 400
+eval sq()
+# The pendulum is a group: a click selects it, a double-click enters it, Esc
+# climbs back out and then clears.
+dclick 320 360
+eval __iron.selection()
+ddblclick 320 360
+eval __iron.selection()
+key Escape
+sleep 300
+eval __iron.selection()
+key Escape
+sleep 300
+eval __iron.selection()
+# A marquee from empty canvas touches the scene's view and the pendulum.
+ddrag 20 520 260 720
+eval __iron.selection()
+shot select-marquee
+key Escape
+sleep 300
+# Arrows nudge (Shift: 10 px), one transaction per press.
+dclick 540 460
+key ArrowRight
+sleep 300
+key Shift+ArrowDown
+sleep 300
+eval sq()
+# Delete the pendulum group, then undo: the whole subtree returns.
+dclick 320 360
+key Backspace
+sleep 400
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return /name="pendulum"/.test(v); })()
+key Meta+z
+sleep 500
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return /name="pendulum"/.test(v); })()
+logs applied|rejected|panicked
 errors
 quit

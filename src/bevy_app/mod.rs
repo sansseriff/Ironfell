@@ -5,6 +5,7 @@ mod input_accum;
 mod interaction;
 mod picking;
 mod pointer;
+pub(crate) mod select;
 pub(crate) mod scene3d;
 mod timeline;
 mod ui_panels;
@@ -25,7 +26,7 @@ pub(crate) use scene3d::ScreenRect as ScreenRectMarker;
 pub(crate) use scene3d::ActiveState as ActiveStateMarker;
 // Bring required items into scope from submodules
 use interaction::{
-    PendingCommit, drag_apply_system, drag_commit_system, interaction_decide_system,
+    PendingCommit, drag_apply_system, drag_commit_system,
     outbound_hover_system, outbound_selection_system, selection_reflect_system,
 };
 use picking::{pick_document_2d_system, pick_world_3d_system, pointer_panel_system, resolve_primary_hit_system};
@@ -227,7 +228,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     app.add_systems(
         PostUpdate,
         (
-            interaction_decide_system,
+            select::select_tool_system,
             // A drag previews into the store, the bridge rewrites the
             // affected entities, and the deferred inserts are applied, all
             // before propagation so transform consumers and the 2D layer see
@@ -235,7 +236,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             (drag_apply_system, reconcile_gesture, ApplyDeferred)
                 .chain()
                 .in_set(GestureSystems)
-                .after(interaction_decide_system)
+                .after(select::select_tool_system)
                 .before(TransformSystems::Propagate),
             // Writeback: the released drag becomes one gesture commit,
             // applied by the document sync next frame.
@@ -262,11 +263,12 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             // Highlights before the 2D layer draws (after propagation) and
             // before the 3D outlines read them.
             crate::document_bridge::update_highlights
-                .after(interaction_decide_system)
+                .after(select::select_tool_system)
                 .before(TransformSystems::Propagate),
             selection_reflect_system.after(crate::document_bridge::update_highlights),
-            outbound_hover_system.after(interaction_decide_system),
-            outbound_selection_system.after(interaction_decide_system),
+            outbound_hover_system.after(select::select_tool_system),
+            outbound_selection_system.after(select::select_tool_system),
+            select::draw_select_overlay.after(TransformSystems::Propagate),
             render_active_shapes
                 .after(GestureSystems)
                 .after(selection_reflect_system),
@@ -301,6 +303,9 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<crate::SelectionState>();
     app.init_resource::<crate::DragState>();
     app.init_resource::<PendingCommit>();
+    app.init_resource::<select::SelectTool>();
+    app.init_resource::<select::ShellModifiers>();
+    app.init_resource::<select::ToolKeys>();
 }
 
 /// STEP 2 (ladder): let bevy_ui draw into the backend's compositing camera.

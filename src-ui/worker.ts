@@ -37,6 +37,7 @@ class IronWorker {
       send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
       send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
+      send_cursor_from_worker: (cursor: string) => self.postMessage({ ty: "cursor", cursor }),
       send_document_changed_from_worker: (version: number) => self.postMessage({ ty: "documentChanged", version }),
     };
 
@@ -133,7 +134,21 @@ class IronWorker {
           break;
 
         case "leftBtDown":
+          // The press lands where it happened, not at the last buffered move.
+          if (typeof data.x === "number") {
+            this.latestMouseX = data.x;
+            this.latestMouseY = data.y;
+            this.hasMouseUpdate = true;
+          }
           glue.left_bt_down(this.appHandle);
+          break;
+
+        case "modifiers":
+          if (this.appHandle !== BigInt(0)) glue.set_modifiers(this.appHandle, data.m);
+          break;
+
+        case "toolKey":
+          if (this.appHandle !== BigInt(0)) glue.tool_key(this.appHandle, data.key, data.m);
           break;
 
         case "leftBtUp":

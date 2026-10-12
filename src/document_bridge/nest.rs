@@ -106,6 +106,24 @@ pub fn embed_2d(
     Some(Embed2d { source, placement, region })
 }
 
+/// `id` and its ancestors inside its composition, outermost first: the part
+/// of a selection chain (`bevy_app::select`) one composition contributes.
+/// Stops below the composition root, or at a loose root.
+pub fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
+    let composition = TypeId::lookup("composition").expect("registered");
+    let mut out = vec![id];
+    let mut cur = doc.live(id).and_then(|n| n.parent);
+    while let Some(n) = cur.and_then(|c| doc.live(c)) {
+        if n.ty == composition {
+            break;
+        }
+        out.push(n.id);
+        cur = n.parent;
+    }
+    out.reverse();
+    out
+}
+
 pub fn is_embed(doc: &Document, id: NodeId) -> bool {
     doc.live(id).is_some_and(|n| n.ty.name() == "embed")
 }

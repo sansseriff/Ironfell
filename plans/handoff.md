@@ -12,6 +12,12 @@ conservative-ports decision first). Known and left: `iron_solve`'s
 `three_link_chain_reaches_a_target` fails (CS §14, phase 1 note). The smoke script now also
 needs `GPU=1` for any frame-time measurement (see `SKILL.md`).
 
+**Update, end of 2026-10-11:** stage E has begun with the **select tool**, at the user's
+request: Figma's semantics, recorded in `plans/select-tool.md`. A plain click on a group
+(the pendulum) now selects the group, and the smoke script holds Cmd for the IK steps.
+The pen tool comes next and should reuse `select.rs`'s chains and its preview-and-commit
+pattern.
+
 ---
 
 ## 1. Read, in this order

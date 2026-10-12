@@ -1,4 +1,5 @@
-//! Selection, hover, and drag.
+//! The drags the select tool (`select`) hands off: meshes in 3D, content on
+//! planes, sliders. Selection and the 2D box live in `select`.
 //!
 //! A drag is an intent (plans/document-spine.md §10) carried by the store's
 //! gesture overlay: every frame the pointer's position is previewed through
@@ -17,17 +18,17 @@
 //! and snapping back. The reasons are logged at press.
 
 use bevy::prelude::*;
-use iron_document::{DragMode, Handle, LeafPath, Value};
+use iron_document::{DragMode, LeafPath, Value};
 
 use crate::bevy_app::scene3d::ActiveState;
 use crate::document_bridge::{Doc2d, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelViews, Provenance, Shape2d, type_of};
 
-type DragCameras<'w, 's> = Query<'w, 's, (Entity, &'static Camera, &'static GlobalTransform, Option<&'static crate::bevy_app::scene3d::ScreenRect>, Option<&'static crate::bevy_app::scene3d::PointerToCamera>)>;
+pub(crate) type DragCameras<'w, 's> = Query<'w, 's, (Entity, &'static Camera, &'static GlobalTransform, Option<&'static crate::bevy_app::scene3d::ScreenRect>, Option<&'static crate::bevy_app::scene3d::PointerToCamera>)>;
 
 /// The pointer as document px in the dragged node's composition: through the
 /// panel and any embeds (an affine), or through a plane in 3D (a ray from
 /// the camera that showed it, meeting the plane).
-fn drag_point(
+pub(crate) fn drag_point(
     drag: &crate::DragState,
     views: &PanelViews,
     screen: Vec2,
@@ -57,153 +58,6 @@ pub struct PendingCommit(pub Option<Entity>);
 
 fn leaf(s: &str) -> LeafPath {
     s.parse().expect("declared leaf")
-}
-
-/// Whether the leaf has a handle now; the reason is logged when it does not,
-/// which is the "why can't I move this" answer until the inspector shows it.
-fn locked(store: &DocumentStore, id: iron_document::NodeId, path: LeafPath) -> bool {
-    match store.0.handle(id, path) {
-        Handle::Locked(reason) => {
-            info!("{id}.{path} locked for this drag: {reason}");
-            true
-        }
-        _ => false,
-    }
-}
-
-// Decide drag start/stop and update selection based on pointer hits.
-pub fn interaction_decide_system(
-    pointer: Res<crate::PointerState>,
-    hits: Res<crate::PointerHits>,
-    mut drag: ResMut<crate::DragState>,
-    mut selection: ResMut<crate::SelectionState>,
-    mut commit: ResMut<PendingCommit>,
-    cameras: DragCameras,
-    transforms: Query<&GlobalTransform>,
-    doc2d: Query<&Doc2d>,
-    provenance: Query<&Provenance>,
-    mut store: ResMut<DocumentStore>,
-    views: Res<PanelViews>,
-    planes: Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane)>,
-) {
-    // Hover follows the primary hit, as a document node. Written only on
-    // change so downstream change detection (and the outbound FFI) stays
-    // quiet while hovering.
-    let hovered_now = hits.primary.and_then(|e| provenance.get(e).ok()).map(|p| p.0);
-    if selection.hovered != hovered_now {
-        selection.hovered = hovered_now;
-    }
-
-    // Drag begin or click selection start
-    if pointer.just_pressed_left {
-        if let Some(primary) = hits.primary {
-            // Shift adds to the selection (Link takes two figures); a plain
-            // press replaces it.
-            if let Ok(prov) = provenance.get(primary) {
-                if !pointer.modifiers.shift {
-                    selection.selected.clear();
-                }
-                if !selection.selected.contains(&prov.0) {
-                    selection.selected.push(prov.0);
-                }
-            }
-            drag.target = Some(primary);
-            drag.handle = None;
-            drag.panel = hits.panel.clone();
-            // The pointer reaches an embedded node through its embeds.
-            drag.space = hits.overlay.iter().find(|h| h.entity == primary).map_or(kurbo::Affine::IDENTITY, |h| h.space);
-            drag.through = hits.overlay.iter().find(|h| h.entity == primary).and_then(|h| h.through);
-            drag.camera = hits.world3d.iter().find(|h| h.entity == primary).map(|h| h.camera);
-            drag.press_screen = pointer.screen;
-            let Ok(prov) = provenance.get(primary) else {
-                drag.target = None;
-                return;
-            };
-            let id = prov.0;
-
-            if doc2d.get(primary).is_ok_and(|d| matches!(d.shape, Shape2d::Slider { .. })) {
-                // Scrubbing the value, not moving the control. The first
-                // preview happens in drag_apply this same frame.
-                drag.kind = Some(crate::DragKind::SliderValue);
-            } else if doc2d.contains(primary) {
-                // The grab point in the node's local space is the anchor the
-                // store drags by (a finger on it, for a constrained node).
-                let p = drag_point(&drag, &views, pointer.screen, &cameras, &planes).unwrap_or(Vec2::ZERO);
-                let local = transforms
-                    .get(primary)
-                    .map(|g| g.affine().inverse().transform_point3(p.extend(0.0)))
-                    .unwrap_or(Vec3::ZERO);
-                let h = store.0.begin_drag(id, [local.x as f64, local.y as f64]);
-                match &h.mode {
-                    DragMode::Locked(reasons) => {
-                        for r in reasons {
-                            info!("{id} locked for this drag: {r}");
-                        }
-                        drag.kind = None;
-                        drag.target = None;
-                    }
-                    DragMode::Axes { locked, .. } => {
-                        for r in locked {
-                            info!("{id} locked for this drag: {r}");
-                        }
-                        drag.kind = Some(crate::DragKind::Overlay2D);
-                        drag.handle = Some(h);
-                    }
-                    DragMode::Cluster(cluster) => {
-                        info!("{id} dragged through cluster {cluster}");
-                        drag.kind = Some(crate::DragKind::Overlay2D);
-                        drag.handle = Some(h);
-                    }
-                }
-            } else if locked(&store, id, leaf("transform3d.pos")) {
-                drag.kind = None;
-                drag.target = None;
-            } else {
-                drag.kind = Some(crate::DragKind::World3D);
-                // Establish drag plane for 3D: if ctrl held -> fixed XZ plane (normal Y).
-                // Otherwise plane passes through object and is camera-facing (normal = camera forward).
-                if let Some((_, camera, cam_tf, screen, to_camera)) = drag.camera.and_then(|c| cameras.get(c).ok()) {
-                    let local = crate::bevy_app::scene3d::to_camera_px(pointer.screen, screen, to_camera);
-                    let cam_forward = cam_tf.forward().as_vec3();
-                    let plane_normal = if pointer.modifiers.ctrl { Vec3::Y } else { cam_forward };
-                    drag.plane_normal = plane_normal.normalize_or_zero();
-                    if let Ok(ent_tf) = transforms.get(primary) {
-                        drag.plane_origin = ent_tf.translation();
-                    } else {
-                        drag.plane_origin = cam_tf.translation();
-                    }
-                    if let Some(ray) =
-                        crate::bevy_app::picking::camera_ray_from_window_px(camera, cam_tf, local)
-                    {
-                        if let Some(hit_pos) = intersect_ray_plane(ray, drag.plane_origin, drag.plane_normal) {
-                            if let Ok(ent_tf) = transforms.get(primary) {
-                                drag.grab_offset_world = ent_tf.translation() - hit_pos;
-                            } else {
-                                drag.grab_offset_world = Vec3::ZERO;
-                            }
-                            drag.plane_origin = hit_pos; // better stability when camera plane
-                        } else {
-                            drag.grab_offset_world = Vec3::ZERO;
-                        }
-                    }
-                }
-            }
-        } else if !selection.selected.is_empty() {
-            selection.selected.clear();
-        }
-    }
-
-    // Drag end, after the press: a click whose press and release share a
-    // frame starts and ends its gesture in that frame. The finger lifts now;
-    // the commit follows next sync.
-    if pointer.just_released_left && drag.target.is_some() {
-        commit.0 = drag.target;
-        drag.target = None;
-        drag.kind = None;
-        if let Some(h) = drag.handle.take() {
-            store.0.end_drag(&h);
-        }
-    }
 }
 
 /// Follow the pointer by previewing the dragged node's leaves in the store.
@@ -319,7 +173,7 @@ pub fn drag_commit_system(
 }
 
 // Utility: ray-plane intersection (plane defined by point & normal). Returns world hit.
-fn intersect_ray_plane(ray: Ray3d, plane_point: Vec3, plane_normal: Vec3) -> Option<Vec3> {
+pub(crate) fn intersect_ray_plane(ray: Ray3d, plane_point: Vec3, plane_normal: Vec3) -> Option<Vec3> {
     let denom = ray.direction.dot(plane_normal);
     if denom.abs() < 1e-5 {
         return None;

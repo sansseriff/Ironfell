@@ -1,0 +1,1320 @@
+//! The select tool (roadmap stage E): Figma's selection, drag and transform
+//! semantics over the document's compositions (plans/select-tool.md).
+//!
+//! Every hit carries its *chain*: the nodes from the panel composition's top
+//! level down to the hit node, through groups and embeds. A click selects
+//! one node along it: the outermost one whose container is not *open*. A
+//! container is open while something inside it is selected (so a sibling of
+//! the selection is one click away), and a top-level embed is always open,
+//! like a top-level frame in Figma: its contents select directly and its
+//! background selects the embed. Cmd/Ctrl-click selects the hit node itself;
+//! a double-click enters one level; Shift adds or removes.
+//!
+//! Pressing a selected node, or inside the selection's box, drags the whole
+//! selection through `Store::begin_drag`. The box's corners and edges resize
+//! (Shift keeps the aspect, Alt resizes about the centre), just outside a
+//! corner rotates (Shift snaps to 15°). Every gesture previews through the
+//! store and closes as one transaction; none of the box is document state.
+//!
+//! Gestures this tool does not draw a box for keep their own paths in
+//! `interaction`: dragging meshes in 3D, content on planes in 3D, sliders.
+
+use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
+use iron_document::composition::{self, Dims};
+use iron_document::{Actor, DragHandle, DragMode, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
+use bevy::ecs::system::SystemParam;
+use kurbo::{Affine, ParamCurve as _, Point, Rect, Shape as _};
+
+use crate::bevy_app::interaction::{DragCameras, PendingCommit, drag_point, intersect_ray_plane};
+use crate::document_bridge::{Doc2d, DocumentPanelLayer, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelView, PanelViews, PendingTransactions, Provenance, Shape2d, nest};
+use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
+
+/// A node as reached in one panel: the chain from the panel composition's
+/// top level down to it, through every group and embed on the way.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reach {
+    pub panel: String,
+    pub chain: Vec<NodeId>,
+}
+
+impl Reach {
+    pub fn node(&self) -> NodeId {
+        *self.chain.last().expect("a chain is never empty")
+    }
+}
+
+/// Modifier keys as the shell last reported them (bits below): the browser
+/// knows Alt and Cmd, which never arrive as keys.
+#[derive(Resource, Default)]
+pub struct ShellModifiers(pub u8);
+
+pub const MOD_SHIFT: u8 = 1;
+pub const MOD_CTRL: u8 = 2;
+pub const MOD_ALT: u8 = 4;
+pub const MOD_META: u8 = 8;
+
+/// Tool shortcuts from the shell, as keys with their modifier bits:
+/// Escape, Enter, Tab, arrows, Delete/Backspace, and `a` (with Cmd/Ctrl).
+#[derive(Resource, Default)]
+pub struct ToolKeys(pub Vec<(String, u8)>);
+
+/// Window px the pointer may travel and still click.
+const SLOP: f32 = 3.0;
+/// Seconds and window px between two clicks that make a double-click.
+const DOUBLE_CLICK: (f64, f32) = (0.4, 5.0);
+/// Grip sizes, window px: a corner's reach, an edge's, how far outside a
+/// corner rotation reaches, and the drawn corner square.
+const CORNER_HIT: f64 = 6.0;
+const EDGE_HIT: f64 = 4.0;
+const ROTATE_HIT: f64 = 22.0;
+const HANDLE: f64 = 7.0;
+/// Rotation snap with Shift.
+const SNAP: f64 = std::f64::consts::PI / 12.0;
+
+const BLUE: [f32; 4] = [0.05, 0.6, 1.0, 1.0];
+
+#[derive(Resource, Default)]
+pub struct SelectTool {
+    /// How each selected node was reached. A selection made elsewhere (the
+    /// shell, Show in) is resolved to a reach when first needed.
+    pub reach: HashMap<NodeId, Reach>,
+    pub hover: Option<Reach>,
+    /// The marquee being drawn: its panel and its rectangle in document px.
+    pub marquee: Option<(String, Rect)>,
+    gesture: Gesture,
+    last_click: Option<(f64, Vec2, NodeId)>,
+    cursor: String,
+}
+
+#[derive(Default)]
+enum Gesture {
+    #[default]
+    Idle,
+    /// Pressed, not yet dragged: a click if released here.
+    Press { panel: String, start: Vec2, then: AfterPress },
+    Move { label: String, start: Point, view: PanelView, drags: Vec<(DragHandle, Affine)> },
+    Transform { label: String, view: PanelView, kind: TransformKind, frame: Affine, start: Point, parts: Vec<Part>, rot0: Option<f64> },
+    Marquee { view: PanelView, start: Point, prefix: Vec<NodeId>, roots: Vec<NodeId>, base: Vec<Reach> },
+    /// A drag `interaction::drag_apply_system` runs (3D, planes, sliders).
+    Legacy,
+}
+
+enum AfterPress {
+    /// A drag moves the selection.
+    Move { click: Click },
+    /// A drag draws a marquee over `roots` (reached through `prefix`).
+    Marquee { prefix: Vec<NodeId>, roots: Vec<NodeId>, click: Click },
+}
+
+/// What a press that did not become a drag does on release.
+enum Click {
+    Keep,
+    Only(Reach),
+    Remove(NodeId),
+    Clear,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TransformKind {
+    /// The grip in the box's unit square: corners and edge midpoints.
+    Resize { grip: (f64, f64) },
+    Rotate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Grip {
+    Resize(f64, f64),
+    /// Outside this corner.
+    Rotate(f64, f64),
+    Body,
+}
+
+/// What resizing a node writes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    /// `size.w`, `size.h` (rects, sliders); `aspect` when a camera fixes h.
+    Sized { aspect: bool },
+    /// `radius.r`; the origin is the centre.
+    Circle,
+    /// A 2D embed's window, `frame.*`, the content staying put.
+    Window { frame: bool },
+    /// Resized through its children; rotates as itself.
+    Group,
+    /// Nothing to write (a slider with no `size`).
+    Fixed,
+}
+
+/// One node a resize or rotation writes, as it was when the gesture began.
+#[derive(Clone, Debug)]
+struct Part {
+    id: NodeId,
+    kind: Kind,
+    /// Document px of the panel ← the node's parent space.
+    parent: Affine,
+    trs: [f64; 5],
+    bounds: Rect,
+}
+
+/// Read access to everything geometry needs.
+struct Geo<'a, 'w, 's> {
+    store: &'a Store,
+    map: &'a NodeMap,
+    globals: &'a Query<'w, 's, &'static GlobalTransform>,
+    nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
+}
+
+fn kaffine(a: iron_document::Affine2) -> Affine {
+    Affine::new(a.0)
+}
+
+fn leaf(s: &str) -> LeafPath {
+    s.parse().expect("declared leaf")
+}
+
+/// The unit square onto `r`.
+fn unit(r: Rect) -> Affine {
+    Affine::translate((r.x0, r.y0)) * Affine::scale_non_uniform(r.width().max(1e-6), r.height().max(1e-6))
+}
+
+fn wrap(a: f64) -> f64 {
+    let t = std::f64::consts::TAU;
+    a - t * ((a + std::f64::consts::PI) / t).floor()
+}
+
+impl Geo<'_, '_, '_> {
+    fn doc(&self) -> &iron_document::Document {
+        self.store.document()
+    }
+
+    fn num(&self, id: NodeId, path: &str) -> Option<f64> {
+        self.store.resolved(id, leaf(path)).and_then(|v| v.as_f64())
+    }
+
+    fn ty(&self, id: NodeId) -> &'static str {
+        self.doc().live(id).map(|n| n.ty.name()).unwrap_or("")
+    }
+
+    fn world(&self, id: NodeId) -> Affine {
+        kaffine(self.store.world_affine(id))
+    }
+
+    fn has(&self, id: NodeId, kind: iron_document::ComponentKind) -> bool {
+        self.doc().component(id, kind).is_some()
+    }
+
+    /// Panel document px ← the space the chain's node is placed in (its
+    /// composition's). `None` through anything 3D.
+    fn space(&self, chain: &[NodeId]) -> Option<Affine> {
+        let doc = self.doc();
+        let mut a = Affine::IDENTITY;
+        let (last, outer) = chain.split_last()?;
+        for &e in outer {
+            if !nest::is_embed(doc, e) {
+                continue;
+            }
+            let source = composition::embedded(doc, e)?;
+            let placed_in = composition::composition_of(doc, e).and_then(|c| composition::dims(doc, c));
+            if composition::dims(doc, source) != Some(Dims::Two) || placed_in == Some(Dims::Three) {
+                return None;
+            }
+            a = a * self.world(e);
+        }
+        let in_3d = composition::composition_of(doc, *last).and_then(|c| composition::dims(doc, c)) == Some(Dims::Three);
+        (!in_3d).then_some(a)
+    }
+
+    /// The node's box in its own space and what resizing it writes.
+    fn local_box(&self, id: NodeId) -> Option<(Rect, Kind)> {
+        use iron_document::ComponentKind as K;
+        let doc = self.doc();
+        match self.ty(id) {
+            "rect" => Some((Rect::new(0.0, 0.0, self.num(id, "size.w")?, self.num(id, "size.h")?), Kind::Sized { aspect: false })),
+            "slider" => {
+                if self.has(id, K::Size) {
+                    return Some((Rect::new(0.0, 0.0, self.num(id, "size.w")?, self.num(id, "size.h")?), Kind::Sized { aspect: false }));
+                }
+                let (d, _) = self.map.entity(id).and_then(|e| self.nodes.get(e).ok())?;
+                let Shape2d::Slider { w, h, .. } = d.shape else { return None };
+                Some((Rect::new(0.0, 0.0, w as f64, h as f64), Kind::Fixed))
+            }
+            "circle" => {
+                let r = self.num(id, "radius.r")?;
+                Some((Rect::new(-r, -r, r, r), Kind::Circle))
+            }
+            "embed" => {
+                if let Some((_, camera, w, h)) = nest::embed_3d(self.store, id) {
+                    return Some((Rect::new(0.0, 0.0, w, h), Kind::Sized { aspect: camera.is_some() }));
+                }
+                let e = nest::embed_2d(doc, self.map, self.globals, self.nodes, id)?;
+                Some((e.region, Kind::Window { frame: self.has(id, K::Frame) }))
+            }
+            "group" => {
+                let inv = self.world(id).inverse();
+                let r = doc
+                    .children(id)
+                    .iter()
+                    .filter_map(|&c| self.local_box(c).map(|(b, _)| (inv * self.world(c)).transform_rect_bbox(b)))
+                    .reduce(|a, b| a.union(b))?;
+                Some((r, Kind::Group))
+            }
+            _ => None,
+        }
+    }
+
+    /// The unit square onto the node's box, in panel document px.
+    fn frame(&self, chain: &[NodeId]) -> Option<Affine> {
+        let id = *chain.last()?;
+        let (b, _) = self.local_box(id)?;
+        Some(self.space(chain)? * self.world(id) * unit(b))
+    }
+
+    /// The selection's box in `panel`: the node's own (oriented) box for
+    /// one node, the bounding box of every node's for several.
+    fn selection_frame(&self, items: &[&Reach]) -> Option<Affine> {
+        match items {
+            [] => None,
+            [one] => self.frame(&one.chain),
+            many => {
+                let r = many
+                    .iter()
+                    .filter_map(|r| self.frame(&r.chain))
+                    .map(|f| f.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)))
+                    .reduce(|a, b| a.union(b))?;
+                Some(unit(r))
+            }
+        }
+    }
+
+    fn trs(&self, id: NodeId) -> [f64; 5] {
+        let n = |f: &str, d: f64| self.num(id, &format!("transform2d.{f}")).unwrap_or(d);
+        [n("x", 0.0), n("y", 0.0), n("rot", 0.0), n("sx", 1.0), n("sy", 1.0)]
+    }
+
+    /// The nodes a gesture on `chain`'s node writes: the node itself, or for
+    /// a resize of a group, its leaves.
+    fn parts(&self, chain: &[NodeId], resize: bool, out: &mut Vec<Part>) {
+        let Some(&id) = chain.last() else { return };
+        let Some((bounds, kind)) = self.local_box(id) else { return };
+        let Some(space) = self.space(chain) else { return };
+        if resize && kind == Kind::Group {
+            for &c in self.doc().children(id) {
+                let mut sub = chain.to_vec();
+                sub.push(c);
+                self.parts(&sub, true, out);
+            }
+            return;
+        }
+        let parent = self.doc().live(id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| self.world(p));
+        out.push(Part { id, kind, parent: space * parent, trs: self.trs(id), bounds });
+    }
+
+    /// Whether a leaf can follow a gesture right now.
+    fn free(&self, id: NodeId, path: &str) -> bool {
+        self.doc().leaf(id, leaf(path)).is_some() && !matches!(self.store.handle(id, leaf(path)), Handle::Locked(_))
+    }
+
+    fn resizable(&self, parts: &[Part]) -> bool {
+        !parts.is_empty()
+            && parts.iter().all(|p| match p.kind {
+                Kind::Sized { .. } => self.free(p.id, "size.w") || self.free(p.id, "size.h"),
+                Kind::Circle => self.free(p.id, "radius.r"),
+                Kind::Window { frame } => frame,
+                Kind::Group | Kind::Fixed => false,
+            })
+    }
+
+    fn rotatable(&self, parts: &[Part]) -> bool {
+        !parts.is_empty() && parts.iter().all(|p| self.free(p.id, "transform2d.rot"))
+    }
+}
+
+/// Position, rotation, box size and whether `sy` flips, from the map of
+/// the unit square (or of the node's local axes, for size 1) into the
+/// parent's space; shear is dropped.
+fn decompose(f: Affine, trs: [f64; 5]) -> (f64, f64, f64, f64, f64, bool) {
+    let [a, b, c, d, e, g] = f.as_coeffs();
+    let [_, _, rot0, sx, sy] = trs;
+    let phi = b.atan2(a);
+    let rot = rot0 + wrap(phi - if sx < 0.0 { std::f64::consts::PI } else { 0.0 } - rot0);
+    let w = a.hypot(b) / sx.abs().max(1e-9);
+    let (s, co) = phi.sin_cos();
+    let y2 = -s * c + co * d;
+    let h = y2 / sy * if sx < 0.0 { -1.0 } else { 1.0 };
+    (e, g, rot, w, h.abs(), h < 0.0)
+}
+
+impl Part {
+    /// The leaf values that apply `a` (panel document px) to this node.
+    fn apply(&self, a: Affine, resize: bool) -> Vec<(&'static str, f64)> {
+        let [x, y, rot, sx, sy] = self.trs;
+        let q = self.parent.inverse() * a * self.parent;
+        let l = Affine::translate((x, y)) * Affine::rotate(rot) * Affine::scale_non_uniform(sx, sy);
+        let mut out = Vec::new();
+        // Every leaf the gesture may drive, not only the ones that differ
+        // from the start: one that returns there must be previewed back.
+        let mut put = |path: &'static str, _start: f64, new: f64| {
+            if new.is_finite() {
+                out.push((path, new));
+            }
+        };
+        let (bw, bh) = (self.bounds.width(), self.bounds.height());
+        match (resize, self.kind) {
+            (true, Kind::Sized { aspect }) => {
+                let (nx, ny, nrot, w, h, flip) = decompose(q * l * Affine::scale_non_uniform(bw.max(1e-6), bh.max(1e-6)), self.trs);
+                put("transform2d.x", x, nx);
+                put("transform2d.y", y, ny);
+                put("transform2d.rot", rot, nrot);
+                put("size.w", bw, w);
+                if !aspect {
+                    put("size.h", bh, h);
+                }
+                put("transform2d.sy", sy, if flip { -sy } else { sy });
+            }
+            (true, Kind::Circle) => {
+                let r = bw * 0.5;
+                let f = q * l * Affine::translate((-r, -r)) * Affine::scale(2.0 * r.max(1e-6));
+                let centre = f * Point::new(0.5, 0.5);
+                let [a0, b0, c0, d0, _, _] = f.as_coeffs();
+                let nr = (a0.hypot(b0) / sx.abs().max(1e-9) + c0.hypot(d0) / sy.abs().max(1e-9)) * 0.25;
+                put("transform2d.x", x, centre.x);
+                put("transform2d.y", y, centre.y);
+                put("radius.r", r, nr);
+            }
+            (true, Kind::Window { frame: true }) => {
+                let r = (l.inverse() * q * l).transform_rect_bbox(self.bounds);
+                put("frame.x0", self.bounds.x0, r.x0);
+                put("frame.y0", self.bounds.y0, r.y0);
+                put("frame.x1", self.bounds.x1, r.x1);
+                put("frame.y1", self.bounds.y1, r.y1);
+            }
+            (true, _) => {}
+            (false, _) => {
+                let (nx, ny, nrot, ..) = decompose(q * l, self.trs);
+                put("transform2d.x", x, nx);
+                put("transform2d.y", y, ny);
+                put("transform2d.rot", rot, nrot);
+            }
+        }
+        out
+    }
+}
+
+/// Which node along `chain` a press selects: the outermost one whose
+/// container is not open (or the hit node itself, `deep`).
+fn target_index(doc: &iron_document::Document, chain: &[NodeId], selected: &[&Reach], deep: bool) -> usize {
+    if deep {
+        return chain.len() - 1;
+    }
+    for i in 0..chain.len() {
+        let open = (i == 0 && nest::is_embed(doc, chain[0])) || selected.iter().any(|r| r.chain.len() > i + 1 && r.chain[..=i] == chain[..=i]);
+        if !open {
+            return i;
+        }
+    }
+    chain.len() - 1
+}
+
+/// Where `id` shows in a 2D panel, for a selection made elsewhere: in a
+/// panel showing its composition, or through embeds of it.
+fn find_reach(doc: &iron_document::Document, views: &PanelViews, id: NodeId) -> Option<Reach> {
+    let comp = composition::composition_of(doc, id);
+    let lineage = nest::lineage(doc, id);
+    let views2d = || views.0.iter().filter(|v| v.dims == Dims::Two);
+    if let Some(v) = views2d().find(|v| v.shows(comp)) {
+        return Some(Reach { panel: v.panel.clone(), chain: lineage });
+    }
+    let comp = comp?;
+    fn search(doc: &iron_document::Document, roots: &[NodeId], prefix: &[NodeId], comp: NodeId, depth: u32) -> Option<Vec<NodeId>> {
+        for &n in roots {
+            let mut chain = prefix.to_vec();
+            chain.push(n);
+            if nest::is_embed(doc, n) {
+                let Some(source) = composition::embedded(doc, n) else { continue };
+                if source == comp {
+                    return Some(chain);
+                }
+                if depth < nest::MAX_DEPTH
+                    && let Some(found) = search(doc, doc.children(source), &chain, comp, depth + 1)
+                {
+                    return Some(found);
+                }
+            } else if let Some(found) = search(doc, doc.children(n), &chain, comp, depth) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    for v in views2d() {
+        if let Some(mut chain) = search(doc, &nest::panel_roots(doc, v), &[], comp, 0) {
+            chain.extend(lineage);
+            return Some(Reach { panel: v.panel.clone(), chain });
+        }
+    }
+    None
+}
+
+/// The grip under a window point for a box `frame` (window px).
+fn grip_at(frame: Affine, p: Point, resizable: bool, rotatable: bool) -> Option<Grip> {
+    let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    let at = |u: f64, v: f64| frame * Point::new(u, v);
+    if resizable {
+        for &(u, v) in &corners {
+            if at(u, v).distance(p) <= CORNER_HIT {
+                return Some(Grip::Resize(u, v));
+            }
+        }
+        for &(u, v) in &[(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)] {
+            let (a, b) = if u == 0.5 { (at(0.0, v), at(1.0, v)) } else { (at(u, 0.0), at(u, 1.0)) };
+            let seg = kurbo::Line::new(a, b);
+            let t = ((p - a).dot(b - a) / (b - a).hypot2().max(1e-9)).clamp(0.0, 1.0);
+            if seg.eval(t).distance(p) <= EDGE_HIT {
+                return Some(Grip::Resize(u, v));
+            }
+        }
+    }
+    let q = frame.inverse() * p;
+    let inside = (0.0..=1.0).contains(&q.x) && (0.0..=1.0).contains(&q.y);
+    if inside {
+        return Some(Grip::Body);
+    }
+    if rotatable {
+        for &(u, v) in &corners {
+            if at(u, v).distance(p) <= ROTATE_HIT {
+                return Some(Grip::Rotate(u, v));
+            }
+        }
+    }
+    None
+}
+
+/// The CSS cursor for a grip: a resize arrow along the grip's direction
+/// from the box centre, or a rotation arrow (drawn by the shell) at it.
+fn cursor_for(frame: Affine, grip: Option<Grip>) -> String {
+    let dir = |u: f64, v: f64| {
+        let c = frame * Point::new(0.5, 0.5);
+        let p = frame * Point::new(u, v);
+        (p.y - c.y).atan2(p.x - c.x).to_degrees()
+    };
+    match grip {
+        Some(Grip::Resize(u, v)) => {
+            let a = dir(u, v).rem_euclid(180.0);
+            let k = ((a + 22.5) / 45.0).floor() as i32 % 4;
+            ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"][k as usize].into()
+        }
+        Some(Grip::Rotate(u, v)) => format!("rotate:{:.0}", dir(u, v)),
+        _ => "default".into(),
+    }
+}
+
+/// Separating-axis test: does the parallelogram `f` (of the unit square)
+/// touch the rectangle?
+fn touches(f: Affine, r: Rect) -> bool {
+    let poly = [f * Point::new(0.0, 0.0), f * Point::new(1.0, 0.0), f * Point::new(1.0, 1.0), f * Point::new(0.0, 1.0)];
+    let rect = [Point::new(r.x0, r.y0), Point::new(r.x1, r.y0), Point::new(r.x1, r.y1), Point::new(r.x0, r.y1)];
+    let axes = [kurbo::Vec2::new(1.0, 0.0), kurbo::Vec2::new(0.0, 1.0), (poly[1] - poly[0]).turn_90(), (poly[3] - poly[0]).turn_90()];
+    axes.iter().all(|ax| {
+        let span = |pts: &[Point; 4]| pts.iter().map(|p| p.to_vec2().dot(*ax)).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), d| (lo.min(d), hi.max(d)));
+        let (a0, a1) = span(&poly);
+        let (b0, b1) = span(&rect);
+        a1 >= b0 && b1 >= a0
+    })
+}
+
+fn set_selection(sel: &mut crate::SelectionState, tool: &mut SelectTool, list: Vec<Reach>) {
+    let ids: Vec<NodeId> = list.iter().map(Reach::node).collect();
+    if sel.selected != ids {
+        sel.selected = ids;
+    }
+    tool.reach = list.into_iter().map(|r| (r.node(), r)).collect();
+}
+
+fn selected_reaches(sel: &crate::SelectionState, tool: &SelectTool) -> Vec<Reach> {
+    sel.selected.iter().filter_map(|id| tool.reach.get(id).cloned()).collect()
+}
+
+/// Selected nodes in `panel` that no other selected node contains: what a
+/// gesture moves (a group and its child both selected move once).
+fn movers<'a>(reaches: &'a [Reach], panel: &str) -> Vec<&'a Reach> {
+    reaches
+        .iter()
+        .filter(|r| r.panel == panel)
+        .filter(|r| !reaches.iter().any(|o| o.panel == r.panel && o.chain.len() < r.chain.len() && r.chain[..o.chain.len()] == o.chain[..]))
+        .collect()
+}
+
+fn type_label(doc: &iron_document::Document, nodes: &[NodeId]) -> String {
+    match nodes {
+        [one] => doc.live(*one).map(|n| n.ty.name().to_owned()).unwrap_or_else(|| "node".into()),
+        many => format!("{} nodes", many.len()),
+    }
+}
+
+/// The container a chain's node sits in and its siblings there, with the
+/// chain prefix that reaches them.
+fn siblings(doc: &iron_document::Document, views: &PanelViews, r: &Reach) -> (Vec<NodeId>, Vec<NodeId>) {
+    let prefix = r.chain[..r.chain.len() - 1].to_vec();
+    let roots = match prefix.last() {
+        Some(&c) if nest::is_embed(doc, c) => composition::embedded(doc, c).map(|s| doc.children(s).to_vec()).unwrap_or_default(),
+        Some(&c) => doc.children(c).to_vec(),
+        None => views.get(&r.panel).map(|v| nest::panel_roots(doc, v)).unwrap_or_default(),
+    };
+    (prefix, roots)
+}
+
+/// Children of a node as chains: a group's children, an embed's content.
+fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
+    let id = r.node();
+    let kids = if nest::is_embed(doc, id) { composition::embedded(doc, id).map(|s| doc.children(s).to_vec()).unwrap_or_default() } else { doc.children(id).to_vec() };
+    kids.into_iter()
+        .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "circle" | "slider" | "group" | "embed" | "mesh")))
+        .map(|k| {
+            let mut chain = r.chain.clone();
+            chain.push(k);
+            Reach { panel: r.panel.clone(), chain }
+        })
+        .collect()
+}
+
+/// The topmost hit under the pointer: its chain and how it was hit.
+enum Source {
+    Overlay(usize),
+    World(usize),
+    Embed3d,
+}
+
+fn top_hit(hits: &crate::PointerHits) -> Option<(Vec<NodeId>, Source)> {
+    if let Some(h) = hits.overlay.first() {
+        return Some((h.chain.clone(), Source::Overlay(0)));
+    }
+    if let Some(h) = hits.world3d.first() {
+        return Some((h.chain.clone(), Source::World(0)));
+    }
+    (!hits.embed_chain.is_empty()).then(|| (hits.embed_chain.clone(), Source::Embed3d))
+}
+
+#[allow(clippy::too_many_arguments)]
+/// The document side of the tool: the store, what it writes, and the
+/// entities geometry reads.
+#[derive(SystemParam)]
+pub struct ToolDoc<'w, 's> {
+    store: ResMut<'w, DocumentStore>,
+    gestures: ResMut<'w, GestureRequests>,
+    pending: ResMut<'w, PendingTransactions>,
+    map: Res<'w, NodeMap>,
+    globals: Query<'w, 's, &'static GlobalTransform>,
+    nodes: Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
+}
+
+/// What the drags the box does not run need (`interaction`).
+#[derive(SystemParam)]
+pub struct LegacyDrag<'w, 's> {
+    drag: ResMut<'w, crate::DragState>,
+    commit: ResMut<'w, PendingCommit>,
+    provenance: Query<'w, 's, &'static Provenance>,
+    cameras: DragCameras<'w, 's>,
+    planes: Query<'w, 's, (&'static GlobalTransform, &'static crate::document_bridge::planes::EmbedPlane)>,
+}
+
+pub fn select_tool_system(
+    pointer: Res<crate::PointerState>,
+    hits: Res<crate::PointerHits>,
+    time: Res<Time<Real>>,
+    mut tool: ResMut<SelectTool>,
+    mut keys: ResMut<ToolKeys>,
+    mut sel: ResMut<crate::SelectionState>,
+    views: Res<PanelViews>,
+    docp: ToolDoc,
+    legacy: LegacyDrag,
+) {
+    let tool = &mut *tool;
+    let ToolDoc { mut store, mut gestures, mut pending, map, globals, nodes } = docp;
+    let LegacyDrag { mut drag, mut commit, provenance, cameras, planes } = legacy;
+    // Keep a reach for every selected node, dropping the rest.
+    {
+        let doc = store.0.document();
+        tool.reach.retain(|id, r| sel.selected.contains(id) && r.chain.iter().all(|&n| doc.live(n).is_some()));
+        for &id in &sel.selected {
+            if !tool.reach.contains_key(&id)
+                && let Some(r) = find_reach(doc, &views, id)
+            {
+                tool.reach.insert(id, r);
+            }
+        }
+        if tool.hover.as_ref().is_some_and(|h| h.chain.iter().any(|&n| doc.live(n).is_none())) {
+            tool.hover = None;
+        }
+    }
+
+    let mods = |bit: u8| match bit {
+        MOD_SHIFT => pointer.modifiers.shift,
+        MOD_ALT => pointer.modifiers.alt,
+        _ => pointer.modifiers.ctrl || pointer.modifiers.meta,
+    };
+
+    // Shortcuts.
+    for (key, m) in std::mem::take(&mut keys.0) {
+        let shift = m & MOD_SHIFT != 0;
+        let command = m & (MOD_CTRL | MOD_META) != 0;
+        let reaches = selected_reaches(&sel, tool);
+        let doc = store.0.document();
+        match key.as_str() {
+            "escape" if !matches!(tool.gesture, Gesture::Idle) => {
+                // Esc mid-gesture puts everything back.
+                if let Gesture::Move { drags, .. } = &tool.gesture {
+                    for (h, _) in drags {
+                        store.0.end_drag(h);
+                    }
+                }
+                if let Some(h) = drag.handle.take() {
+                    store.0.end_drag(&h);
+                }
+                drag.target = None;
+                drag.kind = None;
+                gestures.0.push(GestureRequest::Cancel);
+                tool.gesture = Gesture::Idle;
+                tool.marquee = None;
+            }
+            "escape" | "enter" if key == "escape" || shift => {
+                // Up a level: each node's container, or nothing at the top.
+                let mut up: Vec<Reach> = Vec::new();
+                for r in &reaches {
+                    if r.chain.len() > 1 {
+                        let p = Reach { panel: r.panel.clone(), chain: r.chain[..r.chain.len() - 1].to_vec() };
+                        if !up.contains(&p) {
+                            up.push(p);
+                        }
+                    }
+                }
+                set_selection(&mut sel, tool, up);
+            }
+            "enter" => {
+                let down: Vec<Reach> = reaches.iter().flat_map(|r| children(doc, r)).collect();
+                if !down.is_empty() {
+                    set_selection(&mut sel, tool, down);
+                }
+            }
+            "tab" => {
+                let Some(r) = reaches.first() else { continue };
+                let (prefix, roots) = siblings(doc, &views, r);
+                let Some(i) = roots.iter().position(|&n| n == r.node()) else { continue };
+                let n = roots.len();
+                let next = roots[if shift { (i + n - 1) % n } else { (i + 1) % n }];
+                let mut chain = prefix;
+                chain.push(next);
+                set_selection(&mut sel, tool, vec![Reach { panel: r.panel.clone(), chain }]);
+            }
+            "a" if command => {
+                let (panel, prefix, roots) = match reaches.first() {
+                    Some(r) => {
+                        let (p, roots) = siblings(doc, &views, r);
+                        (r.panel.clone(), p, roots)
+                    }
+                    None => {
+                        let Some(v) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two) else { continue };
+                        (v.panel.clone(), Vec::new(), nest::panel_roots(doc, v))
+                    }
+                };
+                let all = roots
+                    .into_iter()
+                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "circle" | "slider" | "group" | "embed")))
+                    .map(|n| {
+                        let mut chain = prefix.clone();
+                        chain.push(n);
+                        Reach { panel: panel.clone(), chain }
+                    })
+                    .collect();
+                set_selection(&mut sel, tool, all);
+            }
+            "delete" | "backspace" => {
+                let ops: Vec<Op> = sel
+                    .selected
+                    .iter()
+                    .filter(|&&id| !sel.selected.iter().any(|&o| o != id && doc.descendants(o).contains(&id)))
+                    .map(|&id| Op::Delete { id })
+                    .collect();
+                if ops.is_empty() {
+                    continue;
+                }
+                let label = format!("delete {}", type_label(doc, &sel.selected));
+                pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
+                set_selection(&mut sel, tool, Vec::new());
+            }
+            "arrowleft" | "arrowright" | "arrowup" | "arrowdown" if matches!(tool.gesture, Gesture::Idle) => {
+                let step = if shift { 10.0 } else { 1.0 };
+                let d = match key.as_str() {
+                    "arrowleft" => (-step, 0.0),
+                    "arrowright" => (step, 0.0),
+                    "arrowup" => (0.0, -step),
+                    _ => (0.0, step),
+                };
+                let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+                let mut parts = Vec::new();
+                let mut moved = Vec::new();
+                let panels: Vec<String> = reaches.iter().map(|r| r.panel.clone()).collect();
+                for panel in panels.iter().take(1) {
+                    for r in movers(&reaches, panel) {
+                        geo.parts(&r.chain, false, &mut parts);
+                        moved.push(r.node());
+                    }
+                }
+                let writes: Vec<(NodeId, &'static str, f64)> = parts.iter().flat_map(|p| p.apply(Affine::translate(d), false).into_iter().map(move |(l, v)| (p.id, l, v))).collect();
+                let label = format!("nudge {}", type_label(doc, &moved));
+                preview_writes(&mut store.0, writes);
+                gestures.0.push(GestureRequest::Commit(label));
+            }
+            _ => {}
+        }
+    }
+
+    let now = time.elapsed_secs_f64();
+    let screen = Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
+    let doc_point = |v: &PanelView| v.affine().inverse() * screen;
+
+    // ---- Press ----
+    if pointer.just_pressed_left && matches!(tool.gesture, Gesture::Idle) {
+        tool.hover = None;
+        let view = hits.panel.as_deref().and_then(|p| views.get(p)).cloned();
+        let reaches = selected_reaches(&sel, tool);
+        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        'press: {
+            let Some(view) = view else { break 'press };
+            // The selection's grips come first.
+            if view.dims == Dims::Two {
+                let mine = movers(&reaches, &view.panel);
+                if let Some(frame) = geo.selection_frame(&mine) {
+                    let resize_parts = {
+                        let mut v = Vec::new();
+                        for r in &mine {
+                            geo.parts(&r.chain, true, &mut v);
+                        }
+                        v
+                    };
+                    let rotate_parts = {
+                        let mut v = Vec::new();
+                        for r in &mine {
+                            geo.parts(&r.chain, false, &mut v);
+                        }
+                        v
+                    };
+                    let grip = grip_at(view.affine() * frame, screen, geo.resizable(&resize_parts), geo.rotatable(&rotate_parts));
+                    let ids: Vec<NodeId> = mine.iter().map(|r| r.node()).collect();
+                    let start = doc_point(&view);
+                    match grip {
+                        Some(Grip::Resize(u, v)) => {
+                            tool.gesture = Gesture::Transform {
+                                label: format!("resize {}", type_label(geo.doc(), &ids)),
+                                view: view.clone(),
+                                kind: TransformKind::Resize { grip: (u, v) },
+                                frame,
+                                start,
+                                parts: resize_parts,
+                                rot0: None,
+                            };
+                            break 'press;
+                        }
+                        Some(Grip::Rotate(..)) => {
+                            let rot0 = (rotate_parts.len() == 1).then(|| rotate_parts[0].trs[2]);
+                            tool.gesture = Gesture::Transform { label: format!("rotate {}", type_label(geo.doc(), &ids)), view: view.clone(), kind: TransformKind::Rotate, frame, start, parts: rotate_parts, rot0 };
+                            break 'press;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let top = top_hit(&hits);
+            let shift = mods(MOD_SHIFT);
+            let deep = mods(MOD_META);
+            let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
+            let inside_box = view.dims == Dims::Two
+                && geo.selection_frame(&movers(&reaches, &view.panel)).is_some_and(|f| matches!(grip_at(view.affine() * f, screen, false, false), Some(Grip::Body)));
+
+            let Some((chain, source)) = top else {
+                // Empty canvas: drag the selection from inside its box, or
+                // draw a marquee over the panel's top level.
+                if inside_box {
+                    tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Move { click: Click::Clear } };
+                } else if view.dims == Dims::Two {
+                    let roots = nest::panel_roots(geo.doc(), &view);
+                    tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Marquee { prefix: Vec::new(), roots, click: if shift { Click::Keep } else { Click::Clear } } };
+                } else if !shift {
+                    set_selection(&mut sel, tool, Vec::new());
+                }
+                break 'press;
+            };
+
+            let mut k = target_index(geo.doc(), &chain, &here, deep);
+            // A double-click on a selected node enters it.
+            let dbl = tool.last_click.is_some_and(|(t, p, id)| now - t <= DOUBLE_CLICK.0 && p.distance(pointer.screen) <= DOUBLE_CLICK.1 && id == chain[k]);
+            if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
+                k += 1;
+                tool.last_click = None;
+            }
+            let target = Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() };
+            let id = target.node();
+            let is_selected = sel.selected.contains(&id);
+
+            // Gestures the box does not cover: meshes, planes in 3D,
+            // sliders, and anything in a 3D panel.
+            let hit_entity = match source {
+                Source::Overlay(i) => Some(hits.overlay[i].entity),
+                Source::World(i) => Some(hits.world3d[i].entity),
+                Source::Embed3d => None,
+            };
+            let through = match source {
+                Source::Overlay(i) => hits.overlay[i].through,
+                _ => None,
+            };
+            let entity = map.entity(id);
+            let is_slider = entity.and_then(|e| nodes.get(e).ok()).is_some_and(|(d, _)| matches!(d.shape, Shape2d::Slider { .. }));
+            let is_3d_target = matches!(source, Source::World(_)) && k + 1 == chain.len();
+            let legacy = view.dims == Dims::Three || through.is_some() || is_3d_target || (is_slider && k + 1 == chain.len());
+            if legacy {
+                if !(shift && is_selected) {
+                    let mut list = if shift { selected_reaches(&sel, tool) } else { Vec::new() };
+                    if !list.contains(&target) {
+                        list.push(target.clone());
+                    }
+                    set_selection(&mut sel, tool, list);
+                }
+                let Some(entity) = entity.or(hit_entity.filter(|_| k + 1 == chain.len())) else { break 'press };
+                // A 3D node reached through a plane (the plane itself, not
+                // its content) drags in 3D through the camera that saw it.
+                let flat = nodes.contains(entity);
+                let (camera, through) = match source {
+                    Source::World(i) => (Some(hits.world3d[i].camera), None),
+                    _ if !flat && through.is_some() => (through.map(|t| t.0), None),
+                    _ => (None, through),
+                };
+                let space = match source {
+                    Source::Overlay(i) => hits.overlay[i].space,
+                    _ => Affine::IDENTITY,
+                };
+                begin_legacy(entity, id, view.panel.clone(), space, through, camera, is_slider, &pointer, &mut drag, &mut store, &provenance, &globals, &cameras, &views, &planes);
+                tool.gesture = Gesture::Legacy;
+                break 'press;
+            }
+
+            // A top-level embed's background: a drag draws a marquee over
+            // its content, a click selects it (Figma's top-level frame).
+            let artboard = chain.len() == 1 && nest::is_embed(geo.doc(), id) && !matches!(source, Source::Embed3d);
+            if artboard && !is_selected && !inside_box {
+                let roots = composition::embedded(geo.doc(), id).map(|s| geo.doc().children(s).to_vec()).unwrap_or_default();
+                let click = if shift {
+                    let mut list = selected_reaches(&sel, tool);
+                    list.push(target.clone());
+                    set_selection(&mut sel, tool, list);
+                    Click::Keep
+                } else {
+                    Click::Only(target.clone())
+                };
+                tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Marquee { prefix: chain.clone(), roots, click } };
+                tool.last_click = Some((now, pointer.screen, id));
+                break 'press;
+            }
+
+            let click = if is_selected {
+                if shift { Click::Remove(id) } else if here.len() > 1 { Click::Only(target.clone()) } else { Click::Keep }
+            } else {
+                let mut list = if shift { selected_reaches(&sel, tool) } else { Vec::new() };
+                list.push(target.clone());
+                set_selection(&mut sel, tool, list);
+                Click::Keep
+            };
+            tool.last_click = Some((now, pointer.screen, id));
+            tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Move { click } };
+        }
+    }
+
+    // ---- Drag ----
+    // While held; the release frame only closes the gesture, as the pose
+    // the pointer last showed is what commits.
+    if pointer.buttons.left {
+        let reaches = selected_reaches(&sel, tool);
+        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        // A press that has travelled becomes its drag.
+        if let Gesture::Press { panel, start, then } = &tool.gesture
+            && pointer.screen.distance(*start) > SLOP
+            && let Some(view) = views.get(panel).cloned()
+        {
+            let p0 = view.affine().inverse() * Point::new(start.x as f64, start.y as f64);
+            match then {
+                AfterPress::Move { .. } => {
+                    let mine = movers(&reaches, &view.panel);
+                    let mut drags = Vec::new();
+                    let ids: Vec<NodeId> = mine.iter().map(|r| r.node()).collect();
+                    let label = format!("move {}", type_label(geo.doc(), &ids));
+                    let grabs: Vec<(NodeId, Affine, Point)> = mine
+                        .iter()
+                        .filter_map(|r| {
+                            let inv = geo.space(&r.chain)?.inverse();
+                            Some((r.node(), inv, geo.world(r.node()).inverse() * (inv * p0)))
+                        })
+                        .collect();
+                    for (id, inv, anchor) in grabs {
+                        let h = store.0.begin_drag(id, [anchor.x, anchor.y]);
+                        match &h.mode {
+                            DragMode::Locked(reasons) | DragMode::Axes { locked: reasons, .. } => {
+                                for why in reasons {
+                                    info!("{id} locked for this drag: {why}");
+                                }
+                            }
+                            DragMode::Cluster(c) => info!("{id} dragged through cluster {c}"),
+                        }
+                        if !h.is_locked() {
+                            drags.push((h, inv));
+                        }
+                    }
+                    tool.gesture = Gesture::Move { label, start: p0, view, drags };
+                }
+                AfterPress::Marquee { prefix, roots, click } => {
+                    let base = if matches!(click, Click::Keep) { reaches.clone() } else { Vec::new() };
+                    tool.gesture = Gesture::Marquee { view, start: p0, prefix: prefix.clone(), roots: roots.clone(), base };
+                }
+            }
+        }
+        match &tool.gesture {
+            Gesture::Move { start, view, drags, .. } => {
+                let p = doc_point(view);
+                let mut d = p - *start;
+                if mods(MOD_SHIFT) {
+                    if d.x.abs() > d.y.abs() { d.y = 0.0 } else { d.x = 0.0 }
+                }
+                let drags = drags.clone();
+                for (h, inv) in &drags {
+                    let q = *inv * (*start + d);
+                    let t0 = bevy::platform::time::Instant::now();
+                    let report = store.0.drag_to(h, [q.x, q.y]);
+                    if let DragMode::Cluster(cluster) = &h.mode {
+                        // CS phase 3 exit 9: the budget is 2 ms per frame.
+                        let ms = t0.elapsed().as_secs_f64() * 1e3;
+                        info!(
+                            "solve: cluster {cluster}, {} vars, {} iterations, {} evaluations, {ms:.2} ms{}",
+                            report.vars,
+                            report.iterations,
+                            report.evaluations,
+                            if report.converged { "" } else { "; not converged, pose kept" }
+                        );
+                    }
+                }
+            }
+            Gesture::Transform { view, kind, frame, start, parts, rot0, .. } => {
+                let p = doc_point(view);
+                let a = match *kind {
+                    TransformKind::Resize { grip } => {
+                        let u = frame.inverse() * p;
+                        let anchor = if mods(MOD_ALT) { (0.5, 0.5) } else { (1.0 - grip.0, 1.0 - grip.1) };
+                        // Relative to where the press landed, not the grip's
+                        // exact corner, so pressing alone changes nothing.
+                        let u0 = frame.inverse() * *start;
+                        let scale = |g: f64, a: f64, u: f64, u0: f64| if g == 0.5 || (u0 - a).abs() < 1e-9 { 1.0 } else { (u - a) / (u0 - a) };
+                        let (mut fx, mut fy) = (scale(grip.0, anchor.0, u.x, u0.x), scale(grip.1, anchor.1, u.y, u0.y));
+                        if mods(MOD_SHIFT) {
+                            let m = if grip.0 == 0.5 { fy.abs() } else if grip.1 == 0.5 { fx.abs() } else { fx.abs().max(fy.abs()) };
+                            fx = m * if fx < 0.0 { -1.0 } else { 1.0 };
+                            fy = m * if fy < 0.0 { -1.0 } else { 1.0 };
+                        }
+                        // Never collapse to zero: at least a pixel.
+                        let size = (frame.as_coeffs()[0].hypot(frame.as_coeffs()[1]), frame.as_coeffs()[2].hypot(frame.as_coeffs()[3]));
+                        let floor = |f: f64, s: f64| if f.abs() * s < 1.0 { (1.0 / s.max(1e-9)) * if f < 0.0 { -1.0 } else { 1.0 } } else { f };
+                        let (fx, fy) = (floor(fx, size.0), floor(fy, size.1));
+                        *frame * Affine::translate(anchor) * Affine::scale_non_uniform(fx, fy) * Affine::translate((-anchor.0, -anchor.1)) * frame.inverse()
+                    }
+                    TransformKind::Rotate => {
+                        let c = *frame * Point::new(0.5, 0.5);
+                        let mut th = (p - c).atan2() - (*start - c).atan2();
+                        if mods(MOD_SHIFT) {
+                            let base = rot0.unwrap_or(0.0);
+                            th = ((base + th) / SNAP).round() * SNAP - base;
+                        }
+                        Affine::translate(c.to_vec2()) * Affine::rotate(th) * Affine::translate(-c.to_vec2())
+                    }
+                };
+                let resize = matches!(kind, TransformKind::Resize { .. });
+                let writes: Vec<(NodeId, &'static str, f64)> = parts.iter().flat_map(|part| part.apply(a, resize).into_iter().map(move |(l, v)| (part.id, l, v))).collect();
+                preview_writes(&mut store.0, writes);
+            }
+            Gesture::Marquee { view, start, prefix, roots, base } => {
+                let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+                let rect = Rect::from_points(*start, doc_point(view));
+                tool.marquee = Some((view.panel.clone(), rect));
+                let mut list = base.clone();
+                for &n in roots {
+                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "circle" | "slider" | "group" | "embed")) {
+                        continue;
+                    }
+                    let mut chain = prefix.clone();
+                    chain.push(n);
+                    if geo.frame(&chain).is_some_and(|f| touches(f, rect)) {
+                        let r = Reach { panel: view.panel.clone(), chain };
+                        if !list.contains(&r) {
+                            list.push(r);
+                        }
+                    }
+                }
+                set_selection(&mut sel, tool, list);
+            }
+            _ => {}
+        }
+    }
+
+    // ---- Release ----
+    if pointer.just_released_left {
+        match std::mem::take(&mut tool.gesture) {
+            Gesture::Press { then, .. } => {
+                let click = match then {
+                    AfterPress::Move { click } | AfterPress::Marquee { click, .. } => click,
+                };
+                match click {
+                    Click::Keep => {}
+                    Click::Only(r) => set_selection(&mut sel, tool, vec![r]),
+                    Click::Remove(id) => {
+                        let list = selected_reaches(&sel, tool).into_iter().filter(|r| r.node() != id).collect();
+                        set_selection(&mut sel, tool, list);
+                    }
+                    Click::Clear => set_selection(&mut sel, tool, Vec::new()),
+                }
+            }
+            Gesture::Move { label, drags, .. } => {
+                for (h, _) in &drags {
+                    store.0.end_drag(h);
+                }
+                gestures.0.push(GestureRequest::Commit(label));
+            }
+            Gesture::Transform { label, .. } => gestures.0.push(GestureRequest::Commit(label)),
+            Gesture::Marquee { .. } => tool.marquee = None,
+            Gesture::Legacy => {
+                if drag.target.is_some() {
+                    commit.0 = drag.target;
+                    drag.target = None;
+                    drag.kind = None;
+                    if let Some(h) = drag.handle.take() {
+                        store.0.end_drag(&h);
+                    }
+                }
+            }
+            Gesture::Idle => {}
+        }
+    }
+
+    // ---- Hover and cursor, between gestures ----
+    if matches!(tool.gesture, Gesture::Idle) {
+        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        let reaches = selected_reaches(&sel, tool);
+        let view = hits.panel.as_deref().and_then(|p| views.get(p));
+        let mut cursor = "default".to_owned();
+        let mut on_grip = false;
+        if let Some(view) = view.filter(|v| v.dims == Dims::Two) {
+            let mine = movers(&reaches, &view.panel);
+            if let Some(frame) = geo.selection_frame(&mine) {
+                let (mut rp, mut tp) = (Vec::new(), Vec::new());
+                for r in &mine {
+                    geo.parts(&r.chain, true, &mut rp);
+                    geo.parts(&r.chain, false, &mut tp);
+                }
+                let f = view.affine() * frame;
+                let grip = grip_at(f, screen, geo.resizable(&rp), geo.rotatable(&tp));
+                on_grip = matches!(grip, Some(Grip::Resize(..) | Grip::Rotate(..)));
+                cursor = cursor_for(f, grip);
+            }
+        }
+        let hover = match (view, top_hit(&hits)) {
+            (Some(view), Some((chain, _))) if !on_grip => {
+                let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
+                let k = target_index(geo.doc(), &chain, &here, mods(MOD_META));
+                Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() })
+            }
+            _ => None,
+        };
+        if tool.hover != hover {
+            tool.hover = hover;
+        }
+        if tool.cursor != cursor {
+            crate::web_ffi::send_cursor_from_worker(cursor.clone());
+            tool.cursor = cursor;
+        }
+    } else if !matches!(tool.gesture, Gesture::Press { .. }) && tool.hover.is_some() {
+        tool.hover = None;
+    }
+    let hovered = tool.hover.as_ref().map(Reach::node);
+    if sel.hovered != hovered {
+        sel.hovered = hovered;
+    }
+}
+
+/// Preview each leaf that differs from what it reads now. A locked leaf
+/// holds still; why is logged at debug level, every frame it is asked.
+fn preview_writes(store: &mut Store, writes: Vec<(NodeId, &'static str, f64)>) {
+    for (id, path, v) in writes {
+        let current = store.resolved(id, leaf(path)).and_then(|x| x.as_f64());
+        if current.is_some_and(|c| (c - v).abs() < 1e-9) {
+            continue;
+        }
+        if let Err(reason) = store.preview_target(id, leaf(path), Value::Number(v)) {
+            debug!("{id}.{path}: {reason}");
+        }
+    }
+}
+
+/// Start a drag the box does not run: a mesh in 3D, content on a plane, a
+/// slider's value.
+#[allow(clippy::too_many_arguments)]
+fn begin_legacy(
+    entity: Entity,
+    id: NodeId,
+    panel: String,
+    space: Affine,
+    through: Option<(Entity, Entity)>,
+    camera: Option<Entity>,
+    slider: bool,
+    pointer: &crate::PointerState,
+    drag: &mut crate::DragState,
+    store: &mut DocumentStore,
+    provenance: &Query<&Provenance>,
+    transforms: &Query<&GlobalTransform>,
+    cameras: &DragCameras,
+    views: &PanelViews,
+    planes: &Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane)>,
+) {
+    let _ = provenance;
+    drag.target = Some(entity);
+    drag.handle = None;
+    drag.panel = Some(panel);
+    drag.space = space;
+    drag.through = through;
+    drag.camera = camera;
+    drag.press_screen = pointer.screen;
+    if slider {
+        drag.kind = Some(crate::DragKind::SliderValue);
+        return;
+    }
+    if camera.is_none() {
+        // 2D content on a plane in 3D.
+        let p = drag_point(drag, views, pointer.screen, cameras, planes).unwrap_or(Vec2::ZERO);
+        let local = transforms.get(entity).map(|g| g.affine().inverse().transform_point3(p.extend(0.0))).unwrap_or(Vec3::ZERO);
+        let h = store.0.begin_drag(id, [local.x as f64, local.y as f64]);
+        match &h.mode {
+            DragMode::Locked(reasons) => {
+                for r in reasons {
+                    info!("{id} locked for this drag: {r}");
+                }
+                drag.kind = None;
+                drag.target = None;
+            }
+            _ => {
+                drag.kind = Some(crate::DragKind::Overlay2D);
+                drag.handle = Some(h);
+            }
+        }
+        return;
+    }
+    if let Handle::Locked(reason) = store.0.handle(id, leaf("transform3d.pos")) {
+        info!("{id}.transform3d.pos locked for this drag: {reason}");
+        drag.kind = None;
+        drag.target = None;
+        return;
+    }
+    drag.kind = Some(crate::DragKind::World3D);
+    // A camera-facing plane through the object; Ctrl drags on the ground.
+    let Some((_, cam, cam_tf, rect, to_camera)) = camera.and_then(|c| cameras.get(c).ok()) else { return };
+    let local = crate::bevy_app::scene3d::to_camera_px(pointer.screen, rect, to_camera);
+    drag.plane_normal = if pointer.modifiers.ctrl { Vec3::Y } else { cam_tf.forward().as_vec3() }.normalize_or_zero();
+    drag.plane_origin = transforms.get(entity).map(|t| t.translation()).unwrap_or(cam_tf.translation());
+    drag.grab_offset_world = Vec3::ZERO;
+    if let Some(ray) = crate::bevy_app::picking::camera_ray_from_window_px(cam, cam_tf, local)
+        && let Some(hit) = intersect_ray_plane(ray, drag.plane_origin, drag.plane_normal)
+    {
+        if let Ok(t) = transforms.get(entity) {
+            drag.grab_offset_world = t.translation() - hit;
+        }
+        drag.plane_origin = hit;
+    }
+}
+
+/// The select tool's drawing in each 2D panel: the selection's box and
+/// grips, the hovered container's outline, the marquee. Its own layer in
+/// the panel's view, so redrawing it re-encodes none of the document.
+#[derive(Component)]
+pub struct SelectOverlay {
+    panel: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_select_overlay(
+    mut commands: Commands,
+    panel_layers: Query<(Entity, &DocumentPanelLayer)>,
+    mut overlays: Query<(Entity, &SelectOverlay, &mut DisplayList)>,
+    tool: Res<SelectTool>,
+    sel: Res<crate::SelectionState>,
+    views: Res<PanelViews>,
+    store: Res<DocumentStore>,
+    map: Res<NodeMap>,
+    globals: Query<&'static GlobalTransform>,
+    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
+) {
+    for (e, o, _) in &overlays {
+        if !panel_layers.iter().any(|(_, l)| l.panel == o.panel) {
+            commands.entity(e).despawn();
+        }
+    }
+    for (view_entity, layer) in &panel_layers {
+        if !overlays.iter().any(|(_, o, _)| o.panel == layer.panel) {
+            commands.spawn((DisplayList::default(), SelectOverlay { panel: layer.panel.clone() }, VectorLayer::screen(order::DOCUMENT_2D + 1).in_view(view_entity)));
+        }
+    }
+    let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+    let reaches = selected_reaches(&sel, &tool);
+    let blue = peniko::Color::new(BLUE);
+    let thin = kurbo::Stroke::new(1.0);
+    let square = Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
+    for (_, o, mut list) in &mut overlays {
+        let Some(view) = views.get(&o.panel) else { continue };
+        let to_screen = view.affine();
+        list.rebuild(|b| {
+            b.clipped(Affine::IDENTITY, view.rect.to_kurbo(), |b| {
+                // The hovered node's box, for what has no outline of its own.
+                if let Some(h) = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
+                    && matches!(geo.ty(h.node()), "group" | "embed")
+                    && let Some(f) = geo.frame(&h.chain)
+                {
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5), blue, (to_screen * f) * square.clone());
+                }
+                let mine = movers(&reaches, &o.panel);
+                if mine.len() > 1 {
+                    for r in &mine {
+                        if let Some(f) = geo.frame(&r.chain) {
+                            b.stroke(Affine::IDENTITY, thin.clone(), blue, (to_screen * f) * square.clone());
+                        }
+                    }
+                }
+                if let Some(frame) = geo.selection_frame(&mine) {
+                    let (mut rp, mut tp) = (Vec::new(), Vec::new());
+                    for r in &mine {
+                        geo.parts(&r.chain, true, &mut rp);
+                        geo.parts(&r.chain, false, &mut tp);
+                    }
+                    let f = to_screen * frame;
+                    b.stroke(Affine::IDENTITY, thin.clone(), blue, f * square.clone());
+                    let fill = if geo.resizable(&rp) { peniko::Color::new([1.0, 1.0, 1.0, 1.0]) } else { peniko::Color::new([0.8, 0.82, 0.85, 1.0]) };
+                    let [a, bb, ..] = f.as_coeffs();
+                    let angle = bb.atan2(a);
+                    for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+                        let c = f * Point::new(u, v);
+                        let at = Affine::translate(c.to_vec2()) * Affine::rotate(angle);
+                        let r = Rect::new(-HANDLE * 0.5, -HANDLE * 0.5, HANDLE * 0.5, HANDLE * 0.5);
+                        b.fill(at, fill, r);
+                        b.stroke(at, thin.clone(), blue, r);
+                    }
+                }
+                if let Some((p, r)) = &tool.marquee
+                    && p == &o.panel
+                {
+                    let r = to_screen.transform_rect_bbox(*r);
+                    b.fill(Affine::IDENTITY, peniko::Color::new([0.05, 0.6, 1.0, 0.08]), r);
+                    b.stroke(Affine::IDENTITY, thin.clone(), blue, r);
+                }
+            });
+        });
+    }
+}

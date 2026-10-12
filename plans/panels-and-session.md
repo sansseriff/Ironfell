@@ -1,6 +1,7 @@
 # Panels, inspectors and session state
 
-**Status:** design note, 2026-10-12. Nothing here is built. It came out of a conversation
+**Status:** design note, 2026-10-12. The dock presenter and views are built (see "Built
+so far" at the end); the session tier and the inspector are not. It came out of a conversation
 after the select tool (plans/select-tool.md) and records the direction agreed there. It
 revises one earlier verdict, in document-spine.md §4; see "What this changes" below.
 
@@ -91,6 +92,34 @@ rectangle shows. Splitting, resizing and swapping are workspace transactions, an
 layout solver (taffy, document-spine §4) owns every rectangle, as it already owns hosted
 nodes'.
 
+## Views and presenters
+
+"Panel" blurs two things that are kept apart:
+
+- **A view is the meaning:** a source (a composition, the timeline root, the document,
+  the selection), a notation (how it is drawn), and later a target (a pinned node, the
+  selection, a point on screen).
+- **A presenter is the container:** a docked tab or split (dockview), and later a
+  popover, a context menu, a tooltip, or an embed in another composition.
+
+A notation decides which part of a view the canvas draws (a Rust panel kind:
+`composition`, `timeline`) and which part is HTML (a registered Svelte component). A view
+can be **all canvas** (a composition viewer), **all HTML** (the document markup today),
+or **hybrid** (the inspector: canvas sliders, HTML text fields). In a hybrid, the HTML
+part lies over the canvas part and takes the pointer only where it draws. An existing
+Svelte panel joins the system by being registered as a notation's HTML part. A
+runtime-compiled Svelte panel (an LLM's, say) would be one more notation whose source is
+a document node holding the code, mounted in a sandboxed iframe.
+
+Ephemeral presenters (menus, tooltips) belong to the session tier. One physical rule
+places them: there is one canvas under all HTML, so anything that floats over HTML
+chrome must itself be HTML. Inside a canvas view it may be drawn by the canvas.
+
+**Style follows meaning, not container.** Selected, hovered, "a figure of entity X", "a
+port of kind heat" are facts in the document and the session. Highlight and colour rules
+key on those facts, as cross-probe highlights already do through `figures`, so a node
+looks the same in a tab, a tooltip, an embed or a plane in 3D.
+
 ## An inspector is a bound composition
 
 An inspector is a composition in the session whose content is generated from its target's
@@ -151,3 +180,49 @@ bound to leaves.
   definition's inspector is part of its "notation" (ECM §5).
 - **Whether an inspector of several nodes edits through each node's own handle**, or
   refuses when any one is locked.
+
+## Built so far
+
+**2026-10-12, the dock presenter.** `src-ui/views/` holds:
+
+- `views.ts`: `ViewSpec` (source, notation) and the notation registry.
+- `workspace.ts`: dockview-core 8.5.1, its stylesheet vendored as `dockview.css`, the
+  default layout, and the saved layout (browser storage, `iron.workspace.v1`;
+  `?layout=default` or **Reset layout** forgets it).
+- `ViewPanel.svelte`: one view in a tab. It renders the canvas part only while the tab is
+  visible, so a hidden tab posts no rectangle and Rust draws nothing for it.
+- `AddViewMenu.svelte`: "+" in every tab bar opens any composition (`document_compositions`)
+  or a fixed view.
+- `html/`: the old Controls card split into the Document (markup), Model (conversation)
+  and Selection views.
+
+The demo's pendulum and level slider moved into compositions of their own (`pendulum`,
+`controls`). `main` embeds them where they sat, so the Main tab reads as before. The
+default layout:
+- the centre stack holds Main, Scene, Pendulum, Controls, Assembly and Card;
+- Document and Model are on the left;
+- Selection is on the right;
+- Timeline runs across the bottom.
+
+Tabs drag to reorder, into other stacks, or onto an edge to split.
+
+Two input fixes came with it:
+
+- **An embed's background no longer hides what is beneath it.** An embed with no frame
+  takes the bounds of its content, so its transparent area could cover a sibling
+  composition's shapes. Pointer hits on an embed's own area (`Hit2D::background`) now
+  rank below every shape hit.
+- **A press is resolved where it happened.** The shell sends the press position
+  (`left_bt_down_at`). On a slow frame, later moves no longer drag the press along
+  with them.
+
+Follow-ups:
+
+- **Pan and zoom per 2D view.** A composition opened in a narrow split shows its space
+  from the origin and clips the rest.
+- **Show in activates or opens the tab** that shows the counterpart's composition,
+  instead of only panning views already visible.
+- **The FPS overlay** is drawn over the window's top-left, which is now the Main tab.
+  It belongs in a view, or behind a toggle.
+- **The workspace moves into the store** (its own root), then the session root and the
+  inspector.

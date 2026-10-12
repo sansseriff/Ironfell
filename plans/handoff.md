@@ -18,7 +18,9 @@ request: Figma's semantics, recorded in `plans/select-tool.md`. A plain click on
 The pen tool comes next and should reuse `select.rs`'s chains and its preview-and-commit
 pattern. **2026-10-12:** `plans/panels-and-session.md` records the agreed direction for
 panels, inspectors and the session tier (selection as relations in a `session` root);
-nothing there is built yet.
+the dock presenter is built (dockview tabs and splits of views; the demo split into
+`pendulum` and `controls` compositions, embedded in `main`); the session tier and the
+inspector are not.
 
 ---
 

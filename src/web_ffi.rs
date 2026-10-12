@@ -298,6 +298,19 @@ pub fn left_bt_down(ptr: u64) {
     }
 }
 
+/// Left button pressed at a point (CSS px). The press is resolved there
+/// even when later moves arrive in the same frame, as they do on a slow
+/// frame: picking, the click and the drag's start all use this point.
+#[wasm_bindgen]
+pub fn left_bt_down_at(ptr: u64, x: f32, y: f32) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let position = app.to_physical_size(x, y);
+    if let Some(mut press) = app.world_mut().get_resource_mut::<crate::bevy_app::PressPosition>() {
+        press.0 = Some(position);
+    }
+    left_bt_down(ptr);
+}
+
 /// 鼠标左键松开
 #[wasm_bindgen]
 pub fn left_bt_up(ptr: u64) {
@@ -566,6 +579,31 @@ pub fn document_focus(ptr: u64, node: String) -> String {
         active_info.remaining_frames = 10;
     }
     serde_json::json!({"ok": true}).to_string()
+}
+
+/// Every composition, for the shell's "open a view" menu: JSON
+/// `[{"id","name","dims"}]` in root order. A view is a window onto one of
+/// these (plans/panels-and-session.md).
+#[wasm_bindgen]
+pub fn document_compositions(ptr: u64) -> String {
+    use iron_document::composition::{self, Dims};
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return "[]".into();
+    };
+    let doc = store.0.document();
+    let list: Vec<serde_json::Value> = composition::compositions(doc)
+        .into_iter()
+        .map(|c| {
+            let name = doc.get::<iron_document::component::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+            let dims = match composition::dims(doc, c) {
+                Some(Dims::Three) => "3d",
+                _ => "2d",
+            };
+            serde_json::json!({"id": c.to_string(), "name": name, "dims": dims})
+        })
+        .collect();
+    serde_json::Value::Array(list).to_string()
 }
 
 /// Reserve `n` node ids for a batch of creates: JSON array of id strings.

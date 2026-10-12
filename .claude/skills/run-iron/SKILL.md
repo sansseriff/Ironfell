@@ -51,6 +51,17 @@ cd .claude/skills/run-iron && bun run drive.ts < smoke.txt; cd -
 .claude/skills/run-iron/serve.sh stop
 ```
 
+The shell is a dock of views (`src-ui/views/`, plans/panels-and-session.md):
+tabs and splits, each a view onto a composition or an HTML view. The
+document-space commands below address the **Main** tab, whose view id is
+`viewer`; it shows the `main` composition, which embeds the scene, the
+pendulum, the controls and the 3D assembly where they sat before the split.
+The other tabs (Scene, Pendulum, Controls, Assembly, Card) show one
+composition each. A hidden tab has no panel rectangle (`panel <id>` prints
+zeros). Each driver run starts with a fresh browser profile, so the default
+layout; in a normal browser the layout is saved, and `?layout=default` or
+the Document view's **Reset layout** restores the default.
+
 `smoke.txt` opens the app, waits for the engine, screenshots, drags the
 square (step by step, with a mid-drag screenshot and view showing the
 shadow rect bound to it following) and the torus, undoes both with Cmd+Z,
@@ -78,16 +89,16 @@ pendulum undone in one step. Expected output, minus screenshot lines,
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
 redraw (document): 2 of 39 nodes changed [#M #U]; damage 499,379–741,501
 redraw (document): 2 of 39 nodes changed [#M #U]; damage 559,339–801,461
-"<rect id=\"#11\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #10.params.level * 300\" … h=\"270\" h.bind=\"#10.params.level * 300\" …>"
+"<rect id=\"#11\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #10.params.level * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#10.params.level * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#11\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
-"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.63…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#12"}}
+"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.64…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+{"ok":true,"version":9,"aliases":{"$n":"#16"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#12\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
-["<circle id=\"#a\" name=\"ball\" x=\"440.43…\" x.by=\"#V\" y=\"298.93…\" y.by=\"#V\""," rot=\"-1.11…\""," h=\"238.93…\""]
+"<rect id=\"#16\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+["<circle id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-"<circle id=\"#a\" name=\"ball\" x=\"323.85…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
+"<circle id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
 ["<circle id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<circle id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
@@ -96,24 +107,27 @@ redraw (document): 2 of 39 nodes changed [#M #U]; damage 559,339–801,461
 "<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00…\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
 true
 "<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
-["<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"280.96…\" x.by=\"#V\" y=\"38.16…\" y.by=\"#V\""]
+["<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"281.00…\" x.by=\"#V\" y=\"38.20…\" y.by=\"#V\""]
 "x.by=\"#V\""
 "#s"
 found at … (a point on the card dot; varies with the sweep)
 true
 ["#l","#Q"]
+clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#14\" name=\"box\" def=\"#13\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#14\">"
+"<entity id=\"#18\" name=\"box\" def=\"#17\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#18\">"
+clicked Show in assembly
+clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#16\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#16\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#1A\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#1A\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#11\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":17132}
-"<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"27\"> | …"
-applied "open demo scene" (76 ops, System) -> v1
+{"roundtrip_equal":true,"bytes":17779}
+"<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
+applied "open demo scene" (82 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -122,13 +136,14 @@ applied "redo: move rect" (2 ops, System) -> v6
 applied "set slider" (1 ops, Human) -> v7
 applied "move rect" (2 ops, Human) -> v8
 applied "model edit" (2 ops, Model) -> v9
-applied "move circle" (3 ops, Human) -> v10
+applied "move circle" (2 ops, Human) -> v10
 "move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 applied "move circle" (3 ops, Human) -> v11
 "move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 applied "undo: move circle" (7 ops, System) -> v12
-applied "undo: move circle" (7 ops, System) -> v13
-#b locked for this drag: … (twice)
+applied "undo: move circle" (6 ops, System) -> v13
+#b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+#b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 applied "model edit" (1 ops, Model) -> v14
 "model edit" by Model: cluster #V re-solved; moved 3 node(s): #Y #Z #a; unmet: #a.transform2d.x wanted 900 got 619.99…
 applied "undo: model edit" (7 ops, System) -> v15
@@ -144,7 +159,7 @@ applied "undo: link" (4 ops, System) -> v22
 applied "link" (4 ops, Model) -> v23
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (66 live nodes)
+loaded document v25 (70 live nodes)
 (no page errors)
 undefined
 ["#M"]
@@ -154,12 +169,17 @@ undefined
 ["#V"]
 ["#a"]
 ["#V"]
+["#14"]
 []
-["#o","#V"]
+["#o","#14","#15"]
 {"x":501,"y":430,"w":80,"h":80,"deg":0}
-false
 true
-applied "open demo scene" (76 ops, System) -> v1
+true
+tab Pendulum
+[true,false]
+tab Main
+[false,true]
+applied "open demo scene" (82 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -262,6 +282,8 @@ cd -
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
 | `pclick <panel> x y` | click inside a named panel, panel-relative |
+| `tab <title>` | activate the dock tab with that title (`Pendulum`, `Assembly`, …) |
+| `dragtab <title> x y` | drag a dock tab to a window point: a group's edge splits, its centre or tab bar stacks |
 | `dclick x y`, `ddblclick x y` | click or double-click at a document point in the viewer (the select tool: a double-click enters a group or embed) |
 | `click <text>` | click the shell button with that accessible name (`Link`, `Show in assembly`) |
 | `hunt x0 y0 x1 y1 step <js>` | sweep the pointer over a document-space grid until `<js>` is truthy (e.g. `__iron.hovered().includes(id)`); prints where. For targets whose screen position is hard to predict, such as a shape on a plane in 3D |

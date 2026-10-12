@@ -224,8 +224,9 @@ key Meta+z
 key Meta+z
 sleep 400
 eval sq()
-# The pendulum is a group: a click selects it, a double-click enters it, Esc
-# climbs back out and then clears.
+# The pendulum is a group in its own composition, which `main` embeds: a
+# click selects the group, a double-click enters it, Esc climbs out to the
+# group, then to the embed, then clears.
 dclick 320 360
 eval __iron.selection()
 ddblclick 320 360
@@ -236,7 +237,11 @@ eval __iron.selection()
 key Escape
 sleep 300
 eval __iron.selection()
-# A marquee from empty canvas touches the scene's view and the pendulum.
+key Escape
+sleep 300
+eval __iron.selection()
+# A marquee from empty canvas touches the embeds of the scene, the pendulum
+# and the controls.
 ddrag 20 520 260 720
 eval __iron.selection()
 shot select-marquee
@@ -257,6 +262,12 @@ eval (async () => { const v = await __iron.view({fidelity:'full'}); return /name
 key Meta+z
 sleep 500
 eval (async () => { const v = await __iron.view({fidelity:'full'}); return /name="pendulum"/.test(v); })()
+# The dock (src-ui/views): opening a tab gives its view a canvas panel and
+# takes the hidden Main tab's away.
+tab Pendulum
+eval [!!document.querySelector('[data-panel-id="pendulum"]'), !!document.querySelector('[data-panel-id="viewer"]')]
+tab Main
+eval [!!document.querySelector('[data-panel-id="pendulum"]'), !!document.querySelector('[data-panel-id="viewer"]')]
 logs applied|rejected|panicked
 errors
 quit

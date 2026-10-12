@@ -123,8 +123,8 @@ export class MainThreadAdapter {
 
       case "leftBtDown":
         if (this.appHandle !== BigInt(0)) {
-          if (typeof data.x === "number") glue.mouse_move(this.appHandle, data.x, data.y);
-          glue.left_bt_down(this.appHandle);
+          if (typeof data.x === "number") glue.left_bt_down_at(this.appHandle, data.x, data.y);
+          else glue.left_bt_down(this.appHandle);
         }
         break;
 

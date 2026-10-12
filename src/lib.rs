@@ -232,6 +232,9 @@ pub struct Hit2D {
     /// top level down to the node, through every embed on the way
     /// (`bevy_app::select`). Selection rules pick a node along it.
     pub chain: Vec<iron_document::NodeId>,
+    /// An embed's own area rather than a shape: it is transparent, so any
+    /// shape under the pointer, at any depth, comes before it.
+    pub background: bool,
     pub z: f32,
     /// From the panel's document space into the hit node's composition
     /// space: identity unless the node was reached through embeds.

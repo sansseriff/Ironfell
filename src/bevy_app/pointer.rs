@@ -3,6 +3,11 @@ use bevy::prelude::*;
 
 use crate::bevy_app::AccumulatedCursorDelta;
 
+/// Where the last press happened (physical px), set by the shell with the
+/// press; consumed by the frame that sees the press.
+#[derive(Resource, Default)]
+pub struct PressPosition(pub Option<Vec2>);
+
 // Collect pointer state from input events and accumulated deltas.
 pub fn pointer_collect_system(
     mut cursor_events: MessageReader<CursorMoved>,
@@ -10,12 +15,18 @@ pub fn pointer_collect_system(
     keys: Res<ButtonInput<KeyCode>>,
     accumulated: Res<AccumulatedCursorDelta>,
     shell: Res<crate::bevy_app::select::ShellModifiers>,
+    mut press: ResMut<PressPosition>,
+    mut held_back: Local<Option<Vec2>>,
     mut pointer: ResMut<crate::PointerState>,
 ) {
-    // Update position from the last cursor event this frame (if any)
-    if let Some(last) = cursor_events.read().last() {
-        // reads & drains for this system only
-        pointer.screen = last.position;
+    // Update position from the last cursor event this frame (if any); a
+    // position held back by last frame's press comes first.
+    if let Some(p) = held_back.take() {
+        pointer.screen = p;
+    }
+    let moved_to = cursor_events.read().last().map(|e| e.position);
+    if let Some(p) = moved_to {
+        pointer.screen = p;
     }
 
     // Apply accumulated delta (already zeroed if no movement this frame)
@@ -43,6 +54,15 @@ pub fn pointer_collect_system(
             MouseButton::Middle => pointer.buttons.middle = ev.state.is_pressed(),
             _ => {}
         }
+    }
+
+    // A press is resolved where it happened: moves that arrived after it in
+    // the same frame wait for the next one.
+    if pointer.just_pressed_left
+        && let Some(p) = press.0.take()
+    {
+        *held_back = moved_to.filter(|m| *m != p);
+        pointer.screen = p;
     }
 
     // Modifiers: keys Bevy saw, or what the shell reports (it alone sees

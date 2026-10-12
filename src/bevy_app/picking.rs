@@ -80,12 +80,17 @@ pub fn pick_document_2d_system(
     if let Some((_, z, _)) = &walk.embed {
         out.retain(|h| h.z > *z);
     }
-    out.sort_by(|a, b| b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal));
+    sort_hits(&mut out);
     if let Some((k, _, chain)) = walk.embed {
         hits.embed = Some(k);
         hits.embed_chain = chain;
     }
     hits.overlay = out;
+}
+
+/// Topmost first: shapes by painter depth, then embed backgrounds by depth.
+fn sort_hits(hits: &mut [crate::Hit2D]) {
+    hits.sort_by(|a, b| a.background.cmp(&b.background).then(b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal)));
 }
 
 pub(crate) struct Pick<'a, 'w, 's> {
@@ -123,7 +128,7 @@ impl Pick<'_, '_, '_> {
                         // The embed's own area is a hit below its content:
                         // what a press on its background selects.
                         if let Some(entity) = self.map.entity(id) {
-                            self.out.push(crate::Hit2D { entity, chain: chain.clone(), z: self.z as f32, space, through: None });
+                            self.out.push(crate::Hit2D { entity, chain: chain.clone(), background: true, z: self.z as f32, space, through: None });
                         }
                         let kids: Vec<NodeId> = self.doc.children(e.source).to_vec();
                         self.walk(&kids, &chain, q, inv * space, &key, depth + 1);
@@ -138,7 +143,7 @@ impl Pick<'_, '_, '_> {
             {
                 let local = global.affine().inverse().transform_point3(Vec3::new(p.x as f32, p.y as f32, 0.0));
                 if d.shape.contains_local(local.truncate()) {
-                    self.out.push(crate::Hit2D { entity, chain: chain.clone(), z: self.z as f32, space, through: None });
+                    self.out.push(crate::Hit2D { entity, chain: chain.clone(), background: false, z: self.z as f32, space, through: None });
                 }
             }
             let kids: Vec<NodeId> = self.doc.children(id).to_vec();
@@ -229,7 +234,7 @@ pub fn pick_world_3d_system(
         chain.extend(nest::lineage(doc, plane_node));
         walk.walk(&kids, &chain, p, kurbo::Affine::IDENTITY, "plane", 0);
         let mut out = walk.out;
-        out.sort_by(|a, b| b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal));
+        sort_hits(&mut out);
         for h in &mut out {
             h.through = Some((camera_entity, plane_entity));
         }

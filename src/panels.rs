@@ -1,18 +1,26 @@
-//! Panel registry: JS-owned layout rectangles mirrored into Bevy.
+//! The canvas side of views (plans/panels-and-session.md).
 //!
-//! The DOM is the layout engine. JS measures each panel placeholder and posts its
-//! rectangle (physical pixels, top-left origin, full-window coordinates) through the
-//! `set_panel_viewport` FFI. Rust consumes these rects:
+//! A **view** is a window onto a composition: what it shows (`source`), how
+//! (`kind`, its notation: `composition` draws a 2D or 3D composition,
+//! `timeline` draws the timeline root's clips over time, `ui` a plain
+//! background), and where. The shell lays views out as tabs and splits
+//! (dockview) and decides which part of a view is HTML. Whatever part of a
+//! visible view the canvas draws arrives here as a **panel**: the view's id,
+//! its kind and source, and its rectangle (physical px, top-left origin of the
+//! full window canvas), posted through `set_panel_viewport`. A hidden tab
+//! posts nothing, so it costs nothing.
+//!
+//! Rust consumes these rects:
 //! - a `composition` panel shows one composition (ECM §7.1): its 2D content
 //!   drawn and picked inside the rect, or a 3D camera viewport on its layer
 //!   (`document_bridge::panel_views` resolves which)
-//! - vello panels (timeline, overlay) draw in screen space clipped to their rect
+//! - vello panels (timeline, ui) draw in screen space clipped to their rect
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use kurbo;
 
-/// The first composition panel. It also draws 2D nodes outside every
+/// The main viewer's view. It also draws 2D nodes outside every
 /// composition (loose roots from older files).
 pub const VIEWER_PANEL: &str = "viewer";
 /// The kind of a panel that shows one composition.
@@ -49,8 +57,9 @@ impl PanelRect {
 
 #[derive(Debug, Clone)]
 pub struct Panel {
+    /// The view's notation: `composition`, `timeline`, `ui`.
     pub kind: String,
-    /// For a composition panel, the composition it shows: a node id
+    /// For a composition view, the composition it shows: a node id
     /// (`#4`), a composition name, or empty for the first one with the
     /// right dimensions.
     pub composition: String,

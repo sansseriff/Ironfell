@@ -198,6 +198,33 @@ async function run(line: string) {
       await page.waitForTimeout(200);
       return;
     }
+    case "tab": {
+      // Activate the dock tab with this title (the workspace, src-ui/views).
+      const title = rest.join(" ");
+      const tab = page.locator(".dv-tab", { hasText: new RegExp(`^\\s*${title}\\s*$`) }).first();
+      await tab.click();
+      await page.waitForTimeout(400);
+      return out(`tab ${title}`);
+    }
+    case "dragtab": {
+      // dragtab <title> <x> <y>: drag a dock tab to a window point (a
+      // group's edge splits, its centre or tab bar stacks).
+      const title = rest.slice(0, -2).join(" ");
+      const [x, y] = rest.slice(-2).map(Number);
+      const tab = page.locator(".dv-tab", { hasText: new RegExp(`^\\s*${title}\\s*$`) }).first();
+      const box = await tab.boundingBox();
+      if (!box) return out(`no tab ${title}`);
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      for (let i = 1; i <= 12; i++) {
+        await page.mouse.move(box.x + box.width / 2 + ((x - box.x - box.width / 2) * i) / 12, box.y + box.height / 2 + ((y - box.y - box.height / 2) * i) / 12);
+        await page.waitForTimeout(40);
+      }
+      await page.waitForTimeout(200);
+      await page.mouse.up();
+      await page.waitForTimeout(500);
+      return out(`dragged tab ${title}`);
+    }
     case "dclick":
     case "ddblclick": {
       // Click (or double-click) at a document point in the viewer, paced

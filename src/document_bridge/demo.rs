@@ -467,7 +467,35 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let last_in_scene = scratch.document().children(scene).last().and_then(|&c| scratch.document().live(c)).map(|n| n.order.clone());
     let place = Placement { entity_parent: Some(model), entity_after: None, figure_parent: Some(scene), figure_after: last_in_scene.map(|k| OrderKey::after(&k)) };
     let (entity, inst) = definition::instantiate(scratch.document(), def, "free", "bar", &place).expect("bar instantiates");
+    scratch
+        .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: inst.clone(), exact: false })
+        .expect("instantiation applies");
     ops.extend(inst);
+
+    // Semantic tabs (plans/panels-and-session.md): the pendulum and the
+    // level slider get compositions of their own, each a view in its own
+    // tab, and `main` embeds them where they sat, so the everything-in-one
+    // layout still reads as before. Their ids come after everything above,
+    // so every earlier id stays put.
+    let late = scratch.document().next_ids(4);
+    let (pendulum_comp, controls_comp, pendulum_embed, controls_embed) = (late[0], late[1], late[2], late[3]);
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("pendulum".into()));
+    ops.push(Op::Create { id: pendulum_comp, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("controls".into()));
+    ops.push(Op::Create { id: controls_comp, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    ops.push(Op::Reparent { id: pendulum, parent: Some(pendulum_comp), order: OrderKey::first() });
+    ops.push(Op::Reparent { id: slider, parent: Some(controls_comp), order: OrderKey::first() });
+    let k_assembly = OrderKey::after(&OrderKey::first());
+    let k_pendulum = OrderKey::after(&k_assembly);
+    let k_controls = OrderKey::after(&k_pendulum);
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("pendulum view".into()));
+    ops.push(Op::Create { id: pendulum_embed, ty: ty("embed"), parent: Some(main), order: k_pendulum, components: vec![embed(pendulum_comp), Transform2d::default().wrap(), name.wrap()] });
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("controls view".into()));
+    ops.push(Op::Create { id: controls_embed, ty: ty("embed"), parent: Some(main), order: k_controls, components: vec![embed(controls_comp), Transform2d::default().wrap(), name.wrap()] });
     // The entity's parameter follows the slider: the exit of ECM phase 1.
     let level_path: LeafPath = "params.level".parse().expect("parameter path");
     ops.push(Op::Set { id: entity, path: level_path, slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).expect("demo binding")) });

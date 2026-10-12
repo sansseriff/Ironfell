@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",
+    "dockview-core": "^8.5.1",
     "fast-xml-parser": "^5.11.1"
   }
 }

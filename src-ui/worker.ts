@@ -135,12 +135,8 @@ class IronWorker {
 
         case "leftBtDown":
           // The press lands where it happened, not at the last buffered move.
-          if (typeof data.x === "number") {
-            this.latestMouseX = data.x;
-            this.latestMouseY = data.y;
-            this.hasMouseUpdate = true;
-          }
-          glue.left_bt_down(this.appHandle);
+          if (typeof data.x === "number") glue.left_bt_down_at(this.appHandle, data.x, data.y);
+          else glue.left_bt_down(this.appHandle);
           break;
 
         case "modifiers":

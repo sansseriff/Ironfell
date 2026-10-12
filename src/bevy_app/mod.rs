@@ -22,6 +22,7 @@ use crate::document_bridge::{DocumentPlugin, reconcile_gesture};
 struct GestureSystems;
 
 pub use input_accum::*;
+pub(crate) use pointer::PressPosition;
 pub(crate) use scene3d::ScreenRect as ScreenRectMarker;
 pub(crate) use scene3d::ActiveState as ActiveStateMarker;
 // Bring required items into scope from submodules
@@ -303,6 +304,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<crate::SelectionState>();
     app.init_resource::<crate::DragState>();
     app.init_resource::<PendingCommit>();
+    app.init_resource::<pointer::PressPosition>();
     app.init_resource::<select::SelectTool>();
     app.init_resource::<select::ShellModifiers>();
     app.init_resource::<select::ToolKeys>();

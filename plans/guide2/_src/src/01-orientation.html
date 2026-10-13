@@ -1,0 +1,150 @@
+<header class="chapter-head">
+  <p class="kicker">Part 1 of 9 · every system, lightly</p>
+  <h1>Where things stand now</h1>
+  <p class="lede">The first guide ended with a document store, a reconciler, bindings, clips and a model surface: one scene, drawn by Bevy, edited by drags and by Claude. Three days and 52 commits later, the same store holds units, definitions, constraints, compositions, ports and a session. Bevy draws every view into its own texture. The shell is a dock of tabs. This part is the map: what's new, how the stages fit together, where each system lives, and one interaction followed through all of it.</p>
+  <div class="prereq">
+    <div><b>You need</b>Guide 1 (<code>plans/guide/</code>), or at least its Parts 1–5: nodes, components, slots, ops, transactions, the reconciler, bindings.</div>
+    <div><b>Plans</b><code>roadmap.md</code> (stages A–I), <code>entity-composition-model.md</code> (ECM), <code>constraint-system.md</code> (CS), <code>view-textures.md</code>, <code>select-tool.md</code>, <code>panels-and-session.md</code>.</div>
+  </div>
+</header>
+
+<h2 id="one-idea"><span class="sec">1.1</span>The same idea, much further</h2>
+<p>Guide 1's one idea still holds: <strong>the document is the truth, and Bevy draws whatever it says.</strong> Everything since has been about what the document can say, and how many ways it can be seen.</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 400" role="img" aria-label="Four layers. The shell: a dockview workspace of views, the model surface. Bevy: tools, picking, the bridge, per-view textures. The store: document and session, the reactive graph with its layers, the solver, ports. Files: the canonical JSON, saving only the document tier.">
+  <defs><marker id="o1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="900" height="80" rx="8" class="zone"/>
+  <text class="t-b" x="26" y="32">Shell (Svelte, main thread)</text>
+  <rect x="26" y="42" width="270" height="38" rx="5" class="s-shell"/><text class="t-mono" x="161" y="66" text-anchor="middle">dockview: tabs of views · Part 8</text>
+  <rect x="316" y="42" width="270" height="38" rx="5" class="s-shell"/><text class="t-mono" x="451" y="66" text-anchor="middle">HTML views: Document, Inspector</text>
+  <rect x="606" y="42" width="288" height="38" rx="5" class="s-model"/><text class="t-mono" x="750" y="66" text-anchor="middle">model surface: views + SELECTED</text>
+
+  <rect x="10" y="104" width="900" height="100" rx="8" class="zone"/>
+  <text class="t-b" x="26" y="126">Bevy (worker, wasm)</text>
+  <rect x="26" y="136" width="200" height="56" rx="5" class="s-tools"/><text class="t-mono" x="126" y="160" text-anchor="middle">select · pen · pan/zoom</text><text class="t-s" x="126" y="178" text-anchor="middle">Part 7, 8</text>
+  <rect x="246" y="136" width="200" height="56" rx="5" class="s-comp"/><text class="t-mono" x="346" y="160" text-anchor="middle">panels · embeds · chains</text><text class="t-s" x="346" y="178" text-anchor="middle">Part 5</text>
+  <rect x="466" y="136" width="200" height="56" rx="5" class="s-react"/><text class="t-mono" x="566" y="160" text-anchor="middle">bridge: reconcile</text><text class="t-s" x="566" y="178" text-anchor="middle">guide 1, Part 3</text>
+  <rect x="686" y="136" width="208" height="56" rx="5" class="s-render"/><text class="t-mono" x="790" y="160" text-anchor="middle">a texture per view</text><text class="t-s" x="790" y="178" text-anchor="middle">Part 6</text>
+
+  <rect x="10" y="218" width="900" height="120" rx="8" class="zone"/>
+  <text class="t-b" x="26" y="240">Store (iron_document, no Bevy)</text>
+  <rect x="26" y="250" width="200" height="76" rx="5" class="s-store"/><text class="t-mono" x="126" y="274" text-anchor="middle">document</text><text class="t-s" x="126" y="292" text-anchor="middle">units · definitions · entities</text><text class="t-s" x="126" y="308" text-anchor="middle">compositions · Part 2, 5</text>
+  <rect x="246" y="250" width="200" height="76" rx="5" class="s-react"/><text class="t-mono" x="346" y="274" text-anchor="middle">reactive graph</text><text class="t-s" x="346" y="292" text-anchor="middle">bindings · handles · layers</text><text class="t-s" x="346" y="308" text-anchor="middle">Part 3</text>
+  <rect x="466" y="250" width="200" height="76" rx="5" class="s-solve"/><text class="t-mono" x="566" y="274" text-anchor="middle">iron_solve</text><text class="t-s" x="566" y="292" text-anchor="middle">constraints · clusters</text><text class="t-s" x="566" y="308" text-anchor="middle">Part 4</text>
+  <rect x="686" y="250" width="208" height="76" rx="5" class="s-ports"/><text class="t-mono" x="790" y="274" text-anchor="middle">ports · connections</text><text class="t-s" x="790" y="292" text-anchor="middle">signals · physics layer</text><text class="t-s" x="790" y="308" text-anchor="middle">Part 9</text>
+
+  <rect x="10" y="352" width="900" height="40" rx="8" class="zone"/>
+  <text class="t-s" x="26" y="377">File: the document tier only. Session (selection, ids ≥ 2⁴⁰) and workspace (layout, in the browser) never enter it.</text>
+  <line x1="126" y1="192" x2="126" y2="248" class="ln" marker-end="url(#o1)"/>
+  <line x1="161" y1="80" x2="161" y2="134" class="ln" marker-end="url(#o1)"/>
+</svg>
+<figcaption>The four layers, with the part that covers each piece. The arrows follow a gesture: the shell hands pointer input to the tools, and the tools ask the store.</figcaption>
+</figure>
+<p>What's new, grouped by the question each piece answers:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Question</th><th>Answer</th><th>Part</th></tr></thead>
+  <tbody>
+    <tr><td>What does a value mean physically?</td><td>Quantities with units (<code>9.58 mW</code>), dimension-checked; records</td><td>2</td></tr>
+    <tr><td>What is a "laser", as opposed to a drawing of one?</td><td>Definitions, parameters, entities, templates</td><td>2</td></tr>
+    <tr><td>Where is this node on screen, and can I drag it?</td><td>World transforms in the store; handles: direct, linear, locked</td><td>3</td></tr>
+    <tr><td>How do two things stay attached both ways?</td><td>Constraints, solved by <code>iron_solve</code> on drag and on apply</td><td>4</td></tr>
+    <tr><td>How can one thing be drawn in several diagrams?</td><td>Compositions, <code>figures</code>, embeds</td><td>5</td></tr>
+    <tr><td>How does a composition get inside another, or onto a 3D plane?</td><td>Every view renders to its own texture</td><td>6</td></tr>
+    <tr><td>How do clicks and drags work on nested content?</td><td>Figma's selection rules over hit chains; the transform box; the pen</td><td>7</td></tr>
+    <tr><td>Where do panels come from, and where does the selection live?</td><td>A dock of views; the session tier</td><td>8</td></tr>
+    <tr><td>How does a laser feed a fiber?</td><td>Ports, connections, signals and across/through physics</td><td>9</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="stages"><span class="sec">1.2</span>The stages, commit by commit</h2>
+<p>The roadmap (<code>plans/roadmap.md</code> §3) split the work into lettered stages. Here is the order they actually landed in, from <code>5ee0b93</code> (guide 1's last step, committed) to <code>480c15b</code>:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Date</th><th>Stage</th><th>What landed</th><th>Part</th></tr></thead>
+  <tbody>
+    <tr><td>Oct 10</td><td><strong>A</strong> Groundwork</td><td>Floor trig; <code>geom</code> world transforms; linear binding inversion; drags through the store's preview; changed-node sets instead of one dirty flag</td><td>3</td></tr>
+    <tr><td>Oct 10</td><td><strong>C2</strong> phase 1</td><td><code>iron_solve</code>, the dependency-free solver crate</td><td>4</td></tr>
+    <tr><td>Oct 10</td><td><strong>B</strong> Values</td><td>Primitives-only registry; quantities; interned run-time fields; records and <code>Get</code>; definitions as data</td><td>2</td></tr>
+    <tr><td>Oct 10</td><td><strong>C2</strong>, <strong>D</strong></td><td>Constraints in the document, solved on apply; the pendulum demo</td><td>4</td></tr>
+    <tr><td>Oct 11</td><td><strong>C1</strong> Compositions</td><td>Rename to <code>template</code>/<code>figures</code>; composition and model roots; a panel per composition; selection by id; Link and Show in; model and composition views</td><td>5</td></tr>
+    <tr><td>Oct 11</td><td>ECM §7.4 Embeds</td><td><code>embed</code> and <code>camera</code> nodes; 2D in 2D; 3D in 2D; the <code>main</code> layout</td><td>5</td></tr>
+    <tr><td>Oct 11</td><td>View textures</td><td>Spike, then steps 1–4: every view a texture, render on demand, 2D on planes; two latency fixes</td><td>6</td></tr>
+    <tr><td>Oct 11</td><td><strong>E</strong> Select tool</td><td>Figma's selection, drag and transform semantics</td><td>7</td></tr>
+    <tr><td>Oct 12</td><td>Views and session</td><td>The design note; dockview; pan and zoom per view; the session tier</td><td>8</td></tr>
+    <tr><td>Oct 12</td><td><strong>E</strong> Pen</td><td>Paths of point nodes; the pen; point and handle editing; a first inspector</td><td>7</td></tr>
+    <tr><td>Oct 12</td><td><strong>F</strong> steps 1–3</td><td>Ports and connections; the optics chain; across/through pairs as equations; the thermal network</td><td>9</td></tr>
+  </tbody>
+</table></div>
+<p>Stages G (the model surface moves to the semantic views, plus lessons), H (render invalidation, when measurements call for it) and I (encapsulation, live simulation, CAD) haven't started. Stage F's time-domain half (the modulator) is next on that track.</p>
+
+<h2 id="map"><span class="sec">1.3</span>Where everything lives</h2>
+<p>Every excerpt in this guide carries a coloured chip naming its system. Guide 1 had eight systems; this guide regroups them into nine, because the store grew whole new subsystems:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>System</th><th>Lives in</th><th>One line</th></tr></thead>
+  <tbody>
+    <tr><td><span class="chip sys-store">Document model</span></td><td><code>iron_document/src/</code> id, value, units, sym, component, registry, document, definition, op, serial, view, lib; <code>document_bridge/demo.rs</code></td><td>What is stored, how it changes, and the demo that builds it.</td></tr>
+    <tr><td><span class="chip sys-react">Bindings &amp; handles</span></td><td>expr, graph, handle, geom; most of <code>src/document_bridge/</code></td><td>Derived values, how an edit lands, and Bevy reconciled to the store.</td></tr>
+    <tr><td><span class="chip sys-solve">Solver &amp; constraints</span></td><td><code>src/iron_solve/</code>; constraint.rs, solve.rs</td><td>Undirected relationships, solved numerically.</td></tr>
+    <tr><td><span class="chip sys-comp">Compositions</span></td><td>composition.rs; <code>document_bridge/{panel_views,nest}.rs</code></td><td>Diagrams, figures, embeds.</td></tr>
+    <tr><td><span class="chip sys-render">Rendering</span></td><td><code>src/vector/</code>; scene3d, planes, render, ui_panels, timeline</td><td>Views as textures, composited once.</td></tr>
+    <tr><td><span class="chip sys-tools">Select &amp; pen</span></td><td><code>bevy_app/{select,pen,interaction,picking,pointer}.rs</code></td><td>Gestures as state machines over hit chains.</td></tr>
+    <tr><td><span class="chip sys-ports">Ports &amp; physics</span></td><td>port.rs</td><td>Wiring entities together.</td></tr>
+    <tr><td><span class="chip sys-shell">Shell &amp; views</span></td><td><code>src-ui/views/</code>, web_ffi.rs, panels.rs, lib.rs, the worker</td><td>The wasm boundary, the dock, HTML views.</td></tr>
+    <tr><td><span class="chip sys-model">Model surface</span></td><td><code>src-ui/model/</code></td><td>Claude reads views and writes ops.</td></tr>
+  </tbody>
+</table></div>
+<p>By size: <code>iron_document</code> is now 9,024 lines in 22 files (guide 1: 4,775 in 13), with 90 tests; <code>iron_solve</code> is 774 lines with 9; <code>document_bridge</code> 2,862; <code>bevy_app</code> 4,030; <code>vector</code> 2,200; <code>src-ui/views</code> 859. Since guide 1: 157 files changed, about 34,800 lines added.</p>
+
+<h2 id="a-drag"><span class="sec">1.4</span>One drag, through everything</h2>
+<p>The best single tour of the system is one gesture that touches every part: <strong>in the Schematic tab, drag the meter's reading bar wider.</strong> The laser's power slider moves, and both gauges, in both tabs, follow. Here is what happens, in order, with the part that explains each step.</p>
+<ol>
+  <li><strong>The shell</strong> forwards the press with its modifier bits; the dock lets it through to the canvas because the Schematic tab is a canvas view (Part 8). Rust knows the panel's rectangle and its pan and zoom (<code>PanelView::affine</code>, Part 5).</li>
+  <li><strong>Picking</strong> maps the pointer into the schematic composition and finds the reading bar. Its <em>chain</em> is just <code>[reading]</code>: the meter's schematic template has two roots (the block and the bar), and each copied root is a figure of the meter entity, sitting at the composition's top level (Part 5).</li>
+  <li><strong>The select tool</strong> applies Figma's rule: nothing encloses the bar, so the press selects it. Pressing the right edge of its transform box starts a resize (Part 7).</li>
+  <li><strong>The session</strong> records the selection as a <code>selects</code> relation from the session's <code>selection</code> node, with an id above 2⁴⁰, never saved and never in undo (Part 8). The meter's figures light up in the Optics tab too, because they picture the same entity (Part 5).</li>
+  <li><strong>The resize</strong> becomes an affine map, decomposed for a rect into a new <code>size.w</code> (Part 7), and previewed through the bar's <em>handle</em> (Part 3).</li>
+  <li><strong>The handle</strong> of <code>size.w</code> is linear: the width is bound to the meter's <code>in.signal</code>, which is <em>derived</em> from the fiber's <code>out.signal</code> through the connection (Part 9), which is the fiber's input times a constant, which is the laser's <code>out.signal</code>, which is <code>params.power</code>, which is bound to the slider. Inlining collapses all of that to <code>a·slider + b</code>, so the handle writes the slider's value (Part 3).</li>
+  <li><strong>The preview</strong> goes into the graph's overlay layer; the graph re-evaluates every dependent in one pass (Part 3). Both gauges, the beam's opacity and the slider's knob change.</li>
+  <li><strong>The bridge</strong> rewrites just the changed entities in the same frame (<code>reconcile_gesture</code>), and only the views that show them re-render their textures (Part 6). The Thermal tab, if visible, isn't re-rendered.</li>
+  <li><strong>On release</strong>, the gesture commits as one transaction, "resize rect", whose only op sets the slider's value. One Cmd+Z puts it back.</li>
+</ol>
+<p>If the reading had come from a pair port (the heater's temperature bar), step 6 would stop: a physics-solved leaf is <code>Locked</code>, with the reason "solved by its across/through network; change a source or a parameter instead" (Part 9).</p>
+
+<h2 id="vocab"><span class="sec">1.5</span>New words</h2>
+<p>The design discussions fixed a vocabulary. These words are used precisely throughout:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Word</th><th>Means</th><th>Part</th></tr></thead>
+  <tbody>
+    <tr><td><strong>quantity</strong></td><td>A number with a dimension, stored in SI</td><td>2</td></tr>
+    <tr><td><strong>definition / entity</strong></td><td>A kind of thing in the library, and one instance of it in the model</td><td>2</td></tr>
+    <tr><td><strong>template</strong></td><td>A definition's drawing in one notation, copied to make figures</td><td>2</td></tr>
+    <tr><td><strong>handle</strong></td><td>How an edit to a leaf lands: directly, through one linear source, or not at all (with a reason)</td><td>3</td></tr>
+    <tr><td><strong>preview / overlay</strong></td><td>A gesture's values, read on top of everything, never stored until commit</td><td>3</td></tr>
+    <tr><td><strong>driver / finger</strong></td><td>What the solver must satisfy this solve: a transaction's set, or a drag's grip on a point</td><td>4</td></tr>
+    <tr><td><strong>cluster</strong></td><td>Constraints that share variables, solved together</td><td>4</td></tr>
+    <tr><td><strong>composition / figure</strong></td><td>One diagram; a drawing of an entity inside one</td><td>5</td></tr>
+    <tr><td><strong>embed / chain</strong></td><td>A composition shown inside another; the path from a panel's top level to a hit node</td><td>5</td></tr>
+    <tr><td><strong>view</strong></td><td>A source seen through a notation, rendered into its own texture</td><td>6, 8</td></tr>
+    <tr><td><strong>presenter</strong></td><td>Where a view sits: a tab today; later a popover or a menu</td><td>8</td></tr>
+    <tr><td><strong>session tier</strong></td><td>Store content that is never saved and has its own id range</td><td>8</td></tr>
+    <tr><td><strong>port / connection / net</strong></td><td>A terminal of an entity; a wire between two; ports joined by wires</td><td>9</td></tr>
+    <tr><td><strong>across / through</strong></td><td>A pair variable equal at a joint (temperature), and one that sums to zero there (heat flow)</td><td>9</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="run-it"><span class="sec">1.6</span>Running it yourself</h2>
+<p>Both crates are Bevy-free and test natively. The workspace defaults to wasm, so pass your Mac's target:</p>
+<raw lang="bash">
+cargo test -p iron_document --target aarch64-apple-darwin
+cargo test -p iron_solve    --target aarch64-apple-darwin
+</raw>
+<p>The app runs through the <code>/run-iron</code> skill, whose <code>smoke.txt</code> now has a section per stage: drags, the pendulum, Link, embeds, the select tool, the pen, the dock, and the optics and thermal chains. Its expected output is in <code>.claude/skills/run-iron/SKILL.md</code>. Two URL switches are useful when looking at the app: <code>?layout=default</code> forgets the saved dock layout, and <code>?bevy=always</code> turns render on demand off.</p>
+<p>One known failure: <code>iron_solve</code>'s <code>three_link_chain_reaches_a_target</code> hits its 50-iteration cap (Part 4's rough edge).</p>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>The store still owns everything. It now has <strong>layers of derived values</strong> (overlay, bindings, physics, clips) above the stored constants, and none of them is saved.</li>
+  <li>An edit to a leaf goes through its <strong>handle</strong>, which may land on a different leaf, through the solver, or nowhere, with a reason.</li>
+  <li>A <strong>composition</strong> is a diagram, an <strong>entity</strong> is a thing, and a <strong>figure</strong> links the two. Views of compositions can nest.</li>
+  <li>Every <strong>view renders to its own texture</strong>, only when what it shows changed.</li>
+</ul>
+</div>

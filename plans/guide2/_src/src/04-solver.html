@@ -1,0 +1,97 @@
+<header class="chapter-head">
+  <p class="kicker">Part 4 of 9 · <chip sys="solve"/></p>
+  <h1>Constraints and the solver</h1>
+  <p class="lede">Bindings run one way: the bar reads the slider. Many relationships in a diagram run both ways: two joints are coincident, and whichever one you drag, the other follows. This part covers roadmap stages C2 and D: a small numerical solver crate, constraint nodes in the document, the clusters they form, and the pendulum demo that drags through them.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 3: handles, previews, <code>begin_drag</code>/<code>drag_to</code>, and what a <em>driver</em> is.</div>
+    <div><b>Files</b><code>src/iron_solve/src/{lib,cluster,analysis,linalg}.rs</code>, <code>iron_document/src/{constraint,solve,lib}.rs</code>, the pendulum in <code>document_bridge/demo.rs</code>. Design: <code>plans/constraint-system.md</code>.</div>
+  </div>
+</header>
+
+<h2 id="why"><span class="sec">4.1</span>Why bindings aren't enough</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Bind everything to one master.</strong> Make joint 2's position <code>= joint 1 + 100·(cos θ, sin θ)</code>, and so on down the chain. Dragging the ball now has no handle: its position is bound to three angles, non-linearly. You can only drag the master.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>Constraints without a direction.</strong> A <code>distance</code> constraint between two joints says only that they stay 100 px apart. At every solve, whatever is being dragged is a <em>driver</em>, every other free position is a <em>variable</em>, and a numerical solver finds the nearest pose where every constraint holds.</p></div>
+</div>
+
+<h2 id="crate"><span class="sec">4.2</span><code>iron_solve</code>: a solver that knows nothing about documents</h2>
+<p>The solver is its own crate with no dependencies. It knows variables and residual functions, nothing about nodes or constraint kinds. That separation is deliberate: the adapter in <code>iron_document</code> translates, so the numerical method could be swapped without touching the document.</p>
+<snip file="src/iron_solve/src/lib.rs" lines="1-29"/>
+<p>A problem is a vector of variables, a scale per variable, and <em>terms</em>. A term is a small function over a few variables that writes residuals: numbers that are zero when the term is satisfied.</p>
+<snip file="src/iron_solve/src/lib.rs" lines="36-103" mark="37-41,56-61,75-83"/>
+<p>The three tiers do different jobs:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tier</th><th>Means</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td><code>Required</code></td><td>Must hold after a successful solve</td><td>Two joints coincide; a link is 100 px long</td></tr>
+    <tr><td><code>Strong</code></td><td>Satisfy as far as the required terms allow</td><td>The ball is under the pointer; a transaction set <code>x = 900</code></td></tr>
+    <tr><td><code>Weak</code></td><td>A preference</td><td>Stay where you were (added automatically, one per variable)</td></tr>
+  </tbody>
+</table></div>
+<p>The weak "stay where you were" rows are what make dragging feel physical: of the infinitely many poses that satisfy the constraints and put the ball under the pointer, the solver picks the one closest to the last frame, so elbows don't flip.</p>
+
+<h3 id="lm">The method: projected Levenberg–Marquardt</h3>
+<p>The solver minimises the weighted sum of squared residuals. Each iteration linearises every term (central finite differences, only over each term's own variables), solves a damped least-squares step, and then <strong>projects</strong> the trial pose back onto the required terms with a few Newton steps before judging it:</p>
+<snip file="src/iron_solve/src/lib.rs" lines="346-371"/>
+<snip file="src/iron_solve/src/lib.rs" lines="372-433" mark="386-391,402-404,407-421"/>
+<p>Plainly: try a step; if the cost went down, accept it and trust the model more (λ shrinks); if not, damp harder (λ grows ×10) and try again. The projection means the iteration walks along the surface where the constraints hold, rather than trading constraint error against the pointer through a penalty weight. A finger the pendulum can't reach leaves a strong residual equal to the gap, and the chain points straight at the pointer at full extension.</p>
+<div class="box rust"><span class="tab">Reading the numerics</span>
+<p><code>normal_equations</code> forms JᵀJ and Jᵀr from the Jacobian J and residuals r. <code>cholesky_solve</code> solves (JᵀJ + λI)δ = −Jᵀr. Variables are divided by their scale first, so a rotation (radians, scaled by the node's half-diagonal) and a position (pixels) are comparable. All loops run in index order without hashing, so the same input gives bit-identical output, which keeps tests and undo deterministic.</p>
+</div>
+
+<h3 id="clusters">Clusters and analysis</h3>
+<p>Terms that share no variables are independent problems. <code>cluster.rs</code> groups them with union-find, so dragging the pendulum never re-solves an unrelated mechanism:</p>
+<snip file="src/iron_solve/src/cluster.rs" lines="1-29"/>
+<p><code>analysis.rs</code> answers "how many ways can this still move?" (degrees of freedom) and, when a system can't be solved, "which constraints are to blame?". It computes the rank of the required Jacobian, then drops one term at a time and re-tests (SolveSpace's method). That's where the error message <em>likely at fault: #c3, #c4</em> comes from.</p>
+<snip file="src/iron_solve/src/analysis.rs" lines="7-21"/>
+
+<h2 id="document"><span class="sec">4.3</span>Constraints in the document</h2>
+<p>A constraint is an ordinary node: a <code>constraint</code> component (kind, value, enabled) and one <code>constrains</code> relation per operand. The relation's data carries the operand's <em>role</em> and its <em>anchor</em>, a point in the operand's local space:</p>
+<raw title="The hinge between the platform and the first joint">constraint "hinge"   kind=coincident
+  constrains → #platform   role=a  anchor=80,20    (the platform's bottom centre)
+  constrains → #joint0     role=b  anchor=0,0</raw>
+<snip file="src/iron_document/src/constraint.rs" lines="21-40"/>
+<p>The vocabulary is code, like node types. A <code>value</code> can be bound: the pendulum's three <code>distance</code> constraints read <code>value = #length.slider.value · 100</code>, a <em>driving dimension</em>. Validation rejects malformed constraints and duplicates (two constraints of one kind over the same anchored operands) with an explicit error, because the main author of constraints is going to be a model, and an error teaches more than silent merging.</p>
+
+<h2 id="adapter"><span class="sec">4.4</span>The adapter: leaves become variables</h2>
+<p><code>solve.rs</code> decides, per solve, what is a variable and what is known:</p>
+<snip file="src/iron_document/src/solve.rs" lines="1-10"/>
+<snip file="src/iron_document/src/solve.rs" lines="118-122"/>
+<p>A leaf is free if it holds a constant, isn't bound, and no clip drives it right now. Each operand node contributes its free <code>x</code>, <code>y</code> and <code>rot</code>. Constraints connected through shared nodes form one cluster. Then each kind becomes a residual closure:</p>
+<snip file="src/iron_document/src/solve.rs" lines="358-430" mark="372-384,406-410,412-428"/>
+<p>Every residual is written in world positions (<code>pose.point(v, anchor)</code>, which uses Part 3's world transforms), so a joint inside a rotated group is constrained where it actually is. Lines 406–410 turn a transaction's <code>Set</code> into a strong "be this value" term; lines 412–428 turn a drag's <em>finger</em> into a strong "this anchor is at the pointer" term.</p>
+
+<h2 id="when"><span class="sec">4.5</span>When the solver runs</h2>
+<p>Two moments, with different rules for what is written:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>During a drag</th><th>When a transaction applies</th></tr></thead>
+  <tbody>
+    <tr><td>Called from</td><td><code>resolve_clusters_live</code>, after every preview</td><td><code>post_apply</code>, after every transaction</td></tr>
+    <tr><td>Drivers</td><td>Fingers</td><td>The transaction's own <code>Set</code>s</td></tr>
+    <tr><td>Writes</td><td>Previews (the overlay)</td><td><code>Set</code> ops, recorded as the transaction's <code>derived_ops</code></td></tr>
+    <tr><td>On failure</td><td>Keep the last good pose</td><td>Reject the transaction, naming the culprits</td></tr>
+  </tbody>
+</table></div>
+<snip file="src/iron_document/src/lib.rs" lines="218-248" mark="236-246"/>
+<p>Solve-on-apply is what keeps the document consistent no matter who edits it. A model edit that sets the ball's <code>x</code> to 900 is a driver; the solver moves the joints, and their new positions are recorded as derived ops on the same transaction, so one undo puts everything back:</p>
+<snip file="src/iron_document/src/lib.rs" lines="814-889" mark="837-847,860-875,882-885"/>
+<p>Two refinements matter for the model. The returned <code>SolverSummary</code> reports causes, not every changed value: which clusters re-solved, which nodes moved, and any request the solver couldn't honour (<code>&lt;unmet&gt;</code>). And <code>exact: true</code> on a transaction turns an unmet request into a rejection instead of an adjustment, for edits that must land exactly or not at all.</p>
+<snip file="src/iron_document/src/solve.rs" lines="68-91"/>
+<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<ref file="src/iron_document/src/lib.rs" line="697" has="post_apply">lib.rs:697</ref>).</p>
+
+<h2 id="pendulum"><span class="sec">4.6</span>The pendulum</h2>
+<p>The demo that exercises all of it lives in the Pendulum tab (and in Main, through its embed; Part 5):</p>
+<raw title="The pendulum, as nodes">group "pendulum"
+  rect   platform              fixed by a `fix` constraint
+  circle j0, j1, j2            joints (free x, y)
+  circle ball                  free x, y
+  rect   arm1..arm3            x, y, rot BOUND to the joints they connect (bindings read solved positions)
+  rect   height                h bound to 640 − ball.y
+  slider length                0.5–1.5
+  constraint fix(platform), coincident(platform@80,20 ~ j0),
+             distance(j0, j1) = length·100, distance(j1, j2) = …, distance(j2, ball) = …</raw>
+<p>Dragging the ball places a finger on it; every frame the cluster re-solves and the joints move; the arms, being bindings over the joints' solved positions, follow in the same pass; the height bar follows the ball. Dragging an arm does nothing, with the reason logged: its position is bound to four free leaves, so it has no handle (Part 3). Moving the <code>fix</code> from the platform to the ball (a model edit) turns the mechanism around: now the platform drags and the ball stays put. Each frame logs <code>solve: cluster #V, 12 vars, N iterations, M evaluations, T ms</code>; T is well under the 2 ms budget.</p>
+
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>After dragging the platform toward its reach limit, the committed pose is sometimes a hair short of the solver's fixed point. The next unrelated transaction then re-solves and nudges the platform by a fraction of a pixel, which shows up in the smoke log as <code>"link" by Human: cluster #V re-solved; moved 1 node(s): #W</code>. Harmless, and documented in <code>SKILL.md</code>, but it's solver tolerance leaking into history. A second open item: <code>iron_solve</code>'s test <code>three_link_chain_reaches_a_target</code> fails at its 50-iteration cap, noted in <code>constraint-system.md</code> §14.</p>
+</div>

@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 2 · Richer values and definitions — Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="01-orientation.html" aria-label="Previous part">&larr;</a><span class="here">Part 2 of 9</span><a href="03-handles.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html" aria-current="page"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 2 of 9 · <span class="chip sys-store">Document model</span> <span class="chip sys-react">Bindings & handles</span></p>
+  <h1>Richer values and definitions</h1>
+  <p class="lede">The first guide's document stored numbers, strings, colours and vectors, and every node type was a Rust enum variant. Then the optics demo appeared on the horizon. A laser has a power in milliwatts, a fiber has a loss in dB per km, and a "laser" is not something the Rust code should know about. This part covers roadmap stage B: quantities with units, structured records, fields whose names are only known at run time, and definitions that live in the document as data.</p>
+  <div class="prereq">
+    <div><b>You need</b>Guide 1, Parts 2 and 5: components, slots, <code>Value</code>, and the expression language.</div>
+    <div><b>Files</b><code>iron_document/src/{units,value,sym,component,definition,serial}.rs</code>, <code>expr.rs</code>'s arithmetic, and the demo's <code>bar</code> in <code>document_bridge/demo.rs</code>.</div>
+  </div>
+</header>
+
+<h2 id="units"><span class="sec">2.1</span>Quantities: a number that knows its unit</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Store numbers and write the unit in the name.</strong> A field called <code>power_mw</code> holds <code>9.58</code>. It works until someone binds <code>power_mw</code> to a field called <code>power_w</code>, and the laser is a thousand times too bright with no error anywhere. Unit mistakes are silent by construction.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>A quantity is an SI magnitude plus a dimension.</strong> <code>9.58 mW</code> is stored as <code>{si: 0.00958, dim: W}</code>. The unit someone typed is presentation only. Arithmetic checks dimensions, so adding watts to kelvin is an error you see the moment you write the binding.</p></div>
+</div>
+<p>A dimension is seven small integers: the exponents of metre, kilogram, second, ampere, kelvin, mole and candela. Watts are <code>kg·m²·s⁻³</code>, so their <code>Dim</code> is <code>[2, 1, -3, 0, 0, 0, 0]</code>.</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/units.rs:14">src/iron_document/src/units.rs</a><span class="range">lines 14–40</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:2;--len:1"></span><span class="band" style="--from:20;--len:7"></span><pre class="gutter" aria-hidden="true">14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40</pre><pre class="src"><code class="language-rust">/// Exponents of m, kg, s, A, K, mol, cd.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct Dim(pub [i8; 7]);
+
+const BASE_NAMES: [&amp;str; 7] = [&quot;m&quot;, &quot;kg&quot;, &quot;s&quot;, &quot;A&quot;, &quot;K&quot;, &quot;mol&quot;, &quot;cd&quot;];
+
+impl Dim {
+    pub const NONE: Dim = Dim([0; 7]);
+    pub const LENGTH: Dim = Dim([1, 0, 0, 0, 0, 0, 0]);
+    pub const MASS: Dim = Dim([0, 1, 0, 0, 0, 0, 0]);
+    pub const TIME: Dim = Dim([0, 0, 1, 0, 0, 0, 0]);
+    pub const CURRENT: Dim = Dim([0, 0, 0, 1, 0, 0, 0]);
+    pub const TEMPERATURE: Dim = Dim([0, 0, 0, 0, 1, 0, 0]);
+    pub const AMOUNT: Dim = Dim([0, 0, 0, 0, 0, 1, 0]);
+    pub const LUMINOSITY: Dim = Dim([0, 0, 0, 0, 0, 0, 1]);
+
+    pub fn is_none(self) -&gt; bool {
+        self == Dim::NONE
+    }
+
+    pub fn mul(self, o: Dim) -&gt; Dim {
+        let mut d = [0i8; 7];
+        for i in 0..7 {
+            d[i] = self.0[i] + o.0[i];
+        }
+        Dim(d)
+    }</code></pre></div></div></figure>
+<p>Multiplying two quantities adds their exponents, dividing subtracts them. A result whose exponents are all zero is a plain number again, which is why <code>signal / 1 mW</code> gives a dimensionless ratio you can use as a width in pixels.</p>
+<p>Units come in as text, in files, in expressions, and from the model. <code>parse_unit</code> reads any prefixed or compound unit:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/units.rs:211">src/iron_document/src/units.rs</a><span class="range">lines 211–241</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:4"></span><span class="band" style="--from:25;--len:5"></span><pre class="gutter" aria-hidden="true">211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241</pre><pre class="src"><code class="language-rust">/// Parse a unit string: atoms with exponents joined by `*` or `·`, with at
+/// most one `/` separating numerator and denominator (`kg*m2/s3`, `W/m2`,
+/// `1/s`, `mW`).
+pub fn parse_unit(text: &amp;str) -&gt; Result&lt;Unit, UnitError&gt; {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(Unit { dim: Dim::NONE, factor: 1.0 });
+    }
+    let (num, den) = match text.split_once(&#x27;/&#x27;) {
+        Some((n, d)) =&gt; (n, Some(d)),
+        None =&gt; (text, None),
+    };
+    let mut unit = Unit { dim: Dim::NONE, factor: 1.0 };
+    let combine = |unit: &amp;mut Unit, part: &amp;str, sign: i8| -&gt; Result&lt;(), UnitError&gt; {
+        for a in part.split([&#x27;*&#x27;, &#x27;·&#x27;]) {
+            let a = a.trim();
+            if a.is_empty() || (a == &quot;1&quot; &amp;&amp; sign &gt; 0) {
+                continue;
+            }
+            let u = power(a).ok_or_else(|| UnitError(text.to_owned()))?;
+            unit.dim = if sign &gt; 0 { unit.dim.mul(u.dim) } else { unit.dim.div(u.dim) };
+            unit.factor = if sign &gt; 0 { unit.factor * u.factor } else { unit.factor / u.factor };
+        }
+        Ok(())
+    };
+    combine(&amp;mut unit, num, 1)?;
+    if let Some(d) = den {
+        combine(&amp;mut unit, d, -1)?;
+    }
+    Ok(unit)
+}</code></pre></div></div></figure>
+<p>It splits on the one <code>/</code>, multiplies the atoms on each side, and each atom may carry a prefix (<code>m</code>W, <code>µ</code>s) and a power (<code>m2</code>, <code>s^-1</code>). The result is a <code>Unit</code>: a dimension and the factor that turns a magnitude in this unit into SI. So <code>K/W</code> parses to dimension <code>K·kg⁻¹·m⁻²·s³</code> with factor 1, which matters later: the thermal link's resistance is written <code>2 K/W</code> in Part 9.</p>
+<p>Going the other way, <code>format</code> picks an engineering prefix so the mantissa reads between 1 and 1000:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/units.rs:248">src/iron_document/src/units.rs</a><span class="range">lines 248–251</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">248
+249
+250
+251</pre><pre class="src"><code class="language-rust">/// Human- and model-facing rendering: the canonical unit with an engineering
+/// prefix so the mantissa reads in `1..1000` (`0.00958 W` → `9.58 mW`,
+/// `0.5 kg` → `500 g`). Not the file format, which stores `[si, canonical]`.
+pub fn format(si: f64, dim: Dim) -&gt; String {</code></pre></div></div></figure>
+<p>That's what you see in views and in the inspector: <code>7.94 mW</code>, not <code>0.00794 W</code>.</p>
+
+<h3 id="value">The value enum, now</h3>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/value.rs:18">src/iron_document/src/value.rs</a><span class="range">lines 18–39</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:16;--len:5"></span><pre class="gutter" aria-hidden="true">18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    Number(f64),
+    Bool(bool),
+    Str(String),
+    /// Linear RGBA, each channel in `0..=1`.
+    Color([f32; 4]),
+    Vec2([f64; 2]),
+    Vec3([f64; 3]),
+    /// One of a declared set of alternatives. Enumerated choice is a leaf kind
+    /// in its own right (vision doc 06 §3).
+    Enum(String),
+    Ref(NodeId),
+    /// A physical quantity: magnitude in SI base units plus its dimension
+    /// (entity-composition-model.md §3.1). The display unit is presentation.
+    /// Never dimensionless: that is a plain `Number`; see [`Value::quantity`].
+    Quantity { si: f64, dim: Dim },
+    /// A small structured value (a beam, a pulse shape), ECM §3.2. `kind`
+    /// names its schema; fields are read with `Expr::Get` (`beam.waist`).
+    /// Field order is canonical (sorted), so files and views are stable.
+    Record { kind: &amp;&#x27;static str, fields: BTreeMap&lt;&amp;&#x27;static str, Value&gt; },
+}</code></pre></div></div></figure>
+<p>Two variants are new since the first guide. <code>Quantity</code> is above. <code>Record</code> is a small structured value with a named schema (a beam with a waist and a wavelength, say). Its fields are read in expressions with dot syntax, <code>#e.params.beam.waist</code>, which parses to <code>Expr::Get</code>. Records exist for the time-domain work in Part 9's future; nothing in the demo uses one yet.</p>
+<p>In files, a quantity is written as <code>{"q": [si, "canonical unit"]}</code>, always in the coherent SI unit, so diffs stay readable. The model surface may also send <code>{"q": "9.58 mW"}</code>, because the model doesn't carry the unit table:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/value.rs:246">src/iron_document/src/value.rs</a><span class="range">lines 246–259</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259</pre><pre class="src"><code class="language-rust">// `{&quot;q&quot;: [si, &quot;W&quot;]}` is the file form; `{&quot;q&quot;: &quot;9.58 mW&quot;}`
+// is accepted from the model surface, which does not
+// carry the unit table.
+&quot;q&quot; =&gt; match inner {
+    J::Array(a) =&gt; match a.as_slice() {
+        [n, J::String(u)] =&gt; {
+            let si = n.as_f64().ok_or_else(|| &quot;quantity magnitude must be a number&quot;.to_owned())?;
+            let unit = units::parse_unit(u).map_err(|e| e.to_string())?;
+            Ok(Value::quantity(si * unit.factor, unit.dim))
+        }
+        _ =&gt; Err(&quot;q must be [magnitude, \&quot;unit\&quot;]&quot;.to_owned()),
+    },
+    J::String(s) =&gt; Value::parse_quantity(s),
+    _ =&gt; Err(&quot;q must be [magnitude, \&quot;unit\&quot;] or \&quot;magnitude unit\&quot;&quot;.to_owned()),</code></pre></div></div></figure>
+
+<h3 id="arith">Arithmetic that checks dimensions</h3>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:352">src/iron_document/src/expr.rs</a><span class="range">lines 352–378</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:10"></span><span class="band" style="--from:16;--len:4"></span><pre class="gutter" aria-hidden="true">352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376
+377
+378</pre><pre class="src"><code class="language-rust">/// `a &lt;op&gt; b` on two numbers or quantities, dimension-checked: `+ - %` and
+/// comparisons need equal dimensions (a plain number is dimensionless, so
+/// `9.58 mW + 2` is an error and `9.58 mW * 2` is not); `*` and `/` combine
+/// them, and a result whose dimension cancels is a plain number.
+fn quantity_op(op: BinOp, a: &amp;Value, b: &amp;Value) -&gt; Option&lt;Result&lt;Value, EvalError&gt;&gt; {
+    let (x, dx) = a.as_quantity()?;
+    let (y, dy) = b.as_quantity()?;
+    let same = || {
+        if dx == dy {
+            Ok(())
+        } else {
+            Err(EvalError::Type(format!(&quot;cannot combine {} {} {}&quot;, a.describe(), op.symbol(), b.describe())))
+        }
+    };
+    Some(match op {
+        BinOp::Add =&gt; same().map(|_| Value::quantity(x + y, dx)),
+        BinOp::Sub =&gt; same().map(|_| Value::quantity(x - y, dx)),
+        BinOp::Mod =&gt; same().map(|_| Value::quantity(x % y, dx)),
+        BinOp::Mul =&gt; Ok(Value::quantity(x * y, dx.mul(dy))),
+        BinOp::Div =&gt; Ok(Value::quantity(x / y, dx.div(dy))),
+        BinOp::Lt =&gt; same().map(|_| Value::Bool(x &lt; y)),
+        BinOp::Le =&gt; same().map(|_| Value::Bool(x &lt;= y)),
+        BinOp::Gt =&gt; same().map(|_| Value::Bool(x &gt; y)),
+        BinOp::Ge =&gt; same().map(|_| Value::Bool(x &gt;= y)),
+        _ =&gt; return None,
+    })
+}</code></pre></div></div></figure>
+<p>Addition, subtraction, remainder and comparison need equal dimensions; multiplication and division combine them. A plain number is a quantity with no dimension, so <code>9.58 mW * 2</code> is fine and <code>9.58 mW + 2</code> is the error <code>cannot combine 9.58 mW + 2</code>. That's exactly the warning you'd have seen in the thermal demo before its port defaults were fixed: <code>cannot combine a plain number - K</code>.</p>
+<p>The lexer turns a number followed by unit characters into a quantity literal, so <code>640 - x * 300</code> stays plain numbers while <code>x / 1 mW</code> reads <code>1 mW</code> as one token (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:610" title="src/iron_document/src/expr.rs:610"><code>expr.rs:610</code></a>). The same stage added the floor functions geometry needs (<code>sin</code>, <code>cos</code>, <code>atan2</code>, <code>sqrt</code>, <code>pow</code>, <code>hypot</code>) and the constant <code>pi</code>. The fiber's loss in Part 9 is <code>pow(10, -loss * length / 10)</code>.</p>
+<div class="box rust"><span class="tab">Reading the Rust</span>
+<p><code>fn quantity_op(...) -&gt; Option&lt;Result&lt;Value, EvalError&gt;&gt;</code> has two layers of "maybe". The outer <code>Option</code> says "is this my case at all?": <code>a.as_quantity()?</code> returns <code>None</code> early if either side isn't a number or quantity, and <code>binary</code> then tries vectors and strings. The inner <code>Result</code> says "it is my case; did it work?". <code>same().map(|_| ...)</code> runs the closure only when the dimensions matched.</p>
+</div>
+
+<h2 id="params"><span class="sec">2.2</span>Fields named at run time</h2>
+<p>Every component so far has compile-time fields: <code>size.w</code> and <code>size.h</code> are written into the Rust by the <code>components!</code> macro, and a <code>LeafPath</code> names a field with a <code>&amp;'static str</code>. A laser's parameters (<code>power</code>) or a fiber's (<code>length_km</code>) are only known from a definition in the document.</p>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>A second kind of field name.</strong> Add <code>enum Field { Static(&amp;'static str), Dynamic(String) }</code>. Now <code>LeafPath</code> is no longer <code>Copy</code>, every comparison allocates, and every match on a field name grows a case.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>Intern the run-time names.</strong> A name seen at run time is leaked once into a <code>&amp;'static str</code> and reused forever after. <code>LeafPath</code> keeps its shape and stays <code>Copy</code>, and files still store plain strings.</p></div>
+</div>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/sym.rs:1">src/iron_document/src/sym.rs</a><span class="range">lines 1–27</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:17;--len:10"></span><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27</pre><pre class="src"><code class="language-rust">//! Interned field names (entity-composition-model.md §4.1).
+//!
+//! `LeafPath` is `Copy` and names its field with a `&amp;&#x27;static str`, which is
+//! right for the compile-time components. Fields of a `params` component
+//! are known only at run time, from a definition in the document. Rather
+//! than a second field representation (`Field::Sym`), run-time names are
+//! interned to a deduplicated `&amp;&#x27;static str`: the same `LeafPath` shape, the
+//! same `Copy`, equality by content, and files keep storing strings. The
+//! cost is one leaked allocation per distinct name over the process&#x27;s life,
+//! which for parameter names is nothing.
+
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
+static INTERNED: OnceLock&lt;Mutex&lt;HashSet&lt;&amp;&#x27;static str&gt;&gt;&gt; = OnceLock::new();
+
+/// The one `&amp;&#x27;static str` for `name`, allocated on first sight.
+pub fn intern(name: &amp;str) -&gt; &amp;&#x27;static str {
+    let set = INTERNED.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut set = set.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(s) = set.get(name) {
+        return s;
+    }
+    let leaked: &amp;&#x27;static str = Box::leak(name.to_owned().into_boxed_str());
+    set.insert(leaked);
+    leaked
+}</code></pre></div></div></figure>
+<p>The cost is one small allocation per distinct parameter name for the life of the process, which is nothing. The one component with run-time fields is <code>params</code>, declared in the macro's <code>@dynamic</code> block:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:316">src/iron_document/src/component.rs</a><span class="range">lines 316–329</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">316
+317
+318
+319
+320
+321
+322
+323
+324
+325
+326
+327
+328
+329</pre><pre class="src"><code class="language-rust">pub struct Params {
+    pub slots: BTreeMap&lt;&amp;&#x27;static str, Slot&gt;,
+}
+
+impl Params {
+    pub fn field_names(&amp;self) -&gt; Vec&lt;&amp;&#x27;static str&gt; {
+        self.slots.keys().copied().collect()
+    }
+
+    /// Add or replace a parameter.
+    pub fn insert(&amp;mut self, name: &amp;str, slot: Slot) {
+        self.slots.insert(intern(name), slot);
+    }
+}</code></pre></div></div></figure>
+<p>So a laser entity's power is the leaf <code>params.power</code>, bindable like any other: <code>params.power = {= #slider.slider.value * 1 mW}</code> is how the optics demo connects its slider.</p>
+
+<h2 id="definitions"><span class="sec">2.3</span>Definitions are data</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>A node type per thing.</strong> The demo once had a <code>bar</code> type in the registry. Every new kind of thing (laser, fiber, meter) would need a Rust change, a rebuild and a schema bump, and the model could never invent one.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>The registry holds primitives only</strong> (rect, circle, path, slider, group, mesh…). A "bar" or a "laser" is a <code>definition</code> node in a <code>library</code> subtree: its parameters, its ports (Part 9), its behaviour equations, and a <em>template</em> per notation saying how to draw it. An <code>entity</code> instantiates a definition.</p></div>
+</div>
+<figure class="plainfig"><figcaption>A definition in the document</figcaption><pre class="plain"><code class="language-plaintext">library
+  definition &quot;bar&quot;
+    param_spec &quot;level&quot;   kind=number  default=0.4
+    template   notation=&quot;free&quot;
+      rect &quot;bar&quot;   y = 640 − #level.param_spec.default · 300
+                   h =       #level.param_spec.default · 300
+model
+  entity &quot;bar&quot;   instance.def=#bar   params.level = {= #O.slider.value}
+scene (composition)
+  rect &quot;bar&quot;     y = 640 − #entity.params.level · 300      ← a copy, rewritten
+                 figures → #entity</code></pre></figure>
+<p>The three component types that make this work:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:226">src/iron_document/src/component.rs</a><span class="range">lines 226–241</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241</pre><pre class="src"><code class="language-rust">/// Which definition an `entity` instantiates (ECM §4.3).
+Instance / &quot;instance&quot; =&gt; Instance { def: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
+
+/// One parameter a definition declares (ECM §4.2): the kind its values
+/// must have (a quantity&#x27;s dimension comes from the default) and the
+/// default an instance starts with.
+ParamSpec / &quot;param_spec&quot; =&gt; ParamSpec {
+    kind: Enum = Value::Enum(&quot;number&quot;.to_owned()),
+    default: Any = Value::Number(0.0),
+}
+
+/// A definition&#x27;s template for one notation (ECM §4.2). Its children are
+/// the subtree an instance copies; their bindings may read the
+/// definition&#x27;s `param_spec.default` leaves, which instantiation rewrites
+/// to the entity&#x27;s `params`.
+Template / &quot;template&quot; =&gt; Template { notation: Str = Value::Str(&quot;free&quot;.to_owned()) }</code></pre></div></div></figure>
+<p>Note the template's bindings read <code>param_spec.default</code>. That makes the template itself a live, evaluable subtree: it shows what the thing looks like at its defaults, and nothing special is needed to evaluate it.</p>
+
+<h3 id="instantiate">Instantiation is copying with rewritten references</h3>
+<p>Placing a bar creates an entity and copies the template's subtree into a composition. Every reference to a <code>param_spec.default</code> becomes a reference to the entity's parameter, and every reference between template nodes follows the copy:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/definition.rs:220">src/iron_document/src/definition.rs</a><span class="range">lines 220–244</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:11"></span><pre class="gutter" aria-hidden="true">220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244</pre><pre class="src"><code class="language-rust">fn rewritten(doc: &amp;Document, old: NodeId, specs: &amp;[ParamInfo], entity: NodeId, new_id: &amp;BTreeMap&lt;NodeId, NodeId&gt;) -&gt; Vec&lt;Component&gt; {
+    let rewrite = |leaf: Leaf| -&gt; Leaf {
+        if leaf.path.component == ComponentKind::ParamSpec
+            &amp;&amp; let Some(spec) = specs.iter().find(|s| s.spec == leaf.node)
+        {
+            return Leaf { node: entity, path: LeafPath::new(ComponentKind::Params, spec.name).expect(&quot;parameter path&quot;) };
+        }
+        match new_id.get(&amp;leaf.node) {
+            Some(&amp;n) =&gt; Leaf { node: n, path: leaf.path },
+            None =&gt; leaf,
+        }
+    };
+    doc.components_of(old)
+        .map(|c| {
+            let mut c = c.clone();
+            for field in c.field_names() {
+                if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
+                    let rewritten = expr.map_refs(&amp;rewrite);
+                    c.set(field, Slot::Bound(rewritten)).expect(&quot;field exists&quot;);
+                }
+            }
+            c
+        })
+        .collect()
+}</code></pre></div></div></figure>
+<p><code>map_refs</code> walks an expression and swaps every <code>Leaf</code> through the closure. After instantiation the copied rect is a <strong>plain rect with plain bindings</strong>. Nothing downstream (the reconciler, the renderer, picking) knows definitions exist.</p>
+<p>The whole of <code>instantiate</code>:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/definition.rs:136">src/iron_document/src/definition.rs</a><span class="range">lines 136–180</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:6"></span><span class="band" style="--from:37;--len:7"></span><pre class="gutter" aria-hidden="true">136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180</pre><pre class="src"><code class="language-rust">/// Ops that instantiate `def`: an entity named `name` with every parameter
+/// at its default, one `port` per `port_spec` with its behaviour binding
+/// rewritten onto the entity (ECM §6.1), a copy of the `notation` template
+/// with its bindings rewritten the same way, and a `figures` relation from
+/// each copied root to the entity. Ids and relation ids are taken from
+/// `doc`, so these ops must be applied before anything else allocates.
+pub fn instantiate(doc: &amp;Document, def: NodeId, notation: &amp;str, name: &amp;str, place: &amp;Placement) -&gt; Result&lt;(NodeId, Vec&lt;Op&gt;), String&gt; {
+    let specs = params_of(doc, def)?;
+    // Ports and behaviour equations are copied onto the entity.
+    let port_specs: Vec&lt;NodeId&gt; = doc.children(def).iter().copied().filter(|&amp;c| doc.live(c).is_some_and(|n| n.ty == ty(&quot;port_spec&quot;) || n.ty == ty(&quot;equation&quot;))).collect();
+    let template = template_of(doc, def, notation).ok_or_else(|| format!(&quot;{def} has no template for notation {notation:?}&quot;))?;
+    let (roots, copied) = template_nodes(doc, template);
+    let ids = doc.next_ids(1 + port_specs.len() + copied.len());
+    let entity = ids[0];
+    let mut new_id: BTreeMap&lt;NodeId, NodeId&gt; = port_specs.iter().copied().zip(ids[1..].iter().copied()).collect();
+    new_id.extend(copied.iter().copied().zip(ids[1 + port_specs.len()..].iter().copied()));
+    let rel_ids = doc.next_relation_ids(roots.len());
+
+    let mut ops = Vec::new();
+    let mut instance = Instance::default();
+    instance.def = Slot::Const(Value::Ref(def));
+    let mut params = Params::default();
+    for s in &amp;specs {
+        params.insert(s.name, Slot::Const(s.default.clone()));
+    }
+    let mut entity_name = Name::default();
+    entity_name.text = Slot::Const(Value::Str(name.to_owned()));
+    ops.push(Op::Create {
+        id: entity,
+        ty: ty(&quot;entity&quot;),
+        parent: place.entity_parent,
+        order: match &amp;place.entity_after {
+            Some(k) =&gt; OrderKey::after(k),
+            None =&gt; OrderKey::first(),
+        },
+        components: vec![instance.wrap(), params.wrap(), entity_name.wrap()],
+    });
+    for &amp;spec in &amp;port_specs {
+        let node = doc.live(spec).expect(&quot;live port_spec&quot;);
+        let copied_ty = if node.ty == ty(&quot;port_spec&quot;) { ty(&quot;port&quot;) } else { node.ty };
+        ops.push(Op::Create { id: new_id[&amp;spec], ty: copied_ty, parent: Some(entity), order: node.order.clone(), components: rewritten(doc, spec, &amp;specs, entity, &amp;new_id) });
+    }
+    ops.extend(copy_template(doc, &amp;specs, entity, &amp;new_id, &amp;roots, &amp;copied, place.figure_parent, place.figure_after.clone(), &amp;rel_ids));
+    Ok((entity, ops))
+}</code></pre></div></div></figure>
+<p>Three things to notice. Ids are reserved in one block, entity first, then ports and equations (Part 9), then the copied template nodes, because ids in one transaction must ascend. The function returns <em>ops</em>, not a changed document: instantiation is a transaction like anything else, and one undo removes it. And each copied root gets a <code>figures</code> relation to the entity, which is how Part 5's cross-highlighting and Link find it.</p>
+<p>Later, Part 9 needed the same entity drawn again in a <em>second</em> composition (the laser as a cartoon and as a schematic block). <code>place_figures</code> copies another notation's template onto an existing entity, mapping each port spec to the entity's port of the same name:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/definition.rs:182">src/iron_document/src/definition.rs</a><span class="range">lines 182–204</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204</pre><pre class="src"><code class="language-rust">/// Ops that draw an existing entity in another notation: a copy of its
+/// definition&#x27;s `notation` template under `parent` (after `after`), its
+/// bindings reading the entity&#x27;s parameters and ports, each root a figure
+/// of the entity (ECM §5: one entity, many figures).
+pub fn place_figures(doc: &amp;Document, entity: NodeId, notation: &amp;str, parent: Option&lt;NodeId&gt;, after: Option&lt;OrderKey&gt;) -&gt; Result&lt;Vec&lt;Op&gt;, String&gt; {
+    let def = doc
+        .get::&lt;Instance&gt;(entity)
+        .and_then(|i| i.def.constant())
+        .and_then(|v| v.as_ref())
+        .ok_or_else(|| format!(&quot;{entity} is not an entity with a definition&quot;))?;
+    let specs = params_of(doc, def)?;
+    let template = template_of(doc, def, notation).ok_or_else(|| format!(&quot;{def} has no template for notation {notation:?}&quot;))?;
+    let (roots, copied) = template_nodes(doc, template);
+    // Each port_spec maps to the entity&#x27;s port of the same name.
+    let mut new_id: BTreeMap&lt;NodeId, NodeId&gt; = BTreeMap::new();
+    for &amp;spec in doc.children(def).iter().filter(|&amp;&amp;c| doc.live(c).is_some_and(|n| n.ty == ty(&quot;port_spec&quot;))) {
+        let port = doc.children(entity).iter().copied().find(|&amp;p| name_of(doc, p) == name_of(doc, spec)).ok_or_else(|| format!(&quot;{entity} has no port named like {spec}&quot;))?;
+        new_id.insert(spec, port);
+    }
+    new_id.extend(copied.iter().copied().zip(doc.next_ids(copied.len())));
+    let rel_ids = doc.next_relation_ids(roots.len());
+    Ok(copy_template(doc, &amp;specs, entity, &amp;new_id, &amp;roots, &amp;copied, parent, after, &amp;rel_ids))
+}</code></pre></div></div></figure>
+
+<h3 id="validation">Validation</h3>
+<p>An entity's parameters must match its definition exactly: same names, each constant of the declared kind, and a quantity of the default's dimension. <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/definition.rs:79" title="src/iron_document/src/definition.rs:79"><code>validate_entity</code></a> runs at apply time whenever an entity's instance or params change, so the model can't create a laser with a <code>colour</code> parameter it doesn't declare. The error lists what is declared, which gives the model the fix.</p>
+
+<h3 id="demo-bar">The bar in the demo</h3>
+<p>The demo builds its library with ordinary ops, then instantiates. To let <code>instantiate</code> read a definition that isn't applied yet, the ops so far are applied to a scratch copy of the store first:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:460">src/document_bridge/demo.rs</a><span class="range">lines 460–473</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:4"></span><span class="band" style="--from:9;--len:1"></span><pre class="gutter" aria-hidden="true">460
+461
+462
+463
+464
+465
+466
+467
+468
+469
+470
+471
+472
+473</pre><pre class="src"><code class="language-rust">// Instantiate it into the scene. The ops so far are applied to a scratch
+// copy so the instantiation can read the definition and allocate ids
+// past everything above; all of it stays one transaction.
+let mut scratch = iron_document::Store::with_document(store.document().clone());
+scratch
+    .apply(iron_document::TransactionInput { label: &quot;scratch&quot;.into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
+    .expect(&quot;demo scene applies&quot;);
+let last_in_scene = scratch.document().children(scene).last().and_then(|&amp;c| scratch.document().live(c)).map(|n| n.order.clone());
+let place = Placement { entity_parent: Some(model), entity_after: None, figure_parent: Some(scene), figure_after: last_in_scene.map(|k| OrderKey::after(&amp;k)) };
+let (entity, inst) = definition::instantiate(scratch.document(), def, &quot;free&quot;, &quot;bar&quot;, &amp;place).expect(&quot;bar instantiates&quot;);
+scratch
+    .apply(iron_document::TransactionInput { label: &quot;scratch&quot;.into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: inst.clone(), exact: false })
+    .expect(&quot;instantiation applies&quot;);
+ops.extend(inst);</code></pre></div></div></figure>
+<p>All of it still lands as <em>one</em> transaction, "open demo scene". The same scratch-store pattern builds the optics and thermal demos in Part 9, which is also why every late demo node has a high id: they are allocated after everything earlier, so earlier ids (and the smoke script that names them) never shift.</p>
+
+<h2 id="rename"><span class="sec">2.4</span>The rename: depiction → figure</h2>
+<p>The first plans called a picture of an entity a <em>depiction</em>. It was renamed to <strong>figure</strong> before it reached the UI: the relation is <code>figures</code>, the definition's template holder is <code>template</code>, and a composition view writes <code>of="#entity"</code>. Files written before the rename still load, because the loader renames on read:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:104">src/iron_document/src/serial.rs</a><span class="range">lines 104–114</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114</pre><pre class="src"><code class="language-rust">/// A type, component or relation name as this build spells it, for a file
+/// written under `schema`. Schema 3 renamed `depiction` (the definition&#x27;s
+/// template holder and its component) to `template`, and the `depicts`
+/// relation to `figures`.
+fn renamed(schema: u64, name: &amp;str) -&gt; &amp;str {
+    match (schema &lt; 3, name) {
+        (true, &quot;depiction&quot;) =&gt; &quot;template&quot;,
+        (true, &quot;depicts&quot;) =&gt; &quot;figures&quot;,
+        _ =&gt; name,
+    }
+}</code></pre></div></div></figure>
+<p>The schema number went to 3 (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:20" title="src/iron_document/src/serial.rs:20"><code>serial.rs:20</code></a>), and schemas 1 and 2 still load.</p>
+
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>A template is evaluated where it sits in the library, so its bindings must make sense at the defaults. A port spec whose signal defaults to the plain number <code>0</code>, read by a template gauge as <code>signal / 1 mW</code>, is a dimension error, and it was logged every frame until the demo gave port specs defaults in their kind's units (Part 9). Nothing yet checks a template's bindings when the definition is written.</p>
+</div>
+
+<nav class="nextprev"><a href="01-orientation.html"><small>Previous</small><span>Part 1: Where things stand now</span></a><a class="next" href="03-handles.html"><small>Next</small><span>Part 3: Drags through the store</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

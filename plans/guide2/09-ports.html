@@ -1,0 +1,1135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 9 · Ports, connections and physics — Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="08-workspace.html" aria-label="Previous part">&larr;</a><span class="here">Part 9 of 9</span><a href="10-field-guide.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html" aria-current="page"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 9 of 9 · <span class="chip sys-ports">Ports & physics</span> <span class="chip sys-react">Bindings & handles</span> <span class="chip sys-solve">Solver & constraints</span></p>
+  <h1>Ports, connections and physics</h1>
+  <p class="lede">A laser feeds a fiber, which feeds a power meter; a heater warms a block through a thermal link. Entities need a way to be <em>wired together</em> so that a value computed in one flows into another. This part covers roadmap stage F, steps 1–3: port kinds, connections, one-way signals that ride the binding graph, across/through pairs solved as equations, and the two demos (Optics and Thermal) that use them.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 2 (definitions, <code>instantiate</code>), Part 3 (the reactive graph, handles), Part 4 (<code>iron_solve</code>).</div>
+    <div><b>Files</b><code>iron_document/src/port.rs</code>, <code>{component,definition,graph,handle,op,view,lib}.rs</code>, <code>document_bridge/demo.rs</code> (<code>optics</code>, <code>thermal</code>), <code>tests/ports.rs</code>. Design: <code>plans/entity-composition-model.md</code> §6.1.</div>
+  </div>
+</header>
+
+<h2 id="decision"><span class="sec">9.1</span>The decision: two kinds of variable, one interface</h2>
+<p>You asked whether ports should carry constraint bundles or bidirectional signals. The answer recorded in ECM §6.1 is <strong>both, through one general interface</strong>: a port kind declares a bundle of variables, and each variable is one of two sorts.</p>
+<div class="compare">
+  <div class="box built"><span class="tab">One-way signal</span><p><strong><code>out</code> → <code>in</code>.</strong> Optical power along a fiber. The in-port's value <em>is</em> its partner out-port's value. It compiles to a dataflow edge in the binding graph, evaluated like any binding; cycles are rejected. A back-reflection would be a second signal running the other way.</p></div>
+  <div class="box built"><span class="tab">Across / through pair</span><p><strong>Acausal, as in Modelica, Simscape and SPICE.</strong> Temperature and heat flow; voltage and current. At a joint the across values are equal and the through values sum to zero. These compile to equations, solved together with each part's own behaviour equations. Loops are fine.</p></div>
+</div>
+<p>Two things are deliberately <em>not</em> port features. <strong>Editing from either end</strong> (drag the meter's reading, and the laser's power moves) is the store's existing gesture machinery from Part 3: the meter's signal has a linear handle back to the laser. And <strong>geometry stays out of ports</strong>: a mount bolted to a table is a constraint (Part 4), not a connection. Physics flows through ports; placement goes through constraints.</p>
+
+<h2 id="kinds"><span class="sec">9.2</span>Port kinds</h2>
+<p>The vocabulary is code, like node types and constraint kinds:</p>
+<figure class="code"><figcaption><span class="chip sys-ports">Ports & physics</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/port.rs:22">src/iron_document/src/port.rs</a><span class="range">lines 22–53</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:21;--len:7"></span><pre class="gutter" aria-hidden="true">22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53</pre><pre class="src"><code class="language-rust">/// How a port kind&#x27;s variables flow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flow {
+    /// One value, from an `out` port to an `in` port.
+    Signal,
+    /// An across value equal at the joint, a through value summing to zero.
+    Pair,
+}
+
+/// A declared port kind: its name, flow, and the unit its values carry
+/// (`None`: plain numbers).
+#[derive(Clone, Copy, Debug)]
+pub struct PortKind {
+    pub name: &amp;&#x27;static str,
+    pub flow: Flow,
+    /// The signal&#x27;s unit, or a pair&#x27;s across unit.
+    pub unit: Option&lt;&amp;&#x27;static str&gt;,
+    /// A pair&#x27;s through unit.
+    pub through: Option&lt;&amp;&#x27;static str&gt;,
+}
+
+pub static KINDS: &amp;[PortKind] = &amp;[
+    PortKind { name: &quot;value&quot;, flow: Flow::Signal, unit: None, through: None },
+    PortKind { name: &quot;optical_power&quot;, flow: Flow::Signal, unit: Some(&quot;W&quot;), through: None },
+    PortKind { name: &quot;rf_voltage&quot;, flow: Flow::Signal, unit: Some(&quot;V&quot;), through: None },
+    PortKind { name: &quot;electrical&quot;, flow: Flow::Pair, unit: Some(&quot;V&quot;), through: Some(&quot;A&quot;) },
+    PortKind { name: &quot;heat_flow&quot;, flow: Flow::Pair, unit: Some(&quot;K&quot;), through: Some(&quot;W&quot;) },
+];
+
+pub fn kind(name: &amp;str) -&gt; Option&lt;&amp;&#x27;static PortKind&gt; {
+    KINDS.iter().find(|k| k.name == name)
+}</code></pre></div></div></figure>
+<p>Every port carries all five fields; the kind decides which ones mean anything. Storing <code>signal</code>, <code>across</code> and <code>through</code> on every port was step 1 of the plan: the file format holds both variable sorts from the start, so files never need migrating as the solving arrives.</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:273">src/iron_document/src/component.rs</a><span class="range">lines 273–297</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">273
+274
+275
+276
+277
+278
+279
+280
+281
+282
+283
+284
+285
+286
+287
+288
+289
+290
+291
+292
+293
+294
+295
+296
+297</pre><pre class="src"><code class="language-rust">/// A port on an entity, or a definition&#x27;s spec for one (ECM §6.1). `kind`
+/// names a port kind (`port::KINDS`), which declares its variables: a
+/// one-way `signal`, or an `across`/`through` pair. An out-port&#x27;s signal
+/// is the definition&#x27;s behaviour, a binding; an in-port&#x27;s is its
+/// connection partner&#x27;s, derived by the graph, never stored.
+Port / &quot;port&quot; =&gt; Port {
+    kind: Str = Value::Str(&quot;value&quot;.to_owned()),
+    dir: Enum = Value::Enum(&quot;in&quot;.to_owned()),
+    signal: Any = Value::Number(0.0),
+    across: Any = Value::Number(0.0),
+    through: Any = Value::Number(0.0),
+}
+
+/// A behaviour equation of a definition or entity (ECM §6.1): `lhs` and
+/// `rhs` are expressions over its ports&#x27; across and through values and
+/// its parameters, solved with the connections&#x27; equations, never in a
+/// fixed direction.
+Equation / &quot;equation&quot; =&gt; Equation {
+    lhs: Any = Value::Number(0.0),
+    rhs: Any = Value::Number(0.0),
+}
+
+/// A connection between two ports (ECM §6): its ends are two `connects`
+/// relations. `domain` is informational; the ports&#x27; kinds decide.
+Connection / &quot;connection&quot; =&gt; Connection { domain: Str = Value::Str(String::new()) }</code></pre></div></div></figure>
+
+<h3 id="specs">Ports come from definitions</h3>
+<p>A definition (Part 2) gains two kinds of child: <code>port_spec</code> and <code>equation</code>. An out-port's spec carries its <em>behaviour</em> as a binding: the laser's <code>out.signal</code> is bound to its <code>power</code> parameter; the fiber's is its input attenuated by length and loss. <code>instantiate</code> copies each spec onto the new entity as a <code>port</code>, and each equation as an equation, with every reference rewritten the same way template bindings are:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/definition.rs:142">src/iron_document/src/definition.rs</a><span class="range">lines 142–180</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:2;--len:2"></span><span class="band" style="--from:31;--len:5"></span><pre class="gutter" aria-hidden="true">142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180</pre><pre class="src"><code class="language-rust">pub fn instantiate(doc: &amp;Document, def: NodeId, notation: &amp;str, name: &amp;str, place: &amp;Placement) -&gt; Result&lt;(NodeId, Vec&lt;Op&gt;), String&gt; {
+    let specs = params_of(doc, def)?;
+    // Ports and behaviour equations are copied onto the entity.
+    let port_specs: Vec&lt;NodeId&gt; = doc.children(def).iter().copied().filter(|&amp;c| doc.live(c).is_some_and(|n| n.ty == ty(&quot;port_spec&quot;) || n.ty == ty(&quot;equation&quot;))).collect();
+    let template = template_of(doc, def, notation).ok_or_else(|| format!(&quot;{def} has no template for notation {notation:?}&quot;))?;
+    let (roots, copied) = template_nodes(doc, template);
+    let ids = doc.next_ids(1 + port_specs.len() + copied.len());
+    let entity = ids[0];
+    let mut new_id: BTreeMap&lt;NodeId, NodeId&gt; = port_specs.iter().copied().zip(ids[1..].iter().copied()).collect();
+    new_id.extend(copied.iter().copied().zip(ids[1 + port_specs.len()..].iter().copied()));
+    let rel_ids = doc.next_relation_ids(roots.len());
+
+    let mut ops = Vec::new();
+    let mut instance = Instance::default();
+    instance.def = Slot::Const(Value::Ref(def));
+    let mut params = Params::default();
+    for s in &amp;specs {
+        params.insert(s.name, Slot::Const(s.default.clone()));
+    }
+    let mut entity_name = Name::default();
+    entity_name.text = Slot::Const(Value::Str(name.to_owned()));
+    ops.push(Op::Create {
+        id: entity,
+        ty: ty(&quot;entity&quot;),
+        parent: place.entity_parent,
+        order: match &amp;place.entity_after {
+            Some(k) =&gt; OrderKey::after(k),
+            None =&gt; OrderKey::first(),
+        },
+        components: vec![instance.wrap(), params.wrap(), entity_name.wrap()],
+    });
+    for &amp;spec in &amp;port_specs {
+        let node = doc.live(spec).expect(&quot;live port_spec&quot;);
+        let copied_ty = if node.ty == ty(&quot;port_spec&quot;) { ty(&quot;port&quot;) } else { node.ty };
+        ops.push(Op::Create { id: new_id[&amp;spec], ty: copied_ty, parent: Some(entity), order: node.order.clone(), components: rewritten(doc, spec, &amp;specs, entity, &amp;new_id) });
+    }
+    ops.extend(copy_template(doc, &amp;specs, entity, &amp;new_id, &amp;roots, &amp;copied, place.figure_parent, place.figure_after.clone(), &amp;rel_ids));
+    Ok((entity, ops))
+}</code></pre></div></div></figure>
+<p>So <code>#fiber_out.port.signal = #fiber_in.port.signal · 10^(−loss·length/10)</code> in the definition becomes the same expression over the fiber <em>entity's</em> own ports and <code>params</code>. Templates read ports too: the meter's gauge width is bound to <code>#meter_in.port.signal / 1 mW · 24</code>, and <code>place_figures</code> maps each spec to the entity's port of the same name, so the schematic's gauge reads the same port.</p>
+
+<h2 id="connections"><span class="sec">9.3</span>Connections</h2>
+<p>A connection is a <code>connection</code> node under the <code>model</code> root with exactly two <code>connects</code> relations, tagged <code>end: a</code> and <code>end: b</code>. That's all a file stores; nothing about which value flows where.</p>
+<figure class="plainfig"><figcaption>laser → fiber, as nodes</figcaption><pre class="plain"><code class="language-plaintext">model
+  entity &quot;laser&quot;   (instance of laser)
+    port &quot;out&quot;     kind=optical_power dir=out  signal = params.power
+  entity &quot;fiber&quot;
+    port &quot;in&quot;      kind=optical_power dir=in
+    port &quot;out&quot;     kind=optical_power dir=out  signal = in.signal · 10^(−loss·length/10)
+  connection       domain=&quot;optical&quot;
+    connects → laser.out   end=a
+    connects → fiber.in    end=b</code></pre></figure>
+<figure class="code"><figcaption><span class="chip sys-ports">Ports & physics</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/port.rs:68">src/iron_document/src/port.rs</a><span class="range">lines 68–89</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89</pre><pre class="src"><code class="language-rust">/// A connection&#x27;s two ends, `a` then `b`, if it has exactly those.
+pub fn ends(doc: &amp;Document, connection: NodeId) -&gt; Option&lt;(NodeId, NodeId)&gt; {
+    let mut a = None;
+    let mut b = None;
+    for r in doc.relations_from(connection).filter(|r| r.rel == RelKind::Connects) {
+        match r.data.get(&quot;end&quot;).and_then(|v| v.as_str()) {
+            Some(&quot;a&quot;) if a.is_none() =&gt; a = Some(r.to),
+            Some(&quot;b&quot;) if b.is_none() =&gt; b = Some(r.to),
+            _ =&gt; return None,
+        }
+    }
+    Some((a?, b?))
+}
+
+/// For a one-way connection, which end feeds which: `(out, in)`.
+fn direction(doc: &amp;Document, a: NodeId, b: NodeId) -&gt; Option&lt;(NodeId, NodeId)&gt; {
+    match (text(doc, a, &quot;dir&quot;).as_deref(), text(doc, b, &quot;dir&quot;).as_deref()) {
+        (Some(&quot;out&quot;), Some(&quot;in&quot;)) =&gt; Some((a, b)),
+        (Some(&quot;in&quot;), Some(&quot;out&quot;)) =&gt; Some((b, a)),
+        _ =&gt; None,
+    }
+}</code></pre></div></div></figure>
+
+<h3 id="derived">One-way signals are derived bindings</h3>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Write a binding onto the in-port when the connection is made.</strong> Now the file holds the wiring twice (the connection and the binding), deleting the connection must find and remove the binding, and an undo that restores one without the other leaves a ghost.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>Derive the binding from the connection, never store it.</strong> Every time the graph is rebuilt, each live, valid one-way connection contributes one binding: in-port's signal reads out-port's signal. Delete the connection and the binding is simply not derived next time.</p></div>
+</div>
+<figure class="code"><figcaption><span class="chip sys-ports">Ports & physics</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/port.rs:91">src/iron_document/src/port.rs</a><span class="range">lines 91–110</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110</pre><pre class="src"><code class="language-rust">/// Every in-port&#x27;s signal as its partner&#x27;s: one derived binding per live,
+/// valid one-way connection.
+pub fn derived_signals(doc: &amp;Document) -&gt; Vec&lt;(Leaf, Expr)&gt; {
+    let Some(ty) = crate::registry::TypeId::lookup(&quot;connection&quot;) else { return Vec::new() };
+    doc.nodes_of_type(ty)
+        .filter(|&amp;c| doc.is_live(c))
+        .filter_map(|c| {
+            let (a, b) = ends(doc, c)?;
+            if !doc.is_live(a) || !doc.is_live(b) {
+                return None;
+            }
+            let k = kind(&amp;text(doc, a, &quot;kind&quot;)?)?;
+            if k.flow != Flow::Signal {
+                return None;
+            }
+            let (from, to) = direction(doc, a, b)?;
+            Some((signal(to), Expr::Ref(signal(from))))
+        })
+        .collect()
+}</code></pre></div></div></figure>
+<p>The reactive graph (Part 3) folds them in alongside the stored bindings, so a signal is evaluated in topological order with everything else, in the same pass:</p>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:160">src/iron_document/src/graph.rs</a><span class="range">lines 160–180</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:4"></span><pre class="gutter" aria-hidden="true">160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180</pre><pre class="src"><code class="language-rust">pub fn rebuild(&amp;mut self, doc: &amp;Document) {
+    let old_bound: BTreeSet&lt;Leaf&gt; = self.nodes.keys().copied().collect();
+    self.nodes.clear();
+    self.dependents.clear();
+    // Stored bindings, then the signals connections derive (`port`):
+    // an in-port reads its partner, evaluated like any binding.
+    let derived = crate::port::derived_signals(doc);
+    for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
+        let deps = expr.deps();
+        for d in &amp;deps {
+            self.dependents.entry(*d).or_default().insert(leaf);
+        }
+        self.nodes.insert(
+            leaf,
+            BoundNode {
+                expr: expr.clone(),
+                deps,
+                height: 0,
+            },
+        );
+    }</code></pre></div></div></figure>
+<p>This is what makes the chain feel instant. Move the laser-power slider: the entity's <code>params.power</code> (bound to the slider) changes, then the laser's <code>out.signal</code>, the fiber's <code>in.signal</code> (derived), the fiber's <code>out.signal</code>, the meter's <code>in.signal</code> (derived), and both gauges, all in one glitch-free pass.</p>
+
+<h3 id="invert">Dragging the meter's reading</h3>
+<p>Part 3's handle resolution asks "what is this leaf's expression?". An in-port has no stored expression, so it asks the graph for its derived one:</p>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:46">src/iron_document/src/handle.rs</a><span class="range">lines 46–53</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:3"></span><pre class="gutter" aria-hidden="true">46
+47
+48
+49
+50
+51
+52
+53</pre><pre class="src"><code class="language-rust">if reactive.physics().contains_key(&amp;leaf) {
+    return Handle::Locked(format!(&quot;{leaf} is solved by its across/through network; change a source or a parameter instead&quot;));
+}
+// A connection&#x27;s in-port has no binding of its own but resolves through
+// its partner (`port::derived_signals`), so it inverts like one.
+let Some(expr) = slot.expr().or_else(|| reactive.expr_of(leaf)) else {
+    return Handle::Direct;
+};</code></pre></div></div></figure>
+<p>Inlining walks back through the fiber (which multiplies by a constant at the current length) to the laser's <code>power</code>, which is bound to the slider. The result is a linear handle with one free source, the slider, so dragging the meter's gauge sets the laser's power. The test asks for 5 mW at the meter and checks the laser is set to 5 mW / 10<sup>−0.1</sup>:</p>
+<figure class="code"><figcaption><span class="chip sys-ports">Ports & physics</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/tests/ports.rs:185">src/iron_document/tests/ports.rs</a><span class="range">lines 185–198</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198</pre><pre class="src"><code class="language-rust">#[test]
+fn the_meter_reading_inverts_to_the_laser_power() {
+    let mut lab = lab();
+    let reading = Leaf { node: lab.port(lab.meter, &quot;in&quot;), path: path(&quot;port.signal&quot;) };
+    match lab.store.handle(reading.node, reading.path) {
+        Handle::Linear { source, .. } =&gt; assert_eq!(source, Leaf { node: lab.laser, path: path(&quot;params.power&quot;) }),
+        other =&gt; panic!(&quot;expected a linear handle, got {other:?}&quot;),
+    }
+    // Ask for 5 mW at the meter: the laser is set to 5 mW / 10^-0.1.
+    lab.store.preview_target(reading.node, reading.path, Value::parse_quantity(&quot;5 mW&quot;).unwrap()).unwrap();
+    lab.store.commit_gesture(&quot;set reading&quot;, Actor::Human, 0).unwrap().unwrap();
+    assert!((watts(&amp;lab.store.resolved(lab.laser, path(&quot;params.power&quot;)).unwrap()) - 0.005 / 10f64.powf(-0.1)).abs() &lt; 1e-12);
+    assert!((watts(&amp;lab.signal(lab.meter, &quot;in&quot;)) - 0.005).abs() &lt; 1e-12);
+}</code></pre></div></div></figure>
+
+<h3 id="validate">Validation</h3>
+<p>A connection is checked once both <code>connects</code> relations exist, at the end of the transaction that makes it:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:342">src/iron_document/src/op.rs</a><span class="range">lines 342–351</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">342
+343
+344
+345
+346
+347
+348
+349
+350
+351</pre><pre class="src"><code class="language-rust">// A connection is checked once both of its ends exist (ECM §6.1).
+if let Op::Link { rel } = op
+    &amp;&amp; rel.rel == crate::document::RelKind::Connects
+{
+    let cx = Ctx { index, stamp };
+    if doc.is_live(rel.from) {
+        crate::port::validate_connection(doc, rel.from).map_err(|e| cx.err(ErrorKind::BadConnection, e))?;
+    }
+    return Ok(());
+}</code></pre></div></div></figure>
+<figure class="code"><figcaption><span class="chip sys-ports">Ports & physics</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/port.rs:112">src/iron_document/src/port.rs</a><span class="range">lines 112–144</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144</pre><pre class="src"><code class="language-rust">/// Check a connection: two live ports of one kind; for a one-way kind, an
+/// out joined to an in that nothing else feeds; and no signal loop.
+pub fn validate_connection(doc: &amp;Document, connection: NodeId) -&gt; Result&lt;(), String&gt; {
+    let (a, b) = ends(doc, connection).ok_or_else(|| format!(&quot;{connection} needs exactly two connects relations, ends a and b&quot;))?;
+    for p in [a, b] {
+        let ok = doc.live(p).is_some_and(|n| n.ty.name() == &quot;port&quot;);
+        if !ok {
+            return Err(format!(&quot;{connection}: {p} is not a live port&quot;));
+        }
+    }
+    let (ka, kb) = (text(doc, a, &quot;kind&quot;).unwrap_or_default(), text(doc, b, &quot;kind&quot;).unwrap_or_default());
+    if ka != kb {
+        return Err(format!(&quot;{connection}: cannot connect {ka} ({a}) to {kb} ({b}); a connection joins ports of one kind&quot;));
+    }
+    let k = kind(&amp;ka).ok_or_else(|| format!(&quot;{connection}: unknown port kind {ka:?}&quot;))?;
+    if k.flow == Flow::Signal {
+        let (_, to) = direction(doc, a, b).ok_or_else(|| format!(&quot;{connection}: a {ka} connection joins an out port to an in port&quot;))?;
+        let ty = crate::registry::TypeId::lookup(&quot;connection&quot;).expect(&quot;registered&quot;);
+        let feeds = doc
+            .nodes_of_type(ty)
+            .filter(|&amp;c| c != connection &amp;&amp; doc.is_live(c))
+            .filter_map(|c| ends(doc, c))
+            .filter(|&amp;(x, y)| x == to || y == to)
+            .count();
+        if feeds &gt; 0 {
+            return Err(format!(&quot;{connection}: {to} already has a connection feeding it&quot;));
+        }
+    }
+    if let Some(at) = signal_loop(doc) {
+        return Err(format!(&quot;{connection}: signals would loop through {at}&quot;));
+    }
+    Ok(())
+}</code></pre></div></div></figure>
+<p>Same kind on both ends; for a one-way kind, exactly one out and one in, and an in-port fed by at most one connection; and no loop through bindings and derived signals together (<code>signal_loop</code>, a three-colour depth-first search). Each failure is a <code>BadConnection</code> error with a sentence a model can act on: <em>cannot connect rf_voltage (#40) to optical_power (#52); a connection joins ports of one kind</em>.</p>
+
+<h2 id="pairs"><span class="sec">9.4</span>Across/through pairs as equations</h2>
+<p>A pair can't be a binding, because nothing says which way it runs: a thermal link relates two temperatures and a heat flow, and which one is "the answer" depends on what's held fixed elsewhere. So pairs become equations, and the solver from Part 4 finds the values.</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 210" role="img" aria-label="Heater out port connected to the link's a port; the link's b port connected to the ambient's p port. Each connection makes across values equal and through values sum to zero. Each part has its own behaviour equation.">
+  <defs><marker id="p1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="900" height="190" rx="8" class="zone"/>
+  <rect x="30" y="40" width="220" height="80" rx="6" class="s-ports"/>
+  <text class="t-b" x="140" y="64" text-anchor="middle">heater</text>
+  <text class="t-mono" x="140" y="86" text-anchor="middle">out.through = −power</text>
+  <text class="t-s" x="140" y="106" text-anchor="middle">a heat source</text>
+  <rect x="320" y="40" width="280" height="80" rx="6" class="s-ports"/>
+  <text class="t-b" x="460" y="64" text-anchor="middle">thermal link</text>
+  <text class="t-mono" x="460" y="86" text-anchor="middle">a.through + b.through = 0</text>
+  <text class="t-mono" x="460" y="104" text-anchor="middle">a.across − b.across = r·a.through</text>
+  <rect x="670" y="40" width="220" height="80" rx="6" class="s-ports"/>
+  <text class="t-b" x="780" y="64" text-anchor="middle">ambient</text>
+  <text class="t-mono" x="780" y="86" text-anchor="middle">p.across = t</text>
+  <text class="t-s" x="780" y="106" text-anchor="middle">a fixed temperature</text>
+  <line x1="250" y1="80" x2="320" y2="80" class="ln"/>
+  <line x1="600" y1="80" x2="670" y2="80" class="ln"/>
+  <text class="t-s" x="285" y="148" text-anchor="middle">net 1</text>
+  <text class="t-mono" x="285" y="166" text-anchor="middle">out.T = a.T</text>
+  <text class="t-mono" x="285" y="184" text-anchor="middle">out.Q + a.Q = 0</text>
+  <text class="t-s" x="635" y="148" text-anchor="middle">net 2</text>
+  <text class="t-mono" x="635" y="166" text-anchor="middle">b.T = p.T</text>
+  <text class="t-mono" x="635" y="184" text-anchor="middle">b.Q + p.Q = 0</text>
+</svg>
+<figcaption>Four ports give eight unknowns (a temperature T and a heat flow Q at each). The two nets give four equations and the three behaviours four more: eight equations for eight unknowns. With 5 W and 2 K/W, the heater sits at 303.15 K.</figcaption>
+</figure>
+
+<h3 id="network">Assembling the network</h3>
+<figure class="code"><figcaption><span class="chip sys-ports">Ports & physics</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/port.rs:184">src/iron_document/src/port.rs</a><span class="range">lines 184–200</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200</pre><pre class="src"><code class="language-rust">/// The across/through network (ECM §6.1, step 3), assembled for the solver:
+/// every pair port&#x27;s across and through value that is not bound is an
+/// unknown, in SI units with its dimension; the equations are every
+/// connection net&#x27;s (across equal, through summing to zero; an unconnected
+/// terminal carries no flow) and every live `equation` node&#x27;s
+/// `lhs - rhs`. Empty when the document has no pair ports.
+pub struct Network {
+    pub unknowns: Vec&lt;(Leaf, crate::units::Dim)&gt;,
+    /// Each a residual over the unknowns: `Linear` sums `coef · unknown`,
+    /// `Expr` evaluates `lhs - rhs` with the unknowns substituted.
+    pub equations: Vec&lt;Equation&gt;,
+}
+
+pub enum Equation {
+    Linear(Vec&lt;(usize, f64)&gt;),
+    Expr { node: NodeId, lhs: Expr, rhs: Expr },
+}</code></pre></div></div></figure>
+<p><code>network</code> collects every pair port on a live entity. Each port's <code>across</code> and <code>through</code> is an unknown unless it's bound. Ports joined by connections are grouped into <em>nets</em> by union-find (the same trick <code>iron_solve</code> uses for clusters); each net contributes its conservation laws; each live <code>equation</code> on an entity contributes <code>lhs − rhs</code>:</p>
+<figure class="code"><figcaption><span class="chip sys-ports">Ports & physics</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/port.rs:208">src/iron_document/src/port.rs</a><span class="range">lines 208–283</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:22;--len:18"></span><span class="band" style="--from:46;--len:16"></span><span class="band" style="--from:62;--len:12"></span><pre class="gutter" aria-hidden="true">208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+271
+272
+273
+274
+275
+276
+277
+278
+279
+280
+281
+282
+283</pre><pre class="src"><code class="language-rust">pub fn network(doc: &amp;Document) -&gt; Network {
+    let port_ty = crate::registry::TypeId::lookup(&quot;port&quot;).expect(&quot;registered&quot;);
+    let pair_ports: Vec&lt;(NodeId, &amp;&#x27;static PortKind)&gt; = doc
+        .nodes_of_type(port_ty)
+        .filter(|&amp;p| doc.is_live(p) &amp;&amp; doc.live(p).and_then(|n| n.parent).is_some_and(|e| doc.is_live(e)))
+        .filter_map(|p| kind(&amp;text(doc, p, &quot;kind&quot;)?).filter(|k| k.flow == Flow::Pair).map(|k| (p, k)))
+        .collect();
+    let mut unknowns = Vec::new();
+    let mut index: BTreeMap&lt;Leaf, usize&gt; = BTreeMap::new();
+    for &amp;(p, k) in &amp;pair_ports {
+        for (field, unit) in [(&quot;across&quot;, k.unit), (&quot;through&quot;, k.through)] {
+            let leaf = Leaf { node: p, path: LeafPath::new(ComponentKind::Port, field).expect(&quot;declared&quot;) };
+            if doc.leaf(p, leaf.path).is_some_and(|s| s.expr().is_none()) {
+                index.insert(leaf, unknowns.len());
+                unknowns.push((leaf, dim_of(unit)));
+            }
+        }
+    }
+    let mut equations = Vec::new();
+    if pair_ports.is_empty() {
+        return Network { unknowns, equations };
+    }
+    // Nets: union-find over pair connections.
+    let mut parent: BTreeMap&lt;NodeId, NodeId&gt; = pair_ports.iter().map(|&amp;(p, _)| (p, p)).collect();
+    fn root(parent: &amp;mut BTreeMap&lt;NodeId, NodeId&gt;, p: NodeId) -&gt; NodeId {
+        let mut r = p;
+        while parent[&amp;r] != r {
+            r = parent[&amp;r];
+        }
+        parent.insert(p, r);
+        r
+    }
+    let conn_ty = crate::registry::TypeId::lookup(&quot;connection&quot;).expect(&quot;registered&quot;);
+    for c in doc.nodes_of_type(conn_ty).filter(|&amp;c| doc.is_live(c)) {
+        let Some((a, b)) = ends(doc, c) else { continue };
+        if parent.contains_key(&amp;a) &amp;&amp; parent.contains_key(&amp;b) {
+            let (ra, rb) = (root(&amp;mut parent, a), root(&amp;mut parent, b));
+            parent.insert(ra, rb);
+        }
+    }
+    let mut nets: BTreeMap&lt;NodeId, Vec&lt;NodeId&gt;&gt; = BTreeMap::new();
+    for &amp;(p, _) in &amp;pair_ports {
+        let r = root(&amp;mut parent, p);
+        nets.entry(r).or_default().push(p);
+    }
+    let leaf = |p: NodeId, f: &amp;str| Leaf { node: p, path: LeafPath::new(ComponentKind::Port, f).expect(&quot;declared&quot;) };
+    for ports in nets.values() {
+        // Across values equal at the joint (bound ones are knowns: an
+        // equation against a known is an Expr row).
+        for w in ports.windows(2) {
+            let (a, b) = (leaf(w[0], &quot;across&quot;), leaf(w[1], &quot;across&quot;));
+            match (index.get(&amp;a), index.get(&amp;b)) {
+                (Some(&amp;i), Some(&amp;j)) =&gt; equations.push(Equation::Linear(vec![(i, 1.0), (j, -1.0)])),
+                _ =&gt; equations.push(Equation::Expr { node: w[0], lhs: Expr::Ref(a), rhs: Expr::Ref(b) }),
+            }
+        }
+        // Through values sum to zero; alone, a terminal carries none.
+        let throughs: Vec&lt;(usize, f64)&gt; = ports.iter().filter_map(|&amp;p| index.get(&amp;leaf(p, &quot;through&quot;)).map(|&amp;i| (i, 1.0))).collect();
+        if !throughs.is_empty() {
+            equations.push(Equation::Linear(throughs));
+        }
+    }
+    let eq_ty = crate::registry::TypeId::lookup(&quot;equation&quot;).expect(&quot;registered&quot;);
+    for e in doc.nodes_of_type(eq_ty).filter(|&amp;e| doc.is_live(e)) {
+        // A definition&#x27;s own equations describe the template, not a part.
+        if doc.live(e).and_then(|n| n.parent).and_then(|p| doc.live(p)).is_none_or(|n| n.ty.name() != &quot;entity&quot;) {
+            continue;
+        }
+        let Some(eq) = doc.get::&lt;crate::component::Equation&gt;(e) else { continue };
+        let side = |s: &amp;crate::value::Slot| s.expr().cloned().or_else(|| s.constant().map(|v| Expr::Lit(v.clone())));
+        if let (Some(lhs), Some(rhs)) = (side(&amp;eq.lhs), side(&amp;eq.rhs)) {
+            equations.push(Equation::Expr { node: e, lhs, rhs });
+        }
+    }
+    Network { unknowns, equations }
+}</code></pre></div></div></figure>
+<p>Line 273 skips equations on <em>definitions</em>: a definition's equations describe the template, which has no network of its own. An unconnected terminal ends up in a net of one, where "throughs sum to zero" means it carries no flow, which is the physically right default for an open end.</p>
+
+<h3 id="resolve">Solving, and where the answer lives</h3>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:505">src/iron_document/src/lib.rs</a><span class="range">lines 505–571</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:25;--len:9"></span><span class="band" style="--from:34;--len:20"></span><span class="band" style="--from:59;--len:7"></span><pre class="gutter" aria-hidden="true">505
+506
+507
+508
+509
+510
+511
+512
+513
+514
+515
+516
+517
+518
+519
+520
+521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+531
+532
+533
+534
+535
+536
+537
+538
+539
+540
+541
+542
+543
+544
+545
+546
+547
+548
+549
+550
+551
+552
+553
+554
+555
+556
+557
+558
+559
+560
+561
+562
+563
+564
+565
+566
+567
+568
+569
+570
+571</pre><pre class="src"><code class="language-rust">/// Solve the across/through network (ECM §6.1, step 3) and put its
+/// solution in the graph&#x27;s physics layer: derived, never stored, read by
+/// bindings like any value. Run after every change. A network that does
+/// not converge keeps its previous solution and says why.
+pub fn resolve_physics(&amp;mut self) {
+    let net = crate::port::network(&amp;self.doc);
+    if net.unknowns.is_empty() {
+        if !self.reactive.physics().is_empty() {
+            self.reactive.set_physics(&amp;self.doc, Default::default());
+        }
+        self.physics_error = None;
+        return;
+    }
+    let magnitude = |v: &amp;Value| match v {
+        Value::Number(n) =&gt; Some(*n),
+        Value::Quantity { si, .. } =&gt; Some(*si),
+        _ =&gt; None,
+    };
+    let index: std::collections::BTreeMap&lt;Leaf, usize&gt; = net.unknowns.iter().enumerate().map(|(i, (l, _))| (*l, i)).collect();
+    let x0: Vec&lt;f64&gt; = net.unknowns.iter().map(|(l, _)| self.reactive.physics().get(l).and_then(magnitude).unwrap_or(0.0)).collect();
+    let solution = {
+        let doc = &amp;self.doc;
+        let reactive = &amp;self.reactive;
+        let unknowns = &amp;net.unknowns;
+        let mut problem = iron_solve::Problem::uniform(x0, 1.0);
+        for eq in &amp;net.equations {
+            match eq {
+                crate::port::Equation::Linear(coefs) =&gt; {
+                    let vars: Vec&lt;usize&gt; = coefs.iter().map(|(i, _)| *i).collect();
+                    let k: Vec&lt;f64&gt; = coefs.iter().map(|(_, c)| *c).collect();
+                    problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars, 1, move |v, out| {
+                        out[0] = v.iter().zip(&amp;k).map(|(x, c)| x * c).sum();
+                    }));
+                }
+                crate::port::Equation::Expr { lhs, rhs, .. } =&gt; {
+                    let mut vars: Vec&lt;usize&gt; = lhs.deps().into_iter().chain(rhs.deps()).filter_map(|l| index.get(&amp;l).copied()).collect();
+                    vars.sort();
+                    vars.dedup();
+                    if vars.is_empty() {
+                        continue;
+                    }
+                    let (lhs, rhs, index) = (lhs.clone(), rhs.clone(), index.clone());
+                    problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars.clone(), 1, move |v, out| {
+                        let read = |l: Leaf| match index.get(&amp;l).and_then(|i| vars.iter().position(|j| j == i)) {
+                            Some(pos) =&gt; Some(Value::quantity(v[pos], unknowns[vars[pos]].1)),
+                            None =&gt; reactive.read(doc, l),
+                        };
+                        let side = |e: &amp;Expr| e.eval(&amp;read).ok().as_ref().and_then(magnitude);
+                        out[0] = match (side(&amp;lhs), side(&amp;rhs)) {
+                            (Some(a), Some(b)) =&gt; a - b,
+                            _ =&gt; 1e6,
+                        };
+                    }));
+                }
+            }
+        }
+        let options = iron_solve::Options { max_iterations: 100, ..Default::default() };
+        iron_solve::solve(&amp;problem, &amp;options)
+    };
+    if solution.status != iron_solve::Status::Converged {
+        self.physics_error = Some(format!(&quot;the across/through network does not settle (residual {:.3e})&quot;, solution.max_required_residual));
+        return;
+    }
+    self.physics_error = None;
+    let values = net.unknowns.iter().zip(&amp;solution.vars).map(|((l, dim), x)| (*l, Value::quantity(*x, *dim))).collect();
+    self.reactive.set_physics(&amp;self.doc, values);
+}</code></pre></div></div></figure>
+<p>Every equation becomes a <code>Required</code> term (Part 4's tiers). <code>Linear</code> rows are plain sums; <code>Expr</code> rows evaluate both sides with the unknowns substituted (as quantities with their dimensions, so <code>2 K/W · 5 W</code> is a temperature) and everything else read from the store. The previous solution is the starting point, so a slider drag converges in a step or two.</p>
+<p>The solution is <strong>not written to the document</strong>. It goes into a new layer of the reactive graph, <code>physics</code>, which readers see beneath bindings:</p>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:318">src/iron_document/src/graph.rs</a><span class="range">lines 318–340</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">318
+319
+320
+321
+322
+323
+324
+325
+326
+327
+328
+329
+330
+331
+332
+333
+334
+335
+336
+337
+338
+339
+340</pre><pre class="src"><code class="language-rust">fn read_with(
+    overlay: &amp;BTreeMap&lt;Leaf, Value&gt;,
+    animated: &amp;BTreeMap&lt;Leaf, Value&gt;,
+    physics: &amp;BTreeMap&lt;Leaf, Value&gt;,
+    resolved: &amp;BTreeMap&lt;Leaf, Value&gt;,
+    nodes: &amp;BTreeMap&lt;Leaf, BoundNode&gt;,
+    doc: &amp;Document,
+    leaf: Leaf,
+) -&gt; Option&lt;Value&gt; {
+    if let Some(v) = overlay.get(&amp;leaf) {
+        return Some(v.clone());
+    }
+    if nodes.contains_key(&amp;leaf) {
+        return resolved.get(&amp;leaf).cloned();
+    }
+    if let Some(v) = physics.get(&amp;leaf) {
+        return Some(v.clone());
+    }
+    if let Some(v) = animated.get(&amp;leaf) {
+        return Some(v.clone());
+    }
+    doc.leaf(leaf.node, leaf.path)?.constant().cloned()
+}</code></pre></div></div></figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>Order</th><th>Layer</th><th>Comes from</th><th>Stored?</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>overlay</td><td>A gesture's previews (Part 3)</td><td>no</td></tr>
+    <tr><td>2</td><td>resolved</td><td>Bindings, stored and derived</td><td>no</td></tr>
+    <tr><td>3</td><td>physics</td><td>The across/through network</td><td>no</td></tr>
+    <tr><td>4</td><td>animated</td><td>Clips at the playhead</td><td>no</td></tr>
+    <tr><td>5</td><td>constant</td><td>The document</td><td>yes</td></tr>
+  </tbody>
+</table></div>
+<p>So the heater's gauge, bound to <code>(#out.port.across − 293.15 K) / 1 K · 6</code>, reads the solved temperature like any value, and when the solution changes, <code>set_physics</code> invalidates its dependents like any change. <code>resolve_physics</code> runs after every transaction, on load, and when the playhead moves (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:654" title="src/iron_document/src/lib.rs:654"><code>lib.rs:654</code></a>). A solved leaf is <code>Locked</code> for editing, with the reason "solved by its across/through network; change a source or a parameter instead" (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:46" title="src/iron_document/src/handle.rs:46"><code>handle.rs:46</code></a>).</p>
+<div class="box rust"><span class="tab">Why not solve-on-apply like constraints?</span>
+<p>Constraint solutions (Part 4) are <em>positions</em>: authored state the user owns, so they are written as derived ops and undone with the transaction. Physics solutions are <em>consequences</em>: the temperature is whatever the heater's power and the link's resistance make it. Storing it would put a cache in the file that could disagree with its own inputs. A network that fails to converge keeps its previous solution and reports why through <code>physics_error()</code>; it never rejects a transaction.</p>
+</div>
+
+<h2 id="demos"><span class="sec">9.5</span>The two demos</h2>
+<h3 id="optics">Optics: laser → fiber → meter</h3>
+<p>The Optics and Schematic tabs are two compositions of the same three entities: a cartoon (a laser body whose beam brightens with power, a curved fiber path, a meter dial with a gauge) and a block diagram with wires. Each definition carries both templates:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:631">src/document_bridge/demo.rs</a><span class="range">lines 631–654</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:1"></span><span class="band" style="--from:15;--len:1"></span><pre class="gutter" aria-hidden="true">631
+632
+633
+634
+635
+636
+637
+638
+639
+640
+641
+642
+643
+644
+645
+646
+647
+648
+649
+650
+651
+652
+653
+654</pre><pre class="src"><code class="language-rust">let mut ops = vec![
+    Op::Create { id: laser, ty: ty(&quot;definition&quot;), parent: Some(library), order: def_key.clone(), components: vec![named(&quot;laser&quot;)] },
+    spec(power, laser, key(0), &quot;power&quot;, Value::parse_quantity(&quot;10 mW&quot;).expect(&quot;quantity&quot;)),
+    Op::Create { id: laser_out, ty: ty(&quot;port_spec&quot;), parent: Some(laser), order: key(1), components: vec![named(&quot;out&quot;), port(&quot;optical_power&quot;, &quot;out&quot;, Some(format!(&quot;{power}.param_spec.default&quot;)))] },
+    Op::Create { id: laser_cartoon, ty: ty(&quot;template&quot;), parent: Some(laser), order: key(2), components: vec![template(&quot;cartoon&quot;)] },
+    Op::Create { id: laser_schematic, ty: ty(&quot;template&quot;), parent: Some(laser), order: key(3), components: vec![template(&quot;schematic&quot;)] },
+    Op::Create { id: fiber, ty: ty(&quot;definition&quot;), parent: Some(library), order: OrderKey::after(&amp;def_key), components: vec![named(&quot;fiber&quot;)] },
+    spec(loss, fiber, key(0), &quot;loss_db_per_km&quot;, Value::Number(0.5)),
+    spec(length, fiber, key(1), &quot;length_km&quot;, Value::Number(2.0)),
+    Op::Create { id: fiber_in, ty: ty(&quot;port_spec&quot;), parent: Some(fiber), order: key(2), components: vec![named(&quot;in&quot;), port(&quot;optical_power&quot;, &quot;in&quot;, None)] },
+    Op::Create {
+        id: fiber_out,
+        ty: ty(&quot;port_spec&quot;),
+        parent: Some(fiber),
+        order: key(3),
+        components: vec![named(&quot;out&quot;), port(&quot;optical_power&quot;, &quot;out&quot;, Some(format!(&quot;{fiber_in}.port.signal * pow(10, -{loss}.param_spec.default * {length}.param_spec.default / 10)&quot;)))],
+    },
+    Op::Create { id: fiber_cartoon, ty: ty(&quot;template&quot;), parent: Some(fiber), order: key(4), components: vec![template(&quot;cartoon&quot;)] },
+    Op::Create { id: fiber_schematic, ty: ty(&quot;template&quot;), parent: Some(fiber), order: key(5), components: vec![template(&quot;schematic&quot;)] },
+    Op::Create { id: meter, ty: ty(&quot;definition&quot;), parent: Some(library), order: OrderKey::after(&amp;OrderKey::after(&amp;def_key)), components: vec![named(&quot;meter&quot;)] },
+    Op::Create { id: meter_in, ty: ty(&quot;port_spec&quot;), parent: Some(meter), order: key(0), components: vec![named(&quot;in&quot;), port(&quot;optical_power&quot;, &quot;in&quot;, None)] },
+    Op::Create { id: meter_cartoon, ty: ty(&quot;template&quot;), parent: Some(meter), order: key(1), components: vec![template(&quot;cartoon&quot;)] },
+    Op::Create { id: meter_schematic, ty: ty(&quot;template&quot;), parent: Some(meter), order: key(2), components: vec![template(&quot;schematic&quot;)] },
+];</code></pre></div></div></figure>
+<p>Each entity is instantiated in the cartoon, then drawn again in the schematic with <code>place_figures</code>. The two connections are created with a schematic wire each, and each wire is a figure of its <em>connection</em>, so selecting a wire highlights the connection's ends through the usual <code>figures</code> machinery (Part 5):</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:712">src/document_bridge/demo.rs</a><span class="range">lines 712–731</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:14;--len:5"></span><pre class="gutter" aria-hidden="true">712
+713
+714
+715
+716
+717
+718
+719
+720
+721
+722
+723
+724
+725
+726
+727
+728
+729
+730
+731</pre><pre class="src"><code class="language-rust">// The connections, and their wires in the schematic.
+for (i, (from, to)) in [((entities[0], &quot;out&quot;), (entities[1], &quot;in&quot;)), ((entities[1], &quot;out&quot;), (entities[2], &quot;in&quot;))].into_iter().enumerate() {
+    let (a, b) = (port_of(&amp;scratch, from.0, from.1), port_of(&amp;scratch, to.0, to.1));
+    let id = scratch.document().next_ids(2);
+    let rels = scratch.document().next_relation_ids(3);
+    let end = |e: &amp;str| BTreeMap::from([(&quot;end&quot;.to_owned(), Value::Str(e.into()))]);
+    let (x0, x1) = if i == 0 { (150.0, 240.0) } else { (360.0, 450.0) };
+    let mut shape = PathShape::default();
+    shape.closed = Slot::Const(Value::Bool(false));
+    let wire_key = last(&amp;scratch, Some(schematic));
+    let model_key = last(&amp;scratch, Some(model));
+    let mut c = Connection::default();
+    c.domain = Slot::Const(Value::Str(&quot;optical&quot;.into()));
+    phase(&amp;mut scratch, vec![
+        Op::Create { id: id[0], ty: ty(&quot;connection&quot;), parent: Some(model), order: model_key, components: vec![c.wrap()] },
+        Op::Link { rel: Relation { id: rels[0], from: id[0], to: a, rel: RelKind::Connects, data: end(&quot;a&quot;) } },
+        Op::Link { rel: Relation { id: rels[1], from: id[0], to: b, rel: RelKind::Connects, data: end(&quot;b&quot;) } },
+        Op::Create { id: id[1], ty: ty(&quot;path&quot;), parent: Some(schematic), order: wire_key, components: vec![at(x0, 125.0), shape.wrap(), stroke([0.1, 0.1, 0.12, 1.0], 2.0), named(&quot;wire&quot;)] },
+        Op::Link { rel: Relation { id: rels[2], from: id[1], to: id[0], rel: RelKind::Figures, data: BTreeMap::new() } },
+    ]);</code></pre></div></div></figure>
+<p>Two sliders in the cartoon drive the laser's <code>power</code> and the fiber's <code>length_km</code>. Drag either gauge (cartoon or schematic), and the power slider moves.</p>
+
+<h3 id="thermal">Thermal: heater → link → ambient</h3>
+<p>The Thermal tab is the same pattern with pair ports. Each definition has a <code>heat_flow</code> port per terminal and its behaviour as <code>equation</code> children; the heater's template draws a temperature bar and a heat-flow bar bound to its port:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:850">src/document_bridge/demo.rs</a><span class="range">lines 850–876</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:1"></span><span class="band" style="--from:9;--len:1"></span><span class="band" style="--from:11;--len:1"></span><span class="band" style="--from:16;--len:2"></span><span class="band" style="--from:23;--len:1"></span><pre class="gutter" aria-hidden="true">850
+851
+852
+853
+854
+855
+856
+857
+858
+859
+860
+861
+862
+863
+864
+865
+866
+867
+868
+869
+870
+871
+872
+873
+874
+875
+876</pre><pre class="src"><code class="language-rust">phase(&amp;mut scratch, vec![
+    Op::Create { id: heater, ty: ty(&quot;definition&quot;), parent: Some(library), order: k0, components: vec![named(&quot;heater&quot;)] },
+    spec(power, heater, key(0), &quot;power&quot;, &quot;5 W&quot;),
+    Op::Create { id: h_out, ty: ty(&quot;port_spec&quot;), parent: Some(heater), order: key(1), components: port(&quot;out&quot;) },
+    Op::Create { id: h_eq, ty: ty(&quot;equation&quot;), parent: Some(heater), order: key(2), components: vec![equation(format!(&quot;{h_out}.port.through&quot;), format!(&quot;-{power}.param_spec.default&quot;))] },
+    template(h_t, heater, key(3)),
+    rect(h_body, h_t, key(0), 60.0, 110.0, n(120.0), 90.0, [0.86, 0.3, 0.15, 1.0], &quot;heater&quot;),
+    rect(h_track, h_t, key(1), 60.0, 240.0, n(300.0), 14.0, [0.85, 0.86, 0.9, 1.0], &quot;track&quot;),
+    // The temperature rise above 20 °C: 6 px per kelvin.
+    rect(h_rise, h_t, key(2), 60.0, 240.0, bound(format!(&quot;clamp(({h_out}.port.across - 293.15 K) / 1 K * 6, 0, 300)&quot;)), 14.0, [0.9, 0.2, 0.1, 1.0], &quot;temperature&quot;),
+    // The heat leaving the heater: 12 px per watt.
+    rect(h_flow, h_t, key(3), 60.0, 266.0, bound(format!(&quot;clamp(-{h_out}.port.through / 1 W * 12, 0, 300)&quot;)), 10.0, [0.95, 0.65, 0.15, 1.0], &quot;heat flow&quot;),
+    Op::Create { id: link, ty: ty(&quot;definition&quot;), parent: Some(library), order: k1, components: vec![named(&quot;thermal link&quot;)] },
+    spec(r, link, key(0), &quot;r&quot;, &quot;2 K/W&quot;),
+    Op::Create { id: l_a, ty: ty(&quot;port_spec&quot;), parent: Some(link), order: key(1), components: port(&quot;a&quot;) },
+    Op::Create { id: l_b, ty: ty(&quot;port_spec&quot;), parent: Some(link), order: key(2), components: port(&quot;b&quot;) },
+    Op::Create { id: l_eq1, ty: ty(&quot;equation&quot;), parent: Some(link), order: key(3), components: vec![equation(format!(&quot;{l_a}.port.through + {l_b}.port.through&quot;), &quot;0 W&quot;.into())] },
+    Op::Create { id: l_eq2, ty: ty(&quot;equation&quot;), parent: Some(link), order: key(4), components: vec![equation(format!(&quot;{l_a}.port.across - {l_b}.port.across&quot;), format!(&quot;{r}.param_spec.default * {l_a}.port.through&quot;))] },
+    template(l_t, link, key(5)),
+    rect(l_body, l_t, key(0), 180.0, 140.0, n(150.0), 30.0, [0.55, 0.57, 0.62, 1.0], &quot;link&quot;),
+    Op::Create { id: ambient, ty: ty(&quot;definition&quot;), parent: Some(library), order: k2, components: vec![named(&quot;ambient&quot;)] },
+    spec(t, ambient, key(0), &quot;t&quot;, &quot;293.15 K&quot;),
+    Op::Create { id: a_p, ty: ty(&quot;port_spec&quot;), parent: Some(ambient), order: key(1), components: port(&quot;p&quot;) },
+    Op::Create { id: a_eq, ty: ty(&quot;equation&quot;), parent: Some(ambient), order: key(2), components: vec![equation(format!(&quot;{a_p}.port.across&quot;), format!(&quot;{t}.param_spec.default&quot;))] },
+    template(a_t, ambient, key(3)),
+    rect(a_body, a_t, key(0), 330.0, 95.0, n(140.0), 120.0, [0.55, 0.75, 0.95, 1.0], &quot;sink&quot;),
+]);</code></pre></div></div></figure>
+<p>Note the port defaults (lines 809–812): <code>293.15 K</code> and <code>0 W</code>, in the kind's own units. The template's gauges read the definition's ports before any network exists, and with plain-number defaults they failed with a unit error. An instance's values are then overridden by the physics layer.</p>
+<p>The test that pins the arithmetic: 5 W through 2 K/W into 293.15 K settles at 303.15 K with 5 W flowing (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/tests/ports.rs:228" title="src/iron_document/tests/ports.rs:228"><code>ports.rs:228</code></a>).</p>
+
+<h2 id="model"><span class="sec">9.6</span>What the model sees</h2>
+<p>The model view (Part 5) lists each entity's ports with their live values, and every connection by its ends' names:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/view.rs:224">src/iron_document/src/view.rs</a><span class="range">lines 224–245</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245</pre><pre class="src"><code class="language-rust">// Ports with their live values (ECM §6.1): a one-way kind shows its
+// signal, a pair its across and through.
+for p in ports {
+    let port = doc.get::&lt;crate::component::Port&gt;(p);
+    let text = |slot: Option&lt;&amp;crate::value::Slot&gt;| slot.and_then(|s| s.constant()).and_then(|v| v.as_str()).unwrap_or(&quot;&quot;).to_owned();
+    let kind = text(port.map(|c| &amp;c.kind));
+    let mut pa: Vec&lt;(String, String)&gt; = vec![(&quot;id&quot;.into(), p.to_string())];
+    if let Some(n) = name_of(p) {
+        pa.push((&quot;name&quot;.into(), n));
+    }
+    pa.push((&quot;kind&quot;.into(), kind.clone()));
+    pa.push((&quot;dir&quot;.into(), text(port.map(|c| &amp;c.dir))));
+    let read = |f: &amp;str| f.parse::&lt;crate::component::LeafPath&gt;().ok().and_then(|path| reactive.read(doc, crate::expr::Leaf { node: p, path })).map(|v| v.to_string());
+    let pair = crate::port::kind(&amp;kind).is_some_and(|k| k.flow == crate::port::Flow::Pair);
+    for f in if pair { &amp;[&quot;across&quot;, &quot;through&quot;][..] } else { &amp;[&quot;signal&quot;][..] } {
+        if let Some(v) = read(&amp;format!(&quot;port.{f}&quot;)) {
+            pa.push(((*f).into(), v));
+        }
+    }
+    write_open(&amp;mut out, &quot;    &quot;, &quot;port&quot;, &amp;pa);
+    out.push_str(&quot;/&gt;\n&quot;);
+}</code></pre></div></div></figure>
+<figure class="plainfig"><figcaption>The shape of the model view for the fiber (ids elided, values rounded)</figcaption><pre class="plain"><code class="language-plaintext">&amp;lt;entity id=&quot;#…&quot; name=&quot;fiber&quot; definition=&quot;fiber&quot; params.length_km=&quot;2&quot; …&amp;gt;
+  &amp;lt;port id=&quot;#…&quot; name=&quot;in&quot;  kind=&quot;optical_power&quot; dir=&quot;in&quot;  signal=&quot;10 mW&quot;/&amp;gt;
+  &amp;lt;port id=&quot;#…&quot; name=&quot;out&quot; kind=&quot;optical_power&quot; dir=&quot;out&quot; signal=&quot;7.94 mW&quot;/&amp;gt;
+  &amp;lt;figure id=&quot;#…&quot; type=&quot;group&quot; in=&quot;#…&quot; composition=&quot;optics&quot;/&amp;gt;
+  &amp;lt;figure id=&quot;#…&quot; type=&quot;group&quot; in=&quot;#…&quot; composition=&quot;schematic&quot;/&amp;gt;
+&amp;lt;/entity&amp;gt;
+&amp;lt;connection id=&quot;#…&quot; a=&quot;laser.out&quot; b=&quot;fiber.in&quot; kind=&quot;optical_power&quot;/&amp;gt;</code></pre></figure>
+<p>So "connect the meter straight to the laser" is something the model can attempt, and if the meter is already fed, it gets back <em>#… already has a connection feeding it</em> and can delete the fiber's connection first.</p>
+
+<div class="box edge"><span class="tab">Rough edges and what's next</span>
+<p>The module comment at the top of <code>port.rs</code> still says pair solving "comes next"; it has since landed. There's no gesture for making a connection: they come from the demo or a model edit, and the schematic's wires are ordinary paths that don't follow their blocks. Pair networks solve as one problem; splitting them into independent clusters is easy (the nets already are) but unneeded at demo scale. Time-varying signals (a thermal mass, a modulated laser) would make the network a differential system, which is roadmap stage G and the subject of the open questions about animation and state machines.</p>
+</div>
+
+<nav class="nextprev"><a href="08-workspace.html"><small>Previous</small><span>Part 8: The workspace and the session</span></a><a class="next" href="10-field-guide.html"><small>Next</small><span>Field guide</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

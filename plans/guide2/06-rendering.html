@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 6 · Every view is a texture — Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="05-compositions.html" aria-label="Previous part">&larr;</a><span class="here">Part 6 of 9</span><a href="07-tools.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html" aria-current="page"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 6 of 9 · <span class="chip sys-render">Rendering</span></p>
+  <h1>Every view is a texture</h1>
+  <p class="lede">Embedding needed one thing the renderer couldn't do: draw a composition into something other than the window. Fixing that turned into a rewrite of how everything reaches the screen. Every view (a 2D panel, a 3D camera, a 3D view inside a 2D composition, a 2D composition on a plane in 3D) now renders into its own texture, sized to where it's seen, and only when something it shows changed. This part follows <code>plans/view-textures.md</code>: the problem, the model, the three uses, render on demand, and the two latency fixes at the end.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 5's panels and embeds; the idea of a Bevy camera and a render target.</div>
+    <div><b>Files</b><code>src/vector/{backend,hybrid,view_composite,display_list}.rs</code>, <code>bevy_app/scene3d.rs</code> (<code>ViewImage</code>, <code>sync_view_images</code>), <code>document_bridge/planes.rs</code>, <code>src/lib.rs</code> (<code>RedrawNeeded</code>, <code>WorkerApp::frame</code>).</div>
+  </div>
+</header>
+
+<h2 id="problem"><span class="sec">6.1</span>The problem, from the source</h2>
+<div class="box naive"><span class="tab">How it was</span>
+<p><strong>Every camera paid for the whole window, every frame.</strong> Bevy allocates each camera's colour and depth buffers at the size of its render target, the window, and a viewport only restricts where it draws. A 3D panel a fifth of the window paid for full-window buffers; at 5K, 5120×2880 each. The 2D side merged every layer into one window-sized Vello scene, cleared and redrawn each frame. So GPU cost scaled with window area times panel count, an idle frame wasn't free, and a composition couldn't be drawn into anything but the shared screen.</p>
+</div>
+<div class="box built"><span class="tab">The model</span>
+<p><strong>A view is one source seen one way, rendered into its own texture.</strong> The texture is sized to the view's footprint on screen, kept between frames, and re-rendered only when something it shows changed. A texture has three possible uses: pasted 1:1 into a panel by the window's one camera, drawn inside a 2D view under an affine transform, or sampled on a plane in 3D.</p>
+</div>
+<p>The plan's own summary of why this also enables everything else in Parts 5 and 9: once each view has a texture, "show this composition inside that one" is "draw that texture there".</p>
+
+<h2 id="layers"><span class="sec">6.2</span>Vector views</h2>
+<p>A 2D layer is an entity with a <code>DisplayList</code> (the renderer-independent list of fills and strokes from guide 1) and a <code>VectorLayer</code>. The change is one field: which view the layer renders into.</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/vector/backend.rs:43">src/vector/backend.rs</a><span class="range">lines 43–71</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:3"></span><span class="band" style="--from:15;--len:9"></span><pre class="gutter" aria-hidden="true">43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71</pre><pre class="src"><code class="language-rust">/// Marks an entity as a 2D vector layer and fixes its place in painter order.
+///
+/// `order` is explicit because the previous arrangement left every screen-space
+/// scene at `z = 0`, where relative draw order was undefined and depended on
+/// entity iteration. Two layers must not share an order.
+#[derive(Component, Clone, Copy, Debug)]
+#[require(Transform)]
+pub struct VectorLayer {
+    pub space: LayerSpace,
+    pub order: i32,
+    /// The view this layer renders into on its own (an entity carrying
+    /// [`VectorView`]); `None` draws into the window-sized target.
+    pub view: Option&lt;Entity&gt;,
+}
+
+/// A rectangle of the window whose layers render into a texture of their
+/// own, sized to it, and are pasted back texel for pixel
+/// (plans/view-textures.md). Screen layers keep window coordinates; the
+/// backend offsets them by `pos`.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VectorView {
+    pub pos: UVec2,
+    pub size: UVec2,
+}
+
+/// A [`VectorView`] whose texture is used elsewhere (a 2D composition on a
+/// plane in 3D) rather than pasted into the window.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Offscreen;</code></pre></div></div></figure>
+<p>Each 2D composition panel spawns one entity that is both a layer and a <code>VectorView</code> over the panel's rectangle (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/render.rs:37" title="src/document_bridge/render.rs:37"><code>render.rs:37</code></a>). Other layers can target the same view by entity: Part 7's select overlay draws into the panel's view at a higher order, so redrawing the selection box never re-encodes the document's layer.</p>
+<p>The backend gives every view a texture and a quad that pastes it into the window. Sizes round up to 64 px buckets, so dragging a pane divider rarely reallocates:</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/vector/hybrid.rs:294">src/vector/hybrid.rs</a><span class="range">lines 294–301</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">294
+295
+296
+297
+298
+299
+300
+301</pre><pre class="src"><code class="language-rust">/// A view&#x27;s texture and the quad that pastes it into the window.
+#[derive(Component, Debug)]
+pub struct ViewTarget2d {
+    pub image: Handle&lt;Image&gt;,
+    /// The texture&#x27;s size; the view fills its top-left `VectorView::size`.
+    pub bucket: UVec2,
+    material: Handle&lt;ViewCompositeMaterial&gt;,
+}</code></pre></div></div></figure>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/vector/hybrid.rs:307">src/vector/hybrid.rs</a><span class="range">lines 307–317</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">307
+308
+309
+310
+311
+312
+313
+314
+315
+316
+317</pre><pre class="src"><code class="language-rust">/// Give every [`VectorView`] a texture (bucketed, so a pane drag rarely
+/// reallocates) and a composite quad over its rectangle, and retire both
+/// with the view.
+fn sync_views(
+    mut commands: Commands,
+    mut images: ResMut&lt;Assets&lt;Image&gt;&gt;,
+    mut meshes: ResMut&lt;Assets&lt;Mesh&gt;&gt;,
+    mut materials: ResMut&lt;Assets&lt;ViewCompositeMaterial&gt;&gt;,
+    mut quad: Local&lt;Option&lt;Handle&lt;Mesh&gt;&gt;&gt;,
+    mut views: Query&lt;(Entity, Ref&lt;VectorView&gt;, Option&lt;&amp;mut ViewTarget2d&gt;, Has&lt;Offscreen&gt;)&gt;,
+    composites: Query&lt;(Entity, &amp;ViewCompositeOf)&gt;,</code></pre></div></div></figure>
+<p>Each target keeps its own retained Vello scene and remembers whether its texture already holds it. When no layer of a view changed, the view isn't rendered at all; its texture is still on the GPU and the window pastes it again:</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/vector/hybrid.rs:626">src/vector/hybrid.rs</a><span class="range">lines 626–639</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:2"></span><pre class="gutter" aria-hidden="true">626
+627
+628
+629
+630
+631
+632
+633
+634
+635
+636
+637
+638
+639</pre><pre class="src"><code class="language-rust">/// One target&#x27;s retained scene.
+struct TargetScene {
+    scene: Scene,
+    size: UVec2,
+    /// The texture holds the current scene: with retention, nothing to do.
+    rendered: bool,
+    /// Other views&#x27; textures this scene draws, bound at render time.
+    textures: Vec&lt;(TextureId, Handle&lt;Image&gt;, UVec2)&gt;,
+    /// A target that draws textures renders inside the render graph, in its
+    /// shared submission, so it has its own renderer: the queue writes a
+    /// renderer stages for its buffers land before the whole submission, and
+    /// two targets sharing one would overwrite each other&#x27;s.
+    own: Option&lt;(Renderer, Resources)&gt;,
+}</code></pre></div></div></figure>
+
+<h3 id="paste">Pasting texel for pixel</h3>
+<p>The window has exactly one camera now. It clears to the background and draws every view's quad with <code>ViewCompositeMaterial</code>, whose shader computes the texture coordinate from the fragment's window position, so the mapping is exact by construction:</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/vector/view_composite.rs:1">src/vector/view_composite.rs</a><span class="range">lines 1–17</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17</pre><pre class="src"><code class="language-rust">//! Pasting a view&#x27;s texture into a rectangle of the window, texel for pixel
+//! (plans/view-textures.md §2).
+//!
+//! The generalisation of [`super::composite_material`]: that one blits a
+//! window-sized texture over the whole window; this one blits the top-left
+//! `size` texels of a (bucket-sized) texture into a window rectangle. Both
+//! derive the UV from the fragment coordinate, so the mapping is exact by
+//! construction rather than by agreement between a camera, a quad and a
+//! scale factor.
+//!
+//! Two encodings arrive here, and blending must treat them differently:
+//!
+//! - `MODE_PREMULTIPLIED_RAW`: `vello_hybrid` output, premultiplied and
+//!   sRGB-encoded, in a UNORM texture (see `composite_material` for why the
+//!   shader un-premultiplies before converting).
+//! - `MODE_STRAIGHT_SRGB`: a Bevy camera&#x27;s output in an sRGB texture, so the
+//!   sampler already decodes to linear; straight alpha, premultiplied here.</code></pre></div></div></figure>
+<p>Two encodings arrive. Vello writes premultiplied, sRGB-encoded bytes into a UNORM texture; a Bevy camera writes straight alpha into an sRGB texture. The material's mode tells the shader which it's reading, so neither gets its colours shifted.</p>
+
+<h2 id="3d"><span class="sec">6.3</span>3D views</h2>
+<p>A 3D panel's camera renders into its own texture instead of the window, with the same bucketing and the same retention. <code>ViewImage</code> tracks the texture and when the camera needs to run:</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/scene3d.rs:441">src/bevy_app/scene3d.rs</a><span class="range">lines 441–461</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:6;--len:6"></span><span class="band" style="--from:15;--len:5"></span><pre class="gutter" aria-hidden="true">441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455
+456
+457
+458
+459
+460
+461</pre><pre class="src"><code class="language-rust">/// A texture-backed camera&#x27;s target and the quad that composites it.
+#[derive(Component, Debug)]
+pub(crate) struct ViewImage {
+    image: Handle&lt;Image&gt;,
+    bucket: UVec2,
+    /// The quad pasting it into the window; none for a 3D embed, whose
+    /// texture the 2D view that embeds it draws instead.
+    composite: Option&lt;Entity&gt;,
+    /// Renders this frame: its version moves on, so the 2D view drawing it
+    /// re-renders in step (see `EmbedImages`).
+    was_active: bool,
+    version: u32,
+    material: Handle&lt;crate::vector::view_composite::ViewCompositeMaterial&gt;,
+    /// Frames still to render whatever happens: a new texture is not on the
+    /// GPU for a frame or two.
+    fresh: u8,
+    /// Frames to stay awake after a change. A view woken for a single frame
+    /// can render with per-view state (light clusters, visibility) from
+    /// before it slept, so it renders a few frames before sleeping again.
+    awake: u8,
+}</code></pre></div></div></figure>
+<p><code>sync_view_images</code> marks a camera active only when something it shows changed: its rectangle, its pose or lens, or any 3D content on its render layers moving, highlighting, appearing or disappearing. Otherwise it sleeps and its texture is reused. Two practical details from getting this right: a camera woken for one frame can render with stale per-view state (lights, visibility), so it stays <em>awake</em> for a few frames after a change; and the system runs before Bevy's frustum and visibility systems, so a camera woken this frame is culled and lit as an active view this frame.</p>
+<p>Camera orders (Bevy needs them unique) come from the lowest free slot, so cameras appearing and disappearing never collide (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/scene3d.rs:272" title="src/bevy_app/scene3d.rs:272"><code>scene3d.rs:272</code></a>).</p>
+
+<h3 id="3d-in-2d">3D inside 2D</h3>
+<p>A 3D embed's camera renders into a texture sized to the embed's on-screen size (Part 5's <code>EmbedView</code>), and the 2D view that contains the embed draws that texture with <code>DrawCmd::Texture</code>, under the embed's whole transform, in painter order. So a 3D view inside a 2D composition can be rotated, scaled, clipped and drawn over like any other shape. Vello can't read a Bevy camera's sRGB texture directly, so each one is converted into Vello's encoding first (<code>Convert</code>, <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/vector/hybrid.rs:937" title="src/vector/hybrid.rs:937"><code>hybrid.rs:937</code></a>).</p>
+<p>Picking goes the other way: <code>PointerToCamera</code> stores the map from window pixels to the embed camera's own texture pixels, through every transform on the way, so clicking the torus inside a rotated embed casts the ray from the right place.</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/scene3d.rs:463">src/bevy_app/scene3d.rs</a><span class="range">lines 463–479</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">463
+464
+465
+466
+467
+468
+469
+470
+471
+472
+473
+474
+475
+476
+477
+478
+479</pre><pre class="src"><code class="language-rust">/// For a camera whose texture is drawn inside a 2D view (a 3D embed), the
+/// map from window px to its own texture px, through every transform on the
+/// way (it may rotate and scale).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PointerToCamera(pub kurbo::Affine);
+
+/// Window px → this camera&#x27;s own target px: through the embed&#x27;s mapping, or
+/// offset by the panel rectangle&#x27;s corner.
+pub(crate) fn to_camera_px(screen: Vec2, rect: Option&lt;&amp;ScreenRect&gt;, pointer: Option&lt;&amp;PointerToCamera&gt;) -&gt; Vec2 {
+    match pointer {
+        Some(p) =&gt; {
+            let q = p.0 * kurbo::Point::new(screen.x as f64, screen.y as f64);
+            Vec2::new(q.x as f32, q.y as f32)
+        }
+        None =&gt; screen - rect.map_or(Vec2::ZERO, |s| s.pos.as_vec2()),
+    }
+}</code></pre></div></div></figure>
+
+<h3 id="planes">2D on a plane in 3D</h3>
+<p>A 2D composition embedded in 3D is a plane mesh whose material samples an <em>offscreen</em> vector view: a <code>VectorView</code> marked <code>Offscreen</code>, rendered but never pasted into the window. Its resolution comes from how large the plane appears: project the plane's corners through every camera that sees it, and take the largest screen-space length of one document pixel:</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/planes.rs:152">src/document_bridge/planes.rs</a><span class="range">lines 152–183</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:14;--len:7"></span><span class="band" style="--from:27;--len:5"></span><pre class="gutter" aria-hidden="true">152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183</pre><pre class="src"><code class="language-rust">/// Texels per px the plane needs: across the cameras that see it, the largest
+/// on-screen length of one document px along either axis, at any corner.
+fn density_needed(
+    cameras: &amp;Query&lt;(&amp;Camera, &amp;GlobalTransform, &amp;RenderLayers)&gt;,
+    layers: &amp;RenderLayers,
+    global: &amp;GlobalTransform,
+    region: kurbo::Rect,
+) -&gt; Option&lt;f64&gt; {
+    let (w, h) = ((region.width() / PX_PER_UNIT) as f32, (region.height() / PX_PER_UNIT) as f32);
+    let corners = [Vec3::ZERO, Vec3::new(w, 0.0, 0.0), Vec3::new(w, -h, 0.0), Vec3::new(0.0, -h, 0.0)].map(|c| global.transform_point(c));
+    let mut best: Option&lt;f64&gt; = None;
+    for (camera, cam_t, cam_layers) in cameras {
+        // Every camera that renders this composition counts, asleep or not:
+        // a retained view still shows the plane at its last density.
+        if !cam_layers.intersects(layers) {
+            continue;
+        }
+        let Some(px) = corners.iter().map(|&amp;c| camera.world_to_viewport(cam_t, c).ok()).collect::&lt;Option&lt;Vec&lt;Vec2&gt;&gt;&gt;() else { continue };
+        // Edge lengths on screen over edge lengths in document px.
+        let along_x = px[0].distance(px[1]).max(px[3].distance(px[2])) as f64 / region.width().max(1.0);
+        let along_y = px[0].distance(px[3]).max(px[1].distance(px[2])) as f64 / region.height().max(1.0);
+        let d = along_x.max(along_y);
+        best = Some(best.map_or(d, |b: f64| b.max(d)));
+    }
+    best
+}
+
+/// Round a density up to a power of √2 (so small changes reuse the texture).
+fn step(d: f64) -&gt; f64 {
+    let k = (d.clamp(MIN_DENSITY, MAX_DENSITY).ln() / std::f64::consts::SQRT_2.ln()).ceil();
+    std::f64::consts::SQRT_2.powf(k).clamp(MIN_DENSITY, MAX_DENSITY)
+}</code></pre></div></div></figure>
+<p>Densities step by powers of √2, so a slow camera dolly changes the texture size rarely. This is the first piece of the user's "tiled, demand-driven textures" extension (plan §4): views are already described as a content-space region at a density, and demand is already computed per use. The tiles themselves are future work.</p>
+
+<h2 id="on-demand"><span class="sec">6.4</span>Render on demand</h2>
+<p>With every view retaining its texture, a frame where nothing visible changed needs no GPU work at all. <code>WorkerApp::frame</code> runs the main world, asks whether anything the window shows changed, and only then runs extraction and rendering:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/lib.rs:97">src/lib.rs</a><span class="range">lines 97–117</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:9"></span><pre class="gutter" aria-hidden="true">97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117</pre><pre class="src"><code class="language-rust">/// One frame. With render on demand (`RedrawNeeded`), the main world runs,
+    /// decides at the end of its schedule whether anything the window shows
+    /// changed, and only then are the render world&#x27;s extraction and rendering
+    /// run; otherwise the window keeps its last picture. The same steps as
+    /// `App::update`, with the sub-apps made conditional.
+    pub fn frame(&amp;mut self) {
+        if !self.app.world().contains_resource::&lt;RedrawNeeded&gt;() {
+            self.app.update();
+            return;
+        }
+        let subs = self.app.sub_apps_mut();
+        subs.main.run_default_schedule();
+        let redraw = subs.main.world().get_resource::&lt;RedrawNeeded&gt;().is_none_or(|r| r.now);
+        if redraw {
+            for (_, sub) in subs.sub_apps.iter_mut() {
+                sub.extract(subs.main.world_mut());
+                sub.update();
+            }
+        }
+        subs.main.world_mut().clear_trackers();
+    }</code></pre></div></div></figure>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/lib.rs:144">src/lib.rs</a><span class="range">lines 144–176</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:16;--len:12"></span><pre class="gutter" aria-hidden="true">144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176</pre><pre class="src"><code class="language-rust">/// Decide, at the end of the main world&#x27;s frame, whether to render it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn decide_redraw(
+    mut redraw: ResMut&lt;RedrawNeeded&gt;,
+    texture_cameras: Query&lt;&amp;Camera, With&lt;crate::bevy_app::ScreenRectMarker&gt;&gt;,
+    lists: Query&lt;(), Or&lt;(Changed&lt;crate::vector::DisplayList&gt;, Changed&lt;crate::vector::VectorView&gt;)&gt;&gt;,
+    ui: Query&lt;(), Or&lt;(Changed&lt;Text&gt;, Changed&lt;TextSpan&gt;, Changed&lt;Node&gt;, Changed&lt;Visibility&gt;)&gt;&gt;,
+    cameras: Query&lt;(), Or&lt;(Added&lt;Camera&gt;, Changed&lt;Camera&gt;)&gt;&gt;,
+    mut removed_cameras: RemovedComponents&lt;Camera&gt;,
+    mut removed_lists: RemovedComponents&lt;crate::vector::DisplayList&gt;,
+    panels: Res&lt;crate::panels::Panels&gt;,
+    windows: Query&lt;(), Changed&lt;Window&gt;&gt;,
+    mut images: MessageReader&lt;AssetEvent&lt;Image&gt;&gt;,
+    mut meshes: MessageReader&lt;AssetEvent&lt;Mesh&gt;&gt;,
+    mut materials: MessageReader&lt;AssetEvent&lt;crate::vector::view_composite::ViewCompositeMaterial&gt;&gt;,
+) {
+    let changed = texture_cameras.iter().any(|c| c.is_active)
+        || !lists.is_empty()
+        || !ui.is_empty()
+        || !cameras.is_empty()
+        || removed_cameras.read().count() &gt; 0
+        || removed_lists.read().count() &gt; 0
+        || panels.is_changed()
+        || !windows.is_empty()
+        || images.read().count() &gt; 0
+        || meshes.read().count() &gt; 0
+        || materials.read().count() &gt; 0;
+    if changed {
+        redraw.linger = redraw.linger.max(3);
+    }
+    redraw.now = redraw.linger &gt; 0;
+    redraw.linger = redraw.linger.saturating_sub(1);
+}</code></pre></div></div></figure>
+<p>"Changed" covers display lists, views, active texture cameras, UI text, panel layout and asset events. A change keeps rendering for three more frames (<code>linger</code>), since per-view state settles over a frame or two. Two things had to stop changing every frame for this to pay off: the camera controller wrote its transform every frame even at rest, and the FPS text updated every frame; both were fixed. The FPS overlay now updates four times a second.</p>
+<p>The numbers, measured on the GPU with the frame rate unthrottled:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>1600×1000, before → after</th><th>5K, before → after</th></tr></thead>
+  <tbody>
+    <tr><td>Idle</td><td>677 → ≈7000 fps (nothing rendered)</td><td>233 → ≈6800 fps</td></tr>
+    <tr><td>A 3D view moving every frame, 2 panels</td><td>651 → 963 (+48%)</td><td>195 → 303 (+55%)</td></tr>
+    <tr><td>Same, 4 panels</td><td>500 → 893 (+79%)</td><td>184 → 339 (+84%)</td></tr>
+  </tbody>
+</table></div>
+<p><code>?bevy=always</code> in the URL turns render on demand off, for comparing pacing on a real display.</p>
+
+<h2 id="latency"><span class="sec">6.5</span>Two latency fixes</h2>
+<p>After the migration you reported more lag on your display. Headless pacing was a steady 16.7 ms in every case, so the report wasn't reproduced, but reading the schedule turned up two real one-frame delays:</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/vector/hybrid.rs:140">src/vector/hybrid.rs</a><span class="range">lines 140–158</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:4"></span><span class="band" style="--from:10;--len:7"></span><pre class="gutter" aria-hidden="true">140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158</pre><pre class="src"><code class="language-rust">.add_systems(
+    Render,
+    (prepare_scene, render_scene)
+        .chain()
+        .in_set(RenderSystems::Render)
+        // Before Bevy runs its cameras and composites the window:
+        // unordered, the window could paste last frame&#x27;s 2D.
+        .before(bevy::render::renderer::render_system)
+        .run_if(resource_exists::&lt;RenderDevice&gt;),
+)
+// Views that draw a 3D view&#x27;s texture render inside the window
+// camera&#x27;s schedule: after every 3D camera has rendered this
+// frame, before the window composite, in the same submission.
+.add_systems(
+    bevy::core_pipeline::Core2d,
+    render_textured_scenes
+        .before(bevy::core_pipeline::Core2dSystems::MainPass)
+        .run_if(resource_exists::&lt;RenderDevice&gt;),
+);</code></pre></div></div></figure>
+<ol>
+  <li><strong>2D could reach the window a frame late.</strong> Vello's <code>render_scene</code> and Bevy's <code>render_system</code> (which runs every camera and composites the window) were in the same render phase with no order between them. If Vello ran second, the window pasted last frame's 2D. Now Vello is ordered first (line 147).</li>
+  <li><strong>3D inside 2D was a frame behind its camera.</strong> The 2D view sampled the 3D texture before Bevy had rendered this frame's image. Views that draw a 3D texture now render inside the window camera's own schedule, after every 3D camera and before the composite, in the same GPU submission (150–156). Each such view has its own Vello renderer, because a renderer's queued buffer writes all land before the submission, and two views sharing one would overwrite each other.</li>
+</ol>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/vector/hybrid.rs:1052">src/vector/hybrid.rs</a><span class="range">lines 1052–1057</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1052
+1053
+1054
+1055
+1056
+1057</pre><pre class="src"><code class="language-rust">/// Render the targets that draw other views&#x27; textures (3D compositions seen
+/// in 2D), inside the window camera&#x27;s schedule: every 3D camera has recorded
+/// its pass by now, so the texture is this frame&#x27;s and the 2D view that draws
+/// it shows it this frame. Each texture is converted for Vello first (a Bevy
+/// camera writes sRGB that samples as linear; Vello reads raw sRGB-encoded,
+/// premultiplied bytes), all into the graph&#x27;s encoder.</code></pre></div></div></figure>
+
+<div class="box edge"><span class="tab">Rough edges</span>
+<p>The window still pays one full-window composite pass on any frame that renders; a custom final pass that pastes only changed rectangles is the next lever if it ever shows in a profile. Plane textures have no mipmaps yet, so a plane seen at a glancing angle shimmers. Tonemapping shifts plane colours slightly, since the card is lit like any surface. None of the tiled-texture extension (plan §4) exists beyond the foundation described above.</p>
+</div>
+
+<nav class="nextprev"><a href="05-compositions.html"><small>Previous</small><span>Part 5: Compositions, figures and embeds</span></a><a class="next" href="07-tools.html"><small>Next</small><span>Part 7: The select tool and the pen</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

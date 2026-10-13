@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 8 · The workspace and the session — Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="07-tools.html" aria-label="Previous part">&larr;</a><span class="here">Part 8 of 9</span><a href="09-ports.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html" aria-current="page"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 8 of 9 · <span class="chip sys-shell">Shell & views</span> <span class="chip sys-store">Document model</span></p>
+  <h1>The workspace and the session</h1>
+  <p class="lede">The main view had become crowded, and the left panel was a card of leftovers. This part covers the shell's answer: a dock of tabs and splits where every tab is a <em>view onto a composition</em>, drawn by the canvas, by HTML, or both; per-view pan and zoom; and a third tier of state, the <em>session</em>, for things like the selection that belong in the store but not in the file or the undo history.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 5's panels; Part 6's views and textures.</div>
+    <div><b>Files</b><code>src-ui/views/{views,workspace}.ts</code>, <code>src-ui/views/{Workspace,ViewPanel,AddViewMenu,Toolbar}.svelte</code>, <code>src-ui/views/html/*</code>, <code>src/panels.rs</code>, <code>bevy_app/select.rs</code> (<code>navigate_views</code>, <code>sync_session_selection</code>), <code>iron_document/src/{id,document,lib,serial,view}.rs</code>. Design: <code>plans/panels-and-session.md</code>.</div>
+  </div>
+</header>
+
+<h2 id="views"><span class="sec">8.1</span>A panel is a view</h2>
+<p>The design discussion settled on one definition that holds whether a panel shows canvas pixels, HTML, or both:</p>
+<div class="box built"><span class="tab">The idea</span>
+<p><strong>A view is a source plus a notation.</strong> The source is what it shows: a composition, the timeline root, the document, the session's selection. The notation is how it's drawn, and decides which part the canvas draws (a Rust panel kind) and which part is HTML (a Svelte component). <strong>A presenter</strong> is where the view sits: today a dock tab or split; later a popover, a context menu, a tooltip. The view doesn't change with its presenter.</p>
+</div>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/views/views.ts:1">src-ui/views/views.ts</a><span class="range">lines 1–42</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:20;--len:6"></span><span class="band" style="--from:35;--len:7"></span><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42</pre><pre class="src"><code class="language-typescript">/**
+ * Views (plans/panels-and-session.md): every tab or panel in the workspace is
+ * a view, a window onto something in the document drawn in some notation.
+ *
+ *   source    what it is a view of: a composition (id or name), the timeline
+ *             root, the document, the session&#x27;s selection
+ *   notation  how it is drawn
+ *
+ * A notation decides which part of the view the canvas draws (its Rust panel
+ * kind) and which part is HTML (a Svelte component). A view can be all
+ * canvas, all HTML, or both: a hybrid lays its HTML over its canvas part, and
+ * only the HTML&#x27;s interactive elements take the pointer. Where a view sits
+ * (a tab, a split, later a popover or a menu) is the presenter&#x27;s business,
+ * here dockview&#x27;s; the view does not change with it.
+ */
+import type { Component } from &#x27;svelte&#x27;;
+import DocumentView from &#x27;./html/DocumentView.svelte&#x27;;
+import SelectionView from &#x27;./html/SelectionView.svelte&#x27;;
+import ModelView from &#x27;./html/ModelView.svelte&#x27;;
+
+export type Notation = &#x27;composition&#x27; | &#x27;timeline&#x27; | &#x27;markup&#x27; | &#x27;selection&#x27; | &#x27;conversation&#x27;;
+
+export interface ViewSpec {
+  source: string;
+  notation: Notation;
+}
+
+export interface NotationDef {
+  label: string;
+  /** The Rust panel kind for the canvas part, if the canvas draws any. */
+  canvas?: string;
+  /** The HTML part, if any. */
+  html?: Component&lt;{ spec: ViewSpec }&gt;;
+}
+
+export const NOTATIONS: Record&lt;Notation, NotationDef&gt; = {
+  composition: { label: &#x27;Composition&#x27;, canvas: &#x27;composition&#x27; },
+  timeline: { label: &#x27;Timeline&#x27;, canvas: &#x27;timeline&#x27; },
+  markup: { label: &#x27;Document&#x27;, html: DocumentView },
+  selection: { label: &#x27;Inspector&#x27;, html: SelectionView },
+  conversation: { label: &#x27;Model&#x27;, html: ModelView },
+};</code></pre></div></div></figure>
+<p>The Document, Model and Inspector tabs are HTML views; Main, Scene, Pendulum and the rest are canvas views of compositions; the Timeline is a canvas view of the timeline root. A hybrid (an inspector with canvas sliders and HTML text fields) is a notation with both parts; the HTML is laid over the canvas part and takes the pointer only where it actually draws something.</p>
+<p>On the Rust side, nothing about tabs exists. Whatever part of a <em>visible</em> view the canvas draws arrives as a panel rectangle, exactly as before:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/panels.rs:1">src/panels.rs</a><span class="range">lines 1–17</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17</pre><pre class="src"><code class="language-rust">//! The canvas side of views (plans/panels-and-session.md).
+//!
+//! A **view** is a window onto a composition: what it shows (`source`), how
+//! (`kind`, its notation: `composition` draws a 2D or 3D composition,
+//! `timeline` draws the timeline root&#x27;s clips over time, `ui` a plain
+//! background), and where. The shell lays views out as tabs and splits
+//! (dockview) and decides which part of a view is HTML. Whatever part of a
+//! visible view the canvas draws arrives here as a **panel**: the view&#x27;s id,
+//! its kind and source, and its rectangle (physical px, top-left origin of the
+//! full window canvas), posted through `set_panel_viewport`. A hidden tab
+//! posts nothing, so it costs nothing.
+//!
+//! Rust consumes these rects:
+//! - a `composition` panel shows one composition (ECM §7.1): its 2D content
+//!   drawn and picked inside the rect, or a 3D camera viewport on its layer
+//!   (`document_bridge::panel_views` resolves which)
+//! - vello panels (timeline, ui) draw in screen space clipped to their rect</code></pre></div></div></figure>
+
+<h2 id="dock"><span class="sec">8.2</span>The dock</h2>
+<p>Tab and split UIs are mature in HTML (VS Code is one), so the dock is <a href="https://dockview.dev">dockview</a>, a framework-independent library. Each dockview panel renders a <code>ViewPanel</code>, which mounts the canvas part only while its tab is visible:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/views/ViewPanel.svelte:1">src-ui/views/ViewPanel.svelte</a><span class="range">lines 1–34</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:12;--len:4"></span><span class="band" style="--from:20;--len:5"></span><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34</pre><pre class="src"><code class="language-xml">&lt;script lang=&quot;ts&quot;&gt;
+  // One view in a dock tab: its canvas part (a BevyPanel placeholder whose
+  // rectangle Rust draws into) and its HTML part, either or both. The canvas
+  // part exists only while the tab is visible, so a hidden tab costs Rust
+  // nothing; the HTML part stays mounted and keeps its state.
+  import type { DockviewPanelApi } from &quot;dockview-core&quot;;
+  import { onDestroy } from &quot;svelte&quot;;
+  import BevyPanel from &quot;../lib/BevyPanel.svelte&quot;;
+  import { NOTATIONS, type ViewSpec } from &quot;./views&quot;;
+
+  let { id, spec, api }: { id: string; spec: ViewSpec; api: DockviewPanelApi } = $props();
+
+  const def = $derived(NOTATIONS[spec.notation]);
+  let visible = $state(api.isVisible);
+  const sub = api.onDidVisibilityChange((e) =&gt; (visible = e.isVisible));
+  onDestroy(() =&gt; sub.dispose());
+&lt;/script&gt;
+
+&lt;div class=&quot;view&quot; class:hybrid={def.canvas &amp;&amp; def.html}&gt;
+  {#if def.canvas &amp;&amp; visible}
+    &lt;div class=&quot;canvas-part&quot;&gt;
+      &lt;BevyPanel {id} kind={def.canvas} composition={spec.source} /&gt;
+    &lt;/div&gt;
+  {/if}
+  {#if def.html}
+    {@const Html = def.html}
+    &lt;div class=&quot;html-part&quot;&gt;
+      &lt;Html {spec} /&gt;
+    &lt;/div&gt;
+  {/if}
+  {#if !def.canvas &amp;&amp; !def.html}
+    &lt;p class=&quot;unknown&quot;&gt;No notation “{spec.notation}”.&lt;/p&gt;
+  {/if}
+&lt;/div&gt;</code></pre></div></div></figure>
+<p>Because a hidden tab unmounts its placeholder, Rust removes the panel, the panel's camera and view stop, and a hidden tab costs nothing to render. The default layout puts the compositions in tabs in the centre, Document and Model on the left, the Inspector on the right and the Timeline across the bottom:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/views/workspace.ts:17">src-ui/views/workspace.ts</a><span class="range">lines 17–40</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40</pre><pre class="src"><code class="language-typescript">/** The layout to start from: the main viewer with each composition in a
+ *  tab beside it, HTML views left and right, the timeline across the bottom.
+ *  The viewer&#x27;s view id stays `viewer` (Rust draws loose nodes there). */
+function defaultLayout(api: DockviewApi) {
+  const view = (id: string, title: string, spec: ViewSpec, position?: any, extra: Record&lt;string, unknown&gt; = {}) =&gt;
+    api.addPanel({ id, component: &#x27;view&#x27;, title, params: { spec }, position, ...extra });
+  view(&#x27;viewer&#x27;, &#x27;Main&#x27;, { source: &#x27;main&#x27;, notation: &#x27;composition&#x27; });
+  for (const [id, title] of [
+    [&#x27;scene&#x27;, &#x27;Scene&#x27;],
+    [&#x27;pendulum&#x27;, &#x27;Pendulum&#x27;],
+    [&#x27;controls&#x27;, &#x27;Controls&#x27;],
+    [&#x27;assembly&#x27;, &#x27;Assembly&#x27;],
+    [&#x27;card&#x27;, &#x27;Card&#x27;],
+    [&#x27;optics&#x27;, &#x27;Optics&#x27;],
+    [&#x27;schematic&#x27;, &#x27;Schematic&#x27;],
+    [&#x27;thermal&#x27;, &#x27;Thermal&#x27;],
+  ]) {
+    view(id, title, { source: id, notation: &#x27;composition&#x27; }, { referencePanel: &#x27;viewer&#x27;, direction: &#x27;within&#x27; }, { inactive: true });
+  }
+  view(&#x27;timeline&#x27;, &#x27;Timeline&#x27;, { source: &#x27;timeline&#x27;, notation: &#x27;timeline&#x27; }, { direction: &#x27;below&#x27; }, { initialHeight: 220 });
+  view(&#x27;document&#x27;, &#x27;Document&#x27;, { source: &#x27;document&#x27;, notation: &#x27;markup&#x27; }, { referencePanel: &#x27;viewer&#x27;, direction: &#x27;left&#x27; }, { initialWidth: 380 });
+  view(&#x27;model&#x27;, &#x27;Model&#x27;, { source: &#x27;document&#x27;, notation: &#x27;conversation&#x27; }, { referencePanel: &#x27;document&#x27;, direction: &#x27;within&#x27; }, { inactive: true });
+  view(&#x27;selection&#x27;, &#x27;Inspector&#x27;, { source: &#x27;selection&#x27;, notation: &#x27;selection&#x27; }, { referencePanel: &#x27;viewer&#x27;, direction: &#x27;right&#x27; }, { initialWidth: 200 });
+}</code></pre></div></div></figure>
+<p>The layout is workspace state: saved in the browser (<code>iron.workspace.v4</code>) and restored on reload; <code>?layout=default</code> or <em>Reset layout</em> in the Document tab forgets it. It is never in the document or its undo. "+" in any tab bar opens any composition (Rust lists them through <code>document_compositions</code>) or a fixed view.</p>
+<h3 id="pointer">The dock floats over the canvas</h3>
+<p>The dock is HTML over the one full-window canvas. Its chrome must take the pointer (tabs, sashes, HTML views), and everything over a canvas view must let it through to the canvas, except while a tab is being dragged, when drop targets over canvas views must see the pointer:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/views/Workspace.svelte:49">src-ui/views/Workspace.svelte</a><span class="range">lines 49–61</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61</pre><pre class="src"><code class="language-xml">.dock :global(*) {
+  pointer-events: none;
+}
+.dock :global(.dv-tabs-and-actions-container),
+.dock :global(.dv-tabs-and-actions-container *),
+.dock :global(.dv-sash),
+.dock :global(.html-view),
+.dock :global(.html-view *),
+.dock :global(.dv-tabs-overflow-dropdown-root),
+.dock :global(.dv-tabs-overflow-dropdown-root *),
+.dock.dragging :global(*) {
+  pointer-events: auto;
+}</code></pre></div></div></figure>
+<p>Tab drags use pointer events rather than native HTML drag-and-drop (<code>dndStrategy: 'pointer'</code>), which is unreliable in Safari and hung the test browser.</p>
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>dockview's ESM build ships without its stylesheet, so <code>src-ui/views/dockview.css</code> is a copy extracted from the UMD bundle of version 8.5.1. Upgrading dockview means regenerating it.</p>
+</div>
+
+<h2 id="panzoom"><span class="sec">8.3</span>Pan and zoom per view</h2>
+<p>Every 2D view has its own pan and zoom in <code>ViewCameras</code>, keyed by view id, and <code>PanelView::affine</code> (Part 5) carries them to drawing, picking, the select tool and 3D embed textures, so nothing else had to change. The controls are Figma's:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1520">src/bevy_app/select.rs</a><span class="range">lines 1520–1565</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:36;--len:5"></span><pre class="gutter" aria-hidden="true">1520
+1521
+1522
+1523
+1524
+1525
+1526
+1527
+1528
+1529
+1530
+1531
+1532
+1533
+1534
+1535
+1536
+1537
+1538
+1539
+1540
+1541
+1542
+1543
+1544
+1545
+1546
+1547
+1548
+1549
+1550
+1551
+1552
+1553
+1554
+1555
+1556
+1557
+1558
+1559
+1560
+1561
+1562
+1563
+1564
+1565</pre><pre class="src"><code class="language-rust">/// Zoom limits, window px per document px.
+const ZOOM: (f32, f32) = (0.05, 64.0);
+
+/// Keep `doc` (document px) under `screen` (window px) at zoom `z`.
+fn pan_keeping(view: &amp;PanelView, doc: Vec2, screen: Vec2, z: f32) -&gt; Vec2 {
+    screen - Vec2::new(view.rect.x, view.rect.y) - doc * z
+}
+
+/// Pan and zoom 2D views, Figma&#x27;s way: the wheel or a trackpad pans (Shift
+/// turns vertical into horizontal), Ctrl/Cmd+wheel and pinch zoom about the
+/// pointer, Shift+1 fits the content, Shift+0 is 100%, Cmd/Ctrl +/− zoom
+/// about the view&#x27;s centre. Space-drag pans (`select_tool_system`).
+#[allow(clippy::too_many_arguments)]
+pub fn navigate_views(
+    pointer: Res&lt;crate::PointerState&gt;,
+    hits: Res&lt;crate::PointerHits&gt;,
+    scroll: Res&lt;crate::bevy_app::AccumulatedScroll&gt;,
+    views: Res&lt;PanelViews&gt;,
+    tool: Res&lt;SelectTool&gt;,
+    sel: Res&lt;crate::SelectionState&gt;,
+    mut keys: ResMut&lt;ToolKeys&gt;,
+    mut cameras: ResMut&lt;crate::document_bridge::ViewCameras&gt;,
+    store: Res&lt;DocumentStore&gt;,
+    map: Res&lt;NodeMap&gt;,
+    globals: Query&lt;&amp;&#x27;static GlobalTransform&gt;,
+    nodes: Query&lt;(&amp;&#x27;static Doc2d, &amp;&#x27;static GlobalTransform)&gt;,
+) {
+    let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
+    if let Some(view) = under
+        &amp;&amp; scroll.delta != Vec2::ZERO
+    {
+        let px = match scroll.unit {
+            bevy::input::mouse::MouseScrollUnit::Line =&gt; scroll.delta * 16.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel =&gt; scroll.delta,
+        };
+        let camera = cameras.0.entry(view.panel.clone()).or_default();
+        if pointer.modifiers.ctrl || pointer.modifiers.meta {
+            let doc = (pointer.screen - Vec2::new(view.rect.x, view.rect.y) - camera.pan) / camera.zoom;
+            let z = (camera.zoom * (-px.y * 0.01).exp()).clamp(ZOOM.0, ZOOM.1);
+            camera.pan = pan_keeping(view, doc, pointer.screen, z);
+            camera.zoom = z;
+        } else {
+            let d = if pointer.modifiers.shift &amp;&amp; px.x == 0.0 { Vec2::new(px.y, 0.0) } else { px };
+            camera.pan -= d;
+        }
+    }</code></pre></div></div></figure>
+<p>Scrolling pans; Ctrl/Cmd+wheel or a trackpad pinch (which browsers send as Ctrl+wheel) zooms about the pointer, keeping the document point under it fixed (<code>pan_keeping</code>); Space-drag pans; Shift+1 fits the content, Shift+0 is 100%, Cmd/Ctrl +/− zoom about the centre. "Show in" (Part 5) now sets the pan and keeps the zoom. The 3D camera controller acts only on the view under the pointer, so Space and the wheel no longer fly a camera in another tab.</p>
+
+<h2 id="session"><span class="sec">8.4</span>The session tier</h2>
+<p>The selection used to be a Bevy resource: invisible to bindings, to the model, and to anything that should be able to read "what's selected". Moving it into the store raised a question with three answers:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tier</th><th>Holds</th><th>Saved</th><th>Undo</th><th>Shared</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Document</strong></td><td>Content</td><td>yes</td><td>yes</td><td>yes</td></tr>
+    <tr><td><strong>Workspace</strong></td><td>Layout, pins, pans</td><td>yes, beside the document</td><td>no</td><td>no, per user</td></tr>
+    <tr><td><strong>Session</strong></td><td>Selection, hover, the playhead, inspector content</td><td>no</td><td>selection, later</td><td>no</td></tr>
+  </tbody>
+</table></div>
+<p>All three are meant to live in the store and speak its language (nodes, relations, bindings); they differ only in the rules their roots impose. The session tier is built; the workspace is still in the browser.</p>
+
+<h3 id="ids">Its own id range</h3>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Create the session nodes like any others.</strong> The first selection takes the next id, and every content node created afterwards gets a different id than it would have, so saved files, smoke scripts and the model's references all shift depending on whether someone clicked first.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>Session ids start at 2⁴⁰.</strong> Session nodes and relations are allocated from their own counter, so content ids never move. Anything at or above the base is never saved and never shown in the tree views.</p></div>
+</div>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/id.rs:14">src/iron_document/src/id.rs</a><span class="range">lines 14–17</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">14
+15
+16
+17</pre><pre class="src"><code class="language-rust">/// Session-tier ids (plans/panels-and-session.md) start here: session nodes
+/// and relations are allocated from their own range, so they never shift
+/// the ids of content, and nothing at or above it is ever saved.
+pub const SESSION_BASE: u64 = 1 &lt;&lt; 40;</code></pre></div></div></figure>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:299">src/iron_document/src/document.rs</a><span class="range">lines 299–313</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313</pre><pre class="src"><code class="language-rust">pub(crate) fn advance_next_id(&amp;mut self, past: NodeId) {
+    if past.is_session() {
+        self.next_session_id = self.next_session_id.max(past.raw() + 1);
+    } else {
+        self.next_id = self.next_id.max(past.raw() + 1);
+    }
+}
+
+pub(crate) fn advance_next_relation_id(&amp;mut self, past: RelationId) {
+    if past.is_session() {
+        self.next_session_rel = self.next_session_rel.max(past.raw() + 1);
+    } else {
+        self.next_rel = self.next_rel.max(past.raw() + 1);
+    }
+}</code></pre></div></div></figure>
+
+<h3 id="apply-session">Applied without a transaction</h3>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:465">src/iron_document/src/lib.rs</a><span class="range">lines 465–503</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:12"></span><span class="band" style="--from:23;--len:8"></span><pre class="gutter" aria-hidden="true">465
+466
+467
+468
+469
+470
+471
+472
+473
+474
+475
+476
+477
+478
+479
+480
+481
+482
+483
+484
+485
+486
+487
+488
+489
+490
+491
+492
+493
+494
+495
+496
+497
+498
+499
+500
+501
+502
+503</pre><pre class="src"><code class="language-rust">// ---- The session tier (plans/panels-and-session.md) ----------------
+
+/// Apply session-tier ops: nodes, relations and leaves in the session&#x27;s
+/// id range only. Not a transaction: the document&#x27;s version, history and
+/// undo never see it, and it is never saved. All or nothing: an error
+/// rolls back the ops already applied.
+pub fn apply_session(&amp;mut self, ops: Vec&lt;Op&gt;) -&gt; Result&lt;(), ApplyError&gt; {
+    let stamp = self.doc.version();
+    let mut undo: Vec&lt;Op&gt; = Vec::new();
+    let mut structural = false;
+    for (i, op) in ops.iter().enumerate() {
+        let in_session = match op {
+            Op::Create { id, parent, .. } =&gt; id.is_session() &amp;&amp; parent.is_none_or(|p| p.is_session()),
+            Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddComp { id, .. } | Op::RemoveComp { id, .. } =&gt; id.is_session(),
+            Op::Link { rel } =&gt; rel.id.is_session() &amp;&amp; rel.from.is_session(),
+            Op::Unlink { id } =&gt; id.is_session(),
+        };
+        let result = if in_session {
+            op::apply_op(&amp;mut self.doc, i, op, stamp)
+        } else {
+            Err(ApplyError { op: i, kind: ErrorKind::BadId, message: &quot;not a session-tier op&quot;.into() })
+        };
+        match result {
+            Ok(inverse) =&gt; undo.extend(inverse),
+            Err(e) =&gt; {
+                for inv in undo.iter().rev() {
+                    let _ = op::apply_op(&amp;mut self.doc, i, inv, stamp);
+                }
+                return Err(e);
+            }
+        }
+        structural |= matches!(op, Op::Create { .. } | Op::Delete { .. });
+    }
+    if structural {
+        self.reactive.rebuild(&amp;self.doc);
+    }
+    self.session_version += 1;
+    Ok(())
+}</code></pre></div></div></figure>
+<p>Every op must be in the session range (a content op is refused). The ops apply directly, with no version bump, no history entry and no undo; on an error the ops already applied are rolled back through their inverses. <code>session_version</code> counts session changes for whoever needs to notice them.</p>
+
+<h3 id="selection">The selection is relations</h3>
+<p>A selection is a <code>selection</code> node under a <code>session</code> root, with one ordered <code>selects</code> relation per selected node. Relations, not children: a child is owned and placed by its parent, and a selected square stays where it is. Each relation's data records how the select tool reached the node: the panel and the chain (Part 7), so a selection made in Main through the scene's embed is restored to the same place.</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:587">src/iron_document/src/lib.rs</a><span class="range">lines 587–623</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">587
+588
+589
+590
+591
+592
+593
+594
+595
+596
+597
+598
+599
+600
+601
+602
+603
+604
+605
+606
+607
+608
+609
+610
+611
+612
+613
+614
+615
+616
+617
+618
+619
+620
+621
+622
+623</pre><pre class="src"><code class="language-rust">/// The selected nodes, in pick order, with how each was reached
+/// (`data.panel`, `data.chain`). Deleted nodes drop out.
+pub fn selection(&amp;self) -&gt; Vec&lt;(NodeId, std::collections::BTreeMap&lt;String, Value&gt;)&gt; {
+    let Some(sel) = self.live_of_type(&quot;selection&quot;) else { return Vec::new() };
+    self.doc
+        .relations_from(sel)
+        .filter(|r| r.rel == RelKind::Selects &amp;&amp; self.doc.is_live(r.to))
+        .map(|r| (r.to, r.data.clone()))
+        .collect()
+}
+
+/// Replace the selection: one session change, nothing when it is
+/// already this. The session root and its `selection` node are created
+/// on first use.
+pub fn set_selection(&amp;mut self, items: &amp;[(NodeId, std::collections::BTreeMap&lt;String, Value&gt;)]) -&gt; Result&lt;(), ApplyError&gt; {
+    if self.selection() == items {
+        return Ok(());
+    }
+    let mut ops = Vec::new();
+    let sel = match self.live_of_type(&quot;selection&quot;) {
+        Some(sel) =&gt; sel,
+        None =&gt; {
+            let ids = self.doc.next_session_ids(2);
+            let ty = |n: &amp;str| TypeId::lookup(n).expect(&quot;registered&quot;);
+            ops.push(Op::Create { id: ids[0], ty: ty(&quot;session&quot;), parent: None, order: OrderKey::first(), components: vec![] });
+            ops.push(Op::Create { id: ids[1], ty: ty(&quot;selection&quot;), parent: Some(ids[0]), order: OrderKey::first(), components: vec![] });
+            ids[1]
+        }
+    };
+    for r in self.doc.relations_from(sel).filter(|r| r.rel == RelKind::Selects) {
+        ops.push(Op::Unlink { id: r.id });
+    }
+    for ((to, data), id) in items.iter().zip(self.doc.next_session_relation_ids(items.len())) {
+        ops.push(Op::Link { rel: Relation { id, from: sel, to: *to, rel: RelKind::Selects, data: data.clone() } });
+    }
+    self.apply_session(ops)
+}</code></pre></div></div></figure>
+<p>In the app, the select tool keeps working on a per-frame copy (<code>SelectionState</code> plus its reaches), and one system keeps the copy and the record in step:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1615">src/bevy_app/select.rs</a><span class="range">lines 1615–1668</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:24"></span><span class="band" style="--from:35;--len:16"></span><pre class="gutter" aria-hidden="true">1615
+1616
+1617
+1618
+1619
+1620
+1621
+1622
+1623
+1624
+1625
+1626
+1627
+1628
+1629
+1630
+1631
+1632
+1633
+1634
+1635
+1636
+1637
+1638
+1639
+1640
+1641
+1642
+1643
+1644
+1645
+1646
+1647
+1648
+1649
+1650
+1651
+1652
+1653
+1654
+1655
+1656
+1657
+1658
+1659
+1660
+1661
+1662
+1663
+1664
+1665
+1666
+1667
+1668</pre><pre class="src"><code class="language-rust">/// The selection&#x27;s record is the store&#x27;s session tier (a `selection` node
+/// with `selects` relations, plans/panels-and-session.md); `SelectionState`
+/// and the tool&#x27;s reaches are the frame&#x27;s working copy. Whatever changed
+/// the session elsewhere (a load, the shell, later undo) is read back;
+/// otherwise a change here is written there, once per frame.
+pub fn sync_session_selection(
+    mut store: ResMut&lt;DocumentStore&gt;,
+    mut sel: ResMut&lt;crate::SelectionState&gt;,
+    mut tool: ResMut&lt;SelectTool&gt;,
+    mut seen: Local&lt;Option&lt;u64&gt;&gt;,
+) {
+    let version = store.0.session_version();
+    if seen.is_some_and(|v| v != version) {
+        let doc = store.0.document();
+        let mut reach = HashMap::default();
+        let ids: Vec&lt;NodeId&gt; = store
+            .0
+            .selection()
+            .into_iter()
+            .map(|(id, data)| {
+                let panel = data.get(&quot;panel&quot;).and_then(|v| v.as_str()).map(str::to_owned);
+                let chain: Option&lt;Vec&lt;NodeId&gt;&gt; = data.get(&quot;chain&quot;).and_then(|v| v.as_str()).map(|c| c.split(&#x27; &#x27;).filter_map(|s| s.parse().ok()).collect());
+                if let (Some(panel), Some(chain)) = (panel, chain)
+                    &amp;&amp; chain.last() == Some(&amp;id)
+                    &amp;&amp; chain.iter().all(|&amp;n| doc.live(n).is_some())
+                {
+                    reach.insert(id, Reach { panel, chain });
+                }
+                id
+            })
+            .collect();
+        if sel.selected != ids {
+            sel.selected = ids;
+        }
+        tool.reach = reach;
+    } else if sel.is_changed() {
+        let items: Vec&lt;(NodeId, std::collections::BTreeMap&lt;String, Value&gt;)&gt; = sel
+            .selected
+            .iter()
+            .map(|id| {
+                let mut data = std::collections::BTreeMap::new();
+                if let Some(r) = tool.reach.get(id) {
+                    data.insert(&quot;panel&quot;.to_owned(), Value::Str(r.panel.clone()));
+                    data.insert(&quot;chain&quot;.to_owned(), Value::Str(r.chain.iter().map(|n| n.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot; &quot;)));
+                }
+                (*id, data)
+            })
+            .collect();
+        if let Err(e) = store.0.set_selection(&amp;items) {
+            warn!(&quot;selection not recorded in the session: {e}&quot;);
+        }
+    }
+    *seen = Some(store.0.session_version());
+}</code></pre></div></div></figure>
+<p>The model now receives the selection with every request, as a <code>SELECTED</code> block before the instruction (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/agent.ts:30" title="src-ui/model/agent.ts:30"><code>agent.ts:30</code></a>), so "make the selected one red" resolves; <code>__iron.session()</code> returns it for tests.</p>
+<div class="box edge"><span class="tab">Not yet</span>
+<p>Selection in undo, Figma-style: an edit remembers the selection before and after it, and runs of selection changes merge into one undo step. The representation is ready for it; the merging isn't built. Nor is the workspace root, or the inspector as a session composition with controls bound to the target's leaves. The missing piece for that last one is <em>hosting</em>: rendering document nodes (a text field node) as HTML elements laid over the canvas at rectangles Rust computes, which the original spine plan designed (§4) and nothing has built yet.</p>
+</div>
+
+<nav class="nextprev"><a href="07-tools.html"><small>Previous</small><span>Part 7: The select tool and the pen</span></a><a class="next" href="09-ports.html"><small>Next</small><span>Part 9: Ports, connections and physics</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

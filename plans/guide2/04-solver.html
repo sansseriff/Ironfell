@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 4 · Constraints and the solver — Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="03-handles.html" aria-label="Previous part">&larr;</a><span class="here">Part 4 of 9</span><a href="05-compositions.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html" aria-current="page"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 4 of 9 · <span class="chip sys-solve">Solver & constraints</span></p>
+  <h1>Constraints and the solver</h1>
+  <p class="lede">Bindings run one way: the bar reads the slider. Many relationships in a diagram run both ways: two joints are coincident, and whichever one you drag, the other follows. This part covers roadmap stages C2 and D: a small numerical solver crate, constraint nodes in the document, the clusters they form, and the pendulum demo that drags through them.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 3: handles, previews, <code>begin_drag</code>/<code>drag_to</code>, and what a <em>driver</em> is.</div>
+    <div><b>Files</b><code>src/iron_solve/src/{lib,cluster,analysis,linalg}.rs</code>, <code>iron_document/src/{constraint,solve,lib}.rs</code>, the pendulum in <code>document_bridge/demo.rs</code>. Design: <code>plans/constraint-system.md</code>.</div>
+  </div>
+</header>
+
+<h2 id="why"><span class="sec">4.1</span>Why bindings aren't enough</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Bind everything to one master.</strong> Make joint 2's position <code>= joint 1 + 100·(cos θ, sin θ)</code>, and so on down the chain. Dragging the ball now has no handle: its position is bound to three angles, non-linearly. You can only drag the master.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>Constraints without a direction.</strong> A <code>distance</code> constraint between two joints says only that they stay 100 px apart. At every solve, whatever is being dragged is a <em>driver</em>, every other free position is a <em>variable</em>, and a numerical solver finds the nearest pose where every constraint holds.</p></div>
+</div>
+
+<h2 id="crate"><span class="sec">4.2</span><code>iron_solve</code>: a solver that knows nothing about documents</h2>
+<p>The solver is its own crate with no dependencies. It knows variables and residual functions, nothing about nodes or constraint kinds. That separation is deliberate: the adapter in <code>iron_document</code> translates, so the numerical method could be swapped without touching the document.</p>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/lib.rs:1">src/iron_solve/src/lib.rs</a><span class="range">lines 1–29</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29</pre><pre class="src"><code class="language-rust">//! `iron_solve`: a small dense constraint solver (plans/constraint-system.md §5).
+//!
+//! A [`Problem`] is a vector of variables, a characteristic scale per
+//! variable, and residual [`Term`]s in three [`Tier`]s. The solver minimises
+//! the weighted stacked residual with projected Levenberg–Marquardt steps,
+//! warm-started from the given values:
+//!
+//! - **Required** terms are the constraints. They must hold after a
+//!   successful solve. Every trial step is projected back onto them (Newton
+//!   on the required rows, minimum-norm) before it is judged, so the
+//!   iteration walks along the constraint manifold rather than fighting a
+//!   penalty weight.
+//! - **Strong** terms are drivers (a finger on a dragged point, a value a
+//!   transaction asked for). Satisfied as far as the required terms allow:
+//!   an out-of-reach finger leaves a strong residual equal to the gap.
+//! - **Weak** terms express preference. The solver adds one implicit weak
+//!   row per variable, &quot;stay where you were&quot;, which is what keeps motion
+//!   continuous and stops elbows flipping between solutions. Its weight is
+//!   small enough that a finger lands within a thousandth of a pixel.
+//!
+//! Variables are column-scaled by their characteristic size so a radian and
+//! a pixel are comparable. Jacobians are central finite differences per
+//! term, which only touch that term&#x27;s variables. Everything iterates in
+//! index order with no hashing, so the same input gives bit-identical output.
+//!
+//! The crate knows nothing about documents, nodes, or constraint kinds; the
+//! adapter in `iron_document` maps leaves to variables and kinds to residual
+//! closures. That separation (Inkling&#x27;s lesson: reduction is separable from
+//! the numerical method) is what lets the solver be swapped.</code></pre></div></div></figure>
+<p>A problem is a vector of variables, a scale per variable, and <em>terms</em>. A term is a small function over a few variables that writes residuals: numbers that are zero when the term is satisfied.</p>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/lib.rs:36">src/iron_solve/src/lib.rs</a><span class="range">lines 36–103</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:5"></span><span class="band" style="--from:20;--len:6"></span><span class="band" style="--from:39;--len:9"></span><pre class="gutter" aria-hidden="true">36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103</pre><pre class="src"><code class="language-rust">#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Tier {
+    Required,
+    Strong,
+    Weak,
+}
+
+impl Tier {
+    fn index(self) -&gt; usize {
+        match self {
+            Tier::Required =&gt; 0,
+            Tier::Strong =&gt; 1,
+            Tier::Weak =&gt; 2,
+        }
+    }
+}
+
+/// A block of residual equations over a few variables. `residual` receives
+/// the current values of `vars`, in order, and writes `len` outputs that are
+/// zero when the term is satisfied.
+pub struct Term&lt;&#x27;a&gt; {
+    pub tier: Tier,
+    pub vars: Vec&lt;usize&gt;,
+    pub len: usize,
+    pub residual: Box&lt;dyn Fn(&amp;[f64], &amp;mut [f64]) + &#x27;a&gt;,
+}
+
+impl&lt;&#x27;a&gt; Term&lt;&#x27;a&gt; {
+    pub fn new(tier: Tier, vars: impl Into&lt;Vec&lt;usize&gt;&gt;, len: usize, residual: impl Fn(&amp;[f64], &amp;mut [f64]) + &#x27;a) -&gt; Term&lt;&#x27;a&gt; {
+        Term { tier, vars: vars.into(), len, residual: Box::new(residual) }
+    }
+
+    /// Evaluate against the full variable vector.
+    pub fn eval(&amp;self, x: &amp;[f64], out: &amp;mut [f64]) {
+        let vals: Vec&lt;f64&gt; = self.vars.iter().map(|&amp;v| x[v]).collect();
+        (self.residual)(&amp;vals, out);
+    }
+}
+
+pub struct Problem&lt;&#x27;a&gt; {
+    /// Initial values: the warm start, and what the weak rows pull toward.
+    pub vars: Vec&lt;f64&gt;,
+    /// Characteristic size per variable (pixels for a position, the node&#x27;s
+    /// half-diagonal for a rotation). Steps and preferences are measured in
+    /// these units.
+    pub scale: Vec&lt;f64&gt;,
+    pub terms: Vec&lt;Term&lt;&#x27;a&gt;&gt;,
+}
+
+impl&lt;&#x27;a&gt; Problem&lt;&#x27;a&gt; {
+    pub fn new(vars: Vec&lt;f64&gt;, scale: Vec&lt;f64&gt;) -&gt; Problem&lt;&#x27;a&gt; {
+        assert_eq!(vars.len(), scale.len(), &quot;one scale per variable&quot;);
+        Problem { vars, scale, terms: Vec::new() }
+    }
+
+    /// Every variable at the same scale.
+    pub fn uniform(vars: Vec&lt;f64&gt;, scale: f64) -&gt; Problem&lt;&#x27;a&gt; {
+        let n = vars.len();
+        Problem::new(vars, vec![scale; n])
+    }
+
+    pub fn term(&amp;mut self, term: Term&lt;&#x27;a&gt;) -&gt; &amp;mut Self {
+        for &amp;v in &amp;term.vars {
+            assert!(v &lt; self.vars.len(), &quot;term references variable {v} of {}&quot;, self.vars.len());
+        }
+        self.terms.push(term);
+        self
+    }</code></pre></div></div></figure>
+<p>The three tiers do different jobs:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tier</th><th>Means</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td><code>Required</code></td><td>Must hold after a successful solve</td><td>Two joints coincide; a link is 100 px long</td></tr>
+    <tr><td><code>Strong</code></td><td>Satisfy as far as the required terms allow</td><td>The ball is under the pointer; a transaction set <code>x = 900</code></td></tr>
+    <tr><td><code>Weak</code></td><td>A preference</td><td>Stay where you were (added automatically, one per variable)</td></tr>
+  </tbody>
+</table></div>
+<p>The weak "stay where you were" rows are what make dragging feel physical: of the infinitely many poses that satisfy the constraints and put the ball under the pointer, the solver picks the one closest to the last frame, so elbows don't flip.</p>
+
+<h3 id="lm">The method: projected Levenberg–Marquardt</h3>
+<p>The solver minimises the weighted sum of squared residuals. Each iteration linearises every term (central finite differences, only over each term's own variables), solves a damped least-squares step, and then <strong>projects</strong> the trial pose back onto the required terms with a few Newton steps before judging it:</p>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/lib.rs:346">src/iron_solve/src/lib.rs</a><span class="range">lines 346–371</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">346
+347
+348
+349
+350
+351
+352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371</pre><pre class="src"><code class="language-rust">/// Solve `problem` with `opts`. Deterministic: the same problem and options
+/// give bit-identical results.
+pub fn solve(problem: &amp;Problem, opts: &amp;Options) -&gt; Solution {
+    let n = problem.vars.len();
+    let z0: Vec&lt;f64&gt; = problem.vars.iter().zip(&amp;problem.scale).map(|(x, s)| x / s).collect();
+    let mut work = Work {
+        p: problem,
+        layout: layout(problem, opts),
+        z0: z0.clone(),
+        evaluations: 0,
+        buf: Vec::new(),
+        plus: Vec::new(),
+        minus: Vec::new(),
+    };
+    let m = work.layout.rows;
+    let mut z = z0;
+    let mut iterations = 0u32;
+
+    if n &gt; 0 &amp;&amp; m &gt; 0 {
+        if opts.project {
+            work.project(&amp;mut z, opts.tolerance);
+        }
+        let mut r = vec![0.0; m];
+        let mut jac = vec![0.0; m * n];
+        work.residual(&amp;z, &amp;mut r);
+        let mut cost = 0.5 * r.iter().map(|v| v * v).sum::&lt;f64&gt;();</code></pre></div></div></figure>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/lib.rs:372">src/iron_solve/src/lib.rs</a><span class="range">lines 372–433</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:14;--len:6"></span><span class="band" style="--from:30;--len:3"></span><span class="band" style="--from:35;--len:15"></span><pre class="gutter" aria-hidden="true">372
+373
+374
+375
+376
+377
+378
+379
+380
+381
+382
+383
+384
+385
+386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433</pre><pre class="src"><code class="language-rust">    // Damping is λ·I in the scaled space, not Marquardt&#x27;s λ·diag(JᵀJ):
+    // the diagonal is dominated by the required rows, and damping in
+    // proportion to it would shrink every step along the constraint
+    // manifold, which is where the strong terms get satisfied. Columns
+    // are already comparable through `scale`, so λ is in units of
+    // weight²; it starts near the weak weight&#x27;s and grows on failure.
+    let mut lambda = 1e-4;
+    let mut a = vec![0.0; n * n];
+    let mut g = vec![0.0; n];
+    let mut r_try = vec![0.0; m];
+    let mut done = false;
+    while !done &amp;&amp; iterations &lt; opts.max_iterations {
+        iterations += 1;
+        work.jacobian(&amp;z, &amp;mut jac);
+        linalg::normal_equations(&amp;jac, &amp;r, m, n, &amp;mut a, &amp;mut g);
+        if g.iter().all(|v| v.abs() &lt; 1e-15) {
+            break;
+        }
+        let mut accepted = false;
+        for _ in 0..16 {
+            let mut damped = a.clone();
+            for j in 0..n {
+                damped[j * n + j] += lambda;
+            }
+            let rhs: Vec&lt;f64&gt; = g.iter().map(|v| -v).collect();
+            let Some(mut delta) = linalg::cholesky_solve(&amp;damped, &amp;rhs, n) else {
+                lambda *= 10.0;
+                continue;
+            };
+            if let Some(limit) = opts.step_limit {
+                let norm = delta.iter().map(|d| d * d).sum::&lt;f64&gt;().sqrt();
+                if norm &gt; limit {
+                    let k = limit / norm;
+                    delta.iter_mut().for_each(|d| *d *= k);
+                }
+            }
+            let mut z_try: Vec&lt;f64&gt; = z.iter().zip(&amp;delta).map(|(z, d)| z + d).collect();
+            if opts.project {
+                work.project(&amp;mut z_try, opts.tolerance);
+            }
+            work.residual(&amp;z_try, &amp;mut r_try);
+            let cost_try = 0.5 * r_try.iter().map(|v| v * v).sum::&lt;f64&gt;();
+            if cost_try &lt; cost {
+                let step = z_try.iter().zip(&amp;z).fold(0.0f64, |mx, (a, b)| mx.max((a - b).abs()));
+                let drop = cost - cost_try;
+                z = z_try;
+                r.copy_from_slice(&amp;r_try);
+                cost = cost_try;
+                lambda = (lambda / 3.0).max(1e-12);
+                accepted = true;
+                // Converged: the pose stopped moving (a nanometre of a
+                // scale unit) or the cost stopped falling.
+                done = step &lt; 1e-9 || drop &lt;= 1e-12 * cost.max(1e-300);
+                break;
+            }
+            lambda *= 10.0;
+        }
+        if !accepted {
+            break;
+        }
+    }
+}</code></pre></div></div></figure>
+<p>Plainly: try a step; if the cost went down, accept it and trust the model more (λ shrinks); if not, damp harder (λ grows ×10) and try again. The projection means the iteration walks along the surface where the constraints hold, rather than trading constraint error against the pointer through a penalty weight. A finger the pendulum can't reach leaves a strong residual equal to the gap, and the chain points straight at the pointer at full extension.</p>
+<div class="box rust"><span class="tab">Reading the numerics</span>
+<p><code>normal_equations</code> forms JᵀJ and Jᵀr from the Jacobian J and residuals r. <code>cholesky_solve</code> solves (JᵀJ + λI)δ = −Jᵀr. Variables are divided by their scale first, so a rotation (radians, scaled by the node's half-diagonal) and a position (pixels) are comparable. All loops run in index order without hashing, so the same input gives bit-identical output, which keeps tests and undo deterministic.</p>
+</div>
+
+<h3 id="clusters">Clusters and analysis</h3>
+<p>Terms that share no variables are independent problems. <code>cluster.rs</code> groups them with union-find, so dragging the pendulum never re-solves an unrelated mechanism:</p>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/cluster.rs:1">src/iron_solve/src/cluster.rs</a><span class="range">lines 1–29</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29</pre><pre class="src"><code class="language-rust">//! Clustering: terms that share a variable solve together, terms that do
+//! not are independent (constraint-system.md §5.3). Union-find over
+//! variables, iterated in index order so the grouping is deterministic.
+
+use crate::Term;
+
+/// Groups of term indices connected through shared variables, each sorted,
+/// ordered by their smallest term. A term with no variables is its own
+/// group.
+pub fn clusters(terms: &amp;[Term]) -&gt; Vec&lt;Vec&lt;usize&gt;&gt; {
+    let n = terms.iter().flat_map(|t| t.vars.iter().copied()).max().map_or(0, |m| m + 1);
+    let mut parent: Vec&lt;usize&gt; = (0..n).collect();
+    fn find(parent: &amp;mut [usize], mut i: usize) -&gt; usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for t in terms {
+        if let Some(&amp;first) = t.vars.first() {
+            for &amp;v in &amp;t.vars[1..] {
+                let (a, b) = (find(&amp;mut parent, first), find(&amp;mut parent, v));
+                if a != b {
+                    parent[a.max(b)] = a.min(b);
+                }
+            }
+        }
+    }</code></pre></div></div></figure>
+<p><code>analysis.rs</code> answers "how many ways can this still move?" (degrees of freedom) and, when a system can't be solved, "which constraints are to blame?". It computes the rank of the required Jacobian, then drops one term at a time and re-tests (SolveSpace's method). That's where the error message <em>likely at fault: #c3, #c4</em> comes from.</p>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/analysis.rs:7">src/iron_solve/src/analysis.rs</a><span class="range">lines 7–21</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Analysis {
+    /// Rank of the required rows&#x27; Jacobian at the given pose.
+    pub rank: usize,
+    /// Variables minus rank: how many ways the pose can still move.
+    pub dof: usize,
+    /// Required terms whose rows depend on the others and that hold at the
+    /// pose: harmless duplicates. SolveSpace&#x27;s &quot;drop one and re-test rank&quot;.
+    pub redundant: Vec&lt;usize&gt;,
+    /// Required terms whose rows depend on the others and that do *not*
+    /// hold at the pose: the culprits of an unsatisfiable system. Every
+    /// member of a mutually conflicting set is listed, since removing any
+    /// one of them would resolve it.
+    pub conflicting: Vec&lt;usize&gt;,
+}</code></pre></div></div></figure>
+
+<h2 id="document"><span class="sec">4.3</span>Constraints in the document</h2>
+<p>A constraint is an ordinary node: a <code>constraint</code> component (kind, value, enabled) and one <code>constrains</code> relation per operand. The relation's data carries the operand's <em>role</em> and its <em>anchor</em>, a point in the operand's local space:</p>
+<figure class="plainfig"><figcaption>The hinge between the platform and the first joint</figcaption><pre class="plain"><code class="language-plaintext">constraint &quot;hinge&quot;   kind=coincident
+  constrains → #platform   role=a  anchor=80,20    (the platform&#x27;s bottom centre)
+  constrains → #joint0     role=b  anchor=0,0</code></pre></figure>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/constraint.rs:21">src/iron_document/src/constraint.rs</a><span class="range">lines 21–40</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40</pre><pre class="src"><code class="language-rust">#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConstraintSpec {
+    pub kind: &amp;&#x27;static str,
+    /// Operand roles, each required exactly once.
+    pub roles: &amp;&#x27;static [&amp;&#x27;static str],
+    /// Whether `constraint.value` means anything (a distance, an angle).
+    pub uses_value: bool,
+    /// Residual equations the kind contributes.
+    pub equations: usize,
+}
+
+pub const KINDS: &amp;[ConstraintSpec] = &amp;[
+    ConstraintSpec { kind: &quot;coincident&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: false, equations: 2 },
+    ConstraintSpec { kind: &quot;distance&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: true, equations: 1 },
+    ConstraintSpec { kind: &quot;pin&quot;, roles: &amp;[&quot;a&quot;], uses_value: false, equations: 2 },
+    ConstraintSpec { kind: &quot;fix&quot;, roles: &amp;[&quot;a&quot;], uses_value: false, equations: 0 },
+    ConstraintSpec { kind: &quot;angle&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: true, equations: 1 },
+    ConstraintSpec { kind: &quot;horizontal&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: false, equations: 1 },
+    ConstraintSpec { kind: &quot;vertical&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: false, equations: 1 },
+];</code></pre></div></div></figure>
+<p>The vocabulary is code, like node types. A <code>value</code> can be bound: the pendulum's three <code>distance</code> constraints read <code>value = #length.slider.value · 100</code>, a <em>driving dimension</em>. Validation rejects malformed constraints and duplicates (two constraints of one kind over the same anchored operands) with an explicit error, because the main author of constraints is going to be a model, and an error teaches more than silent merging.</p>
+
+<h2 id="adapter"><span class="sec">4.4</span>The adapter: leaves become variables</h2>
+<p><code>solve.rs</code> decides, per solve, what is a variable and what is known:</p>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:1">src/iron_document/src/solve.rs</a><span class="range">lines 1–10</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10</pre><pre class="src"><code class="language-rust">//! The adapter between constraints in the document and `iron_solve`
+//! (constraint-system.md §3, §5–8).
+//!
+//! Roles are assigned per solve: a leaf of an operand node is a *variable*
+//! unless its node carries a `fix` constraint, its slot is bound, or a clip
+//! drives it now; everything else the residuals read is a *known*, taken
+//! through the same reader the reactive graph uses. Constraints connected
+//! through shared operand nodes form a *cluster*, solved as one problem.
+//! Drivers (a transaction&#x27;s explicit `Set`, or a finger during a drag) are
+//! strong terms; the implicit least-change rows keep the rest still.</code></pre></div></div></figure>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:118">src/iron_document/src/solve.rs</a><span class="range">lines 118–122</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">118
+119
+120
+121
+122</pre><pre class="src"><code class="language-rust">fn is_free(doc: &amp;Document, reactive: &amp;crate::graph::Reactive, leaf: Leaf) -&gt; bool {
+    doc.leaf(leaf.node, leaf.path).is_some_and(|s| s.constant().is_some())
+        &amp;&amp; !reactive.is_bound(leaf)
+        &amp;&amp; !reactive.animated().contains_key(&amp;leaf)
+}</code></pre></div></div></figure>
+<p>A leaf is free if it holds a constant, isn't bound, and no clip drives it right now. Each operand node contributes its free <code>x</code>, <code>y</code> and <code>rot</code>. Constraints connected through shared nodes form one cluster. Then each kind becomes a residual closure:</p>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:358">src/iron_document/src/solve.rs</a><span class="range">lines 358–430</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:14;--len:13"></span><span class="band" style="--from:48;--len:5"></span><span class="band" style="--from:54;--len:17"></span><pre class="gutter" aria-hidden="true">358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376
+377
+378
+379
+380
+381
+382
+383
+384
+385
+386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430</pre><pre class="src"><code class="language-rust">    let b = Builder { doc, read, var_index };
+
+    for c in &amp;cluster.constraints {
+        let kind = c.spec.kind;
+        if kind == &quot;fix&quot; || Some(c.id) == exclude {
+            continue;
+        }
+        let mut locals = Vec::new();
+        let poses: Vec&lt;(Pose, [f64; 2])&gt; = c.operands.iter().map(|o| (b.pose(o.node, &amp;mut locals), o.anchor)).collect();
+        // Read now, not when the cluster was built: a driving dimension bound
+        // to a slider changes between solves.
+        let value = read(constraint::value_leaf(c.id)).and_then(|v| v.as_f64()).unwrap_or(c.value);
+        let at = c.operands[0].at;
+        let term = match kind {
+            &quot;coincident&quot; =&gt; Term::new(Tier::Required, locals, 2, move |v, r| {
+                let p = poses[0].0.point(v, poses[0].1);
+                let q = poses[1].0.point(v, poses[1].1);
+                r[0] = p[0] - q[0];
+                r[1] = p[1] - q[1];
+            }),
+            &quot;distance&quot; =&gt; Term::new(Tier::Required, locals, 1, move |v, r| {
+                let p = poses[0].0.point(v, poses[0].1);
+                let q = poses[1].0.point(v, poses[1].1);
+                r[0] = (p[0] - q[0]).hypot(p[1] - q[1]) - value;
+            }),
+            &quot;pin&quot; =&gt; {
+                let at = at.unwrap_or([0.0, 0.0]);
+                Term::new(Tier::Required, locals, 2, move |v, r| {
+                    let p = poses[0].0.point(v, poses[0].1);
+                    r[0] = p[0] - at[0];
+                    r[1] = p[1] - at[1];
+                })
+            }
+            &quot;angle&quot; =&gt; Term::new(Tier::Required, locals, 1, move |v, r| {
+                r[0] = wrap_angle(poses[1].0.rotation(v) - poses[0].0.rotation(v) - value);
+            }),
+            &quot;horizontal&quot; =&gt; Term::new(Tier::Required, locals, 1, move |v, r| {
+                r[0] = poses[0].0.point(v, poses[0].1)[1] - poses[1].0.point(v, poses[1].1)[1];
+            }),
+            &quot;vertical&quot; =&gt; Term::new(Tier::Required, locals, 1, move |v, r| {
+                r[0] = poses[0].0.point(v, poses[0].1)[0] - poses[1].0.point(v, poses[1].1)[0];
+            }),
+            _ =&gt; continue,
+        };
+        problem.term(term);
+        tags.push(Tag::Constraint(c.id));
+    }
+    for d in drivers {
+        if let Some(&amp;i) = b.var_index.get(&amp;d.leaf) {
+            let requested = d.requested;
+            problem.term(Term::new(Tier::Strong, vec![i], 1, move |v, r| r[0] = v[0] - requested));
+            tags.push(Tag::Driver(d.leaf));
+        }
+    }
+    for f in fingers {
+        if !cluster.nodes.contains(&amp;f.node) {
+            continue;
+        }
+        let mut locals = Vec::new();
+        let pose = b.pose(f.node, &amp;mut locals);
+        if locals.is_empty() {
+            continue;
+        }
+        let (anchor, target) = (f.anchor, f.target);
+        problem.term(Term::new(Tier::Strong, locals, 2, move |v, r| {
+            let p = pose.point(v, anchor);
+            r[0] = p[0] - target[0];
+            r[1] = p[1] - target[1];
+        }));
+        tags.push(Tag::Finger(f.node));
+    }
+    (problem, tags)
+}</code></pre></div></div></figure>
+<p>Every residual is written in world positions (<code>pose.point(v, anchor)</code>, which uses Part 3's world transforms), so a joint inside a rotated group is constrained where it actually is. Lines 406–410 turn a transaction's <code>Set</code> into a strong "be this value" term; lines 412–428 turn a drag's <em>finger</em> into a strong "this anchor is at the pointer" term.</p>
+
+<h2 id="when"><span class="sec">4.5</span>When the solver runs</h2>
+<p>Two moments, with different rules for what is written:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th></th><th>During a drag</th><th>When a transaction applies</th></tr></thead>
+  <tbody>
+    <tr><td>Called from</td><td><code>resolve_clusters_live</code>, after every preview</td><td><code>post_apply</code>, after every transaction</td></tr>
+    <tr><td>Drivers</td><td>Fingers</td><td>The transaction's own <code>Set</code>s</td></tr>
+    <tr><td>Writes</td><td>Previews (the overlay)</td><td><code>Set</code> ops, recorded as the transaction's <code>derived_ops</code></td></tr>
+    <tr><td>On failure</td><td>Keep the last good pose</td><td>Reject the transaction, naming the culprits</td></tr>
+  </tbody>
+</table></div>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:218">src/iron_document/src/lib.rs</a><span class="range">lines 218–248</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:18;--len:11"></span><pre class="gutter" aria-hidden="true">218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248</pre><pre class="src"><code class="language-rust">/// Re-solve every cluster from the current resolved values, with the
+/// active fingers, previewing the results. Used during gestures and when
+/// the playhead moves a cluster&#x27;s input.
+fn resolve_clusters_live(&amp;mut self) -&gt; SolveReport {
+    let mut report = SolveReport { converged: true, ..Default::default() };
+    if self.clusters.list.is_empty() {
+        return report;
+    }
+    let clusters = self.clusters.list.clone();
+    for c in &amp;clusters {
+        let result = {
+            let read = |l: Leaf| self.reactive.read(&amp;self.doc, l);
+            solve::solve_cluster(&amp;self.doc, &amp;read, c, &amp;[], &amp;self.fingers)
+        };
+        report.clusters += 1;
+        report.vars += c.vars.len();
+        report.iterations += result.iterations;
+        report.evaluations += result.evaluations;
+        if result.status != iron_solve::Status::Converged {
+            // Keep the previous pose rather than show a jump (CS §5.5).
+            report.converged = false;
+            continue;
+        }
+        for (leaf, v) in result.values {
+            let value = Value::Number(v);
+            if self.reactive.read(&amp;self.doc, leaf) != Some(value.clone()) {
+                self.reactive.preview(&amp;self.doc, leaf, value);
+            }
+        }
+    }
+    report</code></pre></div></div></figure>
+<p>Solve-on-apply is what keeps the document consistent no matter who edits it. A model edit that sets the ball's <code>x</code> to 900 is a driver; the solver moves the joints, and their new positions are recorded as derived ops on the same transaction, so one undo puts everything back:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:814">src/iron_document/src/lib.rs</a><span class="range">lines 814–889</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:23;--len:11"></span><span class="band" style="--from:46;--len:16"></span><span class="band" style="--from:68;--len:4"></span><pre class="gutter" aria-hidden="true">814
+815
+816
+817
+818
+819
+820
+821
+822
+823
+824
+825
+826
+827
+828
+829
+830
+831
+832
+833
+834
+835
+836
+837
+838
+839
+840
+841
+842
+843
+844
+845
+846
+847
+848
+849
+850
+851
+852
+853
+854
+855
+856
+857
+858
+859
+860
+861
+862
+863
+864
+865
+866
+867
+868
+869
+870
+871
+872
+873
+874
+875
+876
+877
+878
+879
+880
+881
+882
+883
+884
+885
+886
+887
+888
+889</pre><pre class="src"><code class="language-rust">/// What needs the whole transaction in place (constraint-system.md §7):
+/// every constraint is well formed, bindings and clusters form no cycle,
+/// and every cluster is solved, with leaves this transaction set treated
+/// as drivers. The solver&#x27;s writes are applied and recorded as
+/// `derived_ops`. Runs on the committed document; the caller rolls back
+/// on `Err`.
+fn post_apply(&amp;mut self, tx: &amp;mut Transaction, exact: bool) -&gt; Result&lt;Option&lt;SolverSummary&gt;, Vec&lt;ApplyError&gt;&gt; {
+    let last = tx.ops.len().saturating_sub(1);
+    let err = |kind: ErrorKind, message: String| vec![ApplyError { op: last, kind, message }];
+    {
+        let read = |l: Leaf| self.reactive.read(&amp;self.doc, l);
+        constraint::validate_all(&amp;self.doc, &amp;read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
+    }
+    let clusters = solve::clusters(&amp;self.doc, &amp;self.reactive).map_err(|m| err(ErrorKind::Cycle, m))?;
+    self.clusters = clusters.clone();
+    if clusters.list.is_empty() {
+        return Ok(None);
+    }
+    let drivers: Vec&lt;solve::Driver&gt; = tx
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Set { id, path, slot } =&gt; slot.constant().and_then(|v| v.as_f64()).map(|requested| solve::Driver {
+                leaf: Leaf { node: *id, path: *path },
+                requested,
+            }),
+            _ =&gt; None,
+        })
+        .collect();
+    let mut summary = SolverSummary::default();
+    for c in &amp;clusters.list {
+        let result = {
+            let read = |l: Leaf| self.reactive.read(&amp;self.doc, l);
+            solve::solve_cluster(&amp;self.doc, &amp;read, c, &amp;drivers, &amp;self.fingers)
+        };
+        if result.status != iron_solve::Status::Converged {
+            let names: Vec&lt;String&gt; = result.culprits.iter().map(|c| c.to_string()).collect();
+            return Err(err(
+                ErrorKind::Unsatisfiable,
+                format!(
+                    &quot;constraints of cluster {} cannot all hold (residual {:.3e}); likely at fault: {}&quot;,
+                    c.id,
+                    result.max_required_residual,
+                    if names.is_empty() { &quot;unknown&quot;.to_owned() } else { names.join(&quot;, &quot;) }
+                ),
+            ));
+        }
+        let mut changed = Vec::new();
+        for (leaf, v) in result.values {
+            let current = self.doc.leaf(leaf.node, leaf.path).and_then(|s| s.constant()).and_then(|x| x.as_f64());
+            if current.is_some_and(|c| (c - v).abs() &lt; 1e-9) {
+                continue;
+            }
+            let op = Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Const(Value::Number(v)) };
+            let inverse = op::apply_op(&amp;mut self.doc, last, &amp;op, tx.version).map_err(|e| vec![e])?;
+            tx.derived_ops.push(op);
+            tx.inverse.extend(inverse);
+            changed.push(leaf);
+            if !summary.moved.contains(&amp;leaf.node) {
+                summary.moved.push(leaf.node);
+            }
+        }
+        if !changed.is_empty() || !result.unmet.is_empty() {
+            summary.clusters.push(c.id);
+        }
+        self.reactive.invalidate(&amp;self.doc, changed);
+        summary.unmet.extend(result.unmet);
+    }
+    if exact &amp;&amp; !summary.unmet.is_empty() {
+        let lines: Vec&lt;String&gt; = summary.unmet.iter().map(|u| format!(&quot;{} requested {} but constraints allow {}&quot;, u.leaf, crate::value::fmt_num(u.requested), crate::value::fmt_num(u.solved))).collect();
+        return Err(err(ErrorKind::Unsatisfiable, format!(&quot;exact transaction not honoured: {}&quot;, lines.join(&quot;; &quot;))));
+    }
+    // Drivers that are not variables of any cluster were plain sets;
+    // only a moved node is a cause worth telling the model about.
+    Ok((!summary.is_empty()).then_some(summary))
+}</code></pre></div></div></figure>
+<p>Two refinements matter for the model. The returned <code>SolverSummary</code> reports causes, not every changed value: which clusters re-solved, which nodes moved, and any request the solver couldn't honour (<code>&lt;unmet&gt;</code>). And <code>exact: true</code> on a transaction turns an unmet request into a rejection instead of an adjustment, for edits that must land exactly or not at all.</p>
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:68">src/iron_document/src/solve.rs</a><span class="range">lines 68–91</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91</pre><pre class="src"><code class="language-rust">/// A requested value the solver could not honour.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Unmet {
+    pub leaf: String,
+    pub requested: f64,
+    pub solved: f64,
+    pub reason: String,
+}
+
+/// What the model is told about a transaction&#x27;s solve (§9): causes, not
+/// every inferred value.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SolverSummary {
+    pub clusters: Vec&lt;NodeId&gt;,
+    pub moved: Vec&lt;NodeId&gt;,
+    #[serde(default, skip_serializing_if = &quot;Vec::is_empty&quot;)]
+    pub unmet: Vec&lt;Unmet&gt;,
+}
+
+impl SolverSummary {
+    pub fn is_empty(&amp;self) -&gt; bool {
+        self.clusters.is_empty() &amp;&amp; self.moved.is_empty() &amp;&amp; self.unmet.is_empty()
+    }
+}</code></pre></div></div></figure>
+<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:697" title="src/iron_document/src/lib.rs:697"><code>lib.rs:697</code></a>).</p>
+
+<h2 id="pendulum"><span class="sec">4.6</span>The pendulum</h2>
+<p>The demo that exercises all of it lives in the Pendulum tab (and in Main, through its embed; Part 5):</p>
+<figure class="plainfig"><figcaption>The pendulum, as nodes</figcaption><pre class="plain"><code class="language-plaintext">group &quot;pendulum&quot;
+  rect   platform              fixed by a `fix` constraint
+  circle j0, j1, j2            joints (free x, y)
+  circle ball                  free x, y
+  rect   arm1..arm3            x, y, rot BOUND to the joints they connect (bindings read solved positions)
+  rect   height                h bound to 640 − ball.y
+  slider length                0.5–1.5
+  constraint fix(platform), coincident(platform@80,20 ~ j0),
+             distance(j0, j1) = length·100, distance(j1, j2) = …, distance(j2, ball) = …</code></pre></figure>
+<p>Dragging the ball places a finger on it; every frame the cluster re-solves and the joints move; the arms, being bindings over the joints' solved positions, follow in the same pass; the height bar follows the ball. Dragging an arm does nothing, with the reason logged: its position is bound to four free leaves, so it has no handle (Part 3). Moving the <code>fix</code> from the platform to the ball (a model edit) turns the mechanism around: now the platform drags and the ball stays put. Each frame logs <code>solve: cluster #V, 12 vars, N iterations, M evaluations, T ms</code>; T is well under the 2 ms budget.</p>
+
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>After dragging the platform toward its reach limit, the committed pose is sometimes a hair short of the solver's fixed point. The next unrelated transaction then re-solves and nudges the platform by a fraction of a pixel, which shows up in the smoke log as <code>"link" by Human: cluster #V re-solved; moved 1 node(s): #W</code>. Harmless, and documented in <code>SKILL.md</code>, but it's solver tolerance leaking into history. A second open item: <code>iron_solve</code>'s test <code>three_link_chain_reaches_a_target</code> fails at its 50-iteration cap, noted in <code>constraint-system.md</code> §14.</p>
+</div>
+
+<nav class="nextprev"><a href="03-handles.html"><small>Previous</small><span>Part 3: Drags through the store</span></a><a class="next" href="05-compositions.html"><small>Next</small><span>Part 5: Compositions, figures and embeds</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

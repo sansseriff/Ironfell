@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="01-orientation.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html" aria-current="page"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">A guide in nine parts, plus a field guide</p>
+  <h1>Iron, Part Two</h1>
+  <p class="lede">Guide 1 explained the document spine: the scene moved out of Bevy into a store with ids, typed values, ops and undo. This guide picks up there and covers everything built on top of it between October 10 and 12: units and definitions, drags that run through the store, a constraint solver, compositions that nest inside each other, a renderer where every view is a texture, Figma's select tool and a pen, a dock of tabs and a session tier, and ports that wire a laser to a fiber to a meter.</p>
+  <div class="prereq">
+    <div><b>Written for</b>You, reading offline. You know the project and its vision documents, and you've read guide 1 (<code>plans/guide/</code>) or know what it covers.</div>
+    <div><b>How to read it</b>In order. Part 1 is the map. Parts 2–4 are the store; 5–8 are what you see and touch; Part 9 wires entities together and draws on most of the parts before it.</div>
+    <div><b>What it covers</b>52 commits, <code>5ee0b93</code> to <code>480c15b</code> on branch <code>document-spine</code>: roadmap stages A, B, C1, C2, D, E and F steps 1–3, plus embeds, view textures, the dock and the session.</div>
+  </div>
+</header>
+
+<h2 id="parts">The parts</h2>
+<ol class="parts">
+  <li><a href="01-orientation.html"><span class="n">1</span><span class="ttl">Where things stand now</span><span class="sub">The four layers in one picture. The stages in the order they landed. The nine systems and where they live. One drag on a power meter traced through every part. The new vocabulary.</span><span class="meta"><span class="chip sys-shell">every system, lightly</span></span></a></li>
+  <li><a href="02-values.html"><span class="n">2</span><span class="ttl">Richer values and definitions</span><span class="sub">Quantities that refuse <code>mW + nm</code>, records, interned run-time field names, and definitions as data: parameters, templates and entities.</span><span class="meta"><span class="chip sys-store">Document model</span></span></a></li>
+  <li><a href="03-handles.html"><span class="n">3</span><span class="ttl">Drags through the store</span><span class="sub">World transforms computed in the store. Handles that invert a binding so dragging a bound shape moves its source. Previews, and the same-frame reconcile that keeps them from lagging.</span><span class="meta"><span class="chip sys-react">Bindings &amp; handles</span></span></a></li>
+  <li><a href="04-solver.html"><span class="n">4</span><span class="ttl">Constraints and the solver</span><span class="sub"><code>iron_solve</code>'s projected Levenberg–Marquardt, constraint nodes, clusters, fingers, solve-on-apply, and the pendulum.</span><span class="meta"><span class="chip sys-solve">Solver &amp; constraints</span></span></a></li>
+  <li><a href="05-compositions.html"><span class="n">5</span><span class="ttl">Compositions, figures and embeds</span><span class="sub">One thing drawn in many diagrams. A panel per composition. Cross-highlighting, Link and the merge question. Compositions inside compositions: 2D in 2D, 3D in 2D, 2D on a plane.</span><span class="meta"><span class="chip sys-comp">Compositions</span><span class="chip sys-render">Rendering</span></span></a></li>
+  <li><a href="06-rendering.html"><span class="n">6</span><span class="ttl">Every view is a texture</span><span class="sub">Why every camera used to pay for the whole window. Views as retained textures, render on demand, 3D inside 2D, plane densities, and two one-frame latency fixes.</span><span class="meta"><span class="chip sys-render">Rendering</span></span></a></li>
+  <li><a href="07-tools.html"><span class="n">7</span><span class="ttl">The select tool and the pen</span><span class="sub">Figma's selection rule over hit chains, the transform box and how a resize becomes leaf values, paths stored as point nodes, the pen, and the first inspector.</span><span class="meta"><span class="chip sys-tools">Select &amp; pen</span><span class="chip sys-shell">Shell &amp; views</span></span></a></li>
+  <li><a href="08-workspace.html"><span class="n">8</span><span class="ttl">The workspace and the session</span><span class="sub">A panel is a view: a source plus a notation. dockview, pointer events over a canvas, pan and zoom per view, and the session tier where the selection lives as relations.</span><span class="meta"><span class="chip sys-shell">Shell &amp; views</span><span class="chip sys-store">Document model</span></span></a></li>
+  <li><a href="09-ports.html"><span class="n">9</span><span class="ttl">Ports, connections and physics</span><span class="sub">One-way signals derived from connections and inverted by drags; across/through pairs solved as equations into a physics layer. The optics and thermal demos.</span><span class="meta"><span class="chip sys-ports">Ports &amp; physics</span></span></a></li>
+  <li><a href="10-field-guide.html"><span class="n">&#8981;</span><span class="ttl">Field guide</span><span class="sub">A searchable index of the functions, types, systems and exports added since guide 1, with file and line.</span><span class="meta"><span class="chip sys-store">all systems</span></span></a></li>
+</ol>
+
+<h2 id="legend">What the marks mean</h2>
+<p>Every code excerpt is copied from the working tree when the pages are built, with its real line numbers, so it matches commit <code>480c15b</code>. Captions and <a class="ref" href="#legend"><code>file.rs:123</code></a>-style references are <code>vscode://</code> links: on your machine they open the file at that line. Highlighted bands inside a code block mark the lines the text is talking about.</p>
+<p>Each excerpt carries a coloured chip naming its system:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>System</th><th>One line</th><th>Mostly in</th></tr></thead>
+  <tbody>
+    <tr><td><span class="chip sys-store">Document model</span></td><td>What is stored, how it changes, and the session tier</td><td>Part 2, 8</td></tr>
+    <tr><td><span class="chip sys-react">Bindings &amp; handles</span></td><td>Derived values, and where an edit lands</td><td>Part 3</td></tr>
+    <tr><td><span class="chip sys-solve">Solver &amp; constraints</span></td><td>Undirected relationships, solved numerically</td><td>Part 4</td></tr>
+    <tr><td><span class="chip sys-comp">Compositions</span></td><td>Diagrams, figures, embeds</td><td>Part 5</td></tr>
+    <tr><td><span class="chip sys-render">Rendering</span></td><td>Views as textures</td><td>Part 6</td></tr>
+    <tr><td><span class="chip sys-tools">Select &amp; pen</span></td><td>Gestures over hit chains</td><td>Part 7</td></tr>
+    <tr><td><span class="chip sys-shell">Shell &amp; views</span></td><td>The wasm boundary, the dock, HTML views</td><td>Part 8</td></tr>
+    <tr><td><span class="chip sys-ports">Ports &amp; physics</span></td><td>Wiring entities together</td><td>Part 9</td></tr>
+    <tr><td><span class="chip sys-model">Model surface</span></td><td>Claude reads views and writes ops</td><td>guide 1, Part 7</td></tr>
+  </tbody>
+</table></div>
+<p>Four kinds of box recur, as in guide 1:</p>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p>What you might build first, and where it breaks. Most sections open with one.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p>The design that shipped, and the problem each extra piece solves.</p></div>
+  <div class="box rust"><span class="tab">Reading the code</span><p>A slower walk through a dense piece, or the reasoning behind a choice that isn't visible in the code.</p></div>
+  <div class="box edge"><span class="tab">Rough edge</span><p>Something that works but that you should know about: a stale comment, a missing piece, a known failure.</p></div>
+</div>
+
+<h2 id="offline">Reading it offline</h2>
+<p>Everything these pages need is in this folder: the stylesheet, the script and the syntax highlighter (<code>highlight.min.js</code>) are local files. Open <code>plans/guide2/index.html</code> in a browser and read. Without a network connection the text falls back from its web fonts to system ones, and nothing else changes. The <code>vscode://</code> links only work on a machine with this repository and VS Code.</p>
+<p>The sources are in <code>_src/</code>. If the code changes, <code>python3 plans/guide2/_src/build.py</code> regenerates every page, and fails if a reference no longer points at the line it describes.</p>
+
+<nav class="nextprev"><a class="next" href="01-orientation.html"><small>Next</small><span>Part 1: Where things stand now</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

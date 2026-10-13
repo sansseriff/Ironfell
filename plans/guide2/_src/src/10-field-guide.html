@@ -1,0 +1,33 @@
+<header class="chapter-head">
+  <p class="kicker">Reference</p>
+  <h1>Field guide</h1>
+  <p class="lede">The functions, types, Bevy systems and wasm exports added since guide 1, with the system each belongs to, where it lives, what it does, and the part that explains it. Type part of a name or a word from the description. Click a system chip to show only that system. For anything from the original spine (ops, transactions, the reconciler, clips), see guide 1's field guide.</p>
+</header>
+
+<div class="finder">
+  <label for="finder-q" class="kicker" style="display:block;margin-bottom:6px">Search</label>
+  <input id="finder-q" type="search" placeholder="e.g. handle, cluster, embed, preview, session, port…" autocomplete="off">
+  <div class="filters" role="group" aria-label="Filter by system">
+    <button type="button" class="chip sys-store" data-sys="store" aria-pressed="true">Document model</button>
+    <button type="button" class="chip sys-react" data-sys="react" aria-pressed="true">Bindings &amp; handles</button>
+    <button type="button" class="chip sys-solve" data-sys="solve" aria-pressed="true">Solver &amp; constraints</button>
+    <button type="button" class="chip sys-comp" data-sys="comp" aria-pressed="true">Compositions</button>
+    <button type="button" class="chip sys-render" data-sys="render" aria-pressed="true">Rendering</button>
+    <button type="button" class="chip sys-tools" data-sys="tools" aria-pressed="true">Select &amp; pen</button>
+    <button type="button" class="chip sys-ports" data-sys="ports" aria-pressed="true">Ports &amp; physics</button>
+    <button type="button" class="chip sys-shell" data-sys="shell" aria-pressed="true">Shell &amp; views</button>
+  </div>
+  <p class="count" id="finder-count" aria-live="polite"></p>
+</div>
+
+<div class="table-wrap wide" style="max-width:none">
+<table class="guide">
+  <thead><tr><th>Name</th><th>System</th><th>Where</th><th>What it does</th><th>Explained</th></tr></thead>
+  <tbody>
+<!--GUIDE-ROWS-->
+  </tbody>
+</table>
+</div>
+
+<h2 id="how-to-place">Placing something that isn't listed</h2>
+<p>Private helpers, tests and trait implementations are left out. To place any other name, look at its file: the system table in <a href="01-orientation.html#map">Part 1</a> covers every file. Rules of thumb: a function taking <code>&amp;Document</code> and returning ops is the store deciding what an edit means; one whose parameters are <code>Res</code>, <code>ResMut</code>, <code>Query</code> or <code>Commands</code> is a Bevy system; a <code>pub fn</code> in <code>web_ffi.rs</code> is called from TypeScript through the worker.</p>

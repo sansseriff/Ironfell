@@ -1,0 +1,845 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 7 · The select tool and the pen — Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="06-rendering.html" aria-label="Previous part">&larr;</a><span class="here">Part 7 of 9</span><a href="08-workspace.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html" aria-current="page"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 7 of 9 · <span class="chip sys-tools">Select & pen</span> <span class="chip sys-shell">Shell & views</span></p>
+  <h1>The select tool and the pen</h1>
+  <p class="lede">You asked for Figma's semantics: its selection rules, its drag, its transform box, its pen. This part covers roadmap stage E as built: how a click picks a node out of a nested scene, how resizing and rotating become leaf values, how a path is stored as point nodes, and the first inspector. Everything here is a gesture in the sense of Part 3: it previews through the store and commits once.</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 3 (previews, <code>begin_drag</code>), Part 5 (hit chains, embeds).</div>
+    <div><b>Files</b><code>bevy_app/{select,pen,picking,pointer}.rs</code>, <code>document_bridge/materialize.rs</code> (paths), <code>web_ffi.rs</code> (inspector), <code>src-ui/views/html/SelectionView.svelte</code>, <code>src-ui/runtime/input_manager.ts</code>. Record: <code>plans/select-tool.md</code>.</div>
+  </div>
+</header>
+
+<h2 id="select"><span class="sec">7.1</span>Which node does a click select?</h2>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1">src/bevy_app/select.rs</a><span class="range">lines 1–20</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20</pre><pre class="src"><code class="language-rust">//! The select tool (roadmap stage E): Figma&#x27;s selection, drag and transform
+//! semantics over the document&#x27;s compositions (plans/select-tool.md).
+//!
+//! Every hit carries its *chain*: the nodes from the panel composition&#x27;s top
+//! level down to the hit node, through groups and embeds. A click selects
+//! one node along it: the outermost one whose container is not *open*. A
+//! container is open while something inside it is selected (so a sibling of
+//! the selection is one click away), and a top-level embed is always open,
+//! like a top-level frame in Figma: its contents select directly and its
+//! background selects the embed. Cmd/Ctrl-click selects the hit node itself;
+//! a double-click enters one level; Shift adds or removes.
+//!
+//! Pressing a selected node, or inside the selection&#x27;s box, drags the whole
+//! selection through `Store::begin_drag`. The box&#x27;s corners and edges resize
+//! (Shift keeps the aspect, Alt resizes about the centre), just outside a
+//! corner rotates (Shift snaps to 15°). Every gesture previews through the
+//! store and closes as one transaction; none of the box is document state.
+//!
+//! Gestures this tool does not draw a box for keep their own paths in
+//! `interaction`: dragging meshes in 3D, content on planes in 3D, sliders.</code></pre></div></div></figure>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Select whatever is under the pointer.</strong> The innermost shape always wins. You can never select a group by clicking it, and dragging one arm of the pendulum drags just that arm out of the mechanism.</p></div>
+  <div class="box built"><span class="tab">What was built (Figma's rule)</span><p><strong>Select the outermost node whose container isn't open.</strong> A group is closed until you enter it; once something inside is selected, the group is open, so siblings are one click away. Cmd/Ctrl-click selects the innermost node directly. A double-click enters one level.</p></div>
+</div>
+<p>Part 5 showed that every pointer hit carries its <em>chain</em>: the nodes from the panel's top level down through groups and embeds to the hit node. Choosing a node is choosing an index into that chain:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:467">src/bevy_app/select.rs</a><span class="range">lines 467–480</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">467
+468
+469
+470
+471
+472
+473
+474
+475
+476
+477
+478
+479
+480</pre><pre class="src"><code class="language-rust">/// Which node along `chain` a press selects: the outermost one whose
+/// container is not open (or the hit node itself, `deep`).
+fn target_index(doc: &amp;iron_document::Document, chain: &amp;[NodeId], selected: &amp;[&amp;Reach], deep: bool) -&gt; usize {
+    if deep {
+        return chain.len() - 1;
+    }
+    for i in 0..chain.len() {
+        let open = (i == 0 &amp;&amp; nest::is_embed(doc, chain[0])) || selected.iter().any(|r| r.chain.len() &gt; i + 1 &amp;&amp; r.chain[..=i] == chain[..=i]);
+        if !open {
+            return i;
+        }
+    }
+    chain.len() - 1
+}</code></pre></div></div></figure>
+<p>Index 0 is the top level. A container at depth <code>i</code> is open if some selected node's chain passes through it. The one extra rule is the first clause: <strong>a top-level embed is always open</strong>, like a top-level frame in Figma (an artboard). That rule was forced by the demo: the whole scene sits inside one embed in Main, so without it every click would select "scene view". With it, clicking a rect selects the rect, clicking the embed's empty background selects the embed, and the pendulum (a group inside its own embed) selects as a whole.</p>
+<figure class="plainfig"><figcaption>The pendulum's ball, clicked in Main</figcaption><pre class="plain"><code class="language-plaintext">chain:  [pendulum view (embed), pendulum (group), ball]
+         index 0: top-level embed → open
+         index 1: group, nothing inside selected → closed → select the group
+double-click: the group is selected → enter → select the ball
+Cmd-click:    select the ball directly
+Esc:          up one level (ball → group → embed → nothing)</code></pre></figure>
+
+<h3 id="press">What a press does</h3>
+<p>A press has to be decided before anyone knows whether it's a click or a drag. The tool records a <code>Press</code> with what a click would do on release, and what a drag would become if the pointer travels more than three pixels:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:109">src/bevy_app/select.rs</a><span class="range">lines 109–125</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125</pre><pre class="src"><code class="language-rust">#[derive(Default)]
+enum Gesture {
+    #[default]
+    Idle,
+    /// Pressed, not yet dragged: a click if released here.
+    Press { panel: String, start: Vec2, then: AfterPress },
+    Move { label: String, start: Point, view: PanelView, drags: Vec&lt;(DragHandle, Affine)&gt; },
+    Transform { label: String, view: PanelView, kind: TransformKind, frame: Affine, start: Point, parts: Vec&lt;Part&gt;, rot0: Option&lt;f64&gt; },
+    Marquee { view: PanelView, start: Point, prefix: Vec&lt;NodeId&gt;, roots: Vec&lt;NodeId&gt;, base: Vec&lt;Reach&gt; },
+    /// A drag `interaction::drag_apply_system` runs (3D, planes, sliders).
+    Legacy,
+    /// Space-drag: the view&#x27;s pan follows the pointer.
+    Pan { panel: String, start: Vec2, pan: Vec2 },
+    /// A path point&#x27;s handle: `out` or in, mirrored to the other unless Alt;
+    /// `to_local` maps window px into the path&#x27;s space.
+    Handle { point: NodeId, out: bool, to_local: Affine, at: Point },
+}</code></pre></div></div></figure>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1022">src/bevy_app/select.rs</a><span class="range">lines 1022–1051</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:0;--len:13"></span><span class="band" style="--from:18;--len:10"></span><pre class="gutter" aria-hidden="true">1022
+1023
+1024
+1025
+1026
+1027
+1028
+1029
+1030
+1031
+1032
+1033
+1034
+1035
+1036
+1037
+1038
+1039
+1040
+1041
+1042
+1043
+1044
+1045
+1046
+1047
+1048
+1049
+1050
+1051</pre><pre class="src"><code class="language-rust">        // A top-level embed&#x27;s background: a drag draws a marquee over
+        // its content, a click selects it (Figma&#x27;s top-level frame).
+        let artboard = chain.len() == 1 &amp;&amp; nest::is_embed(geo.doc(), id) &amp;&amp; !matches!(source, Source::Embed3d);
+        if artboard &amp;&amp; !is_selected &amp;&amp; !inside_box {
+            let roots = composition::embedded(geo.doc(), id).map(|s| geo.doc().children(s).to_vec()).unwrap_or_default();
+            let click = if shift {
+                let mut list = selected_reaches(&amp;sel, tool);
+                list.push(target.clone());
+                set_selection(&amp;mut sel, tool, list);
+                Click::Keep
+            } else {
+                Click::Only(target.clone())
+            };
+            tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Marquee { prefix: chain.clone(), roots, click } };
+            tool.last_click = Some((now, pointer.screen, id));
+            break &#x27;press;
+        }
+
+        let click = if is_selected {
+            if shift { Click::Remove(id) } else if here.len() &gt; 1 { Click::Only(target.clone()) } else { Click::Keep }
+        } else {
+            let mut list = if shift { selected_reaches(&amp;sel, tool) } else { Vec::new() };
+            list.push(target.clone());
+            set_selection(&amp;mut sel, tool, list);
+            Click::Keep
+        };
+        tool.last_click = Some((now, pointer.screen, id));
+        tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Move { click } };
+    }
+}</code></pre></div></div></figure>
+<p>The decisions match Figma's. Pressing an unselected node selects it at once and a drag moves it. Pressing an already-selected node in a multi-selection keeps the selection (so the drag moves them all), and only a click without movement narrows it to that node. Pressing an artboard's background starts a marquee over its contents; a click selects the artboard. Meshes in 3D, content on planes and sliders keep their older dedicated drags (<code>Legacy</code>).</p>
+<p>A drag moves every selected node, each through <code>Store::begin_drag</code> (Part 3), so constrained nodes drag through their cluster and bound axes hold with their reason logged. The keyboard follows Figma too: arrows nudge 1 px (Shift: 10), Delete deletes, Enter and Shift+Enter go down and up a level, Tab walks siblings, Cmd+A selects all at the current level. Each is one transaction.</p>
+
+<h2 id="box"><span class="sec">7.2</span>The transform box</h2>
+<p>The box is the unit square mapped onto the selection: a node's own (oriented) box for one node, the axis-aligned bounds of every node's box for several. Grips are found in window pixels, so they stay the same size at any zoom:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:521">src/bevy_app/select.rs</a><span class="range">lines 521–553</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:6"></span><span class="band" style="--from:23;--len:8"></span><pre class="gutter" aria-hidden="true">521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+531
+532
+533
+534
+535
+536
+537
+538
+539
+540
+541
+542
+543
+544
+545
+546
+547
+548
+549
+550
+551
+552
+553</pre><pre class="src"><code class="language-rust">/// The grip under a window point for a box `frame` (window px).
+fn grip_at(frame: Affine, p: Point, resizable: bool, rotatable: bool) -&gt; Option&lt;Grip&gt; {
+    let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    let at = |u: f64, v: f64| frame * Point::new(u, v);
+    if resizable {
+        for &amp;(u, v) in &amp;corners {
+            if at(u, v).distance(p) &lt;= CORNER_HIT {
+                return Some(Grip::Resize(u, v));
+            }
+        }
+        for &amp;(u, v) in &amp;[(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)] {
+            let (a, b) = if u == 0.5 { (at(0.0, v), at(1.0, v)) } else { (at(u, 0.0), at(u, 1.0)) };
+            let seg = kurbo::Line::new(a, b);
+            let t = ((p - a).dot(b - a) / (b - a).hypot2().max(1e-9)).clamp(0.0, 1.0);
+            if seg.eval(t).distance(p) &lt;= EDGE_HIT {
+                return Some(Grip::Resize(u, v));
+            }
+        }
+    }
+    let q = frame.inverse() * p;
+    let inside = (0.0..=1.0).contains(&amp;q.x) &amp;&amp; (0.0..=1.0).contains(&amp;q.y);
+    if inside {
+        return Some(Grip::Body);
+    }
+    if rotatable {
+        for &amp;(u, v) in &amp;corners {
+            if at(u, v).distance(p) &lt;= ROTATE_HIT {
+                return Some(Grip::Rotate(u, v));
+            }
+        }
+    }
+    None
+}</code></pre></div></div></figure>
+<p>Corners resize both axes, edges one, and the area just outside a corner rotates, with no separate rotation handle, as in Figma. A resize or rotation becomes one affine map <code>A</code>, in the panel's document pixels:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1141">src/bevy_app/select.rs</a><span class="range">lines 1141–1168</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:6"></span><span class="band" style="--from:15;--len:2"></span><span class="band" style="--from:19;--len:8"></span><pre class="gutter" aria-hidden="true">1141
+1142
+1143
+1144
+1145
+1146
+1147
+1148
+1149
+1150
+1151
+1152
+1153
+1154
+1155
+1156
+1157
+1158
+1159
+1160
+1161
+1162
+1163
+1164
+1165
+1166
+1167
+1168</pre><pre class="src"><code class="language-rust">TransformKind::Resize { grip } =&gt; {
+    let u = frame.inverse() * p;
+    let anchor = if mods(MOD_ALT) { (0.5, 0.5) } else { (1.0 - grip.0, 1.0 - grip.1) };
+    // Relative to where the press landed, not the grip&#x27;s
+    // exact corner, so pressing alone changes nothing.
+    let u0 = frame.inverse() * *start;
+    let scale = |g: f64, a: f64, u: f64, u0: f64| if g == 0.5 || (u0 - a).abs() &lt; 1e-9 { 1.0 } else { (u - a) / (u0 - a) };
+    let (mut fx, mut fy) = (scale(grip.0, anchor.0, u.x, u0.x), scale(grip.1, anchor.1, u.y, u0.y));
+    if mods(MOD_SHIFT) {
+        let m = if grip.0 == 0.5 { fy.abs() } else if grip.1 == 0.5 { fx.abs() } else { fx.abs().max(fy.abs()) };
+        fx = m * if fx &lt; 0.0 { -1.0 } else { 1.0 };
+        fy = m * if fy &lt; 0.0 { -1.0 } else { 1.0 };
+    }
+    // Never collapse to zero: at least a pixel.
+    let size = (frame.as_coeffs()[0].hypot(frame.as_coeffs()[1]), frame.as_coeffs()[2].hypot(frame.as_coeffs()[3]));
+    let floor = |f: f64, s: f64| if f.abs() * s &lt; 1.0 { (1.0 / s.max(1e-9)) * if f &lt; 0.0 { -1.0 } else { 1.0 } } else { f };
+    let (fx, fy) = (floor(fx, size.0), floor(fy, size.1));
+    *frame * Affine::translate(anchor) * Affine::scale_non_uniform(fx, fy) * Affine::translate((-anchor.0, -anchor.1)) * frame.inverse()
+}
+TransformKind::Rotate =&gt; {
+    let c = *frame * Point::new(0.5, 0.5);
+    let mut th = (p - c).atan2() - (*start - c).atan2();
+    if mods(MOD_SHIFT) {
+        let base = rot0.unwrap_or(0.0);
+        th = ((base + th) / SNAP).round() * SNAP - base;
+    }
+    Affine::translate(c.to_vec2()) * Affine::rotate(th) * Affine::translate(-c.to_vec2())
+}</code></pre></div></div></figure>
+<p>For a resize, the anchor is the opposite grip (or the centre, with Alt), and the scale is measured from where the press landed rather than from the grip's exact corner, so pressing a grip without moving changes nothing. Shift keeps the aspect ratio. A scale never collapses below one pixel. For a rotation, Shift snaps the node's final angle to 15°.</p>
+
+<h3 id="decompose">Turning A into leaf values</h3>
+<p>Every node the gesture affects is a <code>Part</code>, captured when the gesture begins:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:175">src/bevy_app/select.rs</a><span class="range">lines 175–186</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186</pre><pre class="src"><code class="language-rust">/// One node a resize or rotation writes, as it was when the gesture began.
+#[derive(Clone, Debug)]
+struct Part {
+    id: NodeId,
+    kind: Kind,
+    /// Document px of the panel ← the node&#x27;s parent space.
+    parent: Affine,
+    trs: [f64; 5],
+    bounds: Rect,
+    /// A path&#x27;s points: id, position, in and out handles (path space).
+    points: Vec&lt;(NodeId, Point, kurbo::Vec2, kurbo::Vec2)&gt;,
+}</code></pre></div></div></figure>
+<p>For each part, <code>A</code> is moved into the node's parent space, <code>Q = P⁻¹·A·P</code>, and composed with the node's own transform and its box. The result is decomposed back into position, rotation and size:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:379">src/bevy_app/select.rs</a><span class="range">lines 379–392</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">379
+380
+381
+382
+383
+384
+385
+386
+387
+388
+389
+390
+391
+392</pre><pre class="src"><code class="language-rust">/// Position, rotation, box size and whether `sy` flips, from the map of
+/// the unit square (or of the node&#x27;s local axes, for size 1) into the
+/// parent&#x27;s space; shear is dropped.
+fn decompose(f: Affine, trs: [f64; 5]) -&gt; (f64, f64, f64, f64, f64, bool) {
+    let [a, b, c, d, e, g] = f.as_coeffs();
+    let [_, _, rot0, sx, sy] = trs;
+    let phi = b.atan2(a);
+    let rot = rot0 + wrap(phi - if sx &lt; 0.0 { std::f64::consts::PI } else { 0.0 } - rot0);
+    let w = a.hypot(b) / sx.abs().max(1e-9);
+    let (s, co) = phi.sin_cos();
+    let y2 = -s * c + co * d;
+    let h = y2 / sy * if sx &lt; 0.0 { -1.0 } else { 1.0 };
+    (e, g, rot, w, h.abs(), h &lt; 0.0)
+}</code></pre></div></div></figure>
+<p>What gets written depends on the kind of node, which is the important design choice. Resizing a rect writes its <code>size</code>, not its scale, so its stroke keeps its width (Figma's behaviour, and why the shadow rect resizes cleanly). A circle writes its radius. A 2D embed's resize changes its <em>window</em> (its <code>frame</code>) and leaves the content where it is. A path moves its points and scales its handles:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:394">src/bevy_app/select.rs</a><span class="range">lines 394–465</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:17;--len:11"></span><span class="band" style="--from:46;--len:14"></span><span class="band" style="--from:62;--len:6"></span><pre class="gutter" aria-hidden="true">394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455
+456
+457
+458
+459
+460
+461
+462
+463
+464
+465</pre><pre class="src"><code class="language-rust">impl Part {
+    /// The leaf values that apply `a` (panel document px) to this node, or
+    /// to its points.
+    fn apply(&amp;self, a: Affine, resize: bool) -&gt; Vec&lt;(NodeId, &amp;&#x27;static str, f64)&gt; {
+        let [x, y, rot, sx, sy] = self.trs;
+        let q = self.parent.inverse() * a * self.parent;
+        let l = Affine::translate((x, y)) * Affine::rotate(rot) * Affine::scale_non_uniform(sx, sy);
+        let mut out = Vec::new();
+        let id = self.id;
+        // Every leaf the gesture may drive, not only the ones that differ
+        // from the start: one that returns there must be previewed back.
+        let mut put = |path: &amp;&#x27;static str, _start: f64, new: f64| {
+            if new.is_finite() {
+                out.push((id, path, new));
+            }
+        };
+        let (bw, bh) = (self.bounds.width(), self.bounds.height());
+        match (resize, self.kind) {
+            (true, Kind::Sized { aspect }) =&gt; {
+                let (nx, ny, nrot, w, h, flip) = decompose(q * l * Affine::scale_non_uniform(bw.max(1e-6), bh.max(1e-6)), self.trs);
+                put(&quot;transform2d.x&quot;, x, nx);
+                put(&quot;transform2d.y&quot;, y, ny);
+                put(&quot;transform2d.rot&quot;, rot, nrot);
+                put(&quot;size.w&quot;, bw, w);
+                if !aspect {
+                    put(&quot;size.h&quot;, bh, h);
+                }
+                put(&quot;transform2d.sy&quot;, sy, if flip { -sy } else { sy });
+            }
+            (true, Kind::Circle) =&gt; {
+                let r = bw * 0.5;
+                let f = q * l * Affine::translate((-r, -r)) * Affine::scale(2.0 * r.max(1e-6));
+                let centre = f * Point::new(0.5, 0.5);
+                let [a0, b0, c0, d0, _, _] = f.as_coeffs();
+                let nr = (a0.hypot(b0) / sx.abs().max(1e-9) + c0.hypot(d0) / sy.abs().max(1e-9)) * 0.25;
+                put(&quot;transform2d.x&quot;, x, centre.x);
+                put(&quot;transform2d.y&quot;, y, centre.y);
+                put(&quot;radius.r&quot;, r, nr);
+            }
+            (true, Kind::Window { frame: true }) =&gt; {
+                let r = (l.inverse() * q * l).transform_rect_bbox(self.bounds);
+                put(&quot;frame.x0&quot;, self.bounds.x0, r.x0);
+                put(&quot;frame.y0&quot;, self.bounds.y0, r.y0);
+                put(&quot;frame.x1&quot;, self.bounds.x1, r.x1);
+                put(&quot;frame.y1&quot;, self.bounds.y1, r.y1);
+            }
+            (true, Kind::Points) =&gt; {
+                // Path space to path space; handles take the linear part.
+                let m = l.inverse() * q * l;
+                let [a0, b0, c0, d0, _, _] = m.as_coeffs();
+                let lin = |v: kurbo::Vec2| kurbo::Vec2::new(a0 * v.x + c0 * v.y, b0 * v.x + d0 * v.y);
+                for &amp;(pid, p, hi, ho) in &amp;self.points {
+                    let np = m * p;
+                    out.push((pid, &quot;transform2d.x&quot;, np.x));
+                    out.push((pid, &quot;transform2d.y&quot;, np.y));
+                    if hi != kurbo::Vec2::ZERO || ho != kurbo::Vec2::ZERO {
+                        let (ni, no) = (lin(hi), lin(ho));
+                        out.extend([(pid, &quot;handles.ix&quot;, ni.x), (pid, &quot;handles.iy&quot;, ni.y), (pid, &quot;handles.ox&quot;, no.x), (pid, &quot;handles.oy&quot;, no.y)]);
+                    }
+                }
+            }
+            (true, _) =&gt; {}
+            (false, _) =&gt; {
+                let (nx, ny, nrot, ..) = decompose(q * l, self.trs);
+                put(&quot;transform2d.x&quot;, x, nx);
+                put(&quot;transform2d.y&quot;, y, ny);
+                put(&quot;transform2d.rot&quot;, rot, nrot);
+            }
+        }
+        out
+    }
+}</code></pre></div></div></figure>
+<p>Dragging past the opposite edge flips the node by negating its <code>sy</code>. Every leaf is previewed through its handle each frame (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1293" title="src/bevy_app/select.rs:1293"><code>preview_writes</code></a>), so a locked leaf simply holds still, and the whole gesture commits as one transaction labelled "resize rect" or "rotate 3 nodes".</p>
+
+<h3 id="overlay">The box is not in the document</h3>
+<p>The box, the grips, the hover outline and the marquee are drawn by a second layer in each panel's view (Part 6's <code>in_view</code>), rebuilt each frame from the selection:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1408">src/bevy_app/select.rs</a><span class="range">lines 1408–1412</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1408
+1409
+1410
+1411
+1412</pre><pre class="src"><code class="language-rust">for (view_entity, layer) in &amp;panel_layers {
+    if !overlays.iter().any(|(_, o, _)| o.panel == layer.panel) {
+        commands.spawn((DisplayList::default(), SelectOverlay { panel: layer.panel.clone() }, VectorLayer::screen(order::DOCUMENT_2D + 1).in_view(view_entity)));
+    }
+}</code></pre></div></div></figure>
+<p>Rebuilding this small list re-renders the view's texture, but it never re-encodes the document's own layer.</p>
+
+<h2 id="input"><span class="sec">7.3</span>What the shell had to start sending</h2>
+<p>The tools needed input the canvas never received before:</p>
+<ul>
+  <li><strong>Modifier keys.</strong> Alt and Cmd never arrived as keys. Every pointer, wheel and key event now carries modifier bits (Shift 1, Ctrl 2, Alt 4, Cmd 8) through <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:844" title="src/web_ffi.rs:844"><code>set_modifiers</code></a>.</li>
+  <li><strong>Tool keys.</strong> Escape, Enter, Tab, arrows, Delete, Cmd+A, the zoom keys and P/V are decided in the shell and sent as commands (<code>toolKey</code>), not raw keys, so browser behaviours like Tab focus and Cmd+A text selection are prevented.</li>
+  <li><strong>Where a press happened.</strong> On a slow frame, the press and the first moves of a drag land in the same frame. A press now carries its own position (<code>left_bt_down_at</code>), and later moves wait for the next frame, so a press is resolved where it happened.</li>
+  <li><strong>Cursors.</strong> The canvas lives in a worker, which can't set a cursor, so Rust sends the cursor it wants (<code>send_cursor_from_worker</code>) and the main thread sets it. CSS has no rotation cursor, so <code>rotate:&lt;degrees&gt;</code> becomes a small SVG arrow turned toward the corner.</li>
+</ul>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/pointer.rs:59">src/bevy_app/pointer.rs</a><span class="range">lines 59–66</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">59
+60
+61
+62
+63
+64
+65
+66</pre><pre class="src"><code class="language-rust">// A press is resolved where it happened: moves that arrived after it in
+// the same frame wait for the next one.
+if pointer.just_pressed_left
+    &amp;&amp; let Some(p) = press.0.take()
+{
+    *held_back = moved_to.filter(|m| *m != p);
+    pointer.screen = p;
+}</code></pre></div></div></figure>
+
+<h2 id="paths"><span class="sec">7.4</span>Paths are point nodes</h2>
+<p>The roadmap decided early how a path is stored: a <code>path</code> node whose children are <code>point</code> nodes, each with its own <code>transform2d</code>, and the Bézier handles as leaves on the point (<code>handles.ix iy ox oy</code>, relative to the point; zero is a corner). Each point is then a real node: it can be bound, constrained, selected, and undone on its own.</p>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:57">src/document_bridge/materialize.rs</a><span class="range">lines 57–94</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:19;--len:8"></span><pre class="gutter" aria-hidden="true">57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94</pre><pre class="src"><code class="language-rust">/// A path node&#x27;s outline from its `point` children, in sibling order: a
+/// line between two points, a cubic where either handle is non-zero.
+pub fn path_outline(store: &amp;Store, id: NodeId) -&gt; (kurbo::BezPath, bool) {
+    let doc = store.document();
+    let num = |n: NodeId, leaf: &amp;str| leaf.parse::&lt;LeafPath&gt;().ok().and_then(|p| store.resolved(n, p)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let point_ty = TypeId::lookup(&quot;point&quot;).expect(&quot;registered&quot;);
+    let points: Vec&lt;(kurbo::Point, kurbo::Vec2, kurbo::Vec2)&gt; = doc
+        .children(id)
+        .iter()
+        .filter(|&amp;&amp;c| doc.live(c).is_some_and(|n| n.ty == point_ty))
+        .map(|&amp;c| {
+            (
+                kurbo::Point::new(num(c, &quot;transform2d.x&quot;), num(c, &quot;transform2d.y&quot;)),
+                kurbo::Vec2::new(num(c, &quot;handles.ix&quot;), num(c, &quot;handles.iy&quot;)),
+                kurbo::Vec2::new(num(c, &quot;handles.ox&quot;), num(c, &quot;handles.oy&quot;)),
+            )
+        })
+        .collect();
+    let closed = store.resolved(id, &quot;path.closed&quot;.parse().expect(&quot;declared&quot;)).is_some_and(|v| v == Value::Bool(true));
+    let mut path = kurbo::BezPath::new();
+    let Some(first) = points.first() else { return (path, closed) };
+    path.move_to(first.0);
+    let segment = |path: &amp;mut kurbo::BezPath, a: &amp;(kurbo::Point, kurbo::Vec2, kurbo::Vec2), b: &amp;(kurbo::Point, kurbo::Vec2, kurbo::Vec2)| {
+        if a.2 == kurbo::Vec2::ZERO &amp;&amp; b.1 == kurbo::Vec2::ZERO {
+            path.line_to(b.0);
+        } else {
+            path.curve_to(a.0 + a.2, b.0 + b.1, b.0);
+        }
+    };
+    for w in points.windows(2) {
+        segment(&amp;mut path, &amp;w[0], &amp;w[1]);
+    }
+    if closed &amp;&amp; points.len() &gt; 2 {
+        segment(&amp;mut path, points.last().expect(&quot;non-empty&quot;), first);
+        path.close_path();
+    }
+    (path, closed)
+}</code></pre></div></div></figure>
+<p>The bridge builds the outline from the points in sibling order: a line where both handles are zero, a cubic otherwise. A point has no entity of its own; when one changes, the reconciler redraws its path instead. A click hits a path within 5 px of its line, or anywhere inside a closed, filled one.</p>
+
+<h3 id="pen">The pen</h3>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/pen.rs:1">src/bevy_app/pen.rs</a><span class="range">lines 1–13</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13</pre><pre class="src"><code class="language-rust">//! The pen tool (roadmap stage E, §4): Figma&#x27;s pen over the document&#x27;s
+//! `path` and `point` nodes.
+//!
+//! P picks it, V goes back to selecting. A click places a corner; a
+//! click-drag places a smooth point whose out-handle follows the drag (the
+//! in-handle mirrors it). Clicking the first point closes the path; Enter or
+//! Esc finishes it open, and Esc with nothing being drawn returns to the
+//! select tool. Each placed point is one transaction, so undo removes one
+//! point; the line to the pointer is drawn by the overlay and never stored.
+//!
+//! A new path goes where the press lands: inside a top-level embed&#x27;s area
+//! (an artboard) into the embedded composition, otherwise into the view&#x27;s
+//! own composition.</code></pre></div></div></figure>
+<p>Each placed point is one transaction, so undo removes one point. The first click creates the path and its first point together; later clicks add a point; a click back on the first point sets <code>closed</code>:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/pen.rs:148">src/bevy_app/pen.rs</a><span class="range">lines 148–175</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:13"></span><pre class="gutter" aria-hidden="true">148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175</pre><pre class="src"><code class="language-rust">// Continue the path being drawn in this view, or start one.
+if let Some((path, path_panel, to_comp)) = pen.path.clone().filter(|(id, p, _)| p == &amp;panel &amp;&amp; doc.live(*id).is_some()) {
+    let points = geo.points(path);
+    let to_local = geo.world(path).inverse() * to_comp;
+    let at = to_local * (to_doc * start);
+    let out = {
+        let [a, b, c, d, _, _] = to_local.as_coeffs();
+        kurbo::Vec2::new(a * drag.x + c * drag.y, b * drag.x + d * drag.y)
+    };
+    // Back on the first point: close.
+    let to_screen = view.affine() * to_comp.inverse() * geo.world(path);
+    if points.len() &gt;= 2 &amp;&amp; points.first().is_some_and(|f| (to_screen * f.1).distance(start) &lt;= CLOSE_HIT) {
+        let mut ops = vec![Op::Set { id: path, path: &quot;path.closed&quot;.parse().expect(&quot;declared&quot;), slot: Slot::Const(Value::Bool(true)) }];
+        if out != kurbo::Vec2::ZERO {
+            let first = points[0].0;
+            for (leaf, v) in [(&quot;handles.ix&quot;, -out.x), (&quot;handles.iy&quot;, -out.y), (&quot;handles.ox&quot;, out.x), (&quot;handles.oy&quot;, out.y)] {
+                ops.push(Op::Set { id: first, path: leaf.parse().expect(&quot;declared&quot;), slot: Slot::Const(Value::Number(v)) });
+            }
+        }
+        pending.0.push(transaction(&quot;close path&quot;, ops));
+        pen.path = None;
+        return;
+    }
+    let id = doc.next_ids(1)[0];
+    pending.0.push(transaction(&quot;add point&quot;, vec![point_op(id, path, after_last(doc, Some(path)), at, out)]));
+    let _ = path_panel;
+    return;
+}</code></pre></div></div></figure>
+<p>The point's handles come from the drag between press and release, so a click is a corner and a click-drag is a smooth point. The transaction is pushed only on release, which is why the pen never needs to preview a node that doesn't exist yet. While drawing, the overlay draws the path's points, the line from the last point to the pointer, and the handle being dragged; none of that is stored.</p>
+<p>When a lone path is selected with the select tool, its points and handles are drawn and take the press before the box's grips. A point drags through <code>begin_drag</code> like any node ("move point"); a handle writes the point's <code>handles</code> leaves, mirrored to the opposite handle unless Alt is held ("move handle").</p>
+
+<h2 id="inspector"><span class="sec">7.5</span>The inspector</h2>
+<p>The right-hand panel shows the first selected node's components and fields. Rust describes the node, including how an edit to each field would land:</p>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:616">src/web_ffi.rs</a><span class="range">lines 616–666</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:23;--len:8"></span><pre class="gutter" aria-hidden="true">616
+617
+618
+619
+620
+621
+622
+623
+624
+625
+626
+627
+628
+629
+630
+631
+632
+633
+634
+635
+636
+637
+638
+639
+640
+641
+642
+643
+644
+645
+646
+647
+648
+649
+650
+651
+652
+653
+654
+655
+656
+657
+658
+659
+660
+661
+662
+663
+664
+665
+666</pre><pre class="src"><code class="language-rust">/// The inspector&#x27;s description of a node (plans/panels-and-session.md, a
+/// first HTML inspector): its type and name, and every component&#x27;s fields
+/// with the value a reader sees, the binding if bound, and how an edit
+/// would land (`direct`, `via` a linear binding&#x27;s source, or `locked` with
+/// the reason). JSON `{&quot;node&quot;,&quot;type&quot;,&quot;name&quot;,&quot;components&quot;:[{&quot;kind&quot;,
+/// &quot;fields&quot;:[{&quot;leaf&quot;,&quot;field&quot;,&quot;kind&quot;,&quot;text&quot;,&quot;bind&quot;,&quot;edit&quot;,&quot;via&quot;,&quot;why&quot;}]}]}`.
+#[wasm_bindgen]
+pub fn document_inspect(ptr: u64, node: String) -&gt; String {
+    use iron_document::Handle;
+    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
+    let Some(store) = app.world().get_resource::&lt;crate::document_bridge::DocumentStore&gt;() else {
+        return &quot;null&quot;.into();
+    };
+    let Ok(id) = node.parse::&lt;iron_document::NodeId&gt;() else { return &quot;null&quot;.into() };
+    let doc = store.0.document();
+    let Some(n) = doc.live(id) else { return &quot;null&quot;.into() };
+    let name = doc.get::&lt;iron_document::component::Name&gt;(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    let components: Vec&lt;serde_json::Value&gt; = doc
+        .components_of(id)
+        .filter(|c| c.kind().name() != &quot;name&quot;)
+        .map(|c| {
+            let kind = c.kind();
+            let fields: Vec&lt;serde_json::Value&gt; = c
+                .field_names()
+                .into_iter()
+                .filter_map(|field| {
+                    let path = iron_document::LeafPath::new(kind, field).ok()?;
+                    let slot = c.get(field)?;
+                    let value = store.0.resolved(id, path);
+                    let (edit, via, why) = match store.0.handle(id, path) {
+                        Handle::Direct =&gt; (&quot;direct&quot;, None, None),
+                        Handle::Linear { source, .. } =&gt; (&quot;via&quot;, Some(source.to_string()), None),
+                        Handle::Locked(reason) =&gt; (&quot;locked&quot;, None, Some(reason)),
+                    };
+                    Some(serde_json::json!({
+                        &quot;leaf&quot;: format!(&quot;{}.{field}&quot;, kind.name()),
+                        &quot;field&quot;: field,
+                        &quot;kind&quot;: value.as_ref().map(|v| format!(&quot;{:?}&quot;, v.kind()).to_lowercase()),
+                        &quot;text&quot;: value.as_ref().map(|v| v.to_string()),
+                        &quot;bind&quot;: slot.expr().map(|e| e.to_string()),
+                        &quot;edit&quot;: edit,
+                        &quot;via&quot;: via,
+                        &quot;why&quot;: why,
+                    }))
+                })
+                .collect();
+            serde_json::json!({&quot;kind&quot;: kind.name(), &quot;fields&quot;: fields})
+        })
+        .collect();
+    serde_json::json!({&quot;node&quot;: id.to_string(), &quot;type&quot;: n.ty.name(), &quot;name&quot;: name, &quot;components&quot;: components}).to_string()
+}</code></pre></div></div></figure>
+<p>A field shows its value as a reader sees it, its binding if bound, and its handle: <code>direct</code>, <code>via</code> a linear binding's source, or <code>locked</code> with the reason (shown as the field's tooltip, with the input disabled). Setting a field parses the text by the field's current kind (number, colour, vector, quantity) and applies it through the handle as one transaction, "set size.w". So setting the shadow's bound <code>x</code> to 720 moves the square to 620, through <code>x = #square.x + 100</code>.</p>
+<div class="box edge"><span class="tab">What it isn't yet</span>
+<p>This inspector is HTML generated from a JSON description. The design note (<code>plans/panels-and-session.md</code>) makes it a composition in the session whose controls are nodes <em>bound</em> to the target's leaves. The semantics are already the same (edits go through handles, locks say why). What's missing is hosting document nodes as HTML, which Part 8 discusses.</p>
+</div>
+
+<div class="box edge"><span class="tab">Rough edges</span>
+<p>No Alt-drag to duplicate (the store has no copy op), no snapping or smart guides, no size label (the display list has no text yet), no group/ungroup, no transform box in 3D panels. The pen can't extend an existing open path, insert a point on a segment, or convert a corner to smooth after the fact.</p>
+</div>
+
+<nav class="nextprev"><a href="06-rendering.html"><small>Previous</small><span>Part 6: Every view is a texture</span></a><a class="next" href="08-workspace.html"><small>Next</small><span>Part 8: The workspace and the session</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

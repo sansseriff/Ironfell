@@ -1,0 +1,96 @@
+<header class="chapter-head">
+  <p class="kicker">Part 2 of 9 · <chip sys="store"/> <chip sys="react"/></p>
+  <h1>Richer values and definitions</h1>
+  <p class="lede">The first guide's document stored numbers, strings, colours and vectors, and every node type was a Rust enum variant. Then the optics demo appeared on the horizon. A laser has a power in milliwatts, a fiber has a loss in dB per km, and a "laser" is not something the Rust code should know about. This part covers roadmap stage B: quantities with units, structured records, fields whose names are only known at run time, and definitions that live in the document as data.</p>
+  <div class="prereq">
+    <div><b>You need</b>Guide 1, Parts 2 and 5: components, slots, <code>Value</code>, and the expression language.</div>
+    <div><b>Files</b><code>iron_document/src/{units,value,sym,component,definition,serial}.rs</code>, <code>expr.rs</code>'s arithmetic, and the demo's <code>bar</code> in <code>document_bridge/demo.rs</code>.</div>
+  </div>
+</header>
+
+<h2 id="units"><span class="sec">2.1</span>Quantities: a number that knows its unit</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Store numbers and write the unit in the name.</strong> A field called <code>power_mw</code> holds <code>9.58</code>. It works until someone binds <code>power_mw</code> to a field called <code>power_w</code>, and the laser is a thousand times too bright with no error anywhere. Unit mistakes are silent by construction.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>A quantity is an SI magnitude plus a dimension.</strong> <code>9.58 mW</code> is stored as <code>{si: 0.00958, dim: W}</code>. The unit someone typed is presentation only. Arithmetic checks dimensions, so adding watts to kelvin is an error you see the moment you write the binding.</p></div>
+</div>
+<p>A dimension is seven small integers: the exponents of metre, kilogram, second, ampere, kelvin, mole and candela. Watts are <code>kg·m²·s⁻³</code>, so their <code>Dim</code> is <code>[2, 1, -3, 0, 0, 0, 0]</code>.</p>
+<snip file="src/iron_document/src/units.rs" lines="14-40" mark="16-16,34-40"/>
+<p>Multiplying two quantities adds their exponents, dividing subtracts them. A result whose exponents are all zero is a plain number again, which is why <code>signal / 1 mW</code> gives a dimensionless ratio you can use as a width in pixels.</p>
+<p>Units come in as text, in files, in expressions, and from the model. <code>parse_unit</code> reads any prefixed or compound unit:</p>
+<snip file="src/iron_document/src/units.rs" lines="211-241" mark="218-221,236-240"/>
+<p>It splits on the one <code>/</code>, multiplies the atoms on each side, and each atom may carry a prefix (<code>m</code>W, <code>µ</code>s) and a power (<code>m2</code>, <code>s^-1</code>). The result is a <code>Unit</code>: a dimension and the factor that turns a magnitude in this unit into SI. So <code>K/W</code> parses to dimension <code>K·kg⁻¹·m⁻²·s³</code> with factor 1, which matters later: the thermal link's resistance is written <code>2 K/W</code> in Part 9.</p>
+<p>Going the other way, <code>format</code> picks an engineering prefix so the mantissa reads between 1 and 1000:</p>
+<snip file="src/iron_document/src/units.rs" lines="248-251"/>
+<p>That's what you see in views and in the inspector: <code>7.94 mW</code>, not <code>0.00794 W</code>.</p>
+
+<h3 id="value">The value enum, now</h3>
+<snip file="src/iron_document/src/value.rs" lines="18-39" mark="34-38"/>
+<p>Two variants are new since the first guide. <code>Quantity</code> is above. <code>Record</code> is a small structured value with a named schema (a beam with a waist and a wavelength, say). Its fields are read in expressions with dot syntax, <code>#e.params.beam.waist</code>, which parses to <code>Expr::Get</code>. Records exist for the time-domain work in Part 9's future; nothing in the demo uses one yet.</p>
+<p>In files, a quantity is written as <code>{"q": [si, "canonical unit"]}</code>, always in the coherent SI unit, so diffs stay readable. The model surface may also send <code>{"q": "9.58 mW"}</code>, because the model doesn't carry the unit table:</p>
+<snip file="src/iron_document/src/value.rs" lines="246-259"/>
+
+<h3 id="arith">Arithmetic that checks dimensions</h3>
+<snip file="src/iron_document/src/expr.rs" lines="352-378" mark="356-365,368-371"/>
+<p>Addition, subtraction, remainder and comparison need equal dimensions; multiplication and division combine them. A plain number is a quantity with no dimension, so <code>9.58 mW * 2</code> is fine and <code>9.58 mW + 2</code> is the error <code>cannot combine 9.58 mW + 2</code>. That's exactly the warning you'd have seen in the thermal demo before its port defaults were fixed: <code>cannot combine a plain number - K</code>.</p>
+<p>The lexer turns a number followed by unit characters into a quantity literal, so <code>640 - x * 300</code> stays plain numbers while <code>x / 1 mW</code> reads <code>1 mW</code> as one token (<ref file="src/iron_document/src/expr.rs" line="610" has="A unit after a number">expr.rs:610</ref>). The same stage added the floor functions geometry needs (<code>sin</code>, <code>cos</code>, <code>atan2</code>, <code>sqrt</code>, <code>pow</code>, <code>hypot</code>) and the constant <code>pi</code>. The fiber's loss in Part 9 is <code>pow(10, -loss * length / 10)</code>.</p>
+<div class="box rust"><span class="tab">Reading the Rust</span>
+<p><code>fn quantity_op(...) -&gt; Option&lt;Result&lt;Value, EvalError&gt;&gt;</code> has two layers of "maybe". The outer <code>Option</code> says "is this my case at all?": <code>a.as_quantity()?</code> returns <code>None</code> early if either side isn't a number or quantity, and <code>binary</code> then tries vectors and strings. The inner <code>Result</code> says "it is my case; did it work?". <code>same().map(|_| ...)</code> runs the closure only when the dimensions matched.</p>
+</div>
+
+<h2 id="params"><span class="sec">2.2</span>Fields named at run time</h2>
+<p>Every component so far has compile-time fields: <code>size.w</code> and <code>size.h</code> are written into the Rust by the <code>components!</code> macro, and a <code>LeafPath</code> names a field with a <code>&amp;'static str</code>. A laser's parameters (<code>power</code>) or a fiber's (<code>length_km</code>) are only known from a definition in the document.</p>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>A second kind of field name.</strong> Add <code>enum Field { Static(&amp;'static str), Dynamic(String) }</code>. Now <code>LeafPath</code> is no longer <code>Copy</code>, every comparison allocates, and every match on a field name grows a case.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>Intern the run-time names.</strong> A name seen at run time is leaked once into a <code>&amp;'static str</code> and reused forever after. <code>LeafPath</code> keeps its shape and stays <code>Copy</code>, and files still store plain strings.</p></div>
+</div>
+<snip file="src/iron_document/src/sym.rs" lines="1-27" mark="18-27"/>
+<p>The cost is one small allocation per distinct parameter name for the life of the process, which is nothing. The one component with run-time fields is <code>params</code>, declared in the macro's <code>@dynamic</code> block:</p>
+<snip file="src/iron_document/src/component.rs" lines="316-329"/>
+<p>So a laser entity's power is the leaf <code>params.power</code>, bindable like any other: <code>params.power = {= #slider.slider.value * 1 mW}</code> is how the optics demo connects its slider.</p>
+
+<h2 id="definitions"><span class="sec">2.3</span>Definitions are data</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>A node type per thing.</strong> The demo once had a <code>bar</code> type in the registry. Every new kind of thing (laser, fiber, meter) would need a Rust change, a rebuild and a schema bump, and the model could never invent one.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>The registry holds primitives only</strong> (rect, circle, path, slider, group, mesh…). A "bar" or a "laser" is a <code>definition</code> node in a <code>library</code> subtree: its parameters, its ports (Part 9), its behaviour equations, and a <em>template</em> per notation saying how to draw it. An <code>entity</code> instantiates a definition.</p></div>
+</div>
+<raw title="A definition in the document">library
+  definition "bar"
+    param_spec "level"   kind=number  default=0.4
+    template   notation="free"
+      rect "bar"   y = 640 − #level.param_spec.default · 300
+                   h =       #level.param_spec.default · 300
+model
+  entity "bar"   instance.def=#bar   params.level = {= #O.slider.value}
+scene (composition)
+  rect "bar"     y = 640 − #entity.params.level · 300      ← a copy, rewritten
+                 figures → #entity</raw>
+<p>The three component types that make this work:</p>
+<snip file="src/iron_document/src/component.rs" lines="226-241"/>
+<p>Note the template's bindings read <code>param_spec.default</code>. That makes the template itself a live, evaluable subtree: it shows what the thing looks like at its defaults, and nothing special is needed to evaluate it.</p>
+
+<h3 id="instantiate">Instantiation is copying with rewritten references</h3>
+<p>Placing a bar creates an entity and copies the template's subtree into a composition. Every reference to a <code>param_spec.default</code> becomes a reference to the entity's parameter, and every reference between template nodes follows the copy:</p>
+<snip file="src/iron_document/src/definition.rs" lines="220-244" mark="221-231"/>
+<p><code>map_refs</code> walks an expression and swaps every <code>Leaf</code> through the closure. After instantiation the copied rect is a <strong>plain rect with plain bindings</strong>. Nothing downstream (the reconciler, the renderer, picking) knows definitions exist.</p>
+<p>The whole of <code>instantiate</code>:</p>
+<snip file="src/iron_document/src/definition.rs" lines="136-180" mark="145-150,173-179"/>
+<p>Three things to notice. Ids are reserved in one block, entity first, then ports and equations (Part 9), then the copied template nodes, because ids in one transaction must ascend. The function returns <em>ops</em>, not a changed document: instantiation is a transaction like anything else, and one undo removes it. And each copied root gets a <code>figures</code> relation to the entity, which is how Part 5's cross-highlighting and Link find it.</p>
+<p>Later, Part 9 needed the same entity drawn again in a <em>second</em> composition (the laser as a cartoon and as a schematic block). <code>place_figures</code> copies another notation's template onto an existing entity, mapping each port spec to the entity's port of the same name:</p>
+<snip file="src/iron_document/src/definition.rs" lines="182-204"/>
+
+<h3 id="validation">Validation</h3>
+<p>An entity's parameters must match its definition exactly: same names, each constant of the declared kind, and a quantity of the default's dimension. <ref file="src/iron_document/src/definition.rs" line="79" has="pub fn validate_entity">validate_entity</ref> runs at apply time whenever an entity's instance or params change, so the model can't create a laser with a <code>colour</code> parameter it doesn't declare. The error lists what is declared, which gives the model the fix.</p>
+
+<h3 id="demo-bar">The bar in the demo</h3>
+<p>The demo builds its library with ordinary ops, then instantiates. To let <code>instantiate</code> read a definition that isn't applied yet, the ops so far are applied to a scratch copy of the store first:</p>
+<snip file="src/document_bridge/demo.rs" lines="460-473" mark="463-466,469-469"/>
+<p>All of it still lands as <em>one</em> transaction, "open demo scene". The same scratch-store pattern builds the optics and thermal demos in Part 9, which is also why every late demo node has a high id: they are allocated after everything earlier, so earlier ids (and the smoke script that names them) never shift.</p>
+
+<h2 id="rename"><span class="sec">2.4</span>The rename: depiction → figure</h2>
+<p>The first plans called a picture of an entity a <em>depiction</em>. It was renamed to <strong>figure</strong> before it reached the UI: the relation is <code>figures</code>, the definition's template holder is <code>template</code>, and a composition view writes <code>of="#entity"</code>. Files written before the rename still load, because the loader renames on read:</p>
+<snip file="src/iron_document/src/serial.rs" lines="104-114"/>
+<p>The schema number went to 3 (<ref file="src/iron_document/src/serial.rs" line="20" has="SCHEMA">serial.rs:20</ref>), and schemas 1 and 2 still load.</p>
+
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>A template is evaluated where it sits in the library, so its bindings must make sense at the defaults. A port spec whose signal defaults to the plain number <code>0</code>, read by a template gauge as <code>signal / 1 mW</code>, is a dimension error, and it was logged every frame until the demo gave port specs defaults in their kind's units (Part 9). Nothing yet checks a template's bindings when the definition is written.</p>
+</div>

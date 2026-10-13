@@ -1,0 +1,19 @@
+# Guide 2 sources
+
+`plans/guide2/*.html` is generated. Edit the pages in `src/` and the field-guide table in
+`entries.py`, then rebuild from the repo root:
+
+```sh
+python3 plans/guide2/_src/build.py              # every page
+python3 plans/guide2/_src/build.py 09-ports     # one page
+```
+
+Code excerpts (`<snip file=… lines=…>`) are copied from the working tree at build time, so a
+rebuild picks up code changes; the build prints each excerpt's first and last line so a
+shifted range is easy to spot. The build fails if a `<ref has=…>` or a field-guide entry no
+longer matches the line it cites. That is the signal that the prose describing that code
+needs another look. Line numbers written as plain text in the prose are not checked.
+
+`guide.css`, `guide.js` and `highlight.min.js` (highlight.js 11.9.0, vendored so the pages
+read offline) in the parent folder are hand-maintained, not generated. The tooling is
+adapted from `plans/guide/_src/`; the systems and their colours differ.

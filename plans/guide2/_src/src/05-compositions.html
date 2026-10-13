@@ -1,0 +1,93 @@
+<header class="chapter-head">
+  <p class="kicker">Part 5 of 9 · <chip sys="comp"/> <chip sys="render"/></p>
+  <h1>Compositions, figures and embeds</h1>
+  <p class="lede">The central idea of vision document 09 is that one <em>thing</em> (a laser, a torus) can be drawn many ways, in many diagrams, and every drawing stays linked to the thing. This part covers roadmap stage C1 and the embedding work after it: composition roots, the <code>figures</code> relation, cross-highlighting and Link, and compositions shown inside other compositions (2D in 2D, 3D in 2D as a camera view, 2D in 3D as a plane).</p>
+  <div class="prereq">
+    <div><b>You need</b>Part 2's entities and definitions; guide 1's reconciler and 2D layer.</div>
+    <div><b>Files</b><code>iron_document/src/composition.rs</code>, <code>document_bridge/{panel_views,nest,highlight,render,materialize}.rs</code>, <code>bevy_app/{picking,scene3d}.rs</code>. Design: <code>plans/entity-composition-model.md</code> (ECM) §5–§7.</div>
+  </div>
+</header>
+
+<h2 id="vocab"><span class="sec">5.1</span>Three words</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Word</th><th>What it is</th><th>In the document</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Entity</strong></td><td>One thing being described. Never drawn directly.</td><td>An <code>entity</code> node under the <code>model</code> root (Part 2)</td></tr>
+    <tr><td><strong>Composition</strong></td><td>One diagram in one notation, 2D or 3D.</td><td>A root node of type <code>composition</code>; its subtree is the layout</td></tr>
+    <tr><td><strong>Figure</strong></td><td>A drawing of an entity inside a composition. A role, not a type.</td><td>Any visual node with a <code>figures</code> relation to an entity</td></tr>
+  </tbody>
+</table></div>
+<snip file="src/iron_document/src/composition.rs" lines="1-14"/>
+<p>The last sentence of that comment is the rule for this whole file: <strong>nothing is stored that can be computed</strong>. Which composition a node is in is found by walking up to the nearest composition root; which entity a node pictures is found by walking up to the nearest node with a <code>figures</code> relation:</p>
+<snip file="src/iron_document/src/composition.rs" lines="64-88" mark="74-83"/>
+<p><code>figure_of</code> walks <em>up</em>, which is what makes grouped figures work: clicking one wheel of a car that is a figure of a <code>car</code> entity finds the group, and the group's entity.</p>
+
+<h2 id="panels"><span class="sec">5.2</span>One panel per composition</h2>
+<p>A panel is a rectangle the shell lays out (Part 8 covers how). Rust resolves each composition panel into a <code>PanelView</code>: which composition, 2D or 3D, and how document space maps to the window:</p>
+<snip file="src/document_bridge/panel_views.rs" lines="28-66" mark="49-52"/>
+<p>Every 2D path, drawing, picking and the select tool, goes through <code>affine()</code>, so the pan and zoom added in Part 8 needed no other changes. A 3D composition panel gets its own <code>Camera3d</code> with its viewport set to the panel's rectangle, and its meshes go on a <em>render layer</em> that only that composition's cameras see:</p>
+<snip file="src/document_bridge/panel_views.rs" lines="112-135"/>
+<p>Layer 0 holds the shared scenery (ground, lights). Each composition gets the next number on first use, never reused, so a 3D panel showing the assembly never draws another composition's meshes.</p>
+
+<h2 id="crossprobe"><span class="sec">5.3</span>Selection lifts through figures</h2>
+<p>Select the cartoon box and the torus lights up too, in another panel, because both are figures of one entity. Highlights are derived from the selection and the <code>figures</code> relations every time either changes:</p>
+<snip file="src/document_bridge/highlight.rs" lines="25-41"/>
+<p>The 2D layer draws a node highlighted if it's in <code>Highlights</code>; the 3D side reflects the same set into each mesh's outline state. Hover works the same way, which gives the "hover either, both light up" behaviour from the C1 exit.</p>
+
+<h3 id="link">Link, and the merge question</h3>
+<p>Link says "these two pictures are the same thing". Four cases:</p>
+<snip file="src/iron_document/src/composition.rs" lines="192-232" mark="210-212,218-222,224-229"/>
+<ul>
+  <li>Neither pictures anything yet: create an entity (and a <code>thing</code> definition and a <code>model</code> root if missing), and link both.</li>
+  <li>One does: link the other to the same entity.</li>
+  <li>Both picture the same entity already: nothing to do.</li>
+  <li>Both picture <em>different</em> entities: one of them must go, and the user (or the model) is asked which, never left to a guess. The question carries a summary of each entity (definition, parameters, figures, ports) so the answer is informed. Answering with <code>keep</code> moves the other entity's figures over and deletes it, all in one transaction.</li>
+</ul>
+<p>"Show in" is the reverse journey: from a figure, find its counterparts' compositions and frame them (<ref file="src/web_ffi.rs" line="568" has="pub fn document_focus">document_focus</ref>). A 2D view pans the node to its centre; a 3D panel backs its camera off until the node fills about half the view.</p>
+
+<h3 id="views">Two new views for the model</h3>
+<p>The tree view shows the document as stored. Two more relations were added (<ref file="src/iron_document/src/view.rs" line="31" has="pub enum ViewRelation">view.rs:31</ref>): <code>Model</code> lists entities with their parameters, ports (Part 9) and figures, and <code>Composition(id)</code> shows one composition's layout with each figure naming its entity as <code>of="#e"</code>. The model surface sends the model view first, then the tree, so the model reads "what things are" before "how they're drawn".</p>
+
+<h2 id="embeds"><span class="sec">5.4</span>Compositions inside compositions</h2>
+<p>Later the user pointed out that compositions aren't really panels; like After Effects compositions, they can be placed inside other compositions. An <code>embed</code> node does that: a live reference, not a copy.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Embed a…</th><th>…inside a…</th><th>Behaves like</th></tr></thead>
+  <tbody>
+    <tr><td>2D composition</td><td>2D composition</td><td>A group, clipped to a region (its <code>frame</code>, or the content's bounds)</td></tr>
+    <tr><td>3D composition</td><td>2D composition</td><td>A camera view: a rectangle showing the 3D scene, through a named <code>camera</code> node or a derived view that frames everything</td></tr>
+    <tr><td>2D composition</td><td>3D composition</td><td>A plane in 3D, textured with the 2D content</td></tr>
+    <tr><td>3D composition</td><td>3D composition</td><td>A group (the obvious meaning; not yet needed)</td></tr>
+  </tbody>
+</table></div>
+<snip file="src/iron_document/src/composition.rs" lines="298-351" mark="335-342"/>
+<p>Loops are refused when they'd be created: embedding A in B is rejected if A already shows B, directly or through its own embeds. The check runs on create, on changing the embed's source, and on reparenting, since moving an embed can close a loop too.</p>
+
+<h3 id="main">The main layout</h3>
+<p>The default viewer shows a composition named <code>main</code>, which is just embeds:</p>
+<raw title="main, as nodes">composition "main" (2d)
+  embed "scene view"      → scene       at 0,0       (no frame: the scene's own bounds)
+  embed "assembly view"   → assembly    at 815,10    200×350, a 3D camera view
+  embed "pendulum view"   → pendulum    at 0,0
+  embed "controls view"   → controls    at 0,0
+composition "assembly" (3d)
+  mesh  "torus"
+  embed "card plane"      → card        a 2D composition as a plane beside the torus</raw>
+<p>So "everything in one view" and "each composition in its own tab" are the same document seen two ways. The pendulum and the level slider got compositions of their own when the tabs arrived (Part 8); <code>main</code> embeds them where they used to sit, so it looks as it always did.</p>
+
+<h3 id="walk">Drawing and picking walk through embeds</h3>
+<p>The 2D layer draws a composition's nodes in painter order. At each embed it recurses into the embedded composition through the embed's placement, clipped to its region; a 3D embed draws its camera's texture (Part 6) in the same painter order:</p>
+<snip file="src/document_bridge/render.rs" lines="164-193" mark="171-174,175-183"/>
+<p>Picking mirrors drawing exactly. The pointer is mapped through each embed's inverse placement, and every hit records its <em>chain</em>: the nodes from the panel's top level down through every group and embed to the hit node. Part 7's selection rules are all about choosing a node along that chain.</p>
+<snip file="src/bevy_app/picking.rs" lines="110-153" mark="124-135,136-137"/>
+<p>Note line 131: an embed's own area is a hit too, marked <code>background</code>. It ranks below every shape hit, wherever the shape is. That ordering mattered when the pendulum moved into its own embed: the pendulum embed's region covers most of the scene, and without the rule, clicking a scene rect selected the transparent pendulum embed on top of it.</p>
+
+<h3 id="cams">3D embeds: a camera per view</h3>
+<p>Every visible 3D embed becomes an <code>EmbedView</code> with a stable key (the panel id plus the chain of embeds that reach it), so its Bevy camera survives from frame to frame. The texture is sized to the embed's on-screen size, so it stays sharp at any zoom:</p>
+<snip file="src/document_bridge/nest.rs" lines="219-258" mark="245-255"/>
+<p>Without a named camera node, the view frames everything in the composition from a fixed direction, and only re-frames when content leaves the framed sphere, so dragging the torus doesn't make the camera chase it:</p>
+<snip file="src/bevy_app/scene3d.rs" lines="369-404"/>
+<p>A 2D composition embedded in 3D is materialised as a plane mesh (<ref file="src/document_bridge/materialize.rs" line="212" has="embed plane">materialize.rs:212</ref>), 100 document px per world unit, whose texture is the 2D content rendered off-screen (Part 6). Clicking on the plane intersects the camera ray with it and hands the 2D picker a point in the card's own space, so the card's shapes can be selected and dragged in 3D.</p>
+
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>An embed without a <code>frame</code> takes its content's bounds, which shift as content moves, and its transparent background then covers whatever is beneath it in the parent. The background-ranks-last rule makes clicks behave, but the embed's region is still invisible to the user until hovered. A drawn frame (like Figma's frame labels) or a required <code>frame</code> on top-level embeds would make it explicit.</p>
+</div>

@@ -1,5 +1,9 @@
 # Guide 2 sources
 
+The series is four Foundations pages (`f1-…` to `f4-…`, numbered `F1`–`F4`), which
+replace the older `plans/guide/` with only what is still true of the code, then Parts
+1–9 and the field guide.
+
 `plans/guide2/*.html` is generated. Edit the pages in `src/` and the field-guide table in
 `entries.py`, then rebuild from the repo root:
 

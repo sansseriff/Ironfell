@@ -1,0 +1,180 @@
+<header class="chapter-head">
+  <p class="kicker">Foundations 2 of 4 · <chip sys="store"/></p>
+  <h1>Ops, transactions and undo</h1>
+  <p class="lede">F1 ended with a document whose write methods can't be called from outside the crate. This page covers the one door that is open: <em>ops</em>, grouped into <em>transactions</em>. Undo falls out of that design almost for free. The page ends with the two ways data leaves the store: the saved file and the view.</p>
+  <div class="prereq">
+    <div><b>You need</b>F1: <code>NodeId</code>, <code>Slot</code>, components, <code>LeafPath</code>, tombstones, writes are <code>pub(crate)</code>.</div>
+    <div><b>Files</b><code>op.rs</code>, <code>lib.rs</code> (<code>Store</code>), <code>serial.rs</code>, <code>view.rs</code>, <code>tests/spine.rs</code>.</div>
+  </div>
+</header>
+
+<h2 id="why"><span class="sec">F2.1</span>Why not just set the field?</h2>
+<div class="box naive"><span class="tab">The simple version</span>
+<p>Give the document a public setter: <code>doc.set_x(square, 600.0)</code>. Everything the project wants from the document then fails:</p>
+<ul>
+  <li><strong>Undo</strong> needs the old value, which is gone once overwritten.</li>
+  <li><strong>Bevy</strong> needs to know which nodes changed, or it has to rebuild the whole scene.</li>
+  <li><strong>The model</strong> sends several changes at once. If the third is invalid, the first two have already happened.</li>
+  <li><strong>History</strong> can't say who changed what (a person, the model, the system) or what they meant ("move rect", not "set x14").</li>
+</ul>
+</div>
+<p>The answer: every change is described as data first (an <em>op</em>), ops are grouped into a labelled <em>transaction</em>, and one applier executes them. Undo, the Bevy sync and the model all read the same log of applied transactions.</p>
+
+<h2 id="ops"><span class="sec">F2.2</span>The nine ops</h2>
+<snip file="src/iron_document/src/op.rs" lines="16-65"/>
+<p><code>#[serde(tag = "t", rename_all = "snake_case")]</code> sets the JSON shape: each op is an object whose <code>"t"</code> names its kind, as in <code>{"t":"set","id":"#2","path":"transform2d.x","slot":200.0}</code>. The model surface builds exactly these objects (F4).</p>
+<p>The central property: <strong>every op has an inverse op, and the applier computes it while applying</strong>, when the old state is still at hand.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Op</th><th>What it does</th><th>Its inverse</th></tr></thead>
+  <tbody>
+    <tr><td><code>Create</code></td><td>Adds a node with its components. If the id is a tombstone, restores it.</td><td><code>Delete { id }</code></td></tr>
+    <tr><td><code>Delete</code></td><td>Tombstones a node and its live descendants.</td><td>One <code>Create</code> per tombstoned node, with its placement and components</td></tr>
+    <tr><td><code>Reparent</code></td><td>Moves a node under a new parent at a new key.</td><td><code>Reparent</code> back</td></tr>
+    <tr><td><code>Reorder</code></td><td>Changes only the order key.</td><td><code>Reorder</code> to the old key</td></tr>
+    <tr><td><code>Set</code></td><td>Replaces one leaf's slot.</td><td><code>Set</code> with the old slot</td></tr>
+    <tr><td><code>AddComp</code> / <code>RemoveComp</code></td><td>Adds or removes an optional component.</td><td>The other one</td></tr>
+    <tr><td><code>Link</code> / <code>Unlink</code></td><td>Adds or removes a relation.</td><td>The other one, with the same relation id</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="tx"><span class="sec">F2.3</span>Transactions: what goes in, what gets recorded</h2>
+<snip file="src/iron_document/src/op.rs" lines="75-126" mark="103-109"/>
+<p>Two structs, because the caller and the log need different things. A <code>TransactionInput</code> is what a caller submits: a label, an <code>Actor</code> (<code>Human</code>, <code>Model</code> or <code>System</code>), a timestamp, an optional idempotency key, the ops, and <code>exact</code> (Part 4). A <code>Transaction</code> is what the log keeps: all that, plus the version it produced, the computed inverse, and two things the solver adds in Part 4, <code>derived_ops</code> (what it moved to keep constraints holding) and a <code>solver</code> summary. A real one, from <code>examples/dump.rs</code> moving a rect from x=120 to x=200:</p>
+<raw title="cargo run -p iron_document --example dump (last transaction)">{
+  "version": 2,
+  "label": "move rect",
+  "actor": "human",
+  "ts": 1,
+  "ops":     [ { "t": "set", "id": "#2", "path": "transform2d.x", "slot": 200.0 } ],
+  "inverse": [ { "t": "set", "id": "#2", "path": "transform2d.x", "slot": 120.0 } ]
+}</raw>
+<p>Undo doesn't need to understand what "move rect" meant. It applies <code>inverse</code> in reverse order: <code>undo_ops()</code>.</p>
+
+<h2 id="applier"><span class="sec">F2.4</span>The applier: one function per op</h2>
+<snip file="src/iron_document/src/op.rs" lines="188-227"/>
+<p><code>apply_op</code> takes the working document, the op's index (so errors can say "op 2"), the op, and the version this transaction will produce. It returns the inverse ops or an error. <code>set</code> is the simplest complete arm and the pattern for the rest:</p>
+<snip file="src/iron_document/src/op.rs" lines="478-506" mark="485,486-488,489-494,495-497,501-505"/>
+<ol>
+  <li>The node must be live (485). <code>live(…)?</code> returns an <code>UnknownNode</code> or <code>Tombstoned</code> error, and <code>?</code> hands it straight back.</li>
+  <li>A binding is validated (486–488): every leaf it reads must exist, and it must not end up depending on itself (F3.3).</li>
+  <li>The node must have the component (489–494). <code>ok_or_else</code> turns "no such component" into an <code>UnknownPath</code> error.</li>
+  <li><code>Component::set</code> from F1 type-checks and swaps the value in, returning the old slot (495–497). Line 498 re-checks entities against their definitions (Part 2).</li>
+  <li>The inverse is built from that old slot (501–505). No other bookkeeping.</li>
+</ol>
+<h3 id="delete">Delete: the one whose inverse needs care</h3>
+<snip file="src/iron_document/src/op.rs" lines="385-405"/>
+<p>Deleting a group tombstones it and everything under it. Each node gets its own <code>Create</code> in the inverse, carrying its components, so undo restores the same ids with the same data. The loop walks deepest-first, so the reversed list recreates the group before its children.</p>
+<h3 id="create">Create, and the rules about ids</h3>
+<snip file="src/iron_document/src/op.rs" lines="288-337" mark="297-312,318-332"/>
+<ul>
+  <li>An id already live is refused (298–300).</li>
+  <li>A fresh id must come from the counter (302–309). Callers reserve ids with <code>Document::next_ids</code> and use them in <code>Create</code> ops; an id below the counter that isn't a tombstone is refused, so ids can't be reused.</li>
+  <li>A tombstoned id means "restore" (301, 318–319). That's how undo of a delete gets the same node back.</li>
+</ul>
+<p>Some checks need the whole transaction in place: a created node's bindings may read a sibling created later in the same transaction (undoing the deletion of a group whose children bind to each other does exactly that). Those are deferred to <code>check_created</code>, run after every op has applied (comment at 333–335).</p>
+
+<h2 id="run"><span class="sec">F2.5</span>All or nothing: <code>Store::run</code></h2>
+<p>Several ops in one transaction must all apply or none. The simplest correct approach, which is the one used: copy the whole document, apply every op to the copy, and swap it in only if nothing failed.</p>
+<snip file="src/iron_document/src/lib.rs" lines="891-944" mark="900,904-909,910-925,929"/>
+<p>The loop doesn't stop at the first error (904–909); it collects every one, because a model fixing a rejected edit wants the whole list in one round trip. The deferred checks follow (910–925). Only if both passes are clean does the copy get the new version and go back to the caller. The comment above <code>run</code> covers the cost: one clone per <em>commit</em>, not per frame, because a drag produces one transaction when it ends (F3.5).</p>
+
+<h2 id="apply"><span class="sec">F2.6</span><code>Store::apply</code>, the public entry point</h2>
+<snip file="src/iron_document/src/lib.rs" lines="681-728" mark="684-692,694-696,697-708,717-722"/>
+<ul>
+  <li><strong>Idempotency</strong> (684–692). A key matching one of the last 64 transactions returns that version and does nothing, so a network retry can't apply a model edit twice.</li>
+  <li><strong>Run and swap</strong> (694–696), then <code>after_transaction</code>, which keeps everything derived in step: the reactive graph and clips (F3), constraint clusters (Part 4), the physics network (Part 9).</li>
+  <li><strong>Solve</strong> (697–708). <code>post_apply</code> runs the constraint solver over the committed document (Part 4). If the constraints can't hold, the old document is put back and the transaction never happened.</li>
+  <li><strong>Record</strong> (717–722): push onto the undo stack (trimmed to 200), clear the redo stack, append to the log.</li>
+</ul>
+
+<h2 id="undo"><span class="sec">F2.7</span>Undo and redo: ordinary transactions</h2>
+<p><code>History</code> keeps three lists: <code>past</code> (what undo will reverse), <code>future</code> (what redo will replay), and <code>log</code> (every transaction that applied, undo and redo included). The log is what the Bevy bridge reads (F4).</p>
+<snip file="src/iron_document/src/lib.rs" lines="751-781"/>
+<p>Undo pops the last transaction, builds a new one from its inverse, labels it "undo: …" with actor <code>System</code>, and runs it through the same <code>run</code> as everything else. Redo replays the original ops plus its <code>derived_ops</code>, without solving, so redo reproduces exactly what happened. Because both go through the normal path, validation, the version bump, the Bevy sync and the model's view of history need no special cases.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Action</th><th>Version</th><th>past</th><th>future</th><th>Appended to the log</th></tr></thead>
+  <tbody>
+    <tr><td>open demo scene</td><td>1</td><td>open</td><td>—</td><td>v1 "open demo scene"</td></tr>
+    <tr><td>drag the square</td><td>2</td><td>open, move rect</td><td>—</td><td>v2 "move rect"</td></tr>
+    <tr><td>Cmd+Z</td><td>3</td><td>open</td><td>move rect</td><td>v3 "undo: move rect"</td></tr>
+    <tr><td>Cmd+Shift+Z</td><td>4</td><td>open, redo: move rect</td><td>—</td><td>v4 "redo: move rect"</td></tr>
+  </tbody>
+</table></div>
+<p>The version only goes up, including on undo. A version number names one exact document state, so "I read version 3" is never ambiguous. The model relies on that (F4).</p>
+
+<h2 id="file"><span class="sec">F2.8</span>Out to disk: canonical JSON</h2>
+<p>The saved file from the same example, after the move:</p>
+<raw title="cargo run -p iron_document --example dump (file)">{"schema": 3, "next_id": 4, "next_rel": 1, "version": 2,
+ "nodes": {
+  "#1": {"order":"a0","parent":null,"ty":"group"},
+  "#2": {"order":"a0","parent":"#1","ty":"rect"},
+  "#3": {"order":"a1","parent":"#1","ty":"circle"}
+ },
+ "components": {
+  "name": {
+   "#1": {"text":"scene"}
+  },
+  "transform2d": {
+   "#2": {"rot":0.0,"sx":1.0,"sy":1.0,"x":200.0,"y":80.0},
+   "#3": {"rot":0.0,"sx":1.0,"sy":1.0,"x":0.0,"y":0.0}
+  },
+  "size": {
+   "#2": {"h":100.0,"w":100.0}
+  },
+  "radius": {
+   "#3": {"r":50.0}
+  },
+  "fill": {
+   "#2": {"color":{"rgba":[0.5,0.5,0.5,1.0]},"opacity":1.0}
+  }
+ },
+ "relations": [
+ ]}</raw>
+<ul>
+  <li><strong>Flat, not nested.</strong> Nodes, components and relations are separate tables keyed by id. Reparenting changes one <code>"parent"</code> value on one line.</li>
+  <li><strong>Canonical.</strong> Keys sorted, one record per line. Saving the same document twice gives the same bytes, and a git diff of two saves reads like a list of ops.</li>
+  <li><strong>Tombstones and counters are saved</strong>, so ids stay unique across save and reload. Session-tier nodes (Part 8) are left out.</li>
+</ul>
+<p><code>load</code> (<ref file="src/iron_document/src/serial.rs" line="116" has="pub fn load">serial.rs:116</ref>) trusts nothing. It checks the schema version (renaming the older spellings from schemas 1 and 2), every id against its counter, every parent and child policy, parent cycles, required components, and relation endpoints, then rebuilds the indexes and runs <code>check_invariants</code>. A bad file is an error with a message before anything else sees it.</p>
+
+<h2 id="views"><span class="sec">F2.9</span>Out to a reader: views</h2>
+<p>The file is for machines. A <em>view</em> is for a reader, a person or the model:</p>
+<raw title="cargo run -p iron_document --example dump (view)">&lt;document version="2"&gt;
+  &lt;group id="#1" name="scene" count="2"&gt;
+    &lt;rect id="#2" x="200" y="80" rot="0" sx="1" sy="1" w="100" h="100" color="#808080ff" opacity="1"/&gt;
+    &lt;circle id="#3" x="0" y="0" rot="0" sx="1" sy="1" r="50"/&gt;
+  &lt;/group&gt;
+&lt;/document&gt;</raw>
+<p>It's XML-shaped because the tree is the information, and models read XML well. A view is requested with a <code>ViewQuery</code>:</p>
+<snip file="src/iron_document/src/view.rs" lines="16-52"/>
+<ul>
+  <li><strong>Relation</strong> picks which structure to walk: the raw tree, the model (entities and their figures, Part 5), or one composition's layout.</li>
+  <li><strong>Fidelity.</strong> <code>skeleton</code> shows types, ids, names and child counts; <code>summary</code> shows values but elides long child lists; <code>full</code> shows everything.</li>
+  <li><strong>Elision is always marked.</strong> A node whose children were left out carries <code>elided</code> and the true count, so a reader can tell "no children" from "children not shown".</li>
+</ul>
+<p>Attribute names are bare field names (<code>x</code>, <code>w</code>, <code>color</code>) unless two components on one node share a field name, in which case both are written in full (<code>fill.color</code>, <code>stroke.color</code>). Every value shown is the <em>resolved</em> value, read through the reactive graph, so a bound leaf shows its current number plus the formula: <code>h="75" h.bind="#1.slider.value * 300"</code> (F3). Every view starts with <code>&lt;document version="N"&gt;</code>; the model sends that number back when it edits (F4).</p>
+
+<h2 id="tests"><span class="sec">F2.10</span>The tests are the specification</h2>
+<p><code>tests/spine.rs</code> is a good summary of what the store promises:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Test</th><th>What it proves</th></tr></thead>
+  <tbody>
+    <tr><td><code>every_op_kind_inverts_exactly</code></td><td>For each op: apply, undo, and the content is identical to before.</td></tr>
+    <tr><td><code>replay_of_log_equals_snapshot_and_load_roundtrips</code></td><td>Replaying the log onto an empty store gives the same file byte for byte; save → load → save is identical.</td></tr>
+    <tr><td><code>a_bad_op_rejects_the_whole_batch_and_reports_every_error</code></td><td>Atomicity, and the full error list.</td></tr>
+    <tr><td><code>structural_rules</code></td><td>Cycles, tombstoned targets, unknown paths, type rules and child policies are rejected.</td></tr>
+    <tr><td><code>sibling_order_survives_many_inserts_between_the_same_pair</code></td><td>A thousand inserts into one gap still sort.</td></tr>
+    <tr><td><code>views_mark_elision_and_summary_is_stable_under_hidden_edits</code></td><td>Editing a hidden child doesn't change a summary view, which keeps a model's context cache valid.</td></tr>
+    <tr><td><code>idempotency_keys_replay_instead_of_reapplying</code></td><td>A repeated key is a no-op.</td></tr>
+    <tr><td><code>deleting_a_subtree_with_sibling_bindings_undoes</code></td><td>The deferred checks of F2.4: undo restores children that bind to each other.</td></tr>
+  </tbody>
+</table></div>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>The only way to change the document is <code>Store::apply(TransactionInput)</code>, which runs ops on a copy and commits all or none.</li>
+  <li>Every op's inverse is computed while it applies. Undo applies the inverse as a new transaction; redo replays the ops and any derived ops.</li>
+  <li>The version goes up by one per transaction, undo included. The log of transactions is what every other system reads.</li>
+  <li>Data leaves as canonical JSON (files) or a view (readers). Views show resolved values and always mark what they left out.</li>
+</ul>
+</div>

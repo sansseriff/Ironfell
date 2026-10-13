@@ -18,7 +18,7 @@
 <p>The plan's own summary of why this also enables everything else in Parts 5 and 9: once each view has a texture, "show this composition inside that one" is "draw that texture there".</p>
 
 <h2 id="layers"><span class="sec">6.2</span>Vector views</h2>
-<p>A 2D layer is an entity with a <code>DisplayList</code> (the renderer-independent list of fills and strokes from guide 1) and a <code>VectorLayer</code>. The change is one field: which view the layer renders into.</p>
+<p>A 2D layer is an entity with a <code>DisplayList</code> (the renderer-independent list of fills and strokes the bridge draws) and a <code>VectorLayer</code>. The change is one field: which view the layer renders into.</p>
 <snip file="src/vector/backend.rs" lines="43-71" mark="54-56,58-66"/>
 <p>Each 2D composition panel spawns one entity that is both a layer and a <code>VectorView</code> over the panel's rectangle (<ref file="src/document_bridge/render.rs" line="37" has="pub(super) fn sync_document_views">render.rs:37</ref>). Other layers can target the same view by entity: Part 7's select overlay draws into the panel's view at a higher order, so redrawing the selection box never re-encodes the document's layer.</p>
 <p>The backend gives every view a texture and a quad that pastes it into the window. Sizes round up to 64 px buckets, so dragging a pane divider rarely reallocates:</p>

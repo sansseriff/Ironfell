@@ -3,14 +3,14 @@
   <h1>Drags through the store</h1>
   <p class="lede">In the first guide a drag moved the <em>entity</em> every frame and wrote one op on release. That was enough for a square on its own. It isn't enough once a shadow is bound to the square (the shadow should follow during the drag, not after), or once the dragged value is itself bound (<code>y = 640 − 300·v</code>, where dragging should set <code>v</code>). This part covers roadmap stage A: world transforms inside the store, handles that invert bindings, and previews that reach the screen in the same frame.</p>
   <div class="prereq">
-    <div><b>You need</b>Guide 1, Parts 4 and 5: the reconciler, <code>Store::preview</code> and the gesture overlay.</div>
+    <div><b>You need</b>Foundations 3 and 4: <code>Store::preview</code>, the gesture overlay, and the reconciler.</div>
     <div><b>Files</b><code>iron_document/src/{geom,handle,lib}.rs</code>, <code>document_bridge/mod.rs</code> (<code>reconcile_gesture</code>, <code>DocumentChanges</code>), <code>bevy_app/mod.rs</code>.</div>
   </div>
 </header>
 
 <h2 id="why"><span class="sec">3.1</span>What the old drag got wrong</h2>
 <div class="compare">
-  <div class="box naive"><span class="tab">The simple version (guide 1)</span><p><strong>Move the entity now, write the op on release.</strong> The square follows the pointer, but its bound shadow reads the <em>document</em>, which hasn't changed yet. So the shadow sits still for the whole drag and jumps on release. A rect whose <code>x</code> is bound can't be dragged at all.</p></div>
+  <div class="box naive"><span class="tab">The simple version (the first spine)</span><p><strong>Move the entity now, write the op on release.</strong> The square follows the pointer, but its bound shadow reads the <em>document</em>, which hasn't changed yet. So the shadow sits still for the whole drag and jumps on release. A rect whose <code>x</code> is bound can't be dragged at all.</p></div>
   <div class="box built"><span class="tab">What was built</span><p><strong>A drag previews values in the store, never entities.</strong> Every frame the pointer's position becomes a preview of the right leaf. The reactive graph re-evaluates everything bound to it. A same-frame reconcile pass rewrites the affected entities before Bevy propagates transforms. Nothing in a drag writes a Bevy <code>Transform</code>.</p></div>
 </div>
 <p>Three pieces make that work: the store must know where a node is in the world (to turn a pointer position into an <code>x</code>), it must know <em>which</em> leaf a drag should write (the value itself, or a binding's source), and the bridge must apply the preview within the frame.</p>
@@ -53,7 +53,7 @@
 <p>Lines 182–187 keep the source's kind: if the source is a quantity in watts, the inverted value is written back as watts, not as a bare number. That's what lets the meter's gauge drag the laser's power in Part 9.</p>
 
 <h2 id="preview"><span class="sec">3.4</span>Previews, and commit</h2>
-<p>A gesture is a set of previewed leaves sitting in the graph's overlay (guide 1, Part 5). Stage A added the handle-aware entry point:</p>
+<p>A gesture is a set of previewed leaves sitting in the graph's overlay (F3.5). Stage A added the handle-aware entry point:</p>
 <snip file="src/iron_document/src/lib.rs" lines="373-400"/>
 <p><code>preview_target</code> is what every tool calls: the select tool's move, resize and rotate (Part 7), the pen's point drags, the inspector's fields (Part 7) and the meter gauge (Part 9). Each <code>preview</code> also re-solves constraint clusters (Part 4) and the physics network (Part 9), so everything downstream is live while the pointer moves.</p>
 <p>On release the overlay becomes one transaction:</p>

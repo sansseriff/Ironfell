@@ -14,7 +14,7 @@
       var li = document.createElement("li");
       var a = document.createElement("a");
       a.href = "#" + h.id;
-      a.textContent = h.textContent.replace(/^\s*\d+(\.\d+)?\s*/, "");
+      a.textContent = h.textContent.replace(/^\s*F?\d+(\.\d+)?\s*/, "");
       li.appendChild(a);
       list.appendChild(li);
     });

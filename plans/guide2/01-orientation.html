@@ -8,22 +8,22 @@
 <title>Part 1 · Where things stand now — Iron, Part Two</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="index.html" aria-label="Previous part">&larr;</a><span class="here">Part 1 of 9</span><a href="02-values.html" aria-label="Next part">&rarr;</a></div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="f4-bridge.html" aria-label="Previous part">&larr;</a><span class="here">Part 1 of 9</span><a href="02-values.html" aria-label="Next part">&rarr;</a></div></div></header>
 <div class="frame">
-<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="01-orientation.html" aria-current="page"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html" aria-current="page"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
   <p class="kicker">Part 1 of 9 · every system, lightly</p>
   <h1>Where things stand now</h1>
   <p class="lede">The first guide ended with a document store, a reconciler, bindings, clips and a model surface: one scene, drawn by Bevy, edited by drags and by Claude. Three days and 52 commits later, the same store holds units, definitions, constraints, compositions, ports and a session. Bevy draws every view into its own texture. The shell is a dock of tabs. This part is the map: what's new, how the stages fit together, where each system lives, and one interaction followed through all of it.</p>
   <div class="prereq">
-    <div><b>You need</b>Guide 1 (<code>plans/guide/</code>), or at least its Parts 1–5: nodes, components, slots, ops, transactions, the reconciler, bindings.</div>
+    <div><b>You need</b>Foundations 1–4: nodes, components, slots, ops, transactions, bindings, the reconciler, the model surface.</div>
     <div><b>Plans</b><code>roadmap.md</code> (stages A–I), <code>entity-composition-model.md</code> (ECM), <code>constraint-system.md</code> (CS), <code>view-textures.md</code>, <code>select-tool.md</code>, <code>panels-and-session.md</code>.</div>
   </div>
 </header>
 
 <h2 id="one-idea"><span class="sec">1.1</span>The same idea, much further</h2>
-<p>Guide 1's one idea still holds: <strong>the document is the truth, and Bevy draws whatever it says.</strong> Everything since has been about what the document can say, and how many ways it can be seen.</p>
+<p>The Foundations' one idea still holds: <strong>the document is the truth, and Bevy draws whatever it says.</strong> Everything since has been about what the document can say, and how many ways it can be seen.</p>
 <figure class="diagram">
 <svg viewBox="0 0 920 400" role="img" aria-label="Four layers. The shell: a dockview workspace of views, the model surface. Bevy: tools, picking, the bridge, per-view textures. The store: document and session, the reactive graph with its layers, the solver, ports. Files: the canonical JSON, saving only the document tier.">
   <defs><marker id="o1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
@@ -37,7 +37,7 @@
   <text class="t-b" x="26" y="126">Bevy (worker, wasm)</text>
   <rect x="26" y="136" width="200" height="56" rx="5" class="s-tools"/><text class="t-mono" x="126" y="160" text-anchor="middle">select · pen · pan/zoom</text><text class="t-s" x="126" y="178" text-anchor="middle">Part 7, 8</text>
   <rect x="246" y="136" width="200" height="56" rx="5" class="s-comp"/><text class="t-mono" x="346" y="160" text-anchor="middle">panels · embeds · chains</text><text class="t-s" x="346" y="178" text-anchor="middle">Part 5</text>
-  <rect x="466" y="136" width="200" height="56" rx="5" class="s-react"/><text class="t-mono" x="566" y="160" text-anchor="middle">bridge: reconcile</text><text class="t-s" x="566" y="178" text-anchor="middle">guide 1, Part 3</text>
+  <rect x="466" y="136" width="200" height="56" rx="5" class="s-react"/><text class="t-mono" x="566" y="160" text-anchor="middle">bridge: reconcile</text><text class="t-s" x="566" y="178" text-anchor="middle">F4, Part 3</text>
   <rect x="686" y="136" width="208" height="56" rx="5" class="s-render"/><text class="t-mono" x="790" y="160" text-anchor="middle">a texture per view</text><text class="t-s" x="790" y="178" text-anchor="middle">Part 6</text>
 
   <rect x="10" y="218" width="900" height="120" rx="8" class="zone"/>
@@ -71,7 +71,7 @@
 </table></div>
 
 <h2 id="stages"><span class="sec">1.2</span>The stages, commit by commit</h2>
-<p>The roadmap (<code>plans/roadmap.md</code> §3) split the work into lettered stages. Here is the order they actually landed in, from <code>5ee0b93</code> (guide 1's last step, committed) to <code>480c15b</code>:</p>
+<p>The roadmap (<code>plans/roadmap.md</code> §3) split the work into lettered stages. Here is the order they actually landed in, from <code>5ee0b93</code> (the end of the original spine, which the Foundations pages describe) to <code>480c15b</code>:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Date</th><th>Stage</th><th>What landed</th><th>Part</th></tr></thead>
   <tbody>
@@ -91,7 +91,7 @@
 <p>Stages G (the model surface moves to the semantic views, plus lessons), H (render invalidation, when measurements call for it) and I (encapsulation, live simulation, CAD) haven't started. Stage F's time-domain half (the modulator) is next on that track.</p>
 
 <h2 id="map"><span class="sec">1.3</span>Where everything lives</h2>
-<p>Every excerpt in this guide carries a coloured chip naming its system. Guide 1 had eight systems; this guide regroups them into nine, because the store grew whole new subsystems:</p>
+<p>Every excerpt in this guide carries a coloured chip naming its system. There are nine:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>System</th><th>Lives in</th><th>One line</th></tr></thead>
   <tbody>
@@ -106,7 +106,7 @@
     <tr><td><span class="chip sys-model">Model surface</span></td><td><code>src-ui/model/</code></td><td>Claude reads views and writes ops.</td></tr>
   </tbody>
 </table></div>
-<p>By size: <code>iron_document</code> is now 9,024 lines in 22 files (guide 1: 4,775 in 13), with 90 tests; <code>iron_solve</code> is 774 lines with 9; <code>document_bridge</code> 2,862; <code>bevy_app</code> 4,030; <code>vector</code> 2,200; <code>src-ui/views</code> 859. Since guide 1: 157 files changed, about 34,800 lines added.</p>
+<p>By size: <code>iron_document</code> is now 9,024 lines in 22 files (4,775 in 13 at the end of the spine), with 90 tests; <code>iron_solve</code> is 774 lines with 9; <code>document_bridge</code> 2,862; <code>bevy_app</code> 4,030; <code>vector</code> 2,200; <code>src-ui/views</code> 859. Since the spine: 157 files changed, about 34,800 lines added.</p>
 
 <h2 id="a-drag"><span class="sec">1.4</span>One drag, through everything</h2>
 <p>The best single tour of the system is one gesture that touches every part: <strong>in the Schematic tab, drag the meter's reading bar wider.</strong> The laser's power slider moves, and both gauges, in both tabs, follow. Here is what happens, in order, with the part that explains each step.</p>
@@ -161,7 +161,7 @@ cargo test -p iron_solve    --target aarch64-apple-darwin</code></pre></figure>
 </ul>
 </div>
 
-<nav class="nextprev"><a href="index.html"><small>Previous</small><span>Iron, Part Two</span></a><a class="next" href="02-values.html"><small>Next</small><span>Part 2: Richer values and definitions</span></a></nav>
+<nav class="nextprev"><a href="f4-bridge.html"><small>Previous</small><span>Foundations 4: Bevy and the model</span></a><a class="next" href="02-values.html"><small>Next</small><span>Part 2: Richer values and definitions</span></a></nav>
 </main>
 </div>
 <script src="highlight.min.js"></script>

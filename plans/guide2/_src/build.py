@@ -33,6 +33,10 @@ SYSTEMS = {
 PAGES = [
     # slug, number, title, blurb
     ("index", "", "Iron, Part Two", ""),
+    ("f1-document", "F1", "What the document is made of", "Ids, nodes, relations, values and slots, components, the registry, order keys, tombstones; plus a Rust phrasebook"),
+    ("f2-changes", "F2", "Ops, transactions and undo", "The nine ops and their inverses, all-or-nothing transactions, undo as a transaction, the file, and views"),
+    ("f3-bindings", "F3", "Bindings, the graph and clips", "Expressions, the reactive graph, read layers, gesture previews, and clips on a timeline"),
+    ("f4-bridge", "F4", "Bevy and the model", "How the store reaches the screen, how the shell talks to it, and how Claude edits it"),
     ("01-orientation", "1", "Where things stand now", "The map: what was added since guide 1, the stages in order, where each system lives, and one drag through everything"),
     ("02-values", "2", "Richer values and definitions", "Quantities with units, records, interned fields, definitions, templates and entities"),
     ("03-handles", "3", "Drags through the store", "World transforms, handles that invert bindings, previews, and the same-frame reconcile"),
@@ -198,6 +202,11 @@ FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="
 HLJS = '<script src="highlight.min.js"></script>'
 
 
+def label(num):
+    """How a part is named in the pager and links: `Part 3`, `Foundations 2`."""
+    return f"Foundations {num[1:]}" if num.startswith("F") else f"Part {num}"
+
+
 def page(i, body):
     slug, num, title, _ = PAGES[i]
     href = lambda s: "index.html" if s == "index" else f"{s}.html"
@@ -211,16 +220,16 @@ def page(i, body):
     if prev_:
         pager += f'<a href="{href(prev_[0])}" aria-label="Previous part">&larr;</a>'
     if num:
-        pager += f'<span class="here">Part {num} of 9</span>'
+        pager += f'<span class="here">{label(num)} of {4 if num.startswith("F") else 9}</span>'
     if next_:
         pager += f'<a href="{href(next_[0])}" aria-label="Next part">&rarr;</a>'
     np = '<nav class="nextprev">'
     if prev_:
-        np += f'<a href="{href(prev_[0])}"><small>Previous</small><span>{("Part " + prev_[1] + ": ") if prev_[1] else ""}{prev_[2]}</span></a>'
+        np += f'<a href="{href(prev_[0])}"><small>Previous</small><span>{(label(prev_[1]) + ": ") if prev_[1] else ""}{prev_[2]}</span></a>'
     if next_:
-        np += f'<a class="next" href="{href(next_[0])}"><small>Next</small><span>{("Part " + next_[1] + ": ") if next_[1] else ""}{next_[2]}</span></a>'
+        np += f'<a class="next" href="{href(next_[0])}"><small>Next</small><span>{(label(next_[1]) + ": ") if next_[1] else ""}{next_[2]}</span></a>'
     np += "</nav>"
-    doc_title = title if slug == "index" else f"{('Part ' + num + ' · ') if num else ''}{title} — Iron, Part Two"
+    doc_title = title if slug == "index" else f"{(label(num) + ' · ') if num else ''}{title} — Iron, Part Two"
     inner = f"""<title>{html.escape(doc_title)}</title>
 {FONTS}
 <link rel="stylesheet" href="guide.css">
@@ -257,8 +266,8 @@ def build_guide_rows():
         needle = name.split("::")[-1].split(".")[-1].replace("()", "")
         if line > len(src) or needle not in src[line - 1]:
             errors.append(f"guide: {name} not on {path}:{line}: {src[line - 1].strip() if line <= len(src) else 'EOF'!r}")
-        chap = PAGES[int(part)][0] + ".html" if part else ""
-        chap_link = f'<a href="{chap}">Part {part}</a>' if part else ""
+        chap = next((p[0] for p in PAGES if p[1] == part), "") + ".html" if part else ""
+        chap_link = f'<a href="{chap}">{label(part)}</a>' if part else ""
         rows.append(
             f'<tr data-sys="{sysk}"><td><code>{html.escape(name)}</code><span class="kind">{kind}</span></td>'
             f'<td>{chip(sysk)}</td><td class="where"><a class="ref" href="{vscode(path, line)}"><code>{html.escape(path)}:{line}</code></a></td>'

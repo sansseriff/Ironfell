@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Foundations 1 · What the document is made of — Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="index.html" aria-label="Previous part">&larr;</a><span class="here">Foundations 1 of 4</span><a href="f2-changes.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html" aria-current="page"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Foundations 1 of 4 · <span class="chip sys-store">Document model</span></p>
+  <h1>What the document is made of</h1>
+  <p class="lede">Everything in Iron is stored in one place: a document held by a small Rust crate, <code>iron_document</code>, that knows nothing about Bevy. This page covers the data, not yet how it changes: ids, nodes, relations, values, the slots that hold them, components, the registry of node types, sibling order and deletion. Each piece is introduced by the simple version it replaces and the specific way that version breaks.</p>
+  <div class="prereq">
+    <div><b>You need</b>Nothing. If Rust syntax gets in the way, the phrasebook at the end of this page covers the twenty or so constructs the code uses.</div>
+    <div><b>Files</b><code>id.rs</code>, <code>value.rs</code>, <code>component.rs</code>, <code>registry.rs</code>, <code>document.rs</code>, <code>order.rs</code>, all in <code>src/iron_document/src/</code>.</div>
+  </div>
+</header>
+
+<div class="box rust"><span class="tab">About the Foundations pages</span>
+<p>These four pages replace guide 1 (<code>plans/guide/</code>) for anyone starting here. They keep only what is still true of the code today, with excerpts from the current tree. Guide 1 described the system at an earlier commit and spent time on decisions that have since been overtaken: the old one-op-per-drag writeback, the Document panel, a fixed list of demo ids. You don't need any of that to read Parts 1–9.</p>
+</div>
+
+<h2 id="obvious"><span class="sec">F1.1</span>Start with the obvious document</h2>
+<div class="box naive"><span class="tab">The simple version</span>
+<p>If you were in a hurry, the scene would be JSON with things nested inside things, keyed by name:</p>
+<pre><code>{ "scene": { "children": [
+    { "name": "square", "type": "rect", "x": 500, "y": 420, "w": 80, "h": 80, "color": "#333" },
+    { "name": "circle", "type": "circle", "x": 160, "y": 330, "r": 40 }
+] } }</code></pre>
+<p>Easy to write, and it works until the first real requirement arrives.</p>
+</div>
+<p>Six things go wrong with it, and each explains a piece of the real design:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Breaks because…</th><th>…which the real design answers with</th><th>Section</th></tr></thead>
+  <tbody>
+    <tr><td>A name is not an identity. Rename "square" and every reference to it breaks. A model will invent names, and two things can share one.</td><td>Opaque ids, never reused: <code>NodeId</code></td><td>F1.2</td></tr>
+    <tr><td>Nesting ties <em>where</em> a node is to <em>what</em> it is. Moving it into another group means deleting and re-inserting.</td><td>A flat table of nodes, each with a <code>parent</code> field</td><td>F1.3</td></tr>
+    <tr><td><code>"x": true</code> is accepted. <code>"colour"</code> (a typo) is silently kept and ignored.</td><td>Typed components, and a registry of which components each type allows</td><td>F1.4–F1.6</td></tr>
+    <tr><td>A property can only hold a value. It can't say "this is the slider's value × 300".</td><td><code>Slot</code>: a value or a binding</td><td>F1.4</td></tr>
+    <tr><td>Children are ordered by array index. Inserting one renumbers every later sibling.</td><td>Fractional order keys</td><td>F1.8</td></tr>
+    <tr><td>Deleting removes the node, so undo recreates it with a new identity, and anything pointing at it dangles.</td><td>Tombstones</td><td>F1.9</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="ids"><span class="sec">F1.2</span>Identity: <code>NodeId</code></h2>
+<p>A node's id is a number that means nothing: not its position, name or type. The store hands out the next number from a counter and never hands it out again, even after deletion. For display it's written in base62 (digits, then A–Z, then a–z) with a <code>#</code> in front: <code>#1</code>, <code>#M</code> (22), <code>#1a</code>. You'll see ids like these in every view and log line.</p>
+<p>There are two kinds of id, node ids (<code>#…</code>) and relation ids (<code>r…</code>), which need identical code (printing, parsing, JSON). <code>id.rs</code> writes it once as a macro and invokes it twice:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/id.rs:54">src/iron_document/src/id.rs</a><span class="range">lines 54–71</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:1"></span><span class="band" style="--from:7;--len:6"></span><pre class="gutter" aria-hidden="true">54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71</pre><pre class="src"><code class="language-rust">macro_rules! id_type {
+    ($(#[$m:meta])* $name:ident, $prefix:literal) =&gt; {
+        $(#[$m])*
+        #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        pub struct $name(u64);
+
+        impl $name {
+            pub(crate) fn from_raw(n: u64) -&gt; Self {
+                Self(n)
+            }
+            pub(crate) fn raw(self) -&gt; u64 {
+                self.0
+            }
+            /// In the session tier: never saved, never in undo.
+            pub fn is_session(self) -&gt; bool {
+                self.0 &gt;= SESSION_BASE
+            }
+        }</code></pre></div></div></figure>
+<div class="box rust"><span class="tab">Reading the Rust</span>
+<p><code>macro_rules! id_type</code> is a template. <code>$name:ident</code> matches an identifier such as <code>NodeId</code>, <code>$prefix:literal</code> a literal such as <code>"#"</code>, and <code>$(#[$m:meta])*</code> "zero or more attributes", which is how the <code>///</code> doc comment is passed through. Everything after <code>=&gt;</code> is pasted once per invocation with those names filled in.</p>
+<p>Line 58 is the point: <code>pub struct $name(u64)</code>, with the field <em>not</em> <code>pub</code>. Code outside the crate can't read or construct the integer; only <code>from_raw</code> and <code>raw</code>, which are <code>pub(crate)</code>, can. JSON writes the id as its string (<code>"#M"</code>, never 22). So nothing outside the store can depend on ids being numbers. <code>is_session</code> belongs to Part 8: ids from 2⁴⁰ up are for state that's never saved.</p>
+</div>
+<p>The third id-like type counts transactions. Every successful one bumps it by exactly one, undo included:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/id.rs:121">src/iron_document/src/id.rs</a><span class="range">lines 121–125</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">121
+122
+123
+124
+125</pre><pre class="src"><code class="language-rust">/// Monotonic document version, bumped once per applied transaction.
+#[derive(
+    Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Default, Serialize, Deserialize,
+)]
+pub struct Version(pub u64);</code></pre></div></div></figure>
+
+<h2 id="nodes"><span class="sec">F1.3</span>The node record, and relations</h2>
+<p>A node holds almost nothing itself. Its properties live in separate component tables (next section). The node is identity, type and placement:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:17">src/iron_document/src/document.rs</a><span class="range">lines 17–66</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:10"></span><span class="band" style="--from:21;--len:8"></span><pre class="gutter" aria-hidden="true">17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, PartialEq)]
+pub struct Node {
+    pub id: NodeId,
+    pub ty: TypeId,
+    pub parent: Option&lt;NodeId&gt;,
+    pub order: OrderKey,
+    /// The version at which this node was deleted. Tombstoned nodes keep their
+    /// record and components so that references fail loudly and undo restores
+    /// the same id (doc 04 §2.4).
+    pub tombstoned: Option&lt;Version&gt;,
+}
+
+impl Node {
+    pub fn is_live(&amp;self) -&gt; bool {
+        self.tombstoned.is_none()
+    }
+}
+
+/// A non-containment edge. First-class storage; `target=&quot;…&quot;` in a view is a
+/// rendering of one of these (doc 05 §3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Relation {
+    pub id: RelationId,
+    pub from: NodeId,
+    pub to: NodeId,
+    pub rel: RelKind,
+    #[serde(default, skip_serializing_if = &quot;BTreeMap::is_empty&quot;)]
+    pub data: BTreeMap&lt;String, Value&gt;,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = &quot;snake_case&quot;)]
+pub enum RelKind {
+    /// A clip drives a property of its target.
+    Animates,
+    After,
+    During,
+    AlignsTo,
+    References,
+    /// A visual node is a picture of an entity (ECM §5).
+    Figures,
+    /// A constraint node to one of its operands; `data.role` names the
+    /// operand&#x27;s role and `data.anchor` the point in its local space.
+    Constrains,
+    /// A connection to one of its two ports; `data.end` is `a` or `b`.
+    Connects,
+    /// A session&#x27;s `selection` node to a selected node (session tier, never
+    /// saved): `data.panel` and `data.chain` say how it was reached.
+    Selects,
+}</code></pre></div></div></figure>
+<ul>
+  <li><code>parent: Option&lt;NodeId&gt;</code>. <code>None</code> means a root. Placement is a field, not nesting, so moving a node changes this one field.</li>
+  <li><code>order: OrderKey</code> positions the node among its siblings (F1.8).</li>
+  <li><code>tombstoned: Option&lt;Version&gt;</code> records when it was deleted, if it was (F1.9).</li>
+</ul>
+<p>A <strong>relation</strong> is any link between nodes that isn't parent and child. It has its own id, a kind, and a small <code>data</code> map. Relations are how the later parts connect things without nesting them: a clip <code>animates</code> its target (F3), a figure <code>figures</code> an entity (Part 5), a constraint <code>constrains</code> its operands (Part 4), a connection <code>connects</code> two ports (Part 9), the session's selection <code>selects</code> nodes (Part 8). They're stored in their own table and indexed in both directions, so "what does this clip drive?" and "what drives this node?" are each one lookup.</p>
+
+<h2 id="values"><span class="sec">F1.4</span>Values, and the slots that hold them</h2>
+<p>A <em>leaf</em> is one editable authored value, such as "the square's x". Every leaf holds a <code>Value</code> of a known kind:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/value.rs:18">src/iron_document/src/value.rs</a><span class="range">lines 18–39</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    Number(f64),
+    Bool(bool),
+    Str(String),
+    /// Linear RGBA, each channel in `0..=1`.
+    Color([f32; 4]),
+    Vec2([f64; 2]),
+    Vec3([f64; 3]),
+    /// One of a declared set of alternatives. Enumerated choice is a leaf kind
+    /// in its own right (vision doc 06 §3).
+    Enum(String),
+    Ref(NodeId),
+    /// A physical quantity: magnitude in SI base units plus its dimension
+    /// (entity-composition-model.md §3.1). The display unit is presentation.
+    /// Never dimensionless: that is a plain `Number`; see [`Value::quantity`].
+    Quantity { si: f64, dim: Dim },
+    /// A small structured value (a beam, a pulse shape), ECM §3.2. `kind`
+    /// names its schema; fields are read with `Expr::Get` (`beam.waist`).
+    /// Field order is canonical (sorted), so files and views are stable.
+    Record { kind: &amp;&#x27;static str, fields: BTreeMap&lt;&amp;&#x27;static str, Value&gt; },
+}</code></pre></div></div></figure>
+<p><code>Quantity</code> and <code>Record</code> are Part 2's subject. <code>ValueKind</code> is the matching type tag, used to check that a <code>Number</code> field only ever receives numbers; its extra member <code>Any</code> is for fields that take whatever kind their target has (clip endpoints, parameter defaults).</p>
+<p>A leaf doesn't hold a bare <code>Value</code>, though. It holds a <code>Slot</code>, which answers the fourth problem in the table above:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/value.rs:400">src/iron_document/src/value.rs</a><span class="range">lines 400–427</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, PartialEq)]
+pub enum Slot {
+    Const(Value),
+    /// An expression over other leaves (doc 02 §4). Its value is derived and
+    /// lives in the reactive graph, never here.
+    Bound(Expr),
+    /// Reserved: the value is driven by clips through relations (doc 05).
+    Animated(Reserved),
+}
+
+impl Slot {
+    /// The authored constant, if this slot is one. Bound slots answer `None`;
+    /// their current value comes from `Store::resolved`.
+    pub fn constant(&amp;self) -&gt; Option&lt;&amp;Value&gt; {
+        match self {
+            Slot::Const(v) =&gt; Some(v),
+            Slot::Bound(_) =&gt; None,
+            Slot::Animated(r) =&gt; match r._private {},
+        }
+    }
+
+    pub fn expr(&amp;self) -&gt; Option&lt;&amp;Expr&gt; {
+        match self {
+            Slot::Bound(e) =&gt; Some(e),
+            _ =&gt; None,
+        }
+    }
+}</code></pre></div></div></figure>
+<ul>
+  <li><code>Slot::Const(value)</code>: an authored constant. "x is 500."</li>
+  <li><code>Slot::Bound(expr)</code>: an expression over other leaves. "height is <code>#O.slider.value * 300</code>." The slot stores the formula, never its result. Results live in the reactive graph (F3).</li>
+  <li><code>Slot::Animated(Reserved)</code>: can never be built. Its payload contains an enum with no variants, so no value of it exists, and <code>match r._private {}</code> (line 417) is Rust's way of saying "this branch can't run". It was reserved for clip-driven values, which ended up as a layer in the graph instead (F3.6). Ignore it.</li>
+</ul>
+<p>In JSON the kind stays visible: numbers, bools and strings are bare, vectors are arrays, and colours, enums, refs and quantities are single-key objects (<code>{"rgba": […]}</code>, <code>{"enum": "linear"}</code>, <code>{"ref": "#M"}</code>, <code>{"q": [0.01, "W"]}</code>). A binding is <code>{"bind": "&lt;expression text&gt;"}</code>.</p>
+
+<h2 id="components"><span class="sec">F1.5</span>Components: typed structs from one table</h2>
+<p>Leaves are grouped into <em>components</em>, each a small named bundle: <code>transform2d</code> holds <code>x, y, rot, sx, sy</code>; <code>fill</code> holds <code>color, opacity</code>. A leaf's address is <code>component.field</code>, as in <code>transform2d.x</code>.</p>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>One map per node</strong>, <code>HashMap&lt;String, serde_json::Value&gt;</code>. Every reader checks at run time that <code>"x"</code> exists and is a number. Typos are silent.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>A Rust struct per component</strong>, one <code>Slot</code> field per leaf, plus a static table of field names and kinds. Readers get typed access; the validator, file loader, view renderer and the model's schema all read the same table.</p></div>
+</div>
+<p><code>component.rs</code> declares every component in one table and lets a macro generate the structs and lookups. A few entries:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:143">src/iron_document/src/component.rs</a><span class="range">lines 143–199</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199</pre><pre class="src"><code class="language-rust">Transform2d / &quot;transform2d&quot; =&gt; Transform2d {
+    x: Number = Value::Number(0.0),
+    y: Number = Value::Number(0.0),
+    rot: Number = Value::Number(0.0),
+    sx: Number = Value::Number(1.0),
+    sy: Number = Value::Number(1.0),
+}
+
+/// 3D placement as vectors: a viewport drag writes one leaf.
+Transform3d / &quot;transform3d&quot; =&gt; Transform3d {
+    pos: Vec3 = Value::Vec3([0.0, 0.0, 0.0]),
+    rot: Vec3 = Value::Vec3([0.0, 0.0, 0.0]),
+    scale: Vec3 = Value::Vec3([1.0, 1.0, 1.0]),
+}
+
+Size / &quot;size&quot; =&gt; Size {
+    w: Number = Value::Number(100.0),
+    h: Number = Value::Number(100.0),
+}
+
+Radius / &quot;radius&quot; =&gt; Radius { r: Number = Value::Number(50.0) }
+
+/// A path&#x27;s outline (roadmap stage E): its `point` children in sibling
+/// order, joined by lines or curves, closed back to the first or not.
+PathShape / &quot;path&quot; =&gt; PathShape { closed: Bool = Value::Bool(false) }
+
+/// A path point&#x27;s Bézier handles, relative to the point: `i` leads into
+/// it, `o` out of it. Zero handles make a corner. Leaves on the point,
+/// not child nodes (roadmap §7 item 4), so each can be bound.
+Handles / &quot;handles&quot; =&gt; Handles {
+    ix: Number = Value::Number(0.0),
+    iy: Number = Value::Number(0.0),
+    ox: Number = Value::Number(0.0),
+    oy: Number = Value::Number(0.0),
+}
+
+Fill / &quot;fill&quot; =&gt; Fill {
+    color: Color = Value::Color([0.5, 0.5, 0.5, 1.0]),
+    opacity: Number = Value::Number(1.0),
+}
+
+Stroke / &quot;stroke&quot; =&gt; Stroke {
+    color: Color = Value::Color([0.0, 0.0, 0.0, 1.0]),
+    width: Number = Value::Number(1.0),
+}
+
+/// Which mesh asset a `mesh` node shows.
+Mesh / &quot;mesh&quot; =&gt; Mesh { asset: Str = Value::Str(&quot;torus&quot;.to_owned()) }
+
+/// A scalar-on-a-track control (doc 02 §9.3). `value` is the leaf other
+/// properties will bind to.
+Slider / &quot;slider&quot; =&gt; Slider {
+    min: Number = Value::Number(0.0),
+    max: Number = Value::Number(1.0),
+    step: Number = Value::Number(0.01),
+    value: Number = Value::Number(0.5),
+}</code></pre></div></div></figure>
+<p>Read <code>Radius / "radius" =&gt; Radius { r: Number = Value::Number(50.0) }</code> as: "a component whose enum variant is <code>Radius</code>, whose JSON name is <code>"radius"</code>, whose struct is <code>Radius</code>, with one field <code>r</code> of kind <code>Number</code>, defaulting to 50." The table now has about thirty entries; the later parts introduce them as they come up. Here is the per-component half of the macro that consumes them:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:34">src/iron_document/src/component.rs</a><span class="range">lines 34–66</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66</pre><pre class="src"><code class="language-rust">macro_rules! components {
+    ( $( $(#[$m:meta])* $variant:ident / $json:literal =&gt; $name:ident {
+          $( $field:ident : $vk:ident = $default:expr ),* $(,)?
+      } )*
+      @dynamic { $( $(#[$dm:meta])* $dvariant:ident / $djson:literal =&gt; $dname:ident )* }
+    ) =&gt; {
+        $(
+            $(#[$m])*
+            #[derive(Clone, Debug, PartialEq)]
+            pub struct $name { $( pub $field: Slot, )* }
+
+            impl Default for $name {
+                fn default() -&gt; Self {
+                    Self { $( $field: Slot::Const($default), )* }
+                }
+            }
+
+            impl LeafStruct for $name {
+                const KIND: ComponentKind = ComponentKind::$variant;
+                const FIELDS: &amp;&#x27;static [(&amp;&#x27;static str, ValueKind)] =
+                    &amp;[ $( (stringify!($field), ValueKind::$vk), )* ];
+                fn get(&amp;self, field: &amp;str) -&gt; Option&lt;&amp;Slot&gt; {
+                    match field { $( stringify!($field) =&gt; Some(&amp;self.$field), )* _ =&gt; None }
+                }
+                fn get_mut(&amp;mut self, field: &amp;str) -&gt; Option&lt;&amp;mut Slot&gt; {
+                    match field { $( stringify!($field) =&gt; Some(&amp;mut self.$field), )* _ =&gt; None }
+                }
+                fn wrap(self) -&gt; Component { Component::$variant(self) }
+                fn unwrap_ref(c: &amp;Component) -&gt; Option&lt;&amp;Self&gt; {
+                    match c { Component::$variant(v) =&gt; Some(v), _ =&gt; None }
+                }
+            }
+        )*</code></pre></div></div></figure>
+<div class="box rust"><span class="tab">Reading the Rust</span>
+<p><code>$( … )*</code> means "repeat for each match". The outer repetition matches each component entry, the inner one each field. Lines 40–66 run once per component and produce the struct, its <code>Default</code>, and its <code>LeafStruct</code> implementation. <code>stringify!($field)</code> turns the identifier <code>r</code> into the string <code>"r"</code>. The rest of the macro (after line 66) runs once in total and lists every component again, producing the <code>ComponentKind</code> and <code>Component</code> enums. Written out by hand, the <code>Radius</code> entry becomes:</p>
+<pre><code>pub struct Radius { pub r: Slot }
+impl Default for Radius { fn default() -&gt; Self { Self { r: Slot::Const(Value::Number(50.0)) } } }
+impl LeafStruct for Radius {
+    const KIND: ComponentKind = ComponentKind::Radius;
+    const FIELDS: &amp;'static [(&amp;'static str, ValueKind)] = &amp;[("r", ValueKind::Number)];
+    fn get(&amp;self, field: &amp;str) -&gt; Option&lt;&amp;Slot&gt; { match field { "r" =&gt; Some(&amp;self.r), _ =&gt; None } }
+    /* get_mut, wrap, unwrap_ref likewise */
+}</code></pre>
+<p>The final <code>@dynamic</code> entry, <code>Params</code>, is the one component whose fields aren't known at compile time: an entity's parameters, named by its definition (Part 2).</p>
+</div>
+<p>Three related names, worth keeping apart:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Name</th><th>What it is</th><th>Used for</th></tr></thead>
+  <tbody>
+    <tr><td><code>Radius</code>, <code>Fill</code>, <code>Transform2d</code>…</td><td>The struct with <code>Slot</code> fields</td><td>Building components in code: <code>let mut t = Transform2d::default(); t.x = …;</code></td></tr>
+    <tr><td><code>Component</code></td><td>An enum holding any one of those structs</td><td>Storing mixed components in one table; <code>t.wrap()</code> converts a struct into it</td></tr>
+    <tr><td><code>ComponentKind</code></td><td>Just the tag, no data</td><td>Keys in maps, addresses in leaf paths, lookups by name</td></tr>
+  </tbody>
+</table></div>
+<p>The one hand-written method that matters is <code>set</code>, which replaces one field's slot. It type-checks constants and returns the old slot, which, as F2 shows, is exactly what undo needs:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:415">src/iron_document/src/component.rs</a><span class="range">lines 415–441</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:13"></span><span class="band" style="--from:25;--len:1"></span><pre class="gutter" aria-hidden="true">415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441</pre><pre class="src"><code class="language-rust">/// Replace one field&#x27;s slot, checking the value kind. Returns the previous
+/// slot, which is what an inverse op needs. A parameter must already
+/// exist: parameters are created with the component (so an inverse is
+/// always a `Set` back), and validated against the definition by the
+/// applier.
+pub fn set(&amp;mut self, field: &amp;str, slot: Slot) -&gt; Result&lt;Slot, LeafError&gt; {
+    let kind = self.kind();
+    let expected = self.field_kind(field).ok_or_else(|| LeafError::UnknownField {
+        component: kind,
+        field: field.to_owned(),
+    })?;
+    // A binding&#x27;s kind is only known when it is evaluated; the graph
+    // reports a mismatch then. Constants are checked here.
+    if let Some(v) = slot.constant()
+        &amp;&amp; expected != ValueKind::Any
+        &amp;&amp; v.kind() != expected
+    {
+        let path = LeafPath::new(kind, field).expect(&quot;field checked above&quot;);
+        return Err(LeafError::TypeMismatch {
+            path,
+            expected,
+            got: v.kind(),
+        });
+    }
+    let target = self.get_mut(field).expect(&quot;field checked above&quot;);
+    Ok(std::mem::replace(target, slot))
+}</code></pre></div></div></figure>
+
+<h3 id="leafpath">The leaf address: <code>LeafPath</code></h3>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:514">src/iron_document/src/component.rs</a><span class="range">lines 514–543</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">514
+515
+516
+517
+518
+519
+520
+521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+531
+532
+533
+534
+535
+536
+537
+538
+539
+540
+541
+542
+543</pre><pre class="src"><code class="language-rust">/// `component.field`, the address of one editable value.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LeafPath {
+    pub component: ComponentKind,
+    pub field: &amp;&#x27;static str,
+}
+
+impl LeafPath {
+    /// A path into a declared field, or into any parameter of a dynamic
+    /// component (whether a node has that parameter is checked at use).
+    pub fn new(component: ComponentKind, field: &amp;str) -&gt; Result&lt;LeafPath, LeafError&gt; {
+        if component.is_dynamic() {
+            if field.is_empty() {
+                return Err(LeafError::UnknownField { component, field: field.to_owned() });
+            }
+            return Ok(LeafPath { component, field: intern(field) });
+        }
+        component
+            .fields()
+            .iter()
+            .find(|(n, _)| *n == field)
+            .map(|(n, _)| LeafPath {
+                component,
+                field: n,
+            })
+            .ok_or_else(|| LeafError::UnknownField {
+                component,
+                field: field.to_owned(),
+            })
+    }</code></pre></div></div></figure>
+<p>A <code>LeafPath</code> is a component kind plus a field name. The field is a <code>&amp;'static str</code> pointing into the generated table (or, for a parameter, an interned name), so a path is two small values that are free to copy. The only way to make one is <code>LeafPath::new</code> (or <code>"fill.color".parse()</code>), which rejects unknown fields. <strong>An unknown path is an error, never a silent no-op</strong>; that rule recurs all the way up to the model's edit parser.</p>
+<p>When a leaf also needs to say which node, it becomes a <code>Leaf { node, path }</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:27" title="src/iron_document/src/expr.rs:27"><code>expr.rs:27</code></a>), printed <code>#O.slider.value</code>: exactly the syntax expressions use.</p>
+
+<h2 id="registry"><span class="sec">F1.6</span>The registry: which types exist</h2>
+<p>A node's <code>ty</code> says what kind of thing it is. The registry lists every type: which components it allows (and requires), what it may contain, and which renderer draws it by default:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/registry.rs:40">src/iron_document/src/registry.rs</a><span class="range">lines 40–69</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69</pre><pre class="src"><code class="language-rust">pub struct TypeSpec {
+    pub name: &amp;&#x27;static str,
+    /// Allowed components, with whether each is required on create.
+    pub components: &amp;&#x27;static [(ComponentKind, bool)],
+    pub default_host: Host,
+    pub children: ChildPolicy,
+}
+
+use ComponentKind as K;
+
+static TYPES: &amp;[TypeSpec] = &amp;[
+    TypeSpec {
+        name: &quot;group&quot;,
+        components: &amp;[(K::Name, false), (K::Transform2d, false), (K::Host, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Any,
+    },
+    TypeSpec {
+        name: &quot;rect&quot;,
+        components: &amp;[
+            (K::Transform2d, true),
+            (K::Size, true),
+            (K::Fill, false),
+            (K::Stroke, false),
+            (K::Name, false),
+            (K::Host, false),
+        ],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },</code></pre></div></div></figure>
+<p>The registry holds <strong>primitives only</strong>. Domain things (a bar chart, a laser) are <em>definitions</em> in the document's own library, built from these (Part 2). Today's types, grouped:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Group</th><th>Types</th><th>Covered in</th></tr></thead>
+  <tbody>
+    <tr><td>Drawing</td><td><code>group</code>, <code>rect</code>, <code>circle</code>, <code>path</code>, <code>point</code>, <code>mesh</code>, <code>slider</code></td><td>here, Part 7</td></tr>
+    <tr><td>Time</td><td><code>timeline</code>, <code>clip</code></td><td>F3</td></tr>
+    <tr><td>Things and their kinds</td><td><code>library</code>, <code>definition</code>, <code>param_spec</code>, <code>template</code>, <code>model</code>, <code>entity</code></td><td>Part 2</td></tr>
+    <tr><td>Constraints</td><td><code>constraint</code></td><td>Part 4</td></tr>
+    <tr><td>Diagrams</td><td><code>composition</code>, <code>embed</code>, <code>camera</code></td><td>Part 5</td></tr>
+    <tr><td>Session</td><td><code>session</code>, <code>selection</code></td><td>Part 8</td></tr>
+    <tr><td>Wiring</td><td><code>port_spec</code>, <code>port</code>, <code>equation</code>, <code>connection</code></td><td>Part 9</td></tr>
+  </tbody>
+</table></div>
+<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/registry.rs:316" title="src/iron_document/src/registry.rs:316"><code>registry.rs:316</code></a>) exports the registry and the component table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
+
+<h2 id="document"><span class="sec">F1.7</span>The <code>Document</code>: tables and indexes</h2>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:84">src/iron_document/src/document.rs</a><span class="range">lines 84–104</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:2;--len:9"></span><span class="band" style="--from:14;--len:6"></span><pre class="gutter" aria-hidden="true">84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, Default)]
+pub struct Document {
+    nodes: BTreeMap&lt;NodeId, Node&gt;,
+    components: BTreeMap&lt;ComponentKind, BTreeMap&lt;NodeId, Component&gt;&gt;,
+    relations: BTreeMap&lt;RelationId, Relation&gt;,
+    next_id: u64,
+    next_rel: u64,
+    /// The session tier&#x27;s own counters (`id::SESSION_BASE` and up).
+    next_session_id: u64,
+    next_session_rel: u64,
+    version: Version,
+
+    // Derived. Rebuilt incrementally by the mutators, wholesale by `reindex`.
+    // Only live nodes appear in these.
+    children: BTreeMap&lt;NodeId, Vec&lt;NodeId&gt;&gt;,
+    roots: Vec&lt;NodeId&gt;,
+    by_type: BTreeMap&lt;TypeId, BTreeSet&lt;NodeId&gt;&gt;,
+    by_component: BTreeMap&lt;ComponentKind, BTreeSet&lt;NodeId&gt;&gt;,
+    by_source: BTreeMap&lt;NodeId, BTreeSet&lt;RelationId&gt;&gt;,
+    by_target: BTreeMap&lt;NodeId, BTreeSet&lt;RelationId&gt;&gt;,
+}</code></pre></div></div></figure>
+<ul>
+  <li><strong>The tables</strong> (lines 86–94) are the data: nodes by id, components by kind and then by node, relations by id, the id counters and the version. This is what's saved.</li>
+  <li><strong>The indexes</strong> (lines 98–103) are derived, to make questions fast: a node's children in order, the roots, nodes by type, nodes by component, relations by source and by target. Never saved; rebuilt after loading.</li>
+</ul>
+<p>Components are stored by kind first, so "every <code>transform2d</code>" is one lookup and, in the saved file, all <code>transform2d</code> records sit together.</p>
+<h3 id="reads">Reads are public</h3>
+<p>Everything under <code>// ---- reads</code> is <code>pub</code> and takes <code>&amp;self</code>:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:214">src/iron_document/src/document.rs</a><span class="range">lines 214–229</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229</pre><pre class="src"><code class="language-rust">pub fn component(&amp;self, id: NodeId, kind: ComponentKind) -&gt; Option&lt;&amp;Component&gt; {
+    self.components.get(&amp;kind)?.get(&amp;id)
+}
+
+pub fn get&lt;T: LeafStruct&gt;(&amp;self, id: NodeId) -&gt; Option&lt;&amp;T&gt; {
+    self.component(id, T::KIND).and_then(T::unwrap_ref)
+}
+
+/// All components of a node, in kind order.
+pub fn components_of(&amp;self, id: NodeId) -&gt; impl Iterator&lt;Item = &amp;Component&gt; {
+    self.components.values().filter_map(move |m| m.get(&amp;id))
+}
+
+pub fn leaf(&amp;self, id: NodeId, path: LeafPath) -&gt; Option&lt;&amp;Slot&gt; {
+    self.component(id, path.component)?.get(path.field)
+}</code></pre></div></div></figure>
+<p><code>leaf(id, path)</code> is the most used: find the component, then the field, return the <code>Slot</code>. The <code>?</code> on line 228 means "if this node has no such component, return <code>None</code>". Others you'll meet: <code>live(id)</code> (the node, only if not deleted), <code>children</code>, <code>descendants</code>, <code>is_ancestor</code>, <code>nodes_of_type</code>, <code>relations_from</code>, <code>relations_to</code>.</p>
+<h3 id="writes">Writes are <code>pub(crate)</code></h3>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:293">src/iron_document/src/document.rs</a><span class="range">lines 293–297</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">293
+294
+295
+296
+297</pre><pre class="src"><code class="language-rust">// ---- crate-private mutators ---------------------------------------
+
+pub(crate) fn set_version(&amp;mut self, v: Version) {
+    self.version = v;
+}</code></pre></div></div></figure>
+<p>…and below it <code>insert_node</code>, <code>restore_node</code>, <code>tombstone</code>, <code>set_parent</code>, <code>set_order</code>, <code>insert_component</code>, <code>remove_component</code>, <code>insert_relation</code>, <code>remove_relation</code>, all <code>pub(crate)</code>.</p>
+<p>Every method that changes the document is <code>pub(crate)</code>: callable only from inside <code>iron_document</code>. The Bevy app, the FFI and the tests can read the document but cannot write it except by submitting ops (F2). "No code path mutates the store directly" isn't a convention here; code that breaks it won't compile. <code>check_invariants</code> cross-checks every index against the tables, and the tests call it after every transaction.</p>
+
+<h2 id="order"><span class="sec">F1.8</span>Sibling order without renumbering</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Store each child's index</strong>: 0, 1, 2, 3. Inserting between 0 and 1 renumbers every later sibling: one insert rewrites N nodes, and N nodes show as changed to undo, to Bevy and to the model.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>Each node holds a short string key</strong>, and siblings sort by comparing keys as strings. To insert between two siblings, make a key that sorts between theirs. No other node changes.</p></div>
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th>Call</th><th>Result</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><code>OrderKey::first()</code></td><td><code>a0</code></td><td>The starting key.</td></tr>
+    <tr><td><code>after(a0)</code></td><td><code>a1</code></td><td>Appending increments the integer part.</td></tr>
+    <tr><td><code>between(a0, a1)</code></td><td><code>a0V</code></td><td>No integer fits between 0 and 1, so it adds a fraction. <code>V</code> is base62's middle digit.</td></tr>
+    <tr><td><code>before(a0)</code></td><td><code>Zz</code></td><td>Upper-case heads are the negative side; they sort before lower case.</td></tr>
+    <tr><td><code>after(az)</code></td><td><code>b00</code></td><td>The integer outgrew one digit. The head letter says how long it is.</td></tr>
+  </tbody>
+</table></div>
+<p>It works because the base62 alphabet <code>0-9 A-Z a-z</code> is also in ASCII order, so plain string comparison sorts keys correctly. This is the published rocicorp/fractional-indexing scheme. The rule to remember: <strong>code outside the store never computes order keys</strong>. It asks with <code>OrderKey::first/after/before/between</code>, or from TypeScript with <code>document_place</code>. Inside, a binary search keeps each child list sorted by (key, id), so even two siblings sharing a key have a stable order:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:437">src/iron_document/src/document.rs</a><span class="range">lines 437–452</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:10;--len:4"></span><pre class="gutter" aria-hidden="true">437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452</pre><pre class="src"><code class="language-rust">fn place(&amp;mut self, id: NodeId) {
+    let (parent, key) = {
+        let n = &amp;self.nodes[&amp;id];
+        (n.parent, n.order.clone())
+    };
+    let nodes = &amp;self.nodes;
+    let container = match parent {
+        Some(p) =&gt; self.children.entry(p).or_default(),
+        None =&gt; &amp;mut self.roots,
+    };
+    let pos = container.partition_point(|&amp;c| {
+        let cn = &amp;nodes[&amp;c];
+        (&amp;cn.order, c) &lt; (&amp;key, id)
+    });
+    container.insert(pos, id);
+}</code></pre></div></div></figure>
+
+<h2 id="tombstones"><span class="sec">F1.9</span>Deletion keeps the record</h2>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:357">src/iron_document/src/document.rs</a><span class="range">lines 357–374</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374</pre><pre class="src"><code class="language-rust">/// Tombstone one node. The caller tombstones descendants separately so
+/// each gets its own inverse op.
+pub(crate) fn tombstone(&amp;mut self, id: NodeId, at: Version) {
+    self.unplace(id);
+    let n = self.nodes.get_mut(&amp;id).expect(&quot;tombstone of known node&quot;);
+    n.tombstoned = Some(at);
+    let ty = n.ty;
+    if let Some(s) = self.by_type.get_mut(&amp;ty) {
+        s.remove(&amp;id);
+    }
+    for (kind, m) in &amp;self.components {
+        if m.contains_key(&amp;id)
+            &amp;&amp; let Some(s) = self.by_component.get_mut(kind)
+        {
+            s.remove(&amp;id);
+        }
+    }
+}</code></pre></div></div></figure>
+<p>Deleting a node sets <code>tombstoned = Some(version)</code> and removes it from every index, so <code>children</code> and <code>nodes_of_type</code> stop seeing it. The record and its components stay, which buys three things:</p>
+<ul>
+  <li><strong>Stale references fail loudly.</strong> An op naming a deleted id gets "#M was deleted at version 5", not "no node #M".</li>
+  <li><strong>Undo restores the same id.</strong> Recreating a tombstoned id counts as a restore (F2). Anything that referred to <code>#M</code> refers to it again.</li>
+  <li><strong>Ids are never reused.</strong> The counter only goes up.</li>
+</ul>
+<p>Relations are the exception: unlinking removes the row, and undo re-links it with the original id.</p>
+
+<h2 id="rust"><span class="sec">F1.10</span>A Rust phrasebook for this codebase</h2>
+<p>You don't need all of Rust to read this code; about twenty constructs cover it. If an excerpt stops you, look here first.</p>
+<h3 id="rust-data">Shapes of data</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>You'll see</th><th>It means</th></tr></thead>
+  <tbody>
+    <tr><td><code>pub struct Node { pub id: NodeId, … }</code></td><td>A record with named fields, like a TypeScript interface that is also a class.</td></tr>
+    <tr><td><code>pub struct Version(pub u64);</code></td><td>A tuple struct: one unnamed field, read as <code>.0</code>. A <em>newtype</em> gives a plain number its own type, so a <code>Version</code> can't be passed where a <code>NodeId</code> is expected. <code>store.0.apply(…)</code> reaches inside one.</td></tr>
+    <tr><td><code>pub enum Op { Create { … }, Delete { id }, … }</code></td><td>An enum whose variants each carry their own data, like a TypeScript discriminated union.</td></tr>
+    <tr><td><code>#[derive(Clone, Debug, PartialEq)]</code></td><td>"Write the obvious implementation for me": copying, printing with <code>{:?}</code>, comparing with <code>==</code>.</td></tr>
+    <tr><td><code>Option&lt;T&gt;</code></td><td><code>Some(value)</code> or <code>None</code>. Rust has no null.</td></tr>
+    <tr><td><code>Result&lt;T, E&gt;</code></td><td><code>Ok(value)</code> or <code>Err(error)</code>. Errors are return values, not exceptions.</td></tr>
+    <tr><td><code>BTreeMap</code>, <code>BTreeSet</code>, <code>HashMap</code>, <code>Vec</code>, <code>VecDeque</code></td><td>Sorted map, sorted set, unsorted map, growable array, double-ended queue. The store uses the sorted ones nearly everywhere, which is why files and views come out in a stable order.</td></tr>
+    <tr><td><code>Box&lt;Expr&gt;</code></td><td>A pointer to a heap value. Needed when a type contains itself, as an expression tree does.</td></tr>
+  </tbody>
+</table></div>
+<h3 id="rust-behaviour">Behaviour</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>You'll see</th><th>It means</th></tr></thead>
+  <tbody>
+    <tr><td><code>impl Document { … }</code></td><td>The methods of a type, kept apart from its data.</td></tr>
+    <tr><td><code>&amp;self</code> / <code>&amp;mut self</code></td><td>The method reads the value / may change it. <code>version(&amp;self)</code> can't change the document; <code>apply(&amp;mut self, …)</code> can.</td></tr>
+    <tr><td><code>&amp;T</code>, <code>&amp;mut T</code>, <code>.clone()</code></td><td>Borrow to read, borrow to change, or make an independent copy.</td></tr>
+    <tr><td><code>pub</code> · <code>pub(crate)</code> · <code>pub(super)</code> · nothing</td><td>Visible everywhere · inside this crate · in the parent module · in this module only.</td></tr>
+    <tr><td><code>match x { A =&gt; …, B { id } =&gt; … }</code></td><td>A switch that must handle every case and can pull data out of each variant. Add an op kind and the compiler points at every <code>match</code> that forgot it.</td></tr>
+    <tr><td><code>trait LeafStruct { … }</code> + <code>impl LeafStruct for Fill</code></td><td>An interface, and one type's implementation of it.</td></tr>
+    <tr><td><code>fn get&lt;T: LeafStruct&gt;(…) -&gt; Option&lt;&amp;T&gt;</code></td><td>A generic function. <code>doc.get::&lt;Timing&gt;(id)</code> asks for that node's <code>Timing</code> component, typed.</td></tr>
+    <tr><td><code>impl Display</code> / <code>impl FromStr</code></td><td>What <code>.to_string()</code> and <code>"…".parse()</code> call. So <code>"transform2d.x".parse()</code> builds a <code>LeafPath</code>.</td></tr>
+  </tbody>
+</table></div>
+<h3 id="rust-flow">Control flow shorthands</h3>
+<div class="table-wrap"><table>
+  <thead><tr><th>You'll see</th><th>It means</th></tr></thead>
+  <tbody>
+    <tr><td><code>let tx = self.run(input)?;</code></td><td>"If this is an <code>Err</code> (or <code>None</code>), return it now; otherwise unwrap it."</td></tr>
+    <tr><td><code>if let Some(x) = maybe { … }</code></td><td>"If this matches, bind the inside and run the block."</td></tr>
+    <tr><td><code>let Some(e) = thing else { return };</code></td><td>"Unwrap this or leave the function." A guard clause; it opens most Bevy systems.</td></tr>
+    <tr><td><code>if let A = a &amp;&amp; let B = b</code></td><td>Several matches joined with <code>&amp;&amp;</code> (Rust 2024).</td></tr>
+    <tr><td><code>|n| n.is_live()</code>, <code>move |…|</code></td><td>A closure (an arrow function); <code>move</code> makes it own the variables it uses.</td></tr>
+    <tr><td><code>.iter().filter(…).map(…).collect()</code></td><td>Iterator chains, like JavaScript array methods but lazy.</td></tr>
+    <tr><td><code>-&gt; impl Iterator&lt;Item = &amp;Node&gt;</code></td><td>"Returns something you can loop over that yields <code>&amp;Node</code>."</td></tr>
+    <tr><td><code>.expect("declared leaf")</code>, <code>.unwrap()</code></td><td>"This can't fail; if it does, crash with this message."</td></tr>
+  </tbody>
+</table></div>
+<div class="box rust"><span class="tab">Three things that look scarier than they are</span>
+<p><strong>Lifetimes</strong> (<code>'a</code>, <code>'d</code>, <code>'static</code>) are the compiler's name for how long a borrowed reference stays valid. <code>fn live&lt;'d&gt;(doc: &amp;'d Document, …) -&gt; Result&lt;&amp;'d Node, …&gt;</code> says only that the returned node points into <code>doc</code>. <code>&amp;'static str</code> is a string baked into the program. You can read past them almost every time.</p>
+<p><strong>Macros</strong> end in <code>!</code>: <code>format!</code>, <code>vec!</code>, <code>write!</code> build strings and lists; <code>macro_rules!</code> defines a code template, as <code>id_type!</code> and <code>components!</code> above.</p>
+<p><strong>Attributes</strong> are <code>#[…]</code>: <code>#[derive(…)]</code> generates code, <code>#[serde(tag = "t")]</code> tunes JSON, <code>#[wasm_bindgen]</code> exports a function to JavaScript, <code>#[test]</code> marks a test, and Bevy adds <code>#[derive(Resource)]</code> and <code>#[derive(Component)]</code>.</p>
+</div>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>Nodes have opaque, never-reused ids (<code>#M</code>). A node record is only type, parent, order key and tombstone. Relations link nodes without nesting them.</li>
+  <li>Properties live in typed components generated from one table. A leaf is <code>component.field</code> and holds a <code>Slot</code>: a constant or a binding.</li>
+  <li>The registry says what each node type may hold, and is exported as JSON for the model.</li>
+  <li>The document's reads are <code>pub</code>; its writes are <code>pub(crate)</code>, reachable only from the op applier, which is F2.</li>
+</ul>
+</div>
+
+<nav class="nextprev"><a href="index.html"><small>Previous</small><span>Iron, Part Two</span></a><a class="next" href="f2-changes.html"><small>Next</small><span>Foundations 2: Ops, transactions and undo</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

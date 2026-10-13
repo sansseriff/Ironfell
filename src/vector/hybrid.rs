@@ -456,6 +456,8 @@ fn extract_layers(
     camera_transforms: Extract<Query<&GlobalTransform, With<Camera>>>,
     mut stats: ResMut<VectorStats>,
 ) {
+    let timing = crate::perf::span(crate::perf::Phase::Extract);
+    let mut copied = false;
     if let Some(target) = target.as_ref()
         && extracted.target_size != target.size
     {
@@ -517,6 +519,10 @@ fn extract_layers(
         );
         extracted.dirty.insert(layer.view);
         *stats.layer_rebuilds.entry(entity).or_insert(0) += 1;
+        copied = true;
+    }
+    if !copied {
+        timing.discard();
     }
 
     // Drop layers whose entities are gone. Comparing counts first keeps the
@@ -650,6 +656,7 @@ fn prepare_scene(
     if size.x == 0 || size.y == 0 || window.x == 0 || window.y == 0 {
         return;
     }
+    let timing = crate::perf::span(crate::perf::Phase::Encode);
     let mut state = renderer.0.lock().expect("hybrid renderer lock");
 
     if state.size != window {
@@ -717,6 +724,9 @@ fn prepare_scene(
         stats.layers_culled = culled;
         stats.commands_emitted = emitted;
         debug!("hybrid rebuild #{}: {emitted} commands, {culled} layers culled", stats.scene_rebuilds);
+        crate::perf::set_encode_counts(emitted, culled);
+    } else {
+        timing.discard();
     }
 }
 
@@ -876,6 +886,8 @@ fn render_scene(
             },
         ));
     }
+    let timing = crate::perf::span(crate::perf::Phase::Render);
+    let mut rendered = false;
     let HybridInner { inner, targets, convert, converted, .. } = &mut *state;
     let (renderer_inner, resources) = inner.as_mut().expect("created above");
     let convert = convert.get_or_insert_with(|| Convert::new(device.wgpu_device()));
@@ -920,6 +932,10 @@ fn render_scene(
         }
         queue.submit([encoder.finish()]);
         t.rendered = true;
+        rendered = true;
+    }
+    if !rendered {
+        timing.discard();
     }
 }
 

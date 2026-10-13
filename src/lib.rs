@@ -64,6 +64,9 @@ pub mod document_bridge;
 
 mod camera_controller;
 
+// Per-phase CPU timings for the render benchmark (`__iron.timings`).
+pub mod perf;
+
 pub struct WorkerApp {
     pub app: App,
     /// 手动包装事件需要
@@ -100,8 +103,10 @@ impl WorkerApp {
     /// run; otherwise the window keeps its last picture. The same steps as
     /// `App::update`, with the sub-apps made conditional.
     pub fn frame(&mut self) {
+        let start = bevy::platform::time::Instant::now();
         if !self.app.world().contains_resource::<RedrawNeeded>() {
             self.app.update();
+            crate::perf::end_frame(start);
             return;
         }
         let subs = self.app.sub_apps_mut();
@@ -114,6 +119,7 @@ impl WorkerApp {
             }
         }
         subs.main.world_mut().clear_trackers();
+        crate::perf::end_frame(start);
     }
 
     pub fn to_physical_size(&self, x: f32, y: f32) -> Vec2 {

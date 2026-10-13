@@ -4,7 +4,9 @@
 # WebGL2, not WebGPU, because headless Chrome on SwiftShader has no WebGPU
 # adapter; `?gfx=webgl2` on the URL forces the loader to match.
 # dev-opt (opt-level 1, debug info) builds in ~2.5 min cold, ~15 s warm.
+# PROFILE=wasm-bench builds at opt-level 3 for the render benchmark.
 set -e
+PROFILE=${PROFILE:-dev-opt}
 cd "$(dirname "$0")/../../.."
 
 # The wasm-bindgen CLI must match the crate version pinned in Cargo.lock.
@@ -15,9 +17,9 @@ if [ "$CURRENT_WBG" != "$WBG_VERSION" ]; then
   cargo install -f wasm-bindgen-cli --version "$WBG_VERSION"
 fi
 
-cargo build --profile dev-opt --no-default-features --features webgl2 --target wasm32-unknown-unknown
+cargo build --profile "$PROFILE" --no-default-features --features webgl2 --target wasm32-unknown-unknown
 mkdir -p src-ui/wasm/webgl2 src-ui/wasm/webgpu
-wasm-bindgen --out-dir src-ui/wasm/webgl2 --web target/wasm32-unknown-unknown/dev-opt/ironfell.wasm
+wasm-bindgen --out-dir src-ui/wasm/webgl2 --web "target/wasm32-unknown-unknown/$PROFILE/ironfell.wasm"
 
 # wasm_loader.ts imports both artifact URLs at build time, so Vite needs a
 # file at the WebGPU path even though only WebGL2 is fetched, and glue.ts

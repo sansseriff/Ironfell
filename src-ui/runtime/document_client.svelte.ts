@@ -19,6 +19,8 @@
  *   await __iron.counterparts('#a')     -> every picture of #a's entity
  *   await __iron.focus('#a')       -> "Show in": frame #a in its panels
  *   await __iron.session()         -> the session's selection [{node, panel, chain, …}]
+ *   await __iron.stress(5000)      -> add the render benchmark's `stress` composition
+ *   await __iron.timings(reset?)   -> per-phase CPU render timings since the last reset
  */
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
@@ -57,6 +59,8 @@ export class DocumentClient {
   private post: ((data: any) => void) | null = null;
   private pending = new Map<number, Pending>();
   private nextId = 1;
+  /** Whether `?stress=N` has been acted on (once per page). */
+  private stressed = false;
 
   init(post: (data: any) => void) {
     this.post = post;
@@ -84,6 +88,10 @@ export class DocumentClient {
       // The selection as the store's session records it, with how each
       // node was reached (panel, chain).
       session: () => this.call('selection', []),
+      // The render benchmark (roadmap stage H): a composition of `shapes`
+      // shapes, and per-phase CPU timings (`src/perf.rs`).
+      stress: (shapes = 5000) => this.call('stress', [shapes]),
+      timings: (reset = false) => this.call('timings', [reset]),
     };
   }
 
@@ -149,6 +157,13 @@ export class DocumentClient {
         return true;
       case 'documentChanged':
         this.version = data.version;
+        // `?stress=N`: add the benchmark composition once the demo scene
+        // exists (its tab is in the default layout, src-ui/views/workspace.ts).
+        if (!this.stressed) {
+          this.stressed = true;
+          const shapes = Number(new URLSearchParams(location.search).get('stress'));
+          if (shapes > 0) void this.call('stress', [shapes]);
+        }
         void this.refresh();
         void this.refreshCounterparts();
         return true;

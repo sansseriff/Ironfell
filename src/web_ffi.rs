@@ -485,6 +485,46 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
     result.to_string()
 }
 
+/// Add the render benchmark's stress composition (`document_bridge::stress`)
+/// with `shapes` shapes, applied now. Returns JSON with the ids a benchmark
+/// script drives: `{"ok":true,"version":N,"composition":"#…","slider":"#…",
+/// "field":"#…","sample":"#…","sample_at":[x,y],"nodes":N,"width":W,
+/// "height":H}`.
+#[wasm_bindgen]
+pub fn document_stress(ptr: u64, shapes: u32) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
+    };
+    let (input, ids) = crate::document_bridge::stress::stress_scene(&store.0, shapes as usize);
+    let result = match store.0.apply(input) {
+        Ok(applied) => serde_json::json!({
+            "ok": true,
+            "version": applied.version.0,
+            "composition": ids.composition.to_string(),
+            "slider": ids.slider.to_string(),
+            "field": ids.field.to_string(),
+            "sample": ids.sample.to_string(),
+            "sample_at": [ids.sample_at.0, ids.sample_at.1],
+            "nodes": ids.nodes,
+            "width": ids.width,
+            "height": ids.height,
+        }),
+        Err(errors) => serde_json::json!({"ok": false, "errors": errors}),
+    };
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    result.to_string()
+}
+
+/// Per-phase CPU timings since the last reset (`perf`), as JSON. `reset`
+/// clears them after reading, so a benchmark scenario reads its own frames.
+#[wasm_bindgen]
+pub fn document_timings(_ptr: u64, reset: bool) -> String {
+    crate::perf::report(reset).to_string()
+}
+
 /// Link two pictures to one entity (ECM §7.2) and apply it now, as `actor`
 /// ("human" or "model"). `keep` is "" or the entity to keep when both
 /// pictures already have one. Returns JSON: `{"ok":true,"version":N,

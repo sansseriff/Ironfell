@@ -26,6 +26,7 @@ pub mod nest;
 mod panel_views;
 pub mod planes;
 mod render;
+pub mod stress;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -259,6 +260,7 @@ pub(crate) fn sync_document(
     {
         return;
     }
+    let _timing = crate::perf::span(crate::perf::Phase::Sync);
     let now = time.elapsed().as_millis() as u64;
     let mut affected: BTreeSet<NodeId> = BTreeSet::new();
     let mut structure = false;
@@ -390,6 +392,7 @@ pub(crate) fn reconcile_gesture(
     if !store.0.has_changes() {
         return;
     }
+    let _timing = crate::perf::span(crate::perf::Phase::GestureReconcile);
     let affected: BTreeSet<NodeId> = store.0.drain_changes().into_iter().map(|c| c.leaf.node).collect();
     let Some(assets) = assets else { return };
     materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets);

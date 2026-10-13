@@ -146,6 +146,78 @@ async function run(line: string) {
       const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
       return drag(r.x + x0, r.y + y0, r.x + x1, r.y + y1, steps || 10);
     }
+    case "pmove": {
+      // pmove <panel> x y: move the pointer to a panel-relative point.
+      const r = await panelRect(rest[0]);
+      const [x, y] = rest.slice(1).map(Number);
+      return page.mouse.move(r.x + x, r.y + y);
+    }
+    case "psweep": {
+      // psweep <panel> x0 y0 x1 y1 steps ms: move (not press) from one
+      // panel point to another in `steps` moves, `ms` apart. With `down`
+      // before and `up` after, a gesture held for as long as you like.
+      const r = await panelRect(rest[0]);
+      const [x0, y0, x1, y1, steps, ms] = rest.slice(1).map(Number);
+      for (let i = 1; i <= steps; i++) {
+        await page.mouse.move(r.x + x0 + ((x1 - x0) * i) / steps, r.y + y0 + ((y1 - y0) * i) / steps);
+        await page.waitForTimeout(ms);
+      }
+      return;
+    }
+    case "pwheel": {
+      // pwheel <panel> x y dx dy count ms: `count` wheel events at a panel
+      // point, `ms` apart (hold Control first for a pinch-zoom).
+      const r = await panelRect(rest[0]);
+      const [x, y, dx, dy, count, ms] = rest.slice(1).map(Number);
+      await page.mouse.move(r.x + x, r.y + y);
+      for (let i = 0; i < count; i++) {
+        await page.mouse.wheel(dx, dy);
+        await page.waitForTimeout(ms);
+      }
+      return;
+    }
+    case "measure-reset": {
+      // Start a measured stretch: clear the cadence probe and the phase timings.
+      await page.evaluate(async () => {
+        (window as any).__probeReset();
+        await (window as any).__iron.timings(true);
+      });
+      return;
+    }
+    case "measure": {
+      // measure <label>: one JSON line of what happened since `measure-reset`:
+      // frames per second and worker tick time (cadence probe), and each
+      // render phase's CPU time (src/perf.rs).
+      const label = rest.join(" ");
+      const m = await page.evaluate(async () => {
+        const w = window as any;
+        w.__lastProbeStats = null;
+        w.__probe();
+        for (let i = 0; i < 40 && !w.__lastProbeStats; i++) await new Promise((r) => setTimeout(r, 25));
+        const s = w.__lastProbeStats ?? {};
+        const t = await w.__iron.timings(true);
+        const phase = (p: string) => t.phases[p];
+        return {
+          fps: s.effectiveFps,
+          frames: s.frames,
+          tick_p50: s.tickMs?.p50,
+          tick_p95: s.tickMs?.p95,
+          display_list: phase("display_list"),
+          encode: phase("encode"),
+          render: phase("render"),
+          extract: phase("extract"),
+          gesture_reconcile: phase("gesture_reconcile"),
+          sync: phase("sync"),
+          pick: phase("pick"),
+          frame: phase("frame"),
+          changed_frame: phase("changed_frame"),
+          commands: t.commands,
+          culled: t.culled,
+          drawn: t.drawn,
+        };
+      });
+      return out(`measure ${label} ${JSON.stringify(m)}`);
+    }
     case "hunt": {
       // hunt x0 y0 x1 y1 step <js>: sweep the pointer over a grid in
       // document space until <js> (evaluated in the page) is truthy; prints

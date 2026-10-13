@@ -378,6 +378,42 @@ drag sets that source, and the commit writes it. Any other bound axis, or
 one clip-driven at the current time, is locked for the whole drag and the
 console says why; a node with both axes locked does not drag.
 
+## Render benchmark
+
+Measures what a 2D composition of N shapes costs per frame, phase by phase,
+before any culling or raster cache (roadmap stage H). Build at opt-level 3
+first, since CPU timings at `dev-opt`'s opt-level 1 overstate the encode:
+
+```bash
+PROFILE=wasm-bench .claude/skills/run-iron/build.sh   # ~2.5 min cold
+.claude/skills/run-iron/serve.sh start
+.claude/skills/run-iron/bench-render.sh 1000 5000 10000 20000 | tee bench.txt \
+  | python3 .claude/skills/run-iron/bench-render-table.py
+.claude/skills/run-iron/build.sh                      # back to dev-opt for the smoke
+```
+
+`?stress=N` (with `layout=default` if a saved layout lacks the tab) adds a
+`stress` composition of N shapes in cells of 100 and shows it in a Stress
+tab (`src/document_bridge/stress.rs`); `await __iron.stress(N)` does the same
+from the console. `await __iron.timings(reset)` reads per-phase CPU times
+(`src/perf.rs`): `sync`, `gesture_reconcile`, `display_list`, `extract`,
+`encode`, `render`, `pick`, and whole frames as `frame` and `changed_frame`
+(a frame in which some view re-encoded). Each phase records only frames on
+which it did work.
+
+The script runs headless Chrome on the GPU, unthrottled, through these
+scenarios: `idle` (pointer on empty canvas); `hover-group` (pointer resting
+over the field group); `select-group` (the field group selected); `spin`
+(scrub the slider bound to the field's rotation, everything moves);
+`drag-one` (Cmd-drag one rect inside its cell); `pan` (wheel 200 px and
+back); and `idle`, `spin` and `pan` again at zoom ≈0.37. Hover and
+selection outlines are recomputed every frame, so the script keeps the
+pointer off the content and the selection empty except in their own
+scenarios; a `STILL SELECTED` line means a later scenario is contaminated.
+Frames per second counts idle frames between pointer events too, so read
+`changed_frame` for the cost of a change. Driver commands it adds:
+`pmove`, `psweep`, `pwheel`, `measure-reset`, `measure <label>`.
+
 ## Run (human path)
 
 ```bash

@@ -153,6 +153,16 @@ debug = false
 strip = true
 
 
+# The render benchmark's build (.claude/skills/run-iron/bench-render.sh):
+# full optimisation without the size-first settings of wasm-release, so CPU
+# timings reflect the code rather than opt-level 1 or "z".
+[profile.wasm-bench]
+inherits = "release"
+opt-level = 3
+lto = false
+codegen-units = 16
+debug = false
+
 # works
 [profile.dev-opt]
 inherits = "release"

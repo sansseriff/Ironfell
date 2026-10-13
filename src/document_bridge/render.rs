@@ -92,6 +92,7 @@ pub fn render_document_layer(
     } else {
         return;
     };
+    let _timing = crate::perf::span(crate::perf::Phase::DisplayList);
     let changed = changes.take();
     let doc = store.0.document();
 
@@ -130,6 +131,7 @@ pub fn render_document_layer(
         });
     }
     let (drawn, damage) = (cx.drawn, cx.damage);
+    crate::perf::set_drawn(drawn as u32);
 
     let mut ids: Vec<String> = changed.nodes.iter().take(LOG_IDS).map(|id| id.to_string()).collect();
     if changed.nodes.len() > LOG_IDS {

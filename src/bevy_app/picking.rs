@@ -70,6 +70,7 @@ pub fn pick_document_2d_system(
     hits.embed_chain.clear();
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two) else { return };
     let Some(p) = view.to_doc(pointer.screen) else { return };
+    let _timing = crate::perf::span(crate::perf::Phase::Pick);
     let doc = store.0.document();
     let roots = nest::panel_roots(doc, view);
     let screen = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);

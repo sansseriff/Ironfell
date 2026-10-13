@@ -17,6 +17,12 @@ if [ "$CURRENT_WBG" != "$WBG_VERSION" ]; then
   cargo install -f wasm-bindgen-cli --version "$WBG_VERSION"
 fi
 
+# The benchmark build needs SIMD like the shipped build (build-wasm.sh): without
+# +simd128, vello_common's fearless_simd silently takes a scalar fallback, so CPU
+# encode timings would not describe the renderer that ships.
+if [ "$PROFILE" = "wasm-bench" ]; then
+  export RUSTFLAGS="${RUSTFLAGS:-} -Ctarget-feature=+simd128"
+fi
 cargo build --profile "$PROFILE" --no-default-features --features webgl2 --target wasm32-unknown-unknown
 mkdir -p src-ui/wasm/webgl2 src-ui/wasm/webgpu
 wasm-bindgen --out-dir src-ui/wasm/webgl2 --web "target/wasm32-unknown-unknown/$PROFILE/ironfell.wasm"

@@ -113,6 +113,13 @@ independent of this list; don't mix them into the performance commits.
 
 ## 5. Traps (each one cost the measuring agent a run)
 
+- **The numbers in `render-benchmark.md` were taken without wasm SIMD.** The shipped
+  build (`build-wasm.sh`) compiles with `-Ctarget-feature=+simd128`; without it
+  `vello_common`'s `fearless_simd` silently uses a scalar fallback. `build.sh` now adds
+  the flag for `PROFILE=wasm-bench` (a full rebuild). **Re-run the matrix before step 1**
+  and replace the table; the `encode` column is expected to shrink, the overlay, pick
+  and display-list numbers (no Vello involved) should not.
+
 - **Measure `changed_frame`, not fps.** Unthrottled, the app renders ~1000 fps while the
   driver moves the pointer ~25 times a second, so fps mostly counts idle frames.
 - **The probe's `tick` excludes rendering**; use `frame` / `changed_frame` from `perf`.

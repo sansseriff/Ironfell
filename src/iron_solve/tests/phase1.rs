@@ -1,4 +1,4 @@
-//! Phase 1 exit tests (plans/constraint-system.md §14): a chain reaching a
+//! Phase 1 exit tests (plans/specs/constraint-system.md §14): a chain reaching a
 //! target, an unreachable target, a four-bar linkage through a full crank
 //! turn, redundant and conflicting systems, and determinism.
 

@@ -472,7 +472,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         .expect("instantiation applies");
     ops.extend(inst);
 
-    // Semantic tabs (plans/panels-and-session.md): the pendulum and the
+    // Semantic tabs (plans/specs/panels-and-session.md): the pendulum and the
     // level slider get compositions of their own, each a view in its own
     // tab, and `main` embeds them where they sat, so the everything-in-one
     // layout still reads as before. Their ids come after everything above,

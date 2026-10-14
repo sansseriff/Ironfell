@@ -35,7 +35,7 @@ fn spawn_vector_camera(mut commands: Commands) {
             bevy::render::view::Msaa::Off,
             Camera {
                 // The window's one camera: it clears to the background and
-                // pastes every view's texture (plans/view-textures.md). Above
+                // pastes every view's texture (plans/specs/view-textures.md). Above
                 // every 3D view camera, which all render into textures.
                 order: 10,
                 clear_color: ClearColorConfig::Default,

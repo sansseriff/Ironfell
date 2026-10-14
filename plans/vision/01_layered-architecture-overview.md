@@ -444,8 +444,8 @@ project responsible for maintaining and evolving the feature.
 
 Detailed evidence is recorded in:
 
-- [`../bevy-vello-hybrid-design.md`](../bevy-vello-hybrid-design.md)
-- [`../bevy-vello-hybrid-open-questions.md`](../bevy-vello-hybrid-open-questions.md)
+- [`../archive/bevy-vello-hybrid-design.md`](../archive/bevy-vello-hybrid-design.md)
+- [`../archive/bevy-vello-hybrid-open-questions.md`](../archive/bevy-vello-hybrid-open-questions.md)
 
 ## 8. Choosing between the two Vello paths
 

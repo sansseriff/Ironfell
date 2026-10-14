@@ -1,5 +1,5 @@
 /**
- * Views (plans/panels-and-session.md): every tab or panel in the workspace is
+ * Views (plans/specs/panels-and-session.md): every tab or panel in the workspace is
  * a view, a window onto something in the document drawn in some notation.
  *
  *   source    what it is a view of: a composition (id or name), the timeline

@@ -6,7 +6,7 @@
 //! an operation log with computed inverses, undo/redo, canonical JSON, and
 //! elided views. It depends on nothing renderer-shaped and tests natively.
 //!
-//! The design record is `plans/document-spine.md`.
+//! The design record is `plans/specs/document-spine.md`.
 //!
 //! ```text
 //!   TransactionInput ──apply──▶ Store ──▶ Transaction (with inverse) ──▶ log
@@ -462,7 +462,7 @@ impl Store {
         self.reactive.clear_overlay(&self.doc);
     }
 
-    // ---- The session tier (plans/panels-and-session.md) ----------------
+    // ---- The session tier (plans/specs/panels-and-session.md) ----------------
 
     /// Apply session-tier ops: nodes, relations and leaves in the session's
     /// id range only. Not a transaction: the document's version, history and

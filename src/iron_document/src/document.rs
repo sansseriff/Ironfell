@@ -3,7 +3,7 @@
 //!
 //! Every mutating method is `pub(crate)` and reachable only from the op
 //! applier. That is the structural form of the rule in
-//! plans/document-spine.md §6.1: no code path mutates the store directly.
+//! plans/specs/document-spine.md §6.1: no code path mutates the store directly.
 
 use crate::component::{Component, ComponentKind, LeafPath, LeafStruct};
 use crate::expr::{Expr, Leaf};

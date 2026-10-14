@@ -1,5 +1,5 @@
 //! Pasting a view's texture into a rectangle of the window, texel for pixel
-//! (plans/view-textures.md §2).
+//! (plans/specs/view-textures.md §2).
 //!
 //! The generalisation of [`super::composite_material`]: that one blits a
 //! window-sized texture over the whole window; this one blits the top-left
@@ -142,7 +142,7 @@ pub fn unit_quad() -> Mesh {
 }
 
 /// Texture sizes round up to 64 px, so small changes in a view's size (a
-/// pane being dragged) reuse the texture (plans/view-textures.md §3).
+/// pane being dragged) reuse the texture (plans/specs/view-textures.md §3).
 pub fn bucket(size: UVec2) -> UVec2 {
     UVec2::new(size.x.max(1).div_ceil(64) * 64, size.y.max(1).div_ceil(64) * 64)
 }

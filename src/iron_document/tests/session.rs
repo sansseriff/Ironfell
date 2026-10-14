@@ -1,4 +1,4 @@
-//! The session tier (plans/panels-and-session.md): the selection as a
+//! The session tier (plans/specs/panels-and-session.md): the selection as a
 //! `selection` node with `selects` relations, in its own id range, never
 //! saved, never in undo, leaving the document's version and ids alone.
 

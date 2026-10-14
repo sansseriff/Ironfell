@@ -58,7 +58,7 @@ cd .claude/skills/run-iron && bun run drive.ts < smoke.txt; cd -
 .claude/skills/run-iron/serve.sh stop
 ```
 
-The shell is a dock of views (`src-ui/views/`, plans/panels-and-session.md):
+The shell is a dock of views (`src-ui/views/`, plans/specs/panels-and-session.md):
 tabs and splits, each a view onto a composition or an HTML view. The
 document-space commands below address the **Main** tab, whose view id is
 `viewer`; it shows the `main` composition, which embeds the scene, the
@@ -86,7 +86,7 @@ composition views; hover either to light both; Show in each way; undo the
 link in one step; the model surface's `<link-figures>`, its merge question
 and `keep`), round-trips the document through save and load,
 and prints the transactions the store applied. Then, on a fresh app, it
-runs the select tool (stage E, plans/select-tool.md): click, a corner
+runs the select tool (stage E, plans/specs/select-tool.md): click, a corner
 resize, a Shift-snapped rotation, undo of both, a group's click /
 double-click / Esc / Esc, a marquee, arrow nudges, and delete of the
 pendulum undone in one step; then the pen (a path drawn, closed, the close
@@ -307,7 +307,7 @@ is 5K); `URL=…` replaces the default page. For frame times:
 (`effectiveFps`, `tickMs`, `rafDeltaMs`).
 
 Every view renders into its own texture and the window only composites
-(`plans/view-textures.md`), and a frame that changes nothing visible is not
+(`plans/specs/view-textures.md`), and a frame that changes nothing visible is not
 rendered at all (render on demand), so an idle app costs ≈0.1 ms per tick
 at any size. A frame that keeps rendering while nothing moves means
 something writes state every frame; `crate::decide_redraw` lists what
@@ -431,7 +431,7 @@ Frames per second counts idle frames between pointer events too, so read
 pixels to Playwright CSS pixels using DPR. The benchmark sets this because the
 stress fixture maps document pixels to physical pixels at zoom 1. Normal driver
 commands keep CSS offsets by default. Wheel deltas retain their original units.
-The 1k/10k SIMD before/after tables and raw data are in `plans/render-benchmark.md`
+The 1k/10k SIMD before/after tables and raw data are in `plans/rendering/render-benchmark.md`
 §6–7; older scalar rows are historical. `bounds_updated` and `pick_candidates`
 report maximum work counts per update/walk in the interval; `drawn` is the last
 visible draw walk. Idle `pick.n` and `bounds.n` should be zero.
@@ -483,7 +483,7 @@ Don't run performance measurements concurrently with other browser tests/builds.
 ## Display-paced interaction and independent renderer controls
 
 These are confidence tests, documented with checked results and caveats in
-`plans/renderer-sanity-checks.md`. Use the optimized build and run sequentially:
+`plans/rendering/renderer-sanity-checks.md`. Use the optimized build and run sequentially:
 
 ```bash
 PROFILE=wasm-bench .claude/skills/run-iron/build.sh

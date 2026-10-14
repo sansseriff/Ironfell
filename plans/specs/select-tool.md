@@ -172,7 +172,7 @@ independent bounds have per-subtree revisions.
 
 Measured with shipped wasm SIMD at 10k shapes: resting selection 119 → 2.7 ms,
 hover 13.7 → 2.7 ms, equal to the 2.7 ms idle worker CPU p50. Cache rebuild samples
-are zero during these resting intervals. [Tables and raw data](render-benchmark.md#6-simd-baseline-and-selectionhover-cache-2026-10-13).
+are zero during these resting intervals. [Tables and raw data](../rendering/render-benchmark.md#6-simd-baseline-and-selectionhover-cache-2026-10-13).
 
 Verified with the final dev-opt build: complete `run-iron` smoke (including resize,
 rotation/undo, group selection, marquee, point editing, bound drags, and linked

@@ -1,8 +1,8 @@
 # Handoff: 2D render performance (roadmap stage H)
 
 **Date:** 2026-10-13, work order revised 2026-10-14 · **Branch:** `document-spine` · **Read first:**
-`plans/render-benchmark.md` (the measurements), then this file, then
-`plans/infinite-canvas-architecture-patterns.md` §6–§8 (the target architecture for the
+`plans/rendering/render-benchmark.md` (the measurements), then this file, then
+`plans/specs/infinite-canvas-architecture-patterns.md` §6–§8 (the target architecture for the
 same problems). Background on the rest of the system: `plans/guide2/index.html`.
 
 This is for an agent starting fresh. It says what was measured, what is wrong, what to do
@@ -16,7 +16,7 @@ in what order, and the traps the measuring agent fell into.
 - Don't push. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Worktrees, if used, go in `.agents/worktrees/<name>` (see AGENTS.md; symlink `target`).
 - Native store tests: `cargo test -p iron_document --target aarch64-apple-darwin`.
-- `plans/infinite-canvas-architecture-patterns.md` was written by another agent and is
+- `plans/specs/infinite-canvas-architecture-patterns.md` was written by another agent and is
   **untracked**; the user has not asked for it to be committed or implemented wholesale.
 
 ## 2. What exists now
@@ -48,7 +48,7 @@ PROFILE=wasm-bench .claude/skills/run-iron/build.sh
 
 One count takes ~2.5 min; four counts ~10–12 min, so run it in the background.
 
-## 3. Findings (numbers in `plans/render-benchmark.md`)
+## 3. Findings (numbers in `plans/rendering/render-benchmark.md`)
 
 | # | Problem | Evidence | Where |
 |---|---|---|---|
@@ -127,7 +127,7 @@ mesh baseline, Rive as a reference) are experiments for the
 `iron_renderer_probe` harness, not priorities; see `renderer-sanity-checks.md` §10.
 
 Each step: change, re-run the benchmark at 1k and 10k, run the smoke script, update
-`plans/render-benchmark.md` (add an "after" table), `plans/roadmap.md`'s H row, commit.
+`plans/rendering/render-benchmark.md` (add an "after" table), `plans/roadmap.md`'s H row, commit.
 
 Phases 1–2 of the other plan (gesture ownership, typed UI protocol) are correctness work
 independent of this list; don't mix them into the performance commits.
@@ -215,7 +215,7 @@ spatial queries. The cache is not a substitute for those systems.
 - Initial repeated lookup/sorting plus per-leaf incremental tree updates regressed
   10k low-zoom rotation to 42.1 ms. Cached sort keys, one sort per canonical scope,
   and packed dense updates reduce it to 32.7 ms. Both raw runs are retained in
-  `plans/benchmarks/`; tune the ≥256 / >50% batch policy from further workloads.
+  `plans/rendering/benchmarks/`; tune the ≥256 / >50% batch policy from further workloads.
 - Do not conflate faster picking with a constant-time large-group transform.
   Bevy globals and ~4.3 ms of bounds/index maintenance still scale with descendants.
   Raster baking saves encoding but does not automatically eliminate these costs.

@@ -11,7 +11,7 @@ use std::str::FromStr;
 
 const ALPHABET: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// Session-tier ids (plans/panels-and-session.md) start here: session nodes
+/// Session-tier ids (plans/specs/panels-and-session.md) start here: session nodes
 /// and relations are allocated from their own range, so they never shift
 /// the ids of content, and nothing at or above it is ever saved.
 pub const SESSION_BASE: u64 = 1 << 40;

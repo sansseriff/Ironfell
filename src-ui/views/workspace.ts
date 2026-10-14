@@ -1,6 +1,6 @@
 /**
  * The workspace: how views are laid out, as dockview tabs and splits
- * (plans/panels-and-session.md, the dock presenter). Layout is workspace
+ * (plans/specs/panels-and-session.md, the dock presenter). Layout is workspace
  * state: kept across reloads (browser storage for now; the store's workspace
  * root later), never in the document or its undo.
  */

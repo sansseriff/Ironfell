@@ -1,5 +1,5 @@
 //! The node-type registry: one table read by the validator, the reconciler,
-//! the model-facing manifest and the DOM host (plans/document-spine.md §5.7).
+//! the model-facing manifest and the DOM host (plans/specs/document-spine.md §5.7).
 //!
 //! Adding a node type is a Rust change. That is the correct place for it: the
 //! vocabulary is code, the bindings over it are data (doc 02 §9.6). The
@@ -180,7 +180,7 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
-    // The session tier (plans/panels-and-session.md): state that is not
+    // The session tier (plans/specs/panels-and-session.md): state that is not
     // content. Its ids come from their own range; it is never saved and
     // never in undo, and views of the document leave it out.
     TypeSpec {

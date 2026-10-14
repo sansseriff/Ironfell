@@ -3,11 +3,11 @@
 **Status:** Proposed — implementation plan
 **Date:** 2026-10-09
 **Scope:** The changes to `iron_document`, the Bevy bridge, and the Svelte shell needed
-to realise [`vision/09_entities-compositions-and-ports.md`](vision/09_entities-compositions-and-ports.md):
+to realise [`../vision/09_entities-compositions-and-ports.md`](../vision/09_entities-compositions-and-ports.md):
 units and structured values, run-time definitions, entities with ports, connections that
 carry signals, several compositions shown in separate panels, cross-representation
 linking, obligations, encapsulation, and the lesson layer.
-**Builds on:** [`document-spine.md`](document-spine.md). Sequenced in [`roadmap.md`](roadmap.md).
+**Builds on:** [`document-spine.md`](document-spine.md). Sequenced in [`roadmap.md`](../roadmap.md).
 **Works alongside:** [`constraint-system.md`](constraint-system.md). Constraints are
 composition-local, and port kinds may imply them.
 

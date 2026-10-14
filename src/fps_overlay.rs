@@ -118,7 +118,7 @@ fn update_fps_display(
 ) {
     // Four times a second: rewriting the text every frame would mark the UI
     // changed every frame, and the window would never be idle
-    // (plans/view-textures.md, render on demand).
+    // (plans/specs/view-textures.md, render on demand).
     let now = time.elapsed_secs_f64();
     if now - *last < 0.25 {
         return;

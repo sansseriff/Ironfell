@@ -88,7 +88,7 @@ impl PanelViews {
 /// How each 2D view looks at its composition: a pan and a zoom, set by
 /// scrolling, pinching, Space-drag, the zoom keys and "Show in"
 /// (`bevy_app::select::navigate_views`). Presentation only, workspace
-/// state (plans/panels-and-session.md): not in the document, not undoable.
+/// state (plans/specs/panels-and-session.md): not in the document, not undoable.
 #[derive(Resource, Default, Debug)]
 pub struct ViewCameras(pub bevy::platform::collections::HashMap<String, ViewCamera>);
 

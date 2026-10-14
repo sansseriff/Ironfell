@@ -1,7 +1,7 @@
 //! The drags the select tool (`select`) hands off: meshes in 3D, content on
 //! planes, sliders. Selection and the 2D box live in `select`.
 //!
-//! A drag is an intent (plans/document-spine.md §10) carried by the store's
+//! A drag is an intent (plans/specs/document-spine.md §10) carried by the store's
 //! gesture overlay: every frame the pointer's position is previewed through
 //! `Store::preview_target`, the bridge reconciles the affected nodes before
 //! transforms propagate (`document_bridge::reconcile_gesture`), and one

@@ -2,7 +2,7 @@
 //!
 //! Flat tables keyed by id, sorted keys, one record per line, a schema
 //! version at the top. Nesting would encode location, and identity is
-//! separate from location (plans/document-spine.md §7). The layout is chosen
+//! separate from location (plans/specs/document-spine.md §7). The layout is chosen
 //! so that a git diff of a saved file reads as an op log.
 
 use crate::component::{Component, ComponentKind};

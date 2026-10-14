@@ -3,7 +3,7 @@
 //! Every panel posted from JS with `kind == "ui"` gets a flat gray background drawn
 //! into its rect. This is the placeholder substrate for the future in-scene vector UI
 //! (widgets as entities, not windows). Each panel is its own vector view
-//! (plans/view-textures.md), so it renders into a texture its own size.
+//! (plans/specs/view-textures.md), so it renders into a texture its own size.
 
 use bevy::prelude::*;
 use kurbo;

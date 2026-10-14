@@ -175,7 +175,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     init_shared_resources(&mut app);
     announce_canvas_window(&mut app);
     // Every view renders into its own texture and the window only composites
-    // them (plans/view-textures.md), so a frame that changed nothing visible
+    // them (plans/specs/view-textures.md), so a frame that changed nothing visible
     // need not render at all.
     if variant_flags & VARIANT_ALWAYS_RENDER == 0 {
         app.init_resource::<crate::RedrawNeeded>();
@@ -190,7 +190,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
 
     // --- STEP 1 (retired): a background camera ------------------------------
     // The window has one camera now, the vector composite camera, which clears
-    // to the background itself (plans/view-textures.md).
+    // to the background itself (plans/specs/view-textures.md).
 
     // --- STEP 2: vector backend camera ---------------------------------------
     // The backend spawns and owns its full-window compositing camera (order 10).

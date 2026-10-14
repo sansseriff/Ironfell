@@ -1,5 +1,5 @@
 //! Views: typed, elided reads of the document for a model or a host
-//! (plans/document-spine.md §8; doc 04 §6).
+//! (plans/specs/document-spine.md §8; doc 04 §6).
 //!
 //! Three relations (ECM §11): the raw tree; the model (entities, their
 //! definitions, parameters and figures); and one composition's layout, with

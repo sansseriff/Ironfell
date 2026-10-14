@@ -3,7 +3,7 @@
 **Status:** Research findings — supersedes parts of [`bevy-vello-hybrid-design.md`](./bevy-vello-hybrid-design.md)
 **Date:** 2026-08-15
 **Audited against:** `vello` @ `main` (post-`v0.10.0` / `vello_hybrid` 0.2.0), `bevy` 0.19.1, `bevy_vello` 0.13.1 + `main`
-**Predecessors:** [`bevy-vello-hybrid-design.md`](./bevy-vello-hybrid-design.md), [`bevy-vello-hybrid-open-questions.md`](./bevy-vello-hybrid-open-questions.md), [`vision/01_layered-architecture-overview.md`](./vision/01_layered-architecture-overview.md)
+**Predecessors:** [`bevy-vello-hybrid-design.md`](./bevy-vello-hybrid-design.md), [`bevy-vello-hybrid-open-questions.md`](./bevy-vello-hybrid-open-questions.md), [`../vision/01_layered-architecture-overview.md`](../vision/01_layered-architecture-overview.md)
 
 ---
 
@@ -223,7 +223,7 @@ Also gained: the dependency floor. `vello_hybrid` needs `bytemuck, thiserror, ve
 
 ## 6. What you have to build
 
-Mapped onto the layers in [`vision/01`](./vision/01_layered-architecture-overview.md). Everything below Layer 4 is renderer-independent and is worth building whether or not the renderer migration happens.
+Mapped onto the layers in [`vision/01`](../vision/01_layered-architecture-overview.md). Everything below Layer 4 is renderer-independent and is worth building whether or not the renderer migration happens.
 
 ### 6.1 The renderer control layer (`iron_vector_hybrid`)
 

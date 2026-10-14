@@ -127,7 +127,7 @@ impl WorkerApp {
     }
 }
 
-/// Render on demand (plans/view-textures.md): whether this frame changed
+/// Render on demand (plans/specs/view-textures.md): whether this frame changed
 /// anything the window shows. When it did not, the frame loop runs only the
 /// main world and the window keeps its last picture, so an idle frame costs
 /// no GPU work at any resolution. Only installed with view textures, where

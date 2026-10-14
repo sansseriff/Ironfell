@@ -500,7 +500,7 @@ it, or treat raster baking as the inevitable solution to expensive Vello encodin
 
 ## 9. Retention terminology and upstream intent
 
-See [Vello retention and the render-plan layer](vello-retention-and-render-plan.md)
+See [Vello retention and the render-plan layer](../archive/vello-retention-and-render-plan.md)
 for the pinned API audit and newly read public Zulip discussions. Iron has
 whole-view scene/pixel retention today; its dirty-view path still resets and
 re-encodes visible content. Raster bakes add a finer retained representation,
@@ -517,7 +517,7 @@ prepared strips survive only an unchanged transform (or whole-pixel horizontal,
 4-pixel vertical moves). Renderers that keep geometry in object space and
 rasterize on the GPU (Vello Classic's compute pipeline; tessellating renderers
 such as Rive's) make moving unchanged shapes nearly free on the CPU, at other
-costs. If the work in `handoff-render-perf.md` §4 still misses budget, compare
+costs. If the work in `handoff-render.md` §4 still misses budget, compare
 these in this harness before any migration:
 
 - **Tessellated mesh baseline:** `lyon` fills/strokes tessellated once into

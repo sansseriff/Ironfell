@@ -1,7 +1,7 @@
 //! The document's 2D content as one display-list layer, in painter order.
 //!
 //! One layer for all 2D nodes is the batched tier of
-//! `plans/document-spine.md` §10: many small primitives share one DisplayList
+//! `plans/specs/document-spine.md` §10: many small primitives share one DisplayList
 //! entity and the layer rebuilds when any of them changed. Finer chunking is
 //! the raster cache's job later (doc 07 §4.2).
 //!
@@ -25,7 +25,7 @@ use iron_document::NodeId;
 
 /// One document layer per 2D panel, each its own [`VectorView`]: it renders
 /// into a texture the panel's size and re-renders only when its own content
-/// changed (plans/view-textures.md).
+/// changed (plans/specs/view-textures.md).
 #[derive(Component, Debug)]
 pub struct DocumentPanelLayer {
     pub panel: String,

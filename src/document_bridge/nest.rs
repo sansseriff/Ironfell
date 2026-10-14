@@ -137,7 +137,7 @@ pub const EMBED_3D_SIZE: (f64, f64) = (320.0, 240.0);
 /// view), at what texture size, and how window pixels map onto it. The
 /// camera renders the embed's whole shape into its texture; the 2D view
 /// draws that texture under the embed's transform, clipped like any other
-/// content (plans/view-textures.md, migration step 3).
+/// content (plans/specs/view-textures.md, migration step 3).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EmbedView {
     /// Panel id plus the chain of embeds that reaches it: stable while the

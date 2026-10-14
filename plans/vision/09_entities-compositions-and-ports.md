@@ -11,8 +11,8 @@ clarified how the tool is meant to be used.
 **Relates to:** doc 02 (Model, Projection, Annotation; components; editors as data),
 doc 04 (the authored store; views for the model), doc 05 (three kinds of time), doc 06
 (units; enumerated choice), and the implementation plans
-[`../entity-composition-model.md`](../entity-composition-model.md) and
-[`../constraint-system.md`](../constraint-system.md).
+[`../specs/entity-composition-model.md`](../specs/entity-composition-model.md) and
+[`../specs/constraint-system.md`](../specs/constraint-system.md).
 
 ---
 
@@ -258,7 +258,7 @@ Constraints position things within a composition. A drag assigns roles at intera
 time: grabbed, free, fixed, bound. Connections can imply constraints (§6), so connecting
 a lens to a beam creates the rail it slides on. Constraints are composition-local, like
 mate features: a mate in the 3D view says nothing to the schematic. The design is in
-[`../constraint-system.md`](../constraint-system.md).
+[`../specs/constraint-system.md`](../specs/constraint-system.md).
 
 ---
 

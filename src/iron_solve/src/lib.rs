@@ -1,4 +1,4 @@
-//! `iron_solve`: a small dense constraint solver (plans/constraint-system.md §5).
+//! `iron_solve`: a small dense constraint solver (plans/specs/constraint-system.md §5).
 //!
 //! A [`Problem`] is a vector of variables, a characteristic scale per
 //! variable, and residual [`Term`]s in three [`Tier`]s. The solver minimises

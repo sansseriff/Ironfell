@@ -44,10 +44,10 @@ This plan refines existing work rather than replacing the roadmap.
 |---|---|---|
 | Gesture ownership | [Select tool](select-tool.md), [constraints](constraint-system.md), roadmap E | Define what happens when human previews overlap model edits, undo, or view changes |
 | UI API and subscriptions | [Document spine](document-spine.md), [panels and session](panels-and-session.md) | Typed transport, scoped subscriptions, stale-response protection, explicit disposal |
-| Bounds and spatial queries | [Roadmap H](roadmap.md), [layered architecture](vision/01_layered-architecture-overview.md) | Independent derived subsystem shared by rendering and interaction |
-| Editor overlays | [Rendering architecture](vision/07_current-2d-backends-and-hybrid-architecture.md) | Keep hover and selection from invalidating retained content |
-| Chunks and raster caching | [View textures](view-textures.md), [Hybrid design](bevy-vello-hybrid-design.md), vision 07 | Feed existing cache direction with precise changes and spatial work sets |
-| External Models | [Computation boundary](vision/06_the-computation-boundary.md), [substrate](vision/02_substrate-model-projection-control.md) | Named capabilities with explicit providers and stale-result handling |
+| Bounds and spatial queries | [Roadmap H](../roadmap.md), [layered architecture](../vision/01_layered-architecture-overview.md) | Independent derived subsystem shared by rendering and interaction |
+| Editor overlays | [Rendering architecture](../vision/07_current-2d-backends-and-hybrid-architecture.md) | Keep hover and selection from invalidating retained content |
+| Chunks and raster caching | [View textures](view-textures.md), [Hybrid design](../archive/bevy-vello-hybrid-design.md), vision 07 | Feed existing cache direction with precise changes and spatial work sets |
+| External Models | [Computation boundary](../vision/06_the-computation-boundary.md), [substrate](../vision/02_substrate-model-projection-control.md) | Named capabilities with explicit providers and stale-result handling |
 | DOM-hosted nodes | Document spine §4, panels and session | Materialize hosted-node projections in Svelte |
 
 The performance gate for roadmap H remains. Correctness work on gestures and
@@ -505,7 +505,7 @@ subtree baking using the existing offscreen-view path. `understory_box_tree` and
 raster tiling and atlas allocation remain later, evidence-driven choices.
 
 Measured outcomes and verification are in `render-benchmark.md` §7 and
-`handoff-render-perf.md`; the benchmark will also quantify maintenance cost when
+`handoff-render.md`; the benchmark will also quantify maintenance cost when
 all descendants move. Indexing reduces query work; it does not promise that a
 large rotating subtree becomes constant-time.
 

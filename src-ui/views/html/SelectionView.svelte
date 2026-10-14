@@ -1,7 +1,7 @@
 <script lang="ts">
   // The session's selection (source: selection): what is picked, Link and
   // Show in, and Link's merge question. The seed of the inspector
-  // (plans/panels-and-session.md).
+  // (plans/specs/panels-and-session.md).
   import { controllerManager } from "../../controller-manager.svelte";
   import type { ViewSpec } from "../views";
 
@@ -25,7 +25,7 @@
   }
   const showIn = $derived(doc.counterparts.figures.filter((f) => f.node !== doc.selection[0] && f.composition !== null));
 
-  // The inspector (a first, HTML version; plans/panels-and-session.md):
+  // The inspector (a first, HTML version; plans/specs/panels-and-session.md):
   // the first selected node's fields, each edited through its handle, so a
   // linearly bound value edits its source and a locked one says why.
   type Field = { leaf: string; field: string; kind: string | null; text: string | null; bind: string | null; edit: string; via: string | null; why: string | null };

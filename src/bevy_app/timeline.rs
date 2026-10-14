@@ -94,7 +94,7 @@ pub fn push_time_to_store(timeline: Res<TimelineState>, mut store: ResMut<Docume
 
 fn setup_timeline_scenes(mut commands: Commands) {
     // The timeline's layers render into a texture the timeline panel's size
-    // (plans/view-textures.md); the playhead moving re-renders only that.
+    // (plans/specs/view-textures.md); the playhead moving re-renders only that.
     let view = commands.spawn((crate::panels::PanelVectorView { panel: TIMELINE_PANEL.to_owned() }, Name::new("timeline view"))).id();
     commands.spawn((
         DisplayList::default(),

@@ -1,5 +1,5 @@
 //! The select tool (roadmap stage E): Figma's selection, drag and transform
-//! semantics over the document's compositions (plans/select-tool.md).
+//! semantics over the document's compositions (plans/specs/select-tool.md).
 //!
 //! Every hit carries its *chain*: the nodes from the panel composition's top
 //! level down to the hit node, through groups and embeds. A click selects
@@ -1717,7 +1717,7 @@ pub fn navigate_views(
 }
 
 /// The selection's record is the store's session tier (a `selection` node
-/// with `selects` relations, plans/panels-and-session.md); `SelectionState`
+/// with `selects` relations, plans/specs/panels-and-session.md); `SelectionState`
 /// and the tool's reaches are the frame's working copy. Whatever changed
 /// the session elsewhere (a load, the shell, later undo) is read back;
 /// otherwise a change here is written there, once per frame.

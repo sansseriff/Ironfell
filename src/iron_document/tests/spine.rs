@@ -1,4 +1,4 @@
-//! The tests plans/document-spine.md §14 asks for: inverses restore, replay
+//! The tests plans/specs/document-spine.md §14 asks for: inverses restore, replay
 //! equals snapshot, atomicity, structural validation, and view elision.
 
 use iron_document::component::{Fill, Name, Size, Timing, Transform2d, Transform3d};

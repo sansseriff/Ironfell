@@ -7,7 +7,7 @@
 //!        └────────────── drag_commit ◀── drag_apply ◀─────────────┘ Transform
 //! ```
 //!
-//! Three rules, from `plans/document-spine.md` §10:
+//! Three rules, from `plans/specs/document-spine.md` §10:
 //!
 //! - The store is authority. Bevy holds a projection of it: every materialised
 //!   entity carries [`Provenance`] naming its node, and nothing else about the
@@ -182,7 +182,7 @@ pub enum HistoryOp {
 
 /// Undo and redo requests, queued by the shell through the FFI and applied
 /// by the document sync after that frame's transactions. Undo is itself a
-/// transaction on the same log (plans/document-spine.md §6.4), so the
+/// transaction on the same log (plans/specs/document-spine.md §6.4), so the
 /// reconciler treats it like any other.
 #[derive(Resource, Default)]
 pub struct HistoryRequests(pub Vec<HistoryOp>);

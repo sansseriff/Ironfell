@@ -57,7 +57,7 @@ pub struct VectorLayer {
 
 /// A rectangle of the window whose layers render into a texture of their
 /// own, sized to it, and are pasted back texel for pixel
-/// (plans/view-textures.md). Screen layers keep window coordinates; the
+/// (plans/specs/view-textures.md). Screen layers keep window coordinates; the
 /// backend offsets them by `pos`.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VectorView {

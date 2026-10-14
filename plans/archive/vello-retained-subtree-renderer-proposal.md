@@ -1,7 +1,7 @@
 # A retained render-plan layer for Vello: Zulip research and an implementation proposal
 
 **Date:** 2026-10-14. **Status:** reference, partly adopted. Do not implement it as
-written; the work order lives in [`handoff-render-perf.md` §4](handoff-render-perf.md#4-what-to-do-in-order).
+written; the work order lives in [`handoff-render.md` §4](../handoff-render.md#4-what-to-do-in-order).
 
 ## Decision (2026-10-14 review)
 
@@ -29,8 +29,8 @@ written; the work order lives in [`handoff-render-perf.md` §4](handoff-render-p
   commands, so the first version covers source-over content and clips.
 
 Read with [the retention audit](vello-retention-and-render-plan.md),
-[the measured controls](renderer-sanity-checks.md), and
-[Iron's architectural vision](vision/01_layered-architecture-overview.md).
+[the measured controls](../rendering/renderer-sanity-checks.md), and
+[Iron's architectural vision](../vision/01_layered-architecture-overview.md).
 
 ## 1. Recommendation and feasibility
 
@@ -366,7 +366,7 @@ geometry control and ~36.5 ms for dense outlined group movement. They motivate
 both incremental preparation and separate feedback policy. They do not establish
 that a retained layer will fix the fully changing workload, that GPU presentation
 has been measured, or that a newer core already performs better.
-[Measured protocol and raw data](renderer-sanity-checks.md#7-follow-up-all-shapes-change-and-one-standalone-vello-scene).
+[Measured protocol and raw data](../rendering/renderer-sanity-checks.md#7-follow-up-all-shapes-change-and-one-standalone-vello-scene).
 
 An agent can write the experimental crate, adapters, resource refactors and these
 checks. Throughput, visual fidelity and memory behavior still have to pass the

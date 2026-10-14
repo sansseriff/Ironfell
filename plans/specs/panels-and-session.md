@@ -3,7 +3,7 @@
 **Status:** design note, 2026-10-12. Built: the dock presenter and views, pan and zoom,
 and the session tier with the selection (see "Built so far" at the end). Not yet built:
 the workspace root, the inspector, and selection in undo. It came out of a conversation
-after the select tool (plans/select-tool.md) and records the direction agreed there. It
+after the select tool (plans/specs/select-tool.md) and records the direction agreed there. It
 revises one earlier verdict, in document-spine.md §4; see "What this changes" below.
 
 ## The question

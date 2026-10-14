@@ -90,7 +90,7 @@ if(mode==='capture') {
    throw new Error('Build the standalone control first: sh .claude/skills/run-iron/build-renderer-probe.sh');
   const fixturePath=resolve(artifacts,`fixtures/stress-${count}.json`);
   if(!existsSync(fixturePath)) {
-   const archive=resolve(root,`plans/benchmarks/stress-${count}-fixture-2026-10-13.json.gz`);
+   const archive=resolve(root,`plans/rendering/benchmarks/stress-${count}-fixture-2026-10-13.json.gz`);
    if(!existsSync(archive))throw new Error('capture the fixture first');
    mkdirSync(resolve(artifacts,'fixtures'),{recursive:true});
    writeFileSync(fixturePath,gunzipSync(readFileSync(archive)));

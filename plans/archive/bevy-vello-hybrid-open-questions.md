@@ -1,6 +1,6 @@
 # `bevy_vello_hybrid` — open questions register
 
-> **Historical** (see `plans/README.md` §5). Companion to the design above; resolved or overtaken by the migration. Current direction: vision 07 and `handoff-render-perf.md`.
+> **Historical** (see `plans/README.md` §5). Companion to the design above; resolved or overtaken by the migration. Current direction: vision 07 and `handoff-render.md`.
 
 **Companion to:** [`bevy-vello-hybrid-design.md`](./bevy-vello-hybrid-design.md)
 **Status:** ACTIVE — Tier A and desktop Tier B were resolved on 2026-07-24. They produced
@@ -169,7 +169,7 @@ full visible-scene rebuild. Needs human-driven interaction, hence Tier C.
 ### Q-C3. Frame pacing at 5K
 If a supported direct/no-clear path becomes available, does removing the intermediate
 full-window texture affect the existing 5K frame-skip problem? See
-`plans/perf-grid-runbook.md` and the `CadenceProbe` harness already built for this.
+`plans/archive/perf-grid-runbook.md` and the `CadenceProbe` harness already built for this.
 Ground truth via Perfetto, not DevTools.
 
 ---

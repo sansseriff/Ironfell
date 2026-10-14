@@ -1,4 +1,4 @@
-//! The canvas side of views (plans/panels-and-session.md).
+//! The canvas side of views (plans/specs/panels-and-session.md).
 //!
 //! A **view** is a window onto a composition: what it shows (`source`), how
 //! (`kind`, its notation: `composition` draws a 2D or 3D composition,
@@ -121,7 +121,7 @@ pub fn overlay_affine(rect: PanelRect) -> kurbo::Affine {
 }
 
 /// Document 2D space is y-down with its origin at the viewer panel's top-left
-/// corner, one unit per physical pixel (plans/document-spine.md §0). This maps
+/// corner, one unit per physical pixel (plans/specs/document-spine.md §0). This maps
 /// a window-space cursor position into it; `None` outside the panel.
 pub fn document_from_screen(rect: PanelRect, screen: Vec2) -> Option<Vec2> {
     rect.contains(screen).then(|| Vec2::new(screen.x - rect.x, screen.y - rect.y))
@@ -133,7 +133,7 @@ pub fn document_affine(rect: PanelRect) -> kurbo::Affine {
 }
 
 
-/// A vector view that covers one named panel (plans/view-textures.md): its
+/// A vector view that covers one named panel (plans/specs/view-textures.md): its
 /// layers render into a texture the panel's size. While the panel does not
 /// exist the view has no rectangle, and its layers draw nowhere.
 #[derive(Component, Debug, Clone)]

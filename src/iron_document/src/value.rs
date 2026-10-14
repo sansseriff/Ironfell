@@ -3,7 +3,7 @@
 //! A [`Slot`] is what a leaf path resolves to: a constant, or an expression
 //! over other leaves that the reactive graph (`graph.rs`) keeps resolved. The
 //! `Animated` variant is reserved so that adding clip-driven values later
-//! touches the evaluator, not every read site (plans/document-spine.md §5.4).
+//! touches the evaluator, not every read site (plans/specs/document-spine.md §5.4).
 //! It carries [`Reserved`], which cannot be constructed anywhere.
 
 use crate::expr::Expr;

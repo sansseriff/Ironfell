@@ -409,7 +409,7 @@ pub(crate) fn sync_embed_cameras(
 
 
 // ---------------------------------------------------------------------------
-// View textures (plans/view-textures.md, spike S1 and S3): a 3D camera
+// View textures (plans/specs/view-textures.md, spike S1 and S3): a 3D camera
 // renders into its own texture sized to its rectangle, pasted into the
 // window by a composite quad, and renders only when what it shows changed.
 

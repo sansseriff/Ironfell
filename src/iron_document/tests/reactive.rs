@@ -1,4 +1,4 @@
-//! Bindings, the reactive graph, and gestures (plans/document-spine.md step 5).
+//! Bindings, the reactive graph, and gestures (plans/specs/document-spine.md step 5).
 
 use iron_document::component::{Fill, Size, Slider, Transform2d};
 use iron_document::*;

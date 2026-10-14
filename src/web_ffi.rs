@@ -398,7 +398,7 @@ fn map_key_str_to_bevy_key(key_str: &str) -> Option<(BevyKeyCode, Key)> {
     }
 }
 
-// ---- Document: the four-call FFI of plans/document-spine.md §9 ----------
+// ---- Document: the four-call FFI of plans/specs/document-spine.md §9 ----------
 // `apply` arrives through gestures for now; the model surface adds its own
 // caller in step 7. These stay thin: parse, hand to a resource, return.
 
@@ -647,7 +647,7 @@ pub fn document_focus(ptr: u64, node: String) -> String {
 
 /// The session's selection, in pick order: JSON `[{"node","type","name",
 /// "panel","chain"}]`. For the model surface and the shell; the record is
-/// the store's session tier (plans/panels-and-session.md).
+/// the store's session tier (plans/specs/panels-and-session.md).
 #[wasm_bindgen]
 pub fn document_selection(ptr: u64) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
@@ -674,7 +674,7 @@ pub fn document_selection(ptr: u64) -> String {
     serde_json::Value::Array(list).to_string()
 }
 
-/// The inspector's description of a node (plans/panels-and-session.md, a
+/// The inspector's description of a node (plans/specs/panels-and-session.md, a
 /// first HTML inspector): its type and name, and every component's fields
 /// with the value a reader sees, the binding if bound, and how an edit
 /// would land (`direct`, `via` a linear binding's source, or `locked` with
@@ -782,7 +782,7 @@ pub fn document_inspect_set(ptr: u64, node: String, leaf: String, text: String) 
 
 /// Every composition, for the shell's "open a view" menu: JSON
 /// `[{"id","name","dims"}]` in root order. A view is a window onto one of
-/// these (plans/panels-and-session.md).
+/// these (plans/specs/panels-and-session.md).
 #[wasm_bindgen]
 pub fn document_compositions(ptr: u64) -> String {
     use iron_document::composition::{self, Dims};
@@ -868,7 +868,7 @@ pub fn document_place(ptr: u64, parent: String, after: String, count: u32) -> Re
 }
 
 /// The node-type and component registry as JSON: the one source for the
-/// model's manifest and the shell's editors (plans/document-spine.md §5.7).
+/// model's manifest and the shell's editors (plans/specs/document-spine.md §5.7).
 #[wasm_bindgen]
 pub fn document_schema() -> String {
     iron_document::registry::schema_json().to_string()
@@ -1053,7 +1053,7 @@ fn bigint_to_u64(value: JsValue) -> Result<u64, JsValue> {
     Err(JsValue::from_str("Value is not a valid u64"))
 }
 
-/// The solver's phase 1 benchmark (plans/constraint-system.md §14) in this
+/// The solver's phase 1 benchmark (plans/specs/constraint-system.md §14) in this
 /// build: the 12-variable chain at up to `iterations` iterations, solved
 /// `repeats` times. JSON with the per-solve time, so the same problem can be
 /// compared with `cargo run -p iron_solve --release --example bench`.

@@ -1,5 +1,5 @@
 //! 2D compositions inside 3D ones: a textured plane (ECM §7.4,
-//! plans/view-textures.md migration step 4).
+//! plans/specs/view-textures.md migration step 4).
 //!
 //! An embed of a 2D composition placed in a 3D composition is a plane. Its
 //! extent is the embed's frame, or the bounds of the composition's content,

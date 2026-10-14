@@ -8,13 +8,13 @@ the single authority, undo stays exact, and the language model stays informed wi
 being flooded. Ends in a demo: an inverse-kinematics pendulum you can drag by the ball
 or by the platform.
 **Builds on:** [`document-spine.md`](document-spine.md) (store, ops, gestures, bindings).
-**Fits into:** [`roadmap.md`](roadmap.md) stages C2, D, and I;
-[`vision/09_entities-compositions-and-ports.md`](vision/09_entities-compositions-and-ports.md)
+**Fits into:** [`roadmap.md`](../roadmap.md) stages C2, D, and I;
+[`../vision/09_entities-compositions-and-ports.md`](../vision/09_entities-compositions-and-ports.md)
 §8. Constraints are for setting up and placing things inside one composition; physics
 flows through signals and models. Connections between ports may imply constraints
 ([`entity-composition-model.md`](entity-composition-model.md) phase 7).
 **Amends:** `document-spine.md` §5.10 ("a bound leaf has no drag handle") and vision
-[`02`](vision/02_substrate-model-projection-control.md) §8.2 (writeback policy) — see §17.
+[`02`](../vision/02_substrate-model-projection-control.md) §8.2 (writeback policy) — see §17.
 **Prior art read for this plan:** Inkling's `Constraints.ts`, SolveSpace's `system.cpp`,
 the `ezpz` and `arael-sketch` crate docs, Blender's XPBD solver design notes (§19).
 

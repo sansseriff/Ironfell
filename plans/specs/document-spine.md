@@ -7,9 +7,9 @@ log, and the loop that materialises it into Bevy and writes direct manipulation 
 Records the decisions that shape the store's public types, the process layout those
 decisions imply, and the first vertical slice that proves them.
 **Supersedes:** the build-order disagreement between
-[`vision/08_native-target-via-tauri.md`](vision/08_native-target-via-tauri.md) §1 ("nothing
-before the raster cache") and [`vision/02`](vision/02_substrate-model-projection-control.md)
-§13 / [`vision/04`](vision/04_architecture-an-llm-editable-scene-document.md) §11 (spine
+[`../vision/08_native-target-via-tauri.md`](../vision/08_native-target-via-tauri.md) §1 ("nothing
+before the raster cache") and [`vision/02`](../vision/02_substrate-model-projection-control.md)
+§13 / [`vision/04`](../vision/04_architecture-an-llm-editable-scene-document.md) §11 (spine
 first). Spine first. Amends doc 04 §5.1 on where the store lives.
 
 ---

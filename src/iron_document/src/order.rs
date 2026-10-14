@@ -12,7 +12,7 @@
 //! the fraction. This is the scheme from `rocicorp/fractional-indexing`, which
 //! descends from David Greenspan's write-up. Repeatedly bisecting the same gap
 //! still costs one bit per insert; that is inherent to any order-key scheme,
-//! and the remedy is a rebalance op (deferred; see `plans/document-spine.md`
+//! and the remedy is a rebalance op (deferred; see `plans/specs/document-spine.md`
 //! §5.5).
 
 use serde::{Deserialize, Deserializer, Serialize};

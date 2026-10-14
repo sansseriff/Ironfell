@@ -329,7 +329,7 @@ work. Dirty views still rebuild their whole visible display lists; editor
 outlines still share content targets. No raster cache, presentation-chunk policy,
 atlas or world-space tiles were added. The pinned tutorial inspiration and the
 Understory ownership choices are recorded in
-[infinite-canvas-architecture-patterns.md §13](infinite-canvas-architecture-patterns.md#13-implementation-checkpoint--change-driven-picking-and-spatial-foundation-2026-10-13).
+[infinite-canvas-architecture-patterns.md §13](../specs/infinite-canvas-architecture-patterns.md#13-implementation-checkpoint--change-driven-picking-and-spatial-foundation-2026-10-13).
 
 
 ### Verification

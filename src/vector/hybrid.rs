@@ -266,7 +266,7 @@ fn sync_target(
     }
     // A window-sized texture, rendered and pasted every time it changes,
     // only while some layer still draws into it; otherwise a 1×1 stub and a
-    // hidden quad (plans/view-textures.md).
+    // hidden quad (plans/specs/view-textures.md).
     let used = layers.iter().any(|l| l.view.is_none());
     let size = if used { window } else { UVec2::ONE };
     if let Ok(mut v) = visibility.get_mut(target.composite) {
@@ -383,7 +383,7 @@ struct ExtractedLayer {
 }
 
 /// Where a target's scene goes: the window-sized texture (`None`) or one
-/// view's own texture (plans/view-textures.md).
+/// view's own texture (plans/specs/view-textures.md).
 type TargetKey = Option<Entity>;
 
 /// Render-world mirror of every vector layer.

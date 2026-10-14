@@ -4,7 +4,7 @@
 //! floor and the layout solver all need typed access. Every field is a
 //! [`Slot`], so any field can later become bound or animated without changing
 //! its address. A leaf is addressed as `component.field`, e.g. `transform2d.x`
-//! (plans/document-spine.md §5.3).
+//! (plans/specs/document-spine.md §5.3).
 //!
 //! The file format stays generic JSON regardless: each component serialises as
 //! an object of its fields.
@@ -134,7 +134,7 @@ components! {
     Name / "name" => Name { text: Str = Value::Str(String::new()) }
 
     /// Which renderer materialises this node: `canvas` or `dom`
-    /// (plans/document-spine.md §4). Absent means the type's default.
+    /// (plans/specs/document-spine.md §4). Absent means the type's default.
     Host / "host" => Host { mode: Enum = Value::Enum("canvas".to_owned()) }
 
     /// Document 2D space: y-down, origin top-left, matching SVG and the

@@ -202,7 +202,7 @@ shot after-load
 eval document.querySelector("pre.view")?.textContent.split("\n").slice(0, 4).join(" | ")
 logs applied|rejected|loaded document|nothing to|panicked|binding|locked|differs|by Human|by Model
 errors
-# Stage E, the select tool (plans/select-tool.md), on a fresh app so the
+# Stage E, the select tool (plans/specs/select-tool.md), on a fresh app so the
 # viewer is unpanned: Figma's click, double-click, Esc, marquee, the box's
 # corner resize and Shift-snapped rotation, nudge, and delete, each one
 # transaction that undoes in one step.

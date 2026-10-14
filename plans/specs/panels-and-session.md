@@ -163,6 +163,9 @@ bound to leaves.
 
 ## Order of work
 
+Items 1–2 are built (see "Built so far"). What to pick up next, and in what order, is
+tracked in [`handoff-product.md`](../handoff-product.md).
+
 1. **Session root, selection as relations.** Move `SelectionState` and the select tool's
    reaches into the session; the shell and the model read them from there. No undo yet.
 2. **A right-hand inspector** for the selection, with controls for `transform2d`, `size`,

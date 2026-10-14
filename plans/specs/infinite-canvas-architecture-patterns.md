@@ -19,19 +19,10 @@ entity/figure/composition distinction are particularly suited to the intended
 scientific explanation tool. Moving authority into Svelte or directly into Bevy's
 ECS would weaken those foundations.
 
-The original architecture sequence is below. The measured performance work has
-since taken priority: SIMD/cache, change-driven picking and the spatial foundation
-are implemented (§13). Gesture conflict rules and the typed UI lifecycle remain
-independent hardening work; retained overlay targets and presentation chunks are
-the next rendering increments.
-
-The original recommended sequence is:
-
-1. Define gesture ownership and conflict rules.
-2. Strengthen the typed UI protocol and request lifecycle.
-3. Move bounds and spatial queries out of the drawing traversal.
-4. Separate editor overlays from document content invalidation.
-5. Build presentation chunks and bounded raster caching when measurements justify it.
+Phases 3–5 below are rendering work: phase 3 is implemented (§13), and the order of
+phases 4–5 is owned by [`handoff-render.md`](../handoff-render.md) §4. Phases 1–2
+(gesture ownership, typed UI protocol) are independent hardening work, listed as
+candidates in [`handoff-product.md`](../handoff-product.md).
 
 Capability providers and DOM hosting arrive with their first concrete product use.
 They do not block phases 1–4.

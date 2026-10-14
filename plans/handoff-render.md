@@ -1,12 +1,15 @@
 # Handoff: 2D render performance (roadmap stage H)
 
 **Date:** 2026-10-13, work order revised 2026-10-14 · **Branch:** `document-spine` · **Read first:**
-`plans/rendering/render-benchmark.md` (the measurements), then this file, then
-`plans/specs/infinite-canvas-architecture-patterns.md` §6–§8 (the target architecture for the
-same problems). Background on the rest of the system: `plans/guide2/index.html`.
+this file, then [`rendering/architecture.md`](rendering/architecture.md) (how rendering
+works now, the decisions, and the correctness rules for caching), then
+[`rendering/render-benchmark.md`](rendering/render-benchmark.md) §6–7 (the measurements).
+Background on the rest of the system: [`guide2/index.html`](guide2/index.html). Product
+work has its own handoff, [`handoff-product.md`](handoff-product.md).
 
 This is for an agent starting fresh. It says what was measured, what is wrong, what to do
-in what order, and the traps the measuring agent fell into.
+in what order (§4, the only place the order of rendering work is kept), and the traps
+the measuring agent fell into. §7–9 are verification records of finished increments.
 
 ## 1. Rules of the repo (from AGENTS.md and the user)
 
@@ -67,7 +70,7 @@ change-driven picking, independent bounds/index, per-view culling) are done and
 committed (`87a9a8e`); the DPR question (old item 7) is verified. The list below
 replaces the remaining items. It follows from the measurements in
 `render-benchmark.md` §7 and `renderer-sanity-checks.md` §7, and from the review
-of the retained-renderer proposal (see its Decision block).
+of the retained-renderer proposal (decisions now in `rendering/architecture.md` §5).
 
 Where the remaining time goes at 10k (worker CPU p50, optimized SIMD):
 
@@ -112,8 +115,8 @@ and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
    Start with authored groups as the chunk unit. Bake a static, complex or
    small-on-screen group into an `Offscreen` view at a √2 scale bucket, draw it
    with `DrawCmd::Texture` in painter order, return to live drawing when its
-   subtree revision changes. Gate on the proposal's A → B → C painter-order scene
-   and its §9 acceptance tests. Targets: zoomed-out rotate and pan encode.
+   subtree revision changes. Gate on the A → B → C painter-order scene
+   and the acceptance tests in `rendering/architecture.md` §8. Targets: zoomed-out rotate and pan encode.
    Baking does not remove propagation/bounds cost; item 3 does.
 5. **Small experiment, any time:** panel and embed clips use `push_clip_layer`,
    which routes a whole panel through an intermediate layer texture. 0.2 also has
@@ -169,7 +172,7 @@ independent of this list; don't mix them into the performance commits.
   decide from §4 item 2's propagation timing, after item 3.
 - Settled 2026-10-13/14: `understory_index` is adopted (git-pinned, inside
   `iron_spatial`); `box_tree` and `presentation` are not. The infinite-canvas plan
-  is committed. Vello is not forked (see the proposal's Decision block).
+  is committed. Vello is not forked (`rendering/architecture.md` §5).
 
 
 ## 7. Verification for the selection/hover cache

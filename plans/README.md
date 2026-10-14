@@ -1,81 +1,87 @@
 # Plans: where to start
 
-**Updated:** 2026-10-14, at `bba1ee3` on `document-spine`. Update this file whenever a
-plan's status changes, a plan is added, or one is superseded.
-
-Plans accumulated faster than they were retired, so several overlap. This index says
-which ones are current. Where two documents disagree, the one listed higher wins.
+**Updated:** 2026-10-14 on `document-spine`. Update this file whenever a plan is added,
+finishes, or is superseded.
 
 ## 1. Read first (a new agent)
 
-1. **[`roadmap.md`](roadmap.md)** — the stage map (A–I) and the **Status** table. The one
+1. **[`roadmap.md`](roadmap.md)**: the stage map (A–I) and its **Status** table, the one
    place that records what is done.
-2. **The handoff for your track** — the one place that says what to do next:
-   - **Product/document work** (stages F phase 4–5, G, I):
-     [`handoff.md`](archive/handoff-2026-10-11.md). Its §2 code map, §3 decisions and §5 conventions are
-     current. Its §4 task list is **finished**; the next step is ECM phase 4
-     (consistency and encapsulation) or phase 5 (time-domain signals, the modulator
-     demo). Ask the user which.
-   - **Rendering performance** (stage H): [`handoff-render-perf.md`](handoff-render.md),
-     §4 for the work order, §5 for the measuring traps.
-3. **[`../.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)** — build,
-   serve, drive, smoke script and its expected output.
-4. **[`guide2/index.html`](guide2/index.html)** — a readable walkthrough of the system as
-   built, including the rewritten foundations (store, changes, bindings, bridge).
+2. **The handoff for your track**, the one place that says what to do next and in
+   what order:
+   - **Product work** (documents, compositions, tools, signals, lessons):
+     [`handoff-product.md`](handoff-product.md). Several tasks are open; it says to ask
+     the user which.
+   - **Rendering performance** (stage H): [`handoff-render.md`](handoff-render.md) §4.
+3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
+   serve, drive, the smoke script and its expected output.
+4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as
+   built.
 
-## 2. Specifications for current and next stages
+Where documents disagree, the higher one in this list wins: roadmap Status, then the
+handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `archive/`.
 
-| Plan | What it specifies | State |
+## 2. Layout
+
+| Path | Holds | Changes |
+|---|---|---|
+| `README.md`, `roadmap.md`, `handoff-*.md` | Entry points: status and work order | Every time work lands |
+| `specs/` | What each stage builds, with exit criteria and "Done" notes | As phases land |
+| `rendering/` | Current 2D rendering architecture and its measurements | As rendering work lands |
+| `vision/` | Why: the architecture's reasoning | Rarely |
+| `guide2/` | Generated walkthrough (`guide2/_src/build.py`) | When the system changes enough to mislead |
+| `notes/` | Ideas discussed but **not adopted**; do not build from them | Freely |
+| `archive/` | Superseded plans and finished handoffs, kept for provenance | Only by adding to it |
+
+## 3. Specs
+
+| Spec | What it specifies | State |
 |---|---|---|
 | [`document-spine.md`](specs/document-spine.md) | `iron_document`: ops, transactions, ids, history, file format | Implemented; the store's rules |
 | [`entity-composition-model.md`](specs/entity-composition-model.md) (ECM) | Units, definitions, entities, compositions, ports, lessons | Phases 1–3 done; 4–7 open |
-| [`constraint-system.md`](specs/constraint-system.md) (CS) | Solver, constraints, interaction-time causality | Phases 1–3 done; 4+ open |
+| [`constraint-system.md`](specs/constraint-system.md) (CS) | Solver, constraints, interaction-time causality | Phases 1–3 done; 4–7 open |
 | [`select-tool.md`](specs/select-tool.md) | Select and pen tool semantics | First cut done; "Not yet" list open |
-| [`panels-and-session.md`](specs/panels-and-session.md) | Views, dock presenter, session tier, inspectors | Partly built (see its "Built so far") |
+| [`panels-and-session.md`](specs/panels-and-session.md) | Views, dock presenter, session tier, inspectors | Items 1–2 built; 3–5 open |
 | [`view-textures.md`](specs/view-textures.md) | Every view renders to its own texture | Done except the custom final pass and §4 tiling |
-| [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 slice done (§13); phases 1–2 open, independent of rendering |
+| [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phases 1–2 are product candidates, 4–5 are in the render handoff |
 
-## 3. Vision (why; rarely changes)
+## 4. Rendering
 
-[`vision/`](vision) 01–09. Start with 01 (layered architecture), 02 (substrate, model,
-projection), 07 (2D backends and the hybrid architecture) and 09 (entities, compositions
-and ports). 03 reconciles the vocabulary of 01 and 02: "Projection" is the ontological
-term; the rendering stage is "draw intent" or the "presentation model".
-
-## 4. Rendering reference (evidence behind `handoff-render-perf.md`)
-
-| Plan | Use it for |
+| Document | Use it for |
 |---|---|
-| [`render-benchmark.md`](rendering/render-benchmark.md) | Measurements, protocol, raw data in [`benchmarks/`](rendering/benchmarks) |
+| [`architecture.md`](rendering/architecture.md) | How 2D rendering works now, what Vello can retain, the decisions, caching contracts and acceptance tests |
+| [`render-benchmark.md`](rendering/render-benchmark.md) | In-app measurements and protocol; raw runs in [`benchmarks/`](rendering/benchmarks/) |
 | [`renderer-sanity-checks.md`](rendering/renderer-sanity-checks.md) | Build/DPR pitfalls, Canvas2D/ThorVG/standalone Vello controls, renderer-family experiments (§10) |
-| [`vello-retained-subtree-renderer-proposal.md`](archive/vello-retained-subtree-renderer-proposal.md) | Correctness constraints and acceptance tests for caching; read its **Decision** block first |
-| [`vello-retention-and-render-plan.md`](archive/vello-retention-and-render-plan.md) | What Vello does and does not retain; Zulip sources |
-| [`vello-hybrid-migration-scope.md`](archive/vello-hybrid-migration-scope.md) | `vello_hybrid` internals, transform/caching taxonomy, upstream trajectory |
 
-## 5. Historical (do not build from these)
+## 5. Archive (do not build from these)
 
-Kept for provenance. Each is superseded or already implemented.
-
-| Plan | Superseded by |
+| Document | Superseded by |
 |---|---|
-| [`bevy-vello-hybrid-design.md`](archive/bevy-vello-hybrid-design.md) | Its "NO-GO" header predates the migration; Hybrid is now the default backend. See vision 07 and the migration scope |
-| [`bevy-vello-hybrid-open-questions.md`](archive/bevy-vello-hybrid-open-questions.md) | Same |
-| [`deferred-3d-image-target.md`](archive/deferred-3d-image-target.md) | `view-textures.md` |
+| [`handoff-2026-10-11.md`](archive/handoff-2026-10-11.md) | `handoff-product.md` (tasks done) |
+| [`vello-hybrid-migration-scope.md`](archive/vello-hybrid-migration-scope.md), [`vello-retention-and-render-plan.md`](archive/vello-retention-and-render-plan.md), [`vello-retained-subtree-renderer-proposal.md`](archive/vello-retained-subtree-renderer-proposal.md) | `rendering/architecture.md`; still the place for their source citations and Zulip quotes |
+| [`bevy-vello-hybrid-design.md`](archive/bevy-vello-hybrid-design.md), [`bevy-vello-hybrid-open-questions.md`](archive/bevy-vello-hybrid-open-questions.md) | The migration happened; see `rendering/architecture.md` |
+| [`deferred-3d-image-target.md`](archive/deferred-3d-image-target.md) | `specs/view-textures.md` |
 | [`single-canvas-migration.md`](archive/single-canvas-migration.md) | Implemented; then `view-textures.md` and `panels-and-session.md` |
-| [`hybrid-ui-layout.md`](archive/hybrid-ui-layout.md) | `panels-and-session.md` (dockview workspace) |
-| [`perf-grid-runbook.md`](archive/perf-grid-runbook.md) | The 5K frame-skip investigation; its trace method is still cited by `renderer-sanity-checks.md` |
-| [`bevy-frame-scheduling.html`](archive/bevy-frame-scheduling.html) | A reference map of Bevy's schedule, not a plan |
-| [`guide/`](archive/guide-spine) | `guide2/` (its Foundations part rewrites the spine guide against current code) |
+| [`hybrid-ui-layout.md`](archive/hybrid-ui-layout.md) | `specs/panels-and-session.md` |
+| [`perf-grid-runbook.md`](archive/perf-grid-runbook.md) | The 5K frame-skip investigation; its trace method is still cited |
+| [`bevy-frame-scheduling.html`](archive/bevy-frame-scheduling.html) | A reference map of Bevy's schedule |
+| [`guide-spine/`](archive/guide-spine/) | `guide2/` |
 
-## 6. Notes
+## 6. Vision
 
-[`notes/`](notes) holds ideas discussed but **not adopted**. Do not build from them until a
-plan adopts them.
+[`vision/`](vision/) 01–09. Start with 01 (layered architecture), 02 (substrate, model,
+projection), 07 (2D backends) and 09 (entities, compositions and ports). 03 reconciles
+the vocabulary: "Projection" is the ontological term; the rendering stage is "draw
+intent" or the "presentation model". Vision 07's current-state sections are superseded
+by `rendering/architecture.md`.
 
 ## Keeping this tidy
 
-- Record completion in `roadmap.md`'s Status table, not in a new document.
-- Keep "what to do next" only in the track handoffs. Other plans may describe work,
-  but should point to a handoff for its order.
-- Give every plan a `**Status:**` line under its title, and update it when work lands.
-- When a plan is superseded, add a one-line pointer at its top and move its row to §5.
+- Record completion in `roadmap.md`'s Status table and the spec's "Done" notes, not in a
+  new document.
+- Order work only in the two handoffs. Specs describe phases and exits; they point to a
+  handoff for sequence.
+- Give every plan a `**Status:**` line under its title and update it when work lands.
+- When a document is superseded, add a "Historical" banner at its top, `git mv` it to
+  `archive/`, rewrite links to it, and move its row here.
+- A finished handoff goes to `archive/handoff-<date>.md` and a fresh one replaces it.

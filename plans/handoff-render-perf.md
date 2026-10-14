@@ -1,6 +1,6 @@
 # Handoff: 2D render performance (roadmap stage H)
 
-**Date:** 2026-10-13 · **Branch:** `document-spine` (benchmark/SIMD base `e08faac`) · **Read first:**
+**Date:** 2026-10-13, work order revised 2026-10-14 · **Branch:** `document-spine` · **Read first:**
 `plans/render-benchmark.md` (the measurements), then this file, then
 `plans/infinite-canvas-architecture-patterns.md` §6–§8 (the target architecture for the
 same problems). Background on the rest of the system: `plans/guide2/index.html`.
@@ -62,88 +62,72 @@ One count takes ~2.5 min; four counts ~10–12 min, so run it in the background.
 
 ## 4. What to do, in order
 
-**Current update 2026-10-13:** SIMD and the selection/hover cache are implemented,
-then the user authorized change-driven picking, independent bounds/indexing, and
-indexed picking/per-view culling (items 2–4 of this handoff). Those increments are
-implemented in the working tree. All resting 2D `pick.n`, `bounds.n`, and
-`overlay_geometry.n` are zero. At 10k, idle is 0.9 ms; zoom-1 changed frames:
-pan 18.7→5.3 ms, drag 19.0→6.0 ms, rotation 27.0→17.9 ms. Zoomed-out rotation is
-flat at ~32.7 ms. Full tables/raw runs are in `render-benchmark.md` §7.
+**Revised 2026-10-14.** Items 1–4 of the previous list (overlay geometry cache,
+change-driven picking, independent bounds/index, per-view culling) are done and
+committed (`87a9a8e`); the DPR question (old item 7) is verified. The list below
+replaces the remaining items. It follows from the measurements in
+`render-benchmark.md` §7 and `renderer-sanity-checks.md` §7, and from the review
+of the retained-renderer proposal (see its Decision block).
 
-`src/iron_spatial` pins `understory_index` at
-`2ac7efbc010c8ee4daa316c34eadc0bafacfe83b`; `SpatialScene` consumes propagated Bevy
-globals and maintains canonical composition bounds/indexes even for hidden
-sources. Iron ids are payloads; Understory handles stay private. Query candidates
-retain exact shape/clip tests, occurrence chains, painter order and 3D occlusion.
-Dense motion uses a packed rebuild; sparse edits update individual entries.
-Do not add `understory_box_tree` simply to get bounds: this adapter deliberately
-avoids a third transform hierarchy. `understory_presentation` is also not added.
+Where the remaining time goes at 10k (worker CPU p50, optimized SIMD):
 
-**Remaining:** marquee/fit/selected-group geometry still use exact `Geo` queries;
-shared subtree summaries and finer cache dependency revisions are follow-ups.
-Retained overlay targets, painter-contiguous presentation chunks, partial raster
-invalidation and selective subtree baking remain unfinished. Stage H is partial.
+| Scenario | Changed frame | Encode | Bounds | Rest (mostly untimed) |
+|---|---|---|---|---|
+| pan, zoom 1 | 5.3 | 2.5 | 0 | ~3 |
+| drag one | 6.0 | 2.9 | 0 | ~3 |
+| rotate field, zoom 1 | 17.9 | 2.1 | 4.4 | ~11 |
+| rotate field, zoomed out | 32.7 | 13.7 | 4.3 | ~14 |
+| pan, zoomed out | 19.9 | 13.1 | 0 | ~7 |
 
-Implementation: `SelectionGeometryCache` shared by overlay drawing and idle grip
-cursor testing; lightweight eligibility summary, detailed gesture parts on press;
-`GeometryRevision` survives render drains and covers preview reconciliation and
-same-version loads. Keys also cover authored version, reaches and playhead. Before-
-propagation entries are finalized after propagation for embed bounds. Invalidation
-is globally conservative until the bounds subsystem has subtree revisions.
+Plus the standalone control: all-leaf selection outlines take Vello alone from
+14.1 to 36.5 ms. Three separate problems: editor feedback, group motion touching
+every descendant, and zoomed-out encoding of many visible paths.
 
-DPR mapping is verified with named-target and slider-value assertions at DPR 1/2.
-Benchmark panel offsets now use `PANEL_PIXELS=physical`; the default smoke driver
-remains in CSS pixels. No application coordinate convention was changed. The
-corrected 5K pointer addressing has not yet been used for a full 5K matrix.
+**Constraint while on `vello_hybrid` 0.2.** Its `Renderer::render` always clears
+its target (no `TargetInit`). Several retained scenes therefore cannot be drawn
+into one view texture, so chunk-level *vector* retention (one `Scene` per chunk,
+re-recording only dirty chunks) is not available. On 0.2 a chunk saves encoding
+only when it is **baked** into a texture. `vello_gpu` 0.3 adds `TargetInit::SrcOver`
+and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
+
+1. **Retained overlay target and a dense-outline policy.** Hover, selection,
+   cross-probe feedback, marquee and grips draw into their own view target, so a
+   feedback change leaves content encode/render counts at zero. Decide with the
+   user whether a hovered/selected group strokes every descendant (today) or only
+   its frame, as Figma does; the descendant strokes are the 14 → 36 ms cost.
+   Drop the outline allowance from painted bounds (`spatial.rs` `paint_pad`) once
+   outlines leave content. Exit: hover/select at 10k leaves content `encode.n` = 0;
+   selected-group drag measured with `bench-group-raf.txt`.
+2. **Time the untimed remainder.** Add a span around Bevy transform propagation
+   (and change-flag scanning in `prepare_spatial`) before designing item 3.
+   Finding 6 (one entity per 2D node) is decided from this number, not before.
+3. **Per-subtree revisions and the local/placement split.** Replace the global
+   `GeometryRevision` dependency of the selection cache and spatial prep with
+   per-subtree revisions. Let a group's contents be indexed in group-local space
+   with one placement transform, generalizing how embeds already work (one
+   canonical index per composition, an affine per occurrence). Rotating the field
+   should then update one placement, not 10,002 bounds. Do not add
+   `understory_box_tree` or another transform hierarchy for this (roadmap §5).
+4. **Chunks with selective subtree baking** (old item 6, unchanged in substance).
+   Start with authored groups as the chunk unit. Bake a static, complex or
+   small-on-screen group into an `Offscreen` view at a √2 scale bucket, draw it
+   with `DrawCmd::Texture` in painter order, return to live drawing when its
+   subtree revision changes. Gate on the proposal's A → B → C painter-order scene
+   and its §9 acceptance tests. Targets: zoomed-out rotate and pan encode.
+   Baking does not remove propagation/bounds cost; item 3 does.
+5. **Small experiment, any time:** panel and embed clips use `push_clip_layer`,
+   which routes a whole panel through an intermediate layer texture. 0.2 also has
+   `push_clip_path`. Measure before switching.
+
+Later, when Bevy is on wgpu 30: upgrade to `vello_gpu` 0.3 (renamed from
+`vello_hybrid`; `draw_texture_rects` became external-texture image paints) and
+try chunk-level vector retention with `TargetInit::SrcOver`. Item 3's revisions
+are what it needs. Renderer alternatives (Vello Classic on WebGPU, a tessellated
+mesh baseline, Rive as a reference) are experiments for the
+`iron_renderer_probe` harness, not priorities; see `renderer-sanity-checks.md` §10.
 
 Each step: change, re-run the benchmark at 1k and 10k, run the smoke script, update
 `plans/render-benchmark.md` (add an "after" table), `plans/roadmap.md`'s H row, commit.
-
-1. **Stop the overlay recomputing per frame (finding 1).** Cache the overlay's box,
-   parts summary and grip colour per (selection, hover, document version, resolved-change
-   generation, view mapping); rebuild only when one changes. Compute "resizable" once per
-   selection change, not per frame. Prefer reading bounds from one derived bounds source
-   (step 3) so this isn't a throwaway cache; if step 3 isn't ready, a version-keyed cache
-   is an acceptable stopgap. Exit: `select-group` and `hover-group` `frame` within 0.5 ms
-   of `idle` at 10k.
-2. **Pick only when needed (finding 3; implemented for 2D).** Run picking when the pointer moved, the
-   document or resolved values changed, or the view mapping changed; otherwise keep last
-   frame's hits. Exit: `idle` `pick` n ≈ 0 with a still pointer.
-3. **Bounds and spatial index outside the draw walk (findings 1, 3, 4).** This is
-   `infinite-canvas-architecture-patterns.md` Phase 3. **Foundation now implemented:**
-   `Bounds2d` is filled independently after propagation; the remaining goal is
-   sharing subtree summaries with marquee/fit and selection. Preparation is driven by `DocumentChanges`
-   and resolved changes, per composition, with geometry vs painted vs interaction
-   bounds, and a spatial index (`understory_index`, git-pinned, or a small native
-   grid/BVH; measure). Use it for picking candidates, marquee, fit-to-content and the
-   overlay. Watch: embeds (one node, many occurrences via chains), clips, 2D-on-3D
-   picking, painter order (hits still sort by z), and the background-hit rule.
-4. **Cull per view (finding 4; implemented).** In `render_document_layer`'s walk, skip nodes whose
-   painted bounds don't touch the view's visible rect (through each embed's transform
-   and clip). Exit: `pan` and `drag-one` encode at 10k, zoom 1, drop by roughly the
-   off-screen fraction; `*-zoomed` unchanged; smoke output unchanged.
-5. **Move editor feedback off the content layer (finding 2).** Phase 4 of the other
-   plan: hover/selection/cross-probe outlines draw in the overlay layer (already a
-   separate `VectorLayer` in the same view, order `DOCUMENT_2D + 1`), not as extra
-   strokes in the document walk. Exit: hovering or selecting leaves the document layer's
-   display list unchanged. **Correction:** a separate layer in the same view
-   does not make `encode` n = 0: `prepare_scene` resets the shared dirty target and
-   emits every layer. A separate retained overlay target is needed to leave content
-   encoding/rasterization untouched. Measure content-target and overlay-target work
-   separately; the overlay itself still encodes when it changes.
-6. **Only then, the subtree raster cache (findings 4–5, zoomed out).** Design notes:
-   `plans/vello-hybrid-migration-scope.md` §3.4 and §6.3, `plans/view-textures.md`,
-   vision 07, roadmap §5, Phase 5 of the other plan. Most plumbing exists: offscreen
-   `VectorView`s render into their own textures (used by 2D-on-plane,
-   `document_bridge/planes.rs`, with √2 density steps from on-screen scale), and a 2D
-   view can draw another texture in painter order (`DrawCmd::Texture`, used for 3D
-   embeds). A first version: promote a group to its own offscreen view when static for N
-   frames, not selected or under a gesture, and small on screen or complex; draw its
-   texture in its place; invalidate when `DocumentChanges` names a node under it; key by
-   scale bucket; drop back to live drawing when edited. Exit: `spin-zoomed` and
-   `drag-one` at 10k fall well under 16 ms. Preserve clip/blend semantics.
-7. Separately, verify finding 7 and fix the script's coordinates (or the mapping) so 5K
-   runs are valid.
 
 Phases 1–2 of the other plan (gesture ownership, typed UI protocol) are correctness work
 independent of this list; don't mix them into the performance commits.
@@ -179,11 +163,13 @@ independent of this list; don't mix them into the performance commits.
 
 ## 6. Open questions for the user
 
-- Whether to adopt Understory crates (unpublished; git-pin or vendor) or write a small
-  native index. Measure both against the full traversal first.
+- Whether a hovered or selected group outlines every descendant or only its frame
+  (§4 item 1). A product decision; it sets most of the dense-feedback cost.
 - Whether 2D shapes should stop being one Bevy entity each (finding 6). Large change;
-  only if transform propagation proves to be the remaining cost after steps 1–6.
-- Whether to commit `plans/infinite-canvas-architecture-patterns.md`.
+  decide from §4 item 2's propagation timing, after item 3.
+- Settled 2026-10-13/14: `understory_index` is adopted (git-pinned, inside
+  `iron_spatial`); `box_tree` and `presentation` are not. The infinite-canvas plan
+  is committed. Vello is not forked (see the proposal's Decision block).
 
 
 ## 7. Verification for the selection/hover cache

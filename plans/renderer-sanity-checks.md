@@ -508,3 +508,31 @@ without changing the backend API into an object-addressable scene graph.
 The maintainers explicitly discuss retained orchestration above Vello and connect
 it to Understory. The old migration-scope assertion that upstream would never
 provide cross-frame caching was too strong and has been corrected.
+
+
+## 10. Renderer-family experiments (not scheduled)
+
+Vello Hybrid computes antialiased coverage on the CPU in device space, so its
+prepared strips survive only an unchanged transform (or whole-pixel horizontal,
+4-pixel vertical moves). Renderers that keep geometry in object space and
+rasterize on the GPU (Vello Classic's compute pipeline; tessellating renderers
+such as Rive's) make moving unchanged shapes nearly free on the CPU, at other
+costs. If the work in `handoff-render-perf.md` §4 still misses budget, compare
+these in this harness before any migration:
+
+- **Tessellated mesh baseline:** `lyon` fills/strokes tessellated once into
+  retained meshes, moved by transform, MSAA for antialiasing. Measures the
+  object-space-retention benefit directly; expect weaker AA and re-tessellation
+  at zoom thresholds.
+- **Vello Classic on WebGPU:** same `kurbo`/`peniko` inputs; the open question
+  remains the compute-shader startup stall on affected hardware (#936).
+- **Rive's WebGL2 build as a reference only**, with and without the draft
+  `WEBGL_shader_pixel_local_storage` extension. Rive's best modes need pixel
+  local storage or fragment-shader interlock, which wgpu does not expose; a port
+  running on Bevy's wgpu would get its MSAA or atomic fallbacks. Its runtime is
+  MIT C++ (`rive-app/rive-runtime`); `nuxieai/nuxie-runtime` is an independent
+  pure-Rust reimplementation, unreleased as of 2026-10-14.
+
+Any backend must render into a wgpu texture on Bevy's device to compose with 3D
+views, planes and embeds; Canvas2D and the C++ Rive runtime cannot do that cheaply
+on the web.

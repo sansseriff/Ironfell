@@ -1,7 +1,32 @@
 # A retained render-plan layer for Vello: Zulip research and an implementation proposal
 
-**Date:** 2026-10-14. **Status:** source-audited proposal; no renderer refactor has
-been implemented by this document.
+**Date:** 2026-10-14. **Status:** reference, partly adopted. Do not implement it as
+written; the work order lives in [`handoff-render-perf.md` §4](handoff-render-perf.md#4-what-to-do-in-order).
+
+## Decision (2026-10-14 review)
+
+- **No Vello fork.** Clean partitions skipping raster work, subtree-to-surface
+  rendering and painter-ordered composition of surfaces all work with the public
+  API (Iron already renders per-view textures, `Offscreen` views and
+  `DrawCmd::Texture`). Only Stage D's multi-job single submission needs core
+  changes. Upstream churn is high (`vello_gpu` wgpu backend: 29 commits in the
+  three months to `db90a73`), and upstream is landing this kind of work itself
+  (strip arena #1897, used-rows uploads #1896, target clears #1869). Propose
+  per-job staging upstream if measurement ever needs it; otherwise use separate
+  submissions, or on 0.3 one shared atlas target with `ClearSettings::Rects`.
+- **The render plan is Iron-owned and backend-neutral** (vision 01 §2.4, the
+  `iron_canvas_cache` boundary), not a crate shaped around Vello internals. It
+  starts by extending the existing view-texture graph.
+- **No new transform hierarchy.** §4's `set_placement(id, parent, …, transform)`
+  is rejected. The graph takes resolved affines from the host, as `iron_spatial`
+  does; parent edges express compositing containment only.
+- **Adopted as stated:** §6 retention contracts, §7 correctness constraints and §9
+  acceptance tests, including the A → B → C painter-order scene.
+- **Deferred:** Stage D, and Stage D's prepared-job reuse (it conflicts with the
+  memory concerns that removed `Recording`; discard a `Scene` once baked).
+- **Order:** Iron's overlay target, per-subtree revisions and local/placement split
+  come before chunks and baking. Iron currently has no opacity, blend or filter
+  commands, so the first version covers source-over content and clips.
 
 Read with [the retention audit](vello-retention-and-render-plan.md),
 [the measured controls](renderer-sanity-checks.md), and

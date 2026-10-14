@@ -1,5 +1,7 @@
 # Perf Grid Runbook — 5K frame-skip investigation
 
+> **Historical** (see `plans/README.md` §5). The 5K frame-skip investigation. Its trace method is still referenced by `renderer-sanity-checks.md`.
+
 Goal: prove (or kill) each remaining hypothesis for why the Bevy app skips frames on
 the 5K monitor while a minimal wgpu/vello app at the same resolution holds 60fps.
 

@@ -1,5 +1,7 @@
 # `bevy_vello_hybrid` — design brief
 
+> **Historical** (see `plans/README.md` §5). Hybrid has since become the default backend; its NO-GO header predates that. Current direction: vision 07 and `handoff-render-perf.md`.
+
 **Status:** ⛔ **NO-GO on the current public API — Phase 0 / upstream work only.**
 **Date:** 2026-07-24
 **Author context:** written for the `ironfell` project (bevy 0.18.1 / wgpu 27.0.1 / WebGPU wasm)

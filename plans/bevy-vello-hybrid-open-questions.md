@@ -1,5 +1,7 @@
 # `bevy_vello_hybrid` — open questions register
 
+> **Historical** (see `plans/README.md` §5). Companion to the design above; resolved or overtaken by the migration. Current direction: vision 07 and `handoff-render-perf.md`.
+
 **Companion to:** [`bevy-vello-hybrid-design.md`](./bevy-vello-hybrid-design.md)
 **Status:** ACTIVE — Tier A and desktop Tier B were resolved on 2026-07-24. They produced
 a **no-go on the current public API**. Tier C browser testing and the upstream/API path

@@ -1,5 +1,7 @@
 # Plan: render the 3D viewer to a panel-sized image target
 
+> **Historical** (see `plans/README.md` §5). Superseded by `view-textures.md`, where 3D views render to panel-sized textures.
+
 ## Motivation
 
 The `MainCamera3D` currently targets the window with a viewport sub-rect. Bevy sizes

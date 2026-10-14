@@ -1,5 +1,7 @@
 # Bevy Web App: Hybrid HTML/Bevy UI Layout Architecture
 
+> **Historical** (see `plans/README.md` §5). Superseded by `panels-and-session.md` (dockview workspace).
+
 ## Context
 
 We're building a Bevy app targeting WebAssembly. The UI consists of three kinds of panels arranged on screen:

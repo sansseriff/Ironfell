@@ -1,5 +1,7 @@
 # Single-Canvas Migration (Plan A)
 
+> **Historical** (see `plans/README.md` §5). Implemented; later superseded by `view-textures.md` and `panels-and-session.md`.
+
 Supersedes the multi-canvas implementation. One full-window `<canvas>`, one Bevy `Window`,
 camera viewports for Bevy panels, HTML overlaid via CSS. DOM owns layout; Bevy consumes
 rectangles.

@@ -1,5 +1,17 @@
 # Agent instructions
 
+## Start here
+
+Read [`plans/README.md`](plans/README.md) first. It lists which plans are current, which
+handoff owns the next task for your track (product work or rendering performance), and
+which plans are historical. Where plans disagree, that index decides.
+
+- Every document mutation is an op in a transaction through `iron_document`.
+- Run the run-iron smoke script before committing behaviour changes, and keep its
+  expected output in `.claude/skills/run-iron/SKILL.md` current.
+- Record completed work in `plans/roadmap.md`'s Status table and the owning plan.
+- Don't push. End commit messages with the `Co-Authored-By` line the session gives you.
+
 ## Worktrees
 
 Worktrees for this repo live in **`.agents/worktrees/<name>`**, inside the repo and

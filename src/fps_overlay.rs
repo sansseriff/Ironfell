@@ -2,7 +2,7 @@ use crate::vector::BackendKind;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin}; // removed LogDiagnosticsPlugin
 
 use bevy::{
-    color::palettes::basic::{AQUA, LIME, WHITE},
+    color::palettes::basic::{AQUA, LIME, RED, WHITE},
     prelude::*,
 };
 
@@ -81,8 +81,31 @@ fn setup_ui(mut commands: Commands) {
                     // Filled in by `update_backend_display` from the actual
                     // installed backend, rather than hardcoded here.
                     p.spawn((TextSpan::new(""), font.clone(), TextColor(LIME.into())));
+                    // Which build is running: timings from the slow
+                    // development build mislead (`build_label`).
+                    let (label, colour) = build_label();
+                    p.spawn((TextSpan::new("\nBuild: "), font.clone(), TextColor(WHITE.into())));
+                    p.spawn((TextSpan::new(label), font.clone(), TextColor(colour.into())));
                 });
         });
+}
+
+/// The build's optimization level and wasm SIMD, as a label and a colour:
+/// green when optimized with SIMD (what ships and what benchmarks measure),
+/// red otherwise. `.claude/skills/run-iron/build.sh` builds `dev-opt` (opt 1)
+/// by default and `wasm-bench` (opt 3, SIMD) with `PROFILE=wasm-bench`.
+fn build_label() -> (String, bevy::color::Srgba) {
+    let opt = env!("IRON_OPT_LEVEL");
+    let simd = cfg!(target_feature = "simd128");
+    let fast = matches!(opt, "2" | "3" | "s" | "z") && simd;
+    let name = match opt {
+        "1" => "dev-opt",
+        "3" => "wasm-bench",
+        "z" => "release",
+        _ => "custom",
+    };
+    let label = format!("{name} (opt {opt}{}){}", if simd { ", SIMD" } else { ", no SIMD" }, if fast { "" } else { " - SLOW, not for timing" });
+    (label, if fast { LIME } else { RED })
 }
 
 /// Show the active 2D vector backend, and colour it so a glance is enough.

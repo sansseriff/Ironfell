@@ -82,7 +82,9 @@ fn hue(h: f64) -> [f32; 4] {
     [lo + span * r, lo + span * g, lo + span * b, 1.0]
 }
 
-/// The transaction that adds the stress composition after everything else.
+/// The transaction that adds the stress composition after everything else,
+/// replacing an earlier one, so a second run at another size swaps the scene
+/// in one undoable step and the `stress` view keeps its name to show.
 pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressIds) {
     let doc = store.document();
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
@@ -125,7 +127,13 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
     let mut next = move || ids.next().expect("reserved");
 
     let root_order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
-    let mut ops = Vec::with_capacity(total);
+    let mut ops = Vec::with_capacity(total + 1);
+    for old in iron_document::composition::compositions(doc) {
+        let name = doc.get::<Name>(old).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+        if name.as_deref() == Some("stress") {
+            ops.push(Op::Delete { id: old });
+        }
+    }
     let composition = next();
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));

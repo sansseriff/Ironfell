@@ -34,6 +34,10 @@ cd .claude/skills/run-iron && bun install && cd -
 
 ## Build
 
+`bun run wasm` and `bun run wasm:fast` (repo root) run this script for dev-opt
+and wasm-bench. The app's bottom-right overlay names the running build: green for
+wasm-bench (opt 3, SIMD), red for dev-opt.
+
 ```bash
 .claude/skills/run-iron/build.sh
 ```
@@ -402,7 +406,8 @@ PROFILE=wasm-bench .claude/skills/run-iron/build.sh   # ~2.5 min cold
 .claude/skills/run-iron/build.sh                      # back to dev-opt for the smoke
 ```
 
-`?stress=N` (with `layout=default` if a saved layout lacks the tab) adds a
+The **+** menu in any tab bar has a *Stress test* section (1k–20k shapes; another
+size replaces the scene). `?stress=N` (with `layout=default` if a saved layout lacks the tab) adds a
 `stress` composition of N shapes in cells of 100 and shows it in a Stress
 tab (`src/document_bridge/stress.rs`); `await __iron.stress(N)` does the same
 from the console. `await __iron.timings(reset)` reads per-phase CPU times

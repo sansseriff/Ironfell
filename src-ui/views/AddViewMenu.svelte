@@ -1,6 +1,7 @@
 <script lang="ts">
   // "+" in a tab group's header: open a view here. Every composition in the
-  // document, then the views that are not compositions.
+  // document, then the views that are not compositions, then the render
+  // benchmark's stress scene at a few sizes (src/document_bridge/stress.rs).
   import type { DockviewApi, DockviewGroupPanel } from "dockview-core";
   import { controllerManager } from "../controller-manager.svelte";
   import { FIXED_VIEWS, titleOf, viewId, type ViewSpec } from "./views";
@@ -26,6 +27,21 @@
     const id = viewId(spec, (candidate) => !!api.getPanel(candidate));
     api.addPanel({ id, component: "view", title, params: { spec }, position: { referenceGroup: group } });
   }
+
+  const STRESS_SIZES = [1000, 2000, 5000, 10000, 20000];
+
+  /** Build (or rebuild at a new size) the `stress` composition, then show
+   *  its tab: the one already open, or a new one here. */
+  async function stress(shapes: number) {
+    open = false;
+    await controllerManager.docClient.call("stress", [shapes]);
+    const existing = api.getPanel("stress");
+    if (existing) {
+      existing.api.setActive();
+    } else {
+      api.addPanel({ id: "stress", component: "view", title: "Stress", params: { spec: { source: "stress", notation: "composition" } }, position: { referenceGroup: group } });
+    }
+  }
 </script>
 
 <div class="add">
@@ -41,6 +57,10 @@
       <div class="heading">Views</div>
       {#each FIXED_VIEWS as v (v.title)}
         <button role="menuitem" onclick={() => add(v.title, v.spec)}>{v.title}</button>
+      {/each}
+      <div class="heading">Stress test</div>
+      {#each STRESS_SIZES as n (n)}
+        <button role="menuitem" onclick={() => stress(n)}>{n.toLocaleString()} shapes</button>
       {/each}
     </div>
   {/if}

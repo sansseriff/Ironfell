@@ -93,6 +93,90 @@ const SNAP: f64 = std::f64::consts::PI / 12.0;
 
 const BLUE: [f32; 4] = [0.05, 0.6, 1.0, 1.0];
 
+/// Composition-space boxes and grip eligibility shared by drawing and cursor
+/// testing. View pan/zoom is applied at use time, never baked into these boxes.
+/// This conservative bridge-generation cache is a stopgap until bounds have
+/// their own per-subtree revisions (roadmap H).
+#[derive(Resource, Default)]
+pub struct SelectionGeometryCache {
+    selection: HashMap<String, CachedSelection>,
+    hover: Option<(GeometryStamp, Reach, Option<Affine>)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct GeometryStamp {
+    version: iron_document::Version,
+    resolved: u64,
+    time: u64,
+}
+
+impl GeometryStamp {
+    fn new(store: &Store, revision: u64) -> Self {
+        Self { version: store.document().version(), resolved: revision, time: store.time().to_bits() }
+    }
+}
+
+struct CachedSelection {
+    stamp: GeometryStamp,
+    after_propagation: bool,
+    reaches: Vec<Reach>,
+    geometry: SelectionGeometry,
+}
+
+#[derive(Default)]
+struct SelectionGeometry {
+    frame: Option<Affine>,
+    frames: Vec<Affine>,
+    resizable: bool,
+    rotatable: bool,
+}
+
+impl SelectionGeometryCache {
+    fn selection<'a>(&'a mut self, geo: &Geo, panel: &str, items: &[&Reach], stamp: GeometryStamp, after_propagation: bool) -> &'a SelectionGeometry {
+        let cached = self.selection.get(panel);
+        // Embed bounds can read Bevy globals. A cache rebuilt by cursor testing
+        // before propagation must be finalized by drawing afterwards, but the
+        // next idle cursor test can reuse that finalized entry.
+        if cached.is_none_or(|c| c.stamp != stamp || (after_propagation && !c.after_propagation) || c.reaches.len() != items.len()
+            || c.reaches.iter().zip(items).any(|(a, b)| a != *b)) || geo.store.has_changes()
+        {
+            let timing = crate::perf::span(crate::perf::Phase::OverlayGeometry);
+            if items.is_empty() { timing.discard(); }
+            let frames: Vec<Affine> = items.iter().filter_map(|r| geo.frame(&r.chain)).collect();
+            let frame = match items {
+                [] => None,
+                [_] => frames.first().copied(),
+                _ => frames.iter().map(|f| f.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)))
+                    .reduce(|a, b| a.union(b)).map(unit),
+            };
+            let mut capabilities = Vec::new();
+            if frame.is_some() {
+                for r in items {
+                    geo.resize_capabilities(&r.chain, &mut capabilities);
+                }
+            }
+            let resizable = !capabilities.is_empty() && capabilities.iter().all(|b| *b);
+            // Rotation writes the selected roots, unlike group resizing.
+            let rotatable = frame.is_some() && !items.is_empty() && items.iter()
+                .filter(|r| geo.space(&r.chain).is_some() && geo.local_box(r.node()).is_some())
+                .all(|r| geo.free(r.node(), "transform2d.rot"));
+            self.selection.insert(panel.to_owned(), CachedSelection {
+                stamp, after_propagation, reaches: items.iter().map(|r| (*r).clone()).collect(),
+                geometry: SelectionGeometry { frame, frames, resizable, rotatable },
+            });
+        }
+        &self.selection.get(panel).expect("cached selection").geometry
+    }
+
+    fn hover(&mut self, geo: &Geo, reach: &Reach, stamp: GeometryStamp) -> Option<Affine> {
+        if self.hover.as_ref().is_none_or(|(s, r, _)| *s != stamp || r != reach) || geo.store.has_changes() {
+            let _timing = crate::perf::span(crate::perf::Phase::OverlayGeometry);
+            self.hover = Some((stamp, reach.clone(), geo.frame(&reach.chain)));
+        }
+        self.hover.as_ref().and_then(|(_, _, f)| *f)
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct SelectTool {
     /// How each selected node was reached. A selection made elsewhere (the
@@ -369,6 +453,29 @@ impl Geo<'_, '_, '_> {
                 Kind::Points => true,
                 Kind::Group | Kind::Fixed => false,
             })
+    }
+
+    /// Same eligibility as resize Parts, without allocating gesture poses or
+    /// collecting path points. Detailed Parts are built only on a press.
+    fn resize_capabilities(&self, chain: &[NodeId], out: &mut Vec<bool>) {
+        let Some(&id) = chain.last() else { return };
+        if self.ty(id) == "group" {
+            for &c in self.doc().children(id) {
+                let mut sub = chain.to_vec();
+                sub.push(c);
+                self.resize_capabilities(&sub, out);
+            }
+            return;
+        }
+        let Some((_, kind)) = self.local_box(id) else { return };
+        if self.space(chain).is_none() { return; }
+        out.push(match kind {
+            Kind::Sized { .. } => self.free(id, "size.w") || self.free(id, "size.h"),
+            Kind::Circle => self.free(id, "radius.r"),
+            Kind::Window { frame } => frame,
+            Kind::Points => true,
+            Kind::Group | Kind::Fixed => false,
+        });
     }
 
     fn rotatable(&self, parts: &[Part]) -> bool {
@@ -670,6 +777,8 @@ pub struct ToolDoc<'w, 's> {
     nodes: Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
     view_cameras: ResMut<'w, crate::document_bridge::ViewCameras>,
     keyboard: Res<'w, ButtonInput<KeyCode>>,
+    geometry_revision: Res<'w, crate::document_bridge::GeometryRevision>,
+    geometry_cache: ResMut<'w, SelectionGeometryCache>,
 }
 
 /// What the drags the box does not run need (`interaction`).
@@ -695,7 +804,7 @@ pub fn select_tool_system(
     legacy: LegacyDrag,
 ) {
     let tool = &mut *tool;
-    let ToolDoc { mut store, mut gestures, mut pending, map, globals, nodes, mut view_cameras, keyboard } = docp;
+    let ToolDoc { mut store, mut gestures, mut pending, map, globals, nodes, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
     let space = keyboard.pressed(KeyCode::Space);
     let LegacyDrag { mut drag, mut commit, provenance, cameras, planes } = legacy;
     // Keep a reach for every selected node, dropping the rest.
@@ -1244,14 +1353,10 @@ pub fn select_tool_system(
         let mut on_grip = false;
         if let Some(view) = view.filter(|v| v.dims == Dims::Two) {
             let mine = movers(&reaches, &view.panel);
-            if let Some(frame) = geo.selection_frame(&mine) {
-                let (mut rp, mut tp) = (Vec::new(), Vec::new());
-                for r in &mine {
-                    geo.parts(&r.chain, true, &mut rp);
-                    geo.parts(&r.chain, false, &mut tp);
-                }
+            let cached = geometry_cache.selection(&geo, &view.panel, &mine, GeometryStamp::new(&store.0, geometry_revision.0), false);
+            if let Some(frame) = cached.frame {
                 let f = view.affine() * frame;
-                let grip = grip_at(f, screen, geo.resizable(&rp), geo.rotatable(&tp));
+                let grip = grip_at(f, screen, cached.resizable, cached.rotatable);
                 on_grip = matches!(grip, Some(Grip::Resize(..) | Grip::Rotate(..)));
                 if !space {
                     cursor = cursor_for(f, grip);
@@ -1379,7 +1484,8 @@ fn begin_legacy(
 
 /// The select tool's drawing in each 2D panel: the selection's box and
 /// grips, the hovered container's outline, the marquee. Its own layer in
-/// the panel's view, so redrawing it re-encodes none of the document.
+/// the panel's view; an unchanged list stays clean. A changed overlay still
+/// re-encodes the shared target until it has an independent retained texture.
 #[derive(Component)]
 pub struct SelectOverlay {
     panel: String,
@@ -1399,7 +1505,10 @@ pub fn draw_select_overlay(
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
     pen: Res<crate::bevy_app::pen::PenTool>,
     active: Res<ActiveTool>,
+    geometry_revision: Res<crate::document_bridge::GeometryRevision>,
+    mut geometry_cache: ResMut<SelectionGeometryCache>,
 ) {
+    geometry_cache.selection.retain(|panel, _| views.get(panel).is_some());
     for (e, o, _) in &overlays {
         if !panel_layers.iter().any(|(_, l)| l.panel == o.panel) {
             commands.entity(e).despawn();
@@ -1411,6 +1520,7 @@ pub fn draw_select_overlay(
         }
     }
     let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+    let stamp = GeometryStamp::new(&store.0, geometry_revision.0);
     let reaches = selected_reaches(&sel, &tool);
     let blue = peniko::Color::new(BLUE);
     let thin = kurbo::Stroke::new(1.0);
@@ -1418,32 +1528,26 @@ pub fn draw_select_overlay(
     for (_, o, mut list) in &mut overlays {
         let Some(view) = views.get(&o.panel) else { continue };
         let to_screen = view.affine();
+        let hover_frame = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
+            .filter(|h| matches!(geo.ty(h.node()), "group" | "embed"))
+            .and_then(|h| geometry_cache.hover(&geo, h, stamp));
+        let mine = movers(&reaches, &o.panel);
+        let cached = geometry_cache.selection(&geo, &o.panel, &mine, stamp, true);
         list.rebuild(|b| {
             b.clipped(Affine::IDENTITY, view.rect.to_kurbo(), |b| {
                 // The hovered node's box, for what has no outline of its own.
-                if let Some(h) = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
-                    && matches!(geo.ty(h.node()), "group" | "embed")
-                    && let Some(f) = geo.frame(&h.chain)
-                {
+                if let Some(f) = hover_frame {
                     b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5), blue, (to_screen * f) * square.clone());
                 }
-                let mine = movers(&reaches, &o.panel);
                 if mine.len() > 1 {
-                    for r in &mine {
-                        if let Some(f) = geo.frame(&r.chain) {
+                    for &f in &cached.frames {
                             b.stroke(Affine::IDENTITY, thin.clone(), blue, (to_screen * f) * square.clone());
-                        }
                     }
                 }
-                if let Some(frame) = geo.selection_frame(&mine) {
-                    let (mut rp, mut tp) = (Vec::new(), Vec::new());
-                    for r in &mine {
-                        geo.parts(&r.chain, true, &mut rp);
-                        geo.parts(&r.chain, false, &mut tp);
-                    }
+                if let Some(frame) = cached.frame {
                     let f = to_screen * frame;
                     b.stroke(Affine::IDENTITY, thin.clone(), blue, f * square.clone());
-                    let fill = if geo.resizable(&rp) { peniko::Color::new([1.0, 1.0, 1.0, 1.0]) } else { peniko::Color::new([0.8, 0.82, 0.85, 1.0]) };
+                    let fill = if cached.resizable { peniko::Color::new([1.0, 1.0, 1.0, 1.0]) } else { peniko::Color::new([0.8, 0.82, 0.85, 1.0]) };
                     let [a, bb, ..] = f.as_coeffs();
                     let angle = bb.atan2(a);
                     for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {

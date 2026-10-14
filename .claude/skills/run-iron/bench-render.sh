@@ -30,7 +30,7 @@
 #
 # Prints one line per scenario: `N SIZE scenario {json}`. Pipe the output
 # through bench-render-table.py for a table.
-set -u
+set -eu -o pipefail
 cd "$(dirname "$0")"
 COUNTS=("${@:-1000 5000 10000 20000}")
 SIZES=${SIZES:-1600x1000@1}
@@ -39,6 +39,7 @@ trap 'rm -f "$SCRIPT"' EXIT
 
 for N in ${COUNTS[@]}; do
   for SIZE in $SIZES; do
+    # Physical panel offsets, converted to CSS by PANEL_PIXELS=physical.
     # The slider's knob starts at panel (40, 42); the sample rect's centre is
     # at (60, 100), both at zoom 1 and pan 0 (stress.rs). (600, 50) is empty
     # canvas above the field at both zooms, so idle and pan measure no hover.
@@ -46,6 +47,8 @@ for N in ${COUNTS[@]}; do
 nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=$N
 ready
 sleep 4000
+eval (async () => { const text = await __iron.view({fidelity:'full'}); window.__benchField = text.match(/<group id="([^"]+)" name="field"/)?.[1]; window.__benchSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; return [window.__benchField, window.__benchSample]; })()
+assert !!window.__benchField && !!window.__benchSample
 pmove stress 600 50
 measure-reset
 sleep 3000
@@ -56,6 +59,7 @@ measure-reset
 sleep 3000
 measure hover-group
 pclick stress 60 100
+assert __iron.selection()[0] === window.__benchField
 sleep 500
 pmove stress 600 50
 sleep 300
@@ -66,7 +70,7 @@ key Escape
 sleep 300
 key Escape
 sleep 300
-eval __iron.selection().length === 0 ? 'deselected' : 'STILL SELECTED ' + __iron.selection()
+assert __iron.selection().length === 0
 pmove stress 40 42
 down
 psweep stress 40 42 60 42 4 40
@@ -80,6 +84,7 @@ keydown Meta
 pmove stress 60 100
 down
 psweep stress 60 100 80 110 4 40
+assert __iron.selection()[0] === window.__benchSample
 measure-reset
 psweep stress 80 110 400 400 50 40
 psweep stress 400 400 80 110 50 40
@@ -95,7 +100,7 @@ sleep 300
 key Escape
 sleep 300
 pmove stress 600 50
-eval __iron.selection().length === 0 ? 'deselected' : 'STILL SELECTED ' + __iron.selection()
+assert __iron.selection().length === 0
 sleep 3000
 measure-reset
 pwheel stress 600 50 0 -5 40 40
@@ -126,8 +131,8 @@ measure pan-zoomed
 errors
 quit
 EOS
-    GPU=1 UNTHROTTLED=1 SIZE=$SIZE bun run ./drive.ts < "$SCRIPT" 2>&1 \
-      | grep -E '^measure |STILL SELECTED|panicked|RuntimeError|^Error' \
+    GPU=1 UNTHROTTLED=1 PANEL_PIXELS=physical SIZE=$SIZE bun run ./drive.ts < "$SCRIPT" 2>&1 \
+      | grep -E '^measure |STILL SELECTED|panicked|RuntimeError|^Error|^error in' \
       | sed -E "s/^measure /$N $SIZE /"
   done
 done

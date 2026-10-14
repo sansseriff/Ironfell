@@ -1,0 +1,18 @@
+# Real press + 60Hz DOM-bridge pointer replay; no UNTHROTTLED.
+nav
+ready
+sleep 500
+eval (async () => { const text=await __iron.view({fidelity:'full'}); window.__field=text.match(/<group id="([^"]+)" name="field"/)?.[1]; return window.__field; })()
+pclick stress 60 100
+assert __iron.selection()[0] === window.__field
+sleep 600
+pmove stress 60 100
+down
+sleep 100
+measure-reset
+praf stress 60 100 160 130 3000
+assert __iron.selection()[0] === window.__field
+measure group-raf
+up
+errors
+quit

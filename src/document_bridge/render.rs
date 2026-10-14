@@ -7,10 +7,9 @@
 //!
 //! What triggers a rebuild is the reconciler's changed-node set
 //! ([`DocumentChanges`]), not a boolean: the layer knows which nodes moved,
-//! keeps every node's document-space bounds ([`Bounds2d`]), and reports the
-//! nodes and the damage rectangle it redrew for. That is the plumbing
-//! roadmap stage H turns into culling and damage-driven invalidation; today
-//! the whole layer is still re-encoded.
+//! consumes independently prepared bounds/index ([`SpatialScene`]), and
+//! emits only visible candidates in painter order. Each affected view still
+//! rebuilds its visible display list; partial encoding/rasterization is later.
 //!
 //! Each 2D composition panel draws its own composition's nodes, offset to
 //! and clipped by its rectangle (ECM §7.1); a node outside every composition
@@ -18,12 +17,11 @@
 //! composition in place, through the embed's transform and clipped to its
 //! region, recursively (ECM §7.4).
 
-use super::{Bounds2d, Doc2d, DocumentChanges, DocumentStore, Highlights, NodeMap, PanelViews, Shape2d, nest};
+use super::{SpatialScene, Doc2d, DocumentChanges, DocumentStore, Highlights, NodeMap, PanelViews, Shape2d, nest};
 use iron_document::composition::Dims;
 use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, VectorView, order};
 use bevy::prelude::*;
 use iron_document::NodeId;
-use kurbo::Shape as _;
 
 /// One document layer per 2D panel, each its own [`VectorView`]: it renders
 /// into a texture the panel's size and re-renders only when its own content
@@ -74,13 +72,15 @@ pub fn render_document_layer(
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
     mut changes: ResMut<DocumentChanges>,
-    mut bounds: ResMut<Bounds2d>,
+    spatial: Res<SpatialScene>,
     views: Res<PanelViews>,
     highlights: Res<Highlights>,
     embed_images: Res<super::EmbedImages>,
 ) {
     let reason = if !changes.is_empty() {
         "document"
+    } else if spatial.is_changed() {
+        "spatial projection"
     } else if views.is_changed() {
         "panel layout"
     } else if highlights.is_changed() {
@@ -96,28 +96,17 @@ pub fn render_document_layer(
     let changed = changes.take();
     let doc = store.0.document();
 
-    // Damage: the old and new bounds of every changed node (what a box tree's
-    // commit would report), plus the bounds of changed nodes that vanished.
-    // Bounds are in each node's own composition space, so for content seen
-    // through an embed the damage is approximate until stage H.
-    let mut damage: Option<kurbo::Rect> = None;
-    for id in &changed.nodes {
-        if let Some(old) = bounds.0.get(id) {
-            damage = Some(damage.map_or(*old, |d| d.union(*old)));
-        }
-        if doc.live(*id).is_none() {
-            bounds.0.remove(id);
-        }
-    }
-
-    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, changed: &changed.nodes, bounds: &mut bounds.0, damage, drawn: 0 };
+    // Damage belongs to the independently prepared canonical compositions.
+    // It is diagnostic here; per-view damage mapping/partial rasterization is later.
+    let damage = spatial.damage.iter().copied().reduce(|a,b| a.union(b));
+    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, spatial: &spatial, drawn: 0 };
     // A layer per panel: a panel whose content is unchanged rebuilds to the
     // same commands, so its view does not re-render.
     for (mut panel_list, layer) in &mut panel_layers {
         let Some(view) = views.get(&layer.panel) else { continue };
         let roots = nest::panel_roots(doc, view);
         panel_list.rebuild(|b| {
-            b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), &view.panel, 0));
+            b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), view.rect.to_kurbo(), &view.panel, 0));
         });
     }
     // A plane's view: its composition's region, at its density, into its
@@ -127,10 +116,10 @@ pub fn render_document_layer(
         let key = format!("plane/{}", layer.embed);
         let clip = kurbo::Rect::new(0.0, 0.0, vview.size.x as f64, vview.size.y as f64);
         plane_list.rebuild(|b| {
-            b.clipped(kurbo::Affine::IDENTITY, clip, |b| cx.walk(b, &roots, layer.affine(), &key, 0));
+            b.clipped(kurbo::Affine::IDENTITY, clip, |b| cx.walk(b, &roots, layer.affine(), clip, &key, 0));
         });
     }
-    let (drawn, damage) = (cx.drawn, cx.damage);
+    let drawn = cx.drawn;
     crate::perf::set_drawn(drawn as u32);
 
     let mut ids: Vec<String> = changed.nodes.iter().take(LOG_IDS).map(|id| id.to_string()).collect();
@@ -156,15 +145,20 @@ struct Draw<'a, 'w, 's> {
     nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
     globals: &'a Query<'w, 's, &'static GlobalTransform>,
     highlights: &'a Highlights,
-    changed: &'a std::collections::BTreeSet<NodeId>,
-    bounds: &'a mut bevy::platform::collections::HashMap<NodeId, kurbo::Rect>,
-    damage: Option<kurbo::Rect>,
+    spatial: &'a SpatialScene,
     drawn: usize,
 }
 
 impl Draw<'_, '_, '_> {
-    fn walk(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, key: &str, depth: u32) {
-        for id in nest::preorder(self.doc, roots) {
+    fn walk(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32) {
+        // Expand in device space for antialiasing, then conservatively map the
+        // clip AABB back through the view/occurrence affine. Exact clips remain
+        // in the display list, so rotation cannot expose extra pixels.
+        let visible = base.inverse().transform_rect_bbox(clip.inflate(2.0, 2.0));
+        let candidates = if self.spatial.enabled {
+            self.spatial.candidates(roots, self.doc, None, visible)
+        } else { nest::preorder(self.doc, roots) };
+        for id in candidates {
             if nest::is_embed(self.doc, id) {
                 if depth >= nest::MAX_DEPTH {
                     continue;
@@ -173,7 +167,8 @@ impl Draw<'_, '_, '_> {
                 if let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id) {
                     let inner = base * e.placement;
                     let kids: Vec<NodeId> = self.doc.children(e.source).to_vec();
-                    b.clipped(inner, e.region, |b| self.walk(b, &kids, inner, &key, depth + 1));
+                    let inner_clip = clip.intersect(inner.transform_rect_bbox(e.region));
+                    b.clipped(inner, e.region, |b| self.walk(b, &kids, inner, inner_clip, &key, depth + 1));
                 } else if let Some((_, _, w, h)) = nest::embed_3d(self.store, id) {
                     // The 3D view: its camera's texture (`EmbedImages`), drawn
                     // in painter order under the embed's whole transform, so
@@ -231,14 +226,7 @@ impl Draw<'_, '_, '_> {
             let c = if selected { [0.1, 0.4, 1.0, 1.0] } else { [0.1, 0.4, 1.0, 0.5] };
             b.stroke(affine, kurbo::Stroke::new(2.0), peniko::Color::new(c), shape.clone());
         }
-        // Bounds in the composition's space, widened by the thickest stroke
-        // that could touch this node (its own, or the 2px highlight).
-        let pad = d.stroke.map_or(0.0, |(_, w)| w as f64 * 0.5).max(1.0);
-        let rect = local.transform_rect_bbox(shape.bounding_box()).inflate(pad, pad);
-        if self.changed.contains(&id) {
-            self.damage = Some(self.damage.map_or(rect, |d| d.union(rect)));
-        }
-        self.bounds.insert(id, rect);
+
     }
 }
 

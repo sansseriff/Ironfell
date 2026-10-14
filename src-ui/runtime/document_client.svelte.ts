@@ -91,6 +91,7 @@ export class DocumentClient {
       // The render benchmark (roadmap stage H): a composition of `shapes`
       // shapes, and per-phase CPU timings (`src/perf.rs`).
       stress: (shapes = 5000) => this.call('stress', [shapes]),
+      spatial: (enabled = true) => this.call('spatial', [enabled]),
       timings: (reset = false) => this.call('timings', [reset]),
     };
   }

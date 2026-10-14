@@ -43,6 +43,13 @@ Builds the `dev-opt` profile with the `webgl2` feature, binds it into
 both artifact URLs resolves. About 2.5 minutes cold, 15 seconds warm. The
 wasm is ~128 MB because the profile keeps debug info; that is expected.
 
+**Performance comparisons require `PROFILE=wasm-bench`.** The default dev-opt
+artifact is level 1 and the helper does not enable SIMD for it; it can make the
+1k selected-group drag ~19 FPS even when optimized SIMD is near 60. A localhost
+link alone does not identify the build. Do not publish development timings as
+renderer ceilings. The 2026-10-13 sanity investigation intentionally leaves the
+optimized artifacts served for the owner; a normal build replaces them.
+
 ## Run (agent path)
 
 ```bash
@@ -252,8 +259,11 @@ with the entity's and is a bug. Every rebuild of the 2D layer logs one
 `redraw (<reason>): N of M nodes changed [ids]; damage x0,y0–x1,y1` line:
 the reason is `document` (the reconciler's changed-node set, with
 `, structure` when the tree's shape changed), `panel layout`, or
-`selection`; the damage is the union of the changed nodes' old and new
-document-space bounds.
+`selection`, `embedded view`, `new view` or `spatial projection`; damage
+is the diagnostic union of independently prepared old/new painted bounds.
+Those bounds belong to canonical composition spaces, so that union is not yet
+a view-space partial-rasterization command. `M` now counts submitted visible
+leaves across views, so it can be smaller than historical expected-output totals.
 
 `__iron.edit(xml)` applies `<edit>` markup exactly as a model reply would be
 applied (see `src-ui/model/edit.ts` for the verbs); `__iron.ask(text)` runs a
@@ -397,7 +407,7 @@ PROFILE=wasm-bench .claude/skills/run-iron/build.sh   # ~2.5 min cold
 tab (`src/document_bridge/stress.rs`); `await __iron.stress(N)` does the same
 from the console. `await __iron.timings(reset)` reads per-phase CPU times
 (`src/perf.rs`): `sync`, `gesture_reconcile`, `display_list`, `extract`,
-`encode`, `render`, `pick`, and whole frames as `frame` and `changed_frame`
+`encode`, `render`, `pick`, `overlay_geometry`, `bounds`, and whole frames as `frame` and `changed_frame`
 (a frame in which some view re-encoded). Each phase records only frames on
 which it did work.
 
@@ -406,13 +416,108 @@ scenarios: `idle` (pointer on empty canvas); `hover-group` (pointer resting
 over the field group); `select-group` (the field group selected); `spin`
 (scrub the slider bound to the field's rotation, everything moves);
 `drag-one` (Cmd-drag one rect inside its cell); `pan` (wheel 200 px and
-back); and `idle`, `spin` and `pan` again at zoom ≈0.37. Hover and
-selection outlines are recomputed every frame, so the script keeps the
-pointer off the content and the selection empty except in their own
-scenarios; a `STILL SELECTED` line means a later scenario is contaminated.
+back); and `idle`, `spin` and `pan` again at zoom ≈0.37. Selection/hover
+geometry is now cached; `overlay_geometry.n` should be zero during resting
+hover/selection intervals. The script still keeps the pointer off content and
+selection empty except in their own scenarios so highlight commands do not
+contaminate changed-frame comparisons. Assertions check selected node identity
+and deselection; a failed assertion, driver command, page error, or Rust panic
+fails the run. `bench-render.sh` propagates failures through its output pipeline.
 Frames per second counts idle frames between pointer events too, so read
 `changed_frame` for the cost of a change. Driver commands it adds:
-`pmove`, `psweep`, `pwheel`, `measure-reset`, `measure <label>`.
+`pmove`, `psweep`, `pwheel`, `measure-reset`, `measure <label>`, `assert <js>`.
+
+`PANEL_PIXELS=physical` converts panel-relative pointer offsets from physical
+pixels to Playwright CSS pixels using DPR. The benchmark sets this because the
+stress fixture maps document pixels to physical pixels at zoom 1. Normal driver
+commands keep CSS offsets by default. Wheel deltas retain their original units.
+The 1k/10k SIMD before/after tables and raw data are in `plans/render-benchmark.md`
+§6–7; older scalar rows are historical. `bounds_updated` and `pick_candidates`
+report maximum work counts per update/walk in the interval; `drawn` is the last
+visible draw walk. Idle `pick.n` and `bounds.n` should be zero.
+
+Selection cache regression checks (run after the build, with Vite up):
+
+```bash
+cd .claude/skills/run-iron
+GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < selection-cache.txt
+GPU=1 PANEL_PIXELS=physical SIZE=2560x1440@2 bun run drive.ts < selection-cache.txt
+```
+
+Every assertion must pass, with no page errors or panics. Checks cover unchanged
+selection reuse, descendant edits, undo, same-version reload, pan/zoom reuse, and
+correct slider/sample addressing at DPR 1/2. The slider must commit approximately
+0.5. Inspect the `selection-cache-view-mapping` and `selection-cache-dpr-fixture`
+screenshots. Do not build/rebind wasm during a driver run: a later navigation can
+mix cached glue with a new wasm artifact and make the run invalid.
+
+## Spatial and picking regression checks
+
+After a stable build with Vite up:
+
+```bash
+cd .claude/skills/run-iron
+GPU=1 PANEL_PIXELS=physical bun run drive.ts < picking.txt
+GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < spatial.txt
+python3 check-spatial-images.py
+GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@2 bun run drive.ts < spatial.txt
+python3 check-spatial-images.py
+```
+
+`picking.txt` verifies stationary-pointer invalidation and zero idle pick work.
+`spatial.txt` must pass every assertion: exact ordered chains in reference/indexed
+modes, repeated/nested occurrences of hidden sources, clips, transformed paths,
+negative/nonuniform scales, deletion/history and 2D-on-3D plane hits. The four
+reference/indexed screenshot pairs must match across the complete canvas/editor
+(the comparison excludes the bottom 100 CSS pixels with the live FPS HUD).
+
+`await __iron.spatial(false)` selects exhaustive reference walks; `true` restores
+indexed picking/culling. Bounds continue updating in both modes. The diagnostic
+result contains current ordered hits; allow settled frames after switching before
+comparing. This is a test switch, not persisted document state.
+
+Native spatial/store checks:
+`cargo test -p iron_document -p iron_spatial --target aarch64-apple-darwin`.
+Don't run performance measurements concurrently with other browser tests/builds.
+
+## Display-paced interaction and independent renderer controls
+
+These are confidence tests, documented with checked results and caveats in
+`plans/renderer-sanity-checks.md`. Use the optimized build and run sequentially:
+
+```bash
+PROFILE=wasm-bench .claude/skills/run-iron/build.sh
+GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@2 \
+  URL='http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1000' \
+  bun run .claude/skills/run-iron/drive.ts < .claude/skills/run-iron/bench-interaction.txt
+GPU=1 PANEL_PIXELS=physical SIZE=2560x1440@2 \
+  URL='http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1000' \
+  bun run .claude/skills/run-iron/drive.ts < .claude/skills/run-iron/bench-group-raf.txt
+sh .claude/skills/run-iron/build-renderer-probe.sh
+DPR=2 COUNTS=1000,10000 SCENARIOS=group-plain,group-drag,all-transform,all-geometry \
+  bun run .claude/skills/run-iron/compare-renderers.ts run
+```
+
+Do not set `UNTHROTTLED` for these cadence checks. `bench-interaction.txt` adds
+whole-field movement and verifies identity before/after, waits out the
+second-press double-click window, and clears selection between cases.
+`praf panel x0 y0 x1 y1 ms` generates frame-paced pointer events through the
+normal DOM input bridge. `measure` now includes elapsed time, rAF percentiles and
+buckets; callback FPS alone is not actual displayed-frame/GPU completion proof.
+
+`compare-renderers.ts capture` exports the actual canonical Stress field.
+`run` can instead restore the compressed archived DPR-2 fixtures and downloads
+checksum-pinned ThorVG 1.1.2 into gitignored `.agents`. `preview` checks static
+rendered output without new timed intervals. It adds no app dependency. The page
+`/Ironfell/renderer-sanity.html` allows manual Canvas2D/ThorVG GL/WG comparisons.
+Group/transform cases retain local geometry; `all-geometry` recreates every
+Canvas2D Path2D, resets/rewrites ThorVG paths, and changes rectangle proportions,
+circle radii and cubic curvature. ThorVG smart rendering is disabled. Vello
+Hybrid 0.2 controls (`vello-gl`, `vello-wg`) rebuild one scene every frame without
+Bevy; `build-renderer-probe.sh` writes only `.agents/render-perf/vello-probe`,
+leaving served Iron artifacts unchanged. No custom bitmap cache exists. These
+controls omit the editor/document/Bevy; synchronous submission and rAF cadence
+are not full-frame GPU latency or proof of every presented frame.
 
 ## Run (human path)
 
@@ -430,7 +535,7 @@ run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-74 tests pass (31 unit, 43 integration). The host target is required because
+90 tests pass (31 unit, 59 integration; verified 2026-10-13). The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests).

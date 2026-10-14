@@ -1,0 +1,64 @@
+# Cached selection geometry: idle reuse, descendant edits, history, same-version
+# document replacement. Run on GPU at DPR 1 or 2:
+# GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < selection-cache.txt
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1000
+ready
+eval (async () => { const text = await __iron.view({fidelity:'full'}); window.__cacheField = text.match(/<group id="([^"]+)" name="field"/)?.[1]; window.__cacheSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; return [window.__cacheField, window.__cacheSample]; })()
+pclick stress 60 100
+assert __iron.selection()[0] === window.__cacheField
+pmove stress 600 50
+sleep 500
+measure-reset
+sleep 500
+assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n === 0)()
+# A descendant edit invalidates the selected ancestor's cached box.
+eval __iron.edit('<edit><set id="' + window.__cacheSample + '" w="200"/></edit>')
+sleep 400
+assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n > 0)()
+measure-reset
+sleep 400
+assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n === 0)()
+key Meta+z
+sleep 400
+assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n > 0)()
+# Composition-space boxes are reused under view pan/zoom; no document geometry walk.
+measure-reset
+pwheel stress 600 50 0 5 3 100
+assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n === 0)()
+keydown Control
+pwheel stress 600 50 0 10 1 100
+keyup Control
+sleep 300
+assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n === 0)()
+shot selection-cache-view-mapping
+# Reloading the same authored version cannot reuse geometry from the old projection.
+eval (async () => { window.__cacheSaved = await __iron.save(); await __iron.load(window.__cacheSaved); return true; })()
+sleep 400
+assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n > 0)()
+measure-reset
+sleep 400
+assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n === 0)()
+# Fresh zoom-1 fixture: prove the physical offsets hit the slider and sample
+# at both DPRs. This checks the benchmark's coordinate correction as well.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1000
+ready
+eval (async () => { const text = await __iron.view({fidelity:'full'}); window.__cacheSlider = text.match(/<slider id="([^"]+)" name="spin"/)?.[1]; window.__cacheSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; return window.__cacheSlider; })()
+pmove stress 40 42
+down
+psweep stress 40 42 190 42 15 100
+up
+sleep 400
+assert (async () => { const value = JSON.parse(await __iron.save()).components.slider[window.__cacheSlider].value; return value > 0.45 && value < 0.55; })()
+# Return to zero rotation before addressing the sample.
+pmove stress 190 42
+down
+psweep stress 190 42 40 42 15 100
+up
+sleep 400
+keydown Meta
+pclick stress 60 100
+keyup Meta
+assert __iron.selection()[0] === window.__cacheSample
+shot selection-cache-dpr-fixture
+errors
+quit

@@ -1,0 +1,42 @@
+# Stationary pointer picking and invalidation. Physical panel offsets at zoom 1.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1
+ready
+eval (async () => { const doc = JSON.parse(await __iron.save()); const text = await __iron.view({fidelity:'full'}); window.__pickSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; window.__pickField = text.match(/<group id="([^"]+)" name="field"/)?.[1]; const parent = doc.nodes[window.__pickSample].parent; const others = Object.entries(doc.nodes).filter(([id,n]) => n.parent === parent && id !== window.__pickSample); if (others.length) await __iron.edit('<edit>' + others.map(([id]) => '<delete id="'+id+'"/>').join('') + '</edit>'); return [window.__pickField,window.__pickSample]; })()
+pmove stress 60 100
+sleep 500
+assert __iron.hovered()[0] === window.__pickField
+measure-reset
+sleep 500
+assert (async () => (await __iron.timings(true)).phases.pick.n === 0)()
+# Moving content away from an unmoving pointer clears the hover.
+eval __iron.edit('<edit><set id="'+window.__pickSample+'" x="1000"/></edit>')
+sleep 500
+assert __iron.hovered().length === 0
+key Meta+z
+sleep 500
+assert __iron.hovered()[0] === window.__pickField
+# Same-version replacement must also invalidate hits.
+eval (async () => { window.__pickSaved = await __iron.save(); const doc = JSON.parse(window.__pickSaved); doc.components.transform2d[window.__pickSample].x = 1000; await __iron.load(JSON.stringify(doc)); return true; })()
+sleep 500
+assert __iron.hovered().length === 0
+eval __iron.load(window.__pickSaved)
+sleep 500
+assert __iron.hovered()[0] === window.__pickField
+# A view pan under the stationary pointer updates hover without a pointer move.
+pwheel stress 60 100 0 60 1 100
+sleep 500
+assert __iron.hovered().length === 0
+pwheel stress 60 100 0 -60 1 100
+sleep 500
+assert __iron.hovered()[0] === window.__pickField
+measure-reset
+keydown Control
+pwheel stress 60 100 0 10 1 100
+keyup Control
+sleep 300
+assert (async () => (await __iron.timings(true)).phases.pick.n > 0)()
+sleep 500
+assert (async () => (await __iron.timings(true)).phases.pick.n === 0)()
+shot picking-stationary
+errors
+quit

@@ -26,6 +26,7 @@ pub mod nest;
 mod panel_views;
 pub mod planes;
 mod render;
+mod spatial;
 pub mod stress;
 
 use bevy::platform::collections::HashMap;
@@ -39,6 +40,7 @@ pub use nest::{EmbedImage, EmbedImages, EmbedView, EmbedViews};
 pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d, path_outline};
 pub use panel_views::{CompositionLayers, FocusRequests, InComposition, ViewCameras, PanelView, PanelViews};
 pub use render::{DocumentPanelLayer, render_document_layer};
+pub use spatial::SpatialScene;
 
 /// The authored store, as a resource. Reads go through `.0.document()`;
 /// writes go through [`PendingTransactions`], never through here.
@@ -146,11 +148,25 @@ impl DocumentChanges {
     }
 }
 
-/// Every drawn 2D node's bounds in document space, kept current by the
-/// render pass. Picking and culling read it; a changed node's old and new
-/// bounds are the damage a redraw reports.
+/// Painted bounds in each node's canonical composition space, kept current
+/// by the spatial preparation pass even when no view draws the node.
 #[derive(Resource, Default)]
 pub struct Bounds2d(pub HashMap<NodeId, kurbo::Rect>);
+
+/// Monotonic projection generation, including resolved previews and document
+/// replacement. Unlike DocumentChanges this is never drained by rendering.
+/// Consumers can retain derived geometry across unchanged frames.
+#[derive(Resource, Default)]
+pub struct GeometryRevision(pub u64);
+
+/// The projection generation whose Bevy globals have finished propagation.
+/// PreUpdate picking must refresh again after a newly reconciled pose settles.
+#[derive(Resource, Default)]
+pub struct PropagatedGeometryRevision(pub u64);
+
+fn stamp_propagated_geometry(revision: Res<GeometryRevision>, mut propagated: ResMut<PropagatedGeometryRevision>) {
+    if propagated.0 != revision.0 { propagated.0 = revision.0; }
+}
 
 /// The last version the reconciler has caught up to. Anything the log holds
 /// past it, however it was applied (queued transaction, undo, a synchronous
@@ -180,6 +196,9 @@ impl Plugin for DocumentPlugin {
             .init_resource::<NodeMap>()
             .init_resource::<DocumentChanges>()
             .init_resource::<Bounds2d>()
+            .init_resource::<GeometryRevision>()
+            .init_resource::<PropagatedGeometryRevision>()
+            .init_resource::<SpatialScene>()
             .init_resource::<HistoryRequests>()
             .init_resource::<PendingLoad>()
             .init_resource::<GestureRequests>()
@@ -203,7 +222,9 @@ impl Plugin for DocumentPlugin {
                     // Planes: after transforms (they project their corners)
                     // and before the 2D layer draws their views.
                     planes::sync_planes.after(TransformSystems::Propagate).before(render::render_document_layer),
+                    spatial::prepare_spatial.after(TransformSystems::Propagate).before(render::render_document_layer).before(crate::bevy_app::select::draw_select_overlay),
                     render::render_document_layer.after(TransformSystems::Propagate),
+                    stamp_propagated_geometry.after(TransformSystems::Propagate),
                     // The store's world transforms must agree with Bevy's
                     // (constraint-system.md §4.3); checked whenever one moves.
                     check_world_affine.after(TransformSystems::Propagate),
@@ -246,6 +267,7 @@ pub(crate) fn sync_document(
     mut synced: ResMut<SyncedVersion>,
     mut map: ResMut<NodeMap>,
     mut changes: ResMut<DocumentChanges>,
+    mut geometry_revision: ResMut<GeometryRevision>,
     mut layers: ResMut<CompositionLayers>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
@@ -266,6 +288,7 @@ pub(crate) fn sync_document(
     let mut structure = false;
     let version_before = synced.0;
     if let Some(doc) = load.0.take() {
+        geometry_revision.0 = geometry_revision.0.wrapping_add(1);
         structure = true;
         // Everything materialised belongs to the old document. Tear it all
         // down rather than diffing: ids may coincide with different types.
@@ -362,6 +385,7 @@ pub(crate) fn sync_document(
     if affected.is_empty() {
         return;
     }
+    geometry_revision.0 = geometry_revision.0.wrapping_add(1);
     let Some(assets) = assets else {
         warn!("mesh assets missing; cannot reconcile");
         return;
@@ -385,6 +409,7 @@ pub(crate) fn reconcile_gesture(
     mut store: ResMut<DocumentStore>,
     mut map: ResMut<NodeMap>,
     mut changes: ResMut<DocumentChanges>,
+    mut geometry_revision: ResMut<GeometryRevision>,
     mut layers: ResMut<CompositionLayers>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
@@ -394,6 +419,7 @@ pub(crate) fn reconcile_gesture(
     }
     let _timing = crate::perf::span(crate::perf::Phase::GestureReconcile);
     let affected: BTreeSet<NodeId> = store.0.drain_changes().into_iter().map(|c| c.leaf.node).collect();
+    geometry_revision.0 = geometry_revision.0.wrapping_add(1);
     let Some(assets) = assets else { return };
     materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets);
     changes.nodes.extend(affected);

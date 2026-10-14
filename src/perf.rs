@@ -31,6 +31,11 @@ pub enum Phase {
     /// `pick_document_2d_system`: hit-test the pointer against a 2D view,
     /// every frame the pointer is over one.
     Pick,
+    /// Rebuild a cached selection/hover box and grip eligibility. Idle frames
+    /// reuse it; excludes drawing the small overlay command list.
+    OverlayGeometry,
+    /// Independent resolved bounds/index update, including hidden compositions.
+    Bounds,
     /// One whole frame on the worker (`WorkerApp::frame`), main world and,
     /// when it renders, extraction and rendering. CPU only: the GPU's share
     /// shows in frames per second.
@@ -40,7 +45,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    const ALL: [Phase; 9] = [
+    const ALL: [Phase; 11] = [
         Phase::Sync,
         Phase::GestureReconcile,
         Phase::DisplayList,
@@ -48,6 +53,8 @@ impl Phase {
         Phase::Encode,
         Phase::Render,
         Phase::Pick,
+        Phase::OverlayGeometry,
+        Phase::Bounds,
         Phase::Frame,
         Phase::ChangedFrame,
     ];
@@ -61,6 +68,8 @@ impl Phase {
             Phase::Encode => "encode",
             Phase::Render => "render",
             Phase::Pick => "pick",
+            Phase::OverlayGeometry => "overlay_geometry",
+            Phase::Bounds => "bounds",
             Phase::Frame => "frame",
             Phase::ChangedFrame => "changed_frame",
         }
@@ -71,7 +80,9 @@ impl Phase {
 const CAP: usize = 7200;
 
 struct Table {
-    samples: [Vec<f32>; 9],
+    samples: [Vec<f32>; 11],
+    bounds_updated: u32,
+    pick_candidates: u32,
     /// Whether a view encoded during the current frame.
     encoded: bool,
     /// The largest encode since the last reset: commands emitted, and the
@@ -82,7 +93,10 @@ struct Table {
     drawn: u32,
 }
 
-static TABLE: Mutex<Table> = Mutex::new(Table { samples: [const { Vec::new() }; 9], encoded: false, commands: 0, culled: 0, drawn: 0 });
+static TABLE: Mutex<Table> = Mutex::new(Table { samples: [const { Vec::new() }; 11], encoded: false, commands: 0, culled: 0, drawn: 0, bounds_updated: 0, pick_candidates: 0 });
+
+pub fn set_bounds_updates(n: u32) { if let Ok(mut t) = TABLE.lock() { t.bounds_updated = t.bounds_updated.max(n); } }
+pub fn set_pick_candidates(n: u32) { if let Ok(mut t) = TABLE.lock() { t.pick_candidates = t.pick_candidates.max(n); } }
 
 pub struct Span {
     phase: Phase,
@@ -171,10 +185,12 @@ pub fn report(reset: bool) -> serde_json::Value {
             v.clear();
         }
     }
-    let out = serde_json::json!({ "phases": phases, "commands": t.commands, "culled": t.culled, "drawn": t.drawn });
+    let out = serde_json::json!({ "phases": phases, "commands": t.commands, "culled": t.culled, "drawn": t.drawn, "bounds_updated": t.bounds_updated, "pick_candidates": t.pick_candidates });
     if reset {
         t.commands = 0;
         t.culled = 0;
+        t.bounds_updated = 0;
+        t.pick_candidates = 0;
     }
     out
 }

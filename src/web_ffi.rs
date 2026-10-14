@@ -518,6 +518,27 @@ pub fn document_stress(ptr: u64, shapes: u32) -> String {
     result.to_string()
 }
 
+/// Diagnostic reference switch: bounds continue updating in both modes, but
+/// disabled mode uses the original exhaustive picking/drawing walks.
+#[wasm_bindgen]
+pub fn document_spatial(ptr: u64, enabled: bool) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let mut scene = app.world_mut().resource_mut::<crate::document_bridge::SpatialScene>();
+    if scene.enabled != enabled { scene.enabled = enabled; }
+    let (enabled, generation, nodes) = (scene.enabled, scene.generation, scene.len());
+    let hits = app.world().resource::<crate::PointerHits>();
+    let hits = serde_json::json!({
+        "overlay": hits.overlay.iter().map(|h| serde_json::json!({
+            "chain": h.chain.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "background": h.background, "through_plane": h.through.is_some()
+        })).collect::<Vec<_>>(),
+        "embed": hits.embed, "embed_chain": hits.embed_chain.iter().map(ToString::to_string).collect::<Vec<_>>()
+    });
+    let result = serde_json::json!({"enabled": enabled, "generation": generation, "nodes": nodes, "hits": hits});
+    if let Some(mut active) = app.world_mut().get_resource_mut::<ActivityControl>() { active.remaining_frames = 10; }
+    result.to_string()
+}
+
 /// Per-phase CPU timings since the last reset (`perf`), as JSON. `reset`
 /// clears them after reading, so a benchmark scenario reads its own frames.
 #[wasm_bindgen]

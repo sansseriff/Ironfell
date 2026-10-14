@@ -2,7 +2,7 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = [".", "src/iron_document", "src/iron_solve"]
+members = [".", "src/iron_document", "src/iron_solve", "src/iron_spatial"]
 
 
 [workspace.dependencies]
@@ -80,6 +80,7 @@ log = { version = "*", features = [
 # The authored store. Bevy-free; the app wraps it in a resource and owns the
 # reconciler (src/document_bridge). See plans/document-spine.md.
 iron_document = { path = "./src/iron_document" }
+iron_spatial = { path = "./src/iron_spatial" }
 # The constraint solver (plans/constraint-system.md §5). Pure; the app only
 # exposes its benchmark until the document adapter lands (stage C2 phase 2).
 iron_solve = { path = "./src/iron_solve" }

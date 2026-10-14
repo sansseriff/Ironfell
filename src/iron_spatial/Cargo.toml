@@ -1,0 +1,10 @@
+[package]
+name = "iron_spatial"
+version = "0.1.0"
+edition = "2024"
+description = "Derived bounds and spatial queries keyed by Iron document identity."
+
+[dependencies]
+iron_document = { path = "../iron_document" }
+kurbo = "0.13.1"
+understory_index = { git = "https://github.com/forest-rs/understory", rev = "2ac7efbc010c8ee4daa316c34eadc0bafacfe83b", default-features = false }

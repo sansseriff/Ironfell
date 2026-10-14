@@ -7,6 +7,14 @@ use crate::document_bridge::{Doc2d, DocumentStore, EmbedViews, InComposition, No
 use iron_document::NodeId;
 use iron_document::composition::Dims;
 
+#[derive(Default)]
+pub struct Pick2dCache {
+    key: Option<(Vec2, Option<crate::document_bridge::PanelView>, iron_document::Version, u64, u64, u64, bool)>,
+    overlay: Vec<crate::Hit2D>,
+    embed: Option<String>,
+    chain: Vec<NodeId>,
+}
+
 /// Build a world ray from a window-space cursor position (physical px).
 /// The camera renders into a viewport sub-rect, so the position is translated to
 /// viewport-local coordinates first; returns None when the cursor is outside the
@@ -64,17 +72,34 @@ pub fn pick_document_2d_system(
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
     globals: Query<&'static GlobalTransform>,
     mut hits: ResMut<crate::PointerHits>,
+    revision: Res<crate::document_bridge::GeometryRevision>,
+    propagated: Res<crate::document_bridge::PropagatedGeometryRevision>,
+    mut cache: Local<Pick2dCache>,
+    spatial: Res<crate::document_bridge::SpatialScene>,
 ) {
+    let key = (pointer.screen, views.get(hits.panel.as_deref().unwrap_or("")).cloned(), store.0.document().version(), revision.0, propagated.0, spatial.generation, spatial.enabled);
+    if cache.key.as_ref() == Some(&key) && !embeds.is_changed() {
+        // The 3D picker may have replaced overlay with hits on a plane last
+        // frame. Restore the 2D base independently, before that pass runs again.
+        hits.overlay.clone_from(&cache.overlay);
+        hits.embed.clone_from(&cache.embed);
+        hits.embed_chain.clone_from(&cache.chain);
+        return;
+    }
+    cache.key = Some(key);
     hits.overlay.clear();
     hits.embed = None;
     hits.embed_chain.clear();
+    cache.overlay.clear();
+    cache.embed = None;
+    cache.chain.clear();
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two) else { return };
     let Some(p) = view.to_doc(pointer.screen) else { return };
     let _timing = crate::perf::span(crate::perf::Phase::Pick);
     let doc = store.0.document();
     let roots = nest::panel_roots(doc, view);
     let screen = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
-    let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, screen, z: 0, out: Vec::new(), embed: None };
+    let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, spatial: &spatial, screen, z: 0, examined: 0, out: Vec::new(), embed: None };
     walk.walk(&roots, &[], kurbo::Point::new(p.x as f64, p.y as f64), kurbo::Affine::IDENTITY, &view.panel, 0);
     let mut out = walk.out;
     // Whatever a 3D embed covers is not hit; whatever is drawn over it is.
@@ -87,6 +112,9 @@ pub fn pick_document_2d_system(
         hits.embed_chain = chain;
     }
     hits.overlay = out;
+    cache.overlay.clone_from(&hits.overlay);
+    cache.embed.clone_from(&hits.embed);
+    cache.chain.clone_from(&hits.embed_chain);
 }
 
 /// Topmost first: shapes by painter depth, then embed backgrounds by depth.
@@ -100,9 +128,11 @@ pub(crate) struct Pick<'a, 'w, 's> {
     pub nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
     pub globals: &'a Query<'w, 's, &'static GlobalTransform>,
     pub embeds: &'a EmbedViews,
+    pub spatial: &'a crate::document_bridge::SpatialScene,
     /// The pointer in window px, for 3D embeds (`EmbedView::texture_point`).
     pub screen: kurbo::Point,
     pub z: u32,
+    pub examined: u32,
     pub out: Vec<crate::Hit2D>,
     /// The topmost 3D embed under the pointer, its painter depth and chain.
     pub embed: Option<(String, f32, Vec<NodeId>)>,
@@ -113,10 +143,17 @@ impl Pick<'_, '_, '_> {
     /// document space into it; `prefix` is the chain down to (and including)
     /// the enclosing embed. Painter order: each node, then its children.
     pub fn walk(&mut self, roots: &[NodeId], prefix: &[NodeId], p: kurbo::Point, space: kurbo::Affine, key: &str, depth: u32) {
-        for &id in roots {
+        let indexed = self.spatial.enabled;
+        let candidates = if indexed {
+            self.spatial.candidates(roots, self.doc, Some(p), kurbo::Rect::ZERO)
+        } else { roots.to_vec() };
+        self.examined += candidates.len() as u32;
+        crate::perf::set_pick_candidates(self.examined);
+        for id in candidates {
             self.z += 1;
             let mut chain = prefix.to_vec();
-            chain.push(id);
+            if indexed { chain.extend_from_slice(self.spatial.chain(id)); }
+            else { chain.push(id); }
             if nest::is_embed(self.doc, id) {
                 if depth >= nest::MAX_DEPTH {
                     continue;
@@ -147,8 +184,10 @@ impl Pick<'_, '_, '_> {
                     self.out.push(crate::Hit2D { entity, chain: chain.clone(), background: false, z: self.z as f32, space, through: None });
                 }
             }
-            let kids: Vec<NodeId> = self.doc.children(id).to_vec();
-            self.walk(&kids, &chain, p, space, key, depth);
+            if !indexed {
+                let kids: Vec<NodeId> = self.doc.children(id).to_vec();
+                self.walk(&kids, &chain, p, space, key, depth);
+            }
         }
     }
 }
@@ -170,6 +209,7 @@ pub fn pick_world_3d_system(
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
     globals: Query<&'static GlobalTransform>,
     mut hits: ResMut<crate::PointerHits>,
+    spatial: Res<crate::document_bridge::SpatialScene>,
 ) {
     hits.world3d.clear();
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)) else { return };
@@ -230,7 +270,7 @@ pub fn pick_world_3d_system(
     }
     if let Some((_, plane_entity, p, source, plane_node)) = best {
         let kids: Vec<iron_document::NodeId> = doc.children(source).to_vec();
-        let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, screen: kurbo::Point::ZERO, z: 0, out: Vec::new(), embed: None };
+        let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, spatial: &spatial, screen: kurbo::Point::ZERO, z: 0, examined: 0, out: Vec::new(), embed: None };
         let mut chain = prefix.clone();
         chain.extend(nest::lineage(doc, plane_node));
         walk.walk(&kids, &chain, p, kurbo::Affine::IDENTITY, "plane", 0);

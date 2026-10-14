@@ -219,7 +219,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             accumulate_custom_scroll_system,
             pointer_collect_system.after(accumulate_cursor_delta_system),
             pointer_panel_system.after(pointer_collect_system),
-            pick_document_2d_system.after(pointer_panel_system),
+            pick_document_2d_system.after(pointer_panel_system).after(crate::document_bridge::sync_document),
             // After the 2D picker, which finds the 3D embed on top.
             pick_world_3d_system.after(pick_document_2d_system),
             resolve_primary_hit_system
@@ -310,6 +310,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<PendingCommit>();
     app.init_resource::<pointer::PressPosition>();
     app.init_resource::<select::SelectTool>();
+    app.init_resource::<select::SelectionGeometryCache>();
     app.init_resource::<select::ActiveTool>();
     app.init_resource::<pen::PenTool>();
     app.init_resource::<select::ShellModifiers>();

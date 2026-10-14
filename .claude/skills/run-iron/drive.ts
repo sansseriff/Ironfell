@@ -41,10 +41,20 @@ const page: Page = await browser.newPage({ viewport: { width: vw, height: vh }, 
 // and `errors` prints page errors.
 let logs: string[] = [];
 const errors: string[] = [];
+let commandFailed = false;
 const clean = (t: string) => t.replace(/%c/g, "").replace(/ color:.*$/s, "").trim();
 page.on("pageerror", (e) => errors.push(String(e)));
-page.on("console", (m) => logs.push(clean(m.text())));
+page.on("console", (m) => {
+  const text = clean(m.text());
+  logs.push(text);
+  // Rust panics can be caught by the frame wrapper rather than surfacing as
+  // pageerror. They must still fail a smoke/benchmark run.
+  if (text.includes("panicked at")) commandFailed = true;
+});
 
+// Default panel offsets are CSS px. Benchmarks address physical panel px,
+// matching the stress fixture's document coordinates at zoom 1.
+const panelUnit = process.env.PANEL_PIXELS === "physical" ? 1 / Number(dprSpec ?? 1) : 1;
 type Rect = { x: number; y: number; w: number; h: number };
 let panel: Rect = { x: 0, y: 0, w: 0, h: 0 };
 let found: { x: number; y: number } | null = null;
@@ -144,13 +154,13 @@ async function run(line: string) {
       // Drag inside a named panel (viewer, timeline, sidebar), panel-relative.
       const r = await panelRect(rest[0]);
       const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
-      return drag(r.x + x0, r.y + y0, r.x + x1, r.y + y1, steps || 10);
+      return drag(r.x + x0 * panelUnit, r.y + y0 * panelUnit, r.x + x1 * panelUnit, r.y + y1 * panelUnit, steps || 10);
     }
     case "pmove": {
       // pmove <panel> x y: move the pointer to a panel-relative point.
       const r = await panelRect(rest[0]);
       const [x, y] = rest.slice(1).map(Number);
-      return page.mouse.move(r.x + x, r.y + y);
+      return page.mouse.move(r.x + x * panelUnit, r.y + y * panelUnit);
     }
     case "psweep": {
       // psweep <panel> x0 y0 x1 y1 steps ms: move (not press) from one
@@ -159,17 +169,40 @@ async function run(line: string) {
       const r = await panelRect(rest[0]);
       const [x0, y0, x1, y1, steps, ms] = rest.slice(1).map(Number);
       for (let i = 1; i <= steps; i++) {
-        await page.mouse.move(r.x + x0 + ((x1 - x0) * i) / steps, r.y + y0 + ((y1 - y0) * i) / steps);
+        await page.mouse.move(r.x + (x0 + ((x1 - x0) * i) / steps) * panelUnit, r.y + (y0 + ((y1 - y0) * i) / steps) * panelUnit);
         await page.waitForTimeout(ms);
       }
       return;
+    }
+    case "praf": {
+      // Frame-paced synthetic pointer input through the normal DOM bridge.
+      // praf panel x0 y0 x1 y1 ms. Used to remove WebDriver pacing overhead.
+      const r = await panelRect(rest[0]);
+      const [x0,y0,x1,y1,ms] = rest.slice(1).map(Number);
+      const result = await page.evaluate(({r,x0,y0,x1,y1,ms,unit}) => new Promise(resolve => {
+        const canvas = document.querySelector('canvas')!;
+        let start: number | undefined; let frames = 0;
+        const frame = (time: number) => {
+          start ??= time;
+          const t = Math.min((time-start)/ms,1);
+          const q = t < .5 ? t*2 : (1-t)*2;
+          const props = {clientX:r.x+(x0+(x1-x0)*q)*unit,clientY:r.y+(y0+(y1-y0)*q)*unit,pointerType:'mouse',pointerId:1,buttons:1,bubbles:true};
+          // The app binds one of these two channels according to raw-input policy.
+          canvas.dispatchEvent(new PointerEvent('pointerrawupdate',props));
+          canvas.dispatchEvent(new PointerEvent('pointermove',props));
+          frames++;
+          if(t<1)requestAnimationFrame(frame);else resolve({producer_frames:frames,elapsed_ms:time-start});
+        };
+        requestAnimationFrame(frame);
+      }), {r,x0,y0,x1,y1,ms,unit:panelUnit});
+      return out(`praf ${JSON.stringify(result)}`);
     }
     case "pwheel": {
       // pwheel <panel> x y dx dy count ms: `count` wheel events at a panel
       // point, `ms` apart (hold Control first for a pinch-zoom).
       const r = await panelRect(rest[0]);
       const [x, y, dx, dy, count, ms] = rest.slice(1).map(Number);
-      await page.mouse.move(r.x + x, r.y + y);
+      await page.mouse.move(r.x + x * panelUnit, r.y + y * panelUnit);
       for (let i = 0; i < count; i++) {
         await page.mouse.wheel(dx, dy);
         await page.waitForTimeout(ms);
@@ -200,8 +233,11 @@ async function run(line: string) {
         return {
           fps: s.effectiveFps,
           frames: s.frames,
+          elapsed_ms: s.elapsedMs,
           tick_p50: s.tickMs?.p50,
           tick_p95: s.tickMs?.p95,
+          raf_delta: s.rafDeltaMs,
+          raf_buckets: s.rafDeltaBuckets,
           display_list: phase("display_list"),
           encode: phase("encode"),
           render: phase("render"),
@@ -209,6 +245,10 @@ async function run(line: string) {
           gesture_reconcile: phase("gesture_reconcile"),
           sync: phase("sync"),
           pick: phase("pick"),
+          overlay_geometry: phase("overlay_geometry"),
+          bounds: phase("bounds"),
+          bounds_updated: t.bounds_updated,
+          pick_candidates: t.pick_candidates,
           frame: phase("frame"),
           changed_frame: phase("changed_frame"),
           commands: t.commands,
@@ -262,7 +302,7 @@ async function run(line: string) {
       // Click inside a named panel, panel-relative.
       const r = await panelRect(rest[0]);
       const [x, y] = rest.slice(1).map(Number);
-      await page.mouse.move(r.x + x, r.y + y);
+      await page.mouse.move(r.x + x * panelUnit, r.y + y * panelUnit);
       await page.waitForTimeout(200);
       await page.mouse.down();
       await page.waitForTimeout(200);
@@ -322,6 +362,10 @@ async function run(line: string) {
       return page.keyboard.press(rest[0]);
     case "eval":
       return out(JSON.stringify(await page.evaluate(rest.join(" "))));
+    case "assert": {
+      if (await page.evaluate(rest.join(" ")) !== true) throw new Error("assertion failed");
+      return out("assertion passed");
+    }
     case "logs": {
       // Console messages from the worker reach Playwright a few hundred
       // milliseconds after the frame that produced them; let them land.
@@ -339,10 +383,11 @@ async function run(line: string) {
       return out(logs.filter((l) => !re || re.test(l)).join("\n") || "(no matching console output)");
     }
     case "errors":
+      if (errors.length) commandFailed = true;
       return out(errors.join("\n") || "(no page errors)");
     case "quit":
       await browser.close();
-      process.exit(0);
+      process.exit(commandFailed ? 1 : 0);
     default:
       return out(`unknown command: ${cmd}`);
   }
@@ -353,7 +398,9 @@ for await (const line of rl) {
   try {
     await run(line);
   } catch (e) {
+    commandFailed = true;
     out(`error in "${line}": ${e instanceof Error ? e.message.split("\n")[0] : e}`);
   }
 }
 await browser.close();
+if (commandFailed) process.exit(1);

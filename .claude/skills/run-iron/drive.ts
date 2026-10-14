@@ -240,6 +240,7 @@ async function run(line: string) {
           raf_buckets: s.rafDeltaBuckets,
           display_list: phase("display_list"),
           encode: phase("encode"),
+          overlay_encode: phase("overlay_encode"),
           render: phase("render"),
           extract: phase("extract"),
           gesture_reconcile: phase("gesture_reconcile"),

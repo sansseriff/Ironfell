@@ -70,6 +70,13 @@ pub struct VectorView {
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct Offscreen;
 
+/// A [`VectorView`] for editor feedback (hover, selection, grips, marquee),
+/// pasted above the ordinary views. Its own texture means a feedback change
+/// re-encodes only the feedback, never the content beneath it
+/// (plans/rendering/architecture.md §5).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct Overlay;
+
 impl VectorLayer {
     pub fn screen(order: i32) -> Self {
         Self {
@@ -106,6 +113,8 @@ pub mod order {
     pub const TIMELINE_PLAYHEAD: i32 = 13;
     /// All document 2D nodes, in document preorder (see `document_bridge::render`).
     pub const DOCUMENT_2D: i32 = 20;
+    /// Editor feedback over a 2D panel, in the panel's [`super::Overlay`] view.
+    pub const EDITOR_OVERLAY: i32 = 30;
     /// Alpha stress fixture (`?bevy=alpha`), drawn above everything else.
     pub const ALPHA_STRESS_STATIC: i32 = 70;
     pub const ALPHA_STRESS_ANIMATED: i32 = 71;

@@ -31,6 +31,8 @@ impl SpatialScene {
     pub fn record(&self, id: NodeId) -> Option<&Record> {
         self.scopes.get(self.owners.get(&id)?)?.record(id)
     }
+    /// Every embed in the document, as of the last structural change.
+    pub fn embeds(&self) -> &[NodeId] { &self.embeds }
     pub fn chain(&self, id: NodeId) -> &[NodeId] { self.chains.get(&id).map(Vec::as_slice).unwrap_or(&[]) }
     /// Query a canonical composition once; callers transform into it for each
     /// embed occurrence and retain the occurrence chain in their results.
@@ -87,9 +89,10 @@ pub fn prepare_spatial(
     for (prov, shape, global) in &nodes {
         if !full && !shape.is_changed() && !global.is_changed() { continue; }
         let local = nest::shape_path(&shape.shape).bounding_box();
-        // Current content also draws 2px editor outlines. Bound their potential
-        // miter joins conservatively until editor feedback has its own target.
-        let mut paint_pad = shape.stroke.map_or(0.0, |(_,w)| w as f64 * 0.5 * 4.0).max(4.0);
+        // Half the stroke, times the miter limit. Editor outlines are drawn by
+        // the overlay in its own view, so they need no allowance here; a
+        // plane's view culls with a device-space margin that covers its own.
+        let mut paint_pad = shape.stroke.map_or(0.0, |(_,w)| w as f64 * 0.5 * 4.0);
         if let Shape2d::Slider { h, .. } = shape.shape {
             // The knob can overhang either end of the track's hit rectangle.
             paint_pad = paint_pad.max((h as f64 * 0.5).min(12.0) + 3.0);

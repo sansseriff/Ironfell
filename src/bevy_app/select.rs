@@ -28,7 +28,7 @@ use kurbo::{Affine, ParamCurve as _, Point, Rect, Shape as _};
 
 use crate::bevy_app::interaction::{DragCameras, PendingCommit, drag_point, intersect_ray_plane};
 use crate::document_bridge::{Doc2d, DocumentPanelLayer, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelView, PanelViews, PendingTransactions, Provenance, Shape2d, nest};
-use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
+use crate::vector::{DisplayList, DisplayListRebuild, Overlay, VectorLayer, VectorView, order};
 
 /// A node as reached in one panel: the chain from the panel composition's
 /// top level down to it, through every group and embed on the way.
@@ -101,6 +101,31 @@ const BLUE: [f32; 4] = [0.05, 0.6, 1.0, 1.0];
 pub struct SelectionGeometryCache {
     selection: HashMap<String, CachedSelection>,
     hover: Option<(GeometryStamp, Reach, Option<Affine>)>,
+    lit: HashMap<String, CachedLit>,
+}
+
+/// What lights up in one panel for the current highlights.
+struct CachedLit {
+    stamp: GeometryStamp,
+    highlights: (std::collections::BTreeSet<NodeId>, std::collections::BTreeSet<NodeId>),
+    boxed: Vec<Vec<NodeId>>,
+    marks: Vec<LitMark>,
+}
+
+/// One occurrence of a lit node, in panel document px: a leaf's outline,
+/// or a group's or embed's frame (Figma outlines a group by its box, never
+/// by its descendants).
+struct LitMark {
+    chain: Vec<NodeId>,
+    selected: bool,
+    shape: LitShape,
+}
+
+enum LitShape {
+    /// Panel document px ← the leaf's space, and its outline there.
+    Outline(Affine, kurbo::BezPath),
+    /// The unit square onto the box.
+    Frame(Affine),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -166,6 +191,42 @@ impl SelectionGeometryCache {
             });
         }
         &self.selection.get(panel).expect("cached selection").geometry
+    }
+
+    /// Every occurrence in `view` of every lit node, less the containers in
+    /// `boxed` (already drawn as the selection's or the hover's box; a
+    /// group's frame costs a walk of its descendants). Rebuilt when geometry
+    /// or the highlights change; the scan is over the lit nodes and the
+    /// document's embeds, never over a panel's content.
+    fn lit<'a>(&'a mut self, geo: &Geo, view: &PanelView, embeds: &[NodeId], highlights: &crate::document_bridge::Highlights, boxed: Vec<Vec<NodeId>>, stamp: GeometryStamp) -> &'a [LitMark] {
+        let key = (&highlights.selected, &highlights.hovered);
+        if self.lit.get(&view.panel).is_none_or(|c| c.stamp != stamp || (&c.highlights.0, &c.highlights.1) != key || c.boxed != boxed) || geo.store.has_changes() {
+            let timing = crate::perf::span(crate::perf::Phase::OverlayGeometry);
+            if highlights.selected.is_empty() && highlights.hovered.is_empty() { timing.discard(); }
+            let doc = geo.doc();
+            let mut marks = Vec::new();
+            let selected = highlights.selected.iter().map(|&n| (n, true));
+            let hovered = highlights.hovered.iter().filter(|n| !highlights.selected.contains(n)).map(|&n| (n, false));
+            for (id, selected) in selected.chain(hovered) {
+                if !doc.is_live(id) {
+                    continue;
+                }
+                for chain in occurrences(doc, view, embeds, id) {
+                    let shape = match geo.ty(id) {
+                        "group" | "embed" if boxed.contains(&chain) => None,
+                        "group" | "embed" => geo.frame(&chain).map(LitShape::Frame),
+                        _ => geo.map.entity(id).and_then(|e| geo.nodes.get(e).ok()).and_then(|(d, g)| {
+                            Some(LitShape::Outline(geo.space(&chain)? * nest::affine_of(g), nest::shape_path(&d.shape)))
+                        }),
+                    };
+                    if let Some(shape) = shape {
+                        marks.push(LitMark { chain, selected, shape });
+                    }
+                }
+            }
+            self.lit.insert(view.panel.clone(), CachedLit { stamp, highlights: (highlights.selected.clone(), highlights.hovered.clone()), boxed, marks });
+        }
+        &self.lit.get(&view.panel).expect("cached lit").marks
     }
 
     fn hover(&mut self, geo: &Geo, reach: &Reach, stamp: GeometryStamp) -> Option<Affine> {
@@ -623,6 +684,34 @@ fn find_reach(doc: &iron_document::Document, views: &PanelViews, id: NodeId) -> 
         }
     }
     None
+}
+
+/// Every chain by which `id` shows in `view`: directly, when the panel
+/// shows its composition, and through each 2D embed of that composition
+/// the panel shows, recursively. `embeds` is every embed in the document.
+fn occurrences(doc: &iron_document::Document, view: &PanelView, embeds: &[NodeId], id: NodeId) -> Vec<Vec<NodeId>> {
+    fn prefixes(doc: &iron_document::Document, view: &PanelView, embeds: &[NodeId], comp: Option<NodeId>, depth: u32) -> Vec<Vec<NodeId>> {
+        let mut out = Vec::new();
+        if view.shows(comp) {
+            out.push(Vec::new());
+        }
+        let Some(comp) = comp.filter(|_| depth < nest::MAX_DEPTH) else { return out };
+        for &e in embeds.iter().filter(|&&e| composition::embedded(doc, e) == Some(comp)) {
+            for mut prefix in prefixes(doc, view, embeds, composition::composition_of(doc, e), depth + 1) {
+                prefix.extend(nest::lineage(doc, e));
+                out.push(prefix);
+            }
+        }
+        out
+    }
+    let lineage = nest::lineage(doc, id);
+    prefixes(doc, view, embeds, composition::composition_of(doc, id), 0)
+        .into_iter()
+        .map(|mut chain| {
+            chain.extend_from_slice(&lineage);
+            chain
+        })
+        .collect()
 }
 
 /// The grip under a window point for a box `frame` (window px).
@@ -1482,10 +1571,11 @@ fn begin_legacy(
     }
 }
 
-/// The select tool's drawing in each 2D panel: the selection's box and
-/// grips, the hovered container's outline, the marquee. Its own layer in
-/// the panel's view; an unchanged list stays clean. A changed overlay still
-/// re-encodes the shared target until it has an independent retained texture.
+/// The editor's feedback in each 2D panel: lit nodes' outlines and frames
+/// (hover, selection and cross-probe highlights), the selection's box and
+/// grips, path points, the marquee. Its own [`Overlay`] view over the
+/// panel's, so a feedback change re-encodes only this list, never the
+/// panel's content; an unchanged list stays clean.
 #[derive(Component)]
 pub struct SelectOverlay {
     panel: String,
@@ -1494,8 +1584,8 @@ pub struct SelectOverlay {
 #[allow(clippy::too_many_arguments)]
 pub fn draw_select_overlay(
     mut commands: Commands,
-    panel_layers: Query<(Entity, &DocumentPanelLayer)>,
-    mut overlays: Query<(Entity, &SelectOverlay, &mut DisplayList)>,
+    panel_layers: Query<(&DocumentPanelLayer, &VectorView), Without<SelectOverlay>>,
+    mut overlays: Query<(Entity, &SelectOverlay, &mut DisplayList, &mut VectorView), Without<DocumentPanelLayer>>,
     tool: Res<SelectTool>,
     sel: Res<crate::SelectionState>,
     views: Res<PanelViews>,
@@ -1507,16 +1597,26 @@ pub fn draw_select_overlay(
     active: Res<ActiveTool>,
     geometry_revision: Res<crate::document_bridge::GeometryRevision>,
     mut geometry_cache: ResMut<SelectionGeometryCache>,
+    (highlights, spatial): (Res<crate::document_bridge::Highlights>, Res<crate::document_bridge::SpatialScene>),
 ) {
     geometry_cache.selection.retain(|panel, _| views.get(panel).is_some());
-    for (e, o, _) in &overlays {
-        if !panel_layers.iter().any(|(_, l)| l.panel == o.panel) {
+    geometry_cache.lit.retain(|panel, _| views.get(panel).is_some());
+    for (e, o, ..) in &overlays {
+        if !panel_layers.iter().any(|(l, _)| l.panel == o.panel) {
             commands.entity(e).despawn();
         }
     }
-    for (view_entity, layer) in &panel_layers {
-        if !overlays.iter().any(|(_, o, _)| o.panel == layer.panel) {
-            commands.spawn((DisplayList::default(), SelectOverlay { panel: layer.panel.clone() }, VectorLayer::screen(order::DOCUMENT_2D + 1).in_view(view_entity)));
+    for (layer, panel_view) in &panel_layers {
+        match overlays.iter_mut().find(|(_, o, ..)| o.panel == layer.panel) {
+            Some((.., mut v)) => {
+                if *v != *panel_view {
+                    *v = *panel_view;
+                }
+            }
+            None => {
+                let e = commands.spawn((DisplayList::default(), SelectOverlay { panel: layer.panel.clone() }, *panel_view, Overlay)).id();
+                commands.entity(e).insert(VectorLayer::screen(order::EDITOR_OVERLAY).in_view(e));
+            }
         }
     }
     let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
@@ -1525,9 +1625,24 @@ pub fn draw_select_overlay(
     let blue = peniko::Color::new(BLUE);
     let thin = kurbo::Stroke::new(1.0);
     let square = Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
-    for (_, o, mut list) in &mut overlays {
+    for (_, o, mut list, _) in &mut overlays {
         let Some(view) = views.get(&o.panel) else { continue };
         let to_screen = view.affine();
+        // Lit leaves by their outline and lit containers by their box, in
+        // screen px so the width holds under zoom. Frames already drawn as
+        // the selection's box or the hover box are skipped.
+        let boxed = reaches.iter().chain(tool.hover.as_ref()).filter(|r| r.panel == o.panel).map(|r| r.chain.clone()).collect();
+        let lit: Vec<(peniko::Color, f64, kurbo::BezPath)> = geometry_cache
+            .lit(&geo, view, spatial.embeds(), &highlights, boxed, stamp)
+            .iter()
+            .filter_map(|m| match &m.shape {
+                LitShape::Outline(a, path) => {
+                    let c = if m.selected { crate::document_bridge::LIT_SELECTED } else { crate::document_bridge::LIT_HOVERED };
+                    Some((peniko::Color::new(c), 2.0, (to_screen * *a) * path.clone()))
+                }
+                LitShape::Frame(f) => Some((blue, if m.selected { 1.0 } else { 1.5 }, (to_screen * *f) * square.clone())),
+            })
+            .collect();
         let hover_frame = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
             .filter(|h| matches!(geo.ty(h.node()), "group" | "embed"))
             .and_then(|h| geometry_cache.hover(&geo, h, stamp));
@@ -1535,6 +1650,9 @@ pub fn draw_select_overlay(
         let cached = geometry_cache.selection(&geo, &o.panel, &mine, stamp, true);
         list.rebuild(|b| {
             b.clipped(Affine::IDENTITY, view.rect.to_kurbo(), |b| {
+                for (c, width, path) in lit {
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(width), c, path);
+                }
                 // The hovered node's box, for what has no outline of its own.
                 if let Some(f) = hover_frame {
                     b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5), blue, (to_screen * f) * square.clone());

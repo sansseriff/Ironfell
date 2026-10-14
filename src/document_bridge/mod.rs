@@ -39,7 +39,7 @@ pub use highlight::{Highlights, update_highlights};
 pub use nest::{EmbedImage, EmbedImages, EmbedView, EmbedViews};
 pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d, path_outline};
 pub use panel_views::{CompositionLayers, FocusRequests, InComposition, ViewCameras, PanelView, PanelViews};
-pub use render::{DocumentPanelLayer, render_document_layer};
+pub use render::{DocumentPanelLayer, LIT_HOVERED, LIT_SELECTED, render_document_layer};
 pub use spatial::SpatialScene;
 
 /// The authored store, as a resource. Reads go through `.0.document()`;

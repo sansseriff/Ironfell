@@ -26,6 +26,9 @@ pub enum Phase {
     /// `prepare_scene`: encode changed views' display lists into Vello scenes
     /// (flatten, tile and strip on the CPU).
     Encode,
+    /// `prepare_scene` for editor-feedback views ([`crate::vector::Overlay`]):
+    /// hover, selection and grips, encoded apart from content.
+    OverlayEncode,
     /// `render_scene`: submit each changed view's scene to the GPU.
     Render,
     /// `pick_document_2d_system`: hit-test the pointer against a 2D view,
@@ -40,17 +43,19 @@ pub enum Phase {
     /// when it renders, extraction and rendering. CPU only: the GPU's share
     /// shows in frames per second.
     Frame,
-    /// Whole frames in which some view re-encoded: the cost of a change.
+    /// Whole frames in which some view, content or overlay, re-encoded: the
+    /// cost of a change.
     ChangedFrame,
 }
 
 impl Phase {
-    const ALL: [Phase; 11] = [
+    const ALL: [Phase; 12] = [
         Phase::Sync,
         Phase::GestureReconcile,
         Phase::DisplayList,
         Phase::Extract,
         Phase::Encode,
+        Phase::OverlayEncode,
         Phase::Render,
         Phase::Pick,
         Phase::OverlayGeometry,
@@ -66,6 +71,7 @@ impl Phase {
             Phase::DisplayList => "display_list",
             Phase::Extract => "extract",
             Phase::Encode => "encode",
+            Phase::OverlayEncode => "overlay_encode",
             Phase::Render => "render",
             Phase::Pick => "pick",
             Phase::OverlayGeometry => "overlay_geometry",
@@ -80,7 +86,7 @@ impl Phase {
 const CAP: usize = 7200;
 
 struct Table {
-    samples: [Vec<f32>; 11],
+    samples: [Vec<f32>; 12],
     bounds_updated: u32,
     pick_candidates: u32,
     /// Whether a view encoded during the current frame.
@@ -93,7 +99,7 @@ struct Table {
     drawn: u32,
 }
 
-static TABLE: Mutex<Table> = Mutex::new(Table { samples: [const { Vec::new() }; 11], encoded: false, commands: 0, culled: 0, drawn: 0, bounds_updated: 0, pick_candidates: 0 });
+static TABLE: Mutex<Table> = Mutex::new(Table { samples: [const { Vec::new() }; 12], encoded: false, commands: 0, culled: 0, drawn: 0, bounds_updated: 0, pick_candidates: 0 });
 
 pub fn set_bounds_updates(n: u32) { if let Ok(mut t) = TABLE.lock() { t.bounds_updated = t.bounds_updated.max(n); } }
 pub fn set_pick_candidates(n: u32) { if let Ok(mut t) = TABLE.lock() { t.pick_candidates = t.pick_candidates.max(n); } }
@@ -120,6 +126,18 @@ impl Drop for Span {
         let ms = self.start.elapsed().as_secs_f32() * 1000.0;
         if let Ok(mut t) = TABLE.lock() {
             push(&mut t, self.phase, ms);
+        }
+    }
+}
+
+/// Record one sample measured by hand, for a phase whose work is split
+/// between callers a guard cannot separate. An encode of either kind makes
+/// the frame a changed frame.
+pub fn record(phase: Phase, ms: f32) {
+    if let Ok(mut t) = TABLE.lock() {
+        push(&mut t, phase, ms);
+        if matches!(phase, Phase::Encode | Phase::OverlayEncode) {
+            t.encoded = true;
         }
     }
 }

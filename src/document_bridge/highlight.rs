@@ -3,8 +3,13 @@
 //! Selection and hover hold the nodes the pointer picked. A picked node
 //! that belongs to a figure stands for the figure's entity, so every figure
 //! of that entity lights up, in every panel; a node that pictures nothing
-//! lights up alone. A figure that is a group lights up as all of its
-//! drawn descendants.
+//! lights up alone.
+//!
+//! The sets hold only the lit nodes themselves, never their descendants. In
+//! a 2D panel the editor overlay (`bevy_app::select`) draws a lit leaf's
+//! outline and a lit group's or embed's frame, as Figma does, so feedback
+//! costs the same whatever a group holds. A 2D composition on a plane and a
+//! 3D mesh light up under a lit ancestor too ([`Highlights::covers`]).
 
 use super::DocumentStore;
 use crate::SelectionState;
@@ -13,8 +18,8 @@ use iron_document::composition;
 use iron_document::{Document, NodeId};
 use std::collections::BTreeSet;
 
-/// Every node drawn highlighted this frame: derived from [`SelectionState`]
-/// and the document's `figures` relations, never stored.
+/// Every node highlighted this frame: derived from [`SelectionState`] and
+/// the document's `figures` relations, never stored.
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct Highlights {
     pub selected: BTreeSet<NodeId>,
@@ -24,21 +29,30 @@ pub struct Highlights {
 /// The nodes that light up for `picked`.
 pub fn lit(doc: &Document, picked: impl IntoIterator<Item = NodeId>) -> BTreeSet<NodeId> {
     let mut out = BTreeSet::new();
-    let mut add = |n: NodeId, out: &mut BTreeSet<NodeId>| {
-        out.insert(n);
-        out.extend(doc.descendants(n));
-    };
     for node in picked {
         match composition::figure_of(doc, node) {
-            Some((_, entity)) => {
-                for f in composition::figures_of(doc, entity) {
-                    add(f, &mut out);
-                }
+            Some((_, entity)) => out.extend(composition::figures_of(doc, entity)),
+            None => {
+                out.insert(node);
             }
-            None => add(node, &mut out),
         }
     }
     out
+}
+
+impl Highlights {
+    /// `(selected, hovered)` for `id` drawn whole: lit itself or under a lit
+    /// ancestor. O(depth); for the few nodes drawn that way (planes, meshes).
+    pub fn covers(&self, doc: &Document, id: NodeId) -> (bool, bool) {
+        let (mut selected, mut hovered) = (false, false);
+        let mut cur = Some(id);
+        while let Some(n) = cur {
+            selected |= self.selected.contains(&n);
+            hovered |= self.hovered.contains(&n);
+            cur = doc.live(n).and_then(|n| n.parent);
+        }
+        (selected, hovered)
+    }
 }
 
 /// Recompute when the selection changes or the document does (a link or an

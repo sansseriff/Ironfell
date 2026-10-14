@@ -7,13 +7,15 @@ Columns: frames per second (throughput, GPU unthrottled; idle frames
 included, so it rewards a gesture that changes little), then the p50 CPU
 time of each phase on the frames that ran it (src/perf.rs): `changed_frame`
 is a whole worker frame in which some view re-encoded, the cost of one
-change; `frame` is every frame. Times in ms. `commands` is the largest
+change; `frame` is every frame. `encode` is content, `overlay_encode` the
+editor-feedback views (hover, selection), so a feedback-only change shows
+`–` under `encode`. Times in ms. `commands` is the largest content
 encode's command count.
 """
 import json
 import sys
 
-PHASES = ["changed_frame", "display_list", "extract", "encode", "render", "gesture_reconcile", "pick", "frame"]
+PHASES = ["changed_frame", "display_list", "extract", "encode", "overlay_encode", "render", "gesture_reconcile", "pick", "frame"]
 print("| shapes | size | scenario | fps | " + " | ".join(PHASES) + " | commands |")
 print("|" + "---|" * (5 + len(PHASES)))
 for line in sys.stdin:

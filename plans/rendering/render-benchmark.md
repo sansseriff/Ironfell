@@ -388,3 +388,52 @@ propagation and selection-derived geometry. CPU submission/callback cadence is
 not GPU completion, displayed-frame proof, or a complete-editor 10k guarantee.
 Forty final intervals and version/GPU metadata are retained in
 `benchmarks/render-dynamic-controls-2026-10-13.jsonl`.
+
+## 9. Retained overlay target and frame-only group outlines (2026-10-14)
+
+`handoff-render.md` §4 item 1. Editor feedback (lit outlines, the selection's
+box and grips, path points, marquee) now draws into one `Overlay` view per 2D
+panel, a texture of its own composited above the panel's (`vector::Overlay`,
+z 0.6 over 0.5). The content walk no longer reads highlights in panels, and
+painted bounds lose their 4 px outline allowance. Group policy, following Figma
+(owner's decision): a lit leaf draws its outline, a lit group or embed draws its
+frame, never one stroke per descendant. `Highlights` holds lit nodes only; 3D
+meshes and plane views light under a lit ancestor (`Highlights::covers`).
+The timers split `encode` (content) from the new `overlay_encode`, and the
+matrix gains `hover-sweep` (pointer swept on and off the field four times).
+
+Same protocol as §7: `wasm-bench` with SIMD, 1600×1000 DPR 1, worker CPU p50 ms.
+
+| Shapes | Scenario | Content `encode.n` | `overlay_encode.n` | Changed frame | Note |
+|---|---|---|---|---|---|
+| 1,000 | hover-sweep | 0 | 20 | 1.3 | |
+| 10,000 | hover-sweep | 0 | 12 | 2.1 | 13.0 in a first cut that computed the hovered field's frame for the lit pass, then dropped it as already boxed |
+| 10,000 | idle / hover-group / select-group | 0 | 0 | – | resting frame 0.9 |
+
+Before this change a hover change re-encoded the whole view (~2.5 ms encode at
+10k zoom 1, more zoomed out) and a lit group added one command per descendant
+(13,004 → 23,004 commands in §2). The other scenarios are unchanged from §7
+within noise (10k: spin 17.4, drag-one 6.0, pan 5.2, spin-zoomed 32.5,
+pan-zoomed 20.0); their command counts now exclude the overlay.
+
+Selected-group drag, `bench-group-raf.txt` (1k, 2560×1440 DPR 2, rAF-paced input,
+not unthrottled), against `renderer-sanity-checks.md` §2 ("Continuous input check"):
+
+| | Before | After |
+|---|---|---|
+| Callback FPS | 59.3 | 59.7 |
+| Changed frame p50 / p95 | 11.8 / 13.3 | 8.7 / 9.3 |
+| Content encode p50 | 5.3 | 2.2 |
+| Overlay encode p50 | (in content) | 0.1 |
+| `overlay_geometry` p50 | 2.5 | 2.5 |
+| Commands | 2,309 | 1,297 |
+
+What remains in that drag is `overlay_geometry`: the selection box and grip
+eligibility are recomputed every frame because the cache keys on the global
+`GeometryRevision`. That is item 3 (per-subtree revisions). Raw runs:
+[`render-overlay-target-2026-10-14.jsonl`](benchmarks/render-overlay-target-2026-10-14.jsonl).
+
+Costs and limits: one extra panel-sized texture per visible 2D panel (bucketed
+RGBA8, ~59 MB for a full-window panel at 5K). Lit outlines are no longer clipped
+to an embed's region (Figma shows them past a clipping frame too). Plane views,
+which have no overlay, still stroke lit nodes in their content.

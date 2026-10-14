@@ -60,7 +60,7 @@ use vello_hybrid::{
 };
 use wgpu::TextureFormat;
 
-use super::backend::{LayerSpace, Offscreen, VectorLayer, VectorView};
+use super::backend::{LayerSpace, Offscreen, Overlay, VectorLayer, VectorView};
 use super::view_composite::{MODE_PREMULTIPLIED_RAW, ViewCompositeMaterial, bucket, unit_quad};
 use super::composite::{VECTOR_LAYER, VectorCamera};
 use super::composite_material::{VectorCompositeMaterial, fullscreen_quad};
@@ -313,11 +313,11 @@ fn sync_views(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ViewCompositeMaterial>>,
     mut quad: Local<Option<Handle<Mesh>>>,
-    mut views: Query<(Entity, Ref<VectorView>, Option<&mut ViewTarget2d>, Has<Offscreen>)>,
+    mut views: Query<(Entity, Ref<VectorView>, Option<&mut ViewTarget2d>, Has<Offscreen>, Has<Overlay>)>,
     composites: Query<(Entity, &ViewCompositeOf)>,
 ) {
     let quad = quad.get_or_insert_with(|| meshes.add(unit_quad())).clone();
-    for (entity, view, target, offscreen) in &mut views {
+    for (entity, view, target, offscreen, overlay) in &mut views {
         let size = view.size.max(UVec2::ONE);
         let want = bucket(size);
         let rect = Vec4::new(view.pos.x as f32, view.pos.y as f32, size.x as f32, size.y as f32);
@@ -349,8 +349,8 @@ fn sync_views(
                     Mesh2d(quad.clone()),
                     MeshMaterial2d(material.clone()),
                     // Over 3D views (z = -1) and the window-sized vector
-                    // texture (z = 0).
-                    Transform::from_xyz(0.0, 0.0, 0.5),
+                    // texture (z = 0); editor feedback over the content.
+                    Transform::from_xyz(0.0, 0.0, if overlay { 0.6 } else { 0.5 }),
                     RenderLayers::layer(VECTOR_LAYER),
                     bevy::camera::visibility::NoFrustumCulling,
                     Visibility::Visible,
@@ -411,6 +411,8 @@ struct ExtractedView {
     /// The texture's (bucketed) size, which is the scene's size.
     bucket: UVec2,
     image: Handle<Image>,
+    /// Editor feedback ([`Overlay`]): timed apart from content encoding.
+    overlay: bool,
 }
 
 #[derive(Resource, Default)]
@@ -429,12 +431,12 @@ fn extract_target(mut commands: Commands, target: Extract<Option<Res<HybridTarge
 fn extract_views(
     mut extracted: ResMut<ExtractedViews>,
     mut layers: ResMut<ExtractedLayers>,
-    views: Extract<Query<(Entity, &VectorView, &ViewTarget2d)>>,
+    views: Extract<Query<(Entity, &VectorView, &ViewTarget2d, Has<Overlay>)>>,
 ) {
     let mut seen = 0usize;
-    for (e, view, target) in views.iter() {
+    for (e, view, target, overlay) in views.iter() {
         seen += 1;
-        let next = ExtractedView { pos: view.pos, bucket: target.bucket, image: target.image.clone() };
+        let next = ExtractedView { pos: view.pos, bucket: target.bucket, image: target.image.clone(), overlay };
         if extracted.0.get(&e) != Some(&next) {
             // Moved, resized or re-targeted: its scene's offset or size, or
             // the texture it goes into, changed.
@@ -656,7 +658,10 @@ fn prepare_scene(
     if size.x == 0 || size.y == 0 || window.x == 0 || window.y == 0 {
         return;
     }
-    let timing = crate::perf::span(crate::perf::Phase::Encode);
+    // Content and editor feedback are timed apart, so a hover that only
+    // re-encodes the overlay shows as zero content encodes.
+    let mut content_ms: Option<f32> = None;
+    let mut overlay_ms: Option<f32> = None;
     let mut state = renderer.0.lock().expect("hybrid renderer lock");
 
     if state.size != window {
@@ -673,13 +678,12 @@ fn prepare_scene(
     keys.extend(views.0.keys().map(|&e| Some(e)));
     let mut culled = 0_u32;
     let mut emitted = 0_u32;
-    let mut rebuilt = false;
     for key in keys {
-        let (offset, tsize) = match key {
-            None => (UVec2::ZERO, size),
+        let (offset, tsize, overlay) = match key {
+            None => (UVec2::ZERO, size, false),
             Some(e) => {
                 let v = &views.0[&e];
-                (v.pos, v.bucket)
+                (v.pos, v.bucket, v.overlay)
             }
         };
         let fresh = !state.targets.contains_key(&key);
@@ -687,7 +691,7 @@ fn prepare_scene(
             continue;
         }
         extracted.dirty.remove(&key);
-        rebuilt = true;
+        let started = bevy::platform::time::Instant::now();
         // `Scene::new` takes u16; a 5K display is well inside that, but a bad
         // size should clamp rather than wrap.
         let (w, h) = (tsize.x.min(u16::MAX as u32) as u16, tsize.y.min(u16::MAX as u32) as u16);
@@ -716,17 +720,25 @@ fn prepare_scene(
                     continue;
                 }
             }
-            emitted += emit_layer(&mut target.scene, &mut target.textures, layer, to_target, scratch);
+            let n = emit_layer(&mut target.scene, &mut target.textures, layer, to_target, scratch);
+            if !overlay {
+                emitted += n;
+            }
         }
+        let ms = started.elapsed().as_secs_f32() * 1000.0;
+        let total = if overlay { &mut overlay_ms } else { &mut content_ms };
+        *total = Some(total.unwrap_or(0.0) + ms);
     }
-    if rebuilt {
+    if let Some(ms) = overlay_ms {
+        crate::perf::record(crate::perf::Phase::OverlayEncode, ms);
+    }
+    if let Some(ms) = content_ms {
+        crate::perf::record(crate::perf::Phase::Encode, ms);
         stats.scene_rebuilds += 1;
         stats.layers_culled = culled;
         stats.commands_emitted = emitted;
         debug!("hybrid rebuild #{}: {emitted} commands, {culled} layers culled", stats.scene_rebuilds);
         crate::perf::set_encode_counts(emitted, culled);
-    } else {
-        timing.discard();
     }
 }
 

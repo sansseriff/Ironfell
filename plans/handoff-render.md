@@ -93,14 +93,13 @@ re-recording only dirty chunks) is not available. On 0.2 a chunk saves encoding
 only when it is **baked** into a texture. `vello_gpu` 0.3 adds `TargetInit::SrcOver`
 and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
 
-1. **Retained overlay target and a dense-outline policy.** Hover, selection,
-   cross-probe feedback, marquee and grips draw into their own view target, so a
-   feedback change leaves content encode/render counts at zero. Decide with the
-   user whether a hovered/selected group strokes every descendant (today) or only
-   its frame, as Figma does; the descendant strokes are the 14 → 36 ms cost.
-   Drop the outline allowance from painted bounds (`spatial.rs` `paint_pad`) once
-   outlines leave content. Exit: hover/select at 10k leaves content `encode.n` = 0;
-   selected-group drag measured with `bench-group-raf.txt`.
+1. ~~**Retained overlay target and a dense-outline policy.**~~ **Done
+   2026-10-14** (`render-benchmark.md` §9). Feedback draws into one `Overlay`
+   view per 2D panel; the owner chose Figma's policy (a lit group shows its
+   frame, a lit leaf its outline); `paint_pad` lost its outline allowance.
+   `hover-sweep` at 10k: content `encode.n` = 0, changed frame 2.1 ms; 1k
+   selected-group drag at 5K 11.8 → 8.7 ms, its remaining 2.5 ms
+   `overlay_geometry` belongs to item 3.
 2. **Time the untimed remainder.** Add a span around Bevy transform propagation
    (and change-flag scanning in `prepare_spatial`) before designing item 3.
    Finding 6 (one entity per 2D node) is decided from this number, not before.
@@ -166,8 +165,8 @@ independent of this list; don't mix them into the performance commits.
 
 ## 6. Open questions for the user
 
-- Whether a hovered or selected group outlines every descendant or only its frame
-  (§4 item 1). A product decision; it sets most of the dense-feedback cost.
+- Settled 2026-10-14: a hovered, selected or cross-probed group outlines only its
+  frame, following Figma; a leaf outlines its own shape (§4 item 1).
 - Whether 2D shapes should stop being one Bevy entity each (finding 6). Large change;
   decide from §4 item 2's propagation timing, after item 3.
 - Settled 2026-10-13/14: `understory_index` is adopted (git-pinned, inside

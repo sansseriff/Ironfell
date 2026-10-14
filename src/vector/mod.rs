@@ -32,7 +32,7 @@ pub mod view_composite;
 // Re-exported: what app drawing code needs. Backends reach into the submodules
 // directly (`display_list::DrawCmd`, ...) rather than
 // going through here, so this list stays scoped to the authoring side.
-pub use backend::{BackendKind, Offscreen, VectorLayer, VectorView, order};
+pub use backend::{BackendKind, Offscreen, Overlay, VectorLayer, VectorView, order};
 pub use hybrid::ViewTarget2d;
 pub use composite::{VECTOR_LAYER, VectorCamera};
 pub use display_list::{DisplayList, DisplayListBuilder, DisplayListRebuild};

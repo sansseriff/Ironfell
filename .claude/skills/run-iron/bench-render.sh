@@ -13,6 +13,8 @@
 #   idle         nothing changes, pointer on empty canvas: the floor
 #   hover-group  pointer resting over the field: the hover outline of a
 #                group with N descendants, recomputed every frame
+#   hover-sweep  the pointer swept on and off the field, so its hover
+#                comes and goes: only the overlay view should encode
 #   select-group the field group selected, pointer elsewhere: its box and
 #                handles, recomputed every frame
 #   spin         scrub the `spin` slider; the field group's bound rotation
@@ -58,6 +60,14 @@ sleep 300
 measure-reset
 sleep 3000
 measure hover-group
+pmove stress 600 50
+sleep 300
+measure-reset
+psweep stress 600 50 60 100 30 40
+psweep stress 60 100 600 50 30 40
+psweep stress 600 50 60 100 30 40
+psweep stress 60 100 600 50 30 40
+measure hover-sweep
 pclick stress 60 100
 assert __iron.selection()[0] === window.__benchField
 sleep 500

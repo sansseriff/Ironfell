@@ -16,6 +16,12 @@
 //! draws in the viewer panel. An embed of a 2D composition draws that
 //! composition in place, through the embed's transform and clipped to its
 //! region, recursively (ECM §7.4).
+//!
+//! Panels draw content only: hover and selection feedback is the editor
+//! overlay's, in its own view (`bevy_app::select::draw_select_overlay`), so
+//! a feedback change leaves every panel's content list, and its encoding,
+//! untouched. A plane's view still draws lit nodes outlined, since it has
+//! no overlay of its own.
 
 use super::{SpatialScene, Doc2d, DocumentChanges, DocumentStore, Highlights, NodeMap, PanelViews, Shape2d, nest};
 use iron_document::composition::Dims;
@@ -83,15 +89,17 @@ pub fn render_document_layer(
         "spatial projection"
     } else if views.is_changed() {
         "panel layout"
-    } else if highlights.is_changed() {
-        "selection"
     } else if !new_panels.is_empty() {
         "new view"
     } else if embed_images.is_changed() {
         "embedded view"
+    } else if highlights.is_changed() {
+        // Only planes draw highlights; panels' lists would rebuild equal.
+        "selection"
     } else {
         return;
     };
+    let planes_only = reason == "selection";
     let _timing = crate::perf::span(crate::perf::Phase::DisplayList);
     let changed = changes.take();
     let doc = store.0.document();
@@ -99,10 +107,10 @@ pub fn render_document_layer(
     // Damage belongs to the independently prepared canonical compositions.
     // It is diagnostic here; per-view damage mapping/partial rasterization is later.
     let damage = spatial.damage.iter().copied().reduce(|a,b| a.union(b));
-    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, map: &map, nodes: &nodes, globals: &globals, highlights: &highlights, spatial: &spatial, drawn: 0 };
+    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, map: &map, nodes: &nodes, globals: &globals, highlights: None, spatial: &spatial, drawn: 0 };
     // A layer per panel: a panel whose content is unchanged rebuilds to the
     // same commands, so its view does not re-render.
-    for (mut panel_list, layer) in &mut panel_layers {
+    for (mut panel_list, layer) in panel_layers.iter_mut().filter(|_| !planes_only) {
         let Some(view) = views.get(&layer.panel) else { continue };
         let roots = nest::panel_roots(doc, view);
         panel_list.rebuild(|b| {
@@ -110,7 +118,8 @@ pub fn render_document_layer(
         });
     }
     // A plane's view: its composition's region, at its density, into its
-    // own texture (`planes`).
+    // own texture (`planes`), lit nodes outlined.
+    cx.highlights = Some(&highlights);
     for (mut plane_list, layer, vview) in &mut plane_layers {
         let roots: Vec<NodeId> = doc.children(layer.source).to_vec();
         let key = format!("plane/{}", layer.embed);
@@ -144,7 +153,8 @@ struct Draw<'a, 'w, 's> {
     map: &'a NodeMap,
     nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
     globals: &'a Query<'w, 's, &'static GlobalTransform>,
-    highlights: &'a Highlights,
+    /// Set for plane views only; panels leave feedback to the overlay.
+    highlights: Option<&'a Highlights>,
     spatial: &'a SpatialScene,
     drawn: usize,
 }
@@ -179,7 +189,7 @@ impl Draw<'_, '_, '_> {
                         b.texture(base * placement * to_embed, img.image.clone(), img.size, img.version);
                     }
                     let frame = kurbo::Rect::new(0.0, 0.0, w, h);
-                    let lit = self.highlights.selected.contains(&id) || self.highlights.hovered.contains(&id);
+                    let lit = self.lit(id).is_some();
                     let c = if lit { [0.1, 0.4, 1.0, 1.0] } else { [0.55, 0.57, 0.62, 1.0] };
                     b.stroke(base * placement, kurbo::Stroke::new(1.0), peniko::Color::new(c), frame);
                 }
@@ -220,15 +230,24 @@ impl Draw<'_, '_, '_> {
                 b.stroke(affine, kurbo::Stroke::new(w as f64), peniko::Color::new(c), shape.clone());
             }
         }
-        let selected = self.highlights.selected.contains(&id);
-        let hovered = self.highlights.hovered.contains(&id);
-        if selected || hovered {
-            let c = if selected { [0.1, 0.4, 1.0, 1.0] } else { [0.1, 0.4, 1.0, 0.5] };
+        if let Some(c) = self.lit(id) {
             b.stroke(affine, kurbo::Stroke::new(2.0), peniko::Color::new(c), shape.clone());
         }
+    }
 
+    /// The outline colour of a lit node on a plane, if it is lit there.
+    fn lit(&self, id: NodeId) -> Option<[f32; 4]> {
+        match self.highlights?.covers(self.doc, id) {
+            (true, _) => Some(LIT_SELECTED),
+            (_, true) => Some(LIT_HOVERED),
+            _ => None,
+        }
     }
 }
+
+/// Outline colours of selected and hovered leaves, shared with the overlay.
+pub const LIT_SELECTED: [f32; 4] = [0.1, 0.4, 1.0, 1.0];
+pub const LIT_HOVERED: [f32; 4] = [0.1, 0.4, 1.0, 0.5];
 
 /// The 2D part of a global transform as a kurbo affine.
 pub fn affine_of(global: &GlobalTransform) -> kurbo::Affine {

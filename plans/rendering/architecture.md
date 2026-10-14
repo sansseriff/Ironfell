@@ -29,6 +29,8 @@ iron_document transaction / preview / playhead
   → hybrid backend (vector/hybrid.rs): one retained vello_hybrid Scene per view target;
       a dirty target is reset and re-emits every visible command
   → Renderer::render into the view's own bucketed texture (one submit per target)
+  → editor feedback (bevy_app/select.rs draw_select_overlay): one Overlay view per
+      2D panel above its content view; hover/selection change encodes only this
   → the window composite pastes each view; 3D views and planes sample textures
 ```
 
@@ -52,13 +54,14 @@ Supporting facts:
 |---|---|---|
 | Document | Nodes, hierarchy, geometry, properties | Authored change |
 | Spatial projection | Bounds and indexes per composition | Changed leaves (sparse), or a packed rebuild for dense motion |
-| Selection/hover geometry | `SelectionGeometryCache` | Global `GeometryRevision` (conservative) |
+| Selection/hover geometry | `SelectionGeometryCache` (boxes, grips, lit outlines) | Global `GeometryRevision` (conservative) |
+| Editor feedback pixels | One `Overlay` view texture per 2D panel | Any feedback change; never content's |
 | Display list | Per panel/plane view | Any visible change in that view |
 | Vello `Scene` | Per view target, including generated strips | Any change in that target: **whole-view re-encode** |
 | Pixels | Per view texture | Any re-render of that view |
 
-The gap is the last two rows: one changed shape re-encodes every visible shape in its
-view, and editor feedback shares the content target.
+The gap is the content rows: one changed shape re-encodes every visible shape in its
+view. Editor feedback has its own target since 2026-10-14.
 
 ## 3. What Vello Hybrid can and cannot retain
 
@@ -131,7 +134,10 @@ Levels 2 and 3 both need per-subtree revisions from Iron, which is why those com
   presentation chunks, raster cache entries. Regrouping one never changes those above.
 - **Subtree surfaces before world tiles.** Measured costs are rigid group motion and
   zoomed-out encoding, which surfaces address; pan is already bounded by culling.
-- **Editor feedback is separate from content**, in its own retained target.
+- **Editor feedback is separate from content**, in its own retained target
+  (built 2026-10-14). A lit group or embed shows its frame, a lit leaf its outline,
+  as in Figma; feedback never strokes every descendant of a group. Plane views,
+  which have no overlay, still outline lit nodes in their content.
 
 ## 6. Retention and invalidation contracts
 

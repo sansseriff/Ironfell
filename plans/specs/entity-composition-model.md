@@ -641,8 +641,10 @@ both figures.
   mesh cannot happen now, since 2D and 3D hits never come from the same panel.
 - *Selection by `NodeId`* — done (§7.2): `SelectionState` holds nodes in pick order
   (shift-click adds); `document_bridge::Highlights` derives what lights up — a picked
-  node inside a figure stands for the figure's entity, so every figure of it, and a
-  group figure's descendants, light in every panel; 3D outlines read the same set. The
+  node inside a figure stands for the figure's entity, so every figure of it lights in
+  every panel; 3D outlines read the same set. (Since 2026-10-14 a lit group shows its
+  frame in 2D panels rather than every descendant's outline, as in Figma; 3D meshes and
+  plane views light under a lit ancestor. `render-benchmark.md` §9.) The
   shell receives selection and hover as ids. Found on the way: **3D outlines had never
   rendered** (the `bevy_gizmos_render` feature was missing); now enabled.
 - *Link and Show in* — done. Deviation from the handoff's signature: `Store::link(a, b,

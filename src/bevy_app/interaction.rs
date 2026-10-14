@@ -189,14 +189,15 @@ pub(crate) fn intersect_ray_plane(ray: Ray3d, plane_point: Vec3, plane_normal: V
 // mesh lights up when a figure of its entity is picked in any panel.
 pub fn selection_reflect_system(
     highlights: Res<crate::document_bridge::Highlights>,
+    store: Res<crate::document_bridge::DocumentStore>,
     mut query: Query<(&Provenance, &mut ActiveState)>,
 ) {
     if !highlights.is_changed() {
         return;
     }
+    let doc = store.0.document();
     for (prov, mut active) in &mut query {
-        active.selected = highlights.selected.contains(&prov.0);
-        active.hover = highlights.hovered.contains(&prov.0);
+        (active.selected, active.hover) = highlights.covers(doc, prov.0);
     }
 }
 

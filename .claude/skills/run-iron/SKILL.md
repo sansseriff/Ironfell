@@ -101,7 +101,7 @@ doubled by its slider). Expected output, minus screenshot lines,
 
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-redraw (document): 2 of 39 nodes changed [#M #U]; damage 559,339–801,461
+redraw (document): 2 of 39 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#11\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #10.params.level * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#10.params.level * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#11\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
@@ -407,13 +407,16 @@ PROFILE=wasm-bench .claude/skills/run-iron/build.sh   # ~2.5 min cold
 tab (`src/document_bridge/stress.rs`); `await __iron.stress(N)` does the same
 from the console. `await __iron.timings(reset)` reads per-phase CPU times
 (`src/perf.rs`): `sync`, `gesture_reconcile`, `display_list`, `extract`,
-`encode`, `render`, `pick`, `overlay_geometry`, `bounds`, and whole frames as `frame` and `changed_frame`
-(a frame in which some view re-encoded). Each phase records only frames on
+`encode` (content views), `overlay_encode` (editor-feedback views), `render`, `pick`,
+`overlay_geometry`, `bounds`, and whole frames as `frame` and `changed_frame`
+(a frame in which some view, content or overlay, re-encoded). Each phase records only frames on
 which it did work.
 
 The script runs headless Chrome on the GPU, unthrottled, through these
 scenarios: `idle` (pointer on empty canvas); `hover-group` (pointer resting
-over the field group); `select-group` (the field group selected); `spin`
+over the field group); `hover-sweep` (the pointer swept on and off the field,
+so hover comes and goes: content `encode.n` must stay 0, only
+`overlay_encode` runs); `select-group` (the field group selected); `spin`
 (scrub the slider bound to the field's rotation, everything moves);
 `drag-one` (Cmd-drag one rect inside its cell); `pan` (wheel 200 px and
 back); and `idle`, `spin` and `pan` again at zoom ≈0.37. Selection/hover

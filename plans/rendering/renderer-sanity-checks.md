@@ -16,8 +16,8 @@ Do not declare the architecture finished or guarantee perfectly smooth 60 FPS.
 There are occasional long hover/selection frames, limited margin during group
 movement, and known costs that grow with descendants. The standalone same-version Vello
 control is now built and measured, including changes to every shape every frame
-(§7). It shows substantial outline cost even without Bevy. Prioritize selection
-feedback and repeated derived geometry before a large raster-cache project.
+(§7). It shows substantial outline cost even without Bevy. The resulting work order
+is in [`handoff-render.md`](../handoff-render.md) §4.
 
 ## 1. Why the owner saw much worse performance
 
@@ -206,20 +206,9 @@ callback interval and a synchronous API call do not measure GPU completion.
 
 ### Alongside it: fix avoidable editor work
 
-1. Split cached local/subtree geometry and eligibility from world placement.
-   Moving a group does not normally change every descendant's resize policy or
-   local bounds. Reuse local bounds and apply the gesture/world affine. Retain
-   invalidation for descendant edits, reparenting, bindings, handles, constraints,
-   point changes, undo/load and embedded occurrence mapping.
-2. Put hover/selection feedback in an independently retained **overlay target**.
-   A separate layer in the same dirty target still rebuilds all content. Confirm
-   that a hover transition leaves content-target encoding/rasterization unchanged.
-3. Measure 1k and 10k *selected* group movement/rotation, enter/leave transitions,
-   leaf dragging and dense-group resizing at display cadence. Report p95/p99 and
-   actual changed-frame rate, not only idle-inclusive FPS or CPU p50.
-4. Then form painter-contiguous presentation chunks and measure selective subtree
-   baking where work remains expensive. Baking saves raster/encoding work but
-   does not automatically remove descendant Bevy propagation/index updates.
+This list (local/placement split, overlay target, selected-group measurements,
+then chunks and baking) moved into [`handoff-render.md`](../handoff-render.md) §4,
+which now owns the order.
 
 `iron_document` and `iron_spatial` are renderer-independent foundations. A future
 Canvas2D/ThorVG/Skia adapter or standalone Vello host could consume derived drawing
@@ -422,8 +411,8 @@ are under `.agents/render-perf/renderer-*-geometry-*-dpr2.png`.
    [ThorVG design and supported backends](https://github.com/thorvg/thorvg#readme),
    [Vello renderer families](https://github.com/linebender/vello/blob/main/ARCHITECTURE.md).
 
-The priorities in §5 therefore remain local/subtree revisions and independent
-feedback, followed by measured presentation chunks/bakes. Keep `iron_document`
+These findings set the order in [`handoff-render.md`](../handoff-render.md) §4:
+independent feedback and local/subtree revisions, then measured chunks and bakes. Keep `iron_document`
 as authority and `iron_spatial`/Understory as bounds/query infrastructure. Static
 subtree baking has little reuse in the deliberately all-changing case; reducing
 host work and renderer preprocessing are necessary there. Compare newer Vello or Research in

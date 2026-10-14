@@ -1,5 +1,7 @@
 # Migrating to Vello sparse strips: scope, complexity, and what caching actually buys
 
+> **Historical** (see [`plans/README.md`](../README.md)). Research behind [`rendering/architecture.md`](../rendering/architecture.md), which carries its current conclusions. Its tranches (§7–8) are not the work order.
+
 **Status:** Research findings — supersedes parts of [`bevy-vello-hybrid-design.md`](./bevy-vello-hybrid-design.md)
 **Date:** 2026-08-15
 **Audited against:** `vello` @ `main` (post-`v0.10.0` / `vello_hybrid` 0.2.0), `bevy` 0.19.1, `bevy_vello` 0.13.1 + `main`

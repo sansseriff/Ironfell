@@ -1,5 +1,7 @@
 # Vello retention: current behavior and the missing presentation layer
 
+> **Historical** (see [`plans/README.md`](../README.md)). Research behind [`rendering/architecture.md`](../rendering/architecture.md). Its §5 priorities are superseded by [`handoff-render.md`](../handoff-render.md) §4.
+
 Date: 2026-10-13. Research clarification, not a renderer migration.
 Read with `renderer-sanity-checks.md`, `vello-hybrid-migration-scope.md`, and
 `vision/01_layered-architecture-overview.md`.

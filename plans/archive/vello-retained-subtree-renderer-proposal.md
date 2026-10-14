@@ -1,5 +1,7 @@
 # A retained render-plan layer for Vello: Zulip research and an implementation proposal
 
+> **Historical** (see [`plans/README.md`](../README.md)). Its adopted parts (contracts, constraints, acceptance tests) and its Decision block now live in [`rendering/architecture.md`](../rendering/architecture.md).
+
 **Date:** 2026-10-14. **Status:** reference, partly adopted. Do not implement it as
 written; the work order lives in [`handoff-render.md` §4](../handoff-render.md#4-what-to-do-in-order).
 

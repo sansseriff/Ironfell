@@ -1,5 +1,9 @@
 # Current 2D backends and a high-performance hybrid architecture
 
+> **Current state and decisions:** [`rendering/architecture.md`](../rendering/architecture.md).
+> This document keeps the reasoning; its §2 describes the code as of 2026-09 and its §10
+> sequence is superseded by [`handoff-render.md`](../handoff-render.md) §4.
+
 **Status:** Current-state record and architectural direction
 **Date:** 2026-09-04
 **Scope:** What the classic Vello and Vello Hybrid backends in Iron do today,
@@ -644,66 +648,12 @@ backend change.
 
 ## 10. A concrete evolution from the current code
 
-### Stage 1 — explicit chunk identity and revisions
-
-- Give derived presentation chunks stable IDs tied to document `NodeId`s.
-- Track content, transform, style, effect, and resource revisions.
-- Store old/new conservative bounds.
-- Replace unconditional display-list reconstruction with revision-driven dirty
-  queues where the authoritative document exists.
-- Keep command comparison temporarily as a validation mechanism.
-
-### Stage 2 — spatial damage and painter-order queries
-
-- Build the 2D spatial index over chunk bounds.
-- Convert edits, deletes, reparenting, and resource changes into damage regions.
-- Query all contributors to a dirty region and restore painter order cheaply.
-- Add explicit compositing/isolation operations to draw intent.
-
-### Stage 3 — compositor and atlas before backend specialization
-
-- Introduce world-tile and subtree-image cache entries.
-- Batch atlas quads in Bevy.
-- Implement pan reuse, zoom proxies, gutters, memory accounting, and eviction.
-- Validate alpha/color correctness against the current full-window composite.
-
-Following the earlier vision recommendation, classic can be the first rasterizer
-used to prove cache correctness. This separates ordering and invalidation bugs
-from Hybrid integration bugs.
-
-### Stage 4 — bounded Hybrid raster jobs
-
-- Generalize the current full-window Hybrid target into bounded raster targets.
-- Reuse renderer resources and scratch allocations across jobs.
-- Build/reset a scene per dirty tile or compatible batch.
-- Publish rendered atlas entries and skip Hybrid entirely for clean entries.
-- Instrument encode, schedule, uploads, GPU time, and bytes per job.
-
-The current `emit_layer` function is a useful command-emission seam, but cache
-policy should move above it. The layer entity does not contain enough spatial or
-compositing information to be the only cache unit.
-
-### Stage 5 — live content and adaptive policy
-
-- Separate topmost editor overlays from painter-embedded document content.
-- Reuse isolated images under rigid gesture transforms.
-- Add promotion/demotion policy driven by observed reuse and raster cost.
-- Optionally select classic or Hybrid per bounded job on platforms where both
-  are acceptable.
-
-### Stage 6 — representative acceptance workload
-
-Extend the benchmark beyond uniform shapes to include:
-
-- clustered and scattered local edits;
-- world-transform pan distinct from geometry-reflow pan;
-- discrete zoom buckets and continuous zoom proxies;
-- text, images, gradients, clips, opacity groups, and filters;
-- static groups with small live overlays;
-- scripted, reactive, and transitional animation;
-- 2D content composited with the real 3D viewport and authored editor surfaces.
-
----
+The staged evolution first written here (chunk identity and revisions, spatial damage,
+compositor and atlas, bounded Hybrid jobs, adaptive policy, acceptance workload) has
+been partly built and re-ordered by measurement. Stages 1–2's spatial half is
+implemented; the current order is [`handoff-render.md`](../handoff-render.md) §4 and the
+current state is [`rendering/architecture.md`](../rendering/architecture.md). The
+acceptance workload of the old Stage 6 survives in §11 below and in that document's §8.
 
 ## 11. Required invariants and measurements
 

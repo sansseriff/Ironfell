@@ -3076,6 +3076,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "iron_renderer_probe"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "kurbo",
+ "peniko",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "vello_hybrid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
 name = "iron_solve"
 version = "0.1.0"
 

@@ -1,0 +1,21 @@
+[package]
+name = "iron_renderer_probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+kurbo = "0.13.1"
+peniko = "0.6.1"
+vello_hybrid = { version = "=0.2.0", default-features = false, features = ["wgpu"] }
+wgpu = { version = "29", default-features = false, features = ["std", "webgl", "webgpu", "wgsl"] }
+wasm-bindgen = "0.2.126"
+wasm-bindgen-futures = "0.4.51"
+console_error_panic_hook = "0.1.7"
+web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+raw-window-handle = "0.6"

@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="data:,"><title>Iron renderer sanity comparison</title><style>
+body{font:14px system-ui;margin:20px;background:#f6f7f8;color:#202124}button,select{padding:6px;margin-right:5px}canvas{position:absolute;left:20px;top:250px;display:block;border:1px solid #ccd1d8;margin-top:0}pre{white-space:pre-wrap;height:65px;overflow:auto;margin:8px 0}p{max-width:1000px}
+</style></head><body><h1>Same shapes, isolated renderer</h1>
+<p>This page replays the Stress field exported from Iron. Vello Hybrid rebuilds one complete scene per frame; ThorVG smart/partial rendering is disabled. “Change geometry” replaces every Canvas2D path and rewrites every ThorVG/Vello shape. No application-authored bitmap cache. These controls omit Bevy, document solving, picking and editor feedback policy.</p>
+<select id="renderer"><option value="canvas2d">Canvas2D</option><option value="thorvg-gl">ThorVG WebGL</option><option value="thorvg-wg">ThorVG WebGPU</option><option value="vello-gl">Vello Hybrid WebGL</option><option value="vello-wg">Vello Hybrid WebGPU</option></select>
+<button data-case="group-drag">Move group</button><button data-case="spin">Rotate group</button><button data-case="leaf-drag">Move one shape</button><button data-case="hover">Toggle group outlines</button>
+<button data-case="all-transform">Move every shape</button><button data-case="all-geometry">Change every shape's geometry</button>
+<button data-case="group-plain">Move group without outlines</button>
+<pre id="result">Loading exported fixture… Run compare-renderers.ts first if it is missing.</pre><canvas id="canvas"></canvas>
+<script type="module" src="/src-ui/bench/renderer-sanity.js"></script></body></html>

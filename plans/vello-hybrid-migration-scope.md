@@ -17,7 +17,7 @@ Three things changed in the three weeks since the 2026-07-24 audit, and one impo
 
 **Changed — Bevy↔Vello texture sharing is now a supported path.** `Scene::draw_texture_rect(ExternalTextureRect)` plus `TextureBindings` (0.1.0/0.2.0) let a vello scene sample an arbitrary externally-owned `wgpu::TextureView`. This is the primitive a tile cache needs, and it did not exist in the version previously audited.
 
-**Did not change — there is no cross-frame caching primitive, and there will not be one upstream.** The `Recording` API that provided cached sparse strips was removed in [vello#1611](https://github.com/linebender/vello/pull/1611) (2026-05-04). Both the removal thread and the June 2026 roadmap thread make clear it is not coming back in that form. `Scene::strip_storage` and `Scene::recorder` remain `pub(crate)`. `Config::strip_offset_x/y` still exist in the shader and are still hardcoded to `0` in both backends.
+**Did not change — 0.2.0 lacks the former public cross-scene strip-cache primitive.** The `Recording` API that provided cached sparse strips was removed in [vello#1611](https://github.com/linebender/vello/pull/1611) (2026-05-04). This does **not** establish that upstream will never provide cross-frame caching: the PR review and [Alex Gemberg's removal-thread reply](https://xi.zulipchat.com/#narrow/channel/197075/near/592180594) explicitly leave open revisiting it. A retained, unchanged `Scene` already retains CPU-generated strips; what is missing here is public independently reusable/mutable sub-scene retention under transforms. `Scene::strip_storage` and `Scene::recorder` remain `pub(crate)`. `Config::strip_offset_x/y` still exist in the shader and are still hardcoded to `0` in both backends. See `vello-retention-and-render-plan.md` for the 2026-10-13 clarification.
 
 **The conclusion is therefore inverted from the previous document, but not for the reason you might expect.** The migration is now *possible*. It is not thereby *cheap*, and the caching you want is still something you build, not something you adopt. What is newly true is that the pieces you need to build it with are all public.
 
@@ -134,7 +134,7 @@ This is what `Recording` was. Its reuse envelope is much narrower than "translat
 
 So Tier 2 buys you **integer translation and nothing else**. Alex Gemberg measured ~10× on the naive translation implementation, which is real, but the applicable workload is scrolling and glyph placement — not an editor where the interesting gestures are zoom and free transform. Daniel McNab's framing on the same thread: the motivation is glyph caching, and "I don't think we particularly care to do non-integer translation."
 
-**Upstream position:** not on the roadmap. Laurenz Stampfl's removal rationale on Zulip cites three reasons — memory cost, incompatibility with the glifo-based text setup, and, most durably:
+**Upstream position at removal:** no immediate internal plans to use that particular API; this is not a permanent rejection of retained rendering. [Laurenz Stampfl's removal rationale](https://xi.zulipchat.com/#narrow/channel/197075/near/590147396) discusses reported memory cost, incompatibility with the glifo-based text setup, multithreaded CPU limitations, and a possible future GPU preprocessing pipeline:
 
 > I think it will become much harder to support recordings for Vello Hybrid in a (potential) future where most stuff moves onto the GPU, since the strip alphas won't be calculated on the CPU anymore and thus cannot be cached conveniently anymore.
 
@@ -248,6 +248,14 @@ Renderer-neutral ordered primitives with stable document IDs, grouped into chunk
 The bulk of the work, and the part with the real risk. Bounds, AABB index, dirty queues with deduplicated IDs, old∪new damage rects inflated for stroke and filters, tile keys by zoom bucket, atlas allocation, LRU eviction, memory budget, and a zoom proxy policy.
 
 Do not invent the architecture. Use Nicolas Silva's WebRender three-layer description (§4) as the blueprint, `etagere` as the allocator, and `understory_index` / `understory_view2d` as either dependencies or references. Note that `understory_tiling`, despite the name, is about **docking and pane layout**, not raster tiles — it is interesting for this app's panel system and irrelevant to the cache.
+
+**Implementation checkpoint 2026-10-13:** `iron_spatial` now provides distinct
+geometry/paint/interaction bounds, old/new painted damage, private Understory keys
+with Iron-id payloads, and sparse/packed-dense index updates. Bevy prepares canonical
+composition bounds independently of drawing, and picking/rendering consume indexed
+candidates through occurrence transforms/clips. This is the spatial foundation;
+per-view partial raster invalidation, presentation chunks and `iron_canvas_cache`
+are still future work. See `render-benchmark.md` §7 for measured benefits and limits.
 
 ### 6.4 Optional: a forked hybrid with the per-frame floor fixed
 

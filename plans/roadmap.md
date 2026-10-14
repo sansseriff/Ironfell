@@ -42,7 +42,7 @@ Each item is a decision or a clarified intent, with where it is worked out.
 | 13 | The LLM should hear about causes, not every inferred effect | Notification policy; `.by` markers; obligations as a view | CS §9; ECM §11 |
 | 14 | Category theory gives laws, not vocabulary | Six laws become tests | Vision 09 §11 |
 | 15 | Users and the LLM can define new notations, as they can build editors | Notations as data | Vision 09 §10 |
-| 16 | Rendering should cull before caching; Understory's spatial crates fit the missing middle layer | Pass changed-node sets to rendering; adopt `understory_index` and `understory_box_tree` when measured | §5 |
+| 16 | Rendering should cull before caching; Understory's spatial crates fit the missing middle layer | Independent bounds and `understory_index` now implemented; evaluate box-tree ownership separately | §5 |
 | 17 | The pen tool and a tool and mouse-context system can start now, independent of caching | Tools as state machines that emit ops and previews | §4 |
 | 18 | Drags that only commit on release are fine for undo, but bound and constrained things must respond *during* the drag. Today a drag locks any axis that is bound or clip-driven | All drags go through `preview`; linear bindings invert directly; constrained axes go through the solver instead of locking | §3 stage A |
 
@@ -99,7 +99,7 @@ flowchart TD
 | **E** Tools and pen | Tool state machines; a tool-context resource; a hit-test interface; the pen tool creating paths of point nodes | Asked for soon, mostly independent of caching, and forces the path representation decision early | Draw, close, and edit a path; each click is one transaction; undo per point | §4 |
 | **F** Ports and signals | Port kinds, connections, the signal graph; laser → fiber → meter; then time series and the modulator in three compositions | Delivers the "linked representations animate together" goal | ECM phases 3 and 5 exits | ECM §6 |
 | **G** Model surface and lessons | Extend the existing model surface (`src-ui/model/`, `document_apply`) with `Model`, `Composition`, and `Lesson` views, the new verbs, solver summaries, and obligations; lessons and annotations | The surface exists and works on the raw tree; it should move to the semantic views as soon as they exist | ECM phase 6 exits | ECM §10–11 |
-| **H** Render invalidation | Measure per-panel frame cost; cull with `understory_index`; damage from `understory_box_tree`; dirty presentation with `understory_presentation`; caching only where culling is not enough | Only when measurements say so (doc 07; `bevy-vello-hybrid-design.md` §6) | A local edit redraws only damaged content; frame time with 4 panels is within budget | §5 |
+| **H** Render invalidation | Measure per-panel frame cost; independent bounds and indexed picking/culling implemented; retained overlay targets and presentation chunks next; caching where culling is not enough | Only when measurements say so (doc 07; `bevy-vello-hybrid-design.md` §6) | A local edit redraws only damaged content; frame time with 4 panels is within budget | §5 |
 | **I** Later | Encapsulation and obligations (ECM 4); live simulation with grab (CS 5); 3D mates (CS 6); implied constraints and CAD tagging (ECM 7); simulated paths (CS 7) | Each builds on two or more earlier stages | Per document | — |
 
 ### Status
@@ -112,7 +112,7 @@ flowchart TD
 | **C1** | **Done 2026-10-11** (ECM phase 2), one commit per step, after the `depiction` → `figure` rename (schema 3): root-only `composition` and `model` types (`composition.rs`); one panel per composition (render layers, a camera per 3D panel, per-panel 2D drawing, picking and drags; measured 60 fps at 1, 2 and 4 panels on the GPU, so no fallback); selection by `NodeId` with cross-probe highlights; `Store::link` with the merge question, Show in; `model` and `composition` views with golden files and `<link-figures>` on the model surface. Every phase 2 exit verified by the smoke script. Details and deviations in ECM §12 phase 2 |
 | **E** (select tool) | **First part done 2026-10-11**, before the pen tool: Figma's selection, drag and transform semantics (`bevy_app/select.rs`, plans/select-tool.md). Hits carry their chain through groups and embeds; a click selects the outermost node whose container is not open, and top-level embeds act as artboards. The box resizes, rotates and moves through store previews, one transaction per gesture. Also: a marquee, the Esc/Enter/Tab/Cmd+A/arrow/Delete shortcuts, and shell cursors. Undo of a deleted subtree whose nodes bind to each other was fixed in the store. Verified by the smoke script's select-tool section. **Pen done 2026-10-12:** `path` and `point` nodes with `handles` leaves; the pen tool (P), one transaction per point, closing on the first point, undo per point; point and handle editing; the exit (draw, close, edit, undo per point) verified by the smoke script; see plans/select-tool.md |
 | **F** | **Phase 3 done 2026-10-12** (ECM §6.1, steps 1–3): port kinds with one-way and across/through variables; ports, connections, signals derived by the graph; laser → fiber → meter in an Optics (cartoon) and a Schematic composition; two-way editing (the meter gauge drags the laser's power back through the chain); rf→optical rejected; the model view shows the chain. Step 3: across/through pairs solved as equations into a derived physics layer (a heater, a thermal link and an ambient sink in a Thermal tab). Verified by the smoke script's stage F sections and `tests/ports.rs`. Next: phase 4 (consistency and encapsulation) or phase 5 (time-domain signals, the modulator) |
-| **H** | **Measured 2026-10-13** (`plans/render-benchmark.md`): a stress composition, per-phase timers and a benchmark script. Findings, in the order to act on them: the select and hover overlays walk a group's descendants every frame (119 ms per frame with a 10,000-shape group selected); picking runs every frame over every node; encode scales with every path, not only visible ones, so culling would roughly halve a changed frame at zoom 1, and a subtree raster cache is what the zoomed-out cases need. Nothing in the renderer changed yet |
+| **H** | **Measurements and first interaction fix done 2026-10-13:** stress fixture and phase timers; 1k/10k remeasured with shipped wasm SIMD (`render-benchmark.md` §6). Shared selection/hover geometry cache removes the unchanged-frame subtree walks: at 10k, selected idle frame 119 → 2.7 ms and hovered idle frame 13.7 → 2.7 ms (idle 2.7 ms; worker CPU p50). Cache covers resolved previews, playhead, same-version load, and transform-propagation timing; view pan/zoom is applied without rebuilding geometry. DPR 1/2 browser checks validate the benchmark coordinate correction. Change-driven 2D picking and independent bounds/indexed per-view culling are now implemented (§7): resting 10k frames 0.9 ms; zoom-1 pan 5.3 ms, drag 6.0 ms, rotation 17.9 ms. All 95 native tests, full smoke, and DPR 1/2 reference/image/cache checks pass. Shared subtree summaries, overlay target separation, chunks and subtree caching remain. See `select-tool.md` and `handoff-render-perf.md` |
 | **B** | **Done 2026-10-10** (ECM phase 1), one commit per item: registry primitives only (`bar` out); quantities with units (`units.rs`, `Value::Quantity`, dimension-checked floor, quantity literals, file form `{"q": [si, "W"]}`); run-time fields by interning (`sym.rs`, the dynamic `params` component); `Value::Record` and `Expr::Get`; definitions as data (`definition.rs`: `library`/`definition`/`param_spec`/`depiction`/`entity`, `depicts` (since renamed `template` and `figures`, schema 3), validation, instantiation by template copy with reference rewriting). File schema 2, schema 1 still loads. The demo's bar is a definition instantiated into an entity whose `level` is bound to the slider. Decisions taken as the §7 defaults (units) and recorded with deviations in ECM §12 phase 1. Verified natively (`tests/values.rs`, `tests/definitions.rs`) and in the browser by the smoke script |
 
 **The playhead is already shared.** Spine step 6's `time.rs` keeps the playhead in the
@@ -192,17 +192,27 @@ Findings from reading Understory's source (`forest-rs/understory`, August 2026):
   missing middle. Ours to build: forming presentation chunks, encoding them for Vello,
   baking subtree images and tiles per zoom bucket, the atlas allocator (`etagere` or
   `guillotiere`), compositing cached images in Bevy, promotion and demotion policy, and
-  memory budgets with eviction (doc 07 §5–8). Their IDs are recycled generational handles, so they need an
-  adapter map from `NodeId`, as Understory's own integration guide recommends.
+  memory budgets with eviction (doc 07 §5–8). `understory_index` and `understory_box_tree` use recycled generational handles;
+  the index can carry `NodeId` as payload and keep those handles private.
+  `understory_presentation` accepts caller-owned ids.
 - **The core crates are unpublished** (only `understory_view2d` is on crates.io). Pin a
   git commit or vendor them.
-- **The prerequisite is ours:** `sync_document` already computes exactly which nodes
-  changed, then collapses that into one boolean, and `render.rs` redraws everything.
-  Stage A fixes the plumbing; stage H adds the index and damage, per panel.
+- **Implemented foundation (2026-10-13):** `DocumentChanges` retains the changed-node
+  set; non-drained projection revisions drive cached selection and picking.
+  `SpatialScene` prepares distinct geometry/paint/interaction bounds after Bevy
+  propagation, including hidden compositions. `iron_spatial` pins `understory_index`
+  at `2ac7efbc010c8ee4daa316c34eadc0bafacfe83b`, carries `NodeId` payloads,
+  batches sparse/dense updates and reports painted damage. Indexed candidates feed
+  precise picking and per-view/embedded-occurrence culling in painter order.
+  See `render-benchmark.md` §7 and `infinite-canvas-architecture-patterns.md` §13.
+  Partial raster invalidation, shared subtree geometry summaries, independent overlay
+  targets and caches remain unfinished; stage H is not complete.
 
 One ownership question stays open: world transforms are computed by Bevy for rendering,
 by the store for the solver (stage A), and would be computed again by the box tree.
-Long term, one of these should be the authority (CS open question I5).
+The current spatial adapter consumes Bevy globals and adds no third transform tree.
+Long term, store/Bevy ownership is still CS open question I5; adding
+`understory_box_tree` requires resolving that question rather than duplicating propagation.
 
 ---
 

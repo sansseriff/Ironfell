@@ -413,6 +413,15 @@ emission." Understory gives you a retained document and tells you *what changed*
 (Andrew's item 2) remains yours to build; Understory supplies the invalidation substrate
 that makes it tractable, which is precisely Nico's flagged risk.
 
+**Implementation update 2026-10-13:** `iron_document` is the durable authority;
+Bevy holds its resolved projection. `iron_spatial` now pins `understory_index` at
+`2ac7efbc010c8ee4daa316c34eadc0bafacfe83b`, consumes Bevy globals and carries Iron
+ids as payloads. Independent hidden-source bounds, indexed picking and per-view
+culling are implemented; no third transform tree or presentation crate was added.
+Dense motion uses packed tree rebuilds; sparse motion updates individual entries.
+See `render-benchmark.md` §7 and `infinite-canvas-architecture-patterns.md` §13.
+The cache and chunk policies described above still remain to build.
+
 ### Recommendation: borrow, don't adopt wholesale
 
 Understory is a **parallel scene graph**. Adopting the full three-tree model alongside
@@ -420,7 +429,8 @@ bevy means running its box tree and presentation store next to bevy's ECS hierar
 `Transform` propagation, visibility and picking — duplicated state with a synchronisation
 burden.
 
-- **Preferred (bevy-native):** keep bevy ECS as the document model (§4). Borrow
+- **Preferred (Bevy projection):** keep `iron_document` as authority and Bevy ECS
+  as its runtime projection. Borrow
   Understory's *ideas* — dirty keys, batched commit with coarse damage, spatial index for
   culling — and optionally the leaf crates that make no tree assumptions, chiefly
   `understory_index` and `understory_view2d`.

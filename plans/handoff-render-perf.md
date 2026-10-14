@@ -1,6 +1,6 @@
 # Handoff: 2D render performance (roadmap stage H)
 
-**Date:** 2026-10-13 · **Branch:** `document-spine` (last commit `1285030`) · **Read first:**
+**Date:** 2026-10-13 · **Branch:** `document-spine` (benchmark/SIMD base `e08faac`) · **Read first:**
 `plans/render-benchmark.md` (the measurements), then this file, then
 `plans/infinite-canvas-architecture-patterns.md` §6–§8 (the target architecture for the
 same problems). Background on the rest of the system: `plans/guide2/index.html`.
@@ -28,7 +28,7 @@ in what order, and the traps the measuring agent fell into.
   when the URL has `stress`).
 - Phase timers, `src/perf.rs`, read with `await __iron.timings(reset)` (FFI
   `document_timings`): `sync`, `gesture_reconcile`, `display_list`, `extract`, `encode`,
-  `render`, `pick`, `frame`, `changed_frame`. Spans are placed in
+  `render`, `pick`, `overlay_geometry`, `bounds`, `frame`, `changed_frame`. Spans are placed in
   `document_bridge/mod.rs` (sync, reconcile_gesture), `render.rs`
   (render_document_layer), `vector/hybrid.rs` (extract_layers, prepare_scene,
   render_scene), `bevy_app/picking.rs` (pick_document_2d_system), `src/lib.rs`
@@ -62,6 +62,40 @@ One count takes ~2.5 min; four counts ~10–12 min, so run it in the background.
 
 ## 4. What to do, in order
 
+**Current update 2026-10-13:** SIMD and the selection/hover cache are implemented,
+then the user authorized change-driven picking, independent bounds/indexing, and
+indexed picking/per-view culling (items 2–4 of this handoff). Those increments are
+implemented in the working tree. All resting 2D `pick.n`, `bounds.n`, and
+`overlay_geometry.n` are zero. At 10k, idle is 0.9 ms; zoom-1 changed frames:
+pan 18.7→5.3 ms, drag 19.0→6.0 ms, rotation 27.0→17.9 ms. Zoomed-out rotation is
+flat at ~32.7 ms. Full tables/raw runs are in `render-benchmark.md` §7.
+
+`src/iron_spatial` pins `understory_index` at
+`2ac7efbc010c8ee4daa316c34eadc0bafacfe83b`; `SpatialScene` consumes propagated Bevy
+globals and maintains canonical composition bounds/indexes even for hidden
+sources. Iron ids are payloads; Understory handles stay private. Query candidates
+retain exact shape/clip tests, occurrence chains, painter order and 3D occlusion.
+Dense motion uses a packed rebuild; sparse edits update individual entries.
+Do not add `understory_box_tree` simply to get bounds: this adapter deliberately
+avoids a third transform hierarchy. `understory_presentation` is also not added.
+
+**Remaining:** marquee/fit/selected-group geometry still use exact `Geo` queries;
+shared subtree summaries and finer cache dependency revisions are follow-ups.
+Retained overlay targets, painter-contiguous presentation chunks, partial raster
+invalidation and selective subtree baking remain unfinished. Stage H is partial.
+
+Implementation: `SelectionGeometryCache` shared by overlay drawing and idle grip
+cursor testing; lightweight eligibility summary, detailed gesture parts on press;
+`GeometryRevision` survives render drains and covers preview reconciliation and
+same-version loads. Keys also cover authored version, reaches and playhead. Before-
+propagation entries are finalized after propagation for embed bounds. Invalidation
+is globally conservative until the bounds subsystem has subtree revisions.
+
+DPR mapping is verified with named-target and slider-value assertions at DPR 1/2.
+Benchmark panel offsets now use `PANEL_PIXELS=physical`; the default smoke driver
+remains in CSS pixels. No application coordinate convention was changed. The
+corrected 5K pointer addressing has not yet been used for a full 5K matrix.
+
 Each step: change, re-run the benchmark at 1k and 10k, run the smoke script, update
 `plans/render-benchmark.md` (add an "after" table), `plans/roadmap.md`'s H row, commit.
 
@@ -72,18 +106,19 @@ Each step: change, re-run the benchmark at 1k and 10k, run the smoke script, upd
    (step 3) so this isn't a throwaway cache; if step 3 isn't ready, a version-keyed cache
    is an acceptable stopgap. Exit: `select-group` and `hover-group` `frame` within 0.5 ms
    of `idle` at 10k.
-2. **Pick only when needed (finding 3).** Run picking when the pointer moved, the
+2. **Pick only when needed (finding 3; implemented for 2D).** Run picking when the pointer moved, the
    document or resolved values changed, or the view mapping changed; otherwise keep last
    frame's hits. Exit: `idle` `pick` n ≈ 0 with a still pointer.
 3. **Bounds and spatial index outside the draw walk (findings 1, 3, 4).** This is
-   `infinite-canvas-architecture-patterns.md` Phase 3. `Bounds2d` is filled during
-   drawing today (`render.rs`); move it to its own system driven by `DocumentChanges`
+   `infinite-canvas-architecture-patterns.md` Phase 3. **Foundation now implemented:**
+   `Bounds2d` is filled independently after propagation; the remaining goal is
+   sharing subtree summaries with marquee/fit and selection. Preparation is driven by `DocumentChanges`
    and resolved changes, per composition, with geometry vs painted vs interaction
    bounds, and a spatial index (`understory_index`, git-pinned, or a small native
    grid/BVH; measure). Use it for picking candidates, marquee, fit-to-content and the
    overlay. Watch: embeds (one node, many occurrences via chains), clips, 2D-on-3D
    picking, painter order (hits still sort by z), and the background-hit rule.
-4. **Cull per view (finding 4).** In `render_document_layer`'s walk, skip nodes whose
+4. **Cull per view (finding 4; implemented).** In `render_document_layer`'s walk, skip nodes whose
    painted bounds don't touch the view's visible rect (through each embed's transform
    and clip). Exit: `pan` and `drag-one` encode at 10k, zoom 1, drop by roughly the
    off-screen fraction; `*-zoomed` unchanged; smoke output unchanged.
@@ -91,9 +126,11 @@ Each step: change, re-run the benchmark at 1k and 10k, run the smoke script, upd
    plan: hover/selection/cross-probe outlines draw in the overlay layer (already a
    separate `VectorLayer` in the same view, order `DOCUMENT_2D + 1`), not as extra
    strokes in the document walk. Exit: hovering or selecting leaves the document layer's
-   display list unchanged (`commands` doesn't rise; `encode` n = 0 while hovering).
-   Note the overlay shares the view's texture, so a change still re-renders that view;
-   a separate overlay target is a later refinement.
+   display list unchanged. **Correction:** a separate layer in the same view
+   does not make `encode` n = 0: `prepare_scene` resets the shared dirty target and
+   emits every layer. A separate retained overlay target is needed to leave content
+   encoding/rasterization untouched. Measure content-target and overlay-target work
+   separately; the overlay itself still encodes when it changes.
 6. **Only then, the subtree raster cache (findings 4–5, zoomed out).** Design notes:
    `plans/vello-hybrid-migration-scope.md` §3.4 and §6.3, `plans/view-textures.md`,
    vision 07, roadmap §5, Phase 5 of the other plan. Most plumbing exists: offscreen
@@ -116,8 +153,7 @@ independent of this list; don't mix them into the performance commits.
 - **The numbers in `render-benchmark.md` were taken without wasm SIMD.** The shipped
   build (`build-wasm.sh`) compiles with `-Ctarget-feature=+simd128`; without it
   `vello_common`'s `fearless_simd` silently uses a scalar fallback. `build.sh` now adds
-  the flag for `PROFILE=wasm-bench` (a full rebuild). **Re-run the matrix before step 1**
-  and replace the table; the `encode` column is expected to shrink, the overlay, pick
+  the flag for `PROFILE=wasm-bench` (a full rebuild). **Done for 1k/10k (render-benchmark §6).** The 5k/20k scalar rows remain historical; the `encode` column is expected to shrink, the overlay, pick
   and display-list numbers (no Vello involved) should not.
 
 - **Measure `changed_frame`, not fps.** Unthrottled, the app renders ~1000 fps while the
@@ -148,3 +184,99 @@ independent of this list; don't mix them into the performance commits.
 - Whether 2D shapes should stop being one Bevy entity each (finding 6). Large change;
   only if transform propagation proves to be the remaining cost after steps 1–6.
 - Whether to commit `plans/infinite-canvas-architecture-patterns.md`.
+
+
+## 7. Verification for the selection/hover cache
+
+- `PROFILE=wasm-bench build.sh` with SIMD, final 1k/10k matrix: nine scenarios
+  per count, target/deselection assertions, no scenario failures.
+- `selection-cache.txt`: idle reuse, descendant edit, undo, same-version reload,
+  pan/zoom reuse, and slider/sample identity at DPR 1/2. Driver assertions now fail
+  the process; Rust panics are failures even when caught by the frame wrapper.
+- Native `iron_document` suite: 90 tests passed.
+- **Passed:** final dev-opt build, complete standard smoke on stable artifacts,
+  no page errors or panics; inspected bound mid-drag, rotated selection, and cache
+  view-mapping screenshots. Both final DPR runs passed all 11 cache assertions.
+  Never rebuild/rebind wasm during a running driver: reloading can
+  mix cached glue with replacement wasm and invalidate the run.
+- `bun run check` remains blocked by existing CSS diagnostics in
+  `src-ui/lib/Github.svelte`, an implicit parameter type in `src-ui/lib/utils.ts`,
+  and generated wasm glue diagnostics (5,005 errors across five files in this
+  checkout). No Svelte application source was changed for this fix.
+
+Next action is the change-driven picker, followed by independent bounds and
+spatial queries. The cache is not a substitute for those systems.
+
+
+## 8. Spatial implementation handoff
+
+- `src/document_bridge/spatial.rs`: prepare after propagated transforms, before
+  document rendering and selection-overlay drawing. `GeometryRevision` and
+  `PropagatedGeometryRevision` survive render drains; the pick key includes both
+  plus the spatial generation, so a newly reconciled pose is picked again after
+  it settles. Base 2D hits are restored before the per-frame 3D pass.
+- `src/iron_spatial`: three bounds kinds, private Understory handles, conservative
+  old/new painted damage even for same-bounds style changes; canonical painter
+  order. Call `commit()` before querying a batch. A dense packed rebuild remaps
+  private handles by payload; tests cover subsequent sparse edits/deletion.
+- `render.rs`: inverse-map device-expanded view/occurrence clips; query painted
+  candidates; preserve exact clip commands and recursive painter ordering. A
+  dirty view still rebuilds all its visible commands. Damage unions are diagnostic
+  across canonical spaces, not yet partial raster invalidation.
+- `__iron.spatial(false/true)`: reference/indexed walks, with current exact hit
+  chains in its diagnostic reply. Allow frames to settle after toggling. Bounds
+  update in both modes; this switch therefore does not remove maintenance cost.
+- Initial repeated lookup/sorting plus per-leaf incremental tree updates regressed
+  10k low-zoom rotation to 42.1 ms. Cached sort keys, one sort per canonical scope,
+  and packed dense updates reduce it to 32.7 ms. Both raw runs are retained in
+  `plans/benchmarks/`; tune the ≥256 / >50% batch policy from further workloads.
+- Do not conflate faster picking with a constant-time large-group transform.
+  Bevy globals and ~4.3 ms of bounds/index maintenance still scale with descendants.
+  Raster baking saves encoding but does not automatically eliminate these costs.
+
+Verification commands and the reusable comparison fixtures are in
+`.claude/skills/run-iron/SKILL.md` under “Spatial and picking regression checks”.
+`spatial.txt` covers repeated/nested hidden sources and 2D-on-3D plane hits;
+`check-spatial-images.py` compares complete canvas/editor pixels, excluding the
+live FPS HUD. `picking.txt` checks stationary invalidation; `selection-cache.txt`
+checks retained selection geometry and physical offsets at DPR 1/2.
+
+
+Final validation: 95 native tests, both build profiles, full smoke, 10 picking
+assertions, 37 spatial assertions + four pixel comparisons at both DPRs, and
+11 selection-cache assertions at both DPRs all pass. Final served wasm is
+`dev-opt`. Svelte checking retains errors in the same five pre-existing files
+(5,009 now, with four extra generated-glue errors from the new FFI export);
+no errors point at the changed document client. See benchmark §7 for caveats,
+including root-enumeration cost not represented by the candidate counter.
+
+
+## 9. Subsequent renderer sanity investigation
+
+Read `renderer-sanity-checks.md` before explaining poor interactive performance
+as a renderer/Bevy ceiling. The owner was viewing dev-opt; whole-selected-group
+1k dragging measured ~19 FPS / 51 ms, versus ~60 FPS / 11–12 ms with optimized
+SIMD. The owner confirmed the optimized reload felt smoother. `wasm-bench` is
+now left served deliberately, overriding the previous final dev-opt state.
+
+New display-paced tests assert the exact group/leaf target and wait out the
+second-press double-click window. A continuous rAF pointer replay verifies that
+near-60 callback cadence is not solely idle ticks between WebDriver events.
+Canvas2D and ThorVG controls replay canonical frozen geometry but exclude the
+editor/store/Bevy; they are not a full-editor renderer ranking. 36 app intervals,
+24 renderer intervals and compressed hashed fixtures are retained in `plans/benchmarks`.
+
+The standalone same-version Vello control is now complete; see
+`renderer-sanity-checks.md` §7 and the 40 dynamic intervals. At 10k, all geometry
+and independent transforms changing each frame reaches 60-Hz callback cadence
+in Canvas2D, ThorVG GL and Vello Hybrid GL/WG, with no authored bitmap cache.
+Vello GL spends ~13.8 ms p50 there, but ~36.5 ms with all-leaf selection outlines.
+The latter slowdown exists without Bevy. Canvas2D is ~6.4 / 5.6 ms respectively.
+These are synchronous submissions and callback cadence, not GPU-completion or
+full-editor guarantees.
+
+Priority: split selection local-bounds/eligibility invalidation from placement;
+retained overlay targets and measured dense-outline policy. Then decide
+chunks/bakes or a newer/Classic renderer experiment from remaining costs. The
+probe is a separate diagnostic workspace crate; no Vello/Bevy version upgrade
+or new application runtime dependency was made.

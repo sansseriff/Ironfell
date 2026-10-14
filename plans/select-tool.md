@@ -154,6 +154,39 @@ composition tab bar shows which is active.
 - Resizing a path moves its points and scales its handles (`Kind::Points`), so the
   stroke keeps its width.
 
+## Selection and hover geometry cache (2026-10-13)
+
+**Done in the working tree (roadmap H):** selection boxes, individual frames,
+grip eligibility, and hovered-container boxes are retained in
+`SelectionGeometryCache`, shared by drawing and idle cursor/grip testing.
+Detailed resize/rotate `Part`s are constructed only on a press. This removes
+the repeated descendant walks when the pointer or selection rests.
+
+The cache is keyed by selected reaches, authored version, bridge
+`GeometryRevision`, and playhead time. Resolved previews and same-version loads
+invalidate it; pending resolved changes bypass reuse. Drawing finalizes a cache
+computed before transform propagation, since embed bounds can read Bevy globals.
+Boxes remain in composition space, so current pan/zoom maps them at use time.
+Closed panels retire their entries. Invalidation is globally conservative until
+independent bounds have per-subtree revisions.
+
+Measured with shipped wasm SIMD at 10k shapes: resting selection 119 → 2.7 ms,
+hover 13.7 → 2.7 ms, equal to the 2.7 ms idle worker CPU p50. Cache rebuild samples
+are zero during these resting intervals. [Tables and raw data](render-benchmark.md#6-simd-baseline-and-selectionhover-cache-2026-10-13).
+
+Verified with the final dev-opt build: complete `run-iron` smoke (including resize,
+rotation/undo, group selection, marquee, point editing, bound drags, and linked
+views), no page errors or panics, and inspected screenshots
+`mid-drag-bound-follows`, `select-rotated`, and `selection-cache-view-mapping`.
+`selection-cache.txt` passes all 11 assertions at both DPR 1 and DPR 2: resting
+reuse, descendant edit, undo, pan/zoom reuse, same-version reload, and named
+slider/sample addressing. The slider reaches approximately 0.5. Native
+`iron_document` suite: 90 tests passed.
+
+Picking, independent bounds and per-view culling were implemented next (below).
+Independent overlay targets remain a follow-up. Changing an overlay in the shared view still re-encodes its
+target; this cache only removes repeated geometry preparation.
+
 ## Not yet
 
 - Alt-drag to duplicate. The store has no copy op yet; instantiation is the nearest.
@@ -170,3 +203,29 @@ composition tab bar shows which is active.
   `ActiveTool`, `SelectTool`, `PenTool` and `PointerHits` play those roles.
 - For the pen: adding points to an existing open path, inserting a point on a segment,
   deleting a point while keeping the path, and converting between corner and smooth.
+
+
+## Change-driven and indexed picking (2026-10-13)
+
+The base 2D hit list is retained while the physical pointer, panel/view, document,
+resolved projection, propagated pose and spatial index are unchanged. The 3D pass
+still runs and can replace base hits with hits through a plane, so cached 2D hits
+are restored before that pass each frame. Stationary-pointer edits, undo,
+same-version replacement, view pan and zoom invalidate correctly.
+
+A canonical per-composition `understory_index` now supplies candidate leaves and
+embeds. Exact local geometry and clip/occlusion checks are unchanged; candidates
+are sorted in document painter order and each occurrence keeps its embed prefix.
+`SpatialScene` is prepared independently of drawing, including hidden source
+compositions. Geometry, painted and interaction bounds remain separate.
+
+`picking.txt` checks invalidation and zero idle pick work. `spatial.txt` compares
+ordered exact hit chains with the exhaustive reference mode, including repeated
+and nested hidden-source embeds, transformed/clipped paths, negative/nonuniform
+scale, history/deletion, and 2D hits through a 3D plane. `selection-cache.txt`
+remains the cache/DPR regression gate. See `render-benchmark.md` §7 for results.
+
+Marquee and selected-group frames still use the exact oriented `Geo` traversal;
+sharing subtree summaries and finer dependency revisions is a later increment.
+Outlines still contribute commands to the content target until retained overlay
+targets are implemented.

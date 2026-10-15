@@ -3,6 +3,7 @@
   // the model reads, with save and load. Runtime switches are in Settings.
   import { controllerManager } from "../../controller-manager.svelte";
   import Github from "../../lib/Github.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import type { ViewSpec } from "../views";
 
   let { spec }: { spec: ViewSpec } = $props();
@@ -37,11 +38,15 @@
       <input type="file" accept=".json,application/json" bind:this={fileInput} hidden onchange={onFile} />
       <label class="small">
         view
-        <select bind:value={doc.fidelity} onchange={() => doc.refresh()}>
-          <option value="skeleton">skeleton</option>
-          <option value="summary">summary</option>
-          <option value="full">full</option>
-        </select>
+        <Select
+          label="Document view detail"
+          value={doc.fidelity}
+          items={[{ value: "skeleton", label: "skeleton" }, { value: "summary", label: "summary" }, { value: "full", label: "full" }]}
+          onChange={(v) => {
+            doc.fidelity = v;
+            doc.refresh();
+          }}
+        />
       </label>
       <span class="version">v{doc.version}</span>
     </div>
@@ -61,17 +66,17 @@
     overflow: auto;
     font-size: 11px;
     line-height: 1.35;
-    background: #f3f4f7;
-    border: 1px solid #d9dce3;
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
     border-radius: 6px;
     white-space: pre;
   }
   .version {
     font-size: 11px;
-    color: #666;
+    color: var(--fg-faint);
     margin-left: auto;
   }
   .warning {
-    color: #856404;
+    color: var(--warning);
   }
 </style>

@@ -61,6 +61,12 @@ pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
 /// a Hybrid-only plugin set so classic's eager compute-pipeline creation cannot
 /// affect cold start.
 pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
+
+/// The canvas background in the light and dark themes: behind 2D panels and
+/// in 3D views. Both match the shell's `--bg` (src-ui/app.css), so the
+/// active tab joins the canvas beneath it.
+pub const CANVAS_LIGHT: Color = Color::WHITE;
+pub const CANVAS_DARK: Color = Color::srgb(0.122, 0.122, 0.122);
 /// Render every frame (`?bevy=always`): render on demand off, for comparing
 /// frame pacing and latency against it on a real display.
 pub const VARIANT_ALWAYS_RENDER: u32 = 1 << 6;
@@ -81,7 +87,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
 
     let mut app = App::new();
 
-    app.insert_resource(ClearColor(Color::srgb(0.97, 0.97, 0.97)));
+    app.insert_resource(ClearColor(CANVAS_LIGHT));
 
     // Before any plugin: `RenderPlugin::build` reads the primary window to pick
     // an adapter, and on WebGL2 finds none without it.

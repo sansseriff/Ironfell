@@ -19,6 +19,12 @@ After switching builds, hard-reload the page.
 CSS pixel; "Match a 4K panel" for a 4K display in a scaled macOS mode) applies at
 once, as does a move to a screen of another density. The 2D renderer and worker
 mode restart the app, keeping the document. Settings are kept per browser.
+The app follows the system's light/dark appearance unless Settings forces one.
+
+**UI components:** dropdowns, menus and switches come from
+[bits-ui](https://bits-ui.com), icons from [@lucide/svelte](https://lucide.dev),
+imported per icon (`@lucide/svelte/icons/<name>`). Colours are the tokens in
+`src-ui/app.css`; shared component styles are in `src-ui/ui.css`.
 
 **Stress test:** click **+** in any tab bar and pick a size under *Stress test*
 (1,000–20,000 shapes). It opens a Stress tab there; the slider at its top rotates

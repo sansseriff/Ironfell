@@ -15,20 +15,24 @@
  *   renderer     the 2D vector renderer. `classic` needs a WebGPU build with
  *                the `classic` feature; `?bevy=classic` in the URL wins.
  *   runtime      the app in a worker (default) or on the main thread.
+ *   appearance   light or dark: the system's (default), or forced
+ *                (runtime/theme.svelte.ts).
  */
 import type { RuntimeMode } from './session_adapter';
 
 export type RenderScale = 'auto' | 'panel4k' | '2' | '1.5' | '1';
 export type Renderer = 'hybrid' | 'classic';
+export type Appearance = 'system' | 'light' | 'dark';
 
 export interface Settings {
   renderScale: RenderScale;
   renderer: Renderer;
   runtime: RuntimeMode;
+  appearance: Appearance;
 }
 
 const KEY = 'iron.settings.v1';
-const DEFAULTS: Settings = { renderScale: 'auto', renderer: 'hybrid', runtime: 'worker' };
+const DEFAULTS: Settings = { renderScale: 'auto', renderer: 'hybrid', runtime: 'worker', appearance: 'system' };
 
 function read(): Settings {
   try {

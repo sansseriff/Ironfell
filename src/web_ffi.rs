@@ -286,6 +286,18 @@ pub fn resize(ptr: u64, _width: f32, _height: f32) {
     }
 }
 
+/// Light or dark: the canvas's background (the clear colour behind 2D panels
+/// and in 3D views) follows the shell's theme (src-ui/runtime/theme.svelte.ts).
+#[wasm_bindgen]
+pub fn set_dark_mode(ptr: u64, dark: bool) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let colour = if dark { crate::bevy_app::CANVAS_DARK } else { crate::bevy_app::CANVAS_LIGHT };
+    app.world_mut().insert_resource(ClearColor(colour));
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+}
+
 /// Canvas pixels per CSS pixel, when it changes without a restart (the window
 /// moved to a screen of another density, the browser zoomed, the render
 /// scale setting changed). Pointer positions arrive in CSS px and map by it.

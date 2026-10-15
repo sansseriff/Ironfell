@@ -40,11 +40,77 @@
     width: 100%;
     height: 100%;
   }
-  /* Canvas views show the canvas beneath: the theme's group background
+  /* The dock's colours come from the app's light/dark tokens (app.css).
+     Canvas views show the canvas beneath: the theme's group background
      would cover it. HTML views paint their own page. */
   .dock :global(.dockview-theme-light) {
+    color-scheme: inherit;
     --dv-group-view-background-color: transparent;
-    --dv-separator-border: #d6d8de;
+    --dv-separator-border: var(--border);
+    --dv-tabs-and-actions-container-background-color: var(--bg-chrome);
+    --dv-tabs-and-actions-container-height: 36px;
+    --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
+    --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+    --dv-inactivegroup-visiblepanel-tab-background-color: var(--bg);
+    --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+    --dv-tab-divider-color: transparent;
+    --dv-activegroup-visiblepanel-tab-color: var(--fg);
+    --dv-activegroup-hiddenpanel-tab-color: var(--fg-muted);
+    --dv-inactivegroup-visiblepanel-tab-color: var(--fg-muted);
+    --dv-inactivegroup-hiddenpanel-tab-color: var(--fg-faint);
+    --dv-icon-hover-background-color: var(--hover);
+    --dv-drag-over-background-color: var(--accent-soft);
+    --dv-tabs-container-scrollbar-color: var(--border-strong);
+  }
+
+  /* Tabs, VS Code's current look: the active tab is outlined on its top
+     and sides, and its outline curves out at the bottom into the tab bar's
+     bottom line (the ::before/::after rings), joining it to the content.
+     An inactive tab shows a rounded pill on hover. */
+  .dock :global(.dv-tabs-and-actions-container) {
+    box-shadow: inset 0 -1px var(--tab-outline);
+  }
+  .dock :global(.dv-tabs-container) {
+    padding: 0 10px;
+  }
+  .dock :global(.dv-tab) {
+    position: relative;
+    padding: 0;
+    margin-top: 5px;
+    height: calc(100% - 5px);
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+  }
+  .dock :global(.dv-tab.dv-inactive-tab:hover) {
+    background: var(--hover);
+    border-radius: 8px;
+    height: calc(100% - 9px);
+    margin: 5px 0 4px;
+  }
+  .dock :global(.dv-tab.dv-active-tab) {
+    z-index: 1;
+    border-color: var(--tab-outline);
+  }
+  .dock :global(.dv-tab.dv-active-tab::before),
+  .dock :global(.dv-tab.dv-active-tab::after) {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    pointer-events: none;
+  }
+  /* A quarter ring of the outline, filled with the content colour outside
+     it: tangent to the tab's side at the top, to the bar's line at the
+     bottom. Offset by the 1px border, which the box is placed inside. */
+  .dock :global(.dv-tab.dv-active-tab::before) {
+    left: -9px;
+    background: radial-gradient(circle at 0 0, transparent 7px, var(--tab-outline) 7.5px, var(--tab-outline) 8px, var(--bg) 8.5px);
+  }
+  .dock :global(.dv-tab.dv-active-tab::after) {
+    right: -9px;
+    background: radial-gradient(circle at 100% 0, transparent 7px, var(--tab-outline) 7.5px, var(--tab-outline) 8px, var(--bg) 8.5px);
   }
   .dock :global(*) {
     pointer-events: none;
@@ -60,17 +126,17 @@
     pointer-events: auto;
   }
 
-  /* HTML views: a white page, scrolling, inside their tab. */
+  /* HTML views: a page in the theme's background, scrolling, inside their tab. */
   .dock :global(.html-view) {
     box-sizing: border-box;
     height: 100%;
     overflow: auto;
     padding: 12px;
-    background: var(--body-color, white);
+    background: var(--bg);
     display: flex;
     flex-direction: column;
     gap: 8px;
-    color: black;
+    color: var(--fg);
     font-size: 13px;
   }
   .dock :global(.html-view .row) {
@@ -88,7 +154,7 @@
     gap: 4px;
   }
   .dock :global(.html-view .error) {
-    color: #b3261e;
+    color: var(--danger);
     font-size: 12px;
     margin: 0;
   }

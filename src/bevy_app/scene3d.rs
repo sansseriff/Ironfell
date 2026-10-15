@@ -578,9 +578,11 @@ pub(crate) fn sync_view_images(
         if camera.viewport.as_ref().is_none_or(|v| v.physical_size != size || v.physical_position != UVec2::ZERO) {
             camera.viewport = Some(viewport);
         }
-        let clear_to = ClearColorConfig::Custom(clear.0);
-        if !matches!(camera.clear_color, ClearColorConfig::Custom(_)) {
-            camera.clear_color = clear_to;
+        // The app's clear colour, which follows the light/dark theme
+        // (`web_ffi::set_dark_mode`): a change re-renders the view.
+        if !matches!(camera.clear_color, ClearColorConfig::Custom(c) if c == clear.0) {
+            camera.clear_color = ClearColorConfig::Custom(clear.0);
+            dirty = true;
         }
         let active = dirty || awake.is_some_and(|a| a > 0);
         if camera.is_active != active {

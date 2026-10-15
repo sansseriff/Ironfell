@@ -510,6 +510,7 @@ Do not set `UNTHROTTLED` for these cadence checks. `bench-interaction.txt` adds
 whole-field movement and verifies identity before/after, waits out the
 second-press double-click window, and clears selection between cases.
 `mdrag panel x0 y0 x1 y1 [steps]` drags with the middle button (pans a 2D view).
+`scheme light|dark` sets the system appearance the page sees (the theme follows it).
 `dpr <ratio>` changes devicePixelRatio live; emulation fires neither `resize` nor
 the resolution media query, so follow it with `eval dispatchEvent(new Event('resize'))`.
 `praf panel x0 y0 x1 y1 ms` generates frame-paced pointer events through the

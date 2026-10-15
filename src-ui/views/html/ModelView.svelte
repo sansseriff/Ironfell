@@ -73,7 +73,7 @@
     margin: 4px 0 0;
     padding: 6px;
     font-size: 10px;
-    background: #f3f4f7;
+    background: var(--bg-sunken);
     border-radius: 4px;
     overflow: auto;
     max-height: 200px;

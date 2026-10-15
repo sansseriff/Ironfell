@@ -1,0 +1,110 @@
+/* Shared look for bits-ui parts (menus, selects, switches): they render in
+   portals outside any component, so their classes live here. Colours are the
+   theme tokens in app.css. */
+
+.ui-menu {
+  z-index: 1000;
+  min-width: 180px;
+  max-height: var(--bits-dropdown-menu-content-available-height, 70vh);
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: var(--menu-shadow);
+  font-size: 13px;
+  outline: none;
+}
+.ui-menu-heading {
+  padding: 6px 8px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-faint);
+}
+.ui-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: default;
+  outline: none;
+  user-select: none;
+}
+.ui-menu-item[data-highlighted] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.ui-menu-item[data-disabled] {
+  opacity: 0.45;
+}
+.ui-menu-item .ui-hint {
+  margin-left: auto;
+  color: var(--fg-faint);
+  font-size: 11px;
+}
+.ui-menu-item[data-highlighted] .ui-hint {
+  color: inherit;
+  opacity: 0.8;
+}
+.ui-menu-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
+.ui-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 120px;
+  padding: 3px 6px 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ui-select-trigger:hover {
+  border-color: var(--fg-faint);
+}
+.ui-select-trigger[data-disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ui-switch {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 28px;
+  height: 16px;
+  padding: 2px;
+  border: none;
+  border-radius: 8px;
+  background: var(--border-strong);
+  cursor: pointer;
+}
+.ui-switch[data-state="checked"] {
+  background: var(--accent);
+}
+.ui-switch[data-disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+.ui-switch-thumb {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 120ms ease;
+}
+.ui-switch-thumb[data-state="checked"] {
+  transform: translateX(12px);
+}

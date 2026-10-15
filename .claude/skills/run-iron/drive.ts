@@ -156,6 +156,12 @@ async function run(line: string) {
       const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
       return drag(r.x + x0 * panelUnit, r.y + y0 * panelUnit, r.x + x1 * panelUnit, r.y + y1 * panelUnit, steps || 10);
     }
+    case "scheme": {
+      // scheme light|dark: the system appearance the page sees (the app's
+      // theme follows it unless Settings forces one).
+      await page.emulateMedia({ colorScheme: rest[0] as "light" | "dark" });
+      return out(`scheme ${rest[0]}`);
+    }
     case "dpr": {
       // dpr <ratio>: change the page's devicePixelRatio live, as moving the
       // window to a screen of another density does.

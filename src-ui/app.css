@@ -9,67 +9,89 @@
   line-height: 1.5;
   font-weight: 400;
 
-  /* color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424; */
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  --bg-color: #f7faff;
-  --text-color: #738494;
-  --icon-color: #99a8b7;
-  --heading-color: #edf3f9;
-  --body-color: #f4f9fd;
-  --hl-text-color: #444444;
-  --inner-border-color: #f1f6fb;
-  --value-border-color: #f0f5fa;
-  --outer-border-color: #d7e0ed;
-  --divider-border-color: #cad7e8;
-  --display-color: #fbfcfe;
-  --hover-body-color: #ecf0fb;
-  --hover-heading-color: #000f3e0b;
-  --digits-color: #090909;
-  --digits-deactivated-color: #d2dae8;
-  --disabled-digits-color: #c7c7c7;
-  --module-header-color: #edf3f9;
-  --module-header-color-light: #e4eaf5;
-  --module-border-color: #d7e0ed;
-  --module-icon-color: #1d2225;
-  --red-highlight: #f8c6cb;
-  --edit-blue: #00499c;
-  --red-text: #712020;
-  --extra-light: #fbfdff;
-  --caret-color: #afb5bb;
+  /* The shell's colours, after VS Code's Light/Dark Modern themes. The
+     system's appearance picks the set (day/night switching follows it);
+     the canvas follows the same query (runtime/theme.ts). */
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-chrome: #f8f8f8;
+  --bg-sunken: #f3f3f3;
+  --bg-input: #ffffff;
+  --fg: #3b3b3b;
+  --fg-muted: #616161;
+  --fg-faint: #8b8b8b;
+  --border: #e5e5e5;
+  --border-strong: #cecece;
+  --tab-outline: #e0e0e0;
+  --hover: rgba(0, 0, 0, 0.06);
+  --active: rgba(0, 0, 0, 0.1);
+  --accent: #005fb8;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(0, 95, 184, 0.12);
+  --danger: #b3261e;
+  --warning: #856404;
+  --ok: #1a7f37;
+  --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
+  --overlay: rgba(255, 255, 255, 0.6);
+  color: var(--fg);
+  background: var(--bg);
 }
 
-.dark {
-  --bg-color: #1b1b1b;
-  --text-color: #9698aa;
-  --icon-color: #7a7c89;
-  --heading-color: #2b2b2e;
-  --body-color: #252527;
-  --hl-text-color: #e7e7e7;
-  --inner-border-color: #252528;
-  --outer-border-color: #34343c;
-  --divider-border-color: #3f3f49;
-  --value-border-color: #292930;
-  --display-color: #292a2f;
-  --hover-body-color: #2d2d32;
-  --hover-heading-color: #dde4f810;
-  --digits-color: #f7f7f7;
-  --digits-deactivated-color: #46495a;
-  --module-header-color: #2b2b2e;
-  --module-header-color-light: #3b3b41;
-  --module-border-color: #484853;
-  --module-icon-color: #f1f1f1;
-  --red-highlight: #60060f;
-  --edit-blue: #4b9fff;
-  --red-text: #d27878;
-  --extra-light: #212124;
-  --caret-color: #3b3f44;
+/* Dark: the system's appearance unless Settings forces one
+   (`data-theme` on <html>, runtime/theme.svelte.ts). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #1f1f1f;
+    --bg-chrome: #181818;
+    --bg-sunken: #262626;
+    --bg-input: #313131;
+    --fg: #cccccc;
+    --fg-muted: #9d9d9d;
+    --fg-faint: #6e7681;
+    --border: #2b2b2b;
+    --border-strong: #3c3c3c;
+    --tab-outline: #333333;
+    --hover: rgba(255, 255, 255, 0.07);
+    --active: rgba(255, 255, 255, 0.12);
+    --accent: #0078d4;
+    --accent-fg: #ffffff;
+    --accent-soft: rgba(0, 120, 212, 0.25);
+    --danger: #f48771;
+    --warning: #cca700;
+    --ok: #4ec9b0;
+    --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+    --overlay: rgba(0, 0, 0, 0.5);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1f1f1f;
+  --bg-chrome: #181818;
+  --bg-sunken: #262626;
+  --bg-input: #313131;
+  --fg: #cccccc;
+  --fg-muted: #9d9d9d;
+  --fg-faint: #6e7681;
+  --border: #2b2b2b;
+  --border-strong: #3c3c3c;
+  --tab-outline: #333333;
+  --hover: rgba(255, 255, 255, 0.07);
+  --active: rgba(255, 255, 255, 0.12);
+  --accent: #0078d4;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(0, 120, 212, 0.25);
+  --danger: #f48771;
+  --warning: #cca700;
+  --ok: #4ec9b0;
+  --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --overlay: rgba(0, 0, 0, 0.5);
 }
 
 *,

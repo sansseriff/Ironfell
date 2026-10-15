@@ -113,7 +113,7 @@
     font-size: 0.85em;
   }
   .question {
-    border: 1px solid #c99;
+    border: 1px solid var(--danger);
     border-radius: 6px;
     padding: 6px;
     font-size: 0.85em;
@@ -125,7 +125,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    border-top: 1px solid #e3e5ea;
+    border-top: 1px solid var(--border);
     padding-top: 6px;
   }
   .title {
@@ -134,7 +134,7 @@
   .component {
     font-size: 10px;
     text-transform: uppercase;
-    color: #889;
+    color: var(--fg-faint);
     margin-top: 6px;
   }
   .field {
@@ -149,11 +149,11 @@
     font-size: 12px;
   }
   .label.bound {
-    color: #0b7bd6;
+    color: var(--accent);
   }
   .bind {
     margin-left: 4.5em;
-    color: #0b7bd6;
+    color: var(--accent);
     overflow-wrap: anywhere;
   }
 </style>

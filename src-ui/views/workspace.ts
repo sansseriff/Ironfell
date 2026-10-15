@@ -5,9 +5,10 @@
  * root later), never in the document or its undo.
  */
 import "./dockview.css";
-import { createDockview, themeLight, type DockviewApi, type IContentRenderer, type IHeaderActionsRenderer } from 'dockview-core';
+import { createDockview, themeLight, type DockviewApi, type IContentRenderer, type IHeaderActionsRenderer, type ITabRenderer } from 'dockview-core';
 import { mount, unmount } from 'svelte';
 import ViewPanel from './ViewPanel.svelte';
+import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import Toolbar from './Toolbar.svelte';
 import type { ViewSpec } from './views';
@@ -51,6 +52,24 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
     // Pointer events drive every drag: HTML5 drag-and-drop is unreliable in
     // Safari and embedded webviews, and in headless test browsers.
     dndStrategy: 'pointer',
+    // Every tab is a ViewTab: icon, title, close (VS Code's look).
+    defaultTabComponent: 'view',
+    createTabComponent: (): ITabRenderer => {
+      const element = document.createElement('div');
+      element.style.height = '100%';
+      let instance: Record<string, any> | null = null;
+      return {
+        element,
+        init(params) {
+          const notation = (params.params as { spec?: ViewSpec } | undefined)?.spec?.notation;
+          instance = mount(ViewTab, { target: element, props: { api: params.api, notation } });
+        },
+        dispose() {
+          if (instance) unmount(instance);
+          instance = null;
+        },
+      };
+    },
     createComponent: (): IContentRenderer => {
       const element = document.createElement('div');
       element.style.width = '100%';

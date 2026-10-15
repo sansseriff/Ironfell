@@ -3,6 +3,9 @@
   // document, then the views that are not compositions, then the render
   // benchmark's stress scene at a few sizes (src/document_bridge/stress.rs).
   import type { DockviewApi, DockviewGroupPanel } from "dockview-core";
+  import { DropdownMenu } from "bits-ui";
+  import Plus from "@lucide/svelte/icons/plus";
+  import Settings from "@lucide/svelte/icons/settings";
   import { controllerManager } from "../controller-manager.svelte";
   import { FIXED_VIEWS, SETTINGS_VIEW, titleOf, viewId, type ViewSpec } from "./views";
 
@@ -11,14 +14,12 @@
   let open = $state(false);
   let compositions: { id: string; name: string | null; dims: string }[] = $state([]);
 
-  async function toggle() {
-    open = !open;
-    if (open) {
-      try {
-        compositions = await controllerManager.docClient.call("compositions", []);
-      } catch {
-        compositions = [];
-      }
+  async function opened(now: boolean) {
+    if (!now) return;
+    try {
+      compositions = await controllerManager.docClient.call("compositions", []);
+    } catch {
+      compositions = [];
     }
   }
 
@@ -53,80 +54,66 @@
 </script>
 
 <div class="add">
-  <button class="plus" title="Settings" aria-label="Settings" onclick={settings}>
-    <svg viewBox="0 0 20 20" width="14" height="14"><path d="M10 6.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7Z M8.6 2h2.8l.4 2.2 1.6.9 2.1-.8 1.4 2.4-1.7 1.5v1.6l1.7 1.5-1.4 2.4-2.1-.8-1.6.9-.4 2.2H8.6l-.4-2.2-1.6-.9-2.1.8-1.4-2.4 1.7-1.5V9.2L3.1 7.7l1.4-2.4 2.1.8 1.6-.9Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg>
+  <button class="action" title="Settings" aria-label="Settings" onclick={settings}>
+    <Settings size={15} strokeWidth={1.75} />
   </button>
-  <button class="plus" title="Open a view" onclick={toggle}>+</button>
-  {#if open}
-    <div class="menu" role="menu">
-      <div class="heading">Compositions</div>
-      {#each compositions as c (c.id)}
-        <button role="menuitem" onclick={() => add(titleOf(c.name ?? c.id), { source: c.name ?? c.id, notation: "composition" })}>
-          {titleOf(c.name ?? c.id)} <span class="dims">{c.dims}</span>
-        </button>
-      {/each}
-      <div class="heading">Views</div>
-      {#each FIXED_VIEWS as v (v.title)}
-        <button role="menuitem" onclick={() => add(v.title, v.spec)}>{v.title}</button>
-      {/each}
-      <div class="heading">Stress test</div>
-      {#each STRESS_SIZES as n (n)}
-        <button role="menuitem" onclick={() => stress(n)}>{n.toLocaleString()} shapes</button>
-      {/each}
-    </div>
-  {/if}
+  <DropdownMenu.Root bind:open onOpenChange={opened}>
+    <DropdownMenu.Trigger class="action" title="Open a view" aria-label="Open a view">
+      <Plus size={16} strokeWidth={1.75} />
+    </DropdownMenu.Trigger>
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content class="ui-menu" align="end" sideOffset={4}>
+        <DropdownMenu.Group>
+          <DropdownMenu.GroupHeading class="ui-menu-heading">Compositions</DropdownMenu.GroupHeading>
+          {#each compositions as c (c.id)}
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(titleOf(c.name ?? c.id), { source: c.name ?? c.id, notation: "composition" })}>
+              {titleOf(c.name ?? c.id)} <span class="ui-hint">{c.dims}</span>
+            </DropdownMenu.Item>
+          {/each}
+        </DropdownMenu.Group>
+        <DropdownMenu.Separator class="ui-menu-separator" />
+        <DropdownMenu.Group>
+          <DropdownMenu.GroupHeading class="ui-menu-heading">Views</DropdownMenu.GroupHeading>
+          {#each FIXED_VIEWS as v (v.title)}
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(v.title, v.spec)}>{v.title}</DropdownMenu.Item>
+          {/each}
+        </DropdownMenu.Group>
+        <DropdownMenu.Separator class="ui-menu-separator" />
+        <DropdownMenu.Group>
+          <DropdownMenu.GroupHeading class="ui-menu-heading">Stress test</DropdownMenu.GroupHeading>
+          {#each STRESS_SIZES as n (n)}
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => stress(n)}>{n.toLocaleString()} shapes</DropdownMenu.Item>
+          {/each}
+        </DropdownMenu.Group>
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
+  </DropdownMenu.Root>
 </div>
 
 <style>
   .add {
-    position: relative;
     height: 100%;
     display: flex;
     align-items: center;
+    gap: 2px;
+    padding-right: 6px;
     pointer-events: auto;
   }
-  .plus {
-    border: none;
-    background: transparent;
-    font-size: 16px;
-    padding: 0 8px;
-    cursor: pointer;
-    color: #444;
-  }
-  .menu {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    z-index: 100;
-    min-width: 160px;
-    background: white;
-    border: 1px solid #ccd;
-    border-radius: 6px;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
-    padding: 4px;
+  .add :global(.action) {
     display: flex;
-    flex-direction: column;
-  }
-  .menu button {
-    text-align: left;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
     border: none;
+    border-radius: 5px;
     background: transparent;
-    padding: 4px 8px;
-    border-radius: 4px;
+    color: var(--fg-muted);
     cursor: pointer;
-    color: #222;
   }
-  .menu button:hover {
-    background: #eef1f7;
-  }
-  .heading {
-    font-size: 10px;
-    text-transform: uppercase;
-    color: #889;
-    padding: 4px 8px 2px;
-  }
-  .dims {
-    color: #889;
-    font-size: 10px;
+  .add :global(.action:hover),
+  .add :global(.action[data-state="open"]) {
+    background: var(--hover);
+    color: var(--fg);
   }
 </style>

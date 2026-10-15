@@ -14,7 +14,7 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tsconfig/svelte": "^5.0.4",
-    "svelte": "^5.20.2",
+    "svelte": "^5.46.4",
     "svelte-check": "^4.1.4",
     "typescript": "~5.7.2",
     "vite": "^6.2.0",
@@ -22,6 +22,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",
+    "@lucide/svelte": "^1.57.0",
+    "bits-ui": "^2.19.5",
     "dockview-core": "^8.5.1",
     "fast-xml-parser": "^5.11.1"
   }

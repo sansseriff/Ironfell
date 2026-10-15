@@ -138,6 +138,10 @@ export class MainThreadAdapter {
         if (this.appHandle !== BigInt(0)) glue.tool_key(this.appHandle, data.key, data.m);
         break;
 
+      case "theme":
+        if (this.appHandle !== BigInt(0)) glue.set_dark_mode(this.appHandle, !!data.dark);
+        break;
+
       case "middleBt":
         if (this.appHandle !== BigInt(0)) glue.middle_bt(this.appHandle, !!data.down);
         break;

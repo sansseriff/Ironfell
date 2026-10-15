@@ -1,4 +1,5 @@
 import { pixelRatio, watchPixelRatio } from './runtime/settings.svelte';
+import { onThemeChange, theme } from './runtime/theme.svelte';
 import { SessionAdapter, type RuntimeMode, type PanelRectMsg } from './runtime/session_adapter';
 import { InputManager } from './runtime/input_manager';
 import { chooseBackend, type Backend } from './runtime/backend_policy';
@@ -45,6 +46,7 @@ export class PanelManager {
   private panels = new Map<string, PanelEntry>();
   private windowResizeHandler: (() => void) | null = null;
   private stopWatchingRatio: (() => void) | null = null;
+  private stopWatchingTheme: (() => void) | null = null;
 
   public onInitialized: (() => void) | null = null;
 
@@ -82,6 +84,7 @@ export class PanelManager {
       this.windowResizeHandler = () => this.handleWindowResize();
       window.addEventListener('resize', this.windowResizeHandler, { passive: true });
       this.stopWatchingRatio = watchPixelRatio(() => this.refreshPixelRatio());
+      this.stopWatchingTheme = onThemeChange((dark) => this.session?.post({ ty: 'theme', dark }));
     }
   }
 
@@ -155,6 +158,8 @@ export class PanelManager {
     }
     this.stopWatchingRatio?.();
     this.stopWatchingRatio = null;
+    this.stopWatchingTheme?.();
+    this.stopWatchingTheme = null;
     for (const entry of this.panels.values()) entry.ro.disconnect();
     this.panels.clear();
     this.isInitialized = false;
@@ -188,6 +193,7 @@ export class PanelManager {
         this.sizeCanvasBackingStore();
         this.session?.resizeCanvas(...this.canvasPhysicalSize(), pixelRatio());
         this.syncAllPanels();
+        this.session?.post({ ty: 'theme', dark: theme.dark });
         if (this.canvas) {
           this.input.init(this.canvas, {
             post: (payload: any) => this.session?.post(payload),

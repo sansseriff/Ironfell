@@ -82,14 +82,14 @@
     position: absolute;
     inset: 0;
     z-index: 10;
-    background-color: rgba(255, 255, 255, 0.6);
+    background-color: var(--overlay);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     font-family: Arial, sans-serif;
     font-size: 2em;
-    color: #9aa4b8;
+    color: var(--fg-faint);
     pointer-events: none;
   }
 </style>

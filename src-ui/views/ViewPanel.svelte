@@ -51,6 +51,6 @@
   .unknown {
     padding: 8px;
     pointer-events: auto;
-    background: white;
+    background: var(--bg);
   }
 </style>

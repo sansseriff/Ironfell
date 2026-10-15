@@ -65,8 +65,7 @@
 
   /* Tabs, VS Code's current look: the active tab is outlined on its top
      and sides, and its outline curves out at the bottom into the tab bar's
-     bottom line (the ::before/::after rings), joining it to the content.
-     An inactive tab shows a rounded pill on hover. */
+     bottom line (the ::before/::after rings), joining it to the content. */
   .dock :global(.dv-tabs-and-actions-container) {
     box-shadow: inset 0 -1px var(--tab-outline);
   }
@@ -82,18 +81,27 @@
     border-bottom: none;
     border-radius: 8px 8px 0 0;
   }
-  /* The hover pill is a layer behind the tab's content, so the tab's own
-     box (and so its content's position) never changes. */
-  .dock :global(.dv-tab.dv-inactive-tab) {
-    isolation: isolate;
+  /* A hovered inactive tab takes a faint tint over its whole shape, down to
+     the bar's line, as in VS Code; its box never changes. `!important`:
+     dockview sets every inactive tab's background with a longer selector. */
+  .dock :global(.dv-tab.dv-inactive-tab:hover) {
+    background: var(--tab-hover) !important;
   }
-  .dock :global(.dv-tab.dv-inactive-tab:hover::before) {
+  /* Faint dividers between unselected tabs; none beside the active tab or a
+     hovered one. */
+  .dock :global(.dv-tab.dv-inactive-tab + .dv-tab.dv-inactive-tab::before) {
     content: "";
     position: absolute;
-    inset: 0 0 4px;
-    z-index: -1;
-    border-radius: 8px;
-    background: var(--hover);
+    left: -1px;
+    top: 25%;
+    height: 50%;
+    width: 1px;
+    background: var(--tab-divider);
+    pointer-events: none;
+  }
+  .dock :global(.dv-tab.dv-inactive-tab:hover::before),
+  .dock :global(.dv-tab.dv-inactive-tab:hover + .dv-tab::before) {
+    display: none;
   }
   .dock :global(.dv-tab.dv-active-tab) {
     z-index: 1;

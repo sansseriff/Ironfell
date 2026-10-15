@@ -66,7 +66,7 @@ pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
 /// in 3D views. Both match the shell's `--bg` (src-ui/app.css), so the
 /// active tab joins the canvas beneath it.
 pub const CANVAS_LIGHT: Color = Color::WHITE;
-pub const CANVAS_DARK: Color = Color::srgb(0.122, 0.122, 0.122);
+pub const CANVAS_DARK: Color = Color::srgb_u8(0x12, 0x13, 0x14);
 /// Render every frame (`?bevy=always`): render on demand off, for comparing
 /// frame pacing and latency against it on a real display.
 pub const VARIANT_ALWAYS_RENDER: u32 = 1 << 6;

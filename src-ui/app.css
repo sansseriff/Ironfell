@@ -14,12 +14,12 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  /* The shell's colours, after VS Code's Light/Dark Modern themes. The
+  /* The shell's colours, after VS Code's current light and dark themes. The
      system's appearance picks the set (day/night switching follows it);
      the canvas follows the same query (runtime/theme.ts). */
   color-scheme: light;
   --bg: #ffffff;
-  --bg-chrome: #f8f8f8;
+  --bg-chrome: #eaeaea;
   --bg-sunken: #f3f3f3;
   --bg-input: #ffffff;
   --fg: #3b3b3b;
@@ -28,6 +28,8 @@
   --border: #e5e5e5;
   --border-strong: #cecece;
   --tab-outline: #e0e0e0;
+  --tab-hover: rgba(0, 0, 0, 0.04);
+  --tab-divider: rgba(0, 0, 0, 0.1);
   --hover: rgba(0, 0, 0, 0.06);
   --active: rgba(0, 0, 0, 0.1);
   --accent: #005fb8;
@@ -47,16 +49,18 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #1f1f1f;
-    --bg-chrome: #181818;
-    --bg-sunken: #262626;
-    --bg-input: #313131;
+    --bg: #121314;
+    --bg-chrome: #191a1b;
+    --bg-sunken: #1c1d1f;
+    --bg-input: #222326;
     --fg: #cccccc;
     --fg-muted: #9d9d9d;
     --fg-faint: #6e7681;
     --border: #2b2b2b;
     --border-strong: #3c3c3c;
     --tab-outline: #333333;
+    --tab-hover: rgba(255, 255, 255, 0.07);
+    --tab-divider: rgba(255, 255, 255, 0.09);
     --hover: rgba(255, 255, 255, 0.07);
     --active: rgba(255, 255, 255, 0.12);
     --accent: #0078d4;
@@ -72,16 +76,18 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #1f1f1f;
-  --bg-chrome: #181818;
-  --bg-sunken: #262626;
-  --bg-input: #313131;
+  --bg: #121314;
+  --bg-chrome: #191a1b;
+  --bg-sunken: #1c1d1f;
+  --bg-input: #222326;
   --fg: #cccccc;
   --fg-muted: #9d9d9d;
   --fg-faint: #6e7681;
   --border: #2b2b2b;
   --border-strong: #3c3c3c;
   --tab-outline: #333333;
+  --tab-hover: rgba(255, 255, 255, 0.07);
+  --tab-divider: rgba(255, 255, 255, 0.09);
   --hover: rgba(255, 255, 255, 0.07);
   --active: rgba(255, 255, 255, 0.12);
   --accent: #0078d4;

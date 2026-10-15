@@ -1,6 +1,7 @@
 # Architecture improvements from the infinite canvas tutorial
 
-**Status:** Proposed — implementation phases, not yet scheduled
+**Status:** Phase 3 implemented (§13); phase 1 first pass done 2026-10-15 (§4,
+"First pass"); phases 2, 4 and 5 open
 **Date:** 2026-10-13
 **Scope:** Adapt relevant patterns from `xiaoiver/infinite-canvas-tutorial` while
 preserving Iron's authored document, Bevy runtime, and Svelte host boundaries.
@@ -135,6 +136,112 @@ name/material edits while canceling conflicting spatial edits.
 - Gesture preview writes do not invalidate their own context.
 - Cancel produces no authored transaction; successful release produces one.
 - Bound-source and constraint-driven gestures obey the same ownership rules.
+
+### First pass (2026-10-15)
+
+**In the store** (`iron_document::gesture`, `Store`):
+- **A gesture has an id and watched nodes.** `begin_gesture(nodes)` starts one; a
+  preview or `begin_drag` without one starts it implicitly and adds its node. One
+  gesture at a time: there is one pointer, and a newer gesture cancels the older.
+- **A transaction from outside the gesture is classified before it applies.** It
+  conflicts if it:
+  - deletes or reparents a watched node or an ancestor;
+  - sets a geometry leaf of one, or binds any of its leaves;
+  - sets a leaf the gesture drives (a handle's source, such as the slider behind
+    a bound bar);
+  - links or unlinks a constraint or a clip on a watched node;
+  - makes the solver move a watched node (`derived_ops`).
+
+  Anything else is compatible.
+- **Every outside transaction applies without the gesture's previews.** It applies
+  and solves against the document alone, with the drag's fingers set aside. The
+  previews are then put back, or dropped on a conflict. This fixed a latent bug: an
+  unrelated edit during a cluster drag used to solve with the drag's finger and
+  previewed pose, and wrote the dragged pose into the document under the other
+  transaction's label.
+- **A cancelled gesture commits nothing.** Its previews and fingers are dropped
+  and the document, with the edit, shows. `gesture_status(id)` says why.
+- **Undo and redo cancel a running gesture first** (the decision item 5 asked for).
+- **One-off edits no longer share the overlay.** `set_through_handle` is one
+  transaction through a leaf's handle with no previews. The inspector's
+  `document_inspect_set` used to preview into the shared overlay and commit
+  everything in it, including a drag in progress.
+
+**In the select tool:**
+- It holds the store gesture behind its current one (`SelectTool::owned`). When the
+  store has ended it, the tool goes idle and the release commits nothing.
+- **Box gestures and marquees follow their view's current pan and zoom** while the
+  button is down, and end if the view closes.
+- **The legacy drags** (3D, planes, sliders) begin their gesture explicitly in
+  `begin_legacy`.
+
+**Exit criteria:**
+- Met, natively, in `tests/gestures.rs`:
+  - a model pose edit survives cancel and release;
+  - a colour or another node's edit leaves the drag running;
+  - deleting the node or its parent, reparenting, moving the parent, rebinding or
+    resizing cancels;
+  - previews never cancel their own gesture;
+  - cancel writes nothing and a release writes one transaction;
+  - a bound-source drag and a cluster drag obey the same rules.
+
+  The conflict and suspension tests fail with suspension and classification
+  disabled: checked by mutation.
+- Met in the browser by the smoke script's gesture ownership section.
+- **View replacement** is handled for 2D box gestures.
+- **Not handled:**
+  - a camera change during a 3D drag, which still uses the camera it started with;
+  - rebasing: deliberately cancel-only, as item 3 says.
+
+**Deviation:** item 1's dependency set is coarser than proposed. It watches nodes
+with their ancestors and a fixed list of geometry components, rather than
+per-leaf revisions. Enough for every exit; revisit if a compatible edit is ever
+wrongly cancelled.
+
+**Not yet (item 6):** one lifecycle contract in the tools themselves. The store's
+lifecycle is shared, but `select.rs`'s `Gesture` enum and `interaction.rs`'s
+`DragState` are still two state machines.
+
+### 2D and 3D: what to share
+
+Three layers, shared to different degrees:
+
+1. **Lifecycle and ownership: shared, and done.** Identity, watched nodes, previews,
+   commit and cancel, conflicts. It is in the store and knows nothing of dimension.
+2. **The pointer state machine: should be shared, and is not yet.** Press, slop,
+   drag, release, Esc, modifiers, cursors, which tool owns the pointer. Today
+   `select.rs` runs 2D box gestures and hands 3D, plane and slider drags to
+   `interaction.rs`'s `DragState`. The proposal is one state machine with a
+   *manipulator* per kind, each answering three questions:
+   - `begin`: which nodes it watches;
+   - `update`: the leaf values for this pointer;
+   - its label.
+
+   The manipulators: box transform (`Part::apply`), path point and handle, shape
+   grip, slider, drag through a plane, and the 3D gizmo below.
+3. **Value semantics: per dimension.** A 2D manipulator maps the pointer through
+   the panel affine and the embed chain; a 3D one through a camera ray. Constraint
+   drags go through `begin_drag`/`drag_to`, whose fingers are 2D world points; 3D
+   mates (CS phase 6) need 3D fingers.
+
+**A 3D transform gizmo** (move, rotate, scale handles) is a manipulator in this
+scheme. `transform-gizmo` 0.11 fits the Bevy 0.19 workspace, and comes in two
+forms:
+- **`transform-gizmo-bevy`** writes the `Transform` of entities marked `GizmoTarget`
+  directly. That bypasses the store, and the reconciler would fight it.
+- **The core crate `transform-gizmo`** is framework-agnostic. According to its
+  documentation, it takes the targets' transforms, the camera's view and
+  projection, and the pointer, and returns updated transforms plus screen-space
+  triangles to draw. (Verify the exact API when importing.)
+
+**Recommendation:** use the core crate as a manipulator:
+- read the selected meshes' resolved `transform3d`;
+- preview its result through `Store::preview`, so ownership, conflicts and the
+  single commit apply unchanged;
+- draw its triangles in the panel's retained overlay target (stage H).
+
+Its dependencies include egui's `epaint`, `emath` and `ecolor`, so measure the wasm
+size when adding it. Not imported yet.
 
 ## 5. Phase 2 — Typed UI protocol, subscriptions, and lifecycle
 

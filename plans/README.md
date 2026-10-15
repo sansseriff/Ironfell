@@ -44,7 +44,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`clipboard-and-assets.md`](specs/clipboard-and-assets.md) | Copy, paste, duplicate; the clipboard; assets and drag and drop | Phase 1 done (copy closure, Cmd+D, Cmd+C/X/V); Alt-drag waits on gesture ownership; assets wait on the project container (§6) |
 | [`panels-and-session.md`](specs/panels-and-session.md) | Views, dock presenter, session tier, inspectors | Items 1–2 built; 3–5 open |
 | [`view-textures.md`](specs/view-textures.md) | Every view renders to its own texture | Done except the custom final pass and §4 tiling |
-| [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phases 1–2 are product candidates, 4–5 are in the render handoff |
+| [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phase 1 first pass done (store ownership, 2D/3D sharing, gizmo recommendation); phase 2 a product candidate; 4–5 in the render handoff |
 
 ## 4. Rendering
 

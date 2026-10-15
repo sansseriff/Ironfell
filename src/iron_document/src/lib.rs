@@ -24,6 +24,7 @@ pub mod definition;
 pub mod document;
 pub mod expr;
 pub mod geom;
+pub mod gesture;
 pub mod graph;
 pub mod handle;
 pub mod id;
@@ -44,6 +45,7 @@ pub use component::{Component, ComponentKind, LeafError, LeafPath, LeafStruct};
 pub use document::{Document, Node, RelKind, Relation};
 pub use expr::{Expr, Leaf};
 pub use geom::Affine2;
+pub use gesture::{GestureId, GestureStatus};
 pub use graph::ResolvedChange;
 pub use handle::Handle;
 pub use id::{NodeId, RelationId, Version};
@@ -164,6 +166,11 @@ pub struct Store {
     /// the document's version alone.
     session_version: u64,
     physics_error: Option<String>,
+    /// The gesture whose previews are in the overlay (`gesture`).
+    gesture: Option<gesture::ActiveGesture>,
+    /// How the last gesture ended, for its tool to find out.
+    ended: Option<(GestureId, GestureStatus)>,
+    next_gesture: u64,
 }
 
 impl Default for Store {
@@ -196,6 +203,9 @@ impl Store {
             fingers: Vec::new(),
             session_version: 0,
             physics_error: None,
+            gesture: None,
+            ended: None,
+            next_gesture: 1,
         };
         store.reactive.rebuild(&store.doc);
         store.resample();
@@ -253,6 +263,7 @@ impl Store {
     /// Start dragging `id` by `anchor` (local coordinates). Decides the
     /// drag's mode from the roles at this moment.
     pub fn begin_drag(&mut self, id: NodeId, anchor: [f64; 2]) -> DragHandle {
+        self.watch(id);
         let t2 = |f: &str| LeafPath::new(ComponentKind::Transform2d, f).expect("declared");
         if let Some(cluster) = self.clusters.containing(id) {
             let free: Vec<Leaf> = cluster.vars.iter().copied().filter(|v| v.node == id).collect();
@@ -376,6 +387,7 @@ impl Store {
     /// read it re-evaluate now; nothing is written to the document until
     /// [`Store::commit_gesture`].
     pub fn preview(&mut self, id: NodeId, path: LeafPath, value: Value) {
+        self.watch(id);
         let leaf = Leaf { node: id, path };
         self.drivers.insert(leaf);
         self.reactive.preview(&self.doc, leaf, value);
@@ -405,6 +417,100 @@ impl Store {
         !self.reactive.overlay().is_empty()
     }
 
+    // ---- Gesture ownership (`gesture`) ---------------------------------------
+
+    /// Start a gesture on `nodes`, the ones whose pose it reads. A gesture
+    /// already running is cancelled: there is one pointer. Previews and drags
+    /// without a gesture start one implicitly.
+    pub fn begin_gesture(&mut self, nodes: &[NodeId]) -> GestureId {
+        if self.gesture.is_some() {
+            self.end_gesture(GestureStatus::Cancelled("a newer gesture began".into()));
+        }
+        let id = GestureId(self.next_gesture);
+        self.next_gesture += 1;
+        self.gesture = Some(gesture::ActiveGesture { id, nodes: nodes.iter().copied().collect() });
+        id
+    }
+
+    /// The gesture running now, if any.
+    pub fn active_gesture(&self) -> Option<GestureId> {
+        self.gesture.as_ref().map(|g| g.id)
+    }
+
+    /// Whether `id` is still running, and if not, how it ended.
+    pub fn gesture_status(&self, id: GestureId) -> GestureStatus {
+        match (&self.gesture, &self.ended) {
+            (Some(g), _) if g.id == id => GestureStatus::Active,
+            (_, Some((e, status))) if *e == id => status.clone(),
+            _ => GestureStatus::Unknown,
+        }
+    }
+
+    /// Add `id` to the running gesture's watched nodes, starting one if
+    /// none runs.
+    fn watch(&mut self, id: NodeId) {
+        match &mut self.gesture {
+            Some(g) => {
+                g.nodes.insert(id);
+            }
+            None => {
+                self.begin_gesture(&[id]);
+            }
+        }
+    }
+
+    /// Drop the running gesture's previews and record how it ended.
+    fn end_gesture(&mut self, status: GestureStatus) {
+        self.drivers.clear();
+        self.fingers.clear();
+        self.reactive.clear_overlay(&self.doc);
+        if let Some(g) = self.gesture.take() {
+            self.ended = Some((g.id, status));
+        }
+    }
+
+    /// Set the running gesture's previews aside, so another transaction
+    /// applies and solves against the document alone.
+    fn suspend_gesture(&mut self) -> Option<gesture::Suspended> {
+        self.gesture.as_ref()?;
+        let values = self.reactive.overlay().iter().filter(|(l, _)| self.drivers.contains(l)).map(|(l, v)| (*l, v.clone())).collect();
+        let suspended = gesture::Suspended { values, drivers: std::mem::take(&mut self.drivers), fingers: std::mem::take(&mut self.fingers) };
+        self.reactive.clear_overlay(&self.doc);
+        Some(suspended)
+    }
+
+    /// Put suspended previews back on the document as it now is.
+    fn resume_gesture(&mut self, s: gesture::Suspended) {
+        self.drivers = s.drivers;
+        self.fingers = s.fingers;
+        for (leaf, v) in s.values {
+            if self.doc.leaf(leaf.node, leaf.path).is_some() {
+                self.reactive.preview(&self.doc, leaf, v);
+            }
+        }
+        if !self.clusters.list.is_empty() {
+            self.resolve_clusters_live();
+        }
+        self.resolve_physics();
+    }
+
+    /// Set a leaf to `value` through its handle, as one transaction: a
+    /// constant directly, a linearly bound leaf through its source. For
+    /// one-off edits (an inspector field); a running gesture is unaffected
+    /// unless the edit conflicts with it. `Ok(None)` when nothing changes.
+    pub fn set_through_handle(&mut self, id: NodeId, path: LeafPath, value: Value, label: impl Into<String>, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
+        let (target, v) = handle::resolve_target(&self.doc, &self.reactive, Leaf { node: id, path }, value)?;
+        let same = match (self.doc.leaf(target.node, target.path).and_then(|s| s.constant()), &v) {
+            (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
+            (c, v) => c == Some(v),
+        };
+        if same {
+            return Ok(None);
+        }
+        let input = TransactionInput { label: label.into(), actor, ts, idempotency_key: None, ops: vec![Op::Set { id: target.node, path: target.path, slot: Slot::Const(v) }], exact: false };
+        self.apply(input).map(Some).map_err(|errors| errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+    }
+
     /// Turn the gesture into one transaction: a `Set` for every leaf the
     /// gesture drove (not the leaves the solver moved for it: solve-on-apply
     /// reproduces those as `derived_ops`, warm-started from the previewed
@@ -417,6 +523,12 @@ impl Store {
         actor: Actor,
         ts: u64,
     ) -> Option<Result<Applied, Vec<ApplyError>>> {
+        // The gesture's own commit: taken first, so `apply` neither suspends
+        // its previews nor finds it in conflict with itself.
+        let gesture = self.gesture.take();
+        if let Some(g) = &gesture {
+            self.ended = Some((g.id, GestureStatus::Committed));
+        }
         let mut ops = Vec::new();
         // Leaves of components the node lacks but allows: the component is
         // added, defaults with the previewed fields set, before the `Set`s.
@@ -468,10 +580,9 @@ impl Store {
         Some(result)
     }
 
+    /// Drop the gesture's previews without a transaction (Esc).
     pub fn cancel_gesture(&mut self) {
-        self.drivers.clear();
-        self.fingers.clear();
-        self.reactive.clear_overlay(&self.doc);
+        self.end_gesture(GestureStatus::Cancelled("cancelled".into()));
     }
 
     // ---- The session tier (plans/specs/panels-and-session.md) ----------------
@@ -693,6 +804,25 @@ impl Store {
     /// Apply a transaction atomically. Either every op applies and the
     /// version advances, or nothing applies and every error is reported.
     pub fn apply(&mut self, input: TransactionInput) -> Result<Applied, Vec<ApplyError>> {
+        // A transaction from outside a running gesture is classified against
+        // it (`gesture`) and applied without its previews.
+        let conflict = self.gesture.as_ref().and_then(|g| gesture::conflict(&self.doc, &input.ops, g, &self.drivers));
+        let suspended = self.suspend_gesture();
+        let result = self.apply_now(input);
+        if let Some(s) = suspended {
+            let moved = match (&result, &self.gesture) {
+                (Ok(a), Some(g)) if !a.replayed => self.history.past.last().and_then(|tx| gesture::moved(&tx.derived_ops, g)),
+                _ => None,
+            };
+            match conflict.filter(|_| result.is_ok()).or(moved) {
+                Some(reason) => self.end_gesture(GestureStatus::Cancelled(reason)),
+                None => self.resume_gesture(s),
+            }
+        }
+        result
+    }
+
+    fn apply_now(&mut self, input: TransactionInput) -> Result<Applied, Vec<ApplyError>> {
         if let Some(k) = &input.idempotency_key
             && let Some((_, v)) = self.recent_keys.iter().find(|(key, _)| key == k)
         {
@@ -763,6 +893,9 @@ impl Store {
     /// Undo the most recent transaction. `ts` is the caller's clock.
     /// `None` when there is nothing to undo.
     pub fn undo(&mut self, ts: u64) -> Option<Result<Applied, Vec<ApplyError>>> {
+        if self.gesture.is_some() && self.history.can_undo() {
+            self.end_gesture(GestureStatus::Cancelled("undo".into()));
+        }
         let tx = self.history.past.pop()?;
         let input = TransactionInput {
             label: format!("undo: {}", tx.label),
@@ -793,6 +926,9 @@ impl Store {
     }
 
     pub fn redo(&mut self, ts: u64) -> Option<Result<Applied, Vec<ApplyError>>> {
+        if self.gesture.is_some() && self.history.can_redo() {
+            self.end_gesture(GestureStatus::Cancelled("redo".into()));
+        }
         let tx = self.history.future.pop()?;
         // Requested and derived ops, no solve: the log is the ground truth.
         let input = TransactionInput {

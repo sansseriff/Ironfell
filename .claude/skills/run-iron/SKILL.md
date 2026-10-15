@@ -111,7 +111,11 @@ picture, the connection to the fiber left behind; Cmd+C reaches the system
 clipboard, which the driver may read because it grants clipboard permissions,
 and a paste event carrying it makes a third laser; Cmd+X then a paste relinks
 the figures to the third laser instead of making a fourth; four undos leave one
-laser. Each `[lasers, connections, [figures per laser]]` line counts them). Expected output, minus screenshot lines,
+laser. Each `[lasers, connections, [figures per laser]]` line counts them), and
+gesture ownership (in the same tab: a model edit to the laser body's x mid-drag
+cancels the drag, so the edit stands and the release commits nothing; an edit
+to the dial mid-drag leaves the drag running to its own "move rect"; three undos
+put the body back). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
@@ -260,6 +264,13 @@ undefined
 undefined
 [3,4,[2,2,2]]
 [1,4,[2]]
+tab Optics
+undefined
+true
+" x=\"80\" y=\"140\""
+true
+" x=\"180\" y=\"190\""
+" x=\"60\" y=\"140\""
 tab Pendulum
 [true,false]
 tab Main
@@ -300,6 +311,12 @@ applied "undo: paste 2 nodes" (4 ops, System) -> v33
 applied "undo: cut 2 nodes" (2 ops, System) -> v34
 applied "undo: paste 2 nodes" (6 ops, System) -> v35
 applied "undo: duplicate 2 nodes" (6 ops, System) -> v36
+applied "model edit" (1 ops, Model) -> v37
+applied "model edit" (1 ops, Model) -> v38
+applied "move rect" (2 ops, Human) -> v39
+applied "undo: move rect" (2 ops, System) -> v40
+applied "undo: model edit" (1 ops, System) -> v41
+applied "undo: model edit" (1 ops, System) -> v42
 (no page errors)
 ```
 

@@ -23,7 +23,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
 use iron_document::copy::{self, Fragment};
-use iron_document::{Actor, DragHandle, DragMode, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
+use iron_document::{Actor, DragHandle, DragMode, GestureId, GestureStatus, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
 use bevy::ecs::system::SystemParam;
 use kurbo::{Affine, ParamCurve as _, Point, Rect, Shape as _};
 
@@ -278,6 +278,9 @@ pub struct SelectTool {
     /// Nodes a paste or duplicate is creating, to select once their
     /// transaction has applied.
     select_when_live: Vec<NodeId>,
+    /// The store's gesture behind the current one (`iron_document::gesture`):
+    /// a conflicting edit, undo or Esc can end it while the button is down.
+    owned: Option<GestureId>,
 }
 
 /// Panning a view with the middle button: the panel, where the press was,
@@ -1111,6 +1114,7 @@ pub fn select_tool_system(
         match key.as_str() {
             "escape" if !matches!(tool.gesture, Gesture::Idle) => {
                 // Esc mid-gesture puts everything back.
+                tool.owned = None;
                 if let Gesture::Move { drags, .. } = &tool.gesture {
                     for (h, _) in drags {
                         store.0.end_drag(h);
@@ -1554,6 +1558,49 @@ pub fn select_tool_system(
         }
     }
 
+    // ---- Gesture ownership ----
+    // A gesture that edits the document is the store's: an edit it conflicts
+    // with, undo, or a newer gesture can end it while the button is down.
+    // Then it stops here, and its release commits nothing.
+    if let Some(g) = tool.owned {
+        match store.0.gesture_status(g) {
+            GestureStatus::Active => {}
+            status => {
+                if let GestureStatus::Cancelled(why) = &status {
+                    info!("gesture {g} cancelled: {why}");
+                }
+                tool.owned = None;
+                if matches!(tool.gesture, Gesture::Legacy) {
+                    drag.target = None;
+                    drag.kind = None;
+                    drag.handle = None;
+                }
+                if !matches!(tool.gesture, Gesture::Pan { .. } | Gesture::Press { .. } | Gesture::Idle) {
+                    tool.gesture = Gesture::Idle;
+                    tool.marquee = None;
+                }
+            }
+        }
+    }
+    // A gesture follows its view's pan and zoom; it ends if the view does.
+    let view_gone = match &mut tool.gesture {
+        Gesture::Move { view, .. } | Gesture::Transform { view, .. } | Gesture::Marquee { view, .. } => match views.get(&view.panel) {
+            Some(v) => {
+                *view = v.clone();
+                false
+            }
+            None => true,
+        },
+        _ => false,
+    };
+    if view_gone {
+        info!("gesture cancelled: its view closed");
+        store.0.cancel_gesture();
+        tool.owned = None;
+        tool.gesture = Gesture::Idle;
+        tool.marquee = None;
+    }
+
     // ---- Drag ----
     // While held; the release frame only closes the gesture, as the pose
     // the pointer last showed is what commits.
@@ -1682,6 +1729,7 @@ pub fn select_tool_system(
             }
             Gesture::Marquee { view, start, prefix, roots, base } => {
                 let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+                // A marquee changes the selection, never the document.
                 let rect = Rect::from_points(*start, doc_point(view));
                 tool.marquee = Some((view.panel.clone(), rect));
                 let mut list = base.clone();
@@ -1704,8 +1752,16 @@ pub fn select_tool_system(
         }
     }
 
+    // The first preview or drag of a document gesture starts the store's
+    // gesture; this tool owns it from then until release.
+    let edits = matches!(tool.gesture, Gesture::Move { .. } | Gesture::Transform { .. } | Gesture::Handle { .. } | Gesture::Shape { .. } | Gesture::Legacy);
+    if edits && tool.owned.is_none() {
+        tool.owned = store.0.active_gesture();
+    }
+
     // ---- Release ----
     if pointer.just_released_left {
+        tool.owned = None;
         match std::mem::take(&mut tool.gesture) {
             Gesture::Press { then, .. } => {
                 let click = match then {
@@ -1887,6 +1943,7 @@ fn begin_legacy(
     planes: &Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane)>,
 ) {
     let _ = provenance;
+    store.0.begin_gesture(&[id]);
     drag.target = Some(entity);
     drag.handle = None;
     drag.panel = Some(panel);

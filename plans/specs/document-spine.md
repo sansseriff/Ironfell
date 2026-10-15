@@ -463,6 +463,14 @@ A gesture opens a coalescing buffer and emits one transaction on commit. Key: `(
 for `Set`; same-type ops on the same node within ~500 ms for keyboard tweaks. Never across
 structural ops. The buffer lives in the reconciler layer (§10), not in the store.
 
+*Amended 2026-10-15:* gestures have owners. A gesture's previews belong to one
+`GestureId`; a transaction from outside it applies without them and either
+conflicts (the gesture is cancelled and commits nothing) or does not (the previews
+are put back). Undo and redo cancel a running gesture. See
+`infinite-canvas-architecture-patterns.md` §4, "First pass". Alt-drag to duplicate
+will need the one exception to "never across structural ops": the duplicate and the
+move become one history entry (`clipboard-and-assets.md` phase 2).
+
 ---
 
 ## 7. Serialisation

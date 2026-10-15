@@ -889,15 +889,13 @@ pub fn document_inspect_set(ptr: u64, node: String, leaf: String, text: String) 
         _ => None,
     };
     let Some(value) = value else { return fail(format!("{t:?} is not a {:?}", current.kind())) };
-    if let Err(reason) = store.0.preview_target(id, path, value) {
-        store.0.cancel_gesture();
-        return fail(reason);
-    }
+    // One transaction through the leaf's handle, outside the gesture
+    // overlay: a drag in progress is left alone unless this conflicts with it.
     let now = js_sys::Date::now() as u64;
-    let result = match store.0.commit_gesture(format!("set {leaf}"), iron_document::Actor::Human, now) {
-        None => serde_json::json!({"ok": true, "version": store.0.document().version().0}),
-        Some(Ok(applied)) => serde_json::json!({"ok": true, "version": applied.version.0}),
-        Some(Err(errors)) => serde_json::json!({"ok": false, "error": errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")}),
+    let result = match store.0.set_through_handle(id, path, value, format!("set {leaf}"), iron_document::Actor::Human, now) {
+        Ok(None) => serde_json::json!({"ok": true, "version": store.0.document().version().0}),
+        Ok(Some(applied)) => serde_json::json!({"ok": true, "version": applied.version.0}),
+        Err(error) => serde_json::json!({"ok": false, "error": error}),
     };
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;

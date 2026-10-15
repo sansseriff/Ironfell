@@ -79,7 +79,7 @@ silently. Each line names the spec that owns its detail and exit criteria.
 | Select and pen gaps | Group/ungroup, reparent by drag, snapping and guides, pen point insertion and conversion (duplicate is done) | [`specs/select-tool.md`](specs/select-tool.md) "Not yet" |
 | Alt-drag to duplicate | After gesture ownership: duplicate mid-drag, one history entry | [`specs/clipboard-and-assets.md`](specs/clipboard-and-assets.md) phase 2 |
 | Project container | Decide the bundle format, durable storage, document identity, where libraries and the workspace live; it unblocks assets, drag and drop and cross-document paste | [`specs/clipboard-and-assets.md`](specs/clipboard-and-assets.md) §6 |
-| Gesture ownership | Cancel or keep a drag when a model edit, undo or view change makes it stale | [`specs/infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) §4 |
+| Gesture ownership, rest | First pass done 2026-10-15 (store ownership, conflicts, undo). Next: one pointer state machine with manipulators for 2D and 3D, folding in `interaction.rs`; then the 3D gizmo on `transform-gizmo`; then Alt-drag | [`specs/infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) §4 |
 | Typed UI protocol | Typed requests, subscriptions, request generations, disposal | same, §5 |
 | CS phase 4 | Degrees-of-freedom display, conflict highlighting, constraint glyphs, gesture-created constraints | [`specs/constraint-system.md`](specs/constraint-system.md) §14 phase 4 |
 | Stage G | Semantic model-surface views and verbs, then lessons (ECM phase 6) | roadmap stage G, ECM §10–11 |

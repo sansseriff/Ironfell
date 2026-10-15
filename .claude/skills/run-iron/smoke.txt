@@ -433,6 +433,48 @@ sleep 400
 key Meta+z
 sleep 600
 eval (async () => [...await lasers(), await figured()])()
+# Gesture ownership (infinite-canvas-architecture-patterns.md §4, the store's
+# `gesture` module): a model edit to the laser body's x while it is being
+# dragged cancels the drag, the edit stands and the release commits nothing;
+# an edit to another node mid-drag leaves the drag running to its own commit.
+# Three undos put the body back.
+tab Optics
+eval window.body = async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect id="#1c"[^>]*>/)[0].match(/ x="[^"]*" y="[^"]*"/)[0]; }
+dmove 120 170
+down
+sleep 300
+dmove 140 180
+sleep 300
+dmove 180 200
+sleep 300
+eval __iron.edit('<edit><set id="#1c" x="80"/></edit>').then(r => r.ok)
+sleep 300
+dmove 220 220
+sleep 300
+up
+sleep 600
+eval body()
+dmove 120 170
+down
+sleep 300
+dmove 140 180
+sleep 300
+dmove 180 200
+sleep 300
+eval __iron.edit('<edit><set id="#1o" radius.rx="60"/></edit>').then(r => r.ok)
+sleep 300
+dmove 220 220
+sleep 300
+up
+sleep 600
+eval body()
+key Meta+z
+sleep 400
+key Meta+z
+sleep 400
+key Meta+z
+sleep 600
+eval body()
 # The dock (src-ui/views): opening a tab gives its view a canvas panel and
 # takes the hidden Main tab's away.
 tab Pendulum

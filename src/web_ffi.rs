@@ -52,6 +52,11 @@ extern "C" {
     /// The active tool changed (`select`, `pen`): the shell's toolbar.
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_tool_from_worker(tool: String);
+    /// Editing a shape's points would cut bindings or clips
+    /// (`iron_document::shape`): JSON `{node, type, cuts}` for the shell to
+    /// ask about; a yes calls `document_to_path` with `force`.
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_convert_from_worker(question: String);
 }
 
 /// Build the Bevy app around the canvas it will render into.
@@ -672,6 +677,37 @@ pub fn document_counterparts(ptr: u64, node: String) -> String {
         })
         .collect();
     serde_json::json!({"entity": entity.to_string(), "figures": figures}).to_string()
+}
+
+/// Turn a rect or an ellipse into a path with the same id, as editing its
+/// points does (select-tool.md, "Shapes and paths"). Without `force` it
+/// refuses when the conversion would cut a binding or a clip, and lists
+/// them. JSON `{"ok", "cuts"}`, or `{"ok":false,"error"}`.
+#[wasm_bindgen]
+pub fn document_to_path(ptr: u64, node: String, force: bool) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Ok(id) = node.parse::<iron_document::NodeId>() else {
+        return serde_json::json!({"ok": false, "error": format!("bad id {node:?}")}).to_string();
+    };
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "error": "no document"}).to_string();
+    };
+    let ty = store.0.document().live(id).map(|n| n.ty.name()).unwrap_or("");
+    let conversion = match iron_document::shape::to_path(&store.0, id) {
+        Ok(c) => c,
+        Err(e) => return serde_json::json!({"ok": false, "error": e}).to_string(),
+    };
+    if !force && !conversion.cuts.is_empty() {
+        return serde_json::json!({"ok": false, "cuts": conversion.cuts}).to_string();
+    }
+    let label = format!("convert {ty} to path");
+    if let Some(mut pending) = app.world_mut().get_resource_mut::<crate::document_bridge::PendingTransactions>() {
+        pending.0.push(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: 0, idempotency_key: None, ops: conversion.ops, exact: false });
+    }
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    serde_json::json!({"ok": true, "cuts": conversion.cuts}).to_string()
 }
 
 /// "Show in": frame `node` in every open panel that shows it, directly or

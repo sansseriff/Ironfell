@@ -32,6 +32,10 @@ export interface ViewQuery {
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
+/** The pointer's tools and their keys (Figma's). */
+export type Tool = 'select' | 'pen' | 'rect' | 'ellipse';
+const TOOL_KEYS: Record<Tool, string> = { select: 'v', pen: 'p', rect: 'r', ellipse: 'o' };
+
 export class DocumentClient {
   view = $state('');
   version = $state(0);
@@ -51,8 +55,12 @@ export class DocumentClient {
   /** Every picture of the first selected node's entity, for "Show in". */
   counterparts: { entity: string | null; figures: { node: string; composition: string | null; name: string | null }[] } =
     $state({ entity: null, figures: [] });
-  /** The tool the pointer drives (`select`, `pen`), as the engine reports it. */
-  tool = $state('select');
+  /** The tool the pointer drives (`select`, `pen`, `rect`, `ellipse`), as
+   *  the engine reports it. */
+  tool: Tool = $state('select');
+  /** Editing a shape's points would cut bindings or clips: what they are,
+   *  for the dialog. Answered with `toPath(node, true)` or dismissed. */
+  convertQuestion: { node: string; type: string; cuts: string[] } | null = $state(null);
   /** A pending merge question from Link (ECM I5): the person picks the survivor. */
   question: any = $state(null);
 
@@ -88,6 +96,8 @@ export class DocumentClient {
       link: (a: string, b: string, keep = '') => this.link(a, b, keep),
       counterparts: (node: string) => this.call('counterparts', [node]),
       focus: (node: string) => this.call('focus', [node]),
+      toPath: (node: string, force = false) => this.toPath(node, force),
+      convertQuestion: () => this.convertQuestion,
       // The selection as the store's session records it, with how each
       // node was reached (panel, chain).
       session: () => this.call('selection', []),
@@ -108,9 +118,16 @@ export class DocumentClient {
     }
   }
 
-  /** Pick a tool, as its key would (V select, P pen). */
-  setTool(tool: 'select' | 'pen') {
-    this.post?.({ ty: 'toolKey', key: tool === 'pen' ? 'p' : 'v', m: 0 });
+  /** Pick a tool, as its key would (V select, P pen, R rectangle, O ellipse). */
+  setTool(tool: Tool) {
+    this.post?.({ ty: 'toolKey', key: TOOL_KEYS[tool], m: 0 });
+  }
+
+  /** Turn a rect or an ellipse into a path, as editing its points does.
+   *  Without `force` it refuses when that would cut a binding or a clip,
+   *  and lists them in `cuts`. */
+  async toPath(node: string, force = false): Promise<{ ok: boolean; cuts?: string[]; error?: string }> {
+    return this.call('to_path', [node, force]);
   }
 
   /** Apply `<edit>` markup as the model would. Resolves with the outcome. */

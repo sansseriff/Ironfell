@@ -105,7 +105,7 @@ fn scene() -> Scene {
                 },
                 Op::Create {
                     id: circle,
-                    ty: ty("circle"),
+                    ty: ty("ellipse"),
                     parent: Some(group),
                     order: k1.clone(),
                     components: vec![
@@ -342,7 +342,7 @@ fn replay_of_log_equals_snapshot_and_load_roundtrips() {
             "add",
             vec![Op::Create {
                 id: extra,
-                ty: ty("circle"),
+                ty: ty("ellipse"),
                 parent: Some(group),
                 order: OrderKey::first(),
                 components: vec![

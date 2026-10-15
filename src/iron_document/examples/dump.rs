@@ -37,7 +37,7 @@ fn main() {
                 },
                 Op::Create {
                     id: ids[2],
-                    ty: TypeId::lookup("circle").unwrap(),
+                    ty: TypeId::lookup("ellipse").unwrap(),
                     parent: Some(ids[0]),
                     order: k1,
                     components: vec![Transform2d::default().wrap(), Radius::default().wrap()],

@@ -31,6 +31,7 @@ pub mod order;
 pub mod port;
 pub mod registry;
 pub mod serial;
+pub mod shape;
 pub mod solve;
 pub mod sym;
 pub mod time;

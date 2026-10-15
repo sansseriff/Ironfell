@@ -16,8 +16,10 @@ use std::fmt;
 
 /// Bumped to 2 with definitions, entities, `params`, quantities and records
 /// (roadmap stage B), and to 3 when `depiction` became `template` and
-/// `depicts` became `figures`. Schema 1 and 2 files still load (`renamed`).
-pub const SCHEMA: u64 = 3;
+/// `depicts` became `figures`, and to 4 when `circle` (one radius `r`)
+/// became `ellipse` (`rx`, `ry`). Older files still load (`renamed`,
+/// `migrate_radius`).
+pub const SCHEMA: u64 = 4;
 const OLDEST_READABLE: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,11 +108,55 @@ fn n_compact(v: &J) -> String {
 /// template holder and its component) to `template`, and the `depicts`
 /// relation to `figures`.
 fn renamed(schema: u64, name: &str) -> &str {
-    match (schema < 3, name) {
-        (true, "depiction") => "template",
-        (true, "depicts") => "figures",
+    match (schema < 3, schema < 4, name) {
+        (true, _, "depiction") => "template",
+        (true, _, "depicts") => "figures",
+        (_, true, "circle") => "ellipse",
         _ => name,
     }
+}
+
+/// Before schema 4 a circle had one radius, `radius.r`. Its value becomes
+/// both of the ellipse's radii, and every binding or clip that read
+/// `radius.r` reads `radius.rx`.
+fn migrate_radius(schema: u64, kind: ComponentKind, v: &J) -> J {
+    if schema >= 4 {
+        return v.clone();
+    }
+    fn rewrite(v: &J) -> J {
+        match v {
+            J::String(s) => J::String(rename_leaf(s)),
+            J::Object(o) => J::Object(o.iter().map(|(k, x)| (k.clone(), rewrite(x))).collect()),
+            J::Array(a) => J::Array(a.iter().map(rewrite).collect()),
+            other => other.clone(),
+        }
+    }
+    let mut out = rewrite(v);
+    if kind == ComponentKind::Radius
+        && let Some(o) = out.as_object_mut()
+        && let Some(r) = o.remove("r")
+    {
+        o.insert("rx".into(), r.clone());
+        o.insert("ry".into(), r);
+    }
+    out
+}
+
+/// `radius.r` → `radius.rx` wherever it stands as a whole leaf name.
+fn rename_leaf(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("radius.r") {
+        let end = i + "radius.r".len();
+        let whole = !rest[end..].starts_with(|c: char| c.is_alphanumeric() || c == '_');
+        out.push_str(&rest[..end]);
+        if whole {
+            out.push('x');
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 pub fn load(text: &str) -> Result<Document, LoadError> {
@@ -259,7 +305,7 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
                     id, node.ty
                 )));
             }
-            let c = Component::from_json(kind, v).map_err(|e| LoadError(format!("{id}: {e}")))?;
+            let c = Component::from_json(kind, &migrate_radius(schema, kind, v)).map_err(|e| LoadError(format!("{id}: {e}")))?;
             components.entry(kind).or_default().insert(id, c);
         }
     }

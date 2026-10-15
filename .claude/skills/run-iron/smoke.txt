@@ -59,10 +59,10 @@ shot after-timeline-scrub
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<mesh[\s\S]*?(\/>|<\/mesh>)/); return m ? m[0].replace(/\s+/g, ' ') : v.slice(0, 200); })()
 # Exit criterion 5: an edit in the model's markup lands on the same undo
 # stack as a model-actor transaction. Create a rect under the scene, bind its
-# width to the slider, and recolour the circle; then a bad edit is rejected
+# width to the slider, and recolour the ellipse; then a bad edit is rejected
 # with every error named.
 eval (async () => { const r = await __iron.edit('<edit><create id="$n" type="rect" parent="#1" name="from-model" x="300" y="120" w="{= #O.slider.value * 100}" h="40" color="#22aa55"/><set id="#N" fill.color="#ff3333"/></edit>'); return r; })()
-eval (async () => { const r = await __iron.edit('<edit><set id="#zz" x="1"/><set id="#N" radius.r="{= #N.radius.r + 1}"/></edit>'); return r.failure; })()
+eval (async () => { const r = await __iron.edit('<edit><set id="#zz" x="1"/><set id="#N" radius.rx="{= #N.radius.rx + 1}"/></edit>'); return r.failure; })()
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="from-model"[^>]*>/); return m ? m[0] : 'not found'; })()
 sleep 800
 shot after-model-edit
@@ -83,27 +83,27 @@ sleep 300
 dmove 440 300
 sleep 400
 shot pendulum-mid-drag
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const a = v.match(/<rect[^>]*name="arm3"[^>]*>/); const h = v.match(/<rect[^>]*name="height"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), a && a[0].match(/ rot="[^"]*"/)[0], h && h[0].match(/ h="[^"]*"/)[0]]; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); const a = v.match(/<rect[^>]*name="arm3"[^>]*>/); const h = v.match(/<rect[^>]*name="height"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), a && a[0].match(/ rot="[^"]*"/)[0], h && h[0].match(/ h="[^"]*"/)[0]]; })()
 # 9. Solve time per frame, logged by the bridge (budget 2 ms).
 peek solve: cluster
 up
 sleep 600
-# 3. Release is one "move circle" transaction whose derived ops are the
+# 3. Release is one "move ellipse" transaction whose derived ops are the
 #    joints; the cause line names the cluster and what moved.
-peek "move circle" by Human
+peek "move ellipse" by Human
 # 2. Beyond reach: the chain straightens and the ball stops at full extension
 #    under the pointer, no jitter. The grab is off-centre, clear of the arm
 #    that ends at the ball's centre.
 sleep 300
 ddrag 448 306 328 706
 shot pendulum-extended
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
 # Undo both drags returns every part.
 key Meta+z
 key Meta+z
 keydown Meta
 sleep 500
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), j && j[0].replace(/ rot=.*/, '')]; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); const j = v.match(/<ellipse[^>]*name="j1"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), j && j[0].replace(/ rot=.*/, '')]; })()
 # 6. A node whose position is bound (arm1) does not drag; the reason shows.
 ddrag 320 110 360 110
 peek locked for this drag
@@ -121,26 +121,26 @@ eval (async () => { const v = await __iron.view({fidelity:'full'}); const l = v.
 # 4. Move the fix from the platform to the ball (one model transaction), then
 #    drag the platform: the arms bend and the ball stays put.
 eval (async () => { const r = await __iron.edit('<edit><unlink id="r3"/><link from="#g" to="#a" rel="constrains" role="a"/></edit>'); return r.ok; })()
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
 ddrag 260 50 300 50
 shot pendulum-platform-drag
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<circle[^>]*name="ball"[^>]*>/); const p = v.match(/<rect[^>]*name="platform"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), p && p[0].replace(/ rot=.*/, '')]; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); const p = v.match(/<rect[^>]*name="platform"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), p && p[0].replace(/ rot=.*/, '')]; })()
 keyup Meta
 # 8. The view marks the solver's variables with the cluster that keeps them.
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const j = v.match(/<circle[^>]*name="j1"[^>]*>/); return j && j[0].match(/x\.by="[^"]*"/)[0]; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const j = v.match(/<ellipse[^>]*name="j1"[^>]*>/); return j && j[0].match(/x\.by="[^"]*"/)[0]; })()
 # A 2D composition inside a 3D one (ECM §7.4; view-textures step 4): the
 # `card` composition is a plane beside the torus in the assembly, drawn in
 # perspective. Find its dot by hovering (picking goes 2D view -> 3D view ->
 # plane -> 2D card), then drag it: the pointer maps through the plane. The
 # plane is an embed inside the view, so its content is Cmd (deep) away.
 keydown Meta
-eval (async () => { const v = await __iron.view({fidelity:'full'}); window.__dot = v.match(/<circle id="([^"]+)" name="card dot"/)[1]; return window.__dot; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); window.__dot = v.match(/<ellipse id="([^"]+)" name="card dot"/)[1]; return window.__dot; })()
 hunt 900 120 1010 230 5 __iron.hovered().includes(window.__dot)
 dragfound 15 0
 keyup Meta
 sleep 600
 shot card-dot-dragged
-eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<circle[^>]*name="card dot" x="([^"]+)"/); return Number(m[1]) > 60; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<ellipse[^>]*name="card dot" x="([^"]+)"/); return Number(m[1]) > 60; })()
 key Meta+z
 sleep 400
 # Stage C1 (ECM phase 2 exit), in the main layout (ECM §7.4): the cartoon
@@ -271,7 +271,7 @@ eval (async () => { const v = await __iron.view({fidelity:'full'}); return /name
 tab Controls
 key p
 sleep 400
-eval document.querySelector('.tools button.active')?.title
+eval document.querySelector('.toolbar button.active')?.title
 dclick 200 200
 ddrag 420 200 480 260
 dclick 300 380
@@ -336,6 +336,45 @@ ddrag 135 332 210 332
 sleep 500
 eval heat()
 shot thermal
+# Shapes and paths (select-tool.md, "Shapes and paths"), in the Controls tab:
+# R drags out a rectangle; O with Shift a circle, which the select tool then
+# stretches into an ellipse (rx 70, ry 40); a double-click turns it into a
+# path with the same id and four points, and undo turns it back. The bar's h
+# is bound, so converting it asks first; the dialog's Cancel leaves it.
+tab Controls
+eval window.shapeView = async (name) => { const v = await __iron.view({fidelity:'full'}); const m = v.match(new RegExp('<(rect|ellipse|path) id="[^"]+" name="' + name + '"[^>]*>')); return m && m[0].replace(/ color=.*/, ''); }
+key r
+sleep 300
+eval document.querySelector('.toolbar button.active')?.title
+ddrag 500 100 640 180
+sleep 600
+eval (async () => [await shapeView('rectangle'), document.querySelector('.toolbar button.active')?.title])()
+key o
+keydown Shift
+ddrag 700 100 780 130
+keyup Shift
+sleep 600
+eval shapeView('ellipse')
+ddrag 780 140 840 140
+sleep 1000
+eval shapeView('ellipse')
+ddblclick 760 140
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<path[^>]*name="ellipse"[\s\S]*?<\/path>/); return m && (m[0].match(/<point /g) || []).length; })()
+shot shapes-path
+key Meta+z
+sleep 500
+eval shapeView('ellipse')
+tab Main
+eval __iron.toPath('#11')
+dclick 800 600
+sleep 400
+key Enter
+sleep 600
+eval __iron.convertQuestion()?.cuts
+click Cancel
+sleep 300
+eval __iron.convertQuestion()
 # The dock (src-ui/views): opening a tab gives its view a canvas panel and
 # takes the hidden Main tab's away.
 tab Pendulum

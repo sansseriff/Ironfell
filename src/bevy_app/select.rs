@@ -59,12 +59,15 @@ pub const MOD_META: u8 = 8;
 #[derive(Resource, Default)]
 pub struct ToolKeys(pub Vec<(String, u8)>);
 
-/// Which tool the pointer drives (Figma's keys: V select, P pen).
+/// Which tool the pointer drives (Figma's keys: V select, P pen, R
+/// rectangle, O ellipse).
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ActiveTool {
     #[default]
     Select,
     Pen,
+    Rect,
+    Ellipse,
 }
 
 impl ActiveTool {
@@ -72,6 +75,8 @@ impl ActiveTool {
         match self {
             ActiveTool::Select => "select",
             ActiveTool::Pen => "pen",
+            ActiveTool::Rect => "rect",
+            ActiveTool::Ellipse => "ellipse",
         }
     }
 }
@@ -82,12 +87,15 @@ const SLOP: f32 = 3.0;
 const DOUBLE_CLICK: (f64, f32) = (0.4, 5.0);
 /// Grip sizes, window px: a corner's reach, an edge's, how far outside a
 /// corner rotation reaches, and the drawn corner square.
-const CORNER_HIT: f64 = 6.0;
-const EDGE_HIT: f64 = 4.0;
-const ROTATE_HIT: f64 = 22.0;
-const HANDLE: f64 = 7.0;
+const CORNER_HIT: f64 = 8.0;
+const EDGE_HIT: f64 = 5.0;
+const ROTATE_HIT: f64 = 24.0;
+const HANDLE: f64 = 10.0;
+/// A path point's drawn square and a Bézier handle's end dot (radius).
+const POINT: f64 = 8.0;
+const HANDLE_END: f64 = 4.0;
 /// How near (window px) a press must land to a path's point or handle end.
-const POINT_HIT: f64 = 6.0;
+const POINT_HIT: f64 = 7.0;
 /// Rotation snap with Shift.
 const SNAP: f64 = std::f64::consts::PI / 12.0;
 
@@ -316,8 +324,8 @@ enum Grip {
 enum Kind {
     /// `size.w`, `size.h` (rects, sliders); `aspect` when a camera fixes h.
     Sized { aspect: bool },
-    /// `radius.r`; the origin is the centre.
-    Circle,
+    /// `radius.rx`, `radius.ry`; the origin is the centre.
+    Ellipse,
     /// A 2D embed's window, `frame.*`, the content staying put.
     Window { frame: bool },
     /// Resized through its children; rotates as itself.
@@ -424,9 +432,9 @@ impl Geo<'_, '_, '_> {
                 let Shape2d::Slider { w, h, .. } = d.shape.clone() else { return None };
                 Some((Rect::new(0.0, 0.0, w as f64, h as f64), Kind::Fixed))
             }
-            "circle" => {
-                let r = self.num(id, "radius.r")?;
-                Some((Rect::new(-r, -r, r, r), Kind::Circle))
+            "ellipse" => {
+                let (rx, ry) = (self.num(id, "radius.rx")?, self.num(id, "radius.ry")?);
+                Some((Rect::new(-rx, -ry, rx, ry), Kind::Ellipse))
             }
             "embed" => {
                 if let Some((_, camera, w, h)) = nest::embed_3d(self.store, id) {
@@ -521,7 +529,7 @@ impl Geo<'_, '_, '_> {
         !parts.is_empty()
             && parts.iter().all(|p| match p.kind {
                 Kind::Sized { .. } => self.free(p.id, "size.w") || self.free(p.id, "size.h"),
-                Kind::Circle => self.free(p.id, "radius.r"),
+                Kind::Ellipse => self.free(p.id, "radius.rx") || self.free(p.id, "radius.ry"),
                 Kind::Window { frame } => frame,
                 Kind::Points => true,
                 Kind::Group | Kind::Fixed => false,
@@ -544,7 +552,7 @@ impl Geo<'_, '_, '_> {
         if self.space(chain).is_none() { return; }
         out.push(match kind {
             Kind::Sized { .. } => self.free(id, "size.w") || self.free(id, "size.h"),
-            Kind::Circle => self.free(id, "radius.r"),
+            Kind::Ellipse => self.free(id, "radius.rx") || self.free(id, "radius.ry"),
             Kind::Window { frame } => frame,
             Kind::Points => true,
             Kind::Group | Kind::Fixed => false,
@@ -600,15 +608,18 @@ impl Part {
                 }
                 put("transform2d.sy", sy, if flip { -sy } else { sy });
             }
-            (true, Kind::Circle) => {
-                let r = bw * 0.5;
-                let f = q * l * Affine::translate((-r, -r)) * Affine::scale(2.0 * r.max(1e-6));
+            (true, Kind::Ellipse) => {
+                // As a rect, about the centre: either axis stretches alone,
+                // so a circle becomes an ellipse.
+                let f = q * l * unit(self.bounds);
                 let centre = f * Point::new(0.5, 0.5);
-                let [a0, b0, c0, d0, _, _] = f.as_coeffs();
-                let nr = (a0.hypot(b0) / sx.abs().max(1e-9) + c0.hypot(d0) / sy.abs().max(1e-9)) * 0.25;
+                let (_, _, nrot, w, h, flip) = decompose(f, self.trs);
                 put("transform2d.x", x, centre.x);
                 put("transform2d.y", y, centre.y);
-                put("radius.r", r, nr);
+                put("transform2d.rot", rot, nrot);
+                put("radius.rx", bw * 0.5, w * 0.5);
+                put("radius.ry", bh * 0.5, h * 0.5);
+                put("transform2d.sy", sy, if flip { -sy } else { sy });
             }
             (true, Kind::Window { frame: true }) => {
                 let r = (l.inverse() * q * l).transform_rect_bbox(self.bounds);
@@ -839,7 +850,7 @@ fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
     let id = r.node();
     let kids = if nest::is_embed(doc, id) { composition::embedded(doc, id).map(|s| doc.children(s).to_vec()).unwrap_or_default() } else { doc.children(id).to_vec() };
     kids.into_iter()
-        .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "circle" | "slider" | "group" | "embed" | "mesh")))
+        .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "group" | "embed" | "mesh")))
         .map(|k| {
             let mut chain = r.chain.clone();
             chain.push(k);
@@ -966,6 +977,9 @@ pub fn select_tool_system(
                 }
                 set_selection(&mut sel, tool, up);
             }
+            "enter" if reaches.len() == 1 && iron_document::shape::convertible(&store.0, reaches[0].node()) => {
+                edit_as_path(&store.0, &mut pending, reaches[0].node());
+            }
             "enter" => {
                 let down: Vec<Reach> = reaches.iter().flat_map(|r| children(doc, r)).collect();
                 if !down.is_empty() {
@@ -995,7 +1009,7 @@ pub fn select_tool_system(
                 };
                 let all = roots
                     .into_iter()
-                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "circle" | "slider" | "group" | "embed")))
+                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "group" | "embed")))
                     .map(|n| {
                         let mut chain = prefix.clone();
                         chain.push(n);
@@ -1074,8 +1088,9 @@ pub fn select_tool_system(
         return;
     }
 
-    // The pen has the pointer (`pen`); a gesture already under way finishes.
-    if *active == ActiveTool::Pen && matches!(tool.gesture, Gesture::Idle) {
+    // Another tool has the pointer (`pen`, `shape_tool`); a gesture already
+    // under way finishes.
+    if *active != ActiveTool::Select && matches!(tool.gesture, Gesture::Idle) {
         if tool.hover.take().is_some() || sel.hovered.is_some() {
             sel.hovered = None;
         }
@@ -1212,6 +1227,11 @@ pub fn select_tool_system(
             if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
                 k += 1;
                 tool.last_click = None;
+            } else if dbl && sel.selected == [chain[k]] && iron_document::shape::convertible(&store.0, chain[k]) {
+                // A double-click on a lone rect or ellipse edits its points.
+                tool.last_click = None;
+                edit_as_path(&store.0, &mut pending, chain[k]);
+                break 'press;
             }
             let target = Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() };
             let id = target.node();
@@ -1416,7 +1436,7 @@ pub fn select_tool_system(
                 tool.marquee = Some((view.panel.clone(), rect));
                 let mut list = base.clone();
                 for &n in roots {
-                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "circle" | "slider" | "group" | "embed")) {
+                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "group" | "embed")) {
                         continue;
                     }
                     let mut chain = prefix.clone();
@@ -1525,6 +1545,23 @@ pub fn select_tool_system(
 
 /// Preview each leaf that differs from what it reads now. A locked leaf
 /// holds still; why is logged at debug level, every frame it is asked.
+/// Edit a rect's or an ellipse's points: it becomes a path with the same id,
+/// in one transaction (`iron_document::shape`). When that would cut a
+/// binding or a clip, the shell asks first and converts on a yes.
+fn edit_as_path(store: &Store, pending: &mut PendingTransactions, id: NodeId) {
+    let ty = store.document().live(id).map_or("", |n| n.ty.name());
+    match iron_document::shape::to_path(store, id) {
+        Ok(c) if c.cuts.is_empty() => {
+            pending.0.push(TransactionInput { label: format!("convert {ty} to path"), actor: Actor::Human, ts: 0, idempotency_key: None, ops: c.ops, exact: false });
+        }
+        Ok(c) => {
+            info!("{id}: converting to a path would cut {}", c.cuts.join("; "));
+            crate::web_ffi::send_convert_from_worker(serde_json::json!({"node": id.to_string(), "type": ty, "cuts": c.cuts}).to_string());
+        }
+        Err(e) => warn!("{e}"),
+    }
+}
+
 pub(crate) fn preview_writes(store: &mut Store, writes: Vec<(NodeId, &'static str, f64)>) {
     for (id, path, v) in writes {
         let current = store.resolved(id, leaf(path)).and_then(|x| x.as_f64());
@@ -1634,7 +1671,7 @@ pub fn draw_select_overlay(
     map: Res<NodeMap>,
     globals: Query<&'static GlobalTransform>,
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
-    pen: Res<crate::bevy_app::pen::PenTool>,
+    (pen, shapes): (Res<crate::bevy_app::pen::PenTool>, Res<crate::bevy_app::shape_tool::ShapeTool>),
     active: Res<ActiveTool>,
     geometry_revision: Res<crate::document_bridge::GeometryRevision>,
     mut geometry_cache: ResMut<SelectionGeometryCache>,
@@ -1726,10 +1763,10 @@ pub fn draw_select_overlay(
                         for h in [hi, ho].into_iter().filter(|h| *h != kurbo::Vec2::ZERO) {
                             let e = to_screen * (p + h);
                             b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Line::new(c, e));
-                            b.fill(Affine::IDENTITY, white, kurbo::Circle::new(e, 3.0));
-                            b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(e, 3.0));
+                            b.fill(Affine::IDENTITY, white, kurbo::Circle::new(e, HANDLE_END));
+                            b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(e, HANDLE_END));
                         }
-                        let r = Rect::from_center_size(c, (6.0, 6.0));
+                        let r = Rect::from_center_size(c, (POINT, POINT));
                         b.fill(Affine::IDENTITY, white, r);
                         b.stroke(Affine::IDENTITY, thin.clone(), blue, r);
                     }
@@ -1764,9 +1801,17 @@ pub fn draw_select_overlay(
                     let back = *start - (*now - *start);
                     b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Line::new(back, *now));
                     for e in [back, *now] {
-                        b.fill(Affine::IDENTITY, white, kurbo::Circle::new(e, 3.0));
-                        b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(e, 3.0));
+                        b.fill(Affine::IDENTITY, white, kurbo::Circle::new(e, HANDLE_END));
+                        b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(e, HANDLE_END));
                     }
+                }
+                // The box the rectangle or ellipse tool is dragging out.
+                if let Some(press) = shapes.press.as_ref().filter(|p| p.panel == o.panel)
+                    && let Some(r) = press.rect
+                {
+                    let a = to_screen * press.to_comp.inverse();
+                    let outline = if *active == ActiveTool::Ellipse { kurbo::Ellipse::from_rect(r).to_path(0.1) } else { r.to_path(0.1) };
+                    b.stroke(Affine::IDENTITY, thin.clone(), blue, a * outline);
                 }
                 if let Some((p, r)) = &tool.marquee
                     && p == &o.panel

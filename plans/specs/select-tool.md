@@ -154,6 +154,53 @@ composition tab bar shows which is active.
 - Resizing a path moves its points and scales its handles (`Kind::Points`), so the
   stroke keeps its width.
 
+## Shapes and paths (2026-10-14)
+
+**Decision (user, 2026-10-14): Figma's model.** Rectangles and ellipses stay
+typed shapes with parameters; every shape has a path outline; editing a
+shape's points turns it into a `path`. Not Illustrator's (everything a path
+with "live shape" metadata): Iron binds and constrains parameters (`radius`,
+`size`), the model surface reads them, and points are child nodes, so a path
+per rectangle would multiply the node count by five.
+
+- **`circle` became `ellipse`** (schema 4): `radius.rx`, `radius.ry`, centred
+  on its origin as the circle was, so constraints on joints are unchanged.
+  Figma has no circle type either. A resize writes both radii (and the
+  rotation and flip, like a rect), so stretching a circle makes an ellipse.
+  Schema 3 files load: `circle` reads as `ellipse`, `r` fills both radii, and
+  every binding or clip that read `radius.r` reads `radius.rx`
+  (`serial::migrate_radius`). The model surface now sees `<ellipse rx ry>`.
+- **Converting** (`iron_document::shape::to_path`) is a `Delete` and a
+  restoring `Create` of the same id in one transaction, plus the points
+  (four corners; four smooth points with κ = 0.5523 handles). Id, parent,
+  order, transform, paint, name and every relation survive, so figures,
+  constraints and the selection still hold; one undo restores the shape.
+- **Entering it:** double-click a lone selected rect or ellipse, or press
+  Enter. It converts at once rather than on the first point edit, as Figma
+  does; the result is a selected path showing its points.
+- **The guard (user's proposal):** converting is silent unless it cuts
+  something: a binding on the shape's own size or radius, another node's
+  binding that reads them, or a clip animating them. Then the engine sends a
+  question (`send_convert_from_worker`) and the shell's dialog
+  (`ConvertDialog.svelte`) lists the cuts; on "Convert to path" readers are
+  baked to their current values and such clips are deleted. Undo restores all
+  of it. `__iron.toPath(node, force)` drives the same call.
+
+**The toolbar.** The tab-bar tool buttons (squeezed once tabs overflowed) are
+gone. A Figma-style toolbar floats at the bottom of every 2D composition view
+(`views/html/CompositionTools.svelte`, the composition notation's HTML
+part): Move (V); Rectangle (R) and Ellipse (O) behind one button that
+remembers the last used, with a menu; Pen (P).
+
+**Shape tools** (`bevy_app/shape_tool.rs`): drag out a box; Shift for a
+square or circle, Alt from the centre, a click makes 100 × 100. One
+transaction ("draw rectangle", "draw ellipse"), placed like a pen path (the
+artboard under the press, else the view's composition); then the shape is
+selected and the tool returns to Move.
+
+**Grips** are about 1.4× larger: corner squares 10 px (were 7), path points
+8 px (6), handle ends radius 4 (3), with hit zones to match.
+
 ## Selection and hover geometry cache (2026-10-13)
 
 **Done in the working tree (roadmap H):** selection boxes, individual frames,
@@ -203,6 +250,9 @@ target; this cache only removes repeated geometry preparation.
   `ActiveTool`, `SelectTool`, `PenTool` and `PointerHits` play those roles.
 - For the pen: adding points to an existing open path, inserting a point on a segment,
   deleting a point while keeping the path, and converting between corner and smooth.
+- Rectangle corner radii and ellipse arcs (Figma's parameters); converting a
+  shape lazily on its first point edit instead of on entering.
+- Back from a path to a shape (Figma cannot either).
 
 
 ## Change-driven and indexed picking (2026-10-13)

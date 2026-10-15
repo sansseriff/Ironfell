@@ -7,6 +7,7 @@ mod picking;
 mod pointer;
 pub(crate) mod select;
 mod pen;
+mod shape_tool;
 pub(crate) mod scene3d;
 mod timeline;
 mod ui_panels;
@@ -238,6 +239,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
         (
             select::navigate_views.before(pen::pen_tool_system),
             pen::pen_tool_system.before(select::select_tool_system),
+            shape_tool::shape_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
             select::select_tool_system,
             select::sync_session_selection.after(select::select_tool_system),
             // A drag previews into the store, the bridge rewrites the
@@ -319,6 +321,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<select::SelectionGeometryCache>();
     app.init_resource::<select::ActiveTool>();
     app.init_resource::<pen::PenTool>();
+    app.init_resource::<shape_tool::ShapeTool>();
     app.init_resource::<select::ShellModifiers>();
     app.init_resource::<select::ToolKeys>();
 }

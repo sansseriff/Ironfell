@@ -216,6 +216,9 @@ export class PanelManager {
       case 'tool':
         this.docClient.tool = data.tool;
         break;
+      case 'convertQuestion':
+        this.docClient.convertQuestion = data.question;
+        break;
       case 'cursor':
         if (this.canvas) this.canvas.style.cursor = cssCursor(data.cursor);
         break;

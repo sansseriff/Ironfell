@@ -101,14 +101,15 @@ fn pendulum() -> Pendulum {
         t.x = num(x);
         t.y = num(y);
         let mut rad = Radius::default();
-        rad.r = num(r);
+        rad.rx = num(r);
+        rad.ry = num(r);
         vec![t.wrap(), rad.wrap(), Fill::default().wrap(), named(name).wrap()]
     };
     ops.push(Op::Create { id: platform, ty: ty("rect"), parent: Some(group), order: order(), components: rect(240.0, 40.0, 160.0, 20.0, "platform") });
     for (i, (x, y)) in [(300.0, 100.0), (300.0, 150.0), (310.0, 230.0)].into_iter().enumerate() {
-        ops.push(Op::Create { id: joints[i], ty: ty("circle"), parent: Some(group), order: order(), components: circle(x, y, 6.0, &format!("j{i}")) });
+        ops.push(Op::Create { id: joints[i], ty: ty("ellipse"), parent: Some(group), order: order(), components: circle(x, y, 6.0, &format!("j{i}")) });
     }
-    ops.push(Op::Create { id: ball, ty: ty("circle"), parent: Some(group), order: order(), components: circle(320.0, 300.0, 14.0, "ball") });
+    ops.push(Op::Create { id: ball, ty: ty("ellipse"), parent: Some(group), order: order(), components: circle(320.0, 300.0, 14.0, "ball") });
     // Arms: drawn from joint a to joint b by bindings over the solved joints.
     let chain = [joints[0], joints[1], joints[2], ball];
     for i in 0..3 {

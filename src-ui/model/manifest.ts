@@ -60,7 +60,8 @@ VALUES
   compound like kg*m2/s3). Plain numbers are dimensionless: 2 mW * 3 works,
   2 mW + 3 is an error, and so is adding mW to nm. Angles are plain radians.
   Document 2D space is y-down with the origin at the viewer's top-left, one unit per
-  pixel; rect origin is its top-left corner; circles are centred.
+  pixel; rect origin is its top-left corner; an ellipse is centred on its origin
+  with radii rx, ry (a circle is an ellipse with rx = ry).
 
 EXPRESSIONS (for {= …} bindings)
   #id.component.field references a leaf; + - * / % < <= > >= == != && || !;

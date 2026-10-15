@@ -25,8 +25,8 @@ pub struct Doc2d {
 pub enum Shape2d {
     /// Spans `(0, 0)` to `(w, h)`: the node origin is the top-left corner.
     Rect { w: f32, h: f32 },
-    /// Centred on the node origin.
-    Circle { r: f32 },
+    /// Centred on the node origin, with radii along its x and y.
+    Ellipse { rx: f32, ry: f32 },
     /// A scalar-on-a-track control (doc 02 §9.3): a `w`×`h` track with the
     /// knob at fraction `t` along it.
     Slider { w: f32, h: f32, t: f32 },
@@ -41,7 +41,7 @@ impl Shape2d {
     pub fn contains_local(&self, p: Vec2) -> bool {
         match self {
             &Shape2d::Rect { w, h } | &Shape2d::Slider { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
-            &Shape2d::Circle { r } => p.length_squared() <= r * r,
+            &Shape2d::Ellipse { rx, ry } => (p / Vec2::new(rx, ry).max(Vec2::splat(1e-6))).length_squared() <= 1.0,
             Shape2d::Path { outline, closed, filled } => {
                 use kurbo::{ParamCurveNearest, Shape};
                 let q = kurbo::Point::new(p.x as f64, p.y as f64);
@@ -211,7 +211,7 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         // and texture.
         "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Transform::default(), Visibility::default())),
         "group" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
-        "rect" | "circle" | "slider" | "path" => {
+        "rect" | "ellipse" | "slider" | "path" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
         // A camera node is a pose: embeds that name it look through it.
@@ -251,10 +251,10 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
         "group" | "embed" => {
             ec.insert(r.transform_2d());
         }
-        "rect" | "circle" | "slider" | "path" => {
+        "rect" | "ellipse" | "slider" | "path" => {
             ec.insert(r.transform_2d());
             let shape = match node.ty.name() {
-                "circle" => Shape2d::Circle { r: r.num("radius.r", 50.0) },
+                "ellipse" => Shape2d::Ellipse { rx: r.num("radius.rx", 50.0), ry: r.num("radius.ry", 50.0) },
                 "path" => {
                     let (outline, closed) = path_outline(store, id);
                     let filled = closed && r.color("fill.color").is_some();

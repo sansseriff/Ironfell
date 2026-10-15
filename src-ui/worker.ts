@@ -38,6 +38,7 @@ class IronWorker {
       send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
       send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
       send_tool_from_worker: (tool: string) => self.postMessage({ ty: "tool", tool }),
+      send_convert_from_worker: (question: string) => self.postMessage({ ty: "convertQuestion", question: JSON.parse(question) }),
       send_cursor_from_worker: (cursor: string) => self.postMessage({ ty: "cursor", cursor }),
       send_document_changed_from_worker: (version: number) => self.postMessage({ ty: "documentChanged", version }),
     };

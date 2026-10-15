@@ -100,7 +100,10 @@ the Optics and Schematic tabs: the fiber lengthened by its slider dims both
 gauges, the gauge dragged sets the laser's power back through the chain,
 an rf_voltage output refused by the meter's optical input; the Thermal tab's
 heater, link and sink solved as an across/through network, the heater's power
-doubled by its slider). Expected output, minus screenshot lines,
+doubled by its slider), and shapes and paths (a rectangle and a circle drawn with
+the bottom toolbar's R and O tools, the circle stretched into an ellipse, a
+double-click turning it into a path with the same id, undo, and the bound bar's
+conversion asking first, then cancelled). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
@@ -111,20 +114,20 @@ redraw (document): 2 of 39 nodes changed [#M #U]; damage 560,340–800,460
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.64…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
 {"ok":true,"version":9,"aliases":{"$n":"#2m"}}
-"<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.r would depend on itself</error>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
 "<rect id=\"#2m\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
-["<circle id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
-"move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-"<circle id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
-["<circle id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<circle id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
+["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
+"move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+"<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
+["<ellipse id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<ellipse id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 "<applied version=\"14\">\n  <solver clusters=\"#V\" moved=\"#Y #Z #a\"/>\n  <unmet leaf=\"#a.transform2d.x\" requested=\"900\" solved=\"619.99…\">constrained by cluster #V: the constraints allow 619.99… at most</unmet>\n</applied>"
 "<edit-failed applied=\"none\" version=\"14\">\n  <error op=\"0\" kind=\"unsatisfiable\">exact transaction not honoured: #a.transform2d.x requested 900 but constraints allow 619.99…</error>\n</edit-failed>"
 "<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00…\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
 true
-"<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
-["<circle id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"281.00…\" x.by=\"#V\" y=\"38.20…\" y.by=\"#V\""]
+"<ellipse id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
+["<ellipse id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"281.00…\" x.by=\"#V\" y=\"38.20…\" y.by=\"#V\""]
 "x.by=\"#V\""
 "#s"
 found at … (a point on the card dot; varies with the sweep)
@@ -142,7 +145,7 @@ false
 true
 "<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#2q\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#2q\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#11\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":40739}
+{"roundtrip_equal":true,"bytes":40832}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
 applied "open demo scene" (216 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
@@ -153,12 +156,12 @@ applied "redo: move rect" (2 ops, System) -> v6
 applied "set slider" (1 ops, Human) -> v7
 applied "move rect" (2 ops, Human) -> v8
 applied "model edit" (2 ops, Model) -> v9
-applied "move circle" (2 ops, Human) -> v10
-"move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-applied "move circle" (3 ops, Human) -> v11
-"move circle" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-applied "undo: move circle" (7 ops, System) -> v12
-applied "undo: move circle" (6 ops, System) -> v13
+applied "move ellipse" (2 ops, Human) -> v10
+"move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+applied "move ellipse" (3 ops, Human) -> v11
+"move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+applied "undo: move ellipse" (7 ops, System) -> v12
+applied "undo: move ellipse" (6 ops, System) -> v13
 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 applied "model edit" (1 ops, Model) -> v14
@@ -169,9 +172,9 @@ applied "set slider" (1 ops, Human) -> v16
 applied "model edit" (2 ops, Model) -> v17
 applied "move rect" (3 ops, Human) -> v18
 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
-applied "move circle" (2 ops, Human) -> v19
-"move circle" by Human: cluster #V re-solved; moved 1 node(s): #W
-applied "undo: move circle" (3 ops, System) -> v20
+applied "move ellipse" (2 ops, Human) -> v19
+"move ellipse" by Human: cluster #V re-solved; moved 1 node(s): #W
+applied "undo: move ellipse" (3 ops, System) -> v20
 applied "link" (4 ops, Human) -> v21
 "link" by Human: cluster #V re-solved; moved 1 node(s): #W
 applied "undo: link" (5 ops, System) -> v22
@@ -220,6 +223,18 @@ tab Thermal
 undefined
 ["out 303.15 K -5 W","a 303.15 K 5 W","b 293.15 K -5 W","p 293.15 K 5 W"]
 ["out 313.15 K -10 W","a 313.15 K 10 W","b 293.15 K -10 W","p 293.15 K 10 W"]
+tab Controls
+"Rectangle (R)"
+["<rect id=\"#2q\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
+"<ellipse id=\"#2r\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
+"<ellipse id=\"#2r\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+4
+"<ellipse id=\"#2r\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+tab Main
+{"cuts":["its h is bound to #10.params.level * 300; the path keeps the current value"],"ok":false}
+["its h is bound to #10.params.level * 300; the path keeps the current value"]
+clicked Cancel
+null
 tab Pendulum
 [true,false]
 tab Main
@@ -244,6 +259,11 @@ applied "set transform2d.x" (1 ops, Human) -> v17
 applied "set slider" (1 ops, Human) -> v18
 applied "resize rect" (1 ops, Human) -> v19
 applied "set slider" (1 ops, Human) -> v20
+applied "draw rectangle" (1 ops, Human) -> v21
+applied "draw ellipse" (1 ops, Human) -> v22
+applied "resize ellipse" (2 ops, Human) -> v23
+applied "convert ellipse to path" (6 ops, Human) -> v24
+applied "undo: convert ellipse to path" (6 ops, System) -> v25
 (no page errors)
 ```
 
@@ -358,7 +378,7 @@ cd -
 | `quit` | close the browser |
 
 Where things are in the demo scene, in document space: the draggable square
-covers (500,420)–(580,500); the circle is centred at (160,330); the slider
+covers (500,420)–(580,500); the orange ellipse (a circle, rx = ry) is centred at (160,330); the slider
 track runs (100,600)–(400,624) and scrubbing along it previews the value
 through the store; the bar at x=780 has its height and top bound to the
 slider through a definition: the library (a root) holds a `bar` definition
@@ -376,7 +396,7 @@ binding and any `<driven-by>` names a clip.
 
 The pendulum (constraint-system.md phase 3) is a group with a fixed
 platform (240,40)–(400,60), joints every 100 px below its hinge at (320,60),
-a ball (r=14) at (320,360), arms drawn between the joints by bindings, a
+a ball (rx = ry = 14) at (320,360), arms drawn between the joints by bindings, a
 "length" slider (100,660)–(400,684) whose value times 100 is each link's
 `distance`, and a height bar at x=700 bound to the ball's y. Its ids: group
 #U, platform #V, joints #W #X #Y, ball #Z, arms #a #b #c, fix constraint
@@ -547,7 +567,7 @@ run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-90 tests pass (31 unit, 59 integration; verified 2026-10-13). The host target is required because
+94 tests pass (31 unit, 63 integration; verified 2026-10-14). The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests).

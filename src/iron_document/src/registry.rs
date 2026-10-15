@@ -67,14 +67,17 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // Centred on its origin; a circle is an ellipse with equal radii, as in
+    // Figma (the type was `circle`, with one radius, before schema 4).
     TypeSpec {
-        name: "circle",
+        name: "ellipse",
         components: &[
             (K::Transform2d, true),
             (K::Radius, true),
             (K::Fill, false),
             (K::Stroke, false),
             (K::Name, false),
+            (K::Host, false),
         ],
         default_host: Host::Canvas,
         children: ChildPolicy::None,

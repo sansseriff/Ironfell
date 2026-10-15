@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import Workspace from "./views/Workspace.svelte";
   import WebGL2Warning from "./lib/WebGL2Warning.svelte";
+  import ConvertDialog from "./lib/ConvertDialog.svelte";
   import { controllerManager } from "./controller-manager.svelte";
 
   let canvasEl: HTMLCanvasElement;
@@ -33,6 +34,8 @@
   <div class="ui-layer">
     <Workspace />
   </div>
+
+  <ConvertDialog />
 
   <WebGL2Warning
     show={controllerManager.showBackendWarning}

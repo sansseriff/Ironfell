@@ -95,14 +95,16 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     t.x = n(160.0);
     t.y = n(330.0);
     let mut r = Radius::default();
-    r.r = n(40.0);
+    let radius = n(40.0);
+    r.rx = radius.clone();
+    r.ry = radius;
     let mut f = Fill::default();
     f.color = Slot::Const(Value::Color([0.95, 0.6, 0.1, 1.0]));
     let mut st = Stroke::default();
     st.width = n(3.0);
     ops.push(Op::Create {
         id: next(),
-        ty: ty("circle"),
+        ty: ty("ellipse"),
         parent: Some(scene),
         order: order(),
         components: vec![t.wrap(), r.wrap(), f.wrap(), st.wrap()],
@@ -255,15 +257,19 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         t.x = n(x);
         t.y = n(y);
         let mut r = Radius::default();
-        r.r = n(5.0);
-        ops.push(Op::Create { id: joints[i], ty: ty("circle"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), r.wrap(), color([0.15, 0.15, 0.18, 1.0]).wrap(), named(&format!("j{i}")).wrap()] });
+        let radius = n(5.0);
+        r.rx = radius.clone();
+        r.ry = radius;
+        ops.push(Op::Create { id: joints[i], ty: ty("ellipse"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), r.wrap(), color([0.15, 0.15, 0.18, 1.0]).wrap(), named(&format!("j{i}")).wrap()] });
     }
     let mut t = Transform2d::default();
     t.x = n(320.0);
     t.y = n(360.0);
     let mut r = Radius::default();
-    r.r = n(14.0);
-    ops.push(Op::Create { id: ball, ty: ty("circle"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), r.wrap(), color([0.9, 0.35, 0.15, 1.0]).wrap(), named("ball").wrap()] });
+    let radius = n(14.0);
+    r.rx = radius.clone();
+    r.ry = radius;
+    ops.push(Op::Create { id: ball, ty: ty("ellipse"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), r.wrap(), color([0.9, 0.35, 0.15, 1.0]).wrap(), named("ball").wrap()] });
     for i in 0..3 {
         let (a, b) = (chain[i], chain[i + 1]);
         let mut t = Transform2d::default();
@@ -386,9 +392,11 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         f.color = Slot::Const(Value::Color(c));
         let mut name = DocName::default();
         name.text = Slot::Const(Value::Str(label.into()));
-        let geometry = if ty_name == "circle" {
+        let geometry = if ty_name == "ellipse" {
             let mut r = Radius::default();
-            r.r = n(w);
+            let radius = n(w);
+            r.rx = radius.clone();
+            r.ry = radius;
             r.wrap()
         } else {
             let mut sz = Size::default();
@@ -402,7 +410,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let k1 = OrderKey::after(&k0);
     let k2 = OrderKey::after(&k1);
     ops.push(card_shape(next(), "rect", 0.0, 0.0, 160.0, 100.0, [0.16, 0.22, 0.42, 1.0], "card panel", k0));
-    ops.push(card_shape(next(), "circle", 40.0, 50.0, 22.0, 0.0, [0.98, 0.78, 0.2, 1.0], "card dot", k1));
+    ops.push(card_shape(next(), "ellipse", 40.0, 50.0, 22.0, 0.0, [0.98, 0.78, 0.2, 1.0], "card dot", k1));
     ops.push(card_shape(next(), "rect", 75.0, 42.0, 70.0, 16.0, [0.92, 0.94, 0.98, 1.0], "card bar", k2));
     let card_plane = next();
     let mut t = Transform3d::default();
@@ -674,8 +682,10 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     ops.push(point(fiber_b, key(1), 270.0, 0.0, 90.0, -120.0));
     // The meter: a dial, a gauge track, and the reading.
     let mut dial_r = Radius::default();
-    dial_r.r = n(55.0);
-    ops.push(Op::Create { id: dial, ty: ty("circle"), parent: Some(meter_cartoon), order: key(0), components: vec![at(600.0, 175.0), dial_r.wrap(), fill([0.88, 0.9, 0.94, 1.0]), stroke([0.3, 0.32, 0.38, 1.0], 3.0), named("dial")] });
+    let radius = n(55.0);
+    dial_r.rx = radius.clone();
+    dial_r.ry = radius;
+    ops.push(Op::Create { id: dial, ty: ty("ellipse"), parent: Some(meter_cartoon), order: key(0), components: vec![at(600.0, 175.0), dial_r.wrap(), fill([0.88, 0.9, 0.94, 1.0]), stroke([0.3, 0.32, 0.38, 1.0], 3.0), named("dial")] });
     ops.push(rect_op(track, meter_cartoon, key(1), vec![at(540.0, 260.0), size(240.0, 14.0), fill([0.85, 0.86, 0.9, 1.0]), named("track")]));
     ops.push(gauge(reading, meter_cartoon, key(2), meter_in, 540.0, 260.0, 24.0, [0.15, 0.7, 0.35, 1.0]));
     // Schematic: blocks, and the meter's reading as a bar under its block.

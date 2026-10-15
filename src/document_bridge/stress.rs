@@ -195,8 +195,10 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
                 }
                 Kind::Circle => {
                     let mut r = Radius::default();
-                    r.r = n(4.0 + rand() * 10.0);
-                    ops.push(Op::Create { id, ty: ty("circle"), parent: Some(cell), order, components: vec![at(x, y, 0.0), r.wrap(), fill(colour)] });
+                    let radius = n(4.0 + rand() * 10.0);
+                    r.rx = radius.clone();
+                    r.ry = radius;
+                    ops.push(Op::Create { id, ty: ty("ellipse"), parent: Some(cell), order, components: vec![at(x, y, 0.0), r.wrap(), fill(colour)] });
                 }
                 Kind::Path => {
                     let mut shape = PathShape::default();

@@ -19,7 +19,7 @@ use iron_document::{Actor, LeafStruct, NodeId, Op, OrderKey, Slot, TransactionIn
 use kurbo::{Affine, Point};
 
 use crate::bevy_app::select::{ActiveTool, Geo, Source, ToolKeys, top_hit};
-use crate::document_bridge::{Doc2d, DocumentStore, NodeMap, PanelViews, PendingTransactions, nest};
+use crate::document_bridge::{Doc2d, DocumentStore, NodeMap, PanelView, PanelViews, PendingTransactions, nest};
 
 /// Window px within which a click on the first point closes the path.
 const CLOSE_HIT: f64 = 8.0;
@@ -60,12 +60,26 @@ fn transaction(label: &str, ops: Vec<Op>) -> TransactionInput {
 }
 
 /// The order key after a parent's last child (or the first key).
-fn after_last(doc: &iron_document::Document, parent: Option<NodeId>) -> OrderKey {
+pub(crate) fn after_last(doc: &iron_document::Document, parent: Option<NodeId>) -> OrderKey {
     let siblings = match parent {
         Some(p) => doc.children(p).to_vec(),
         None => doc.roots().to_vec(),
     };
     siblings.last().and_then(|&s| doc.live(s)).map_or_else(OrderKey::first, |s| OrderKey::after(&s.order))
+}
+
+/// Where something drawn at the pointer goes: the 2D artboard (top-level
+/// embed) under it, else the view's own composition; and the view's
+/// document px → that composition's space.
+pub(crate) fn drop_target(geo: &Geo, hits: &crate::PointerHits, view: &PanelView) -> Option<(NodeId, Affine)> {
+    let doc = geo.store.document();
+    let (container, to_comp) = match top_hit(hits) {
+        Some((chain, Source::Overlay(_))) if nest::is_embed(doc, chain[0]) && composition::embedded(doc, chain[0]).is_some_and(|s| composition::dims(doc, s) == Some(Dims::Two)) => {
+            (composition::embedded(doc, chain[0]), geo.world(chain[0]).inverse())
+        }
+        _ => (view.composition, Affine::IDENTITY),
+    };
+    Some((container.or(view.composition)?, to_comp))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -90,12 +104,22 @@ pub fn pen_tool_system(
         pen.path = None;
     }
 
-    // Tool keys: P and V switch; Enter and Esc finish (Esc with nothing
-    // drawn goes back to selecting).
+    // Tool keys: V, P, R and O switch (Figma's); Enter and Esc finish a
+    // path (Esc with nothing drawn goes back to selecting), and Esc puts
+    // the shape tools down.
     let mut rest = Vec::new();
     for (key, m) in std::mem::take(&mut keys.0) {
         match key.as_str() {
             "p" if m == 0 => *active = ActiveTool::Pen,
+            "r" if m == 0 => {
+                *active = ActiveTool::Rect;
+                pen.path = None;
+            }
+            "o" if m == 0 => {
+                *active = ActiveTool::Ellipse;
+                pen.path = None;
+            }
+            "escape" if matches!(*active, ActiveTool::Rect | ActiveTool::Ellipse) => *active = ActiveTool::Select,
             "v" if m == 0 => {
                 *active = ActiveTool::Select;
                 pen.path = None;
@@ -176,13 +200,7 @@ pub fn pen_tool_system(
 
     // A new path: into the artboard under the press, else the view's own
     // composition.
-    let (container, to_comp) = match top_hit(&hits) {
-        Some((chain, Source::Overlay(_))) if nest::is_embed(doc, chain[0]) && composition::embedded(doc, chain[0]).is_some_and(|s| composition::dims(doc, s) == Some(Dims::Two)) => {
-            (composition::embedded(doc, chain[0]), geo.world(chain[0]).inverse())
-        }
-        _ => (view.composition, Affine::IDENTITY),
-    };
-    let Some(container) = container.or(view.composition) else { return };
+    let Some((container, to_comp)) = drop_target(&geo, &hits, view) else { return };
     let origin = to_comp * (to_doc * start);
     let out = drag;
     let ids = doc.next_ids(2);

@@ -160,7 +160,12 @@ components! {
         h: Number = Value::Number(100.0),
     }
 
-    Radius / "radius" => Radius { r: Number = Value::Number(50.0) }
+    /// An ellipse's radii along its own x and y; equal for a circle. The
+    /// ellipse is centred on its origin (SVG's `rx`, `ry`).
+    Radius / "radius" => Radius {
+        rx: Number = Value::Number(50.0),
+        ry: Number = Value::Number(50.0),
+    }
 
     /// A path's outline (roadmap stage E): its `point` children in sibling
     /// order, joined by lines or curves, closed back to the first or not.

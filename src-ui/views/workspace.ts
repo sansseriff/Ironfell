@@ -10,7 +10,6 @@ import { mount, unmount } from 'svelte';
 import ViewPanel from './ViewPanel.svelte';
 import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
-import Toolbar from './Toolbar.svelte';
 import type { ViewSpec } from './views';
 
 const STORAGE_KEY = 'iron.workspace.v4';
@@ -82,21 +81,6 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
             target: element,
             props: { id: params.api.id, spec: (params.params as { spec: ViewSpec }).spec, api: params.api },
           });
-        },
-        dispose() {
-          if (instance) unmount(instance);
-          instance = null;
-        },
-      };
-    },
-    createLeftHeaderActionComponent: (group): IHeaderActionsRenderer => {
-      const element = document.createElement('div');
-      element.style.height = '100%';
-      let instance: Record<string, any> | null = null;
-      return {
-        element,
-        init() {
-          instance = mount(Toolbar, { target: element, props: { group } });
         },
         dispose() {
           if (instance) unmount(instance);

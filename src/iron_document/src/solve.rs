@@ -328,8 +328,8 @@ fn wrap_angle(a: f64) -> f64 {
 /// Half the diagonal of a node's shape, for a rotation's scale.
 fn half_diagonal(read: &dyn Fn(Leaf) -> Option<Value>, node: NodeId) -> f64 {
     let size = |c: ComponentKind, f: &str| read(Leaf { node, path: LeafPath::new(c, f).expect("declared") }).and_then(|v| v.as_f64());
-    if let Some(r) = size(ComponentKind::Radius, "r") {
-        return r.max(1.0);
+    if let Some(rx) = size(ComponentKind::Radius, "rx") {
+        return rx.max(size(ComponentKind::Radius, "ry").unwrap_or(rx)).max(1.0);
     }
     let w = size(ComponentKind::Size, "w").unwrap_or(100.0);
     let h = size(ComponentKind::Size, "h").unwrap_or(100.0);

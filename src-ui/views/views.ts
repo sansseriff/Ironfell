@@ -18,6 +18,7 @@ import DocumentView from './html/DocumentView.svelte';
 import SelectionView from './html/SelectionView.svelte';
 import ModelView from './html/ModelView.svelte';
 import SettingsView from './html/SettingsView.svelte';
+import CompositionTools from './html/CompositionTools.svelte';
 
 export type Notation = 'composition' | 'timeline' | 'markup' | 'selection' | 'conversation' | 'settings';
 
@@ -35,7 +36,7 @@ export interface NotationDef {
 }
 
 export const NOTATIONS: Record<Notation, NotationDef> = {
-  composition: { label: 'Composition', canvas: 'composition' },
+  composition: { label: 'Composition', canvas: 'composition', html: CompositionTools },
   timeline: { label: 'Timeline', canvas: 'timeline' },
   markup: { label: 'Document', html: DocumentView },
   selection: { label: 'Inspector', html: SelectionView },

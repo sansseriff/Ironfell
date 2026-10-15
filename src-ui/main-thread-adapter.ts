@@ -79,6 +79,7 @@ export class MainThreadAdapter {
         break;
 
       case "resize":
+        if (typeof data.dpr === "number" && this.appHandle !== BigInt(0)) glue.set_scale_factor(this.appHandle, data.dpr);
         this.canvasResize(data.width, data.height);
         break;
 

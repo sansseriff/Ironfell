@@ -1,5 +1,6 @@
 import { PanelManager } from "./panel_manager";
 import type { RuntimeMode } from "./runtime/session_adapter";
+import { saveSettings, settings } from "./runtime/settings.svelte";
 
 /**
  * Thin reactive wrapper around PanelManager for Svelte components.
@@ -9,7 +10,7 @@ class ControllerManagerClass {
   showBackendWarning = $state(false);
   loadingInProgress = $state(false);
   backendSupported = $state(true);
-  runtimeMode: RuntimeMode = $state('worker');
+  runtimeMode: RuntimeMode = $state(settings.runtime);
 
   private manager = new PanelManager();
 
@@ -51,10 +52,36 @@ class ControllerManagerClass {
   async switchMode(mode: RuntimeMode) {
     if (this.loadingInProgress) return;
     if (this.runtimeMode === mode && this.isInitialized) return;
-    this.loadingInProgress = true;
     this.runtimeMode = mode;
+    saveSettings({ runtime: mode });
+    await this.restart();
+  }
+
+  /** Re-size the canvas, panels and pointer mapping for the current pixel
+   *  ratio (the render scale setting changed); no restart. */
+  refreshPixelRatio(): void {
+    this.manager.refreshPixelRatio();
+  }
+
+  /**
+   * Restart the app so changed settings take effect, keeping the document:
+   * it is saved first and loaded into the fresh app (its undo history does
+   * not survive).
+   */
+  async restart(): Promise<void> {
+    if (this.loadingInProgress) return;
+    let carry: string | null = null;
+    if (this.isInitialized) {
+      try {
+        carry = await this.docClient.save();
+      } catch {
+        carry = null;
+      }
+    }
+    this.loadingInProgress = true;
+    this.docClient.carryOver(carry);
     try {
-      await this.manager.switchMode(mode);
+      await this.manager.restart(this.runtimeMode);
     } finally {
       this.syncFlags();
     }

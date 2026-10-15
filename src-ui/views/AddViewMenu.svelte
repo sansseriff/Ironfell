@@ -4,7 +4,7 @@
   // benchmark's stress scene at a few sizes (src/document_bridge/stress.rs).
   import type { DockviewApi, DockviewGroupPanel } from "dockview-core";
   import { controllerManager } from "../controller-manager.svelte";
-  import { FIXED_VIEWS, titleOf, viewId, type ViewSpec } from "./views";
+  import { FIXED_VIEWS, SETTINGS_VIEW, titleOf, viewId, type ViewSpec } from "./views";
 
   let { api, group }: { api: DockviewApi; group: DockviewGroupPanel } = $props();
 
@@ -28,6 +28,14 @@
     api.addPanel({ id, component: "view", title, params: { spec }, position: { referenceGroup: group } });
   }
 
+  /** The gear: show the one Settings view, or open it here. */
+  function settings() {
+    open = false;
+    const existing = api.panels.find((p) => (p.params as any)?.spec?.notation === "settings");
+    if (existing) existing.api.setActive();
+    else add("Settings", SETTINGS_VIEW);
+  }
+
   const STRESS_SIZES = [1000, 2000, 5000, 10000, 20000];
 
   /** Build (or rebuild at a new size) the `stress` composition, then show
@@ -45,6 +53,9 @@
 </script>
 
 <div class="add">
+  <button class="plus" title="Settings" aria-label="Settings" onclick={settings}>
+    <svg viewBox="0 0 20 20" width="14" height="14"><path d="M10 6.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 1 0 0-7Z M8.6 2h2.8l.4 2.2 1.6.9 2.1-.8 1.4 2.4-1.7 1.5v1.6l1.7 1.5-1.4 2.4-2.1-.8-1.6.9-.4 2.2H8.6l-.4-2.2-1.6-.9-2.1.8-1.4-2.4 1.7-1.5V9.2L3.1 7.7l1.4-2.4 2.1.8 1.6-.9Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg>
+  </button>
   <button class="plus" title="Open a view" onclick={toggle}>+</button>
   {#if open}
     <div class="menu" role="menu">

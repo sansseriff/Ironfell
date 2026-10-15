@@ -15,6 +15,7 @@ impl Plugin for FPSOverlayPlugin {
             (
                 update_fps_display,
                 update_backend_display,
+                update_canvas_display,
             ),
         );
     }
@@ -86,6 +87,10 @@ fn setup_ui(mut commands: Commands) {
                     let (label, colour) = build_label();
                     p.spawn((TextSpan::new("\nBuild: "), font.clone(), TextColor(WHITE.into())));
                     p.spawn((TextSpan::new(label), font.clone(), TextColor(colour.into())));
+                    // The canvas's backing size, which the render scale
+                    // setting changes (`update_canvas_display`).
+                    p.spawn((TextSpan::new("\nCanvas: "), font.clone(), TextColor(WHITE.into())));
+                    p.spawn((TextSpan::new(""), font.clone(), TextColor(AQUA.into())));
                 });
         });
 }
@@ -95,6 +100,15 @@ fn setup_ui(mut commands: Commands) {
 /// red otherwise. `.claude/skills/run-iron/build.sh` builds `dev-opt` (opt 1)
 /// by default and `wasm-bench` (opt 3, SIMD) with `PROFILE=wasm-bench`.
 fn build_label() -> (String, bevy::color::Srgba) {
+    let (name, opt, simd, fast) = build_profile();
+    let label = format!("{name} (opt {opt}{}){}", if simd { ", SIMD" } else { ", no SIMD" }, if fast { "" } else { " - SLOW, not for timing" });
+    (label, if fast { LIME } else { RED })
+}
+
+/// The build's profile name, optimization level, wasm SIMD, and whether it
+/// is fast enough to judge performance by. Also reported to the shell's
+/// Settings view (`web_ffi::document_build_info`).
+pub(crate) fn build_profile() -> (&'static str, &'static str, bool, bool) {
     let opt = env!("IRON_OPT_LEVEL");
     let simd = cfg!(target_feature = "simd128");
     let fast = matches!(opt, "2" | "3" | "s" | "z") && simd;
@@ -104,8 +118,22 @@ fn build_label() -> (String, bevy::color::Srgba) {
         "z" => "release",
         _ => "custom",
     };
-    let label = format!("{name} (opt {opt}{}){}", if simd { ", SIMD" } else { ", no SIMD" }, if fast { "" } else { " - SLOW, not for timing" });
-    (label, if fast { LIME } else { RED })
+    (name, opt, simd, fast)
+}
+
+/// The canvas's size in physical pixels, when it changes.
+fn update_canvas_display(
+    window: Single<Ref<Window>, With<bevy::window::PrimaryWindow>>,
+    query: Single<Entity, With<FpsText>>,
+    mut writer: TextUiWriter,
+    mut shown: Local<UVec2>,
+) {
+    let size = window.physical_size();
+    if *shown == size {
+        return;
+    }
+    *shown = size;
+    *writer.text(*query, 12) = format!("{}x{} px", size.x, size.y);
 }
 
 /// Show the active 2D vector backend, and colour it so a glance is enough.

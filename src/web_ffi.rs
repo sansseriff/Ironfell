@@ -286,6 +286,18 @@ pub fn resize(ptr: u64, _width: f32, _height: f32) {
     }
 }
 
+/// Canvas pixels per CSS pixel, when it changes without a restart (the window
+/// moved to a screen of another density, the browser zoomed, the render
+/// scale setting changed). Pointer positions arrive in CSS px and map by it.
+/// Sent with the canvas resize, before it.
+#[wasm_bindgen]
+pub fn set_scale_factor(ptr: u64, scale_factor: f32) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        app.scale_factor = scale_factor;
+    }
+}
+
 /// Mouse left button down (no entity id needed; Rust picking determines target)
 #[wasm_bindgen]
 pub fn left_bt_down(ptr: u64) {
@@ -503,6 +515,23 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
 /// script drives: `{"ok":true,"version":N,"composition":"#…","slider":"#…",
 /// "field":"#…","sample":"#…","sample_at":[x,y],"nodes":N,"width":W,
 /// "height":H}`.
+/// What this build is, for the Settings view: `{"profile","opt","simd",
+/// "fast","classic","gfx"}`. `classic` says whether Vello Classic can be
+/// chosen (a WebGPU build with the `classic` feature).
+#[wasm_bindgen]
+pub fn document_build_info(_ptr: u64) -> String {
+    let (profile, opt, simd, fast) = crate::fps_overlay::build_profile();
+    serde_json::json!({
+        "profile": profile,
+        "opt": opt,
+        "simd": simd,
+        "fast": fast,
+        "classic": cfg!(feature = "classic"),
+        "gfx": if cfg!(feature = "webgpu") { "webgpu" } else { "webgl2" },
+    })
+    .to_string()
+}
+
 #[wasm_bindgen]
 pub fn document_stress(ptr: u64, shapes: u32) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };

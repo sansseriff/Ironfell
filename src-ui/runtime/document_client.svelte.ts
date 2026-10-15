@@ -59,6 +59,9 @@ export class DocumentClient {
   private post: ((data: any) => void) | null = null;
   private pending = new Map<number, Pending>();
   private nextId = 1;
+  /** A document to load once the next app has opened its demo: what a
+   *  restart (the Settings view) carries over. */
+  private carried: string | null = null;
   /** Whether `?stress=N` has been acted on (once per page). */
   private stressed = false;
 
@@ -158,6 +161,11 @@ export class DocumentClient {
         return true;
       case 'documentChanged':
         this.version = data.version;
+        if (this.carried !== null) {
+          const text = this.carried;
+          this.carried = null;
+          void this.load(text);
+        }
         // `?stress=N`: add the benchmark composition once the demo scene
         // exists (its tab is in the default layout, src-ui/views/workspace.ts).
         if (!this.stressed) {
@@ -214,6 +222,11 @@ export class DocumentClient {
     } catch (e) {
       this.error = String(e);
     }
+  }
+
+  /** Load `text` into the next app once it is up (`null`: start fresh). */
+  carryOver(text: string | null): void {
+    this.carried = text;
   }
 
   save(): Promise<string> {

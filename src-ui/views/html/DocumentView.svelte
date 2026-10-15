@@ -1,10 +1,9 @@
 <script lang="ts">
   // The document as markup (source: document, notation: markup): the view
-  // the model reads, with save, load and the runtime switches.
+  // the model reads, with save and load. Runtime switches are in Settings.
   import { controllerManager } from "../../controller-manager.svelte";
   import Github from "../../lib/Github.svelte";
   import type { ViewSpec } from "../views";
-  import { resetWorkspace } from "../workspace";
 
   let { spec }: { spec: ViewSpec } = $props();
   void spec;
@@ -23,18 +22,6 @@
       }
     }
     input.value = "";
-  }
-
-  let pendingSwitch = $state(false);
-  async function toggleMode(event: Event) {
-    const input = event.currentTarget as HTMLInputElement | null;
-    if (!input) return;
-    pendingSwitch = true;
-    try {
-      await controllerManager.switchMode(input.checked ? "worker" : "main");
-    } finally {
-      pendingSwitch = false;
-    }
   }
 </script>
 
@@ -61,19 +48,6 @@
     {#if doc.error}<p class="error">{doc.error}</p>{/if}
     <pre class="view">{doc.view}</pre>
     <p class="hint">Cmd/Ctrl+Z undoes, with Shift redoes. Shift-click a second picture to Link.</p>
-    <div class="row">
-      <label class="small">
-        <input
-          type="checkbox"
-          onchange={toggleMode}
-          disabled={controllerManager.loadingInProgress || pendingSwitch}
-          checked={controllerManager.runtimeMode === "worker"}
-        />
-        {controllerManager.runtimeMode === "worker" ? "Worker mode" : "Main thread mode"}
-      </label>
-      {#if pendingSwitch}<span class="small">switching…</span>{/if}
-      <button class="reset" onclick={resetWorkspace}>Reset layout</button>
-    </div>
     <Github></Github>
   {/if}
 </section>
@@ -95,9 +69,6 @@
   .version {
     font-size: 11px;
     color: #666;
-    margin-left: auto;
-  }
-  .reset {
     margin-left: auto;
   }
   .warning {

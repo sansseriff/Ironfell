@@ -156,6 +156,14 @@ async function run(line: string) {
       const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
       return drag(r.x + x0 * panelUnit, r.y + y0 * panelUnit, r.x + x1 * panelUnit, r.y + y1 * panelUnit, steps || 10);
     }
+    case "dpr": {
+      // dpr <ratio>: change the page's devicePixelRatio live, as moving the
+      // window to a screen of another density does.
+      const vp = page.viewportSize()!;
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width: vp.width, height: vp.height, deviceScaleFactor: Number(rest[0]), mobile: false });
+      return out(`dpr ${rest[0]}`);
+    }
     case "mdrag": {
       // mdrag <panel> x0 y0 x1 y1 [steps]: drag with the middle button
       // (pans a 2D view), panel-relative.

@@ -5,6 +5,7 @@ import webgpuWasmUrl from '../wasm/webgpu/ironfell_bg.wasm?url';
 import webgl2WasmUrl from '../wasm/webgl2/ironfell_bg.wasm?url';
 import type { AdapterBridge } from './adapter_bridge';
 import type { Backend } from './backend_policy';
+import { settings } from './settings.svelte';
 
 /**
  * Perf-grid variant selection (mirrors bevy_app::VARIANT_* in Rust).
@@ -31,7 +32,9 @@ export function variantFlagsFromUrl(): number {
     if (parts.includes('min')) flags |= 2;   // VARIANT_MIN_PLUGINS
     if (parts.includes('empty')) flags |= 4; // VARIANT_EMPTY
     if (parts.includes('alpha')) flags |= 16; // VARIANT_ALPHA_STRESS
-    if (parts.includes('classic')) flags |= 32; // VARIANT_CLASSIC_BACKEND
+    // The renderer: the URL's choice, else the Settings view's.
+    const classic = parts.includes('classic') || (!parts.includes('hybrid') && settings.renderer === 'classic');
+    if (classic) flags |= 32; // VARIANT_CLASSIC_BACKEND
     if (parts.includes('always')) flags |= 64; // VARIANT_ALWAYS_RENDER
     return flags;
 }

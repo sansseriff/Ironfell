@@ -1,3 +1,4 @@
+import { pixelRatio, watchPixelRatio } from './runtime/settings.svelte';
 import { SessionAdapter, type RuntimeMode, type PanelRectMsg } from './runtime/session_adapter';
 import { InputManager } from './runtime/input_manager';
 import { chooseBackend, type Backend } from './runtime/backend_policy';
@@ -43,6 +44,7 @@ export class PanelManager {
   readonly docClient = new DocumentClient();
   private panels = new Map<string, PanelEntry>();
   private windowResizeHandler: (() => void) | null = null;
+  private stopWatchingRatio: (() => void) | null = null;
 
   public onInitialized: (() => void) | null = null;
 
@@ -79,6 +81,7 @@ export class PanelManager {
     if (!this.windowResizeHandler) {
       this.windowResizeHandler = () => this.handleWindowResize();
       window.addEventListener('resize', this.windowResizeHandler, { passive: true });
+      this.stopWatchingRatio = watchPixelRatio(() => this.refreshPixelRatio());
     }
   }
 
@@ -106,12 +109,18 @@ export class PanelManager {
     }
   }
 
-  /**
-   * Tear down the current session and start a fresh one in the other mode.
-   * The canvas element is replaced: a transferred (or GPU-bound) canvas can't be reused.
-   */
+  /** Tear down the current session and start a fresh one in the other mode. */
   async switchMode(mode: RuntimeMode): Promise<void> {
     if (mode === this.mode) return;
+    await this.restart(mode);
+  }
+
+  /**
+   * Tear down the session and start a fresh one, in `mode`, reading the
+   * settings again (render scale, renderer). The canvas element is replaced:
+   * a transferred (or GPU-bound) canvas can't be reused.
+   */
+  async restart(mode: RuntimeMode = this.mode): Promise<void> {
     if (!this.canvas) {
       this.mode = mode;
       return;
@@ -144,6 +153,8 @@ export class PanelManager {
       window.removeEventListener('resize', this.windowResizeHandler);
       this.windowResizeHandler = null;
     }
+    this.stopWatchingRatio?.();
+    this.stopWatchingRatio = null;
     for (const entry of this.panels.values()) entry.ro.disconnect();
     this.panels.clear();
     this.isInitialized = false;
@@ -158,7 +169,7 @@ export class PanelManager {
     session.onMessage((data) => this.handleSessionMessage(data));
     this.docClient.init((data: any) => session.post(data));
     session.attachCanvas(this.canvas!, this.backend);
-    session.resizeCanvas(...this.canvasPhysicalSize());
+    session.resizeCanvas(...this.canvasPhysicalSize(), pixelRatio());
     this.syncAllPanels();
 
     // Perf-grid cadence probe controls (see runtime/cadence_probe.ts).
@@ -175,7 +186,7 @@ export class PanelManager {
         // Deterministic post-init sync: canvas size + all panel rects (the session
         // flushed its own coalesced state already; re-measure to catch late layout).
         this.sizeCanvasBackingStore();
-        this.session?.resizeCanvas(...this.canvasPhysicalSize());
+        this.session?.resizeCanvas(...this.canvasPhysicalSize(), pixelRatio());
         this.syncAllPanels();
         if (this.canvas) {
           this.input.init(this.canvas, {
@@ -211,16 +222,26 @@ export class PanelManager {
     }
   }
 
+  /**
+   * Re-size everything for the current pixel ratio, without a restart: the
+   * window moved to a screen of another density, the browser zoomed, or the
+   * render scale setting changed. The canvas, every panel rectangle and the
+   * app's pointer mapping change together.
+   */
+  refreshPixelRatio(): void {
+    this.handleWindowResize();
+  }
+
   private handleWindowResize(): void {
     this.sizeCanvasBackingStore();
-    this.session?.resizeCanvas(...this.canvasPhysicalSize());
+    this.session?.resizeCanvas(...this.canvasPhysicalSize(), pixelRatio());
     // Panel placeholders resize with the window; ResizeObserver fires, but re-post
     // anyway so position-only changes are never missed.
     this.syncAllPanels();
   }
 
   private canvasPhysicalSize(): [number, number] {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = pixelRatio();
     const rect = this.canvas?.getBoundingClientRect();
     const w = Math.max(1, Math.round((rect?.width ?? window.innerWidth) * dpr));
     const h = Math.max(1, Math.round((rect?.height ?? window.innerHeight) * dpr));
@@ -267,7 +288,7 @@ export class PanelManager {
   private postPanelRect(id: string): void {
     const entry = this.panels.get(id);
     if (!entry || !this.session || !this.canvas) return;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = pixelRatio();
     const canvasRect = this.canvas.getBoundingClientRect();
     const rect = entry.el.getBoundingClientRect();
     const msg: PanelRectMsg = {

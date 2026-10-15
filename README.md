@@ -15,6 +15,11 @@ bun run dev         # serves http://localhost:5173/Ironfell/
 which: `Build: wasm-bench (opt 3, SIMD)` in green, or a red `dev-opt … SLOW` line.
 After switching builds, hard-reload the page.
 
+**Settings:** the gear beside **+** in any tab bar. Render scale (canvas pixels per
+CSS pixel; "Match a 4K panel" for a 4K display in a scaled macOS mode) applies at
+once, as does a move to a screen of another density. The 2D renderer and worker
+mode restart the app, keeping the document. Settings are kept per browser.
+
 **Stress test:** click **+** in any tab bar and pick a size under *Stress test*
 (1,000–20,000 shapes). It opens a Stress tab there; the slider at its top rotates
 the whole field. Picking another size replaces the scene. `?stress=N` in the URL,

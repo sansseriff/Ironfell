@@ -1,3 +1,4 @@
+import { pixelRatio } from './settings.svelte';
 import { AdapterBridge } from './adapter_bridge';
 import { WasmLoader } from './wasm_loader';
 import type { Backend } from './backend_policy';
@@ -33,7 +34,7 @@ export class SessionAdapter {
   private disposed = false;
 
   private pendingInit: { canvas: HTMLCanvasElement; dpr: number } | null = null;
-  private latestCanvasSize: { width: number; height: number } | null = null;
+  private latestCanvasSize: { width: number; height: number; dpr: number } | null = null;
   private latestPanelRects = new Map<string, PanelRectMsg>();
 
   constructor(mode: RuntimeMode) {
@@ -67,15 +68,16 @@ export class SessionAdapter {
     }
     this.bridge = new AdapterBridge(this.mode, canvas);
     this.bridge.setHandler((data: any) => this.handleBridgeMessage(data));
-    this.pendingInit = { canvas, dpr: window.devicePixelRatio || 1 };
+    this.pendingInit = { canvas, dpr: pixelRatio() };
     this.wasmLoader.sendToAdapter(this.bridge, backend).catch(e => console.error('WASM send failed', e));
   }
 
-  /** Full-window canvas backing size (physical px). */
-  resizeCanvas(width: number, height: number): void {
-    this.latestCanvasSize = { width, height };
+  /** Full-window canvas backing size (physical px), and the pixel ratio it
+   *  was sized at: the app maps pointer positions by it. */
+  resizeCanvas(width: number, height: number, dpr: number): void {
+    this.latestCanvasSize = { width, height, dpr };
     if (this.enginePrepared) {
-      this.post({ ty: 'resize', width, height });
+      this.post({ ty: 'resize', width, height, dpr });
     }
   }
 

@@ -17,8 +17,9 @@ import type { Component } from 'svelte';
 import DocumentView from './html/DocumentView.svelte';
 import SelectionView from './html/SelectionView.svelte';
 import ModelView from './html/ModelView.svelte';
+import SettingsView from './html/SettingsView.svelte';
 
-export type Notation = 'composition' | 'timeline' | 'markup' | 'selection' | 'conversation';
+export type Notation = 'composition' | 'timeline' | 'markup' | 'selection' | 'conversation' | 'settings';
 
 export interface ViewSpec {
   source: string;
@@ -39,7 +40,11 @@ export const NOTATIONS: Record<Notation, NotationDef> = {
   markup: { label: 'Document', html: DocumentView },
   selection: { label: 'Inspector', html: SelectionView },
   conversation: { label: 'Model', html: ModelView },
+  settings: { label: 'Settings', html: SettingsView },
 };
+
+/** The app's settings (views/html/SettingsView.svelte): not a document view. */
+export const SETTINGS_VIEW: ViewSpec = { source: 'app', notation: 'settings' };
 
 /** Views that are not compositions, for the "open a view" menu. */
 export const FIXED_VIEWS: { title: string; spec: ViewSpec }[] = [
@@ -47,6 +52,7 @@ export const FIXED_VIEWS: { title: string; spec: ViewSpec }[] = [
   { title: 'Document', spec: { source: 'document', notation: 'markup' } },
   { title: 'Inspector', spec: { source: 'selection', notation: 'selection' } },
   { title: 'Model', spec: { source: 'document', notation: 'conversation' } },
+  { title: 'Settings', spec: SETTINGS_VIEW },
 ];
 
 /** The id a new view gets: readable, and unique among the open ones. */

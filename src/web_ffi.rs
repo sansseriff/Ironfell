@@ -367,6 +367,19 @@ pub fn right_bt_up(ptr: u64) {
     }
 }
 
+/// The middle button pressed or released: it pans a 2D view
+/// (`bevy_app::select`), and never acts as a left press.
+#[wasm_bindgen]
+pub fn middle_bt(ptr: u64, down: bool) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let state = if down { ButtonState::Pressed } else { ButtonState::Released };
+    let window = app.window;
+    app.world_mut().write_message(MouseButtonInput { button: MouseButton::Middle, state, window });
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+}
+
 // Inbound hover/selection setters removed; Rust is authoritative now. Keep optional FFI if UI wants to force selection later.
 
 /// 打开 / 关闭动画

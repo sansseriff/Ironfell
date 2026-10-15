@@ -223,8 +223,9 @@ Two input fixes came with it:
 **Pan and zoom per 2D view (2026-10-12)**, Figma's controls (`select::navigate_views`):
 - the wheel or a trackpad pans, and Shift turns vertical scrolling horizontal;
 - Ctrl/Cmd+wheel and pinch zoom about the pointer;
-- Space-drag pans;
-- Shift+1 fits the content, Shift+0 sets 100%, and Cmd/Ctrl +/− zoom about the centre.
+- Space-drag and middle-button drag pan (any tool; the middle button is never a left press);
+- Shift+1 fits the content, Shift+2 fits the selection, Shift+0 sets 100%, and +/−,
+  alone or with Cmd/Ctrl, zoom about the centre.
 
 Each view's pan and zoom live in `ViewCameras`, which replaced the Show-in-only pans.
 Every 2D path (drawing, picking, the select tool, 3D embed textures) goes through

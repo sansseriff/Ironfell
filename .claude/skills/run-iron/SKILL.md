@@ -509,6 +509,7 @@ DPR=2 COUNTS=1000,10000 SCENARIOS=group-plain,group-drag,all-transform,all-geome
 Do not set `UNTHROTTLED` for these cadence checks. `bench-interaction.txt` adds
 whole-field movement and verifies identity before/after, waits out the
 second-press double-click window, and clears selection between cases.
+`mdrag panel x0 y0 x1 y1 [steps]` drags with the middle button (pans a 2D view).
 `praf panel x0 y0 x1 y1 ms` generates frame-paced pointer events through the
 normal DOM input bridge. `measure` now includes elapsed time, rAF percentiles and
 buckets; callback FPS alone is not actual displayed-frame/GPU completion proof.

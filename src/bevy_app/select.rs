@@ -247,8 +247,20 @@ pub struct SelectTool {
     /// The marquee being drawn: its panel and its rectangle in document px.
     pub marquee: Option<(String, Rect)>,
     gesture: Gesture,
+    /// A middle-button drag: `Some(None)` while held off any 2D view,
+    /// `Some(Some(pan))` while it pans one. Apart from `gesture`, since it
+    /// belongs to no tool.
+    middle: Option<Option<MiddlePan>>,
     last_click: Option<(f64, Vec2, NodeId)>,
     cursor: String,
+}
+
+/// Panning a view with the middle button: the panel, where the press was,
+/// and the pan then.
+struct MiddlePan {
+    panel: String,
+    start: Vec2,
+    pan: Vec2,
 }
 
 #[derive(Default)]
@@ -1033,6 +1045,35 @@ pub fn select_tool_system(
         }
     }
 
+    // Middle-drag pans the 2D view it began over, as in Figma, whatever the
+    // tool. While it does, nothing hovers.
+    match (pointer.buttons.middle, &tool.middle) {
+        (true, None) => {
+            let view = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
+            tool.middle = Some(view.map(|v| MiddlePan {
+                panel: v.panel.clone(),
+                start: pointer.screen,
+                pan: view_cameras.0.get(&v.panel).map_or(Vec2::ZERO, |c| c.pan),
+            }));
+        }
+        (true, Some(Some(m))) => {
+            view_cameras.0.entry(m.panel.clone()).or_default().pan = m.pan + (pointer.screen - m.start);
+        }
+        (false, Some(_)) => tool.middle = None,
+        _ => {}
+    }
+    if matches!(tool.middle, Some(Some(_))) && matches!(tool.gesture, Gesture::Idle) {
+        tool.hover = None;
+        if sel.hovered.is_some() {
+            sel.hovered = None;
+        }
+        if tool.cursor != "grabbing" {
+            crate::web_ffi::send_cursor_from_worker("grabbing".into());
+            tool.cursor = "grabbing".into();
+        }
+        return;
+    }
+
     // The pen has the pointer (`pen`); a gesture already under way finishes.
     if *active == ActiveTool::Pen && matches!(tool.gesture, Gesture::Idle) {
         if tool.hover.take().is_some() || sel.hovered.is_some() {
@@ -1749,8 +1790,9 @@ fn pan_keeping(view: &PanelView, doc: Vec2, screen: Vec2, z: f32) -> Vec2 {
 
 /// Pan and zoom 2D views, Figma's way: the wheel or a trackpad pans (Shift
 /// turns vertical into horizontal), Ctrl/Cmd+wheel and pinch zoom about the
-/// pointer, Shift+1 fits the content, Shift+0 is 100%, Cmd/Ctrl +/− zoom
-/// about the view's centre. Space-drag pans (`select_tool_system`).
+/// pointer, Shift+1 fits the content, Shift+2 fits the selection, Shift+0 is
+/// 100%, +/− (with or without Cmd/Ctrl) zoom about the view's centre.
+/// Space-drag and middle-drag pan (`select_tool_system`).
 #[allow(clippy::too_many_arguments)]
 pub fn navigate_views(
     pointer: Res<crate::PointerState>,
@@ -1787,15 +1829,16 @@ pub fn navigate_views(
     }
 
     // The zoom keys act on the view under the pointer, else the one holding
-    // the selection, else the main viewer.
-    let target = under
-        .or_else(|| sel.selected.first().and_then(|id| tool.reach.get(id)).and_then(|r| views.get(&r.panel)))
+    // the selection, else the main viewer; Shift+2 prefers the selection's.
+    let selection_view = sel.selected.first().and_then(|id| tool.reach.get(id)).and_then(|r| views.get(&r.panel));
+    let to_selection = keys.0.iter().any(|(k, _)| k == "zoomsel");
+    let target = (if to_selection { selection_view.or(under) } else { under.or(selection_view) })
         .or_else(|| views.get(crate::panels::VIEWER_PANEL))
         .filter(|v| v.dims == Dims::Two)
         .cloned();
     let mut rest = Vec::new();
     for (key, m) in std::mem::take(&mut keys.0) {
-        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoomfit" | "zoom100" | "zoomin" | "zoomout")) else {
+        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoomfit" | "zoomsel" | "zoom100" | "zoomin" | "zoomout")) else {
             rest.push((key, m));
             continue;
         };
@@ -1804,12 +1847,17 @@ pub fn navigate_views(
         let camera = cameras.0.entry(view.panel.clone()).or_default();
         let at_centre = (size * 0.5 - camera.pan) / camera.zoom;
         match key.as_str() {
-            "zoomfit" => {
+            "zoomfit" | "zoomsel" => {
                 let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
-                let roots = nest::panel_roots(&store.0.document(), view);
-                let Some(r) = roots
+                // Boxes in the panel's document px: its top-level nodes, or
+                // the selection as reached in this panel.
+                let frames: Vec<Affine> = if key == "zoomsel" {
+                    sel.selected.iter().filter_map(|id| tool.reach.get(id)).filter(|r| r.panel == view.panel).filter_map(|r| geo.frame(&r.chain)).collect()
+                } else {
+                    nest::panel_roots(&store.0.document(), view).iter().filter_map(|&n| geo.frame(&[n])).collect()
+                };
+                let Some(r) = frames
                     .iter()
-                    .filter_map(|&n| geo.frame(&[n]))
                     .map(|f| f.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)))
                     .reduce(|a, b| a.union(b))
                 else {

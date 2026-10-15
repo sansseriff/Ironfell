@@ -125,15 +125,28 @@ export class InputManager {
             this.listen(canvas, 'pointermove', onPointerMove, { passive: true });
         }
 
+        // Buttons by `e.button`: 0 left (select, drag), 1 middle (pans a 2D
+        // view, as in Figma). Right is not forwarded: it is not a left press.
         this.listen(canvas, 'pointerdown', (e: PointerEvent) => {
             refreshRect();
             const x = e.clientX - rect.left; const y = e.clientY - rect.top;
             this.sendMods(InputManager.mods(e));
-            this.post({ ty: 'leftBtDown', x, y });
+            if (e.button === 0) this.post({ ty: 'leftBtDown', x, y });
+            else if (e.button === 1) {
+                e.preventDefault();
+                // Keep the pan going when the pointer leaves the canvas.
+                canvas.setPointerCapture?.(e.pointerId);
+                this.post({ ty: 'middleBt', down: true });
+            }
         });
         this.listen(canvas, 'pointerup', (e: PointerEvent) => {
             this.sendMods(InputManager.mods(e));
-            this.post({ ty: 'leftBtUp' });
+            if (e.button === 0) this.post({ ty: 'leftBtUp' });
+            else if (e.button === 1) this.post({ ty: 'middleBt', down: false });
+        });
+        // A middle press must not start the browser's autoscroll.
+        this.listen(canvas, 'mousedown', (e: MouseEvent) => {
+            if (e.button === 1) e.preventDefault();
         });
 
         this.listen(canvas, 'wheel', (e: WheelEvent) => {
@@ -167,13 +180,14 @@ export class InputManager {
                 this.post({ ty: 'toolKey', key, m: InputManager.mods(event) });
                 return;
             }
-            // View zoom (Figma's keys): Shift+1 fit, Shift+0 100%, Cmd/Ctrl
-            // +/- in and out (instead of the browser's page zoom).
-            const command = event.metaKey || event.ctrlKey;
+            // View zoom (Figma's keys): Shift+1 fit, Shift+2 selection,
+            // Shift+0 100%, +/- in and out, alone or with Cmd/Ctrl (instead
+            // of the browser's page zoom).
             const zoom = event.shiftKey && event.code === 'Digit1' ? 'zoomfit'
+                : event.shiftKey && event.code === 'Digit2' ? 'zoomsel'
                 : event.shiftKey && event.code === 'Digit0' ? 'zoom100'
-                : command && (key === '=' || key === '+') ? 'zoomin'
-                : command && key === '-' ? 'zoomout'
+                : !event.altKey && (key === '=' || key === '+') ? 'zoomin'
+                : !event.altKey && key === '-' ? 'zoomout'
                 : null;
             if (!editing && zoom) {
                 event.preventDefault();

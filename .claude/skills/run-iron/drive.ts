@@ -156,6 +156,21 @@ async function run(line: string) {
       const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
       return drag(r.x + x0 * panelUnit, r.y + y0 * panelUnit, r.x + x1 * panelUnit, r.y + y1 * panelUnit, steps || 10);
     }
+    case "mdrag": {
+      // mdrag <panel> x0 y0 x1 y1 [steps]: drag with the middle button
+      // (pans a 2D view), panel-relative.
+      const r = await panelRect(rest[0]);
+      const [x0, y0, x1, y1, steps] = rest.slice(1).map(Number);
+      const n = steps || 10;
+      await page.mouse.move(r.x + x0 * panelUnit, r.y + y0 * panelUnit);
+      await page.mouse.down({ button: "middle" });
+      for (let i = 1; i <= n; i++) {
+        await page.mouse.move(r.x + (x0 + ((x1 - x0) * i) / n) * panelUnit, r.y + (y0 + ((y1 - y0) * i) / n) * panelUnit);
+        await page.waitForTimeout(16);
+      }
+      await page.mouse.up({ button: "middle" });
+      return;
+    }
     case "pmove": {
       // pmove <panel> x y: move the pointer to a panel-relative point.
       const r = await panelRect(rest[0]);

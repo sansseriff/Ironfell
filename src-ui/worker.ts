@@ -148,6 +148,10 @@ class IronWorker {
           if (this.appHandle !== BigInt(0)) glue.tool_key(this.appHandle, data.key, data.m);
           break;
 
+        case "middleBt":
+          if (this.appHandle !== BigInt(0)) glue.middle_bt(this.appHandle, !!data.down);
+          break;
+
         case "leftBtUp":
           glue.left_bt_up(this.appHandle);
           break;

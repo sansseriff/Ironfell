@@ -11,6 +11,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # The constraint solver (plans/specs/constraint-system.md §5); pure, no Bevy.
 iron_solve = { path = "../iron_solve" }
+# Shape outlines (`shape`): the renderer and a shape's conversion to a path
+# share one geometry. Pure, no Bevy; the app already uses this version.
+kurbo = "0.13.1"
 
 [dev-dependencies]
 # Only for the test that pins `geom::world_affine` to Bevy's own transform

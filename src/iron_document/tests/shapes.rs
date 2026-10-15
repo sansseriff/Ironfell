@@ -134,3 +134,84 @@ fn only_rects_and_ellipses_convert() {
     assert!(!shape::convertible(&store, id));
     assert!(shape::to_path(&store, id).is_err());
 }
+
+fn rect_at(store: &mut Store, w: f64, h: f64, extra: Vec<Component>) -> NodeId {
+    let id = store.document().next_ids(1)[0];
+    let mut s = Size::default();
+    s.w = num(w);
+    s.h = num(h);
+    let mut components = vec![at(0.0, 0.0), s.wrap()];
+    components.extend(extra);
+    store.apply(tx("draw", vec![Op::Create { id, ty: ty("rect"), parent: None, order: OrderKey::first(), components }])).unwrap();
+    id
+}
+
+#[test]
+fn corner_radii_round_a_rect_and_are_clamped_to_half_the_shorter_side() {
+    use iron_document::shape::rect_outline;
+    let plain = rect_outline(40.0, 20.0, [0.0; 4]);
+    assert_eq!(plain.len(), 4);
+    let round = rect_outline(40.0, 20.0, [4.0, 0.0, 50.0, 0.0]);
+    // Two anchors per rounded corner; 50 is clamped to 10.
+    assert_eq!(round.len(), 6);
+    assert_eq!((round[0].at.x, round[0].at.y, round[1].at.x, round[1].at.y), (0.0, 4.0, 4.0, 0.0));
+    assert_eq!((round[3].at.x, round[3].at.y, round[4].at.x, round[4].at.y), (40.0, 10.0, 30.0, 20.0));
+}
+
+#[test]
+fn a_rounded_rect_converts_to_its_eight_point_outline() {
+    use iron_document::component::Corners;
+    let mut store = Store::new();
+    let mut c = Corners::default();
+    for slot in [&mut c.tl, &mut c.tr, &mut c.br, &mut c.bl] {
+        *slot = num(5.0);
+    }
+    let id = rect_at(&mut store, 40.0, 20.0, vec![c.wrap()]);
+    let conv = shape::to_path(&store, id).unwrap();
+    store.apply(tx("convert to path", conv.ops)).unwrap();
+    let doc = store.document();
+    assert_eq!(doc.children(id).len(), 8);
+    assert!(doc.component(id, ComponentKind::Corners).is_none(), "corners are a rect's parameter, not a path's");
+    let second = doc.children(id)[1];
+    assert_eq!((resolved(&store, second, "transform2d.x"), resolved(&store, second, "handles.ix")), (5.0, -5.0 * 0.552_284_749_830_793_4));
+}
+
+#[test]
+fn an_arc_is_a_pie_a_ring_segment_or_a_ring() {
+    use iron_document::shape::ellipse_outline;
+    use std::f64::consts::{PI, TAU};
+    // A half pie: the centre, then three anchors over two quarter turns.
+    let pie = ellipse_outline(10.0, 10.0, Some([0.0, PI, 0.0]));
+    assert_eq!(pie.len(), 1);
+    assert_eq!(pie[0].len(), 4);
+    assert_eq!((pie[0][0].at.x, pie[0][0].at.y), (0.0, 0.0));
+    // A half ring segment: out along the outer edge, back along the inner.
+    let segment = ellipse_outline(10.0, 10.0, Some([0.0, PI, 0.5]));
+    assert_eq!(segment[0].len(), 6);
+    assert!((segment[0][3].at.x + 5.0).abs() < 1e-9);
+    // A full ring has two contours, so it cannot become one path.
+    assert_eq!(ellipse_outline(10.0, 10.0, Some([0.0, TAU, 0.5])).len(), 2);
+    let mut store = Store::new();
+    let id = store.document().next_ids(1)[0];
+    let mut arc = iron_document::component::Arc::default();
+    arc.inner = num(0.5);
+    store.apply(tx("ring", vec![Op::Create { id, ty: ty("ellipse"), parent: None, order: OrderKey::first(), components: vec![at(0.0, 0.0), Radius::default().wrap(), arc.wrap()] }])).unwrap();
+    assert!(shape::to_path(&store, id).unwrap_err().contains("ring"));
+}
+
+#[test]
+fn a_gesture_on_a_missing_component_adds_it_in_one_undoable_step() {
+    let mut store = Store::new();
+    let id = rect_at(&mut store, 40.0, 20.0, vec![]);
+    assert!(matches!(store.handle(id, path("corners.tl")), handle::Handle::Direct));
+    assert!(matches!(store.handle(id, path("arc.start")), handle::Handle::Locked(_)), "a rect has no arc");
+    for c in ["tl", "tr", "br", "bl"] {
+        store.preview_target(id, path(&format!("corners.{c}")), Value::Number(6.0)).unwrap();
+    }
+    assert_eq!(resolved(&store, id, "corners.br"), 6.0, "previewed before it exists");
+    let applied = store.commit_gesture("round corners", Actor::Human, 1).unwrap().unwrap();
+    let _ = applied;
+    assert_eq!(store.document().leaf(id, path("corners.tl")), Some(&num(6.0)));
+    store.undo(2).unwrap().unwrap();
+    assert!(store.document().component(id, ComponentKind::Corners).is_none());
+}

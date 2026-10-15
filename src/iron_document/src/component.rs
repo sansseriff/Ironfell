@@ -167,6 +167,35 @@ components! {
         ry: Number = Value::Number(50.0),
     }
 
+    /// A rect's corner radii, clockwise from the top-left. Each is clamped
+    /// to half the shorter side when drawn, as in Figma.
+    Corners / "corners" => Corners {
+        tl: Number = Value::Number(0.0),
+        tr: Number = Value::Number(0.0),
+        br: Number = Value::Number(0.0),
+        bl: Number = Value::Number(0.0),
+    }
+
+    /// Part of an ellipse (Figma's arc): from `start` through `sweep`
+    /// radians, clockwise on screen from the +x axis, as angles of the
+    /// ellipse's parameter; `inner` is the hole's radius as a fraction of
+    /// the outer (0 a pie, above 0 a ring or a ring segment).
+    Arc / "arc" => Arc {
+        start: Number = Value::Number(0.0),
+        sweep: Number = Value::Number(std::f64::consts::TAU),
+        inner: Number = Value::Number(0.0),
+    }
+
+    /// A drop shadow under the shape (Figma's defaults): offset `dx`, `dy`
+    /// in the parent's space, so it does not turn with the shape, and a
+    /// `blur` radius (twice the Gaussian's standard deviation, as in CSS).
+    Shadow / "shadow" => Shadow {
+        color: Color = Value::Color([0.0, 0.0, 0.0, 0.25]),
+        dx: Number = Value::Number(0.0),
+        dy: Number = Value::Number(4.0),
+        blur: Number = Value::Number(4.0),
+    }
+
     /// A path's outline (roadmap stage E): its `point` children in sibling
     /// order, joined by lines or curves, closed back to the first or not.
     PathShape / "path" => PathShape { closed: Bool = Value::Bool(false) }

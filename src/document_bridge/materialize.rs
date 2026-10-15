@@ -19,14 +19,27 @@ pub struct Doc2d {
     pub fill: Option<[f32; 4]>,
     /// Colour and width.
     pub stroke: Option<([f32; 4], f32)>,
+    pub shadow: Option<Shadow2d>,
+}
+
+/// A drop shadow (the `shadow` component): offset in the parent's space,
+/// and the blur's standard deviation (half the authored blur radius).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shadow2d {
+    pub color: [f32; 4],
+    pub dx: f32,
+    pub dy: f32,
+    pub std_dev: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape2d {
     /// Spans `(0, 0)` to `(w, h)`: the node origin is the top-left corner.
-    Rect { w: f32, h: f32 },
-    /// Centred on the node origin, with radii along its x and y.
-    Ellipse { rx: f32, ry: f32 },
+    /// `radii` round its corners, clockwise from the top-left.
+    Rect { w: f32, h: f32, radii: [f32; 4] },
+    /// Centred on the node origin, with radii along its x and y; `arc`
+    /// (start, sweep, inner) keeps part of it.
+    Ellipse { rx: f32, ry: f32, arc: Option<[f32; 3]> },
     /// A scalar-on-a-track control (doc 02 §9.3): a `w`×`h` track with the
     /// knob at fraction `t` along it.
     Slider { w: f32, h: f32, t: f32 },
@@ -40,8 +53,16 @@ const PATH_HIT: f64 = 5.0;
 impl Shape2d {
     pub fn contains_local(&self, p: Vec2) -> bool {
         match self {
-            &Shape2d::Rect { w, h } | &Shape2d::Slider { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
-            &Shape2d::Ellipse { rx, ry } => (p / Vec2::new(rx, ry).max(Vec2::splat(1e-6))).length_squared() <= 1.0,
+            &Shape2d::Rect { w, h, radii } if radii.iter().any(|&r| r > 0.0) => {
+                use kurbo::Shape;
+                super::nest::rounded_rect(w, h, radii).contains(kurbo::Point::new(p.x as f64, p.y as f64))
+            }
+            &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
+            &Shape2d::Ellipse { rx, ry, arc: None } => (p / Vec2::new(rx, ry).max(Vec2::splat(1e-6))).length_squared() <= 1.0,
+            Shape2d::Ellipse { .. } => {
+                use kurbo::Shape;
+                super::nest::shape_path(self).winding(kurbo::Point::new(p.x as f64, p.y as f64)) != 0
+            }
             Shape2d::Path { outline, closed, filled } => {
                 use kurbo::{ParamCurveNearest, Shape};
                 let q = kurbo::Point::new(p.x as f64, p.y as f64);
@@ -254,7 +275,11 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
         "rect" | "ellipse" | "slider" | "path" => {
             ec.insert(r.transform_2d());
             let shape = match node.ty.name() {
-                "ellipse" => Shape2d::Ellipse { rx: r.num("radius.rx", 50.0), ry: r.num("radius.ry", 50.0) },
+                "ellipse" => {
+                    // Present, or previewed by a gesture that will add it.
+                    let arc = ["arc.start", "arc.sweep", "arc.inner"].iter().any(|l| r.get(l).is_some()).then(|| [r.num("arc.start", 0.0), r.num("arc.sweep", std::f32::consts::TAU), r.num("arc.inner", 0.0)]);
+                    Shape2d::Ellipse { rx: r.num("radius.rx", 50.0), ry: r.num("radius.ry", 50.0), arc }
+                }
                 "path" => {
                     let (outline, closed) = path_outline(store, id);
                     let filled = closed && r.color("fill.color").is_some();
@@ -266,14 +291,15 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
                     let t = if max > min { ((value - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
                     Shape2d::Slider { w: r.num("size.w", 200.0), h: r.num("size.h", 24.0), t }
                 }
-                _ => Shape2d::Rect { w: r.num("size.w", 100.0), h: r.num("size.h", 100.0) },
+                _ => Shape2d::Rect { w: r.num("size.w", 100.0), h: r.num("size.h", 100.0), radii: ["tl", "tr", "br", "bl"].map(|c| r.num(&format!("corners.{c}"), 0.0)) },
             };
             let fill = r.color("fill.color").map(|mut c| {
                 c[3] *= r.num("fill.opacity", 1.0);
                 c
             });
             let stroke = r.color("stroke.color").map(|c| (c, r.num("stroke.width", 1.0)));
-            ec.insert(Doc2d { shape, fill, stroke });
+            let shadow = r.color("shadow.color").map(|color| Shadow2d { color, dx: r.num("shadow.dx", 0.0), dy: r.num("shadow.dy", 4.0), std_dev: r.num("shadow.blur", 4.0).max(0.0) * 0.5 });
+            ec.insert(Doc2d { shape, fill, stroke, shadow });
         }
         "camera" => {
             ec.insert(r.transform_3d());

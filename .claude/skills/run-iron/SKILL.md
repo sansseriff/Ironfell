@@ -103,7 +103,9 @@ heater, link and sink solved as an across/through network, the heater's power
 doubled by its slider), and shapes and paths (a rectangle and a circle drawn with
 the bottom toolbar's R and O tools, the circle stretched into an ellipse, a
 double-click turning it into a path with the same id, undo, and the bound bar's
-conversion asking first, then cancelled). Expected output, minus screenshot lines,
+conversion asking first, then cancelled; then a corner dot rounding the
+rectangle, a shadow added in the inspector, and the ellipse's sweep handle making
+a quarter pie). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
@@ -235,6 +237,11 @@ tab Main
 ["its h is bound to #10.params.level * 300; the path keeps the current value"]
 clicked Cancel
 null
+tab Controls
+"<rect id=\"#2q\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
+clicked Add shadow
+" shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
+"<ellipse id=\"#2r\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.5707963267948966\" inner=\"0\""
 tab Pendulum
 [true,false]
 tab Main
@@ -264,6 +271,9 @@ applied "draw ellipse" (1 ops, Human) -> v22
 applied "resize ellipse" (2 ops, Human) -> v23
 applied "convert ellipse to path" (6 ops, Human) -> v24
 applied "undo: convert ellipse to path" (6 ops, System) -> v25
+applied "round corners" (1 ops, Human) -> v26
+applied "add shadow" (1 ops, Human) -> v27
+applied "edit arc" (1 ops, Human) -> v28
 (no page errors)
 ```
 
@@ -567,7 +577,7 @@ run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-94 tests pass (31 unit, 63 integration; verified 2026-10-14). The host target is required because
+98 tests pass (31 unit, 67 integration; verified 2026-10-14). The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests).

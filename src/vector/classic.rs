@@ -182,6 +182,14 @@ fn replay_display_lists(
                         s,
                     ));
                 }
+                DrawCmd::BlurredRect { transform, color, rect, radius, std_dev } => {
+                    scene.draw_blurred_rounded_rect(*transform, *rect, *color, *radius, *std_dev);
+                }
+                // Classic has no filter layers: the content draws without its
+                // shadow, inside a plain layer so the pop stays balanced.
+                DrawCmd::PushShadow { transform, bounds, .. } => {
+                    scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, *transform, bounds);
+                }
                 DrawCmd::PopLayer => scene.pop_layer(),
                 // Texture views (3D compositions seen from 2D) are drawn by the
                 // hybrid backend only; classic shows nothing there for now.

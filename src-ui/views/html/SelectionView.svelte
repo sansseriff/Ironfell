@@ -3,6 +3,8 @@
   // Show in, and Link's merge question. The seed of the inspector
   // (plans/specs/panels-and-session.md).
   import { controllerManager } from "../../controller-manager.svelte";
+  import Plus from "@lucide/svelte/icons/plus";
+  import X from "@lucide/svelte/icons/x";
   import type { ViewSpec } from "../views";
 
   let { spec }: { spec: ViewSpec } = $props();
@@ -29,7 +31,7 @@
   // the first selected node's fields, each edited through its handle, so a
   // linearly bound value edits its source and a locked one says why.
   type Field = { leaf: string; field: string; kind: string | null; text: string | null; bind: string | null; edit: string; via: string | null; why: string | null };
-  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[] };
+  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[] };
   let inspected: Inspected | null = $state(null);
   let setError = $state("");
   $effect(() => {
@@ -46,6 +48,15 @@
     setError = "";
     const r = await doc.call("inspect_set", [inspected.node, f.leaf, text]);
     if (!r.ok) setError = `${f.leaf}: ${r.error}`;
+    inspected = await doc.call("inspect", [inspected.node]);
+  }
+  // Optional components (fill, stroke, corners, arc, shadow): one
+  // transaction each, "add shadow" or "remove corners".
+  async function component(kind: string, add: boolean) {
+    if (!inspected) return;
+    setError = "";
+    const r = await doc.call("component", [inspected.node, kind, add]);
+    if (!r.ok) setError = `${kind}: ${r.error}`;
     inspected = await doc.call("inspect", [inspected.node]);
   }
 </script>
@@ -80,7 +91,8 @@
       <div class="title"><strong>{inspected.name ?? inspected.type}</strong> <span class="mono">{inspected.type} {inspected.node}</span></div>
       {#if setError}<p class="error">{setError}</p>{/if}
       {#each inspected.components as c (c.kind)}
-        <div class="component">{c.kind}</div>
+        <!-- The heading's text is exactly the kind: drivers find fields by it. -->
+        <div class="component"><span>{c.kind}</span>{#if inspected.removable.includes(c.kind)}<button class="icon" title="Remove {c.kind}" aria-label="Remove {c.kind}" onclick={() => component(c.kind, false)}><X size={12} strokeWidth={2} /></button>{/if}</div>
         {#each c.fields as f (f.leaf)}
           <label class="field" title={f.why ?? (f.via ? `edits ${f.via} through the binding` : "")}>
             <span class="label" class:bound={f.bind}>{f.field}</span>
@@ -102,6 +114,13 @@
           {#if f.bind}<div class="bind mono">= {f.bind}</div>{/if}
         {/each}
       {/each}
+      {#if inspected.addable.length}
+        <div class="add">
+          {#each inspected.addable as kind (kind)}
+            <button title="Add {kind}" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={12} strokeWidth={2} /> {kind}</button>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
 </section>
@@ -136,6 +155,34 @@
     text-transform: uppercase;
     color: var(--fg-faint);
     margin-top: 6px;
+  }
+  .component {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .component .icon {
+    display: flex;
+    padding: 1px;
+    border: none;
+    background: transparent;
+    color: var(--fg-faint);
+    cursor: pointer;
+  }
+  .component .icon:hover {
+    color: var(--fg);
+  }
+  .add {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 8px;
+  }
+  .add button {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
   }
   .field {
     display: grid;

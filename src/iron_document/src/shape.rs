@@ -1,17 +1,22 @@
-//! Shapes into paths (select-tool.md, "Shapes and paths").
+//! Shapes: their outlines, and turning them into paths (select-tool.md,
+//! "Shapes and paths").
 //!
-//! A `rect` or an `ellipse` keeps its parameters (`size`, `radius`) so they
-//! can be edited, bound and constrained; editing its outline point by point
-//! first turns it into a `path`, as in Figma. The conversion keeps the node's
-//! id, placement, transform, paint and name, and its relations (figures,
-//! constraints, the session's selection): it is a `Delete` and a restoring
-//! `Create` of the same id in one transaction, so one undo brings the shape
-//! back.
+//! A `rect` (with optional `corners`) and an `ellipse` (with an optional
+//! `arc`) keep their parameters so they can be edited, bound and
+//! constrained. Their outline is computed here, once, for both the renderer
+//! and the conversion, as anchors with Bézier handles: the same form a
+//! `path`'s points take.
+//!
+//! Editing a shape's outline point by point first turns it into a `path`, as
+//! in Figma. The conversion keeps the node's id, placement, transform, paint,
+//! shadow and name, and its relations (figures, constraints, the session's
+//! selection): it is a `Delete` and a restoring `Create` of the same id in
+//! one transaction, so one undo brings the shape back.
 //!
 //! What a conversion cannot keep is the parameters. Anything that reads or
-//! drives them is *cut*: a binding on the shape's own size or radius, another
-//! node's binding that reads it, a clip that animates it. Bindings that read
-//! it are baked to their current value and such clips are deleted. A caller
+//! drives them is *cut*: a binding on the shape's own parameters, another
+//! node's binding that reads one, a clip that animates one. Bindings that read
+//! them are baked to their current value and such clips are deleted. A caller
 //! shows the cuts and asks first; with none, nothing is lost.
 
 use crate::component::{Component, ComponentKind, Handles, LeafPath, LeafStruct, PathShape, Transform2d};
@@ -23,6 +28,8 @@ use crate::order::OrderKey;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value};
 use crate::Store;
+use kurbo::{BezPath, Point, Vec2};
+use std::f64::consts::{FRAC_PI_2, TAU};
 
 /// The ops that turn a shape into a path, and what they cut.
 #[derive(Clone, Debug, PartialEq)]
@@ -32,14 +39,29 @@ pub struct Conversion {
     pub cuts: Vec<String>,
 }
 
-/// A cubic's handle length for a quarter ellipse, as a fraction of the radius.
+/// One anchor of an outline: its position, and its in- and out-handles
+/// relative to it (zero for a corner), as a `point` node stores them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anchor {
+    pub at: Point,
+    pub inn: Vec2,
+    pub out: Vec2,
+}
+
+impl Anchor {
+    fn corner(at: Point) -> Anchor {
+        Anchor { at, inn: Vec2::ZERO, out: Vec2::ZERO }
+    }
+}
+
+/// A cubic's handle length for a quarter circle, as a fraction of the radius.
 const KAPPA: f64 = 0.552_284_749_830_793_4;
 
 /// The leaves that are a shape's parameters, by type.
 fn parameters(ty: &str) -> &'static [&'static str] {
     match ty {
-        "rect" => &["size.w", "size.h"],
-        "ellipse" => &["radius.rx", "radius.ry"],
+        "rect" => &["size.w", "size.h", "corners.tl", "corners.tr", "corners.br", "corners.bl"],
+        "ellipse" => &["radius.rx", "radius.ry", "arc.start", "arc.sweep", "arc.inner"],
         _ => &[],
     }
 }
@@ -49,21 +71,120 @@ pub fn convertible(store: &Store, id: NodeId) -> bool {
     store.document().live(id).is_some_and(|n| !parameters(n.ty.name()).is_empty())
 }
 
-/// The points of a shape's outline in its own space: position, in-handle,
-/// out-handle (relative), clockwise on screen from the first.
-pub fn outline_points(ty: &str, a: f64, b: f64) -> Vec<([f64; 2], [f64; 2], [f64; 2])> {
-    match ty {
-        "rect" => [[0.0, 0.0], [a, 0.0], [a, b], [0.0, b]].into_iter().map(|p| (p, [0.0; 2], [0.0; 2])).collect(),
-        "ellipse" => {
-            let (kx, ky) = (KAPPA * a, KAPPA * b);
-            vec![
-                ([a, 0.0], [0.0, -ky], [0.0, ky]),
-                ([0.0, b], [kx, 0.0], [-kx, 0.0]),
-                ([-a, 0.0], [0.0, ky], [0.0, -ky]),
-                ([0.0, -b], [-kx, 0.0], [kx, 0.0]),
-            ]
+/// Corner radii clamped as Figma draws them: none negative, none above half
+/// the shorter side.
+pub fn clamp_radii(w: f64, h: f64, radii: [f64; 4]) -> [f64; 4] {
+    let most = (w.abs().min(h.abs()) * 0.5).max(0.0);
+    radii.map(|r| r.clamp(0.0, most))
+}
+
+/// A `w`×`h` rect from the origin, its corners rounded by `radii`
+/// (top-left, top-right, bottom-right, bottom-left): one closed contour,
+/// clockwise on screen from the top-left corner.
+pub fn rect_outline(w: f64, h: f64, radii: [f64; 4]) -> Vec<Anchor> {
+    let (w, h) = (w.abs(), h.abs());
+    let radii = clamp_radii(w, h, radii);
+    // Each corner, with the directions of travel into and out of it.
+    let corners = [
+        (Point::new(0.0, 0.0), Vec2::new(0.0, -1.0), Vec2::new(1.0, 0.0)),
+        (Point::new(w, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0)),
+        (Point::new(w, h), Vec2::new(0.0, 1.0), Vec2::new(-1.0, 0.0)),
+        (Point::new(0.0, h), Vec2::new(-1.0, 0.0), Vec2::new(0.0, -1.0)),
+    ];
+    let mut out = Vec::with_capacity(8);
+    for ((p, into, from), r) in corners.into_iter().zip(radii) {
+        if r <= 0.0 {
+            out.push(Anchor::corner(p));
+        } else {
+            out.push(Anchor { at: p - into * r, inn: Vec2::ZERO, out: into * (KAPPA * r) });
+            out.push(Anchor { at: p + from * r, inn: -from * (KAPPA * r), out: Vec2::ZERO });
         }
-        _ => Vec::new(),
+    }
+    out
+}
+
+/// Anchors along the ellipse `rx`, `ry` from parameter angle `start`
+/// through `sweep`, one cubic per quarter turn at most; the ends have no
+/// handle outward.
+fn arc_anchors(rx: f64, ry: f64, start: f64, sweep: f64) -> Vec<Anchor> {
+    let n = ((sweep.abs() / FRAC_PI_2).ceil() as usize).max(1);
+    let step = sweep / n as f64;
+    let k = 4.0 / 3.0 * (step / 4.0).tan();
+    let at = |t: f64| Point::new(rx * t.cos(), ry * t.sin());
+    let tangent = |t: f64| Vec2::new(-rx * t.sin(), ry * t.cos()) * k;
+    (0..=n)
+        .map(|i| {
+            let t = start + step * i as f64;
+            Anchor { at: at(t), inn: if i == 0 { Vec2::ZERO } else { -tangent(t) }, out: if i == n { Vec2::ZERO } else { tangent(t) } }
+        })
+        .collect()
+}
+
+/// An open run of anchors that ends where it began, as one closed contour.
+fn closed(mut run: Vec<Anchor>) -> Vec<Anchor> {
+    if let Some(last) = run.pop()
+        && let Some(first) = run.first_mut()
+    {
+        first.inn = last.inn;
+    }
+    run
+}
+
+/// An ellipse centred on the origin, or the part of it `arc` (start, sweep,
+/// inner) keeps: one closed contour, or two for a full ring (the hole
+/// running the other way, so it stays empty under the non-zero rule).
+pub fn ellipse_outline(rx: f64, ry: f64, arc: Option<[f64; 3]>) -> Vec<Vec<Anchor>> {
+    let [start, sweep, inner] = arc.unwrap_or([0.0, TAU, 0.0]);
+    let sweep = sweep.clamp(-TAU, TAU);
+    let inner = inner.clamp(0.0, 0.999);
+    if sweep.abs() >= TAU - 1e-9 {
+        let mut out = vec![closed(arc_anchors(rx, ry, start, TAU))];
+        if inner > 0.0 {
+            out.push(closed(arc_anchors(rx * inner, ry * inner, start, -TAU)));
+        }
+        return out;
+    }
+    let mut ring = arc_anchors(rx, ry, start, sweep);
+    if inner > 0.0 {
+        ring.extend(arc_anchors(rx * inner, ry * inner, start + sweep, -sweep));
+    } else {
+        ring.insert(0, Anchor::corner(Point::ORIGIN));
+    }
+    vec![ring]
+}
+
+/// The closed contours as a path: a line between two anchors whose facing
+/// handles are both zero, a cubic otherwise.
+pub fn to_bez(contours: &[Vec<Anchor>]) -> BezPath {
+    let mut path = BezPath::new();
+    for c in contours.iter().filter(|c| !c.is_empty()) {
+        path.move_to(c[0].at);
+        for (a, b) in c.iter().zip(c.iter().skip(1).chain(std::iter::once(&c[0]))) {
+            if a.out == Vec2::ZERO && b.inn == Vec2::ZERO {
+                path.line_to(b.at);
+            } else {
+                path.curve_to(a.at + a.out, b.at + b.inn, b.at);
+            }
+        }
+        path.close_path();
+    }
+    path
+}
+
+/// A shape node's outline in its own space, from its resolved parameters.
+pub fn outline(store: &Store, id: NodeId) -> Option<Vec<Vec<Anchor>>> {
+    let num = |leaf: &str, default: f64| store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).unwrap_or(default);
+    let doc = store.document();
+    match doc.live(id)?.ty.name() {
+        "rect" => {
+            let radii = ["tl", "tr", "br", "bl"].map(|c| num(&format!("corners.{c}"), 0.0));
+            Some(vec![rect_outline(num("size.w", 100.0), num("size.h", 100.0), radii)])
+        }
+        "ellipse" => {
+            let arc = doc.component(id, ComponentKind::Arc).map(|_| [num("arc.start", 0.0), num("arc.sweep", TAU), num("arc.inner", 0.0)]);
+            Some(ellipse_outline(num("radius.rx", 50.0), num("radius.ry", 50.0), arc))
+        }
+        _ => None,
     }
 }
 
@@ -77,9 +198,11 @@ pub fn to_path(store: &Store, id: NodeId) -> Result<Conversion, String> {
     if params.is_empty() {
         return Err(format!("{id} is a {ty}; only a rect or an ellipse becomes a path"));
     }
+    let contours = outline(store, id).expect("a shape has an outline");
+    let [contour] = &contours[..] else {
+        return Err(format!("{id} is a ring, which has two outlines; a path has one"));
+    };
     let leaves: Vec<LeafPath> = params.iter().map(|p| p.parse().expect("declared leaf")).collect();
-    let value = |path: LeafPath| store.resolved(id, path).and_then(|v| v.as_f64()).ok_or_else(|| format!("{id} has no {path}"));
-    let (a, b) = (value(leaves[0])?, value(leaves[1])?);
 
     let mut ops = Vec::new();
     let mut cuts = Vec::new();
@@ -105,8 +228,9 @@ pub fn to_path(store: &Store, id: NodeId) -> Result<Conversion, String> {
     // Clips that animate them.
     for r in doc.relations_to(id).filter(|r| r.rel == RelKind::Animates) {
         let prop = store.resolved(r.from, "clip.prop".parse().expect("declared leaf"));
-        if prop.as_ref().and_then(|v| v.as_str()).is_some_and(|p| params.contains(&p)) && doc.live(r.from).is_some() {
-            cuts.push(format!("clip {} animates its {}; the clip is deleted", r.from, prop.and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()));
+        let prop = prop.as_ref().and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+        if params.contains(&prop.as_str()) && doc.live(r.from).is_some() {
+            cuts.push(format!("clip {} animates its {prop}; the clip is deleted", r.from));
             ops.push(Op::Delete { id: r.from });
         }
     }
@@ -114,7 +238,7 @@ pub fn to_path(store: &Store, id: NodeId) -> Result<Conversion, String> {
     // The node again, as a path: everything but the parameters carries over.
     let carried: Vec<Component> = doc
         .components_of(id)
-        .filter(|c| !matches!(c.kind(), ComponentKind::Size | ComponentKind::Radius))
+        .filter(|c| !matches!(c.kind(), ComponentKind::Size | ComponentKind::Radius | ComponentKind::Corners | ComponentKind::Arc))
         .cloned()
         .chain(std::iter::once({
             let mut s = PathShape::default();
@@ -124,19 +248,18 @@ pub fn to_path(store: &Store, id: NodeId) -> Result<Conversion, String> {
         .collect();
     ops.push(Op::Delete { id });
     ops.push(Op::Create { id, ty: TypeId::lookup("path").expect("registered"), parent: node.parent, order: node.order.clone(), components: carried });
-    let points = outline_points(ty, a, b);
-    let ids = doc.next_ids(points.len());
+    let ids = doc.next_ids(contour.len());
     let mut order = OrderKey::first();
-    for (&pid, (p, i, o)) in ids.iter().zip(points) {
+    for (&pid, a) in ids.iter().zip(contour) {
         let n = |v: f64| Slot::Const(Value::Number(v));
         let mut t = Transform2d::default();
-        t.x = n(p[0]);
-        t.y = n(p[1]);
+        t.x = n(a.at.x);
+        t.y = n(a.at.y);
         let mut h = Handles::default();
-        h.ix = n(i[0]);
-        h.iy = n(i[1]);
-        h.ox = n(o[0]);
-        h.oy = n(o[1]);
+        h.ix = n(a.inn.x);
+        h.iy = n(a.inn.y);
+        h.ox = n(a.out.x);
+        h.oy = n(a.out.y);
         ops.push(Op::Create { id: pid, ty: TypeId::lookup("point").expect("registered"), parent: Some(id), order: order.clone(), components: vec![t.wrap(), h.wrap()] });
         order = OrderKey::after(&order);
     }

@@ -207,7 +207,7 @@ impl Draw<'_, '_, '_> {
         // only at emit time, so bounds stay in the node's composition space.
         let local = affine_of(global);
         let affine = base * local;
-        let shape = nest::shape_path(&d.shape);
+        let shape = nest::draw_shape(&d.shape);
         if let Shape2d::Slider { w, h, t } = d.shape.clone() {
             // Track, filled part, knob. The hit shape stays the whole w×h
             // box so the knob is easy to grab.
@@ -223,11 +223,46 @@ impl Draw<'_, '_, '_> {
         } else {
             // An open path has no inside to fill.
             let open = matches!(&d.shape, Shape2d::Path { closed: false, .. });
-            if let Some(c) = d.fill.filter(|_| !open) {
-                b.fill(affine, peniko::Color::new(c), shape.clone());
-            }
-            if let Some((c, w)) = d.stroke {
-                b.stroke(affine, kurbo::Stroke::new(w as f64), peniko::Color::new(c), shape.clone());
+            let paint = |b: &mut crate::vector::DisplayListBuilder<'_>| {
+                if let Some(c) = d.fill.filter(|_| !open) {
+                    b.fill(affine, peniko::Color::new(c), shape.clone());
+                }
+                if let Some((c, w)) = d.stroke {
+                    b.stroke(affine, kurbo::Stroke::new(w as f64), peniko::Color::new(c), shape.clone());
+                }
+            };
+            match d.shadow.filter(|s| s.color[3] > 0.0) {
+                None => paint(b),
+                Some(s) => {
+                    // The offset is in the parent's space, so the shadow
+                    // stays below a rotated shape, as in Figma.
+                    let parent = self.doc.live(id).and_then(|n| n.parent).and_then(|p| self.map.entity(p)).and_then(|e| self.globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+                    let offset = kurbo::Vec2::new(s.dx as f64, s.dy as f64);
+                    let color = peniko::Color::new(s.color);
+                    let std_dev = s.std_dev as f64;
+                    // A plain or evenly rounded rect: Vello's analytic blur,
+                    // no offscreen pass. Anything else: a filter layer.
+                    let analytic = match &shape {
+                        crate::vector::Shape::Rect(r) => Some((*r, 0.0)),
+                        crate::vector::Shape::RoundedRect(r) => r.radii().as_single_radius().map(|radius| (r.rect(), radius)),
+                        _ => None,
+                    };
+                    match analytic {
+                        Some((rect, radius)) => {
+                            let shifted = base * parent * kurbo::Affine::translate(offset) * parent.inverse() * local;
+                            b.blurred_rect(shifted, color, rect, radius, std_dev);
+                            paint(b);
+                        }
+                        None => {
+                            let in_parent = parent.inverse() * local;
+                            let pad = d.stroke.map_or(0.0, |(_, w)| w as f64);
+                            let own = in_parent.transform_rect_bbox(shape.bounding_box().inflate(pad, pad));
+                            let blur = 3.0 * std_dev;
+                            let bounds = own.union((own + offset).inflate(blur, blur));
+                            b.shadowed(base * parent, color, offset, std_dev, bounds, paint);
+                        }
+                    }
+                }
             }
         }
         if let Some(c) = self.lit(id) {

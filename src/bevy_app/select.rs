@@ -287,7 +287,28 @@ enum Gesture {
     /// A path point's handle: `out` or in, mirrored to the other unless Alt;
     /// `to_local` maps window px into the path's space.
     Handle { point: NodeId, out: bool, to_local: Affine, at: Point },
+    /// A lone shape's own handle (`ShapeGrip`); `to_local` maps window px
+    /// into the shape's space, `arc` is (start, sweep, inner) at the press.
+    Shape { id: NodeId, grip: ShapeGrip, to_local: Affine, arc: [f64; 3] },
 }
+
+/// Figma's handles on a lone selected shape: a dot inside each of a rect's
+/// corners sets the corner radius, and an ellipse's arc has a start, a
+/// sweep (its end) and an inner ratio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ShapeGrip {
+    Corner(usize),
+    Start,
+    Sweep,
+    Inner,
+}
+
+/// Window px a shape must span on screen, both ways, to show its handles,
+/// and how far inside its outline they sit.
+const SHAPE_GRIPS_MIN: f64 = 48.0;
+const SHAPE_GRIP_INSET: f64 = 12.0;
+/// A rect's corners, clockwise from the top-left, as unit-square points.
+const CORNERS: [(f64, f64); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
 
 enum AfterPress {
     /// A drag moves the selection.
@@ -557,6 +578,65 @@ impl Geo<'_, '_, '_> {
             Kind::Points => true,
             Kind::Group | Kind::Fixed => false,
         });
+    }
+
+    /// A rect's corner radii or an ellipse's arc (start, sweep, inner), as
+    /// resolved; an absent component reads as its defaults.
+    fn radii(&self, id: NodeId) -> [f64; 4] {
+        ["tl", "tr", "br", "bl"].map(|c| self.num(id, &format!("corners.{c}")).unwrap_or(0.0))
+    }
+
+    fn arc(&self, id: NodeId) -> [f64; 3] {
+        [self.num(id, "arc.start").unwrap_or(0.0), self.num(id, "arc.sweep").unwrap_or(std::f64::consts::TAU), self.num(id, "arc.inner").unwrap_or(0.0)]
+    }
+
+    /// A lone shape's handles (`ShapeGrip`) and where they are on screen,
+    /// given window px ← the shape's space; none while it is small there.
+    pub(crate) fn shape_grips(&self, id: NodeId, to_screen: Affine) -> Vec<(ShapeGrip, Point)> {
+        let Some((b, _)) = self.local_box(id) else { return Vec::new() };
+        let [a, bb, c, d, _, _] = to_screen.as_coeffs();
+        // Window px per local unit along each axis.
+        let (kx, ky) = (a.hypot(bb).max(1e-9), c.hypot(d).max(1e-9));
+        if b.width() * kx < SHAPE_GRIPS_MIN || b.height() * ky < SHAPE_GRIPS_MIN {
+            return Vec::new();
+        }
+        match self.ty(id) {
+            "rect" => {
+                let radii = iron_document::shape::clamp_radii(b.width(), b.height(), self.radii(id));
+                CORNERS
+                    .iter()
+                    .zip(radii)
+                    .enumerate()
+                    .map(|(i, (&(u, v), r))| {
+                        let inward = kurbo::Vec2::new(1.0 - 2.0 * u, 1.0 - 2.0 * v);
+                        let dx = r.max(SHAPE_GRIP_INSET / kx).min(b.width() * 0.5);
+                        let dy = r.max(SHAPE_GRIP_INSET / ky).min(b.height() * 0.5);
+                        let corner = Point::new(b.x0 + u * b.width(), b.y0 + v * b.height());
+                        (ShapeGrip::Corner(i), to_screen * (corner + kurbo::Vec2::new(inward.x * dx, inward.y * dy)))
+                    })
+                    .collect()
+            }
+            "ellipse" => {
+                let (rx, ry) = (b.width() * 0.5, b.height() * 0.5);
+                let [start, sweep, inner] = self.arc(id);
+                // On the rim, pulled in so it stays clear of the box's edges.
+                let rim = |t: f64| {
+                    let p = Point::new(rx * t.cos(), ry * t.sin());
+                    let screen_r = (to_screen * p).distance(to_screen * Point::ORIGIN).max(1.0);
+                    let k = (1.0 - SHAPE_GRIP_INSET / screen_r).max(0.0);
+                    to_screen * Point::new(p.x * k, p.y * k)
+                };
+                let full = sweep.abs() >= std::f64::consts::TAU - 1e-9;
+                let mid = start + sweep * 0.5;
+                let mut out = vec![(ShapeGrip::Sweep, rim(start + sweep))];
+                if !full {
+                    out.push((ShapeGrip::Start, rim(start)));
+                }
+                out.push((ShapeGrip::Inner, to_screen * Point::new(rx * inner * mid.cos(), ry * inner * mid.sin())));
+                out
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn rotatable(&self, parts: &[Part]) -> bool {
@@ -1156,6 +1236,21 @@ pub fn select_tool_system(
                     None => {}
                 }
             }
+            // A lone rect's corner dots and a lone ellipse's arc handles
+            // come before the box's grips too.
+            if view.dims == Dims::Two
+                && let [r] = movers(&reaches, &view.panel)[..]
+                && matches!(geo.ty(r.node()), "rect" | "ellipse")
+                && let Some(space) = geo.space(&r.chain)
+            {
+                let id = r.node();
+                let to_screen = view.affine() * space * geo.world(id);
+                let hit = geo.shape_grips(id, to_screen).into_iter().find(|(_, p)| p.distance(screen) <= POINT_HIT);
+                if let Some((grip, _)) = hit {
+                    tool.gesture = Gesture::Shape { id, grip, to_local: to_screen.inverse(), arc: geo.arc(id) };
+                    break 'press;
+                }
+            }
             // The selection's grips come first.
             if view.dims == Dims::Two {
                 let mine = movers(&reaches, &view.panel);
@@ -1360,6 +1455,11 @@ pub fn select_tool_system(
             Gesture::Pan { panel, start, pan } => {
                 view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
             }
+            Gesture::Shape { id, grip, to_local, arc } => {
+                let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+                let writes = shape_grip_writes(&geo, *id, *grip, *to_local * screen, *arc, mods(MOD_ALT), mods(MOD_SHIFT));
+                preview_writes(&mut store.0, writes);
+            }
             Gesture::Handle { point, out, to_local, at } => {
                 let v = *to_local * screen - *at;
                 let (mine, other) = if *out { (("handles.ox", "handles.oy"), ("handles.ix", "handles.iy")) } else { (("handles.ix", "handles.iy"), ("handles.ox", "handles.oy")) };
@@ -1479,6 +1579,10 @@ pub fn select_tool_system(
             }
             Gesture::Transform { label, .. } => gestures.0.push(GestureRequest::Commit(label)),
             Gesture::Handle { .. } => gestures.0.push(GestureRequest::Commit("move handle".into())),
+            Gesture::Shape { grip, .. } => {
+                let label = if matches!(grip, ShapeGrip::Corner(_)) { "round corners" } else { "edit arc" };
+                gestures.0.push(GestureRequest::Commit(label.into()));
+            }
             Gesture::Marquee { .. } => tool.marquee = None,
             Gesture::Legacy => {
                 if drag.target.is_some() {
@@ -1545,6 +1649,44 @@ pub fn select_tool_system(
 
 /// Preview each leaf that differs from what it reads now. A locked leaf
 /// holds still; why is logged at debug level, every frame it is asked.
+/// What dragging a shape's handle to `p` (the shape's space) writes. A
+/// corner dot sets every corner's radius (Alt: its own only) to the
+/// pointer's distance along the corner's diagonal; the arc's handles set its
+/// end or start by the pointer's angle (Shift: 15° steps) and its inner
+/// ratio by the pointer's distance. Every arc leaf is written, so a commit
+/// that adds the `arc` component carries all three.
+fn shape_grip_writes(geo: &Geo, id: NodeId, grip: ShapeGrip, p: Point, arc: [f64; 3], alt: bool, shift: bool) -> Vec<(NodeId, &'static str, f64)> {
+    use std::f64::consts::TAU;
+    let Some((b, _)) = geo.local_box(id) else { return Vec::new() };
+    let snap = |a: f64| if shift { (a / SNAP).round() * SNAP } else { a };
+    match grip {
+        ShapeGrip::Corner(i) => {
+            let (u, v) = CORNERS[i];
+            let corner = Point::new(b.x0 + u * b.width(), b.y0 + v * b.height());
+            let d = p - corner;
+            let r = ((d.x * (1.0 - 2.0 * u) + d.y * (1.0 - 2.0 * v)) * 0.5).clamp(0.0, b.width().min(b.height()) * 0.5);
+            let all = ["corners.tl", "corners.tr", "corners.br", "corners.bl"];
+            if alt { vec![(id, all[i], r)] } else { all.iter().map(|&leaf| (id, leaf, r)).collect() }
+        }
+        _ => {
+            let (rx, ry) = (b.width().max(1e-9) * 0.5, b.height().max(1e-9) * 0.5);
+            let t = snap((p.y / ry).atan2(p.x / rx));
+            let [start, sweep, inner] = arc;
+            // A sweep that closes up within a degree is the whole ellipse.
+            let positive = |a: f64| {
+                let a = a.rem_euclid(TAU);
+                if a < 1f64.to_radians() || a > TAU - 1f64.to_radians() { TAU } else { a }
+            };
+            let (start, sweep, inner) = match grip {
+                ShapeGrip::Sweep => (start, positive(t - start), inner),
+                ShapeGrip::Start => (t, positive(start + sweep - t), inner),
+                _ => (start, sweep, (p.x / rx).hypot(p.y / ry).clamp(0.0, 0.99)),
+            };
+            vec![(id, "arc.start", start), (id, "arc.sweep", sweep), (id, "arc.inner", inner)]
+        }
+    }
+}
+
 /// Edit a rect's or an ellipse's points: it becomes a path with the same id,
 /// in one transaction (`iron_document::shape`). When that would cut a
 /// binding or a clip, the shell asks first and converts on a yes.
@@ -1771,6 +1913,17 @@ pub fn draw_select_overlay(
                         b.stroke(Affine::IDENTITY, thin.clone(), blue, r);
                     }
                 };
+                // A lone shape's corner dots or arc handles.
+                if *active == ActiveTool::Select
+                    && let [r] = movers(&reaches, &o.panel)[..]
+                    && matches!(geo.ty(r.node()), "rect" | "ellipse")
+                    && let Some(space) = geo.space(&r.chain)
+                {
+                    for (_, at) in geo.shape_grips(r.node(), to_screen * space * geo.world(r.node())) {
+                        b.fill(Affine::IDENTITY, white, kurbo::Circle::new(at, HANDLE_END));
+                        b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(at, HANDLE_END));
+                    }
+                }
                 if *active == ActiveTool::Select
                     && let [r] = movers(&reaches, &o.panel)[..]
                     && geo.ty(r.node()) == "path"

@@ -201,6 +201,49 @@ selected and the tool returns to Move.
 **Grips** are about 1.4× larger: corner squares 10 px (were 7), path points
 8 px (6), handle ends radius 4 (3), with hit zones to match.
 
+## Corners, arcs and shadows (2026-10-14)
+
+Three optional components, each added by its first gesture or from the
+inspector's **+ corners / + arc / + shadow** buttons (and removed by the ×
+on its heading):
+
+- **`corners`** on a `rect`: `tl tr br bl`, clamped to half the shorter side
+  when drawn. A lone selected rect shows a dot inside each corner (when it
+  spans 48 px on screen); dragging one along its diagonal sets all four,
+  Alt one ("round corners").
+- **`arc`** on an `ellipse`: `start`, `sweep` (radians, clockwise on screen,
+  parameter angles) and `inner` (hole ratio): a pie, a ring segment or a
+  ring. Handles: the sweep's end on the rim, the start once the arc is
+  partial, and the inner ratio ("edit arc"). Shift snaps angles to 15°;
+  a sweep closing within 1° is the whole ellipse. A full ring has two
+  outlines, so it refuses to become a path.
+- **`shadow`** on a `rect`, `ellipse` or `path`: `color dx dy blur`,
+  Figma's defaults (black 25 %, 0, 4, 4). The offset is in the parent's
+  space, so the shadow stays below a rotated shape; `blur` is twice the
+  Gaussian's standard deviation, as in CSS.
+
+**One geometry.** `iron_document::shape` (now with `kurbo`) builds every
+shape's outline as anchors with handles: the renderer draws it, and a
+conversion to a path writes the same anchors (a rounded rect becomes eight
+points).
+
+**A gesture may add a component.** `Store::handle` treats a leaf of a
+component the node allows but lacks as `Direct`, previews read it from the
+overlay, and `commit_gesture` adds the component (defaults plus the previewed
+fields) before its `Set`s: one transaction, one undo. This also unblocks
+resizing a 2D embed without a `frame` (not yet wired).
+
+**What Vello offers** (vello_hybrid 0.2, read from source): no rounded-rect
+primitive. `fill_rect` has a fast path for plain axis-aligned rects only,
+and a rounded rect is a path. For shadows it has two routes, both used:
+`fill_blurred_rounded_rect`, an analytic blurred rounded rect with no
+offscreen pass, for a plain or evenly rounded rect's shadow
+(`DrawCmd::BlurredRect`); and filter layers with `DropShadow` (blur, offset,
+composite) for any other shape (`DrawCmd::PushShadow`), which costs an
+offscreen pass per shadowed shape. Document rects now reach the backend as
+`Shape::Rect`/`RoundedRect` rather than paths. The classic backend draws the
+analytic shadow but has no filter layers, so it skips the others.
+
 ## Selection and hover geometry cache (2026-10-13)
 
 **Done in the working tree (roadmap H):** selection boxes, individual frames,
@@ -250,8 +293,9 @@ target; this cache only removes repeated geometry preparation.
   `ActiveTool`, `SelectTool`, `PenTool` and `PointerHits` play those roles.
 - For the pen: adding points to an existing open path, inserting a point on a segment,
   deleting a point while keeping the path, and converting between corner and smooth.
-- Rectangle corner radii and ellipse arcs (Figma's parameters); converting a
-  shape lazily on its first point edit instead of on entering.
+- Converting a shape lazily on its first point edit instead of on entering.
+- Several shadows per shape, inner shadows (`fill_blurred_rounded_rect`'s
+  `invert`), spread, and layer blur.
 - Back from a path to a shape (Figma cannot either).
 
 

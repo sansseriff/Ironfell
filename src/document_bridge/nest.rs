@@ -30,10 +30,30 @@ pub struct Embed2d {
 
 /// A node's shape as a path in its own local space.
 pub fn shape_path(shape: &Shape2d) -> kurbo::BezPath {
+    match draw_shape(shape) {
+        crate::vector::Shape::Path(p) => p,
+        other => other.to_path(),
+    }
+}
+
+/// A rect's rounded outline, its radii clamped as Figma draws them.
+pub fn rounded_rect(w: f32, h: f32, radii: [f32; 4]) -> kurbo::RoundedRect {
+    let [tl, tr, br, bl] = iron_document::shape::clamp_radii(w as f64, h as f64, radii.map(f64::from));
+    kurbo::RoundedRect::from_rect(kurbo::Rect::new(0.0, 0.0, w as f64, h as f64), kurbo::RoundedRectRadii::new(tl, tr, br, bl))
+}
+
+/// A node's shape as the display list's typed shape, so a backend can take
+/// its fast path for a plain or rounded rect.
+pub fn draw_shape(shape: &Shape2d) -> crate::vector::Shape {
+    use crate::vector::Shape;
     match shape {
-        &Shape2d::Rect { w, h } | &Shape2d::Slider { w, h, .. } => kurbo::Rect::new(0.0, 0.0, w as f64, h as f64).into_path(0.1),
-        &Shape2d::Ellipse { rx, ry } => kurbo::Ellipse::new((0.0, 0.0), (rx as f64, ry as f64), 0.0).into_path(0.1),
-        Shape2d::Path { outline, .. } => (**outline).clone(),
+        &Shape2d::Rect { w, h, radii } if radii.iter().any(|&r| r > 0.0) => Shape::RoundedRect(rounded_rect(w, h, radii)),
+        &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } => Shape::Rect(kurbo::Rect::new(0.0, 0.0, w as f64, h as f64)),
+        &Shape2d::Ellipse { rx, ry, arc } => {
+            let arc = arc.map(|a| a.map(f64::from));
+            Shape::Path(iron_document::shape::to_bez(&iron_document::shape::ellipse_outline(rx as f64, ry as f64, arc)))
+        }
+        Shape2d::Path { outline, .. } => Shape::Path((**outline).clone()),
     }
 }
 

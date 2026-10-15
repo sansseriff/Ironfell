@@ -795,6 +795,24 @@ fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, U
                     }
                 }
             }
+            DrawCmd::BlurredRect { transform, color, rect, radius, std_dev } => {
+                scene.set_transform(base * *transform);
+                scene.set_paint(*color);
+                scene.fill_blurred_rounded_rect(rect, *radius as f32, *std_dev as f32, false);
+            }
+            DrawCmd::PushShadow { transform, color, offset, std_dev, .. } => {
+                use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
+                // The filter reads its offset and blur in the transform
+                // current when the layer is pushed.
+                scene.set_transform(base * *transform);
+                scene.push_filter_layer(Filter::from_primitive(FilterPrimitive::DropShadow {
+                    dx: offset.x as f32,
+                    dy: offset.y as f32,
+                    std_deviation: *std_dev as f32,
+                    color: *color,
+                    edge_mode: EdgeMode::None,
+                }));
+            }
             DrawCmd::PushClip { transform, shape } => {
                 scene.set_transform(base * *transform);
                 fill_scratch(scratch, shape);

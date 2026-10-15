@@ -55,7 +55,7 @@ pub use units::Dim;
 pub use value::{Slot, Value, ValueKind};
 pub use view::{Fidelity, ViewError, ViewQuery, ViewRelation};
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 /// Result of a successful apply.
 #[derive(Clone, Debug, PartialEq)]
@@ -417,11 +417,19 @@ impl Store {
         ts: u64,
     ) -> Option<Result<Applied, Vec<ApplyError>>> {
         let mut ops = Vec::new();
+        // Leaves of components the node lacks but allows: the component is
+        // added, defaults with the previewed fields set, before the `Set`s.
+        let mut added: BTreeMap<(NodeId, ComponentKind), Component> = BTreeMap::new();
         for (leaf, value) in self.reactive.overlay() {
             if !self.drivers.contains(leaf) {
                 continue;
             }
             let Some(slot) = self.doc.leaf(leaf.node, leaf.path) else {
+                let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.component));
+                if allowed && self.doc.component(leaf.node, leaf.path.component).is_none() {
+                    let c = added.entry((leaf.node, leaf.path.component)).or_insert_with(|| leaf.path.component.default_component());
+                    let _ = c.set(leaf.path.field, Slot::Const(value.clone()));
+                }
                 continue;
             };
             if slot.expr().is_some() {
@@ -439,6 +447,8 @@ impl Store {
                 });
             }
         }
+        let adds = added.into_iter().map(|((id, _), comp)| Op::AddComp { id, comp });
+        ops = adds.chain(ops).collect();
         if ops.is_empty() {
             self.cancel_gesture();
             return None;

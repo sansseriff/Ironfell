@@ -93,6 +93,11 @@ pub fn prepare_spatial(
         // the overlay in its own view, so they need no allowance here; a
         // plane's view culls with a device-space margin that covers its own.
         let mut paint_pad = shape.stroke.map_or(0.0, |(_,w)| w as f64 * 0.5 * 4.0);
+        // A shadow paints past the shape by its offset and three of its
+        // standard deviations.
+        if let Some(s) = shape.shadow {
+            paint_pad += (s.dx.abs().max(s.dy.abs()) + 3.0 * s.std_dev) as f64;
+        }
         if let Shape2d::Slider { h, .. } = shape.shape {
             // The knob can overhang either end of the track's hit rectangle.
             paint_pad = paint_pad.max((h as f64 * 0.5).min(12.0) + 3.0);

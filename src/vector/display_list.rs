@@ -64,6 +64,17 @@ impl From<BezPath> for Shape {
 }
 
 impl Shape {
+    /// The outline as a path.
+    pub fn to_path(&self) -> BezPath {
+        match self {
+            Self::Rect(s) => s.to_path(0.1),
+            Self::RoundedRect(s) => s.to_path(0.1),
+            Self::Circle(s) => s.to_path(0.1),
+            Self::Line(s) => s.to_path(0.1),
+            Self::Path(s) => s.clone(),
+        }
+    }
+
     /// Untransformed bounds of the outline.
     pub fn bounding_box(&self) -> Rect {
         match self {
@@ -115,6 +126,27 @@ pub enum DrawCmd {
         image: Handle<Image>,
         size: UVec2,
         version: u32,
+    },
+    /// A rect's drop shadow, drawn analytically: a rounded rect blurred by a
+    /// Gaussian of `std_dev`, with no offscreen pass (Vello's
+    /// `fill_blurred_rounded_rect`, the reason [`Shape`] keeps rects).
+    BlurredRect {
+        transform: Affine,
+        color: Color,
+        rect: Rect,
+        radius: f64,
+        std_dev: f64,
+    },
+    /// Begin a layer whose content casts a drop shadow (a filter layer, for
+    /// shapes the analytic shadow cannot draw). Offset and blur are in
+    /// `transform`'s space; `bounds`, in the same space, covers the content
+    /// and its shadow. Always balanced by [`DrawCmd::PopLayer`].
+    PushShadow {
+        transform: Affine,
+        color: Color,
+        offset: kurbo::Vec2,
+        std_dev: f64,
+        bounds: Rect,
     },
     /// Begin a clip layer. Always balanced by [`DrawCmd::PopLayer`].
     PushClip {
@@ -185,6 +217,11 @@ impl DisplayList {
                 DrawCmd::Texture { transform, size, .. } => {
                     transform.transform_rect_bbox(Rect::new(0.0, 0.0, size.x as f64, size.y as f64))
                 }
+                DrawCmd::BlurredRect { transform, rect, std_dev, .. } => {
+                    let pad = 3.0 * std_dev;
+                    transform.transform_rect_bbox(rect.inflate(pad, pad))
+                }
+                DrawCmd::PushShadow { transform, bounds, .. } => transform.transform_rect_bbox(*bounds),
                 DrawCmd::PopLayer => continue,
             };
             acc = Some(match acc {
@@ -241,6 +278,21 @@ impl DisplayListBuilder<'_> {
     /// Draw another view's texture; see [`DrawCmd::Texture`].
     pub fn texture(&mut self, transform: Affine, image: Handle<Image>, size: UVec2, version: u32) {
         self.out.push(DrawCmd::Texture { transform, image, size, version });
+    }
+
+    /// A rect's analytic drop shadow; see [`DrawCmd::BlurredRect`].
+    pub fn blurred_rect(&mut self, transform: Affine, color: Color, rect: Rect, radius: f64, std_dev: f64) {
+        self.out.push(DrawCmd::BlurredRect { transform, color, rect, radius, std_dev });
+    }
+
+    /// Run `f` with what it draws casting a drop shadow; see
+    /// [`DrawCmd::PushShadow`]. Scoped, as [`Self::clipped`] is.
+    pub fn shadowed(&mut self, transform: Affine, color: Color, offset: kurbo::Vec2, std_dev: f64, bounds: Rect, f: impl FnOnce(&mut Self)) {
+        self.out.push(DrawCmd::PushShadow { transform, color, offset, std_dev, bounds });
+        self.depth += 1;
+        f(self);
+        self.depth -= 1;
+        self.out.push(DrawCmd::PopLayer);
     }
 
     /// Run `f` with everything it draws clipped to `shape`.

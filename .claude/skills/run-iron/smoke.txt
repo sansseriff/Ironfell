@@ -375,6 +375,25 @@ eval __iron.convertQuestion()?.cuts
 click Cancel
 sleep 300
 eval __iron.convertQuestion()
+# Corner radius, arcs and shadows: the rectangle's top-left corner dot
+# dragged in rounds all four corners (a "round corners" that adds the
+# `corners` component); the inspector adds a shadow; the ellipse's sweep
+# handle dragged to the bottom makes a quarter pie ("edit arc" adds `arc`).
+tab Controls
+dclick 600 170
+sleep 600
+ddrag 512 112 530 130
+sleep 500
+eval shapeView('rectangle')
+click Add shadow
+sleep 500
+eval (async () => (await __iron.view({fidelity:'full'})).match(/<rect[^>]*name="rectangle"[^>]*>/)[0].match(/ shadow\.color.*blur="[^"]*"/)[0])()
+dclick 800 160
+sleep 600
+ddrag 828 140 770 168
+sleep 500
+eval shapeView('ellipse')
+shot shapes-arc
 # The dock (src-ui/views): opening a tab gives its view a canvas panel and
 # takes the hidden Main tab's away.
 tab Pendulum

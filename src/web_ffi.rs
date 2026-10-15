@@ -813,7 +813,37 @@ pub fn document_inspect(ptr: u64, node: String) -> String {
             serde_json::json!({"kind": kind.name(), "fields": fields})
         })
         .collect();
-    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components}).to_string()
+    // Optional components a person adds and removes from the inspector.
+    let optional = |k: iron_document::ComponentKind| n.ty.spec().allows(k) && !n.ty.spec().requires(k) && INSPECTOR_OPTIONAL.contains(&k.name());
+    let addable: Vec<&str> = iron_document::ComponentKind::ALL.iter().copied().filter(|&k| optional(k) && doc.component(id, k).is_none()).map(|k| k.name()).collect();
+    let removable: Vec<&str> = doc.components_of(id).map(|c| c.kind()).filter(|&k| optional(k)).map(|k| k.name()).collect();
+    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable}).to_string()
+}
+
+/// Components the inspector offers to add or remove: paint and shape
+/// details, never structure.
+const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow"];
+
+/// Add (`add`) or remove a component from the inspector, with its defaults,
+/// as one transaction: "add shadow", "remove corners". JSON `{"ok"}` or
+/// `{"ok":false,"error"}`.
+#[wasm_bindgen]
+pub fn document_component(ptr: u64, node: String, kind: String, add: bool) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    let Ok(id) = node.parse::<iron_document::NodeId>() else { return fail(format!("bad id {node:?}")) };
+    let Some(k) = iron_document::ComponentKind::from_name(&kind).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())) else { return fail(format!("no optional component {kind:?}")) };
+    let op = if add { iron_document::Op::AddComp { id, comp: k.default_component() } } else { iron_document::Op::RemoveComp { id, kind: k } };
+    let label = format!("{} {kind}", if add { "add" } else { "remove" });
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    let result = store.0.apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: 0, idempotency_key: None, ops: vec![op], exact: false });
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    match result {
+        Ok(_) => serde_json::json!({"ok": true}).to_string(),
+        Err(errors) => fail(errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")),
+    }
 }
 
 /// Set one leaf from the inspector: `text` parsed by the leaf's current

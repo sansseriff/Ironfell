@@ -137,6 +137,9 @@
   .dock :global(.dv-sash),
   .dock :global(.html-view),
   .dock :global(.html-view *),
+  /* Controls a hybrid view lays over its canvas (the composition toolbar). */
+  .dock :global(.canvas-ui),
+  .dock :global(.canvas-ui *),
   .dock :global(.dv-tabs-overflow-dropdown-root),
   .dock :global(.dv-tabs-overflow-dropdown-root *),
   .dock.dragging :global(*) {

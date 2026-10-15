@@ -226,6 +226,7 @@ undefined
 ["out 303.15 K -5 W","a 303.15 K 5 W","b 293.15 K -5 W","p 293.15 K 5 W"]
 ["out 313.15 K -10 W","a 313.15 K 10 W","b 293.15 K -10 W","p 293.15 K 10 W"]
 tab Controls
+clicked .toolbar button[aria-label="Rectangle"]
 "Rectangle (R)"
 ["<rect id=\"#2q\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
 "<ellipse id=\"#2r\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
@@ -376,7 +377,8 @@ cd -
 | `tab <title>` | activate the dock tab with that title (`Pendulum`, `Assembly`, …) |
 | `dragtab <title> x y` | drag a dock tab to a window point: a group's edge splits, its centre or tab bar stacks |
 | `dclick x y`, `ddblclick x y` | click or double-click at a document point in the viewer (the select tool: a double-click enters a group or embed) |
-| `click <text>` | click the shell button with that accessible name (`Link`, `Show in assembly`) |
+| `click <text>` | click the shell button with that accessible name (`Link`, `Show in assembly`); the name matches as a substring, so `Pen` can hit `Close Pendulum` |
+| `clickel <selector>` | click the element a CSS selector names; fails if another element (the canvas) would receive the click |
 | `hunt x0 y0 x1 y1 step <js>` | sweep the pointer over a document-space grid until `<js>` is truthy (e.g. `__iron.hovered().includes(id)`); prints where. For targets whose screen position is hard to predict, such as a shape on a plane in 3D |
 | `dragfound dx dy` | drag from the last `hunt` hit by (dx, dy) document px |
 | `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |

@@ -50,7 +50,7 @@
 </script>
 
 {#if twoD}
-  <div class="toolbar" role="toolbar" aria-label="Tools">
+  <div class="toolbar canvas-ui" role="toolbar" aria-label="Tools">
     <button class="tool" class:active={doc.tool === "select"} title="Move (V)" aria-label="Move" onclick={() => pick("select")}>
       <MousePointer2 size={18} strokeWidth={1.6} />
     </button>
@@ -96,7 +96,6 @@
     border-radius: 12px;
     background: var(--bg);
     box-shadow: var(--menu-shadow);
-    pointer-events: auto;
     user-select: none;
   }
   .group {

@@ -343,7 +343,8 @@ shot thermal
 # is bound, so converting it asks first; the dialog's Cancel leaves it.
 tab Controls
 eval window.shapeView = async (name) => { const v = await __iron.view({fidelity:'full'}); const m = v.match(new RegExp('<(rect|ellipse|path) id="[^"]+" name="' + name + '"[^>]*>')); return m && m[0].replace(/ color=.*/, ''); }
-key r
+# The toolbar floats over the canvas: a real click must reach it.
+clickel .toolbar button[aria-label="Rectangle"]
 sleep 300
 eval document.querySelector('.toolbar button.active')?.title
 ddrag 500 100 640 180

@@ -328,6 +328,12 @@ async function run(line: string) {
       await page.getByRole("button", { name: rest.join(" ") }).first().click();
       return out(`clicked ${rest.join(" ")}`);
     }
+    case "clickel": {
+      // Click the element a CSS selector names, as a pointer would: Playwright
+      // refuses when another element (the canvas) would receive the click.
+      await page.locator(rest.join(" ")).first().click({ timeout: 5000 });
+      return out(`clicked ${rest.join(" ")}`);
+    }
     case "pclick": {
       // Click inside a named panel, panel-relative.
       const r = await panelRect(rest[0]);

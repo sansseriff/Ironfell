@@ -99,8 +99,9 @@
     background: var(--tab-divider);
     pointer-events: none;
   }
-  .dock :global(.dv-tab.dv-inactive-tab:hover::before),
-  .dock :global(.dv-tab.dv-inactive-tab:hover + .dv-tab::before) {
+  /* Only dividers: the active tab's ::before is its left fillet. */
+  .dock :global(.dv-tab.dv-inactive-tab:hover + .dv-tab.dv-inactive-tab::before),
+  .dock :global(.dv-tab.dv-inactive-tab + .dv-tab.dv-inactive-tab:hover::before) {
     display: none;
   }
   .dock :global(.dv-tab.dv-active-tab) {

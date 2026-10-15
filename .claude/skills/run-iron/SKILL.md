@@ -115,7 +115,11 @@ laser. Each `[lasers, connections, [figures per laser]]` line counts them), and
 gesture ownership (in the same tab: a model edit to the laser body's x mid-drag
 cancels the drag, so the edit stands and the release commits nothing; an edit
 to the dial mid-drag leaves the drag running to its own "move rect"; three undos
-put the body back). Expected output, minus screenshot lines,
+put the body back), Alt-drag (Alt held from the press on the laser body drags
+a copy, with a second laser entity, and leaves the original; one undo takes back
+the duplicate and its move, which history holds as one entry, though the log
+shows both), and the 3D gizmo (the torus selected in the Assembly tab, its
+green Y arrow dragged up: y only, one "move mesh", undone). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
@@ -271,6 +275,13 @@ true
 true
 " x=\"180\" y=\"190\""
 " x=\"60\" y=\"140\""
+undefined
+[["60,140","160,290"],2,1]
+[["60,140"],1]
+tab Assembly
+undefined
+[true,true,true]
+[0,1.5,0]
 tab Pendulum
 [true,false]
 tab Main
@@ -317,6 +328,11 @@ applied "move rect" (2 ops, Human) -> v39
 applied "undo: move rect" (2 ops, System) -> v40
 applied "undo: model edit" (1 ops, System) -> v41
 applied "undo: model edit" (1 ops, System) -> v42
+applied "duplicate rect" (4 ops, Human) -> v43
+applied "duplicate rect" (2 ops, Human) -> v44
+applied "undo: duplicate rect" (6 ops, System) -> v45
+applied "move mesh" (1 ops, Human) -> v46
+applied "undo: move mesh" (1 ops, System) -> v47
 (no page errors)
 ```
 

@@ -494,6 +494,42 @@ impl Store {
         self.resolve_physics();
     }
 
+    /// Take back transaction `version` if it is the latest: undo it and drop
+    /// it from redo, as if it had never been applied. For a gesture that
+    /// made something and then thought better of it (releasing Alt during an
+    /// Alt-drag removes the copies). `false` when it is not the latest.
+    pub fn retract(&mut self, version: Version, ts: u64) -> bool {
+        if self.history.past.last().is_none_or(|t| t.version != version) {
+            return false;
+        }
+        match self.undo(ts) {
+            Some(Ok(_)) => {
+                self.history.future.pop();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Fold the latest transaction into the one before it, when that one is
+    /// `previous`: one history entry, labelled `label`, undone in one step.
+    /// An Alt-drag's duplicate and its move are one edit. The log keeps both.
+    pub fn merge_with_previous(&mut self, previous: Version, label: impl Into<String>) -> bool {
+        let n = self.history.past.len();
+        if n < 2 || self.history.past[n - 2].version != previous {
+            return false;
+        }
+        let b = self.history.past.pop().expect("two entries");
+        let a = self.history.past.pop().expect("two entries");
+        let mut ops = a.ops;
+        ops.extend(a.derived_ops);
+        ops.extend(b.ops);
+        let mut inverse = a.inverse;
+        inverse.extend(b.inverse);
+        self.history.past.push(Transaction { version: b.version, label: label.into(), actor: b.actor, ts: b.ts, idempotency_key: None, ops, derived_ops: b.derived_ops, inverse, solver: b.solver });
+        true
+    }
+
     /// Set a leaf to `value` through its handle, as one transaction: a
     /// constant directly, a linearly bound leaf through its source. For
     /// one-off edits (an inspector field); a running gesture is unaffected

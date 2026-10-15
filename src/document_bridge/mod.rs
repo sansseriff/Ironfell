@@ -139,6 +139,9 @@ impl NodeMap {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GestureRequest {
     Commit(String),
+    /// Commit, then fold the commit into transaction `.1` before it: an
+    /// Alt-drag's duplicate and its move are one edit.
+    CommitMerged(String, iron_document::Version),
     Cancel,
 }
 
@@ -352,6 +355,17 @@ pub(crate) fn sync_document(
                     }
                 }
             }
+            GestureRequest::CommitMerged(label, before) => match store.0.commit_gesture(label.clone(), iron_document::Actor::Human, now) {
+                Some(Ok(_)) => {
+                    store.0.merge_with_previous(before, label);
+                }
+                Some(Err(errors)) => {
+                    for e in errors {
+                        warn!("gesture rejected: {e}");
+                    }
+                }
+                None => {}
+            },
             GestureRequest::Cancel => store.0.cancel_gesture(),
         }
     }

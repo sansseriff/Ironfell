@@ -1,7 +1,7 @@
 # Clipboard, duplicate and assets
 
-**Status:** phase 1 (copy closure, Cmd+D, Cmd+C/X/V within the app) done 2026-10-15.
-Phase 2 (Alt-drag) waits on gesture ownership. Phases 3 and later (assets, drag and
+**Status:** phases 1 (copy closure, Cmd+D, Cmd+C/X/V within the app) and 2
+(Alt-drag) done 2026-10-15. Phases 3 and later (assets, drag and
 drop, cross-document paste) wait on the project-container decision (§6).
 
 This spec came out of a conversation on 2026-10-15 about how deep copy and paste must
@@ -96,11 +96,12 @@ The worker has no `navigator.clipboard`, and the store lives in the worker.
      `tests/constraints.rs`.
    - The smoke script's Optics section: duplicate, copy to the system clipboard,
      paste, cut and paste, four undos.
-2. **Alt-drag to duplicate.** It creates structure in the middle of a gesture and
-   removes it again if Alt is released, so it waits on gesture ownership
-   (`infinite-canvas-architecture-patterns.md` §4) and is one of its exit tests. It
-   needs history to merge the duplicate and the move into one entry, an exception
-   to spine §6.5 that must be recorded there.
+2. **Alt-drag to duplicate. Done 2026-10-15**, on gesture ownership
+   (`infinite-canvas-architecture-patterns.md` §4, "Second pass"). Alt down
+   mid-move applies a duplicate and drags the copies; Alt up retracts it
+   (`Store::retract`); release folds the move into the duplicate
+   (`Store::merge_with_previous`), the exception to spine §6.5 recorded there.
+   The copies are selected, as in Figma.
 3. **Outbound formats:**
    - `text/plain` as the model's XML view of the selection, so a paste into a
      conversation with Claude reads well, with the fragment moved to a `text/html`

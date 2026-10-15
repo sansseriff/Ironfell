@@ -97,6 +97,13 @@ bevy_vello = { git = "https://github.com/linebender/bevy_vello", branch = "main"
 # `vello_hybrid`. Versions must match the renderer's resolved versions so their
 # types unify at the rendering seam.
 kurbo = "0.13.1"
+# The 3D transform gizmo's math and drawing, framework-agnostic: it previews
+# through the store like any drag (bevy_app/manipulate.rs), unlike its Bevy
+# plugin, which writes `Transform`s directly.
+transform-gizmo = "0.11"
+# transform-gizmo's epaint uses ahash with runtime randomness, which on wasm
+# needs getrandom's `wasm_js` backend; 0.3.4 selects it from the feature alone.
+getrandom = { version = "0.3.4", features = ["wasm_js"] }
 peniko = "0.6.1"
 
 # Sparse-strips vector renderer.

@@ -475,6 +475,58 @@ sleep 400
 key Meta+z
 sleep 600
 eval body()
+# Alt-drag (clipboard-and-assets.md phase 2), still in Optics: Alt held from
+# the press on the laser body duplicates it (and its laser entity) and drags
+# the copy, leaving the original; one undo takes back the duplicate and its
+# move together.
+eval window.bodies = async () => { const v = await __iron.view({fidelity:'full'}); const i = v.indexOf('name="optics"'); return [...v.slice(i).matchAll(/<rect id="[^"]+" name="body" x="([^"]+)" y="([^"]+)"/g)].map(m => m[1] + ',' + m[2]); }
+dclick 120 170
+sleep 300
+keydown Alt
+dmove 120 170
+down
+sleep 300
+dmove 140 190
+sleep 300
+dmove 180 260
+sleep 300
+dmove 220 320
+sleep 300
+up
+keyup Alt
+sleep 700
+eval (async () => [await bodies(), (await lasers())[0], __iron.selection().length])()
+key Meta+z
+sleep 600
+eval (async () => [await bodies(), (await lasers())[0]])()
+# The 3D transform gizmo (manipulate.rs, transform-gizmo): selecting the torus
+# in the Assembly tab shows it; dragging its green (Y) arrow up moves the torus
+# along y only, as one "move mesh"; undo puts it back.
+tab Assembly
+sleep 600
+eval window.torusPos = async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<mesh id="#Q"[^>]*pos="([^"]+)"/)[1].split(',').map(Number); }
+move 870 395
+down
+sleep 200
+up
+sleep 800
+move 890 305
+sleep 300
+down
+sleep 300
+move 890 290
+sleep 300
+move 890 260
+sleep 300
+move 890 240
+sleep 300
+up
+sleep 800
+eval torusPos().then(p => [p[0] === 0, p[1] > 2, p[2] === 0])
+shot gizmo
+key Meta+z
+sleep 600
+eval torusPos()
 # The dock (src-ui/views): opening a tab gives its view a canvas panel and
 # takes the hidden Main tab's away.
 tab Pendulum

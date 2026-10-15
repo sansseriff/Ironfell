@@ -279,16 +279,15 @@ target; this cache only removes repeated geometry preparation.
 
 ## Not yet
 
-- Alt-drag to duplicate. Copy, paste and Cmd+D are done (`iron_document::copy`,
-  [clipboard-and-assets.md](clipboard-and-assets.md)); Alt-drag waits on gesture
-  ownership, because it creates and removes nodes mid-gesture.
 - Snapping and smart guides, and the distance and size labels. The size label needs text
   in the display list.
 - Group and ungroup (Cmd+G).
 - Reparenting by dragging into a group or frame.
 - The scale tool (K), which scales strokes and content.
 - Right-click "select layer".
-- A transform box in 3D panels; gizmos are a separate question.
+- A transform box in 3D panels. Answered by the 3D transform gizmo instead
+  (2026-10-15, `bevy_app/manipulate.rs`;
+  infinite-canvas-architecture-patterns.md §4, "Second pass").
 - Resizing a 2D embed that has no `frame`. It would need an `AddComp` in the same
   gesture; the current commit makes only `Set`s.
 - The tool-context resource and the hit-test interface of roadmap §4 are still implicit:

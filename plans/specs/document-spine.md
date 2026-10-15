@@ -467,9 +467,10 @@ structural ops. The buffer lives in the reconciler layer (§10), not in the stor
 `GestureId`; a transaction from outside it applies without them and either
 conflicts (the gesture is cancelled and commits nothing) or does not (the previews
 are put back). Undo and redo cancel a running gesture. See
-`infinite-canvas-architecture-patterns.md` §4, "First pass". Alt-drag to duplicate
-will need the one exception to "never across structural ops": the duplicate and the
-move become one history entry (`clipboard-and-assets.md` phase 2).
+`infinite-canvas-architecture-patterns.md` §4, "First pass". Alt-drag to duplicate is
+the one exception to "never across structural ops": the duplicate and the move
+become one history entry (`Store::merge_with_previous`, built 2026-10-15). The log
+keeps both transactions; only the undo stack holds them as one.
 
 ---
 

@@ -101,6 +101,8 @@ pub struct Pasted {
     pub ops: Vec<Op>,
     /// The new roots, in the fragment's order: what to select.
     pub roots: Vec<NodeId>,
+    /// The node each root copies, alongside `roots`.
+    pub sources: Vec<NodeId>,
     /// One line per binding frozen or reference that could not be kept.
     pub notes: Vec<String>,
 }
@@ -440,8 +442,8 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
         used += 1;
     }
 
-    let roots = frag.roots.iter().filter_map(|r| map.get(r).copied()).collect();
-    Ok(Pasted { ops, roots, notes })
+    let (sources, roots) = frag.roots.iter().filter_map(|r| map.get(r).map(|n| (*r, *n))).unzip();
+    Ok(Pasted { ops, roots, sources, notes })
 }
 
 /// Duplicate `roots` in place, each right above its original: Cmd+D.

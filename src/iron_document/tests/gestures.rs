@@ -243,3 +243,48 @@ fn a_one_off_edit_through_a_handle_leaves_a_drag_alone() {
     assert_eq!(tx.version, applied.version);
     assert!(tx.ops.iter().all(|op| matches!(op, Op::Set { id, .. } if *id == s.a)), "{:?}", tx.ops);
 }
+
+#[test]
+fn an_alt_drag_duplicates_moves_the_copy_and_undoes_in_one_step() {
+    let mut s = scene();
+    let (a, other) = (s.a, s.other);
+    // The drag starts on the original...
+    let (g, _) = drag(&mut s.store, a, [200.0, 200.0]);
+    // ...Alt goes down: the original goes back, a copy takes the drag.
+    s.store.cancel_gesture();
+    assert!(matches!(s.store.gesture_status(g), GestureStatus::Cancelled(_)));
+    let pasted = copy::duplicate(&s.store, &[a]).unwrap();
+    assert_eq!(pasted.sources, vec![a]);
+    let dup = s.store.apply(tx("duplicate rect", Actor::Human, pasted.ops)).unwrap().version;
+    let copy = pasted.roots[0];
+    s.store.begin_gesture(&[copy]);
+    let h = s.store.begin_drag(copy, [0.0, 0.0]);
+    s.store.drag_to(&h, [220.0, 210.0]);
+    assert_eq!(get(&s.store, a, "transform2d.x"), 10.0);
+    // Alt comes up: the copy is taken back, the original drags again.
+    s.store.cancel_gesture();
+    assert!(s.store.retract(dup, 0));
+    assert!(!s.store.document().is_live(copy));
+    assert!(!s.store.history().can_redo());
+    // And down again, then release.
+    let pasted = copy::duplicate(&s.store, &[a]).unwrap();
+    let dup = s.store.apply(tx("duplicate rect", Actor::Human, pasted.ops)).unwrap().version;
+    let copy = pasted.roots[0];
+    s.store.begin_gesture(&[copy]);
+    let h = s.store.begin_drag(copy, [0.0, 0.0]);
+    s.store.drag_to(&h, [240.0, 220.0]);
+    s.store.end_drag(&h);
+    s.store.commit_gesture("move rect", Actor::Human, 0).unwrap().unwrap();
+    assert!(s.store.merge_with_previous(dup, "duplicate rect"));
+    assert_eq!(s.store.history().past().last().unwrap().label, "duplicate rect");
+    assert_eq!(get(&s.store, copy, "transform2d.x"), 240.0);
+    assert_eq!(get(&s.store, a, "transform2d.x"), 10.0);
+    // One undo removes the copy; one redo brings it back where it was left.
+    s.store.undo(0).unwrap().unwrap();
+    assert!(!s.store.document().is_live(copy));
+    s.store.redo(0).unwrap().unwrap();
+    assert_eq!(get(&s.store, copy, "transform2d.x"), 240.0);
+    // Merging is refused when the previous entry is another.
+    s.store.apply(tx("nudge", Actor::Human, vec![set(other, "transform2d.x", 1.0)])).unwrap();
+    assert!(!s.store.merge_with_previous(dup, "x"));
+}

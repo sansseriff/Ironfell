@@ -23,12 +23,12 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
 use iron_document::copy::{self, Fragment};
-use iron_document::{Actor, DragHandle, DragMode, GestureId, GestureStatus, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
+use iron_document::{Actor, DragMode, GestureId, GestureStatus, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
 use bevy::ecs::system::SystemParam;
 use kurbo::{Affine, ParamCurve as _, Point, Rect, Shape as _};
 
-use crate::bevy_app::interaction::{DragCameras, PendingCommit, drag_point, intersect_ray_plane};
-use crate::document_bridge::{Doc2d, DocumentPanelLayer, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelView, PanelViews, PendingTransactions, Provenance, Shape2d, nest};
+use crate::bevy_app::manipulate::{self, DragCameras, Gizmo3d, Manip};
+use crate::document_bridge::{Doc2d, DocumentPanelLayer, DocumentStore, GestureRequest, GestureRequests, NodeMap, PanelView, PanelViews, PendingTransactions, Shape2d, nest};
 use crate::vector::{DisplayList, DisplayListRebuild, Overlay, VectorLayer, VectorView, order};
 
 /// A node as reached in one panel: the chain from the panel composition's
@@ -281,6 +281,14 @@ pub struct SelectTool {
     /// The store's gesture behind the current one (`iron_document::gesture`):
     /// a conflicting edit, undo or Esc can end it while the button is down.
     owned: Option<GestureId>,
+    /// The 3D transform gizmo, while the selection is meshes in a 3D view.
+    gizmo: Option<Gizmo3d>,
+}
+
+impl SelectTool {
+    pub(crate) fn gizmo(&self) -> Option<&Gizmo3d> {
+        self.gizmo.as_ref()
+    }
 }
 
 /// Panning a view with the middle button: the panel, where the press was,
@@ -297,19 +305,12 @@ enum Gesture {
     Idle,
     /// Pressed, not yet dragged: a click if released here.
     Press { panel: String, start: Vec2, then: AfterPress },
-    Move { label: String, start: Point, view: PanelView, drags: Vec<(DragHandle, Affine)> },
-    Transform { label: String, view: PanelView, kind: TransformKind, frame: Affine, start: Point, parts: Vec<Part>, rot0: Option<f64> },
+    /// An edit of the document, 2D or 3D: one manipulator under the
+    /// store's gesture (`manipulate`).
+    Edit(Manip),
     Marquee { view: PanelView, start: Point, prefix: Vec<NodeId>, roots: Vec<NodeId>, base: Vec<Reach> },
-    /// A drag `interaction::drag_apply_system` runs (3D, planes, sliders).
-    Legacy,
     /// Space-drag: the view's pan follows the pointer.
     Pan { panel: String, start: Vec2, pan: Vec2 },
-    /// A path point's handle: `out` or in, mirrored to the other unless Alt;
-    /// `to_local` maps window px into the path's space.
-    Handle { point: NodeId, out: bool, to_local: Affine, at: Point },
-    /// A lone shape's own handle (`ShapeGrip`); `to_local` maps window px
-    /// into the shape's space, `arc` is (start, sweep, inner) at the press.
-    Shape { id: NodeId, grip: ShapeGrip, to_local: Affine, arc: [f64; 3] },
 }
 
 /// Figma's handles on a lone selected shape: a dot inside each of a rect's
@@ -346,7 +347,7 @@ enum Click {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum TransformKind {
+pub(crate) enum TransformKind {
     /// The grip in the box's unit square: corners and edge midpoints.
     Resize { grip: (f64, f64) },
     Rotate,
@@ -380,7 +381,7 @@ enum Kind {
 
 /// One node a resize or rotation writes, as it was when the gesture began.
 #[derive(Clone, Debug)]
-struct Part {
+pub(crate) struct Part {
     id: NodeId,
     kind: Kind,
     /// Document px of the panel ← the node's parent space.
@@ -682,7 +683,7 @@ fn decompose(f: Affine, trs: [f64; 5]) -> (f64, f64, f64, f64, f64, bool) {
 impl Part {
     /// The leaf values that apply `a` (panel document px) to this node, or
     /// to its points.
-    fn apply(&self, a: Affine, resize: bool) -> Vec<(NodeId, &'static str, f64)> {
+    pub(crate) fn apply(&self, a: Affine, resize: bool) -> Vec<(NodeId, &'static str, f64)> {
         let [x, y, rot, sx, sy] = self.trs;
         let q = self.parent.inverse() * a * self.parent;
         let l = Affine::translate((x, y)) * Affine::rotate(rot) * Affine::scale_non_uniform(sx, sy);
@@ -926,6 +927,42 @@ fn movers<'a>(reaches: &'a [Reach], panel: &str) -> Vec<&'a Reach> {
         .collect()
 }
 
+/// What the gizmo sits on: the selection's movers in its first panel, when
+/// they are all meshes seen through one 3D camera (a 3D panel's, or a 3D
+/// embed's in a 2D view); that camera, and where the gizmo may be hovered.
+fn gizmo_target(
+    doc: &iron_document::Document,
+    reaches: &[Reach],
+    views: &PanelViews,
+    panel_cams: &Query<(Entity, &crate::bevy_app::scene3d::PanelCamera)>,
+    embed_cams: &Query<(Entity, &crate::bevy_app::scene3d::EmbedCam)>,
+    embed_views: &crate::document_bridge::EmbedViews,
+) -> Option<(String, Entity, Vec<NodeId>, Rect)> {
+    let first = reaches.first()?;
+    let mine = movers(reaches, &first.panel);
+    if mine.is_empty() || mine.iter().any(|r| doc.live(r.node()).map(|n| n.ty.name()) != Some("mesh")) {
+        return None;
+    }
+    let view = views.get(&first.panel)?;
+    // The key `nest::collect_embed_views` gives the camera: the panel, then
+    // every embed on the way in.
+    let key = |r: &Reach| -> String {
+        let embeds = r.chain[..r.chain.len() - 1].iter().filter(|&&n| nest::is_embed(doc, n)).map(|n| n.to_string());
+        std::iter::once(r.panel.clone()).chain(embeds).collect::<Vec<_>>().join("/")
+    };
+    let k = key(mine[0]);
+    if mine.iter().any(|r| key(r) != k) {
+        return None;
+    }
+    let (camera, clip) = if view.dims == Dims::Three {
+        (panel_cams.iter().find(|(_, c)| c.panel == view.panel)?.0, view.rect.to_kurbo())
+    } else {
+        let ev = embed_views.0.iter().find(|v| v.key == k)?;
+        (embed_cams.iter().find(|(_, c)| c.key == k)?.0, ev.clip)
+    };
+    Some((first.panel.clone(), camera, mine.iter().map(|r| r.node()).collect(), clip))
+}
+
 /// Selected nodes no other selected node contains.
 fn outermost(doc: &iron_document::Document, selected: &[NodeId]) -> Vec<NodeId> {
     selected.iter().copied().filter(|&id| !selected.iter().any(|&o| o != id && doc.is_ancestor(o, id))).collect()
@@ -1048,14 +1085,16 @@ pub struct ToolDoc<'w, 's> {
     geometry_cache: ResMut<'w, SelectionGeometryCache>,
 }
 
-/// What the drags the box does not run need (`interaction`).
+/// What the 3D side of the tool reads: cameras, planes, the 3D embeds'
+/// views, and the window's density.
 #[derive(SystemParam)]
-pub struct LegacyDrag<'w, 's> {
-    drag: ResMut<'w, crate::DragState>,
-    commit: ResMut<'w, PendingCommit>,
-    provenance: Query<'w, 's, &'static Provenance>,
+pub struct Views3d<'w, 's> {
     cameras: DragCameras<'w, 's>,
-    planes: Query<'w, 's, (&'static GlobalTransform, &'static crate::document_bridge::planes::EmbedPlane)>,
+    planes: manipulate::Planes<'w, 's>,
+    panel_cams: Query<'w, 's, (Entity, &'static crate::bevy_app::scene3d::PanelCamera)>,
+    embed_cams: Query<'w, 's, (Entity, &'static crate::bevy_app::scene3d::EmbedCam)>,
+    embed_views: Res<'w, crate::document_bridge::EmbedViews>,
+    windows: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
 }
 
 pub fn select_tool_system(
@@ -1068,7 +1107,7 @@ pub fn select_tool_system(
     views: Res<PanelViews>,
     active: Res<ActiveTool>,
     docp: ToolDoc,
-    legacy: LegacyDrag,
+    v3d: Views3d,
     mut clipboard: ResMut<Clipboard>,
     origin: Res<crate::document_bridge::DocumentOrigin>,
 ) {
@@ -1082,7 +1121,7 @@ pub fn select_tool_system(
         sel.selected = ids;
     }
     let space = keyboard.pressed(KeyCode::Space);
-    let LegacyDrag { mut drag, mut commit, provenance, cameras, planes } = legacy;
+    let Views3d { cameras, planes, panel_cams, embed_cams, embed_views, windows } = v3d;
     // Keep a reach for every selected node, dropping the rest.
     {
         let doc = store.0.document();
@@ -1113,19 +1152,16 @@ pub fn select_tool_system(
         let doc = store.0.document();
         match key.as_str() {
             "escape" if !matches!(tool.gesture, Gesture::Idle) => {
-                // Esc mid-gesture puts everything back.
+                // Esc mid-gesture puts everything back, an Alt-drag's
+                // copies included.
                 tool.owned = None;
-                if let Gesture::Move { drags, .. } = &tool.gesture {
-                    for (h, _) in drags {
-                        store.0.end_drag(h);
+                if let Gesture::Edit(m) = &tool.gesture {
+                    m.end(&mut store.0);
+                    store.0.cancel_gesture();
+                    if let Some(v) = m.duplicate() {
+                        store.0.retract(v, 0);
                     }
                 }
-                if let Some(h) = drag.handle.take() {
-                    store.0.end_drag(&h);
-                }
-                drag.target = None;
-                drag.kind = None;
-                gestures.0.push(GestureRequest::Cancel);
                 tool.gesture = Gesture::Idle;
                 tool.marquee = None;
             }
@@ -1339,6 +1375,30 @@ pub fn select_tool_system(
     let screen = Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
     let doc_point = |v: &PanelView| v.affine().inverse() * screen;
 
+    // ---- The 3D gizmo ----
+    // While the selection is meshes in one 3D view, the transform gizmo
+    // sits on them, fed the pointer every frame; a press on one of its
+    // handles is a gizmo edit.
+    {
+        let reaches = selected_reaches(&sel, tool);
+        let want = gizmo_target(store.0.document(), &reaches, &views, &panel_cams, &embed_cams, &embed_views);
+        let editing = matches!(tool.gesture, Gesture::Edit(Manip::Gizmo { .. }));
+        match want {
+            Some((panel, camera, targets, clip)) if *active == ActiveTool::Select => {
+                if !editing && tool.gizmo.as_ref().is_none_or(|g| g.panel != panel || g.camera != camera || g.targets != targets) {
+                    tool.gizmo = Some(Gizmo3d::new(panel, camera, targets));
+                }
+                let dpr = windows.single().map_or(1.0, |w| w.scale_factor());
+                if !tool.gizmo.as_mut().is_some_and(|g| g.frame(&store.0, &pointer, &cameras, clip, dpr, editing)) {
+                    tool.gizmo = None;
+                }
+            }
+            _ if !editing => tool.gizmo = None,
+            _ => {}
+        }
+    }
+    let gizmo_hot = tool.gizmo.as_ref().is_some_and(|g| g.focused());
+
     // ---- Press ----
     if pointer.just_pressed_left && matches!(tool.gesture, Gesture::Idle) {
         tool.hover = None;
@@ -1351,6 +1411,13 @@ pub fn select_tool_system(
             if space && view.dims == Dims::Two {
                 let pan = view_cameras.0.get(&view.panel).map_or(Vec2::ZERO, |c| c.pan);
                 tool.gesture = Gesture::Pan { panel: view.panel.clone(), start: pointer.screen, pan };
+                break 'press;
+            }
+            // The gizmo's handles come before everything under them.
+            if gizmo_hot && let Some(g) = &tool.gizmo {
+                let targets = g.targets.clone();
+                store.0.begin_gesture(&targets);
+                tool.gesture = Gesture::Edit(Manip::Gizmo { targets, kind: None });
                 break 'press;
             }
             // A lone selected path shows its points and handles, which come
@@ -1376,15 +1443,21 @@ pub fn select_tool_system(
                 }
                 match hit {
                     Some((point, at, Some(out))) => {
-                        tool.gesture = Gesture::Handle { point, out, to_local: to_screen.inverse(), at };
+                        store.0.begin_gesture(&[point]);
+                        tool.gesture = Gesture::Edit(Manip::PathHandle { point, out, to_local: to_screen.inverse(), at });
                         break 'press;
                     }
                     Some((point, _, None)) => {
                         let start = doc_point(&view);
                         let inv = space.inverse();
                         let anchor = geo.world(point).inverse() * (inv * start);
+                        store.0.begin_gesture(&[point]);
                         let h = store.0.begin_drag(point, [anchor.x, anchor.y]);
-                        tool.gesture = if h.is_locked() { Gesture::Idle } else { Gesture::Move { label: "move point".into(), start, view: view.clone(), drags: vec![(h, inv)] } };
+                        tool.gesture = if h.is_locked() {
+                            Gesture::Idle
+                        } else {
+                            Gesture::Edit(Manip::Drag(manipulate::Drag { label: "move point".into(), view: view.clone(), start, drags: vec![(h, inv)], duplicable: false, duplicate: None }))
+                        };
                         break 'press;
                     }
                     None => {}
@@ -1401,7 +1474,9 @@ pub fn select_tool_system(
                 let to_screen = view.affine() * space * geo.world(id);
                 let hit = geo.shape_grips(id, to_screen).into_iter().find(|(_, p)| p.distance(screen) <= POINT_HIT);
                 if let Some((grip, _)) = hit {
-                    tool.gesture = Gesture::Shape { id, grip, to_local: to_screen.inverse(), arc: geo.arc(id) };
+                    let arc = geo.arc(id);
+                    store.0.begin_gesture(&[id]);
+                    tool.gesture = Gesture::Edit(Manip::ShapeGrip { id, grip, to_local: to_screen.inverse(), arc });
                     break 'press;
                 }
             }
@@ -1428,20 +1503,26 @@ pub fn select_tool_system(
                     let start = doc_point(&view);
                     match grip {
                         Some(Grip::Resize(u, v)) => {
-                            tool.gesture = Gesture::Transform {
-                                label: format!("resize {}", type_label(geo.doc(), &ids)),
+                            let label = format!("resize {}", type_label(geo.doc(), &ids));
+                            let nodes: Vec<NodeId> = resize_parts.iter().map(|p| p.id).collect();
+                            store.0.begin_gesture(&nodes);
+                            tool.gesture = Gesture::Edit(Manip::Transform(manipulate::Transform2 {
+                                label,
                                 view: view.clone(),
                                 kind: TransformKind::Resize { grip: (u, v) },
                                 frame,
                                 start,
                                 parts: resize_parts,
                                 rot0: None,
-                            };
+                            }));
                             break 'press;
                         }
                         Some(Grip::Rotate(..)) => {
                             let rot0 = (rotate_parts.len() == 1).then(|| rotate_parts[0].trs[2]);
-                            tool.gesture = Gesture::Transform { label: format!("rotate {}", type_label(geo.doc(), &ids)), view: view.clone(), kind: TransformKind::Rotate, frame, start, parts: rotate_parts, rot0 };
+                            let label = format!("rotate {}", type_label(geo.doc(), &ids));
+                            let nodes: Vec<NodeId> = rotate_parts.iter().map(|p| p.id).collect();
+                            store.0.begin_gesture(&nodes);
+                            tool.gesture = Gesture::Edit(Manip::Transform(manipulate::Transform2 { label, view: view.clone(), kind: TransformKind::Rotate, frame, start, parts: rotate_parts, rot0 }));
                             break 'press;
                         }
                         _ => {}
@@ -1522,8 +1603,9 @@ pub fn select_tool_system(
                     Source::Overlay(i) => hits.overlay[i].space,
                     _ => Affine::IDENTITY,
                 };
-                begin_legacy(entity, id, view.panel.clone(), space, through, camera, is_slider, &pointer, &mut drag, &mut store, &provenance, &globals, &cameras, &views, &planes);
-                tool.gesture = Gesture::Legacy;
+                if let Some(m) = manipulate::hand_off(&mut store.0, entity, id, view.panel.clone(), space, through, camera, is_slider, &pointer, &globals, &cameras, &views, &planes) {
+                    tool.gesture = Gesture::Edit(m);
+                }
                 break 'press;
             }
 
@@ -1570,10 +1652,8 @@ pub fn select_tool_system(
                     info!("gesture {g} cancelled: {why}");
                 }
                 tool.owned = None;
-                if matches!(tool.gesture, Gesture::Legacy) {
-                    drag.target = None;
-                    drag.kind = None;
-                    drag.handle = None;
+                if let Gesture::Edit(m) = &tool.gesture {
+                    m.end(&mut store.0);
                 }
                 if !matches!(tool.gesture, Gesture::Pan { .. } | Gesture::Press { .. } | Gesture::Idle) {
                     tool.gesture = Gesture::Idle;
@@ -1583,18 +1663,23 @@ pub fn select_tool_system(
         }
     }
     // A gesture follows its view's pan and zoom; it ends if the view does.
+    let follow = |view: &mut PanelView| match views.get(&view.panel) {
+        Some(v) => {
+            *view = v.clone();
+            false
+        }
+        None => true,
+    };
     let view_gone = match &mut tool.gesture {
-        Gesture::Move { view, .. } | Gesture::Transform { view, .. } | Gesture::Marquee { view, .. } => match views.get(&view.panel) {
-            Some(v) => {
-                *view = v.clone();
-                false
-            }
-            None => true,
-        },
+        Gesture::Marquee { view, .. } => follow(view),
+        Gesture::Edit(m) => m.view_mut().is_some_and(follow),
         _ => false,
     };
     if view_gone {
         info!("gesture cancelled: its view closed");
+        if let Gesture::Edit(m) = &tool.gesture {
+            m.end(&mut store.0);
+        }
         store.0.cancel_gesture();
         tool.owned = None;
         tool.gesture = Gesture::Idle;
@@ -1626,6 +1711,7 @@ pub fn select_tool_system(
                             Some((r.node(), inv, geo.world(r.node()).inverse() * (inv * p0)))
                         })
                         .collect();
+                    store.0.begin_gesture(&ids);
                     for (id, inv, anchor) in grabs {
                         let h = store.0.begin_drag(id, [anchor.x, anchor.y]);
                         match &h.mode {
@@ -1640,7 +1726,7 @@ pub fn select_tool_system(
                             drags.push((h, inv));
                         }
                     }
-                    tool.gesture = Gesture::Move { label, start: p0, view, drags };
+                    tool.gesture = Gesture::Edit(Manip::Drag(manipulate::Drag { label, view, start: p0, drags, duplicable: true, duplicate: None }));
                 }
                 AfterPress::Marquee { prefix, roots, click } => {
                     let base = if matches!(click, Click::Keep) { reaches.clone() } else { Vec::new() };
@@ -1648,84 +1734,31 @@ pub fn select_tool_system(
                 }
             }
         }
-        match &tool.gesture {
+        // Alt during a move duplicates and drags the copies; Alt up takes
+        // them back (Figma). The selection follows what is dragged.
+        if let Gesture::Edit(Manip::Drag(d)) = &mut tool.gesture {
+            let before: Vec<NodeId> = d.drags.iter().map(|(h, _)| h.node).collect();
+            if let Some(now) = d.set_duplicate(&mut store.0, pointer.modifiers.alt) {
+                tool.owned = store.0.active_gesture();
+                let list: Vec<Reach> = before
+                    .iter()
+                    .zip(&now)
+                    .filter_map(|(b, n)| {
+                        let mut r = tool.reach.get(b).cloned()?;
+                        *r.chain.last_mut().expect("a chain is never empty") = *n;
+                        Some(r)
+                    })
+                    .collect();
+                set_selection(&mut sel, tool, list);
+            }
+        }
+        match &mut tool.gesture {
             Gesture::Pan { panel, start, pan } => {
                 view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
             }
-            Gesture::Shape { id, grip, to_local, arc } => {
-                let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
-                let writes = shape_grip_writes(&geo, *id, *grip, *to_local * screen, *arc, mods(MOD_ALT), mods(MOD_SHIFT));
-                preview_writes(&mut store.0, writes);
-            }
-            Gesture::Handle { point, out, to_local, at } => {
-                let v = *to_local * screen - *at;
-                let (mine, other) = if *out { (("handles.ox", "handles.oy"), ("handles.ix", "handles.iy")) } else { (("handles.ix", "handles.iy"), ("handles.ox", "handles.oy")) };
-                let mut writes = vec![(*point, mine.0, v.x), (*point, mine.1, v.y)];
-                // Smooth unless Alt breaks the handles apart.
-                if !mods(MOD_ALT) {
-                    writes.extend([(*point, other.0, -v.x), (*point, other.1, -v.y)]);
-                }
-                preview_writes(&mut store.0, writes);
-            }
-            Gesture::Move { start, view, drags, .. } => {
-                let p = doc_point(view);
-                let mut d = p - *start;
-                if mods(MOD_SHIFT) {
-                    if d.x.abs() > d.y.abs() { d.y = 0.0 } else { d.x = 0.0 }
-                }
-                let drags = drags.clone();
-                for (h, inv) in &drags {
-                    let q = *inv * (*start + d);
-                    let t0 = bevy::platform::time::Instant::now();
-                    let report = store.0.drag_to(h, [q.x, q.y]);
-                    if let DragMode::Cluster(cluster) = &h.mode {
-                        // CS phase 3 exit 9: the budget is 2 ms per frame.
-                        let ms = t0.elapsed().as_secs_f64() * 1e3;
-                        info!(
-                            "solve: cluster {cluster}, {} vars, {} iterations, {} evaluations, {ms:.2} ms{}",
-                            report.vars,
-                            report.iterations,
-                            report.evaluations,
-                            if report.converged { "" } else { "; not converged, pose kept" }
-                        );
-                    }
-                }
-            }
-            Gesture::Transform { view, kind, frame, start, parts, rot0, .. } => {
-                let p = doc_point(view);
-                let a = match *kind {
-                    TransformKind::Resize { grip } => {
-                        let u = frame.inverse() * p;
-                        let anchor = if mods(MOD_ALT) { (0.5, 0.5) } else { (1.0 - grip.0, 1.0 - grip.1) };
-                        // Relative to where the press landed, not the grip's
-                        // exact corner, so pressing alone changes nothing.
-                        let u0 = frame.inverse() * *start;
-                        let scale = |g: f64, a: f64, u: f64, u0: f64| if g == 0.5 || (u0 - a).abs() < 1e-9 { 1.0 } else { (u - a) / (u0 - a) };
-                        let (mut fx, mut fy) = (scale(grip.0, anchor.0, u.x, u0.x), scale(grip.1, anchor.1, u.y, u0.y));
-                        if mods(MOD_SHIFT) {
-                            let m = if grip.0 == 0.5 { fy.abs() } else if grip.1 == 0.5 { fx.abs() } else { fx.abs().max(fy.abs()) };
-                            fx = m * if fx < 0.0 { -1.0 } else { 1.0 };
-                            fy = m * if fy < 0.0 { -1.0 } else { 1.0 };
-                        }
-                        // Never collapse to zero: at least a pixel.
-                        let size = (frame.as_coeffs()[0].hypot(frame.as_coeffs()[1]), frame.as_coeffs()[2].hypot(frame.as_coeffs()[3]));
-                        let floor = |f: f64, s: f64| if f.abs() * s < 1.0 { (1.0 / s.max(1e-9)) * if f < 0.0 { -1.0 } else { 1.0 } } else { f };
-                        let (fx, fy) = (floor(fx, size.0), floor(fy, size.1));
-                        *frame * Affine::translate(anchor) * Affine::scale_non_uniform(fx, fy) * Affine::translate((-anchor.0, -anchor.1)) * frame.inverse()
-                    }
-                    TransformKind::Rotate => {
-                        let c = *frame * Point::new(0.5, 0.5);
-                        let mut th = (p - c).atan2() - (*start - c).atan2();
-                        if mods(MOD_SHIFT) {
-                            let base = rot0.unwrap_or(0.0);
-                            th = ((base + th) / SNAP).round() * SNAP - base;
-                        }
-                        Affine::translate(c.to_vec2()) * Affine::rotate(th) * Affine::translate(-c.to_vec2())
-                    }
-                };
-                let resize = matches!(kind, TransformKind::Resize { .. });
-                let writes: Vec<(NodeId, &'static str, f64)> = parts.iter().flat_map(|part| part.apply(a, resize)).collect();
-                preview_writes(&mut store.0, writes);
+            Gesture::Edit(m) => {
+                let mut cx = manipulate::Cx { store: &mut store.0, pointer: &pointer, views: &views, map: &map, globals: &globals, nodes: &nodes, cameras: &cameras, planes: &planes, gizmo: tool.gizmo.as_mut() };
+                m.update(&mut cx);
             }
             Gesture::Marquee { view, start, prefix, roots, base } => {
                 let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
@@ -1733,7 +1766,7 @@ pub fn select_tool_system(
                 let rect = Rect::from_points(*start, doc_point(view));
                 tool.marquee = Some((view.panel.clone(), rect));
                 let mut list = base.clone();
-                for &n in roots {
+                for &n in roots.iter() {
                     if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "group" | "embed")) {
                         continue;
                     }
@@ -1754,7 +1787,7 @@ pub fn select_tool_system(
 
     // The first preview or drag of a document gesture starts the store's
     // gesture; this tool owns it from then until release.
-    let edits = matches!(tool.gesture, Gesture::Move { .. } | Gesture::Transform { .. } | Gesture::Handle { .. } | Gesture::Shape { .. } | Gesture::Legacy);
+    let edits = matches!(tool.gesture, Gesture::Edit(_));
     if edits && tool.owned.is_none() {
         tool.owned = store.0.active_gesture();
     }
@@ -1777,29 +1810,16 @@ pub fn select_tool_system(
                     Click::Clear => set_selection(&mut sel, tool, Vec::new()),
                 }
             }
-            Gesture::Move { label, drags, .. } => {
-                for (h, _) in &drags {
-                    store.0.end_drag(h);
-                }
-                gestures.0.push(GestureRequest::Commit(label));
-            }
-            Gesture::Transform { label, .. } => gestures.0.push(GestureRequest::Commit(label)),
-            Gesture::Handle { .. } => gestures.0.push(GestureRequest::Commit("move handle".into())),
-            Gesture::Shape { grip, .. } => {
-                let label = if matches!(grip, ShapeGrip::Corner(_)) { "round corners" } else { "edit arc" };
-                gestures.0.push(GestureRequest::Commit(label.into()));
+            Gesture::Edit(m) => {
+                m.end(&mut store.0);
+                let label = m.label(&store.0);
+                gestures.0.push(match m.duplicate() {
+                    // An Alt-drag's duplicate and its move are one edit.
+                    Some(v) => GestureRequest::CommitMerged(label, v),
+                    None => GestureRequest::Commit(label),
+                });
             }
             Gesture::Marquee { .. } => tool.marquee = None,
-            Gesture::Legacy => {
-                if drag.target.is_some() {
-                    commit.0 = drag.target;
-                    drag.target = None;
-                    drag.kind = None;
-                    if let Some(h) = drag.handle.take() {
-                        store.0.end_drag(&h);
-                    }
-                }
-            }
             Gesture::Pan { .. } | Gesture::Idle => {}
         }
     }
@@ -1824,7 +1844,7 @@ pub fn select_tool_system(
             }
         }
         let hover = match (view, top_hit(&hits)) {
-            (Some(view), Some((chain, _))) if !on_grip => {
+            (Some(view), Some((chain, _))) if !on_grip && !gizmo_hot => {
                 let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
                 let k = target_index(geo.doc(), &chain, &here, mods(MOD_META));
                 Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() })
@@ -1861,7 +1881,7 @@ pub fn select_tool_system(
 /// end or start by the pointer's angle (Shift: 15° steps) and its inner
 /// ratio by the pointer's distance. Every arc leaf is written, so a commit
 /// that adds the `arc` component carries all three.
-fn shape_grip_writes(geo: &Geo, id: NodeId, grip: ShapeGrip, p: Point, arc: [f64; 3], alt: bool, shift: bool) -> Vec<(NodeId, &'static str, f64)> {
+pub(crate) fn shape_grip_writes(geo: &Geo, id: NodeId, grip: ShapeGrip, p: Point, arc: [f64; 3], alt: bool, shift: bool) -> Vec<(NodeId, &'static str, f64)> {
     use std::f64::consts::TAU;
     let Some((b, _)) = geo.local_box(id) else { return Vec::new() };
     let snap = |a: f64| if shift { (a / SNAP).round() * SNAP } else { a };
@@ -1919,82 +1939,6 @@ pub(crate) fn preview_writes(store: &mut Store, writes: Vec<(NodeId, &'static st
         if let Err(reason) = store.preview_target(id, leaf(path), Value::Number(v)) {
             debug!("{id}.{path}: {reason}");
         }
-    }
-}
-
-/// Start a drag the box does not run: a mesh in 3D, content on a plane, a
-/// slider's value.
-#[allow(clippy::too_many_arguments)]
-fn begin_legacy(
-    entity: Entity,
-    id: NodeId,
-    panel: String,
-    space: Affine,
-    through: Option<(Entity, Entity)>,
-    camera: Option<Entity>,
-    slider: bool,
-    pointer: &crate::PointerState,
-    drag: &mut crate::DragState,
-    store: &mut DocumentStore,
-    provenance: &Query<&Provenance>,
-    transforms: &Query<&GlobalTransform>,
-    cameras: &DragCameras,
-    views: &PanelViews,
-    planes: &Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane)>,
-) {
-    let _ = provenance;
-    store.0.begin_gesture(&[id]);
-    drag.target = Some(entity);
-    drag.handle = None;
-    drag.panel = Some(panel);
-    drag.space = space;
-    drag.through = through;
-    drag.camera = camera;
-    drag.press_screen = pointer.screen;
-    if slider {
-        drag.kind = Some(crate::DragKind::SliderValue);
-        return;
-    }
-    if camera.is_none() {
-        // 2D content on a plane in 3D.
-        let p = drag_point(drag, views, pointer.screen, cameras, planes).unwrap_or(Vec2::ZERO);
-        let local = transforms.get(entity).map(|g| g.affine().inverse().transform_point3(p.extend(0.0))).unwrap_or(Vec3::ZERO);
-        let h = store.0.begin_drag(id, [local.x as f64, local.y as f64]);
-        match &h.mode {
-            DragMode::Locked(reasons) => {
-                for r in reasons {
-                    info!("{id} locked for this drag: {r}");
-                }
-                drag.kind = None;
-                drag.target = None;
-            }
-            _ => {
-                drag.kind = Some(crate::DragKind::Overlay2D);
-                drag.handle = Some(h);
-            }
-        }
-        return;
-    }
-    if let Handle::Locked(reason) = store.0.handle(id, leaf("transform3d.pos")) {
-        info!("{id}.transform3d.pos locked for this drag: {reason}");
-        drag.kind = None;
-        drag.target = None;
-        return;
-    }
-    drag.kind = Some(crate::DragKind::World3D);
-    // A camera-facing plane through the object; Ctrl drags on the ground.
-    let Some((_, cam, cam_tf, rect, to_camera)) = camera.and_then(|c| cameras.get(c).ok()) else { return };
-    let local = crate::bevy_app::scene3d::to_camera_px(pointer.screen, rect, to_camera);
-    drag.plane_normal = if pointer.modifiers.ctrl { Vec3::Y } else { cam_tf.forward().as_vec3() }.normalize_or_zero();
-    drag.plane_origin = transforms.get(entity).map(|t| t.translation()).unwrap_or(cam_tf.translation());
-    drag.grab_offset_world = Vec3::ZERO;
-    if let Some(ray) = crate::bevy_app::picking::camera_ray_from_window_px(cam, cam_tf, local)
-        && let Some(hit) = intersect_ray_plane(ray, drag.plane_origin, drag.plane_normal)
-    {
-        if let Ok(t) = transforms.get(entity) {
-            drag.grab_offset_world = t.translation() - hit;
-        }
-        drag.plane_origin = hit;
     }
 }
 

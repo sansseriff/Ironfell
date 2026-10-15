@@ -3,6 +3,7 @@
 
 mod input_accum;
 mod interaction;
+pub(crate) mod manipulate;
 mod picking;
 mod pointer;
 pub(crate) mod select;
@@ -29,7 +30,6 @@ pub(crate) use scene3d::ScreenRect as ScreenRectMarker;
 pub(crate) use scene3d::ActiveState as ActiveStateMarker;
 // Bring required items into scope from submodules
 use interaction::{
-    PendingCommit, drag_apply_system, drag_commit_system,
     outbound_hover_system, outbound_selection_system, selection_reflect_system,
 };
 use picking::{pick_document_2d_system, pick_world_3d_system, pointer_panel_system, resolve_primary_hit_system};
@@ -246,14 +246,13 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             // affected entities, and the deferred inserts are applied, all
             // before propagation so transform consumers and the 2D layer see
             // this frame's pointer position (constraint-system.md §8.2).
-            (drag_apply_system, reconcile_gesture, ApplyDeferred)
+            (reconcile_gesture, ApplyDeferred)
                 .chain()
                 .in_set(GestureSystems)
                 .after(select::select_tool_system)
                 .before(TransformSystems::Propagate),
-            // Writeback: the released drag becomes one gesture commit,
-            // applied by the document sync next frame.
-            drag_commit_system.after(GestureSystems),
+            // The 3D gizmo's triangles, in an overlay view over its panel.
+            manipulate::draw_gizmo_overlay.after(select::select_tool_system),
             update_aabbes.after(GestureSystems),
             // A 3D embed's camera follows its rectangle in the same frame,
             // after the meshes' volumes it may frame are current.
@@ -314,8 +313,6 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<crate::PointerState>();
     app.init_resource::<crate::PointerHits>();
     app.init_resource::<crate::SelectionState>();
-    app.init_resource::<crate::DragState>();
-    app.init_resource::<PendingCommit>();
     app.init_resource::<pointer::PressPosition>();
     app.init_resource::<select::SelectTool>();
     app.init_resource::<select::SelectionGeometryCache>();

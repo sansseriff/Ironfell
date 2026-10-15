@@ -1,7 +1,8 @@
 # Architecture improvements from the infinite canvas tutorial
 
-**Status:** Phase 3 implemented (§13); phase 1 first pass done 2026-10-15 (§4,
-"First pass"); phases 2, 4 and 5 open
+**Status:** Phase 3 implemented (§13); phase 1 done 2026-10-15 in two passes (§4,
+"First pass", "Second pass": store ownership, one pointer state machine, the 3D
+gizmo, Alt-drag); phases 2, 4 and 5 open
 **Date:** 2026-10-13
 **Scope:** Adapt relevant patterns from `xiaoiver/infinite-canvas-tutorial` while
 preserving Iron's authored document, Bevy runtime, and Svelte host boundaries.
@@ -198,9 +199,8 @@ with their ancestors and a fixed list of geometry components, rather than
 per-leaf revisions. Enough for every exit; revisit if a compatible edit is ever
 wrongly cancelled.
 
-**Not yet (item 6):** one lifecycle contract in the tools themselves. The store's
-lifecycle is shared, but `select.rs`'s `Gesture` enum and `interaction.rs`'s
-`DragState` are still two state machines.
+**Item 6, done 2026-10-15 (second pass):** one lifecycle contract in the tools
+too; see "Second pass" below.
 
 ### 2D and 3D: what to share
 
@@ -208,10 +208,10 @@ Three layers, shared to different degrees:
 
 1. **Lifecycle and ownership: shared, and done.** Identity, watched nodes, previews,
    commit and cancel, conflicts. It is in the store and knows nothing of dimension.
-2. **The pointer state machine: should be shared, and is not yet.** Press, slop,
-   drag, release, Esc, modifiers, cursors, which tool owns the pointer. Today
-   `select.rs` runs 2D box gestures and hands 3D, plane and slider drags to
-   `interaction.rs`'s `DragState`. The proposal is one state machine with a
+2. **The pointer state machine: shared, and done (second pass).** Press, slop,
+   drag, release, Esc, modifiers, cursors, which tool owns the pointer. It used to
+   be two: `select.rs` ran 2D box gestures and handed 3D, plane and slider drags
+   to `interaction.rs`'s `DragState`. Now it is one state machine with a
    *manipulator* per kind, each answering three questions:
    - `begin`: which nodes it watches;
    - `update`: the leaf values for this pointer;
@@ -241,7 +241,82 @@ forms:
 - draw its triangles in the panel's retained overlay target (stage H).
 
 Its dependencies include egui's `epaint`, `emath` and `ecolor`, so measure the wasm
-size when adding it. Not imported yet.
+size when adding it. Imported in the second pass, below.
+
+### Second pass (2026-10-15)
+
+**One pointer state machine.** The select tool's `Gesture` has one variant for
+every document edit, `Edit(Manip)` (`bevy_app/manipulate.rs`):
+- the manipulators are a 2D move (`Drag`, which also duplicates on Alt), box
+  resize and rotation, path handle, shape grip, slider, 2D content on a plane in
+  3D, a 3D move in a plane, and the gizmo;
+- each one begins the store's gesture on the nodes it watches, previews per frame
+  through a shared context (`Cx`), ends its drag fingers, and labels its commit;
+- press, slop, release, Esc, conflict-cancel and view-follow are written once for
+  all of them;
+- `DragState`, `DragKind`, `PendingCommit`, `drag_apply_system` and
+  `drag_commit_system` are gone. `interaction.rs` keeps only highlight reflection
+  and the outbound hover and selection messages.
+
+**The 3D gizmo** (`Gizmo3d`), on `transform-gizmo` 0.11:
+- **When it shows:** while the selection's movers are meshes seen through one 3D
+  camera, a 3D panel's or a 3D embed's in a 2D view. `gizmo_target` derives the
+  camera from the reach, by `nest::collect_embed_views`'s key.
+- **Each frame** it gets the camera's view and projection, the viewport in the
+  camera's own pixels, and the pointer mapped there (through `PointerToCamera` for
+  an embed).
+- **A press on a focused handle** starts `Manip::Gizmo`. Its results preview
+  `transform3d.pos`, `rot` (Euler XYZ, as the reconciler reads it) or `scale`
+  through `preview_target`, and commit as "move mesh", "rotate mesh" or "scale
+  mesh".
+- **Modes:** translation (axes and planes), rotation (axes and the view ring) and
+  axis scaling, each family shown only while every target's leaf has a handle (a
+  clip-driven rotation shows no rings).
+- **Drawing:** its triangles go into an overlay vector view over the panel
+  (`draw_gizmo_overlay`). They are merged into one path per colour with one
+  winding, so shared edges leave no antialiasing seam, and clipped to the panel
+  or the embed's visible region.
+- **Dependency:** `getrandom` 0.3.4 with `wasm_js`, for `epaint`'s `ahash`; from
+  0.3.4 the feature alone selects the backend, so no RUSTFLAGS change. The dev-opt
+  wasm grew 0.19 MB, debug info included; not measured on wasm-bench.
+
+**Rendering the gizmo: Vello now, a GPU mesh later.**
+- **Why Vello now:** the gizmo's output is already tessellated triangles, which in
+  principle belong on the GPU as a mesh rather than re-rasterised as paths. Vello
+  was chosen because editor feedback already lives in per-panel overlay targets,
+  and mapping through window pixels gives 3D panels and 3D embeds (rotated,
+  clipped) the same treatment for free. The gizmo is small, screen-space and
+  always on top, so either works.
+- **The rule:**
+  - *Vello* for resolution-independent 2D vector content that must match document
+    geometry, clip with views and pass through 2D embeds;
+  - *GPU meshes* for content that is already triangles, anchored in 3D, needs
+    depth, or is high in count and changes every frame (particles, instanced
+    markers, 3D constraint and mate glyphs).
+- **When to switch:** when the first 3D-anchored or depth-aware editor feedback
+  arrives, build one shared "3D overlay mesh" pipeline (an unlit vertex-colour
+  material, no depth test or a depth-aware variant, one render layer per camera)
+  and move the gizmo onto it.
+
+**Alt-drag** (`clipboard-and-assets.md` phase 2):
+- **The sequence:** Alt down during a selection move cancels the gesture on the
+  originals and applies a duplicate at once, so the copies exist to be dragged.
+  It then begins a gesture on the copies with the same anchors, and selects
+  them. Alt up retracts the duplicate (`Store::retract`: undo, and drop it from
+  redo) and drags the originals again. Release commits the move and folds it into
+  the duplicate (`Store::merge_with_previous`, `GestureRequest::CommitMerged`), so
+  one undo takes back both. Esc cancels and retracts.
+- **Tests:** `tests/gestures.rs`
+  `an_alt_drag_duplicates_moves_the_copy_and_undoes_in_one_step`, and the smoke
+  script.
+
+**Not yet:**
+- **Gizmo target spaces:** it assumes meshes sit at the top of their composition,
+  so local is world; nested 3D transforms will need the parent's inverse.
+- **Gizmo options:** no keyboard switching of modes, no local/global orientation
+  toggle, no snapping.
+- **3D move plane:** a camera that moves during a 3D drag is followed for the ray,
+  but the drag plane is fixed at the press.
 
 ## 5. Phase 2 — Typed UI protocol, subscriptions, and lifecycle
 

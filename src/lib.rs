@@ -284,60 +284,6 @@ pub struct SelectionState {
     pub hovered: Option<iron_document::NodeId>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum DragKind {
-    Overlay2D,
-    World3D,
-    Group,
-    /// Scrubbing a slider's value: previewed through the store each frame,
-    /// committed as one `Set` on release.
-    SliderValue,
-}
-
-#[derive(Resource, Debug)]
-pub struct DragState {
-    pub target: Option<Entity>,
-    pub kind: Option<DragKind>,
-    /// The store's handle for a 2D drag: which mode it runs in (through a
-    /// constraint cluster, per axis, or not at all) and the grab point in
-    /// the node's local space (constraint-system.md §8).
-    pub handle: Option<iron_document::DragHandle>,
-    /// The panel the drag started in: its rectangle and camera map the
-    /// pointer for the whole gesture, wherever the pointer goes.
-    pub panel: Option<String>,
-    /// Panel document space → the dragged node's composition space (through
-    /// any embeds it was picked through).
-    pub space: kurbo::Affine,
-    /// For a 3D drag, the camera that maps the pointer to a ray.
-    pub camera: Option<Entity>,
-    /// For a 2D drag through a plane in 3D: the camera and the plane.
-    pub through: Option<(Entity, Entity)>,
-    /// Where the press happened (window px). A move or 3D drag previews
-    /// nothing until the pointer leaves it, so a click is not a move.
-    pub press_screen: Vec2,
-    pub plane_origin: Vec3,
-    pub plane_normal: Vec3,
-    pub grab_offset_world: Vec3,
-}
-
-impl Default for DragState {
-    fn default() -> Self {
-        Self {
-            target: None,
-            kind: None,
-            handle: None,
-            panel: None,
-            space: kurbo::Affine::IDENTITY,
-            camera: None,
-            through: None,
-            press_screen: Vec2::ZERO,
-            plane_origin: Vec3::ZERO,
-            plane_normal: Vec3::Y,
-            grab_offset_world: Vec3::ZERO,
-        }
-    }
-}
-
 // Marker for a composite vector group (single VelloScene acting as many shapes)
 #[derive(Component, Debug)]
 pub struct GroupAggregate {

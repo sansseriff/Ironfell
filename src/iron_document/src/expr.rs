@@ -178,6 +178,22 @@ impl Expr {
         }
     }
 
+    /// The same expression with each reference replaced by whatever `f`
+    /// returns for it: another reference, or a literal (`copy` freezes a
+    /// read it cannot keep).
+    pub fn replace_refs(&self, f: &dyn Fn(Leaf) -> Expr) -> Expr {
+        match self {
+            Expr::Lit(_) | Expr::Const(_) => self.clone(),
+            Expr::Ref(l) => f(*l),
+            Expr::Neg(e) => Expr::Neg(Box::new(e.replace_refs(f))),
+            Expr::Not(e) => Expr::Not(Box::new(e.replace_refs(f))),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(a.replace_refs(f)), Box::new(b.replace_refs(f))),
+            Expr::If(c, a, b) => Expr::If(Box::new(c.replace_refs(f)), Box::new(a.replace_refs(f)), Box::new(b.replace_refs(f))),
+            Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.replace_refs(f)).collect()),
+            Expr::Get(e, field) => Expr::Get(Box::new(e.replace_refs(f)), field),
+        }
+    }
+
     /// Evaluate against a resolver for leaf values. Reads go through the
     /// resolver and nowhere else, which is the hook a tracking evaluator
     /// would use later.

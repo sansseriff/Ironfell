@@ -1,4 +1,5 @@
 import { oppositeVectorBackendUrl } from './wasm_loader';
+import { beginCopy, canvasOwnsCopy, pastedFragment } from './clipboard';
 
 export interface InputPoster {
     post(data: any): void;
@@ -161,6 +162,14 @@ export class InputManager {
     private attachKeyboard() {
         this.listen(window, 'keydown', (e: KeyboardEvent) => this.onKeyDown(e));
         this.listen(window, 'keyup', (e: KeyboardEvent) => this.onKeyUp(e));
+        // Paste arrives as an event so the clipboard is readable without a
+        // permission prompt; Cmd+V itself is left to the browser.
+        this.listen(window, 'paste', (e: ClipboardEvent) => {
+            const text = pastedFragment(e);
+            if (text === null) return;
+            e.preventDefault();
+            this.post({ ty: 'paste', text });
+        });
     }
 
     /** Select-tool shortcuts, sent as commands with their modifiers. */
@@ -194,6 +203,22 @@ export class InputManager {
                 this.post({ ty: 'toolKey', key: zoom, m: InputManager.mods(event) });
                 return;
             }
+        }
+        // Copy, cut and duplicate (Cmd/Ctrl+C, X, D). Copy and cut write the
+        // clipboard from here, while this key event still counts as a user
+        // gesture; the worker supplies the content (runtime/clipboard.ts).
+        const command = event.metaKey || event.ctrlKey;
+        if (command && !event.altKey && (key === 'c' || key === 'x') && canvasOwnsCopy(event.target)) {
+            event.preventDefault();
+            if (event.repeat) return;
+            beginCopy(() => this.post({ ty: 'toolKey', key, m: InputManager.mods(event) }));
+            return;
+        }
+        if (command && !event.altKey && key === 'd' && canvasOwnsCopy(event.target)) {
+            // Also keeps the browser's bookmark shortcut away.
+            event.preventDefault();
+            this.post({ ty: 'toolKey', key, m: InputManager.mods(event) });
+            return;
         }
         // Editor commands are decided here and sent as commands, not keys:
         // Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z or Ctrl+Y redoes.

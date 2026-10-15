@@ -76,7 +76,9 @@ silently. Each line names the spec that owns its detail and exit criteria.
 | ECM phase 4 | Obligations, ghost lines, the tray, `omits`, `Store::encapsulate`, drill-in and breadcrumbs, the law tests | ECM §8–9, §12 phase 4 |
 | Phase 3 follow-ups | Pins on solved values (drag a heater's temperature, solve for power), electrical parts, adapters between port kinds | ECM §12 phase 3, "Next for this phase's area" |
 | Panels and session | The outliner; the workspace root (save each view's pan and zoom); Show in opening the right tab; selection in undo | [`specs/panels-and-session.md`](specs/panels-and-session.md) |
-| Select and pen gaps | Duplicate, group/ungroup, reparent by drag, snapping and guides, pen point insertion and conversion | [`specs/select-tool.md`](specs/select-tool.md) "Not yet" |
+| Select and pen gaps | Group/ungroup, reparent by drag, snapping and guides, pen point insertion and conversion (duplicate is done) | [`specs/select-tool.md`](specs/select-tool.md) "Not yet" |
+| Alt-drag to duplicate | After gesture ownership: duplicate mid-drag, one history entry | [`specs/clipboard-and-assets.md`](specs/clipboard-and-assets.md) phase 2 |
+| Project container | Decide the bundle format, durable storage, document identity, where libraries and the workspace live; it unblocks assets, drag and drop and cross-document paste | [`specs/clipboard-and-assets.md`](specs/clipboard-and-assets.md) §6 |
 | Gesture ownership | Cancel or keep a drag when a model edit, undo or view change makes it stale | [`specs/infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) §4 |
 | Typed UI protocol | Typed requests, subscriptions, request generations, disposal | same, §5 |
 | CS phase 4 | Degrees-of-freedom display, conflict highlighting, constraint glyphs, gesture-created constraints | [`specs/constraint-system.md`](specs/constraint-system.md) §14 phase 4 |

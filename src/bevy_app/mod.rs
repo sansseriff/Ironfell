@@ -324,6 +324,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<shape_tool::ShapeTool>();
     app.init_resource::<select::ShellModifiers>();
     app.init_resource::<select::ToolKeys>();
+    app.init_resource::<select::Clipboard>();
 }
 
 /// STEP 2 (ladder): let bevy_ui draw into the backend's compositing camera.

@@ -4,6 +4,7 @@ import { SessionAdapter, type RuntimeMode, type PanelRectMsg } from './runtime/s
 import { InputManager } from './runtime/input_manager';
 import { chooseBackend, type Backend } from './runtime/backend_policy';
 import { DocumentClient } from './runtime/document_client.svelte';
+import { copied, setSelectionCount } from './runtime/clipboard';
 
 interface PanelEntry {
   id: string;
@@ -201,6 +202,9 @@ export class PanelManager {
         }
         if (this.onInitialized) try { this.onInitialized(); } catch { }
         break;
+      case 'clipboard':
+        copied(data.text ?? '');
+        break;
       case 'documentChanged':
       case 'documentSaved':
       case 'documentLoaded':
@@ -211,6 +215,7 @@ export class PanelManager {
       case 'modelEditResult':
       case 'modelAskResult':
       case 'solveBench':
+        if (data.ty === 'selection') setSelectionCount((data.list ?? []).length);
         this.docClient.handleMessage(data);
         break;
       case 'tool':

@@ -57,6 +57,11 @@ extern "C" {
     /// ask about; a yes calls `document_to_path` with `force`.
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_convert_from_worker(question: String);
+    /// The answer to a Cmd+C or Cmd+X: the copied fragment's text
+    /// (`iron_document::copy`), or empty when nothing was copied. The shell
+    /// is waiting on it to finish its clipboard write.
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_clipboard_from_worker(text: String);
 }
 
 /// Build the Bevy app around the canvas it will render into.
@@ -1038,6 +1043,16 @@ pub fn tool_key(ptr: u64, key: String, bits: u8) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     if let Some(mut keys) = app.world_mut().get_resource_mut::<crate::bevy_app::select::ToolKeys>() {
         keys.0.push((key.to_lowercase(), bits));
+    }
+}
+
+/// Paste clipboard text the shell read from a paste event. The select tool
+/// places it on its next frame; text that is not an Iron fragment is ignored.
+#[wasm_bindgen]
+pub fn clipboard_paste(ptr: u64, text: String) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    if let Some(mut clip) = app.world_mut().get_resource_mut::<crate::bevy_app::select::Clipboard>() {
+        clip.pastes.push(text);
     }
 }
 

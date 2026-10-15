@@ -395,6 +395,44 @@ ddrag 828 140 770 168
 sleep 500
 eval shapeView('ellipse')
 shot shapes-arc
+# Copy, paste and duplicate (iron_document::copy). In the Optics tab, Cmd+D
+# on the laser's body and beam makes a second laser entity that both copies
+# picture (its connection to the fiber stays behind); Cmd+C puts a fragment
+# on the system clipboard, and a paste event carrying it makes a third laser;
+# Cmd+X removes those figures but not their entity, and the paste that
+# follows relinks the figures to it instead of making a fourth. Four undos
+# leave one laser.
+tab Optics
+eval window.lasers = async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [(v.match(/<entity id="[^"]+" name="laser"/g) || []).length, (v.match(/<connection[^>]*>/g) || []).length]; }
+eval window.figured = async () => { const v = await __iron.view({fidelity:'full'}); const i = v.indexOf('name="optics"'); const n = {}; for (const m of v.slice(i).matchAll(/name="(?:body|beam)"[\s\S]*?<figures to="([^"]+)"/g)) n[m[1]] = (n[m[1]] || 0) + 1; return Object.values(n); }
+dclick 120 170
+keydown Shift
+dclick 215 175
+keyup Shift
+key Meta+d
+sleep 800
+eval (async () => [__iron.selection().length, ...await lasers(), await figured()])()
+key Meta+c
+sleep 500
+eval navigator.clipboard.readText().then(t => t.includes('"iron_fragment":'))
+eval navigator.clipboard.readText().then(t => __iron.paste(t))
+sleep 800
+eval (async () => [...await lasers(), await figured()])()
+key Meta+x
+sleep 600
+eval (async () => [...await lasers(), await figured()])()
+eval __iron.paste()
+sleep 800
+eval (async () => [...await lasers(), await figured()])()
+key Meta+z
+sleep 400
+key Meta+z
+sleep 400
+key Meta+z
+sleep 400
+key Meta+z
+sleep 600
+eval (async () => [...await lasers(), await figured()])()
 # The dock (src-ui/views): opening a tab gives its view a canvas panel and
 # takes the hidden Main tab's away.
 tab Pendulum

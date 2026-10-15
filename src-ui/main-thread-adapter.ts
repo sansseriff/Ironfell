@@ -40,6 +40,7 @@ export class MainThreadAdapter {
       send_convert_from_worker: (question: string) => this.sendMessage({ ty: "convertQuestion", question: JSON.parse(question) }),
       send_cursor_from_worker: (cursor: string) => this.sendMessage({ ty: "cursor", cursor }),
       send_document_changed_from_worker: (version: number) => this.sendMessage({ ty: "documentChanged", version }),
+      send_clipboard_from_worker: (text: string) => this.sendMessage({ ty: "clipboard", text }),
     };
 
     // Make it globally accessible
@@ -137,6 +138,10 @@ export class MainThreadAdapter {
 
       case "toolKey":
         if (this.appHandle !== BigInt(0)) glue.tool_key(this.appHandle, data.key, data.m);
+        break;
+
+      case "paste":
+        if (this.appHandle !== BigInt(0)) glue.clipboard_paste(this.appHandle, data.text);
         break;
 
       case "theme":

@@ -21,7 +21,11 @@
  *   await __iron.session()         -> the session's selection [{node, panel, chain, …}]
  *   await __iron.stress(5000)      -> add the render benchmark's `stress` composition
  *   await __iron.timings(reset?)   -> per-phase CPU render timings since the last reset
+ *   __iron.copied()                -> the last fragment Cmd+C or Cmd+X copied in this tab
+ *   __iron.paste(text?)            -> paste a fragment (default: the last copied), as a paste event does
  */
+import { lastCopied } from './clipboard';
+
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
 export interface ViewQuery {
@@ -106,6 +110,12 @@ export class DocumentClient {
       stress: (shapes = 5000) => this.call('stress', [shapes]),
       spatial: (enabled = true) => this.call('spatial', [enabled]),
       timings: (reset = false) => this.call('timings', [reset]),
+      copied: () => lastCopied(),
+      paste: (text?: string) => {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', text ?? lastCopied());
+        window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt }));
+      },
     };
   }
 

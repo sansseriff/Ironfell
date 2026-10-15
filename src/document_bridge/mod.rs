@@ -66,6 +66,29 @@ impl PendingTransactions {
     }
 }
 
+/// This document in this session, as a token: a fragment copied under the
+/// same token keeps its references to nodes outside it when pasted, and one
+/// from another tab or an earlier document freezes them
+/// (`iron_document::copy`). Renewed whenever a document is loaded.
+#[derive(Resource)]
+pub struct DocumentOrigin(pub String);
+
+impl DocumentOrigin {
+    pub fn fresh() -> DocumentOrigin {
+        #[cfg(target_arch = "wasm32")]
+        let r = js_sys::Math::random();
+        #[cfg(not(target_arch = "wasm32"))]
+        let r = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.subsec_nanos() as f64 / 1e9);
+        DocumentOrigin(format!("{:016x}", (r * u64::MAX as f64) as u64))
+    }
+}
+
+impl Default for DocumentOrigin {
+    fn default() -> Self {
+        DocumentOrigin::fresh()
+    }
+}
+
 /// Names the document node an entity materialises.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Provenance(pub NodeId);
@@ -203,6 +226,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<PendingLoad>()
             .init_resource::<GestureRequests>()
             .init_resource::<SyncedVersion>()
+            .init_resource::<DocumentOrigin>()
             .init_resource::<PanelViews>()
             .init_resource::<Highlights>()
             .init_resource::<ViewCameras>()
@@ -272,6 +296,7 @@ pub(crate) fn sync_document(
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
+    mut origin: ResMut<DocumentOrigin>,
 ) {
     if pending.0.is_empty()
         && history.0.is_empty()
@@ -298,6 +323,7 @@ pub(crate) fn sync_document(
             }
         }
         store.0 = Store::with_document(doc);
+        *origin = DocumentOrigin::fresh();
         synced.0 = store.0.document().version();
         affected.extend(store.0.document().live_nodes().map(|n| n.id));
         info!(

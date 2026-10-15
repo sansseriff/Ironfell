@@ -22,6 +22,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
+use iron_document::copy::{self, Fragment};
 use iron_document::{Actor, DragHandle, DragMode, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
 use bevy::ecs::system::SystemParam;
 use kurbo::{Affine, ParamCurve as _, Point, Rect, Shape as _};
@@ -58,6 +59,19 @@ pub const MOD_META: u8 = 8;
 /// Escape, Enter, Tab, arrows, Delete/Backspace, and `a` (with Cmd/Ctrl).
 #[derive(Resource, Default)]
 pub struct ToolKeys(pub Vec<(String, u8)>);
+
+/// Clipboard traffic (plans/specs/clipboard-and-assets.md). The system
+/// clipboard belongs to the shell: Cmd+C answers it with the fragment's
+/// text (`send_clipboard_from_worker`), and a paste event hands text back
+/// here. Nothing is kept on this side but the last cut.
+#[derive(Resource, Default)]
+pub struct Clipboard {
+    /// Text from paste events, placed on the next frame.
+    pub pastes: Vec<String>,
+    /// The last cut's text, until it is pasted once: that first paste moves
+    /// what was cut (figures relink to their entities); later ones copy.
+    cut: Option<String>,
+}
 
 /// Which tool the pointer drives (Figma's keys: V select, P pen, R
 /// rectangle, O ellipse).
@@ -261,6 +275,9 @@ pub struct SelectTool {
     middle: Option<Option<MiddlePan>>,
     last_click: Option<(f64, Vec2, NodeId)>,
     cursor: String,
+    /// Nodes a paste or duplicate is creating, to select once their
+    /// transaction has applied.
+    select_when_live: Vec<NodeId>,
 }
 
 /// Panning a view with the middle button: the panel, where the press was,
@@ -906,6 +923,61 @@ fn movers<'a>(reaches: &'a [Reach], panel: &str) -> Vec<&'a Reach> {
         .collect()
 }
 
+/// Selected nodes no other selected node contains.
+fn outermost(doc: &iron_document::Document, selected: &[NodeId]) -> Vec<NodeId> {
+    selected.iter().copied().filter(|&id| !selected.iter().any(|&o| o != id && doc.is_ancestor(o, id))).collect()
+}
+
+/// Where a paste goes, as in Figma: the view under the pointer (else the
+/// selection's, else the first 2D view); beside the selection there, else
+/// into the artboard under the pointer or the view's composition; at the
+/// copied position when that is on screen, else centred in the view.
+fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, reaches: &[Reach], frag: &Fragment, share: bool) -> Option<copy::Placement> {
+    let doc = geo.doc();
+    let two = |v: &&PanelView| v.dims == Dims::Two;
+    let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(two);
+    let view = under.or_else(|| reaches.first().and_then(|r| views.get(&r.panel)).filter(two)).or_else(|| views.0.iter().find(two))?;
+    // The container, and view document px → its composition's space.
+    let mine = movers(reaches, &view.panel);
+    let (parent, to_comp) = match mine.last() {
+        Some(r) => (doc.live(r.node()).and_then(|n| n.parent), geo.space(&r.chain)?.inverse()),
+        None if under.is_some() => {
+            let (c, a) = crate::bevy_app::pen::drop_target(geo, hits, view)?;
+            (Some(c), a)
+        }
+        None => (view.composition, Affine::IDENTITY),
+    };
+    // An embed never goes inside the composition it shows (a cycle the
+    // store refuses): from an artboard of that composition, paste beside it.
+    let shows_target = |root: &NodeId| {
+        let source = frag.doc.get::<iron_document::component::Embed>(*root).and_then(|e| e.source.constant()).and_then(|v| v.as_ref());
+        source.is_some() && source == parent.and_then(|p| composition::composition_of(doc, p))
+    };
+    let (parent, to_comp) = if frag.roots.iter().any(shows_target) { (view.composition, Affine::IDENTITY) } else { (parent, to_comp) };
+    // What the view shows, in that space.
+    let r = view.rect;
+    let shown = (to_comp * view.affine().inverse()).transform_rect_bbox(Rect::new(r.x as f64, r.y as f64, (r.x + r.w) as f64, (r.y + r.h) as f64));
+    // Where the copied roots were, by their origins.
+    let origins: Vec<Point> = frag
+        .roots
+        .iter()
+        .filter_map(|&root| {
+            let t = frag.doc.component(root, iron_document::ComponentKind::Transform2d)?;
+            let n = |f: &str| t.get(f).and_then(|s| s.constant()).and_then(|v| v.as_f64());
+            let p = frag.parent_world.get(&root).copied().unwrap_or(iron_document::Affine2::IDENTITY).apply([n("x")?, n("y")?]);
+            Some(Point::new(p[0], p[1]))
+        })
+        .collect();
+    let offset = match origins.iter().map(|&p| Rect::from_points(p, p)).reduce(|a, b| a.union(b)) {
+        Some(b) if !origins.iter().any(|p| shown.contains(*p)) => {
+            let d = shown.center() - b.center();
+            [d.x, d.y]
+        }
+        _ => [0.0, 0.0],
+    };
+    Some(copy::Placement { parent, beside: false, offset, share_entities: share })
+}
+
 fn type_label(doc: &iron_document::Document, nodes: &[NodeId]) -> String {
     match nodes {
         [one] => doc.live(*one).map(|n| n.ty.name().to_owned()).unwrap_or_else(|| "node".into()),
@@ -994,9 +1066,18 @@ pub fn select_tool_system(
     active: Res<ActiveTool>,
     docp: ToolDoc,
     legacy: LegacyDrag,
+    mut clipboard: ResMut<Clipboard>,
+    origin: Res<crate::document_bridge::DocumentOrigin>,
 ) {
     let tool = &mut *tool;
     let ToolDoc { mut store, mut gestures, mut pending, map, globals, nodes, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
+    // What the last paste or duplicate made becomes the selection once it
+    // exists (its reach is found below, like any selection made elsewhere).
+    if !tool.select_when_live.is_empty() && tool.select_when_live.iter().all(|&id| store.0.document().is_live(id)) {
+        let ids = std::mem::take(&mut tool.select_when_live);
+        tool.reach.retain(|id, _| ids.contains(id));
+        sel.selected = ids;
+    }
     let space = keyboard.pressed(KeyCode::Space);
     let LegacyDrag { mut drag, mut commit, provenance, cameras, planes } = legacy;
     // Keep a reach for every selected node, dropping the rest.
@@ -1098,6 +1179,41 @@ pub fn select_tool_system(
                     .collect();
                 set_selection(&mut sel, tool, all);
             }
+            "d" if command => match copy::duplicate(&store.0, &sel.selected) {
+                Ok(pasted) => {
+                    for note in &pasted.notes {
+                        info!("duplicate: {note}");
+                    }
+                    let label = format!("duplicate {}", type_label(doc, &sel.selected));
+                    pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: pasted.ops, exact: false });
+                    tool.select_when_live = pasted.roots;
+                }
+                Err(e) => info!("duplicate: {e}"),
+            },
+            "c" | "x" if command => {
+                let text = match copy::fragment(&store.0, &sel.selected, &origin.0) {
+                    Ok(frag) => {
+                        for note in &frag.dropped {
+                            info!("copy: {note}");
+                        }
+                        frag.to_text()
+                    }
+                    Err(e) => {
+                        info!("copy: {e}");
+                        String::new()
+                    }
+                };
+                crate::web_ffi::send_clipboard_from_worker(text.clone());
+                if key == "x" && !text.is_empty() {
+                    let ops = outermost(doc, &sel.selected).into_iter().map(|id| Op::Delete { id }).collect();
+                    let label = format!("cut {}", type_label(doc, &sel.selected));
+                    pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
+                    set_selection(&mut sel, tool, Vec::new());
+                    clipboard.cut = Some(text);
+                } else if key == "c" {
+                    clipboard.cut = None;
+                }
+            }
             "delete" | "backspace" => {
                 let ops: Vec<Op> = sel
                     .selected
@@ -1136,6 +1252,40 @@ pub fn select_tool_system(
                 gestures.0.push(GestureRequest::Commit(label));
             }
             _ => {}
+        }
+    }
+
+    for text in std::mem::take(&mut clipboard.pastes) {
+        if !Fragment::is_fragment_text(&text) {
+            continue;
+        }
+        let frag = match Fragment::from_text(&text) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!("paste: {e}");
+                continue;
+            }
+        };
+        let share = clipboard.cut.as_deref() == Some(text.as_str());
+        if share {
+            clipboard.cut = None;
+        }
+        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        let reaches = selected_reaches(&sel, tool);
+        let Some(place) = paste_placement(&geo, &hits, &views, &reaches, &frag, share) else {
+            info!("paste: no 2D view to paste into");
+            continue;
+        };
+        match copy::paste(&store.0, &frag, &place, &origin.0) {
+            Ok(pasted) => {
+                for note in pasted.notes.iter().chain(&frag.dropped) {
+                    info!("paste: {note}");
+                }
+                let label = format!("paste {}", type_label(&frag.doc, &frag.roots));
+                pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: pasted.ops, exact: false });
+                tool.select_when_live = pasted.roots;
+            }
+            Err(e) => warn!("paste: {e}"),
         }
     }
 

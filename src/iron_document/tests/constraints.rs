@@ -470,3 +470,67 @@ fn a_bound_node_has_no_drag_and_says_why() {
     let DragMode::Locked(reasons) = &h.mode else { panic!("{h:?}") };
     assert!(reasons[0].contains("fixed") && reasons[0].contains(&p.group.to_string()), "{reasons:?}");
 }
+
+#[test]
+fn duplicating_the_pendulum_copies_its_mechanism_and_undo_removes_it() {
+    let mut p = pendulum();
+    let before = content(&p.store);
+    let pasted = copy::duplicate(&p.store, &[p.group]).unwrap();
+    assert!(pasted.notes.is_empty(), "{:?}", pasted.notes);
+    p.store.apply(tx("duplicate group", pasted.ops)).unwrap();
+    let doc = p.store.document();
+    let copy = pasted.roots[0];
+    // Right above the original, as a sibling.
+    let roots: Vec<NodeId> = doc.roots().to_vec();
+    assert_eq!(roots, vec![p.group, copy]);
+    // Its constraints are its own: they name the copy's joints.
+    let kids = doc.children(copy).to_vec();
+    assert_eq!(kids.len(), doc.children(p.group).len());
+    let is_constraint = |k: &NodeId| doc.live(*k).unwrap().ty.name() == "constraint";
+    let constraints: Vec<NodeId> = kids.iter().copied().filter(is_constraint).collect();
+    assert_eq!(constraints.len(), doc.children(p.group).iter().filter(|k| is_constraint(k)).count());
+    assert!(!constraints.is_empty());
+    for c in &constraints {
+        for r in doc.relations_from(*c) {
+            assert!(kids.contains(&r.to), "{c} constrains {} outside the copy", r.to);
+        }
+    }
+    // The copy's ball moves; the original's stays.
+    let ball = kids[p.store.document().children(p.group).iter().position(|&k| k == p.ball).unwrap()];
+    let still = pos(&p.store, p.ball);
+    let h = p.store.begin_drag(ball, [0.0, 0.0]);
+    assert!(matches!(h.mode, DragMode::Cluster(_)), "{:?}", h.mode);
+    p.store.drag_to(&h, [420.0, 300.0]);
+    p.store.end_drag(&h);
+    p.store.commit_gesture("move ball", Actor::Human, 0).unwrap().unwrap();
+    assert!(dist(pos(&p.store, ball), still) > 50.0);
+    assert!(dist(pos(&p.store, p.ball), still) < 1e-6);
+    // Two undos: the drag, then the duplicate. What is live is the original
+    // again; the copies stay behind only as tombstones (ids are never reused).
+    p.store.undo(0).unwrap().unwrap();
+    p.store.undo(0).unwrap().unwrap();
+    let live = |text: &str| {
+        let v: serde_json::Value = serde_json::from_str(text).unwrap();
+        let nodes = v["nodes"].as_object().unwrap();
+        let live: Vec<&String> = nodes.iter().filter(|(_, n)| n.get("tombstoned").is_none()).map(|(k, _)| k).collect();
+        let comps: Vec<String> = v["components"].as_object().unwrap().iter().flat_map(|(kind, t)| t.as_object().unwrap().iter().filter(|(id, _)| live.contains(id)).map(move |(id, c)| format!("{kind} {id} {c}"))).collect();
+        let rels: Vec<String> = v["relations"].as_array().unwrap().iter().map(|r| r.to_string()).collect();
+        (live.into_iter().cloned().collect::<Vec<_>>(), comps, rels)
+    };
+    assert_eq!(live(&content(&p.store)), live(&before));
+}
+
+#[test]
+fn a_constraint_reaching_outside_the_copy_stays_behind() {
+    let mut p = pendulum();
+    let pasted = copy::duplicate(&p.store, &[p.ball]).unwrap();
+    // The ball's distance link to the last joint is not copied, and says so.
+    assert_eq!(pasted.notes.len(), 1, "{:?}", pasted.notes);
+    assert!(pasted.notes[0].contains("constraint") && pasted.notes[0].contains("outside the copy"), "{:?}", pasted.notes);
+    p.store.apply(tx("duplicate ellipse", pasted.ops)).unwrap();
+    let ball = pasted.roots[0];
+    assert!(p.store.document().relations_to(ball).next().is_none());
+    // Free: it drags anywhere without a solve.
+    let h = p.store.begin_drag(ball, [0.0, 0.0]);
+    assert!(matches!(h.mode, DragMode::Axes { .. }), "{:?}", h.mode);
+}

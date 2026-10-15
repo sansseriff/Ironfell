@@ -105,7 +105,13 @@ the bottom toolbar's R and O tools, the circle stretched into an ellipse, a
 double-click turning it into a path with the same id, undo, and the bound bar's
 conversion asking first, then cancelled; then a corner dot rounding the
 rectangle, a shadow added in the inspector, and the ellipse's sweep handle making
-a quarter pie). Expected output, minus screenshot lines,
+a quarter pie), and copy and paste (`iron_document::copy`, in the Optics tab:
+Cmd+D on the laser's body and beam makes a second laser entity both copies
+picture, the connection to the fiber left behind; Cmd+C reaches the system
+clipboard, which the driver may read because it grants clipboard permissions,
+and a paste event carrying it makes a third laser; Cmd+X then a paste relinks
+the figures to the third laser instead of making a fourth; four undos leave one
+laser. Each `[lasers, connections, [figures per laser]]` line counts them). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
@@ -243,6 +249,17 @@ tab Controls
 clicked Add shadow
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
 "<ellipse id=\"#2r\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.5707963267948966\" inner=\"0\""
+tab Optics
+undefined
+undefined
+[2,2,4,[2,2]]
+true
+undefined
+[3,4,[2,2,2]]
+[3,4,[2,2]]
+undefined
+[3,4,[2,2,2]]
+[1,4,[2]]
 tab Pendulum
 [true,false]
 tab Main
@@ -275,6 +292,14 @@ applied "undo: convert ellipse to path" (6 ops, System) -> v25
 applied "round corners" (1 ops, Human) -> v26
 applied "add shadow" (1 ops, Human) -> v27
 applied "edit arc" (1 ops, Human) -> v28
+applied "duplicate 2 nodes" (6 ops, Human) -> v29
+applied "paste 2 nodes" (6 ops, Human) -> v30
+applied "cut 2 nodes" (2 ops, Human) -> v31
+applied "paste 2 nodes" (4 ops, Human) -> v32
+applied "undo: paste 2 nodes" (4 ops, System) -> v33
+applied "undo: cut 2 nodes" (2 ops, System) -> v34
+applied "undo: paste 2 nodes" (6 ops, System) -> v35
+applied "undo: duplicate 2 nodes" (6 ops, System) -> v36
 (no page errors)
 ```
 
@@ -605,6 +630,12 @@ tests).
   probe to show frames advancing; always call it before interacting. The app
   then runs at roughly 8 fps, so `drag` paces itself in hundreds of
   milliseconds. Do not read performance off these runs.
+- **Cmd+V does not paste in a driven browser.** A synthetic key press never
+  runs the browser's paste command, so no `paste` event fires. Paste with
+  `__iron.paste(text)`, which dispatches the event the shell listens for
+  (`text` defaults to the tab's last copy, `__iron.copied()`). Cmd+C does work,
+  because the driver grants clipboard permissions; read the result back with
+  `navigator.clipboard.readText()`.
 
 ## Troubleshooting
 

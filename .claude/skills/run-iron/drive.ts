@@ -33,7 +33,9 @@ const browser: Browser = await chromium.launch({
 // SIZE=2560x1440@2 sets the window and device scale (that one is 5K).
 const [sizeSpec, dprSpec] = (process.env.SIZE ?? "1600x1000@1").split("@");
 const [vw, vh] = sizeSpec.split("x").map(Number);
-const page: Page = await browser.newPage({ viewport: { width: vw, height: vh }, deviceScaleFactor: Number(dprSpec ?? 1) });
+// Clipboard permissions, so Cmd+C reaches the system clipboard as it would
+// for a person.
+const page: Page = await browser.newPage({ viewport: { width: vw, height: vh }, deviceScaleFactor: Number(dprSpec ?? 1), permissions: ["clipboard-read", "clipboard-write"] });
 
 // Console output. Playwright forwards the worker's console on the page
 // channel too, so one listener sees both. Rust logs arrive with %c colour

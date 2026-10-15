@@ -303,3 +303,91 @@ fn a_heater_settles_through_its_thermal_link() {
     let view = lab.store.view(&ViewQuery { scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
     assert!(view.contains(r#"kind="heat_flow""#) && view.contains("across=") && view.contains("through="), "{view}");
 }
+
+/// The entity's first figure; the lab's fiber template draws nothing, so
+/// the fiber gets a plain rect for one.
+fn figure_of_entity(store: &mut Store, entity: NodeId) -> NodeId {
+    if let Some(&f) = composition::figures_of(store.document(), entity).first() {
+        return f;
+    }
+    let doc = store.document();
+    let cartoon = doc.roots()[1];
+    let id = doc.next_ids(1)[0];
+    let rel = doc.next_relation_id();
+    let order = OrderKey::after(&doc.live(*doc.children(cartoon).last().unwrap()).unwrap().order);
+    store
+        .apply(tx(
+            "figure",
+            vec![
+                Op::Create { id, ty: ty("rect"), parent: Some(cartoon), order, components: vec![Transform2d::default().wrap(), Size::default().wrap()] },
+                Op::Link { rel: Relation { id: rel, from: id, to: entity, rel: RelKind::Figures, data: BTreeMap::new() } },
+            ],
+        ))
+        .unwrap();
+    id
+}
+
+#[test]
+fn copying_a_figure_copies_its_entity_with_fresh_ports() {
+    let mut lab = lab();
+    let fiber_box = figure_of_entity(&mut lab.store, lab.fiber);
+    let pasted = copy::duplicate(&lab.store, &[fiber_box]).unwrap();
+    // Both of the fiber's connections reach outside: neither is copied.
+    assert_eq!(pasted.notes.len(), 2, "{:?}", pasted.notes);
+    lab.store.apply(tx("duplicate", pasted.ops)).unwrap();
+    let copy = pasted.roots[0];
+    let doc = lab.store.document();
+    let entity = composition::figured_by(doc, copy).unwrap();
+    assert_ne!(entity, lab.fiber);
+    // A second fiber in the model, right after the first, with its own ports.
+    let model: Vec<NodeId> = doc.children(lab.model).to_vec();
+    assert_eq!(model[model.iter().position(|&e| e == lab.fiber).unwrap() + 1], entity);
+    let ports: Vec<NodeId> = doc.children(entity).to_vec();
+    assert_eq!(ports.len(), doc.children(lab.fiber).len());
+    assert!(ports.iter().all(|p| !doc.children(lab.fiber).contains(p)));
+    // Its out-port's behaviour reads its own parameters and in-port.
+    let out = lab.port(entity, "out");
+    let expr = doc.leaf(out, path("port.signal")).unwrap().expr().unwrap().clone();
+    assert!(expr.deps().iter().all(|d| d.node == entity || ports.contains(&d.node)), "{expr:?}");
+    // Unconnected, it carries nothing; the original chain is untouched.
+    let expected = 0.010 * 10f64.powf(-0.1);
+    assert!((watts(&lab.signal(lab.meter, "in")) - expected).abs() < 1e-12);
+    // Its parameters are its own.
+    lab.store.apply(tx("longer", vec![Op::Set { id: entity, path: path("params.length_km"), slot: Slot::Const(Value::Number(10.0)) }])).unwrap();
+    assert!((watts(&lab.signal(lab.meter, "in")) - expected).abs() < 1e-12);
+}
+
+#[test]
+fn copying_a_whole_chain_keeps_its_connections() {
+    let mut lab = lab();
+    let figures: Vec<NodeId> = [lab.laser, lab.fiber, lab.meter].iter().map(|&e| figure_of_entity(&mut lab.store, e)).collect();
+    let pasted = copy::duplicate(&lab.store, &figures).unwrap();
+    assert!(pasted.notes.is_empty(), "{:?}", pasted.notes);
+    let connections = lab.store.document().nodes_of_type(ty("connection")).count();
+    lab.store.apply(tx("duplicate", pasted.ops)).unwrap();
+    let doc = lab.store.document();
+    assert_eq!(doc.nodes_of_type(ty("connection")).count(), connections * 2);
+    // The copied meter reads the copied laser: raise it, only its meter moves.
+    let def = |e: NodeId| doc.get::<iron_document::component::Instance>(e).unwrap().def.constant().cloned();
+    let copy_of = |original: NodeId| pasted.roots.iter().map(|&r| composition::figured_by(doc, r).unwrap()).find(|&e| def(e) == def(original)).unwrap();
+    let (laser, meter) = (copy_of(lab.laser), copy_of(lab.meter));
+    assert!(laser != lab.laser && meter != lab.meter);
+    lab.store.apply(tx("brighter", vec![Op::Set { id: laser, path: path("params.power"), slot: Slot::Const(Value::parse_quantity("20 mW").unwrap()) }])).unwrap();
+    assert!((watts(&lab.signal(meter, "in")) - 0.020 * 10f64.powf(-0.1)).abs() < 1e-12);
+    assert!((watts(&lab.signal(lab.meter, "in")) - 0.010 * 10f64.powf(-0.1)).abs() < 1e-12);
+}
+
+#[test]
+fn pasting_after_a_cut_relinks_the_figure_to_its_entity() {
+    let mut lab = lab();
+    let fiber_box = figure_of_entity(&mut lab.store, lab.fiber);
+    let frag = copy::fragment(&lab.store, &[fiber_box], "here").unwrap();
+    lab.store.apply(tx("cut", vec![Op::Delete { id: fiber_box }])).unwrap();
+    let place = copy::Placement { share_entities: true, ..Default::default() };
+    let pasted = copy::paste(&lab.store, &frag, &place, "here").unwrap();
+    lab.store.apply(tx("paste", pasted.ops)).unwrap();
+    // The same fiber, still connected: no second entity.
+    let doc = lab.store.document();
+    assert_eq!(composition::figured_by(doc, pasted.roots[0]), Some(lab.fiber));
+    assert_eq!(doc.nodes_of_type(ty("entity")).count(), 3);
+}

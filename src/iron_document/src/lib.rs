@@ -19,6 +19,7 @@
 pub mod component;
 pub mod composition;
 pub mod constraint;
+pub mod copy;
 pub mod definition;
 pub mod document;
 pub mod expr;

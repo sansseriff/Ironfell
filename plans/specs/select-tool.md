@@ -279,7 +279,9 @@ target; this cache only removes repeated geometry preparation.
 
 ## Not yet
 
-- Alt-drag to duplicate. The store has no copy op yet; instantiation is the nearest.
+- Alt-drag to duplicate. Copy, paste and Cmd+D are done (`iron_document::copy`,
+  [clipboard-and-assets.md](clipboard-and-assets.md)); Alt-drag waits on gesture
+  ownership, because it creates and removes nodes mid-gesture.
 - Snapping and smart guides, and the distance and size labels. The size label needs text
   in the display list.
 - Group and ungroup (Cmd+G).

@@ -82,11 +82,18 @@
     border-bottom: none;
     border-radius: 8px 8px 0 0;
   }
-  .dock :global(.dv-tab.dv-inactive-tab:hover) {
-    background: var(--hover);
+  /* The hover pill is a layer behind the tab's content, so the tab's own
+     box (and so its content's position) never changes. */
+  .dock :global(.dv-tab.dv-inactive-tab) {
+    isolation: isolate;
+  }
+  .dock :global(.dv-tab.dv-inactive-tab:hover::before) {
+    content: "";
+    position: absolute;
+    inset: 0 0 4px;
+    z-index: -1;
     border-radius: 8px;
-    height: calc(100% - 9px);
-    margin: 5px 0 4px;
+    background: var(--hover);
   }
   .dock :global(.dv-tab.dv-active-tab) {
     z-index: 1;
@@ -101,16 +108,17 @@
     height: 8px;
     pointer-events: none;
   }
-  /* A quarter ring of the outline, filled with the content colour outside
-     it: tangent to the tab's side at the top, to the bar's line at the
-     bottom. Offset by the 1px border, which the box is placed inside. */
+  /* A quarter ring of the outline (radii 7–8px), filled with the content
+     colour outside it. The 8px box ends on the tab's side border, so the
+     ring's top meets that border's 1px column exactly and its fill covers
+     the border below the curve; the ring's bottom meets the bar's line. */
   .dock :global(.dv-tab.dv-active-tab::before) {
-    left: -9px;
-    background: radial-gradient(circle at 0 0, transparent 7px, var(--tab-outline) 7.5px, var(--tab-outline) 8px, var(--bg) 8.5px);
+    left: -8px;
+    background: radial-gradient(circle at 0 0, transparent 6.6px, var(--tab-outline) 7.2px, var(--tab-outline) 7.8px, var(--bg) 8.4px);
   }
   .dock :global(.dv-tab.dv-active-tab::after) {
-    right: -9px;
-    background: radial-gradient(circle at 100% 0, transparent 7px, var(--tab-outline) 7.5px, var(--tab-outline) 8px, var(--bg) 8.5px);
+    right: -8px;
+    background: radial-gradient(circle at 100% 0, transparent 6.6px, var(--tab-outline) 7.2px, var(--tab-outline) 7.8px, var(--bg) 8.4px);
   }
   .dock :global(*) {
     pointer-events: none;

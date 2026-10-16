@@ -219,6 +219,18 @@ pub struct ModifierSnapshot {
     pub meta: bool,
 }
 
+/// Window px per CSS px. Everything Rust-side is window (canvas) px, so
+/// editor feedback sized in CSS px (grips, handles, hit radii) scales by
+/// this to look and reach the same on every screen.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct Dpr(pub f64);
+
+impl Default for Dpr {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
 #[derive(Resource, Debug, Default)]
 pub struct PointerState {
     pub screen: Vec2,

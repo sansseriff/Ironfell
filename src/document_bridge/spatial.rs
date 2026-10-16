@@ -89,10 +89,11 @@ pub fn prepare_spatial(
     for (prov, shape, global) in &nodes {
         if !full && !shape.is_changed() && !global.is_changed() { continue; }
         let local = nest::shape_path(&shape.shape).bounding_box();
-        // Half the stroke, times the miter limit. Editor outlines are drawn by
-        // the overlay in its own view, so they need no allowance here; a
-        // plane's view culls with a device-space margin that covers its own.
-        let mut paint_pad = shape.stroke.map_or(0.0, |(_,w)| w as f64 * 0.5 * 4.0);
+        // Half the stroke, times the miter limit (at least 4, which covers
+        // round and square caps too). Editor outlines are drawn by the
+        // overlay in its own view, so they need no allowance here; a plane's
+        // view culls with a device-space margin that covers its own.
+        let mut paint_pad = shape.stroke.as_ref().map_or(0.0, |(_, st)| st.width * 0.5 * st.miter_limit.max(4.0));
         // A shadow paints past the shape by its offset and three of its
         // standard deviations.
         if let Some(s) = shape.shadow {

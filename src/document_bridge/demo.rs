@@ -526,7 +526,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
 /// the meter's gauge in both compositions reads its in-port, and dragging a
 /// gauge's edge sets the power slider back through the chain.
 fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: NodeId) -> Vec<Op> {
-    use iron_document::component::{Connection, Handles, PathShape, Port};
+    use iron_document::component::{Connection, Contour, Handles, PathShape, Port};
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
     let mut scratch = iron_document::Store::with_document(base.document().clone());
     scratch
@@ -618,7 +618,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         s.h = n(14.0);
         rect_op(id, parent, order, vec![at(x, y), s.wrap(), fill(c), named("reading")])
     };
-    let ids = scratch.document().next_ids(28);
+    let ids = scratch.document().next_ids(29);
     let mut it = ids.into_iter();
     let mut next = move || it.next().expect("reserved");
     let (laser, power, laser_out, laser_cartoon, laser_schematic) = (next(), next(), next(), next(), next());
@@ -626,7 +626,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     let (meter, meter_in, meter_cartoon, meter_schematic) = (next(), next(), next(), next());
     // In the order they are created below: ids must ascend.
     let (laser_body, laser_beam) = (next(), next());
-    let (fiber_path, fiber_a, fiber_b) = (next(), next(), next());
+    let (fiber_path, fiber_contour, fiber_a, fiber_b) = (next(), next(), next(), next());
     let (dial, track, reading) = (next(), next(), next());
     let (laser_block, fiber_block, meter_block, schematic_reading) = (next(), next(), next(), next());
     let def_key = last(&scratch, Some(library));
@@ -667,16 +667,15 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     beam.opacity = Slot::Bound(Expr::parse(&format!("clamp({power}.param_spec.default / 20 mW, 0.15, 1)")).expect("demo binding"));
     ops.push(rect_op(laser_beam, laser_cartoon, key(1), vec![at(190.0, 168.0), size(50.0, 14.0), beam.wrap(), named("beam")]));
     // The fiber: a curve from the laser to the meter.
-    let mut shape = PathShape::default();
-    shape.closed = Slot::Const(Value::Bool(false));
-    ops.push(Op::Create { id: fiber_path, ty: ty("path"), parent: Some(fiber_cartoon), order: key(0), components: vec![at(240.0, 175.0), shape.wrap(), stroke([0.96, 0.7, 0.15, 1.0], 6.0), named("fiber")] });
+    ops.push(Op::Create { id: fiber_path, ty: ty("path"), parent: Some(fiber_cartoon), order: key(0), components: vec![at(240.0, 175.0), PathShape::default().wrap(), stroke([0.96, 0.7, 0.15, 1.0], 6.0), named("fiber")] });
+    ops.push(Op::Create { id: fiber_contour, ty: ty("contour"), parent: Some(fiber_path), order: key(0), components: vec![Contour::default().wrap()] });
     let point = |id: NodeId, order: OrderKey, x: f64, y: f64, ox: f64, oy: f64| {
         let mut h = Handles::default();
         h.ix = n(-ox);
         h.iy = n(-oy);
         h.ox = n(ox);
         h.oy = n(oy);
-        Op::Create { id, ty: ty("point"), parent: Some(fiber_path), order, components: vec![at(x, y), h.wrap()] }
+        Op::Create { id, ty: ty("point"), parent: Some(fiber_contour), order, components: vec![at(x, y), h.wrap()] }
     };
     ops.push(point(fiber_a, key(0), 0.0, 0.0, 90.0, 120.0));
     ops.push(point(fiber_b, key(1), 270.0, 0.0, 90.0, -120.0));
@@ -726,8 +725,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         let rels = scratch.document().next_relation_ids(3);
         let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
         let (x0, x1) = if i == 0 { (150.0, 240.0) } else { (360.0, 450.0) };
-        let mut shape = PathShape::default();
-        shape.closed = Slot::Const(Value::Bool(false));
+        let shape = PathShape::default();
         let wire_key = last(&scratch, Some(schematic));
         let model_key = last(&scratch, Some(model));
         let mut c = Connection::default();
@@ -739,10 +737,11 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
             Op::Create { id: id[1], ty: ty("path"), parent: Some(schematic), order: wire_key, components: vec![at(x0, 125.0), shape.wrap(), stroke([0.1, 0.1, 0.12, 1.0], 2.0), named("wire")] },
             Op::Link { rel: Relation { id: rels[2], from: id[1], to: id[0], rel: RelKind::Figures, data: BTreeMap::new() } },
         ]);
-        let pts = scratch.document().next_ids(2);
+        let pts = scratch.document().next_ids(3);
         phase(&mut scratch, vec![
-            Op::Create { id: pts[0], ty: ty("point"), parent: Some(id[1]), order: key(0), components: vec![at(0.0, 0.0), Handles::default().wrap()] },
-            Op::Create { id: pts[1], ty: ty("point"), parent: Some(id[1]), order: key(1), components: vec![at(x1 - x0, 0.0), Handles::default().wrap()] },
+            Op::Create { id: pts[0], ty: ty("contour"), parent: Some(id[1]), order: key(0), components: vec![Contour::default().wrap()] },
+            Op::Create { id: pts[1], ty: ty("point"), parent: Some(pts[0]), order: key(0), components: vec![at(0.0, 0.0), Handles::default().wrap()] },
+            Op::Create { id: pts[2], ty: ty("point"), parent: Some(pts[0]), order: key(1), components: vec![at(x1 - x0, 0.0), Handles::default().wrap()] },
         ]);
     }
 

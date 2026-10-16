@@ -4,6 +4,9 @@
   // (plans/specs/panels-and-session.md).
   import { controllerManager } from "../../controller-manager.svelte";
   import Plus from "@lucide/svelte/icons/plus";
+  import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
+  import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+  import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
   import X from "@lucide/svelte/icons/x";
   import type { ViewSpec } from "../views";
 
@@ -30,39 +33,59 @@
   // The inspector (a first, HTML version; plans/specs/panels-and-session.md):
   // the first selected node's fields, each edited through its handle, so a
   // linearly bound value edits its source and a locked one says why.
-  type Field = { leaf: string; field: string; kind: string | null; text: string | null; bind: string | null; edit: string; via: string | null; why: string | null };
+  type Field = Property;
   type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[] };
   let inspected: Inspected | null = $state(null);
   let setError = $state("");
-  $effect(() => {
+  let generation = 0;
+  async function refresh() {
     const node = doc.selection[0];
+    const request = ++generation;
+    if (!node) { inspected = null; return; }
+    try {
+      const r = await doc.call("inspect", [node]);
+      if (request === generation && doc.selection[0] === node) inspected = r;
+    } catch (e) { if (request === generation) setError = String(e); }
+  }
+  let previousNode: string | undefined;
+  $effect(() => {
     void doc.version;
-    if (!node) {
-      inspected = null;
-      return;
-    }
-    doc.call("inspect", [node]).then((r) => (inspected = r)).catch(() => (inspected = null));
+    const node = doc.selection[0];
+    if (previousNode !== node) { previousNode = node; inspected = null; setError = ""; }
+    void refresh();
+  });
+  const titles: Record<string, string> = { transform2d: "Position", size: "Layout", radius: "Dimensions", appearance: "Appearance", fill: "Fill", gradient: "Gradient", stroke: "Stroke", corners: "Corner radius", arc: "Arc", shadow: "Drop shadow", group_clip: "Clip content" };
+  const order = ["transform2d", "size", "radius", "appearance", "corners", "arc", "group_clip", "fill", "gradient", "stroke", "shadow"];
+  const components = $derived.by(() => {
+    const current = inspected as Inspected | null;
+    return current ? [...current.components].sort((a, b) => (order.indexOf(a.kind) < 0 ? 99 : order.indexOf(a.kind)) - (order.indexOf(b.kind) < 0 ? 99 : order.indexOf(b.kind))) : [];
   });
   async function set(f: Field, text: string) {
     if (!inspected) return;
+    const node = inspected.node;
     setError = "";
-    const r = await doc.call("inspect_set", [inspected.node, f.leaf, text]);
-    if (!r.ok) setError = `${f.leaf}: ${r.error}`;
-    inspected = await doc.call("inspect", [inspected.node]);
+    try {
+      const r = await doc.call("inspect_set", [node, f.leaf, text]);
+      if (!r.ok) setError = `${f.leaf}: ${r.error}`;
+      await refresh();
+    } catch (e) { setError = String(e); }
   }
   // Optional components (fill, stroke, corners, arc, shadow): one
   // transaction each, "add shadow" or "remove corners".
   async function component(kind: string, add: boolean) {
     if (!inspected) return;
     setError = "";
-    const r = await doc.call("component", [inspected.node, kind, add]);
-    if (!r.ok) setError = `${kind}: ${r.error}`;
-    inspected = await doc.call("inspect", [inspected.node]);
+    try {
+      const r = await doc.call("component", [inspected.node, kind, add]);
+      if (!r.ok) setError = `${kind}: ${r.error}`;
+      await refresh();
+    } catch (e) { setError = String(e); }
   }
 </script>
 
-<section class="html-view">
-  <div class="picked">{doc.selection.length ? doc.selection.join(" ") : "nothing selected"}</div>
+<section class="html-view properties">
+  <header class="panel-heading"><span>Design</span><SlidersHorizontal size={15} strokeWidth={1.5} /></header>
+
   <div class="row">
     <button onclick={() => link()} disabled={doc.selection.length !== 2}>Link</button>
     {#each showIn as f (f.node)}
@@ -90,117 +113,60 @@
     <div class="inspector">
       <div class="title"><strong>{inspected.name ?? inspected.type}</strong> <span class="mono">{inspected.type} {inspected.node}</span></div>
       {#if setError}<p class="error">{setError}</p>{/if}
-      {#each inspected.components as c (c.kind)}
-        <!-- The heading's text is exactly the kind: drivers find fields by it. -->
-        <div class="component"><span>{c.kind}</span>{#if inspected.removable.includes(c.kind)}<button class="icon" title="Remove {c.kind}" aria-label="Remove {c.kind}" onclick={() => component(c.kind, false)}><X size={12} strokeWidth={2} /></button>{/if}</div>
-        {#each c.fields as f (f.leaf)}
-          <label class="field" title={f.why ?? (f.via ? `edits ${f.via} through the binding` : "")}>
-            <span class="label" class:bound={f.bind}>{f.field}</span>
-            {#if f.kind === "bool"}
-              <input type="checkbox" checked={f.text === "true"} disabled={f.edit === "locked"} onchange={(e) => set(f, String((e.currentTarget as HTMLInputElement).checked))} />
-            {:else if f.kind === "color"}
-              <input type="color" value={(f.text ?? "#000000").slice(0, 7)} disabled={f.edit === "locked"} onchange={(e) => set(f, (e.currentTarget as HTMLInputElement).value + (f.text ?? "").slice(7, 9))} />
-            {:else}
-              <input
-                class:number={f.kind === "number"}
-                type={f.kind === "number" ? "number" : "text"}
-                step="any"
-                value={f.text ?? ""}
-                disabled={f.edit === "locked"}
-                onchange={(e) => set(f, (e.currentTarget as HTMLInputElement).value)}
-              />
-            {/if}
-          </label>
-          {#if f.bind}<div class="bind mono">= {f.bind}</div>{/if}
-        {/each}
+      {#if doc.selection.length > 1}<p class="selection-note">{doc.selection.length} selected · editing the first item</p>{/if}
+      {#each components as c (c.kind)}
+        <div class="property-section">
+          <div class="component" data-kind={c.kind}>
+            <span>{titles[c.kind] ?? c.kind}</span>
+            {#if inspected.removable.includes(c.kind)}<button class="icon" title="Remove {titles[c.kind] ?? c.kind}" aria-label="Remove {c.kind}" onclick={() => component(c.kind, false)}><X size={14} strokeWidth={1.5} /></button>{/if}
+          </div>
+          {#if c.kind === "gradient"}
+            <div class="gradient-preview" style:background={`${c.fields.find(f => f.field === "kind")?.text === "radial" ? "radial-gradient(circle" : "linear-gradient(135deg"}, ${c.fields.find(f => f.field === "start")?.text ?? "#000000"}, ${c.fields.find(f => f.field === "end")?.text ?? "#ffffff"})`}></div>
+          {/if}
+          <div class="field-grid">
+            {#each c.fields as f (f.leaf)}
+              <PropertyField field={f} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+            {/each}
+          </div>
+        </div>
       {/each}
       {#if inspected.addable.length}
         <div class="add">
           {#each inspected.addable as kind (kind)}
-            <button title="Add {kind}" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={12} strokeWidth={2} /> {kind}</button>
+            <button title="Add {kind}" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={13} strokeWidth={1.75} /> {titles[kind] ?? kind}</button>
           {/each}
         </div>
       {/if}
     </div>
+  {:else}
+    <div class="empty"><MousePointer2 size={28} strokeWidth={1.25} /><strong>Make a selection</strong><span>Select an object to see its properties.</span></div>
   {/if}
+  <footer>Alt + drag a number to adjust <span>⇧ Precision</span></footer>
 </section>
 
 <style>
-  .picked,
-  .mono {
-    font-family: monospace;
-    font-size: 0.85em;
-  }
-  .question {
-    border: 1px solid var(--danger);
-    border-radius: 6px;
-    padding: 6px;
-    font-size: 0.85em;
-  }
-  .candidate {
-    margin: 4px 0;
-  }
-  .inspector {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    border-top: 1px solid var(--border);
-    padding-top: 6px;
-  }
-  .title {
-    margin-bottom: 4px;
-  }
-  .component {
-    font-size: 10px;
-    text-transform: uppercase;
-    color: var(--fg-faint);
-    margin-top: 6px;
-  }
-  .component {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .component .icon {
-    display: flex;
-    padding: 1px;
-    border: none;
-    background: transparent;
-    color: var(--fg-faint);
-    cursor: pointer;
-  }
-  .component .icon:hover {
-    color: var(--fg);
-  }
-  .add {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 8px;
-  }
-  .add button {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    font-size: 11px;
-  }
-  .field {
-    display: grid;
-    grid-template-columns: 4.5em 1fr;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-  }
-  .field input {
-    min-width: 0;
-    font-size: 12px;
-  }
-  .label.bound {
-    color: var(--accent);
-  }
-  .bind {
-    margin-left: 4.5em;
-    color: var(--accent);
-    overflow-wrap: anywhere;
-  }
+  .properties { padding: 0 !important; font-size: 12px; }
+  .panel-heading { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .panel-heading span { border-bottom: 2px solid var(--accent); padding-bottom: 4px; }
+  .row { padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .row:has(button:only-child:disabled) { display: none; }
+  .inspector { display: flex; flex-direction: column; }
+  .title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .title strong { font-size: 13px; flex: 1; }
+  .mono { font-family: monospace; font-size: 10px; color: var(--fg-faint); }
+  .property-section { padding: 13px 16px 16px; border-bottom: 1px solid var(--border); }
+  .component { display: flex; justify-content: space-between; align-items: center; min-height: 22px; margin-bottom: 10px; font-size: 12px; font-weight: 600; }
+  .icon { display: grid; place-items: center; background: transparent; color: var(--fg-muted); padding: 3px; border: none; border-radius: 4px; cursor: pointer; }
+  .icon:hover { background: var(--hover); color: var(--fg); }
+  .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 8px; }
+  .gradient-preview { height: 36px; margin-bottom: 12px; border-radius: 5px; border: 1px solid var(--border); }
+  .add { display: flex; flex-wrap: wrap; gap: 6px; padding: 16px; }
+  .add button { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; padding: 5px 7px; background: transparent; }
+  .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 40px 20px; color: var(--fg-faint); }
+  .empty strong { font-size: 13px; color: var(--fg-muted); }
+  .selection-note { padding: 0 16px; color: var(--fg-muted); font-size: 11px; }
+  footer { display: flex; justify-content: space-between; padding: 12px 16px; font-size: 10px; color: var(--fg-faint); }
+  .question { border: 1px solid var(--danger); padding: 10px; margin: 8px; border-radius: 6px; }
+  .candidate { margin: 8px 0; }
+  .error { padding: 0 16px; overflow-wrap: anywhere; }
 </style>

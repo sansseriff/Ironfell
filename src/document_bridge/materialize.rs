@@ -17,8 +17,8 @@ use crate::bevy_app::scene3d::{ActiveState, Shape};
 pub struct Doc2d {
     pub shape: Shape2d,
     pub fill: Option<[f32; 4]>,
-    /// Colour and width.
-    pub stroke: Option<([f32; 4], f32)>,
+    /// Colour, and width, joins, caps and dashes.
+    pub stroke: Option<([f32; 4], kurbo::Stroke)>,
     pub shadow: Option<Shadow2d>,
 }
 
@@ -43,8 +43,11 @@ pub enum Shape2d {
     /// A scalar-on-a-track control (doc 02 §9.3): a `w`×`h` track with the
     /// knob at fraction `t` along it.
     Slider { w: f32, h: f32, t: f32 },
-    /// A path through its points (stage E), in the path's local space.
-    Path { outline: std::sync::Arc<kurbo::BezPath>, closed: bool, filled: bool },
+    /// A path through its contours' points (stage E), in the path's local
+    /// space: `outline` is every contour (what is stroked), `fill` the
+    /// closed ones (what is filled; none when no contour closes), filled by
+    /// the even-odd rule or the non-zero one.
+    Path { outline: std::sync::Arc<kurbo::BezPath>, fill: Option<std::sync::Arc<kurbo::BezPath>>, even_odd: bool },
 }
 
 /// How near (local px) the pointer must come to a path's line to hit it.
@@ -63,11 +66,14 @@ impl Shape2d {
                 use kurbo::Shape;
                 super::nest::shape_path(self).winding(kurbo::Point::new(p.x as f64, p.y as f64)) != 0
             }
-            Shape2d::Path { outline, closed, filled } => {
+            Shape2d::Path { outline, fill, even_odd } => {
                 use kurbo::{ParamCurveNearest, Shape};
                 let q = kurbo::Point::new(p.x as f64, p.y as f64);
-                if *closed && *filled && outline.winding(q) != 0 {
-                    return true;
+                if let Some(fill) = fill {
+                    let w = fill.winding(q);
+                    if if *even_odd { w % 2 != 0 } else { w != 0 } {
+                        return true;
+                    }
                 }
                 outline.segments().any(|s| s.nearest(q, 0.01).distance_sq <= PATH_HIT * PATH_HIT)
             }
@@ -75,43 +81,30 @@ impl Shape2d {
     }
 }
 
-/// A path node's outline from its `point` children, in sibling order: a
-/// line between two points, a cubic where either handle is non-zero.
-pub fn path_outline(store: &Store, id: NodeId) -> (kurbo::BezPath, bool) {
-    let doc = store.document();
-    let num = |n: NodeId, leaf: &str| leaf.parse::<LeafPath>().ok().and_then(|p| store.resolved(n, p)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let point_ty = TypeId::lookup("point").expect("registered");
-    let points: Vec<(kurbo::Point, kurbo::Vec2, kurbo::Vec2)> = doc
-        .children(id)
-        .iter()
-        .filter(|&&c| doc.live(c).is_some_and(|n| n.ty == point_ty))
-        .map(|&c| {
-            (
-                kurbo::Point::new(num(c, "transform2d.x"), num(c, "transform2d.y")),
-                kurbo::Vec2::new(num(c, "handles.ix"), num(c, "handles.iy")),
-                kurbo::Vec2::new(num(c, "handles.ox"), num(c, "handles.oy")),
-            )
-        })
-        .collect();
-    let closed = store.resolved(id, "path.closed".parse().expect("declared")).is_some_and(|v| v == Value::Bool(true));
-    let mut path = kurbo::BezPath::new();
-    let Some(first) = points.first() else { return (path, closed) };
-    path.move_to(first.0);
-    let segment = |path: &mut kurbo::BezPath, a: &(kurbo::Point, kurbo::Vec2, kurbo::Vec2), b: &(kurbo::Point, kurbo::Vec2, kurbo::Vec2)| {
-        if a.2 == kurbo::Vec2::ZERO && b.1 == kurbo::Vec2::ZERO {
-            path.line_to(b.0);
-        } else {
-            path.curve_to(a.0 + a.2, b.0 + b.1, b.0);
-        }
+/// A path node's outline: every contour, in the path's space
+/// (`iron_document::contour`).
+pub fn path_outline(store: &Store, id: NodeId) -> kurbo::BezPath {
+    iron_document::contour::outline(&iron_document::contour::contours(store, id))
+}
+
+/// A `stroke` component's style as kurbo strokes: Iron's names are SVG's.
+pub fn stroke_style(store: &Store, id: NodeId) -> kurbo::Stroke {
+    let r = Reader { store, id };
+    let word = |leaf: &str, default: &str| r.str(leaf).unwrap_or_else(|| default.to_owned());
+    let join = match word("stroke.join", "round").as_str() {
+        "miter" => kurbo::Join::Miter,
+        "bevel" => kurbo::Join::Bevel,
+        _ => kurbo::Join::Round,
     };
-    for w in points.windows(2) {
-        segment(&mut path, &w[0], &w[1]);
-    }
-    if closed && points.len() > 2 {
-        segment(&mut path, points.last().expect("non-empty"), first);
-        path.close_path();
-    }
-    (path, closed)
+    let cap = match word("stroke.cap", "round").as_str() {
+        "butt" => kurbo::Cap::Butt,
+        "square" => kurbo::Cap::Square,
+        _ => kurbo::Cap::Round,
+    };
+    let dash: Vec<f64> = word("stroke.dash", "").split(|c: char| c == ',' || c.is_whitespace()).filter_map(|v| v.parse().ok()).collect();
+    let solid = dash.is_empty() || dash.iter().any(|&d| d < 0.0 || !d.is_finite()) || dash.iter().all(|&d| d == 0.0);
+    let style = kurbo::Stroke::new(r.num("stroke.width", 1.0) as f64).with_join(join).with_caps(cap).with_miter_limit(r.num("stroke.miter", 4.0) as f64);
+    if solid { style } else { style.with_dashes(r.num("stroke.dash_offset", 0.0) as f64, dash) }
 }
 
 /// Marker for materialised 3D nodes.
@@ -155,13 +148,20 @@ pub(super) fn reconcile(
 ) {
     let doc = store.document();
     let _ = ComponentKind::ALL; // keep the import meaningful for readers
-    // A point has no entity of its own: its path is redrawn instead.
-    let point_ty = TypeId::lookup("point").expect("registered");
+    // A contour or a point has no entity of its own: its path is redrawn
+    // instead. Tombstoned nodes still name their parent, so a deleted point
+    // finds its path.
+    let parts = ["point", "contour"].map(|t| TypeId::lookup(t).expect("registered"));
+    let path_ty = TypeId::lookup("path").expect("registered");
     let mut with_paths = affected.clone();
     for &id in affected {
-        let point = doc.node(id).is_some_and(|n| n.ty == point_ty);
-        if point && let Some(parent) = doc.node(id).and_then(|n| n.parent) {
-            with_paths.insert(parent);
+        let mut cur = doc.node(id).filter(|n| parts.contains(&n.ty)).and_then(|n| n.parent);
+        while let Some(p) = cur.and_then(|p| doc.node(p)) {
+            if p.ty == path_ty {
+                with_paths.insert(p.id);
+                break;
+            }
+            cur = p.parent;
         }
     }
     let affected = &with_paths;
@@ -281,9 +281,12 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
                     Shape2d::Ellipse { rx: r.num("radius.rx", 50.0), ry: r.num("radius.ry", 50.0), arc }
                 }
                 "path" => {
-                    let (outline, closed) = path_outline(store, id);
-                    let filled = closed && r.color("fill.color").is_some();
-                    Shape2d::Path { outline: std::sync::Arc::new(outline), closed, filled }
+                    use iron_document::contour;
+                    let contours = contour::contours(store, id);
+                    let fill = contour::fill_outline(&contours);
+                    let fill = (!fill.elements().is_empty() && (r.color("fill.color").is_some() || r.color("gradient.start").is_some())).then(|| std::sync::Arc::new(fill));
+                    let even_odd = contour::fill_rule(store, id) == contour::FillRule::EvenOdd;
+                    Shape2d::Path { outline: std::sync::Arc::new(contour::outline(&contours)), fill, even_odd }
                 }
                 "slider" => {
                     let (min, max) = (r.num("slider.min", 0.0), r.num("slider.max", 1.0));
@@ -297,7 +300,7 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
                 c[3] *= r.num("fill.opacity", 1.0);
                 c
             });
-            let stroke = r.color("stroke.color").map(|c| (c, r.num("stroke.width", 1.0)));
+            let stroke = r.color("stroke.color").map(|c| (c, stroke_style(store, id)));
             let shadow = r.color("shadow.color").map(|color| Shadow2d { color, dx: r.num("shadow.dx", 0.0), dy: r.num("shadow.dy", 4.0), std_dev: r.num("shadow.blur", 4.0).max(0.0) * 0.5 });
             ec.insert(Doc2d { shape, fill, stroke, shadow });
         }

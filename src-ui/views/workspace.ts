@@ -40,7 +40,7 @@ function defaultLayout(api: DockviewApi) {
   view('timeline', 'Timeline', { source: 'timeline', notation: 'timeline' }, { direction: 'below' }, { initialHeight: 220 });
   view('document', 'Document', { source: 'document', notation: 'markup' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
   view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
-  view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 200 });
+  view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 280 });
 }
 
 let current: DockviewApi | null = null;

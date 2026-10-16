@@ -99,7 +99,7 @@ pub fn pick_document_2d_system(
     let doc = store.0.document();
     let roots = nest::panel_roots(doc, view);
     let screen = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
-    let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, spatial: &spatial, screen, z: 0, examined: 0, out: Vec::new(), embed: None };
+    let mut walk = Pick { store: &store.0, doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, spatial: &spatial, screen, z: 0, examined: 0, out: Vec::new(), embed: None };
     walk.walk(&roots, &[], kurbo::Point::new(p.x as f64, p.y as f64), kurbo::Affine::IDENTITY, &view.panel, 0);
     let mut out = walk.out;
     // Whatever a 3D embed covers is not hit; whatever is drawn over it is.
@@ -123,6 +123,7 @@ fn sort_hits(hits: &mut [crate::Hit2D]) {
 }
 
 pub(crate) struct Pick<'a, 'w, 's> {
+    pub store: &'a iron_document::Store,
     pub doc: &'a iron_document::Document,
     pub map: &'a NodeMap,
     pub nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
@@ -150,6 +151,7 @@ impl Pick<'_, '_, '_> {
         self.examined += candidates.len() as u32;
         crate::perf::set_pick_candidates(self.examined);
         for id in candidates {
+            if !iron_document::appearance::inside_clips(self.store, id, [p.x, p.y]) { continue; }
             self.z += 1;
             let mut chain = prefix.to_vec();
             if indexed { chain.extend_from_slice(self.spatial.chain(id)); }
@@ -270,7 +272,7 @@ pub fn pick_world_3d_system(
     }
     if let Some((_, plane_entity, p, source, plane_node)) = best {
         let kids: Vec<iron_document::NodeId> = doc.children(source).to_vec();
-        let mut walk = Pick { doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, spatial: &spatial, screen: kurbo::Point::ZERO, z: 0, examined: 0, out: Vec::new(), embed: None };
+        let mut walk = Pick { store: &store.0, doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, spatial: &spatial, screen: kurbo::Point::ZERO, z: 0, examined: 0, out: Vec::new(), embed: None };
         let mut chain = prefix.clone();
         chain.extend(nest::lineage(doc, plane_node));
         walk.walk(&kids, &chain, p, kurbo::Affine::IDENTITY, "plane", 0);

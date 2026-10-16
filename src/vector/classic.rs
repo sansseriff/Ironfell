@@ -161,8 +161,8 @@ fn replay_display_lists(
                     fill_rule,
                     shape,
                 } => {
-                    let Brush::Solid(color) = brush;
-                    with_shape!(shape, |s| scene.fill(*fill_rule, *transform, *color, None, s));
+                    let paint = match brush { Brush::Solid(c) => peniko::Brush::Solid((*c).into()), Brush::Gradient(g) => peniko::Brush::Gradient(g.clone()) };
+                    with_shape!(shape, |s| scene.fill(*fill_rule, *transform, &paint, None, s));
                 }
                 DrawCmd::Stroke {
                     transform,
@@ -170,8 +170,8 @@ fn replay_display_lists(
                     brush,
                     shape,
                 } => {
-                    let Brush::Solid(color) = brush;
-                    with_shape!(shape, |s| scene.stroke(style, *transform, *color, None, s));
+                    let paint = match brush { Brush::Solid(c) => peniko::Brush::Solid((*c).into()), Brush::Gradient(g) => peniko::Brush::Gradient(g.clone()) };
+                    with_shape!(shape, |s| scene.stroke(style, *transform, &paint, None, s));
                 }
                 DrawCmd::PushClip { transform, shape } => {
                     with_shape!(shape, |s| scene.push_layer(
@@ -190,6 +190,7 @@ fn replay_display_lists(
                 DrawCmd::PushShadow { transform, bounds, .. } => {
                     scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, 1.0, *transform, bounds);
                 }
+                DrawCmd::PushOpacity { opacity, bounds } => scene.push_layer(peniko::Fill::NonZero, peniko::Mix::Normal, *opacity, kurbo::Affine::IDENTITY, bounds),
                 DrawCmd::PopLayer => scene.pop_layer(),
                 // Texture views (3D compositions seen from 2D) are drawn by the
                 // hybrid backend only; classic shows nothing there for now.

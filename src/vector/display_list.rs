@@ -89,11 +89,16 @@ impl Shape {
 
 /// How a shape is coloured.
 ///
-/// Only solid colour is used today. Gradients and images become variants here,
+/// Solid colours and gradients share draw operations. Images can become variants here,
 /// which is why call sites take `impl Into<Brush>` rather than a `Color`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Brush {
     Solid(Color),
+    Gradient(peniko::Gradient),
+}
+
+impl From<peniko::Gradient> for Brush {
+    fn from(v: peniko::Gradient) -> Self { Self::Gradient(v) }
 }
 
 impl From<Color> for Brush {
@@ -153,6 +158,7 @@ pub enum DrawCmd {
         transform: Affine,
         shape: Shape,
     },
+    PushOpacity { opacity: f32, bounds: Rect },
     PopLayer,
 }
 
@@ -222,7 +228,7 @@ impl DisplayList {
                     transform.transform_rect_bbox(rect.inflate(pad, pad))
                 }
                 DrawCmd::PushShadow { transform, bounds, .. } => transform.transform_rect_bbox(*bounds),
-                DrawCmd::PopLayer => continue,
+                DrawCmd::PushOpacity { .. } | DrawCmd::PopLayer => continue,
             };
             acc = Some(match acc {
                 Some(a) => a.union(b),
@@ -289,6 +295,17 @@ impl DisplayListBuilder<'_> {
     /// [`DrawCmd::PushShadow`]. Scoped, as [`Self::clipped`] is.
     pub fn shadowed(&mut self, transform: Affine, color: Color, offset: kurbo::Vec2, std_dev: f64, bounds: Rect, f: impl FnOnce(&mut Self)) {
         self.out.push(DrawCmd::PushShadow { transform, color, offset, std_dev, bounds });
+        self.depth += 1;
+        f(self);
+        self.depth -= 1;
+        self.out.push(DrawCmd::PopLayer);
+    }
+
+    /// Composite the scope once, so overlapping children share one opacity.
+    pub fn opacity(&mut self, opacity: f32, bounds: Rect, f: impl FnOnce(&mut Self)) {
+        if opacity >= 1.0 { f(self); return; }
+        if opacity <= 0.0 { return; }
+        self.out.push(DrawCmd::PushOpacity { opacity, bounds });
         self.depth += 1;
         f(self);
         self.depth -= 1;

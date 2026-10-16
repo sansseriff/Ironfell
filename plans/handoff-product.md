@@ -53,9 +53,9 @@ Not started: ECM phases 4–7, stage G's semantic views and lessons, CS phases 4
 How to verify anything:
 
 ```sh
-cargo test -p iron_document -p iron_spatial -p iron_solve --target aarch64-apple-darwin
+cargo test -p iron_document -p iron_spatial -p iron_solve -p iron_svg --target aarch64-apple-darwin
 .claude/skills/run-iron/build.sh && .claude/skills/run-iron/serve.sh start
-cd .claude/skills/run-iron && bun run ./drive.ts < smoke.txt; cd -   # compare with SKILL.md
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run ./drive.ts < smoke.txt; cd -   # compare with SKILL.md
 .claude/skills/run-iron/serve.sh stop
 ```
 
@@ -76,8 +76,9 @@ silently. Each line names the spec that owns its detail and exit criteria.
 | ECM phase 4 | Obligations, ghost lines, the tray, `omits`, `Store::encapsulate`, drill-in and breadcrumbs, the law tests | ECM §8–9, §12 phase 4 |
 | Phase 3 follow-ups | Pins on solved values (drag a heater's temperature, solve for power), electrical parts, adapters between port kinds | ECM §12 phase 3, "Next for this phase's area" |
 | Panels and session | The outliner; the workspace root (save each view's pan and zoom); Show in opening the right tab; selection in undo | [`specs/panels-and-session.md`](specs/panels-and-session.md) |
+| SVG import and export | Phases 1–2 done 2026-10-15 (export, import by paste, drop, Load, `__iron.importSvg`, `<import-svg>`). Rects and ellipses in foreign SVG are recognised; Export SVG stays in the Document view until that view is remade. Phases 3–4 done too (paths with holes, schema 5; stroke style). Initial appearance pass now supports isolated opacity, two-stop linear/radial fills, and group clip frames (spec §8). Follow-ups: gradient strokes/more stops, arbitrary clip shapes and general foreign gradient/clip import | [`specs/svg-import-export.md`](specs/svg-import-export.md) |
 | Select and pen gaps | Group/ungroup, reparent by drag, snapping and guides, pen point insertion and conversion (duplicate is done) | [`specs/select-tool.md`](specs/select-tool.md) "Not yet" |
-| Project container | Decide the bundle format, durable storage, document identity, where libraries and the workspace live; it unblocks assets, drag and drop and cross-document paste | [`specs/clipboard-and-assets.md`](specs/clipboard-and-assets.md) §6 |
+| Project container | Decide the bundle format, durable storage, document identity, where libraries and the workspace live; it unblocks assets, drag and drop and cross-document paste. The wider question (projects, a lab twin, organizations, a server) is open in [`notes/projects-labs-and-server.md`](notes/projects-labs-and-server.md): read it and ask before deciding | [`specs/clipboard-and-assets.md`](specs/clipboard-and-assets.md) §6 |
 | Gizmo and manipulator follow-ups | Done 2026-10-15: store ownership, one pointer state machine (`manipulate.rs`), the 3D gizmo, Alt-drag. Open: gizmo mode keys, orientation and snapping; nested 3D transforms; a shared 3D overlay mesh pipeline when depth-aware feedback is needed | [`specs/infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) §4 |
 | Typed UI protocol | Typed requests, subscriptions, request generations, disposal | same, §5 |
 | CS phase 4 | Degrees-of-freedom display, conflict highlighting, constraint glyphs, gesture-created constraints | [`specs/constraint-system.md`](specs/constraint-system.md) §14 phase 4 |

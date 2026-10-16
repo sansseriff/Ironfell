@@ -170,6 +170,31 @@ export class InputManager {
             e.preventDefault();
             this.post({ ty: 'paste', text });
         });
+        // An .svg file dropped on the canvas imports where it was dropped:
+        // the pointer moves there first, then the text arrives as a paste.
+        this.listen(window, 'dragover', (e: DragEvent) => {
+            if (this.dropTarget(e)) e.preventDefault();
+        });
+        this.listen(window, 'drop', (e: DragEvent) => {
+            const at = this.dropTarget(e);
+            const file = at && [...(e.dataTransfer?.files ?? [])].find((f) => f.type === 'image/svg+xml' || f.name.toLowerCase().endsWith('.svg'));
+            if (!at) return;
+            e.preventDefault();
+            if (!file) return;
+            void file.text().then((text) => {
+                this.post({ ty: 'mousemove', x: at.x, y: at.y });
+                this.post({ ty: 'paste', text });
+            });
+        });
+    }
+
+    /** Where a file drag is over the canvas, in canvas px; `null` elsewhere
+     *  or when it carries no files. */
+    private dropTarget(e: DragEvent): { x: number; y: number } | null {
+        if (!this.canvas || !e.dataTransfer?.types.includes('Files')) return null;
+        const rect = this.canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left, y = e.clientY - rect.top;
+        return x >= 0 && y >= 0 && x <= rect.width && y <= rect.height ? { x, y } : null;
     }
 
     /** Select-tool shortcuts, sent as commands with their modifiers. */
@@ -212,6 +237,15 @@ export class InputManager {
             event.preventDefault();
             if (event.repeat) return;
             beginCopy(() => this.post({ ty: 'toolKey', key, m: InputManager.mods(event) }));
+            return;
+        }
+        // Copy as SVG (Alt+Shift+C; Figma has no default). By key code: with
+        // Alt held, macOS reports the character it types. Cmd+Shift+C and
+        // Cmd+Alt+C belong to the browser's developer tools.
+        if (!command && event.altKey && event.shiftKey && event.code === 'KeyC' && canvasOwnsCopy(event.target)) {
+            event.preventDefault();
+            if (event.repeat) return;
+            beginCopy(() => this.post({ ty: 'toolKey', key: 'copysvg', m: InputManager.mods(event) }));
             return;
         }
         if (command && !event.altKey && key === 'd' && canvasOwnsCopy(event.target)) {

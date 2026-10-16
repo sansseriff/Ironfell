@@ -189,6 +189,11 @@ pub(crate) enum Manip {
     /// A path point's Bézier handle, `out` or in, mirrored unless Alt;
     /// `to_local` maps window px into the path's space.
     PathHandle { point: NodeId, out: bool, to_local: Affine, at: Point },
+    /// A path's segment bent (Figma's Cmd-drag on a segment): the curve
+    /// at `t` follows the pointer by moving both its inner handles, from
+    /// point `a`'s out-handle to `b`'s in-handle; `curve` is the segment at
+    /// the press, in the path's space, which `to_local` maps window px to.
+    Bend { a: NodeId, b: NodeId, curve: kurbo::CubicBez, t: f64, to_local: Affine },
     /// A lone shape's own handle; `arc` is (start, sweep, inner) at the press.
     ShapeGrip { id: NodeId, grip: ShapeGrip, to_local: Affine, arc: [f64; 3] },
     /// Scrubbing a slider's value along its track.
@@ -221,6 +226,7 @@ impl Manip {
             },
             Manip::Transform(t) => t.label.clone(),
             Manip::PathHandle { .. } => "move handle".into(),
+            Manip::Bend { .. } => "bend segment".into(),
             Manip::ShapeGrip { grip, .. } => if matches!(grip, ShapeGrip::Corner(_)) { "round corners" } else { "edit arc" }.into(),
             Manip::Slider { .. } => "set slider".into(),
             Manip::Plane { ty, .. } => format!("move {ty}"),
@@ -329,6 +335,16 @@ impl Manip {
                     writes.extend([(*point, other.0, -v.x), (*point, other.1, -v.y)]);
                 }
                 preview_writes(cx.store, writes);
+            }
+            Manip::Bend { a, b, curve, t, to_local } => {
+                use kurbo::ParamCurve as _;
+                // Moving both inner controls by `e` moves the curve at `t` by
+                // 3t(1-t)e; near the ends the weight is clamped so a grab
+                // there cannot fling the handles.
+                let w = 3.0 * t.clamp(0.15, 0.85) * (1.0 - t.clamp(0.15, 0.85));
+                let e = (*to_local * screen - curve.eval(*t)) / w;
+                let (out, inn) = (curve.p1 + e - curve.p0, curve.p2 + e - curve.p3);
+                preview_writes(cx.store, vec![(*a, "handles.ox", out.x), (*a, "handles.oy", out.y), (*b, "handles.ix", inn.x), (*b, "handles.iy", inn.y)]);
             }
             Manip::ShapeGrip { id, grip, to_local, arc } => {
                 let writes = {
@@ -570,6 +586,9 @@ impl Gizmo3d {
             projection_matrix: rows(camera.clip_from_view().as_dmat4()),
             viewport: transform_gizmo::Rect::from_x_y_ranges(0.0..=rect.size.x as f32, 0.0..=rect.size.y as f32),
             modes: modes(store, &self.targets),
+            // Its sizes are viewport (camera) px; these make them the
+            // default's CSS px on screen. `pixels_per_point` only feathers.
+            visuals: transform_gizmo::GizmoVisuals { gizmo_size: 75.0 * dpr * scale, stroke_width: 4.0 * dpr * scale, ..Default::default() },
             pixels_per_point: dpr * scale,
             ..Default::default()
         };

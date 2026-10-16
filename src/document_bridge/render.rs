@@ -168,10 +168,51 @@ impl Draw<'_, '_, '_> {
         let candidates = if self.spatial.enabled {
             self.spatial.candidates(roots, self.doc, None, visible)
         } else { nest::preorder(self.doc, roots) };
+        // Preserve the spatial query, then restore ancestor scopes around its
+        // painter-ordered leaves. A group composites once, not once per leaf.
+        let mut allowed = std::collections::BTreeSet::new();
         for id in candidates {
+            let mut at = Some(id);
+            while let Some(n) = at {
+                if !allowed.insert(n) { break; }
+                at = self.doc.live(n).and_then(|n| n.parent);
+            }
+        }
+        self.branches(b, roots, base, clip, key, depth, &allowed);
+    }
+
+    fn number(&self, id: NodeId, leaf: &str, fallback: f64) -> f64 {
+        self.store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(fallback)
+    }
+
+    fn branches(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32, allowed: &std::collections::BTreeSet<NodeId>) {
+        for &id in roots {
+            if !allowed.contains(&id) { continue; }
+            let opacity = self.number(id, "appearance.opacity", 1.0).clamp(0.0, 1.0) as f32;
+            let frame = iron_document::appearance::ClipFrame::read(self.store, id);
+            b.opacity(opacity, clip, |b| {
+                if let Some(frame) = frame {
+                    let (w, h, r) = (frame.w, frame.h, frame.radius);
+                    let rect = kurbo::Rect::new(0.0, 0.0, w, h);
+                    let shape = if frame.ellipse {
+                        use kurbo::Shape;
+                        crate::vector::Shape::Path(kurbo::Ellipse::new((w/2.0, h/2.0), (w/2.0, h/2.0), 0.0).to_path(0.1))
+                    } else { crate::vector::Shape::RoundedRect(rect.to_rounded_rect(r)) };
+                    let placement = self.map.entity(id).and_then(|e| self.globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+                    let affine = base * placement;
+                    let inner_clip = clip.intersect(affine.transform_rect_bbox(rect));
+                    b.clipped(affine, shape, |b| self.content(b, id, base, inner_clip, key, depth, allowed));
+                } else {
+                    self.content(b, id, base, clip, key, depth, allowed);
+                }
+            });
+        }
+    }
+
+    fn content(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, id: NodeId, base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32, allowed: &std::collections::BTreeSet<NodeId>) {
             if nest::is_embed(self.doc, id) {
                 if depth >= nest::MAX_DEPTH {
-                    continue;
+                    return;
                 }
                 let key = format!("{key}/{id}");
                 if let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id) {
@@ -193,10 +234,10 @@ impl Draw<'_, '_, '_> {
                     let c = if lit { [0.1, 0.4, 1.0, 1.0] } else { [0.55, 0.57, 0.62, 1.0] };
                     b.stroke(base * placement, kurbo::Stroke::new(1.0), peniko::Color::new(c), frame);
                 }
-                continue;
+                return;
             }
             self.node(b, id, base);
-        }
+            self.branches(b, self.doc.children(id), base, clip, key, depth, allowed);
     }
 
     fn node(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, id: NodeId, base: kurbo::Affine) {
@@ -221,14 +262,21 @@ impl Draw<'_, '_, '_> {
             b.fill(affine, peniko::Color::new([1.0, 1.0, 1.0, 1.0]), knob);
             b.stroke(affine, kurbo::Stroke::new(1.5), peniko::Color::new([0.3, 0.3, 0.35, 1.0]), knob);
         } else {
-            // An open path has no inside to fill.
-            let open = matches!(&d.shape, Shape2d::Path { closed: false, .. });
+            // A path fills its closed contours by its rule; an open contour
+            // has no inside.
             let paint = |b: &mut crate::vector::DisplayListBuilder<'_>| {
-                if let Some(c) = d.fill.filter(|_| !open) {
-                    b.fill(affine, peniko::Color::new(c), shape.clone());
+                if let Some(brush) = self.fill_brush(id, d, &shape) {
+                    match &d.shape {
+                        Shape2d::Path { fill: Some(f), even_odd, .. } => {
+                            let rule = if *even_odd { peniko::Fill::EvenOdd } else { peniko::Fill::NonZero };
+                            b.fill_with_rule(affine, brush, rule, crate::vector::Shape::Path((**f).clone()));
+                        }
+                        Shape2d::Path { fill: None, .. } => {}
+                        _ => b.fill(affine, brush, shape.clone()),
+                    }
                 }
-                if let Some((c, w)) = d.stroke {
-                    b.stroke(affine, kurbo::Stroke::new(w as f64), peniko::Color::new(c), shape.clone());
+                if let Some((c, style)) = &d.stroke {
+                    b.stroke(affine, style.clone(), peniko::Color::new(*c), shape.clone());
                 }
             };
             match d.shadow.filter(|s| s.color[3] > 0.0) {
@@ -255,7 +303,7 @@ impl Draw<'_, '_, '_> {
                         }
                         None => {
                             let in_parent = parent.inverse() * local;
-                            let pad = d.stroke.map_or(0.0, |(_, w)| w as f64);
+                            let pad = d.stroke.as_ref().map_or(0.0, |(_, st)| st.width);
                             let own = in_parent.transform_rect_bbox(shape.bounding_box().inflate(pad, pad));
                             let blur = 3.0 * std_dev;
                             let bounds = own.union((own + offset).inflate(blur, blur));
@@ -268,6 +316,23 @@ impl Draw<'_, '_, '_> {
         if let Some(c) = self.lit(id) {
             b.stroke(affine, kurbo::Stroke::new(2.0), peniko::Color::new(c), shape.clone());
         }
+    }
+
+    fn fill_brush(&self, id: NodeId, d: &Doc2d, shape: &crate::vector::Shape) -> Option<crate::vector::Brush> {
+        let color = |leaf: &str| self.store.resolved(id, leaf.parse().unwrap()).and_then(|v| v.as_color());
+        let Some(mut start) = color("gradient.start") else { return d.fill.map(|c| peniko::Color::new(c).into()); };
+        let mut end = color("gradient.end").unwrap_or(start);
+        let opacity = self.number(id, "fill.opacity", 1.0).clamp(0.0, 1.0) as f32;
+        start[3] *= opacity;
+        end[3] *= opacity;
+        let bounds = shape.bounding_box();
+        let point = |x, y| kurbo::Point::new(bounds.x0 + bounds.width() * x, bounds.y0 + bounds.height() * y);
+        let p0 = point(self.number(id, "gradient.x0", 0.0), self.number(id, "gradient.y0", 0.0));
+        let p1 = point(self.number(id, "gradient.x1", 1.0), self.number(id, "gradient.y1", 1.0));
+        let radial = self.store.resolved(id, "gradient.kind".parse().unwrap()).and_then(|v| v.as_str().map(str::to_owned)).as_deref() == Some("radial");
+        let gradient = if radial { peniko::Gradient::new_radial(p0, p0.distance(p1).max(0.001) as f32) }
+            else { peniko::Gradient::new_linear(p0, if p0 == p1 { p1 + kurbo::Vec2::new(0.001, 0.0) } else { p1 }) };
+        Some(gradient.with_stops([peniko::Color::new(start), peniko::Color::new(end)]).into())
     }
 
     /// The outline colour of a lit node on a plane, if it is lit there.

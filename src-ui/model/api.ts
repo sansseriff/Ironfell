@@ -39,6 +39,18 @@ export interface DocumentApi {
   link(a: string, b: string, keep: string, actor: 'human' | 'model'): LinkResult;
   /** What the person has selected, in pick order (the session tier). */
   selection(): { node: string; type: string | null; name: string | null }[];
+  /** Import SVG into `parent` with its origin at `x`, `y` there, as one
+   *  transaction (plans/specs/svg-import-export.md). `cuts` lists what it
+   *  could not carry. */
+  importSvg(text: string, parent: string, x: number, y: number, actor: 'human' | 'model'): ImportSvgResult;
+}
+
+export interface ImportSvgResult {
+  ok: boolean;
+  version?: number;
+  roots?: string[];
+  cuts?: string[];
+  error?: string;
 }
 
 export interface EntitySummary {
@@ -74,5 +86,6 @@ export function makeDocumentApi(glue: Glue, handle: bigint): DocumentApi {
     apply: (tx, expect) => JSON.parse(glue.document_apply(handle, JSON.stringify(tx), expect)),
     link: (a, b, keep, actor) => JSON.parse((glue as any).document_link(handle, a, b, keep, actor)),
     selection: () => JSON.parse((glue as any).document_selection(handle)),
+    importSvg: (text, parent, x, y, actor) => JSON.parse((glue as any).document_import_svg_at(handle, text, parent, x, y, actor)),
   };
 }

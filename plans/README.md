@@ -41,6 +41,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`entity-composition-model.md`](specs/entity-composition-model.md) (ECM) | Units, definitions, entities, compositions, ports, lessons | Phases 1–3 done; 4–7 open |
 | [`constraint-system.md`](specs/constraint-system.md) (CS) | Solver, constraints, interaction-time causality | Phases 1–3 done; 4–7 open |
 | [`select-tool.md`](specs/select-tool.md) | Select and pen tool semantics | First cut done; "Not yet" list open |
+| [`svg-import-export.md`](specs/svg-import-export.md) | SVG export and import, compound paths, stroke style | Phases 1–4 done; initial opacity, two-stop gradient fills and group clip frames built; follow-ups in §8 |
 | [`clipboard-and-assets.md`](specs/clipboard-and-assets.md) | Copy, paste, duplicate; the clipboard; assets and drag and drop | Phases 1–2 done (copy closure, Cmd+D, Cmd+C/X/V, Alt-drag); assets wait on the project container (§6) |
 | [`panels-and-session.md`](specs/panels-and-session.md) | Views, dock presenter, session tier, inspectors | Items 1–2 built; 3–5 open |
 | [`view-textures.md`](specs/view-textures.md) | Every view renders to its own texture | Done except the custom final pass and §4 tiling |

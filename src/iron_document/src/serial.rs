@@ -17,9 +17,10 @@ use std::fmt;
 /// Bumped to 2 with definitions, entities, `params`, quantities and records
 /// (roadmap stage B), and to 3 when `depiction` became `template` and
 /// `depicts` became `figures`, and to 4 when `circle` (one radius `r`)
-/// became `ellipse` (`rx`, `ry`). Older files still load (`renamed`,
-/// `migrate_radius`).
-pub const SCHEMA: u64 = 4;
+/// became `ellipse` (`rx`, `ry`), and to 5 when a path's points moved under
+/// `contour` children, so a path can have holes. Older files still load
+/// (`renamed`, `migrate_radius`, `migrate_contours`).
+pub const SCHEMA: u64 = 5;
 const OLDEST_READABLE: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -159,8 +160,76 @@ fn rename_leaf(s: &str) -> String {
     out
 }
 
+/// Before schema 5 a path's points were its children and `path.closed`
+/// said whether it closed. Each such path gets one contour, a new node
+/// holding its points and their `closed`, with the next free id. A
+/// binding that read `path.closed` no longer resolves; none is known.
+fn migrate_contours(root: &mut J) -> Result<(), LoadError> {
+    let bad = |m: &str| LoadError(format!("migrating to contours: {m}"));
+    let mut next_id = root.get("next_id").and_then(J::as_u64).ok_or_else(|| bad("missing next_id"))?;
+    let nodes = root.get("nodes").and_then(J::as_object).ok_or_else(|| bad("missing nodes"))?;
+    let paths: Vec<(String, Option<J>)> = nodes
+        .iter()
+        .filter(|(_, n)| n.get("ty").and_then(J::as_str) == Some("path"))
+        .map(|(k, n)| (k.clone(), n.get("tombstoned").cloned()))
+        .collect();
+    let mut moves: Vec<(String, String)> = Vec::new();
+    let mut created: Vec<(String, J)> = Vec::new();
+    let mut closed: Vec<(String, String)> = Vec::new();
+    for (path, tombstoned) in paths {
+        // Ids are written with or without their `#`; compare them parsed.
+        let path_id: Option<NodeId> = path.parse().ok();
+        let points: Vec<String> = nodes
+            .iter()
+            .filter(|(_, n)| n.get("ty").and_then(J::as_str) == Some("point") && n.get("parent").and_then(J::as_str).and_then(|p| p.parse::<NodeId>().ok()) == path_id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if points.is_empty() {
+            continue;
+        }
+        let contour = NodeId::from_raw(next_id).to_string();
+        next_id += 1;
+        let mut node = json!({"ty": "contour", "parent": path, "order": OrderKey::first().as_str()});
+        if let Some(t) = tombstoned {
+            node["tombstoned"] = t;
+        }
+        created.push((contour.clone(), node));
+        closed.push((path.clone(), contour.clone()));
+        moves.extend(points.into_iter().map(|p| (p, contour.clone())));
+    }
+    let nodes = root.get_mut("nodes").and_then(J::as_object_mut).expect("checked above");
+    for (point, contour) in moves {
+        nodes.get_mut(&point).expect("listed above")["parent"] = J::String(contour);
+    }
+    for (id, node) in created {
+        nodes.insert(id, node);
+    }
+    let comps = root.get_mut("components").and_then(J::as_object_mut).ok_or_else(|| bad("missing components"))?;
+    let mut contours = Map::new();
+    if let Some(J::Object(table)) = comps.get_mut("path") {
+        for (path, contour) in &closed {
+            let was = table.get_mut(path).and_then(J::as_object_mut).and_then(|o| o.remove("closed")).unwrap_or(J::Bool(false));
+            contours.insert(contour.clone(), json!({ "closed": was }));
+        }
+        for v in table.values_mut() {
+            if let Some(o) = v.as_object_mut() {
+                o.remove("closed");
+            }
+        }
+    }
+    for (_, contour) in &closed {
+        contours.entry(contour.clone()).or_insert_with(|| json!({ "closed": false }));
+    }
+    comps.insert("contour".into(), J::Object(contours));
+    root["next_id"] = json!(next_id);
+    Ok(())
+}
+
 pub fn load(text: &str) -> Result<Document, LoadError> {
-    let root: J = serde_json::from_str(text).map_err(|e| LoadError(e.to_string()))?;
+    let mut root: J = serde_json::from_str(text).map_err(|e| LoadError(e.to_string()))?;
+    if root.get("schema").and_then(J::as_u64).is_some_and(|s| s < 5) {
+        migrate_contours(&mut root)?;
+    }
     let obj = root
         .as_object()
         .ok_or_else(|| LoadError("top level must be an object".into()))?;

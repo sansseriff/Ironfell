@@ -54,10 +54,10 @@ fn a_schema_3_circle_loads_as_an_ellipse_and_its_readers_follow() {
     assert_eq!(resolved(&store, c, "radius.rx"), 12.0);
     assert_eq!(resolved(&store, c, "radius.ry"), 12.0);
     assert_eq!(resolved(&store, "#1".parse::<NodeId>().unwrap(), "size.w"), 24.0);
-    // It saves as schema 4 and loads back unchanged.
+    // It saves as the current schema and loads back unchanged.
     let again = Store::load(&store.save()).expect("reloads");
     assert_eq!(again.save(), store.save());
-    assert!(store.save().starts_with("{\"schema\": 4"));
+    assert!(store.save().starts_with("{\"schema\": 5"));
 }
 
 #[test]
@@ -78,9 +78,10 @@ fn a_rect_becomes_a_path_with_the_same_id_and_undo_brings_it_back() {
     assert_eq!(doc.live(id).unwrap().ty.name(), "path");
     assert!(doc.component(id, ComponentKind::Fill).is_some(), "paint carries over");
     assert_eq!(resolved(&store, id, "transform2d.x"), 10.0);
-    let pts: Vec<(f64, f64)> = doc.children(id).iter().map(|&p| (resolved(&store, p, "transform2d.x"), resolved(&store, p, "transform2d.y"))).collect();
+    let [contour] = doc.children(id)[..] else { panic!("one contour") };
+    let pts: Vec<(f64, f64)> = doc.children(contour).iter().map(|&p| (resolved(&store, p, "transform2d.x"), resolved(&store, p, "transform2d.y"))).collect();
     assert_eq!(pts, vec![(0.0, 0.0), (40.0, 0.0), (40.0, 20.0), (0.0, 20.0)]);
-    assert_eq!(store.resolved(id, path("path.closed")), Some(Value::Bool(true)));
+    assert_eq!(store.resolved(contour, path("contour.closed")), Some(Value::Bool(true)));
 
     store.undo(0).unwrap().unwrap();
     assert_eq!(store.document().live(id).unwrap().ty.name(), "rect");
@@ -121,9 +122,10 @@ fn converting_an_ellipse_reports_and_bakes_what_reads_or_drives_its_radii() {
     // The reader keeps its value as a constant; the outline matches the radii.
     assert_eq!(store.document().leaf(reader, path("size.w")), Some(&num(30.0)));
     let doc = store.document();
-    let first = doc.children(ellipse)[0];
+    let contour = doc.children(ellipse)[0];
+    let first = doc.children(contour)[0];
     assert_eq!((resolved(&store, first, "transform2d.x"), resolved(&store, first, "handles.oy")), (30.0, 10.0 * 0.552_284_749_830_793_4));
-    assert_eq!(doc.children(ellipse).len(), 4);
+    assert_eq!(doc.children(contour).len(), 4);
 }
 
 #[test]
@@ -170,9 +172,10 @@ fn a_rounded_rect_converts_to_its_eight_point_outline() {
     let conv = shape::to_path(&store, id).unwrap();
     store.apply(tx("convert to path", conv.ops)).unwrap();
     let doc = store.document();
-    assert_eq!(doc.children(id).len(), 8);
+    let contour = doc.children(id)[0];
+    assert_eq!(doc.children(contour).len(), 8);
     assert!(doc.component(id, ComponentKind::Corners).is_none(), "corners are a rect's parameter, not a path's");
-    let second = doc.children(id)[1];
+    let second = doc.children(contour)[1];
     assert_eq!((resolved(&store, second, "transform2d.x"), resolved(&store, second, "handles.ix")), (5.0, -5.0 * 0.552_284_749_830_793_4));
 }
 
@@ -189,14 +192,50 @@ fn an_arc_is_a_pie_a_ring_segment_or_a_ring() {
     let segment = ellipse_outline(10.0, 10.0, Some([0.0, PI, 0.5]));
     assert_eq!(segment[0].len(), 6);
     assert!((segment[0][3].at.x + 5.0).abs() < 1e-9);
-    // A full ring has two contours, so it cannot become one path.
+    // A full ring has two outlines: a path of two contours, the hole running
+    // the other way, so it stays a ring under the non-zero rule.
     assert_eq!(ellipse_outline(10.0, 10.0, Some([0.0, TAU, 0.5])).len(), 2);
     let mut store = Store::new();
     let id = store.document().next_ids(1)[0];
     let mut arc = iron_document::component::Arc::default();
     arc.inner = num(0.5);
     store.apply(tx("ring", vec![Op::Create { id, ty: ty("ellipse"), parent: None, order: OrderKey::first(), components: vec![at(0.0, 0.0), Radius::default().wrap(), arc.wrap()] }])).unwrap();
-    assert!(shape::to_path(&store, id).unwrap_err().contains("ring"));
+    let conv = shape::to_path(&store, id).unwrap();
+    store.apply(tx("convert to path", conv.ops)).unwrap();
+    let contours = contour::contours(&store, id);
+    assert_eq!(contours.iter().map(|c| (c.points.len(), c.closed)).collect::<Vec<_>>(), [(4, true), (4, true)]);
+    assert_eq!(contour::fill_rule(&store, id), contour::FillRule::NonZero);
+    use kurbo::Shape as _;
+    let fill = contour::fill_outline(&contours);
+    assert_eq!(fill.winding(kurbo::Point::new(0.0, 0.0)), 0, "the hole is empty");
+    assert_ne!(fill.winding(kurbo::Point::new(40.0, 0.0)), 0, "the ring is filled");
+}
+
+#[test]
+fn a_schema_4_path_gets_one_contour_holding_its_points() {
+    let text = r##"{"schema": 4, "next_id": 3, "next_rel": 0, "version": 0,
+ "nodes": {
+  "0": {"order": "a0", "parent": null, "ty": "path"},
+  "1": {"order": "a0", "parent": "#0", "ty": "point"},
+  "2": {"order": "a1", "parent": "#0", "ty": "point"}
+ },
+ "components": {
+  "path": {"0": {"closed": true}},
+  "transform2d": {"0": {}, "1": {"x": 1}, "2": {"x": 2}}
+ },
+ "relations": [
+ ]}"##;
+    let store = Store::load(text).expect("loads");
+    let doc = store.document();
+    let p = "#0".parse::<NodeId>().unwrap();
+    let [c] = doc.children(p)[..] else { panic!("one contour") };
+    assert_eq!(doc.live(c).unwrap().ty.name(), "contour");
+    assert_eq!(c, "#3".parse::<NodeId>().unwrap(), "the next free id");
+    assert_eq!(doc.children(c), ["#1".parse::<NodeId>().unwrap(), "#2".parse::<NodeId>().unwrap()]);
+    assert_eq!(store.resolved(c, path("contour.closed")), Some(Value::Bool(true)));
+    assert_eq!(contour::fill_rule(&store, p), contour::FillRule::NonZero);
+    let again = Store::load(&store.save()).expect("reloads");
+    assert_eq!(again.save(), store.save());
 }
 
 #[test]

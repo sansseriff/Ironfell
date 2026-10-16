@@ -34,7 +34,8 @@ export function canvasOwnsCopy(target: EventTarget | null): boolean {
     return selected > 0 && !editing && !textSelected;
 }
 
-/** Ask the worker for the selection's fragment and put it on the clipboard. */
+/** Ask the worker for the selection's fragment (or, for Copy as SVG, its
+ *  SVG) and put it on the clipboard. */
 export function beginCopy(ask: () => void) {
     pendingCopy?.('');
     const text = new Promise<string>((resolve) => {
@@ -74,15 +75,23 @@ function isFragment(text: string): boolean {
     return text.trimStart().startsWith('{') && text.includes('"iron_fragment":');
 }
 
+/** SVG text (Figma's "Copy as SVG", a file's contents): the canvas imports
+ *  it (plans/specs/svg-import-export.md). Mirrors `iron_svg::is_svg_text`. */
+export function isSvg(text: string): boolean {
+    const t = text.replace(/^\uFEFF/, '').trimStart();
+    return t.startsWith('<svg') || ((t.startsWith('<?xml') || t.startsWith('<!DOCTYPE') || t.startsWith('<!--')) && t.includes('<svg'));
+}
+
 /**
- * The fragment a paste event carries, or the tab's own last copy when the
- * system clipboard refused it. `null` when the paste is not for the canvas.
+ * The fragment or SVG a paste event carries, or the tab's own last copy
+ * when the system clipboard refused it. `null` when the paste is not for
+ * the canvas.
  */
 export function pastedFragment(e: ClipboardEvent): string | null {
     const el = e.target as HTMLElement | null;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return null;
-    const text = e.clipboardData?.getData('text/plain') ?? '';
-    if (isFragment(text)) return text;
+    const text = e.clipboardData?.getData('text/plain') || e.clipboardData?.getData('image/svg+xml') || '';
+    if (isFragment(text) || isSvg(text)) return text;
     if (lastWriteFailed && lastText) return lastText;
     return null;
 }

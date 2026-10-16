@@ -52,16 +52,33 @@ VERBS, inside <edit expect-version="N">  (N = the version you read)
   <link-figures a="#box" b="#torus"/>          make two pictures pictures of one entity
       (alone in its <edit>). If both already picture different entities you get a
       <question>; resend with keep="#entity" naming the one to keep.
+  <import-svg to="#comp" x="100" y="50"><svg …>…</svg></import-svg>
+      SVG's shapes as new nodes under #comp (or a group), the SVG's origin at x, y
+      (alone in its <edit>). Paths stay paths; what SVG cannot carry (text, images,
+      gradients beyond their first colour, filters) is listed as <cut> lines.
 
 VALUES
   numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or
-  0,1.5,0; enums by name (easing: linear ease_in ease_out ease_in_out; host: canvas dom);
+  0,1.5,0; enums by name (easing: linear ease_in ease_out ease_in_out; host: canvas dom;
+  path.fill_rule: nonzero evenodd; stroke.join: round miter bevel; stroke.cap: round butt
+  square); stroke.dash is dash and gap lengths, "6 3", empty for a solid line;
   quantities as a magnitude and unit, 9.58 mW or 1550 nm (SI units with prefixes;
   compound like kg*m2/s3). Plain numbers are dimensionless: 2 mW * 3 works,
   2 mW + 3 is an error, and so is adding mW to nm. Angles are plain radians.
+  appearance.opacity (0..1) composites a whole shape or group once, including overlaps.
+  gradient is an optional two-stop fill: kind linear|radial, start/end colours (with
+  alpha), x0/y0/x1/y1 as fractions of local shape bounds. It replaces the solid fill;
+  fill.opacity still multiplies its stops. Radial uses the first point as centre and
+  the distance to the second as radius. Remove gradient to reveal the solid fill.
+  group_clip is an optional local group frame: enabled, shape rect|ellipse, w/h and
+  radius (rounded rect). It clips all descendants and their shadows, including embeds.
+  Use explicit appearance.opacity versus fill.opacity when setting opacity.
   Document 2D space is y-down with the origin at the viewer's top-left, one unit per
   pixel; rect origin is its top-left corner; an ellipse is centred on its origin
-  with radii rx, ry (a circle is an ellipse with rx = ry).
+  with radii rx, ry (a circle is an ellipse with rx = ry). A path holds contours, each an
+  outline holding its points in order (x, y in the path's space; handles ix iy ox oy
+  relative to the point) and closed or not; a second contour inside the first is a hole
+  when it runs the other way, or always under fill_rule evenodd.
 
 EXPRESSIONS (for {= …} bindings)
   #id.component.field references a leaf; + - * / % < <= > >= == != && || !;

@@ -2,7 +2,7 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = [".", "src/iron_document", "src/iron_solve", "src/iron_spatial", "src/iron_renderer_probe"]
+members = [".", "src/iron_document", "src/iron_solve", "src/iron_spatial", "src/iron_renderer_probe", "src/iron_svg"]
 
 
 [workspace.dependencies]
@@ -84,6 +84,8 @@ iron_spatial = { path = "./src/iron_spatial" }
 # The constraint solver (plans/constraint-system.md §5). Pure; the app only
 # exposes its benchmark until the document adapter lands (stage C2 phase 2).
 iron_solve = { path = "./src/iron_solve" }
+# SVG export and import (plans/specs/svg-import-export.md). Bevy-free.
+iron_svg = { path = "./src/iron_svg" }
 
 # Classic Vello, behind the `classic` feature. Optional because its plugin
 # creates every compute pipeline in `Plugin::finish`, so an unused-but-present

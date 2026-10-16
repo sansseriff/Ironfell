@@ -157,7 +157,7 @@ fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
     assert!(v.contains(&format!(r#"<driven-by ref="{copy}" rel="figures"/>"#)), "{v}");
     // Everything round-trips through the file.
     let text = store.save();
-    assert!(text.contains(r#""schema": 4"#), "{text}");
+    assert!(text.contains(r#""schema": 5"#), "{text}");
     let loaded = Store::load(&text).unwrap();
     assert_eq!(loaded.save(), text);
     assert_eq!(resolved(&loaded, copy, "size.h"), Value::Number(270.0));

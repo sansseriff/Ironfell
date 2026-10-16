@@ -50,7 +50,7 @@ use ComponentKind as K;
 static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "group",
-        components: &[(K::Name, false), (K::Transform2d, false), (K::Host, false)],
+        components: &[(K::Name, false), (K::Transform2d, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -61,6 +61,8 @@ static TYPES: &[TypeSpec] = &[
             (K::Size, true),
             (K::Corners, false),
             (K::Fill, false),
+            (K::Gradient, false),
+            (K::Appearance, false),
             (K::Stroke, false),
             (K::Shadow, false),
             (K::Name, false),
@@ -78,6 +80,8 @@ static TYPES: &[TypeSpec] = &[
             (K::Radius, true),
             (K::Arc, false),
             (K::Fill, false),
+            (K::Gradient, false),
+            (K::Appearance, false),
             (K::Stroke, false),
             (K::Shadow, false),
             (K::Name, false),
@@ -86,22 +90,33 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
-    // A path (roadmap stage E): its points are children, in order.
+    // A path (roadmap stage E): its outlines are `contour` children, so it
+    // can have holes (schema 5; before, its points were its children).
     TypeSpec {
         name: "path",
         components: &[
             (K::Transform2d, true),
             (K::PathShape, true),
             (K::Fill, false),
+            (K::Gradient, false),
+            (K::Appearance, false),
             (K::Stroke, false),
             (K::Shadow, false),
             (K::Name, false),
             (K::Host, false),
         ],
         default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["contour"]),
+    },
+    // One outline of a path: its points, in order. No transform: its points
+    // are in the path's space.
+    TypeSpec {
+        name: "contour",
+        components: &[(K::Contour, true), (K::Name, false)],
+        default_host: Host::Canvas,
         children: ChildPolicy::Only(&["point"]),
     },
-    // One anchor of a path, in the path's space, with its handles.
+    // One anchor of a contour, in the path's space, with its handles.
     TypeSpec {
         name: "point",
         components: &[(K::Transform2d, true), (K::Handles, false), (K::Name, false)],

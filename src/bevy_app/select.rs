@@ -66,8 +66,11 @@ pub struct ToolKeys(pub Vec<(String, u8)>);
 /// here. Nothing is kept on this side but the last cut.
 #[derive(Resource, Default)]
 pub struct Clipboard {
-    /// Text from paste events, placed on the next frame.
+    /// Text from paste events, placed on the next frame: an Iron fragment,
+    /// or SVG to import.
     pub pastes: Vec<String>,
+    /// SVG already imported (`document_import_svg`), placed like a paste.
+    pub imports: Vec<Fragment>,
     /// The last cut's text, until it is pasted once: that first paste moves
     /// what was cut (figures relink to their entities); later ones copy.
     cut: Option<String>,
@@ -99,21 +102,38 @@ impl ActiveTool {
 const SLOP: f32 = 3.0;
 /// Seconds and window px between two clicks that make a double-click.
 const DOUBLE_CLICK: (f64, f32) = (0.4, 5.0);
-/// Grip sizes, window px: a corner's reach, an edge's, how far outside a
-/// corner rotation reaches, and the drawn corner square.
+/// Grip sizes, CSS px (times [`crate::Dpr`] for window px), Figma's: a
+/// corner's reach, an edge's, how far outside a corner rotation reaches, and
+/// the drawn corner square.
 const CORNER_HIT: f64 = 8.0;
 const EDGE_HIT: f64 = 5.0;
 const ROTATE_HIT: f64 = 24.0;
-const HANDLE: f64 = 10.0;
-/// A path point's drawn square and a Bézier handle's end dot (radius).
-const POINT: f64 = 8.0;
-const HANDLE_END: f64 = 4.0;
-/// How near (window px) a press must land to a path's point or handle end.
+const HANDLE: f64 = 8.0;
+/// A path point's drawn circle and a Bézier handle's end diamond, as
+/// diameters, CSS px.
+const POINT: f64 = 7.0;
+const HANDLE_END: f64 = 7.0;
+/// How near (CSS px) a press must land to a path's point or handle end.
 const POINT_HIT: f64 = 7.0;
 /// Rotation snap with Shift.
 const SNAP: f64 = std::f64::consts::PI / 12.0;
 
 const BLUE: [f32; 4] = [0.05, 0.6, 1.0, 1.0];
+/// A Bézier handle's arm, Figma's grey.
+const HANDLE_ARM: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
+/// The outline of a path being edited, Figma's grey.
+const EDIT_OUTLINE: [f32; 4] = [0.6, 0.6, 0.6, 1.0];
+
+/// A square standing on its corner, `r` from centre to each tip.
+fn diamond(c: Point, r: f64) -> kurbo::BezPath {
+    let mut d = kurbo::BezPath::new();
+    d.move_to((c.x, c.y - r));
+    d.line_to((c.x + r, c.y));
+    d.line_to((c.x, c.y + r));
+    d.line_to((c.x - r, c.y));
+    d.close_path();
+    d
+}
 
 /// Composition-space boxes and grip eligibility shared by drawing and cursor
 /// testing. View pan/zoom is applied at use time, never baked into these boxes.
@@ -260,6 +280,25 @@ impl SelectionGeometryCache {
     }
 }
 
+/// Figma's vector edit mode. A click selects a path and shows its box; a
+/// double-click (or Enter) edits its points instead: the box goes, the path
+/// is outlined and its points show, with the selected point's handles and
+/// its neighbours' facing ones. Esc or selecting anything else leaves. The
+/// pen adds points to the path being edited.
+#[derive(Resource, Default)]
+pub struct PathEdit {
+    pub reach: Option<Reach>,
+    /// The selected point.
+    pub point: Option<NodeId>,
+}
+
+impl PathEdit {
+    /// The path being edited in `panel`.
+    pub(crate) fn path_in(&self, panel: &str) -> Option<&Reach> {
+        self.reach.as_ref().filter(|r| r.panel == panel)
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct SelectTool {
     /// How each selected node was reached. A selection made elsewhere (the
@@ -274,6 +313,9 @@ pub struct SelectTool {
     /// belongs to no tool.
     middle: Option<Option<MiddlePan>>,
     last_click: Option<(f64, Vec2, NodeId)>,
+    /// The last press, whatever it began, so a double-click on a selected
+    /// shape edits it even on its box's grips.
+    last_press: Option<(f64, Vec2)>,
     cursor: String,
     /// Nodes a paste or duplicate is creating, to select once their
     /// transaction has applied.
@@ -324,10 +366,13 @@ pub(crate) enum ShapeGrip {
     Inner,
 }
 
-/// Window px a shape must span on screen, both ways, to show its handles,
+/// CSS px a shape must span on screen, both ways, to show its handles,
 /// and how far inside its outline they sit.
 const SHAPE_GRIPS_MIN: f64 = 48.0;
-const SHAPE_GRIP_INSET: f64 = 12.0;
+const SHAPE_GRIP_INSET: f64 = 14.0;
+/// A shape's corner-radius and arc dots, drawn diameter, CSS px (Figma's are
+/// larger than path anchors).
+const SHAPE_DOT: f64 = 10.0;
 /// A rect's corners, clockwise from the top-left, as unit-square points.
 const CORNERS: [(f64, f64); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
 
@@ -427,6 +472,81 @@ impl Geo<'_, '_, '_> {
         self.store.resolved(id, leaf(path)).and_then(|v| v.as_f64())
     }
 
+    /// `path`'s contours as ranges of [`Self::points`], each with its node and
+    /// whether it is drawn closed.
+    pub(crate) fn runs(&self, path: NodeId) -> Vec<(NodeId, bool, std::ops::Range<usize>)> {
+        let mut start = 0;
+        iron_document::contour::contours(self.store, path)
+            .into_iter()
+            .map(|c| {
+                let r = start..start + c.points.len();
+                start = r.end;
+                (c.id, iron_document::contour::draws_closed(&c), r)
+            })
+            .collect()
+    }
+
+    /// The contour holding `point`, as its node, closedness and range.
+    pub(crate) fn run_of(&self, path: NodeId, point: usize) -> Option<(NodeId, bool, std::ops::Range<usize>)> {
+        self.runs(path).into_iter().find(|r| r.2.contains(&point))
+    }
+
+    /// Each segment of `path` as its two points' indices and its cubic, in
+    /// the path's space; a closed contour's last runs back to its first.
+    pub(crate) fn segments(&self, path: NodeId) -> Vec<(usize, usize, kurbo::CubicBez)> {
+        let points = self.points(path);
+        let mut out = Vec::new();
+        for (_, closed, r) in self.runs(path) {
+            let ends = r.clone().zip(r.clone().skip(1)).chain(closed.then(|| (r.end - 1, r.start)));
+            for (i, j) in ends {
+                let (a, b) = (points[i], points[j]);
+                out.push((i, j, kurbo::CubicBez::new(a.1, a.1 + a.3, b.1 + b.2, b.1)));
+            }
+        }
+        out
+    }
+
+    /// The segment of `path` under window point `at`, within `reach` window
+    /// px, as its two points' indices and the curve parameter there; none
+    /// when a point is that near, since the point wins. `to_screen` maps the
+    /// path's space to window px.
+    pub(crate) fn segment_at(&self, path: NodeId, to_screen: Affine, at: Point, reach: f64) -> Option<(usize, usize, f64)> {
+        use kurbo::ParamCurveNearest as _;
+        if self.points(path).iter().any(|p| (to_screen * p.1).distance(at) <= reach) {
+            return None;
+        }
+        self.segments(path)
+            .into_iter()
+            .map(|(i, j, c)| (i, j, (to_screen * c).nearest(at, 0.01)))
+            .filter(|(.., n)| n.distance_sq <= reach * reach)
+            .min_by(|a, b| a.2.distance_sq.total_cmp(&b.2.distance_sq))
+            .map(|(i, j, n)| (i, j, n.t))
+    }
+
+    /// The handles shown while editing `path` with `selected` chosen, as
+    /// (point, out): the selected point's both, and the facing one of each
+    /// neighbour in its contour. Zero handles are left out.
+    pub(crate) fn shown_handles(&self, path: NodeId, selected: Option<NodeId>) -> Vec<(NodeId, bool)> {
+        let points = self.points(path);
+        let Some(i) = selected.and_then(|s| points.iter().position(|p| p.0 == s)) else { return Vec::new() };
+        let Some((_, closed, r)) = self.run_of(path, i) else { return Vec::new() };
+        let mut out = vec![(i, true), (i, false)];
+        if i > r.start {
+            out.push((i - 1, true));
+        } else if closed {
+            out.push((r.end - 1, true));
+        }
+        if i + 1 < r.end {
+            out.push((i + 1, false));
+        } else if closed {
+            out.push((r.start, false));
+        }
+        out.into_iter()
+            .filter(|&(j, o)| if o { points[j].3 } else { points[j].2 } != kurbo::Vec2::ZERO)
+            .map(|(j, o)| (points[j].0, o))
+            .collect()
+    }
+
     pub(crate) fn ty(&self, id: NodeId) -> &'static str {
         self.doc().live(id).map(|n| n.ty.name()).unwrap_or("")
     }
@@ -486,7 +606,7 @@ impl Geo<'_, '_, '_> {
                 Some((e.region, Kind::Window { frame: self.has(id, K::Frame) }))
             }
             "path" => {
-                let (outline, _) = crate::document_bridge::path_outline(self.store, id);
+                let outline = crate::document_bridge::path_outline(self.store, id);
                 let r = outline.control_box();
                 (r.width() > 0.0 || r.height() > 0.0 || outline.elements().len() > 0).then_some((r, Kind::Points))
             }
@@ -551,15 +671,10 @@ impl Geo<'_, '_, '_> {
         out.push(Part { id, kind, parent: space * parent, trs: self.trs(id), bounds, points });
     }
 
-    /// A path's points, in order: id, position, in and out handles.
+    /// A path's points, contour after contour, in order: id, position, in
+    /// and out handles. [`Self::runs`] says where each contour's are.
     pub(crate) fn points(&self, path: NodeId) -> Vec<(NodeId, Point, kurbo::Vec2, kurbo::Vec2)> {
-        let n = |c: NodeId, l: &str| self.num(c, l).unwrap_or(0.0);
-        self.doc()
-            .children(path)
-            .iter()
-            .filter(|&&c| self.ty(c) == "point")
-            .map(|&c| (c, Point::new(n(c, "transform2d.x"), n(c, "transform2d.y")), kurbo::Vec2::new(n(c, "handles.ix"), n(c, "handles.iy")), kurbo::Vec2::new(n(c, "handles.ox"), n(c, "handles.oy"))))
-            .collect()
+        iron_document::contour::contours(self.store, path).into_iter().flat_map(|c| c.points).map(|(id, a)| (id, a.at, a.inn, a.out)).collect()
     }
 
     /// Whether a leaf can follow a gesture right now.
@@ -612,13 +727,15 @@ impl Geo<'_, '_, '_> {
     }
 
     /// A lone shape's handles (`ShapeGrip`) and where they are on screen,
-    /// given window px ← the shape's space; none while it is small there.
-    pub(crate) fn shape_grips(&self, id: NodeId, to_screen: Affine) -> Vec<(ShapeGrip, Point)> {
+    /// given window px ← the shape's space and window px per CSS px; none
+    /// while it is small there.
+    pub(crate) fn shape_grips(&self, id: NodeId, to_screen: Affine, dpr: f64) -> Vec<(ShapeGrip, Point)> {
         let Some((b, _)) = self.local_box(id) else { return Vec::new() };
         let [a, bb, c, d, _, _] = to_screen.as_coeffs();
         // Window px per local unit along each axis.
         let (kx, ky) = (a.hypot(bb).max(1e-9), c.hypot(d).max(1e-9));
-        if b.width() * kx < SHAPE_GRIPS_MIN || b.height() * ky < SHAPE_GRIPS_MIN {
+        let (min, inset) = (SHAPE_GRIPS_MIN * dpr, SHAPE_GRIP_INSET * dpr);
+        if b.width() * kx < min || b.height() * ky < min {
             return Vec::new();
         }
         match self.ty(id) {
@@ -630,8 +747,8 @@ impl Geo<'_, '_, '_> {
                     .enumerate()
                     .map(|(i, (&(u, v), r))| {
                         let inward = kurbo::Vec2::new(1.0 - 2.0 * u, 1.0 - 2.0 * v);
-                        let dx = r.max(SHAPE_GRIP_INSET / kx).min(b.width() * 0.5);
-                        let dy = r.max(SHAPE_GRIP_INSET / ky).min(b.height() * 0.5);
+                        let dx = r.max(inset / kx).min(b.width() * 0.5);
+                        let dy = r.max(inset / ky).min(b.height() * 0.5);
                         let corner = Point::new(b.x0 + u * b.width(), b.y0 + v * b.height());
                         (ShapeGrip::Corner(i), to_screen * (corner + kurbo::Vec2::new(inward.x * dx, inward.y * dy)))
                     })
@@ -644,7 +761,7 @@ impl Geo<'_, '_, '_> {
                 let rim = |t: f64| {
                     let p = Point::new(rx * t.cos(), ry * t.sin());
                     let screen_r = (to_screen * p).distance(to_screen * Point::ORIGIN).max(1.0);
-                    let k = (1.0 - SHAPE_GRIP_INSET / screen_r).max(0.0);
+                    let k = (1.0 - inset / screen_r).max(0.0);
                     to_screen * Point::new(p.x * k, p.y * k)
                 };
                 let full = sweep.abs() >= std::f64::consts::TAU - 1e-9;
@@ -838,13 +955,14 @@ fn occurrences(doc: &iron_document::Document, view: &PanelView, embeds: &[NodeId
         .collect()
 }
 
-/// The grip under a window point for a box `frame` (window px).
-fn grip_at(frame: Affine, p: Point, resizable: bool, rotatable: bool) -> Option<Grip> {
+/// The grip under a window point for a box `frame` (window px), with `k`
+/// window px per CSS px.
+fn grip_at(frame: Affine, p: Point, resizable: bool, rotatable: bool, k: f64) -> Option<Grip> {
     let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
     let at = |u: f64, v: f64| frame * Point::new(u, v);
     if resizable {
         for &(u, v) in &corners {
-            if at(u, v).distance(p) <= CORNER_HIT {
+            if at(u, v).distance(p) <= CORNER_HIT * k {
                 return Some(Grip::Resize(u, v));
             }
         }
@@ -852,7 +970,7 @@ fn grip_at(frame: Affine, p: Point, resizable: bool, rotatable: bool) -> Option<
             let (a, b) = if u == 0.5 { (at(0.0, v), at(1.0, v)) } else { (at(u, 0.0), at(u, 1.0)) };
             let seg = kurbo::Line::new(a, b);
             let t = ((p - a).dot(b - a) / (b - a).hypot2().max(1e-9)).clamp(0.0, 1.0);
-            if seg.eval(t).distance(p) <= EDGE_HIT {
+            if seg.eval(t).distance(p) <= EDGE_HIT * k {
                 return Some(Grip::Resize(u, v));
             }
         }
@@ -864,7 +982,7 @@ fn grip_at(frame: Affine, p: Point, resizable: bool, rotatable: bool) -> Option<
     }
     if rotatable {
         for &(u, v) in &corners {
-            if at(u, v).distance(p) <= ROTATE_HIT {
+            if at(u, v).distance(p) <= ROTATE_HIT * k {
                 return Some(Grip::Rotate(u, v));
             }
         }
@@ -872,23 +990,26 @@ fn grip_at(frame: Affine, p: Point, resizable: bool, rotatable: bool) -> Option<
     None
 }
 
-/// The CSS cursor for a grip: a resize arrow along the grip's direction
-/// from the box centre, or a rotation arrow (drawn by the shell) at it.
+/// The cursor for a grip, as `cssCursor` (src-ui/cursors) reads it: Figma's
+/// resize and rotate arrows turned to the box, `resize:<axis degrees>` and
+/// `rotate:<degrees toward the corner>`.
 fn cursor_for(frame: Affine, grip: Option<Grip>) -> String {
-    let dir = |u: f64, v: f64| {
-        let c = frame * Point::new(0.5, 0.5);
-        let p = frame * Point::new(u, v);
-        (p.y - c.y).atan2(p.x - c.x).to_degrees()
-    };
     match grip {
-        Some(Grip::Resize(u, v)) => {
-            let a = dir(u, v).rem_euclid(180.0);
-            let k = ((a + 22.5) / 45.0).floor() as i32 % 4;
-            ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"][k as usize].into()
-        }
-        Some(Grip::Rotate(u, v)) => format!("rotate:{:.0}", dir(u, v)),
+        Some(Grip::Resize(u, v)) => format!("resize:{:.0}", grip_angle(frame, u, v).rem_euclid(180.0)),
+        Some(Grip::Rotate(u, v)) => format!("rotate:{:.0}", grip_angle(frame, u, v)),
         _ => "default".into(),
     }
+}
+
+/// Which way a grip at (`u`, `v`) of the unit box faces on screen, degrees
+/// (y down): along the box's own axes, each normalised, so a corner reads as
+/// the box's diagonal at 45° whatever its proportions, as Figma's do.
+fn grip_angle(frame: Affine, u: f64, v: f64) -> f64 {
+    let side = |t: f64| if t > 0.5 { 1.0 } else if t < 0.5 { -1.0 } else { 0.0 };
+    let [a, b, c, d, _, _] = frame.as_coeffs();
+    let unit = |w: kurbo::Vec2| if w.hypot() > 1e-9 { w.normalize() } else { kurbo::Vec2::ZERO };
+    let w = unit(kurbo::Vec2::new(a, b)) * side(u) + unit(kurbo::Vec2::new(c, d)) * side(v);
+    w.y.atan2(w.x).to_degrees()
 }
 
 /// Separating-axis test: does the parallelogram `f` (of the unit square)
@@ -1094,7 +1215,7 @@ pub struct Views3d<'w, 's> {
     panel_cams: Query<'w, 's, (Entity, &'static crate::bevy_app::scene3d::PanelCamera)>,
     embed_cams: Query<'w, 's, (Entity, &'static crate::bevy_app::scene3d::EmbedCam)>,
     embed_views: Res<'w, crate::document_bridge::EmbedViews>,
-    windows: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
+    dpr: Res<'w, crate::Dpr>,
 }
 
 pub fn select_tool_system(
@@ -1110,6 +1231,7 @@ pub fn select_tool_system(
     v3d: Views3d,
     mut clipboard: ResMut<Clipboard>,
     origin: Res<crate::document_bridge::DocumentOrigin>,
+    (pen, mut edit): (Res<crate::bevy_app::pen::PenTool>, ResMut<PathEdit>),
 ) {
     let tool = &mut *tool;
     let ToolDoc { mut store, mut gestures, mut pending, map, globals, nodes, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
@@ -1121,7 +1243,8 @@ pub fn select_tool_system(
         sel.selected = ids;
     }
     let space = keyboard.pressed(KeyCode::Space);
-    let Views3d { cameras, planes, panel_cams, embed_cams, embed_views, windows } = v3d;
+    let Views3d { cameras, planes, panel_cams, embed_cams, embed_views, dpr } = v3d;
+    let k = dpr.0;
     // Keep a reach for every selected node, dropping the rest.
     {
         let doc = store.0.document();
@@ -1135,6 +1258,15 @@ pub fn select_tool_system(
         }
         if tool.hover.as_ref().is_some_and(|h| h.chain.iter().any(|&n| doc.live(n).is_none())) {
             tool.hover = None;
+        }
+        // Editing lasts while its path is the whole selection, and a path
+        // (or about to be: a rect's conversion still pending).
+        if let Some(r) = &edit.reach {
+            let id = r.node();
+            let converting = pending.0.iter().any(|t| t.ops.iter().any(|o| matches!(o, Op::Create { id: c, .. } if *c == id)));
+            if sel.selected != [id] || !(doc.live(id).is_some_and(|n| n.ty.name() == "path") || converting) {
+                *edit = PathEdit::default();
+            }
         }
     }
 
@@ -1165,6 +1297,11 @@ pub fn select_tool_system(
                 tool.gesture = Gesture::Idle;
                 tool.marquee = None;
             }
+            // Esc leaves editing a path, keeping it selected.
+            "escape" if edit.reach.is_some() => *edit = PathEdit::default(),
+            "enter" if !shift && edit.reach.is_none() && reaches.len() == 1 && doc.live(reaches[0].node()).is_some_and(|n| n.ty.name() == "path") => {
+                *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
+            }
             "escape" | "enter" if key == "escape" || shift => {
                 // Up a level: each node's container, or nothing at the top.
                 let mut up: Vec<Reach> = Vec::new();
@@ -1179,7 +1316,9 @@ pub fn select_tool_system(
                 set_selection(&mut sel, tool, up);
             }
             "enter" if reaches.len() == 1 && iron_document::shape::convertible(&store.0, reaches[0].node()) => {
-                edit_as_path(&store.0, &mut pending, reaches[0].node());
+                if edit_as_path(&store.0, &mut pending, reaches[0].node()) {
+                    *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
+                }
             }
             "enter" => {
                 let down: Vec<Reach> = reaches.iter().flat_map(|r| children(doc, r)).collect();
@@ -1254,6 +1393,32 @@ pub fn select_tool_system(
                     clipboard.cut = None;
                 }
             }
+            // Copy as SVG (Alt+Shift+C in the shell): the selection's SVG as
+            // clipboard text, for pasting into Figma, a browser or a file.
+            "copysvg" => {
+                let text = match iron_svg::export(&store.0, &iron_svg::Scope::Nodes(sel.selected.clone())) {
+                    Ok(out) => {
+                        for cut in &out.cuts {
+                            info!("copy as SVG: {cut}");
+                        }
+                        out.svg
+                    }
+                    Err(e) => {
+                        info!("copy as SVG: {e}");
+                        String::new()
+                    }
+                };
+                crate::web_ffi::send_clipboard_from_worker(text);
+            }
+            // Delete takes the selected point out of the path being edited,
+            // which stays joined across the gap (two points at least stay).
+            "delete" | "backspace" if let Some(point) = edit.point && edit.reach.is_some() => {
+                // Two points at least stay in the point's contour.
+                if doc.live(point).and_then(|n| n.parent).is_some_and(|c| doc.children(c).iter().filter(|&&p| doc.live(p).is_some_and(|n| n.ty.name() == "point")).count() > 2) {
+                    pending.0.push(TransactionInput { label: "delete point".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![Op::Delete { id: point }], exact: false });
+                }
+                edit.point = None;
+            }
             "delete" | "backspace" => {
                 let ops: Vec<Op> = sel
                     .selected
@@ -1295,7 +1460,23 @@ pub fn select_tool_system(
         }
     }
 
+    // Pasted text is an Iron fragment or SVG (plans/specs/svg-import-export.md);
+    // an import from the driver arrives already parsed. Each is placed like a
+    // paste and applied as one transaction.
+    let mut arrivals: Vec<(Fragment, bool, &'static str)> = std::mem::take(&mut clipboard.imports).into_iter().map(|f| (f, false, "import SVG")).collect();
     for text in std::mem::take(&mut clipboard.pastes) {
+        if iron_svg::is_svg_text(&text) {
+            match iron_svg::import(&text) {
+                Ok(imported) => {
+                    for cut in &imported.cuts {
+                        info!("import SVG: {cut}");
+                    }
+                    arrivals.push((imported.fragment, false, "import SVG"));
+                }
+                Err(e) => warn!("import SVG: {e}"),
+            }
+            continue;
+        }
         if !Fragment::is_fragment_text(&text) {
             continue;
         }
@@ -1310,22 +1491,25 @@ pub fn select_tool_system(
         if share {
             clipboard.cut = None;
         }
+        arrivals.push((frag, share, "paste"));
+    }
+    for (frag, share, verb) in arrivals {
         let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
         let reaches = selected_reaches(&sel, tool);
         let Some(place) = paste_placement(&geo, &hits, &views, &reaches, &frag, share) else {
-            info!("paste: no 2D view to paste into");
+            info!("{verb}: no 2D view to paste into");
             continue;
         };
         match copy::paste(&store.0, &frag, &place, &origin.0) {
             Ok(pasted) => {
                 for note in pasted.notes.iter().chain(&frag.dropped) {
-                    info!("paste: {note}");
+                    info!("{verb}: {note}");
                 }
-                let label = format!("paste {}", type_label(&frag.doc, &frag.roots));
+                let label = if verb == "paste" { format!("paste {}", type_label(&frag.doc, &frag.roots)) } else { verb.to_owned() };
                 pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: pasted.ops, exact: false });
                 tool.select_when_live = pasted.roots;
             }
-            Err(e) => warn!("paste: {e}"),
+            Err(e) => warn!("{verb}: {e}"),
         }
     }
 
@@ -1364,9 +1548,16 @@ pub fn select_tool_system(
         if tool.hover.take().is_some() || sel.hovered.is_some() {
             sel.hovered = None;
         }
-        if tool.cursor != "crosshair" {
-            crate::web_ffi::send_cursor_from_worker("crosshair".into());
-            tool.cursor = "crosshair".into();
+        let want = match *active {
+            ActiveTool::Pen if pen.hover == crate::bevy_app::pen::PenHover::Close => "pen-close",
+            ActiveTool::Pen if pen.hover == crate::bevy_app::pen::PenHover::Add => "pen-add",
+            ActiveTool::Pen if pen.hover == crate::bevy_app::pen::PenHover::Remove => "pen-remove",
+            ActiveTool::Pen => "pen",
+            _ => "crosshair",
+        };
+        if tool.cursor != want {
+            crate::web_ffi::send_cursor_from_worker(want.into());
+            tool.cursor = want.into();
         }
         return;
     }
@@ -1388,8 +1579,7 @@ pub fn select_tool_system(
                 if !editing && tool.gizmo.as_ref().is_none_or(|g| g.panel != panel || g.camera != camera || g.targets != targets) {
                     tool.gizmo = Some(Gizmo3d::new(panel, camera, targets));
                 }
-                let dpr = windows.single().map_or(1.0, |w| w.scale_factor());
-                if !tool.gizmo.as_mut().is_some_and(|g| g.frame(&store.0, &pointer, &cameras, clip, dpr, editing)) {
+                if !tool.gizmo.as_mut().is_some_and(|g| g.frame(&store.0, &pointer, &cameras, clip, k as f32, editing)) {
                     tool.gizmo = None;
                 }
             }
@@ -1405,6 +1595,8 @@ pub fn select_tool_system(
         let view = hits.panel.as_deref().and_then(|p| views.get(p)).cloned();
         let reaches = selected_reaches(&sel, tool);
         let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        let double = tool.last_press.is_some_and(|(t, p)| now - t <= DOUBLE_CLICK.0 && p.distance(pointer.screen) <= DOUBLE_CLICK.1);
+        tool.last_press = Some((now, pointer.screen));
         'press: {
             let Some(view) = view else { break 'press };
             // Space held: the press pans the view instead.
@@ -1420,28 +1612,41 @@ pub fn select_tool_system(
                 tool.gesture = Gesture::Edit(Manip::Gizmo { targets, kind: None });
                 break 'press;
             }
-            // A lone selected path shows its points and handles, which come
-            // before the box's grips: a point drags through the store like
-            // any node, a handle writes the point's `handles` leaves.
+            // The path being edited: its points and shown handles come first.
+            // A point is selected and drags through the store like any node,
+            // a handle writes the point's `handles` leaves, and a point
+            // Cmd-dragged pulls out fresh mirrored handles (Figma's). A press
+            // on the path elsewhere clears the point; one off it leaves
+            // editing and goes on as a plain press.
             if view.dims == Dims::Two
-                && let [r] = movers(&reaches, &view.panel)[..]
+                && let Some(r) = edit.path_in(&view.panel).cloned()
                 && geo.ty(r.node()) == "path"
                 && let Some(space) = geo.space(&r.chain)
             {
                 let path = r.node();
                 let to_screen = view.affine() * space * geo.world(path);
+                let points = geo.points(path);
                 let mut hit: Option<(NodeId, Point, Option<bool>)> = None;
-                for (pid, p, hi, ho) in geo.points(path) {
-                    for (out, h) in [(true, ho), (false, hi)] {
-                        if hit.is_none() && h != kurbo::Vec2::ZERO && (to_screen * (p + h)).distance(screen) <= POINT_HIT {
-                            hit = Some((pid, p, Some(out)));
-                        }
+                for (pid, out) in geo.shown_handles(path, edit.point) {
+                    let Some(&(_, p, hi, ho)) = points.iter().find(|q| q.0 == pid) else { continue };
+                    if hit.is_none() && (to_screen * (p + if out { ho } else { hi })).distance(screen) <= POINT_HIT * k {
+                        hit = Some((pid, p, Some(out)));
                     }
-                    if hit.is_none() && (to_screen * p).distance(screen) <= POINT_HIT {
+                }
+                for &(pid, p, ..) in &points {
+                    if hit.is_none() && (to_screen * p).distance(screen) <= POINT_HIT * k {
                         hit = Some((pid, p, None));
                     }
                 }
+                if let Some((point, ..)) = hit {
+                    edit.point = Some(point);
+                }
                 match hit {
+                    Some((point, at, None)) if mods(MOD_META) => {
+                        store.0.begin_gesture(&[point]);
+                        tool.gesture = Gesture::Edit(Manip::PathHandle { point, out: true, to_local: to_screen.inverse(), at });
+                        break 'press;
+                    }
                     Some((point, at, Some(out))) => {
                         store.0.begin_gesture(&[point]);
                         tool.gesture = Gesture::Edit(Manip::PathHandle { point, out, to_local: to_screen.inverse(), at });
@@ -1460,7 +1665,22 @@ pub fn select_tool_system(
                         };
                         break 'press;
                     }
-                    None => {}
+                    // Cmd on a segment bends it.
+                    None if mods(MOD_META)
+                        && let Some((i, j, t)) = geo.segment_at(path, to_screen, screen, POINT_HIT * k)
+                        && let Some((.., curve)) = geo.segments(path).into_iter().find(|s| (s.0, s.1) == (i, j)) =>
+                    {
+                        let (a, b) = (points[i].0, points[j].0);
+                        edit.point = None;
+                        store.0.begin_gesture(&[a, b]);
+                        tool.gesture = Gesture::Edit(Manip::Bend { a, b, curve, t, to_local: to_screen.inverse() });
+                        break 'press;
+                    }
+                    None if top_hit(&hits).is_some_and(|(chain, _)| chain.contains(&path)) => {
+                        edit.point = None;
+                        break 'press;
+                    }
+                    None => *edit = PathEdit::default(),
                 }
             }
             // A lone rect's corner dots and a lone ellipse's arc handles
@@ -1472,7 +1692,7 @@ pub fn select_tool_system(
             {
                 let id = r.node();
                 let to_screen = view.affine() * space * geo.world(id);
-                let hit = geo.shape_grips(id, to_screen).into_iter().find(|(_, p)| p.distance(screen) <= POINT_HIT);
+                let hit = geo.shape_grips(id, to_screen, k).into_iter().find(|(_, p)| p.distance(screen) <= POINT_HIT * k);
                 if let Some((grip, _)) = hit {
                     let arc = geo.arc(id);
                     store.0.begin_gesture(&[id]);
@@ -1480,10 +1700,26 @@ pub fn select_tool_system(
                     break 'press;
                 }
             }
+            // A double-click on a lone selected path, or a rect or ellipse
+            // (made a path), edits its points, before its box's grips.
+            if double
+                && edit.reach.is_none()
+                && view.dims == Dims::Two
+                && let [r] = movers(&reaches, &view.panel)[..]
+                && top_hit(&hits).is_some_and(|(chain, _)| chain.contains(&r.node()))
+                && (geo.ty(r.node()) == "path" || (iron_document::shape::convertible(&store.0, r.node()) && edit_as_path(&store.0, &mut pending, r.node())))
+            {
+                *edit = PathEdit { reach: Some(r.clone()), point: None };
+                tool.last_click = None;
+                tool.last_press = None;
+                break 'press;
+            }
             // The selection's grips come first.
             if view.dims == Dims::Two {
                 let mine = movers(&reaches, &view.panel);
-                if let Some(frame) = geo.selection_frame(&mine) {
+                if edit.reach.is_none()
+                    && let Some(frame) = geo.selection_frame(&mine)
+                {
                     let resize_parts = {
                         let mut v = Vec::new();
                         for r in &mine {
@@ -1498,7 +1734,7 @@ pub fn select_tool_system(
                         }
                         v
                     };
-                    let grip = grip_at(view.affine() * frame, screen, geo.resizable(&resize_parts), geo.rotatable(&rotate_parts));
+                    let grip = grip_at(view.affine() * frame, screen, geo.resizable(&resize_parts), geo.rotatable(&rotate_parts), k);
                     let ids: Vec<NodeId> = mine.iter().map(|r| r.node()).collect();
                     let start = doc_point(&view);
                     match grip {
@@ -1535,7 +1771,7 @@ pub fn select_tool_system(
             let deep = mods(MOD_META);
             let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
             let inside_box = view.dims == Dims::Two
-                && geo.selection_frame(&movers(&reaches, &view.panel)).is_some_and(|f| matches!(grip_at(view.affine() * f, screen, false, false), Some(Grip::Body)));
+                && geo.selection_frame(&movers(&reaches, &view.panel)).is_some_and(|f| matches!(grip_at(view.affine() * f, screen, false, false, k), Some(Grip::Body)));
 
             let Some((chain, source)) = top else {
                 // Empty canvas: drag the selection from inside its box, or
@@ -1557,10 +1793,18 @@ pub fn select_tool_system(
             if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
                 k += 1;
                 tool.last_click = None;
-            } else if dbl && sel.selected == [chain[k]] && iron_document::shape::convertible(&store.0, chain[k]) {
-                // A double-click on a lone rect or ellipse edits its points.
+            } else if dbl && sel.selected == [chain[k]] && geo.ty(chain[k]) == "path" {
+                // A double-click on a lone path edits its points.
                 tool.last_click = None;
-                edit_as_path(&store.0, &mut pending, chain[k]);
+                *edit = PathEdit { reach: Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() }), point: None };
+                break 'press;
+            } else if dbl && sel.selected == [chain[k]] && iron_document::shape::convertible(&store.0, chain[k]) {
+                // A double-click on a lone rect or ellipse makes it a path
+                // and edits its points.
+                tool.last_click = None;
+                if edit_as_path(&store.0, &mut pending, chain[k]) {
+                    *edit = PathEdit { reach: Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() }), point: None };
+                }
                 break 'press;
             }
             let target = Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() };
@@ -1834,12 +2078,48 @@ pub fn select_tool_system(
         if let Some(view) = view.filter(|v| v.dims == Dims::Two) {
             let mine = movers(&reaches, &view.panel);
             let cached = geometry_cache.selection(&geo, &view.panel, &mine, GeometryStamp::new(&store.0, geometry_revision.0), false);
-            if let Some(frame) = cached.frame {
+            if edit.reach.is_none()
+                && let Some(frame) = cached.frame
+            {
                 let f = view.affine() * frame;
-                let grip = grip_at(f, screen, cached.resizable, cached.rotatable);
+                let grip = grip_at(f, screen, cached.resizable, cached.rotatable, k);
                 on_grip = matches!(grip, Some(Grip::Resize(..) | Grip::Rotate(..)));
                 if !space {
                     cursor = cursor_for(f, grip);
+                }
+            }
+            // A lone shape's corner dots and arc handles.
+            if !space
+                && *active == ActiveTool::Select
+                && let [r] = mine[..]
+                && matches!(geo.ty(r.node()), "rect" | "ellipse")
+                && let Some(space) = geo.space(&r.chain)
+                && geo.shape_grips(r.node(), view.affine() * space * geo.world(r.node()), k).iter().any(|(_, p)| p.distance(screen) <= POINT_HIT * k)
+            {
+                cursor = "radius".into();
+                on_grip = true;
+            }
+            // The path being edited: no hover light on it; the plain arrow
+            // over its points and shown handles, or with Cmd over a point (a
+            // drag pulls out its handles) the adjust cursor.
+            if !space
+                && *active == ActiveTool::Select
+                && let Some(r) = edit.path_in(&view.panel)
+                && geo.ty(r.node()) == "path"
+                && let Some(space) = geo.space(&r.chain)
+            {
+                let path = r.node();
+                let to_screen = view.affine() * space * geo.world(path);
+                let near = |q: Point| (to_screen * q).distance(screen) <= POINT_HIT * k;
+                let points = geo.points(path);
+                on_grip = top_hit(&hits).is_some_and(|(chain, _)| chain.contains(&path));
+                if points.iter().any(|&(_, p, ..)| near(p)) {
+                    cursor = if mods(MOD_META) { "point" } else { "default" }.into();
+                    on_grip = true;
+                } else if mods(MOD_META) && geo.segment_at(path, to_screen, screen, POINT_HIT * k).is_some() {
+                    // Cmd on a segment: a drag bends it.
+                    cursor = "bend".into();
+                    on_grip = true;
                 }
             }
         }
@@ -1865,6 +2145,25 @@ pub fn select_tool_system(
         if matches!(tool.gesture, Gesture::Pan { .. }) && tool.cursor != "grabbing" {
             crate::web_ffi::send_cursor_from_worker("grabbing".into());
             tool.cursor = "grabbing".into();
+        }
+        // A rotation turns its arrow with the box: the grabbed corner's
+        // direction at the press, plus how far the pointer has swung round
+        // the centre since.
+        if let Gesture::Edit(Manip::Transform(t)) = &tool.gesture
+            && matches!(t.kind, TransformKind::Rotate)
+        {
+            let centre = t.frame * Point::new(0.5, 0.5);
+            let corner = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+                .into_iter()
+                .min_by(|a, b| (t.frame * Point::new(a.0, a.1)).distance(t.start).total_cmp(&(t.frame * Point::new(b.0, b.1)).distance(t.start)))
+                .unwrap_or((0.0, 0.0));
+            let at = |p: Point| (p.y - centre.y).atan2(p.x - centre.x).to_degrees();
+            let swing = at(t.view.affine().inverse() * screen) - at(t.start);
+            let cursor = format!("rotate:{:.0}", grip_angle(t.frame, corner.0, corner.1) + swing);
+            if tool.cursor != cursor {
+                crate::web_ffi::send_cursor_from_worker(cursor.clone());
+                tool.cursor = cursor;
+            }
         }
     }
     let hovered = tool.hover.as_ref().map(Reach::node);
@@ -1916,17 +2215,23 @@ pub(crate) fn shape_grip_writes(geo: &Geo, id: NodeId, grip: ShapeGrip, p: Point
 /// Edit a rect's or an ellipse's points: it becomes a path with the same id,
 /// in one transaction (`iron_document::shape`). When that would cut a
 /// binding or a clip, the shell asks first and converts on a yes.
-fn edit_as_path(store: &Store, pending: &mut PendingTransactions, id: NodeId) {
+/// Whether it converted now (rather than asking first, or failing).
+fn edit_as_path(store: &Store, pending: &mut PendingTransactions, id: NodeId) -> bool {
     let ty = store.document().live(id).map_or("", |n| n.ty.name());
     match iron_document::shape::to_path(store, id) {
         Ok(c) if c.cuts.is_empty() => {
             pending.0.push(TransactionInput { label: format!("convert {ty} to path"), actor: Actor::Human, ts: 0, idempotency_key: None, ops: c.ops, exact: false });
+            true
         }
         Ok(c) => {
             info!("{id}: converting to a path would cut {}", c.cuts.join("; "));
             crate::web_ffi::send_convert_from_worker(serde_json::json!({"node": id.to_string(), "type": ty, "cuts": c.cuts}).to_string());
+            false
         }
-        Err(e) => warn!("{e}"),
+        Err(e) => {
+            warn!("{e}");
+            false
+        }
     }
 }
 
@@ -1964,11 +2269,11 @@ pub fn draw_select_overlay(
     map: Res<NodeMap>,
     globals: Query<&'static GlobalTransform>,
     nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
-    (pen, shapes): (Res<crate::bevy_app::pen::PenTool>, Res<crate::bevy_app::shape_tool::ShapeTool>),
+    (pen, shapes, edit): (Res<crate::bevy_app::pen::PenTool>, Res<crate::bevy_app::shape_tool::ShapeTool>, Res<PathEdit>),
     active: Res<ActiveTool>,
     geometry_revision: Res<crate::document_bridge::GeometryRevision>,
     mut geometry_cache: ResMut<SelectionGeometryCache>,
-    (highlights, spatial): (Res<crate::document_bridge::Highlights>, Res<crate::document_bridge::SpatialScene>),
+    (highlights, spatial, dpr): (Res<crate::document_bridge::Highlights>, Res<crate::document_bridge::SpatialScene>, Res<crate::Dpr>),
 ) {
     geometry_cache.selection.retain(|panel, _| views.get(panel).is_some());
     geometry_cache.lit.retain(|panel, _| views.get(panel).is_some());
@@ -1993,8 +2298,10 @@ pub fn draw_select_overlay(
     let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
     let stamp = GeometryStamp::new(&store.0, geometry_revision.0);
     let reaches = selected_reaches(&sel, &tool);
+    // Sizes are CSS px; `k` makes them window px.
+    let k = dpr.0;
     let blue = peniko::Color::new(BLUE);
-    let thin = kurbo::Stroke::new(1.0);
+    let thin = kurbo::Stroke::new(k);
     let square = Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
     for (_, o, mut list, _) in &mut overlays {
         let Some(view) = views.get(&o.panel) else { continue };
@@ -2003,15 +2310,19 @@ pub fn draw_select_overlay(
         // screen px so the width holds under zoom. Frames already drawn as
         // the selection's box or the hover box are skipped.
         let boxed = reaches.iter().chain(tool.hover.as_ref()).filter(|r| r.panel == o.panel).map(|r| r.chain.clone()).collect();
+        // The path being edited here shows no box and no selection light:
+        // its points are its feedback.
+        let editing = edit.path_in(&o.panel).map(Reach::node);
         let lit: Vec<(peniko::Color, f64, kurbo::BezPath)> = geometry_cache
             .lit(&geo, view, spatial.embeds(), &highlights, boxed, stamp)
             .iter()
+            .filter(|m| editing.is_none_or(|e| m.chain.last() != Some(&e)))
             .filter_map(|m| match &m.shape {
                 LitShape::Outline(a, path) => {
                     let c = if m.selected { crate::document_bridge::LIT_SELECTED } else { crate::document_bridge::LIT_HOVERED };
-                    Some((peniko::Color::new(c), 2.0, (to_screen * *a) * path.clone()))
+                    Some((peniko::Color::new(c), 2.0 * k, (to_screen * *a) * path.clone()))
                 }
-                LitShape::Frame(f) => Some((blue, if m.selected { 1.0 } else { 1.5 }, (to_screen * *f) * square.clone())),
+                LitShape::Frame(f) => Some((blue, if m.selected { 1.0 } else { 1.5 } * k, (to_screen * *f) * square.clone())),
             })
             .collect();
         let hover_frame = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
@@ -2026,14 +2337,16 @@ pub fn draw_select_overlay(
                 }
                 // The hovered node's box, for what has no outline of its own.
                 if let Some(f) = hover_frame {
-                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5), blue, (to_screen * f) * square.clone());
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), blue, (to_screen * f) * square.clone());
                 }
-                if mine.len() > 1 {
+                if mine.len() > 1 && editing.is_none() {
                     for &f in &cached.frames {
                             b.stroke(Affine::IDENTITY, thin.clone(), blue, (to_screen * f) * square.clone());
                     }
                 }
-                if let Some(frame) = cached.frame {
+                if editing.is_none()
+                    && let Some(frame) = cached.frame
+                {
                     let f = to_screen * frame;
                     b.stroke(Affine::IDENTITY, thin.clone(), blue, f * square.clone());
                     let fill = if cached.resizable { peniko::Color::new([1.0, 1.0, 1.0, 1.0]) } else { peniko::Color::new([0.8, 0.82, 0.85, 1.0]) };
@@ -2042,26 +2355,37 @@ pub fn draw_select_overlay(
                     for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
                         let c = f * Point::new(u, v);
                         let at = Affine::translate(c.to_vec2()) * Affine::rotate(angle);
-                        let r = Rect::new(-HANDLE * 0.5, -HANDLE * 0.5, HANDLE * 0.5, HANDLE * 0.5);
+                        let r = Rect::from_center_size(Point::ORIGIN, (HANDLE * k, HANDLE * k));
                         b.fill(at, fill, r);
                         b.stroke(at, thin.clone(), blue, r);
                     }
                 }
-                // A path's points and handles: the lone selected path's, and
-                // the one the pen is drawing.
+                // A path's points and handles, Figma's way: anchors are
+                // circles (the active one filled), handle ends diamonds on
+                // grey arms; the path being edited's, and the one the pen is
+                // drawing.
                 let white = peniko::Color::new([1.0, 1.0, 1.0, 1.0]);
-                let draw_points = |b: &mut crate::vector::DisplayListBuilder<'_>, to_screen: Affine, path: NodeId| {
-                    for (_, p, hi, ho) in geo.points(path) {
-                        let c = to_screen * p;
+                let grey = peniko::Color::new(HANDLE_ARM);
+                let anchor = |b: &mut crate::vector::DisplayListBuilder<'_>, c: Point, active: bool| {
+                    let dot = kurbo::Circle::new(c, POINT * 0.5 * k);
+                    b.fill(Affine::IDENTITY, if active { blue } else { white }, dot);
+                    b.stroke(Affine::IDENTITY, thin.clone(), blue, dot);
+                };
+                let handle = |b: &mut crate::vector::DisplayListBuilder<'_>, c: Point, e: Point, arm: peniko::Color| {
+                    b.stroke(Affine::IDENTITY, thin.clone(), arm, kurbo::Line::new(c, e));
+                    let d = diamond(e, HANDLE_END * 0.5 * k);
+                    b.fill(Affine::IDENTITY, white, d.clone());
+                    b.stroke(Affine::IDENTITY, thin.clone(), blue, d);
+                };
+                let draw_points = |b: &mut crate::vector::DisplayListBuilder<'_>, to_screen: Affine, path: NodeId, active: Option<NodeId>| {
+                    let points = geo.points(path);
+                    for &(_, p, hi, ho) in &points {
                         for h in [hi, ho].into_iter().filter(|h| *h != kurbo::Vec2::ZERO) {
-                            let e = to_screen * (p + h);
-                            b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Line::new(c, e));
-                            b.fill(Affine::IDENTITY, white, kurbo::Circle::new(e, HANDLE_END));
-                            b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(e, HANDLE_END));
+                            handle(b, to_screen * p, to_screen * (p + h), grey);
                         }
-                        let r = Rect::from_center_size(c, (POINT, POINT));
-                        b.fill(Affine::IDENTITY, white, r);
-                        b.stroke(Affine::IDENTITY, thin.clone(), blue, r);
+                    }
+                    for &(id, p, ..) in &points {
+                        anchor(b, to_screen * p, Some(id) == active);
                     }
                 };
                 // A lone shape's corner dots or arc handles.
@@ -2070,44 +2394,66 @@ pub fn draw_select_overlay(
                     && matches!(geo.ty(r.node()), "rect" | "ellipse")
                     && let Some(space) = geo.space(&r.chain)
                 {
-                    for (_, at) in geo.shape_grips(r.node(), to_screen * space * geo.world(r.node())) {
-                        b.fill(Affine::IDENTITY, white, kurbo::Circle::new(at, HANDLE_END));
-                        b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(at, HANDLE_END));
+                    for (_, at) in geo.shape_grips(r.node(), to_screen * space * geo.world(r.node()), k) {
+                        let dot = kurbo::Circle::new(at, SHAPE_DOT * 0.5 * k);
+                        b.fill(Affine::IDENTITY, white, dot);
+                        b.stroke(Affine::IDENTITY, thin.clone(), blue, dot);
                     }
                 }
-                if *active == ActiveTool::Select
-                    && let [r] = movers(&reaches, &o.panel)[..]
+                // The path being edited: outlined in grey, its points, and the
+                // selected point's handles with its neighbours' facing ones.
+                if matches!(*active, ActiveTool::Select | ActiveTool::Pen)
+                    && let Some(r) = edit.path_in(&o.panel)
                     && geo.ty(r.node()) == "path"
                     && let Some(space) = geo.space(&r.chain)
                 {
-                    draw_points(b, to_screen * space * geo.world(r.node()), r.node());
+                    let path = r.node();
+                    let to_screen = to_screen * space * geo.world(path);
+                    let outline = crate::document_bridge::path_outline(geo.store, path);
+                    b.stroke(Affine::IDENTITY, thin.clone(), peniko::Color::new(EDIT_OUTLINE), to_screen * outline);
+                    let points = geo.points(path);
+                    for (pid, out) in geo.shown_handles(path, edit.point) {
+                        if let Some(&(_, p, hi, ho)) = points.iter().find(|q| q.0 == pid) {
+                            handle(b, to_screen * p, to_screen * (p + if out { ho } else { hi }), grey);
+                        }
+                    }
+                    for &(id, p, ..) in &points {
+                        anchor(b, to_screen * p, Some(id) == edit.point);
+                    }
                 }
+                // The pen's press: the new point sits where it landed, and a
+                // drag pulls out its two mirrored handles.
+                let press = pen.press.as_ref().filter(|(p, ..)| *active == ActiveTool::Pen && p == &o.panel).map(|(_, start, now)| {
+                    let out = if start.distance(*now) > 3.0 * k { *now - *start } else { kurbo::Vec2::ZERO };
+                    (*start, out)
+                });
                 if *active == ActiveTool::Pen
                     && let Some((path, panel, to_comp)) = pen.path.as_ref().filter(|(id, p, _)| p == &o.panel && geo.doc().live(*id).is_some())
                 {
                     let _ = panel;
                     let to_screen = to_screen * to_comp.inverse() * geo.world(*path);
-                    draw_points(b, to_screen, *path);
-                    // The line from the last point to the pointer.
-                    if let (Some((_, p, _, ho)), Some((_, at))) = (geo.points(*path).last().copied(), pen.pointer.as_ref().filter(|(pp, _)| pp == &o.panel)) {
+                    let points = geo.points(*path);
+                    // The segment to come: to the press while one is held
+                    // (its in-handle mirrors the drag), else to the pointer.
+                    let end = press.or_else(|| pen.pointer.as_ref().filter(|(pp, _)| pp == &o.panel).map(|(_, at)| (*at, kurbo::Vec2::ZERO)));
+                    if let (Some(&(_, p, _, ho)), Some((at, out))) = (points.last(), end) {
                         let from = to_screen * p;
+                        let c1 = if ho == kurbo::Vec2::ZERO { from } else { to_screen * (p + ho) };
                         let mut line = kurbo::BezPath::new();
                         line.move_to(from);
-                        if ho == kurbo::Vec2::ZERO { line.line_to(*at) } else { line.curve_to(to_screen * (p + ho), *at, *at) }
+                        if c1 == from && out == kurbo::Vec2::ZERO { line.line_to(at) } else { line.curve_to(c1, at - out, at) }
                         b.stroke(Affine::IDENTITY, thin.clone(), blue, line);
                     }
+                    let last = if press.is_some() { None } else { points.last().map(|p| p.0) };
+                    draw_points(b, to_screen, *path, last);
                 }
-                if *active == ActiveTool::Pen
-                    && let Some((panel, start, now)) = &pen.press
-                    && panel == &o.panel
-                    && start.distance(*now) > 3.0
-                {
-                    let back = *start - (*now - *start);
-                    b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Line::new(back, *now));
-                    for e in [back, *now] {
-                        b.fill(Affine::IDENTITY, white, kurbo::Circle::new(e, HANDLE_END));
-                        b.stroke(Affine::IDENTITY, thin.clone(), blue, kurbo::Circle::new(e, HANDLE_END));
+                if let Some((start, out)) = press {
+                    if out != kurbo::Vec2::ZERO {
+                        let arm = peniko::Color::new([BLUE[0], BLUE[1], BLUE[2], 0.35]);
+                        handle(b, start, start - out, arm);
+                        handle(b, start, start + out, arm);
                     }
+                    anchor(b, start, true);
                 }
                 // The box the rectangle or ellipse tool is dragging out.
                 if let Some(press) = shapes.press.as_ref().filter(|p| p.panel == o.panel)
@@ -2168,7 +2514,7 @@ pub fn navigate_views(
         let camera = cameras.0.entry(view.panel.clone()).or_default();
         if pointer.modifiers.ctrl || pointer.modifiers.meta {
             let doc = (pointer.screen - Vec2::new(view.rect.x, view.rect.y) - camera.pan) / camera.zoom;
-            let z = (camera.zoom * (-px.y * 0.01).exp()).clamp(ZOOM.0, ZOOM.1);
+            let z = (camera.zoom * (-scroll.zoom).exp()).clamp(ZOOM.0, ZOOM.1);
             camera.pan = pan_keeping(view, doc, pointer.screen, z);
             camera.zoom = z;
         } else {

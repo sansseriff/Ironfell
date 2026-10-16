@@ -1,3 +1,4 @@
+# Run at SIZE=1680x1000@1: the 280 px inspector leaves the fixture its 1020 px canvas.
 # Default flow: open, wait, screenshot, drag the square (document 500,420 80x80)
 # and the torus (in the assembly panel), undo both, redo one, then round-trip
 # the document through save and load and show the transactions that applied.
@@ -282,19 +283,61 @@ eval (async () => { const p = await penPath(); return [p.match(/closed="[^"]*"/)
 key Meta+z
 sleep 400
 eval (async () => (await penPath()).match(/closed="[^"]*"/)[0])()
-# V selects again; the path's points are drawn and drag one at a time.
+# V selects again: a click shows the path's box, a double-click edits its
+# points (Figma's vector edit), which then drag one at a time.
 key v
 dclick 300 380
 eval __iron.selection()
+ddblclick 300 380
 ddrag 300 380 330 420
 sleep 400
 eval (async () => (await penPath()).match(/<point[^>]*>/g)[2].replace(/ rot=.*/, ''))()
+# The pen on a segment of the path being edited adds a point there, the
+# curve split so its shape holds; undo takes it back.
+key p
+dmove 287 178
+sleep 300
+eval document.querySelector('canvas').dataset.cursor
+dclick 287 178
+sleep 400
+eval (async () => { const p = await penPath(); return [(p.match(/<point /g) || []).length, p.match(/<point[^>]*>/g)[1].replace(/ rot="0" sx="1" sy="1"/, '').replace(/(\d+\.\d)\d+/g, '$1')]; })()
+key Meta+z
+sleep 400
+eval (async () => ((await penPath()).match(/<point /g) || []).length)()
+# Cmd on a segment of the edited path bends it (Figma's bend); Delete takes
+# out the selected point, and so does the pen's click on a point; each undoes.
+key v
+dmove 287 178
+keydown Meta
+sleep 300
+eval document.querySelector('canvas').dataset.cursor
+ddrag 287 178 287 130
+keyup Meta
+sleep 400
+eval (async () => (await penPath()).match(/<point[^>]*>/g)[0].match(/ o[xy]="[^"]*"/g).join('').replace(/(\d+\.\d)\d+/g, '$1'))()
+key Meta+z
+dclick 420 200
+key Backspace
+sleep 400
+eval (async () => ((await penPath()).match(/<point /g) || []).length)()
+key Meta+z
+key p
+dmove 421 201
+sleep 300
+eval document.querySelector('canvas').dataset.cursor
+dclick 420 200
+sleep 400
+eval (async () => ((await penPath()).match(/<point /g) || []).length)()
+key Meta+z
+sleep 400
+key Escape
+key Escape
 shot pen-path
 # The inspector (src-ui/views/html/SelectionView.svelte): the square's width
 # set in its field is one "set size.w"; the shadow's x is bound to the
 # square's, so setting it moves the square through the binding.
 tab Main
-eval window.setField = (leaf, text) => { let comp = ''; for (const el of document.querySelectorAll('.inspector .component, .inspector .field')) { if (el.classList.contains('component')) comp = el.textContent; else if (comp + '.' + el.querySelector('.label').textContent === leaf) { const i = el.querySelector('input'); i.value = text; i.dispatchEvent(new Event('change', { bubbles: true })); return true; } } return false; }
+eval window.setField = (leaf, text) => { const el = [...document.querySelectorAll('.inspector .field')].find(el => el.dataset.leaf === leaf); const i = el?.querySelector('input'); if (!i) return false; i.value = text; i.dispatchEvent(new Event('change', { bubbles: true })); return true; }
 dclick 540 460
 sleep 600
 eval setField('size.w', '160')
@@ -439,7 +482,7 @@ eval (async () => [...await lasers(), await figured()])()
 # an edit to another node mid-drag leaves the drag running to its own commit.
 # Three undos put the body back.
 tab Optics
-eval window.body = async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect id="#1c"[^>]*>/)[0].match(/ x="[^"]*" y="[^"]*"/)[0]; }
+eval window.body = async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect id="#1d"[^>]*>/)[0].match(/ x="[^"]*" y="[^"]*"/)[0]; }
 dmove 120 170
 down
 sleep 300
@@ -447,7 +490,7 @@ dmove 140 180
 sleep 300
 dmove 180 200
 sleep 300
-eval __iron.edit('<edit><set id="#1c" x="80"/></edit>').then(r => r.ok)
+eval __iron.edit('<edit><set id="#1d" x="80"/></edit>').then(r => r.ok)
 sleep 300
 dmove 220 220
 sleep 300
@@ -461,7 +504,7 @@ dmove 140 180
 sleep 300
 dmove 180 200
 sleep 300
-eval __iron.edit('<edit><set id="#1o" radius.rx="60"/></edit>').then(r => r.ok)
+eval __iron.edit('<edit><set id="#1q" radius.rx="60"/></edit>').then(r => r.ok)
 sleep 300
 dmove 220 220
 sleep 300
@@ -533,6 +576,50 @@ tab Pendulum
 eval [!!document.querySelector('[data-panel-id="pendulum"]'), !!document.querySelector('[data-panel-id="viewer"]')]
 tab Main
 eval [!!document.querySelector('[data-panel-id="pendulum"]'), !!document.querySelector('[data-panel-id="viewer"]')]
+# SVG export and import (plans/specs/svg-import-export.md). The Controls
+# composition exports as SVG: its slider as a picture, the rectangle drawn above
+# with its rounded corners and shadow filter, the quarter pie as a path. Figma's
+# "Copy as SVG" of four shapes (src/iron_svg/tests/fixtures/figma.svg) imports
+# into the Controls tab as one "import SVG": its rects and circle recognised as a
+# rect (rounded) and an ellipse, the line a path of two points. One undo takes it back; a paste
+# event carrying the same SVG imports it again, undone too. Counts are the
+# Controls composition's nodes.
+tab Controls
+sleep 600
+eval window.controlsCount = async () => Number((await __iron.view({fidelity:'skeleton'})).match(/<composition [^>]*name="controls"[^>]*count="(\d+)"/)[1])
+eval __iron.exportSvg('controls')
+eval __iron.exportSvgCuts('controls')
+eval controlsCount()
+move 600 300
+sleep 300
+eval fetch('src/iron_svg/tests/fixtures/figma.svg').then(r => r.text()).then(t => (window.figmaSvg = t, __iron.importSvg(t)))
+sleep 800
+eval (async () => [await controlsCount(), __iron.selection().length])()
+eval (async () => { const tags = []; for (const id of __iron.selection()) tags.push((await __iron.view({scope: id, fidelity: 'full'})).match(/<(rect|ellipse|path) [^>]*>/)[0].replace(/ (color|closed)=.*/, '')); return tags; })()
+eval (async () => (await __iron.view({scope: __iron.selection()[2], fidelity: 'full'})).match(/<point [^>]*>/g))()
+shot svg-import
+# Copy as SVG (Alt+Shift+C): the selection's SVG reaches the system clipboard.
+key Alt+Shift+KeyC
+sleep 600
+eval navigator.clipboard.readText().then(t => [t.startsWith('<svg'), (t.match(/data-iron-type=/g) || []).length])
+key Meta+z
+sleep 600
+eval controlsCount()
+eval __iron.paste(figmaSvg)
+sleep 800
+eval controlsCount()
+key Meta+z
+sleep 600
+eval controlsCount()
+# The model surface's <import-svg>: placed where it says, cuts in the summary.
+eval (async () => { const id = (await __iron.view({fidelity:'skeleton'})).match(/<composition id="([^"]+)" name="controls"/)[1]; return __iron.edit(`<edit><import-svg to="${id}" x="40" y="200">${figmaSvg}</import-svg></edit>`); })()
+sleep 400
+eval controlsCount()
+key Meta+z
+sleep 600
+eval controlsCount()
 logs applied|rejected|panicked
 errors
 quit
+
+# Appearance pixels and Alt-drag inspector exits: run appearance.ts after this script (SKILL.md).

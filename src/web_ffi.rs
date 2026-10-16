@@ -101,6 +101,7 @@ pub fn init_bevy_app_with_canvas(
 
     let mut app = init_app(variant_flags, view_obj);
     app.scale_factor = scale_factor;
+    app.insert_resource(crate::Dpr(scale_factor as f64));
 
     let mut act = ActivityControl::new();
     act.is_in_worker = is_in_worker;
@@ -317,6 +318,7 @@ pub fn set_scale_factor(ptr: u64, scale_factor: f32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     if scale_factor.is_finite() && scale_factor > 0.0 {
         app.scale_factor = scale_factor;
+        app.insert_resource(crate::Dpr(scale_factor as f64));
     }
 }
 
@@ -715,6 +717,104 @@ pub fn document_to_path(ptr: u64, node: String, force: bool) -> String {
     serde_json::json!({"ok": true, "cuts": conversion.cuts}).to_string()
 }
 
+/// Export SVG (plans/specs/svg-import-export.md): `scope` is a composition's
+/// id or name, a node id, or `selection`. JSON `{"ok":true,"svg","cuts"}`,
+/// or `{"ok":false,"error"}`.
+#[wasm_bindgen]
+pub fn document_export_svg(ptr: u64, scope: String) -> String {
+    use iron_document::composition;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "error": "no document"}).to_string();
+    };
+    let doc = store.0.document();
+    let name_of = |c: iron_document::NodeId| doc.get::<iron_document::component::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    let scope = if scope == "selection" {
+        iron_svg::Scope::Nodes(store.0.selection().into_iter().map(|(id, _)| id).collect())
+    } else if scope.starts_with('#')
+        && let Ok(id) = scope.parse::<iron_document::NodeId>()
+    {
+        match doc.live(id).map(|n| n.ty.name()) {
+            Some("composition") => iron_svg::Scope::Composition(id),
+            Some(_) => iron_svg::Scope::Nodes(vec![id]),
+            None => return serde_json::json!({"ok": false, "error": format!("no node {id}")}).to_string(),
+        }
+    } else {
+        match composition::compositions(doc).into_iter().find(|&c| name_of(c).is_some_and(|n| n.eq_ignore_ascii_case(&scope))) {
+            Some(c) => iron_svg::Scope::Composition(c),
+            None => return serde_json::json!({"ok": false, "error": format!("no composition named {scope:?}")}).to_string(),
+        }
+    };
+    match iron_svg::export(&store.0, &scope) {
+        Ok(out) => serde_json::json!({"ok": true, "svg": out.svg, "cuts": out.cuts}).to_string(),
+        Err(e) => serde_json::json!({"ok": false, "error": e}).to_string(),
+    }
+}
+
+/// Import SVG text, placed as a paste is (under the pointer or at the view's
+/// centre, in the artboard there) on the next frame, as one "import SVG"
+/// transaction. JSON `{"ok":true,"cuts","nodes"}`, or `{"ok":false,"error"}`.
+#[wasm_bindgen]
+pub fn document_import_svg(ptr: u64, text: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let imported = match iron_svg::import(&text) {
+        Ok(i) => i,
+        Err(e) => return serde_json::json!({"ok": false, "error": e}).to_string(),
+    };
+    for cut in &imported.cuts {
+        info!("import SVG: {cut}");
+    }
+    let Some(mut clip) = app.world_mut().get_resource_mut::<crate::bevy_app::select::Clipboard>() else {
+        return serde_json::json!({"ok": false, "error": "no select tool"}).to_string();
+    };
+    clip.imports.push(imported.fragment);
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    serde_json::json!({"ok": true, "cuts": imported.cuts, "nodes": imported.nodes}).to_string()
+}
+
+/// Import SVG text into `parent` (a composition or a group) with the SVG's
+/// origin at `x`, `y` there, applied now as one "import SVG" transaction by
+/// `actor`: the model surface's `<import-svg>`, which names where content
+/// goes rather than pointing. JSON `{"ok":true,"version","roots","cuts"}`, or
+/// `{"ok":false,"error"}`.
+#[wasm_bindgen]
+pub fn document_import_svg_at(ptr: u64, text: String, parent: String, x: f64, y: f64, actor: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let Ok(parent) = parent.parse::<iron_document::NodeId>() else {
+        return serde_json::json!({"ok": false, "error": format!("bad id {parent:?}")}).to_string();
+    };
+    let imported = match iron_svg::import(&text) {
+        Ok(i) => i,
+        Err(e) => return serde_json::json!({"ok": false, "error": e}).to_string(),
+    };
+    let actor = if actor == "model" { iron_document::Actor::Model } else { iron_document::Actor::Human };
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "error": "no document"}).to_string();
+    };
+    if !store.0.document().is_live(parent) {
+        return serde_json::json!({"ok": false, "error": format!("no node {parent}")}).to_string();
+    }
+    let place = iron_document::copy::Placement { parent: Some(parent), beside: false, offset: [x, y], share_entities: false };
+    let result = match iron_document::copy::paste(&store.0, &imported.fragment, &place, "import") {
+        Err(e) => serde_json::json!({"ok": false, "error": e}),
+        Ok(pasted) => match store.0.apply(iron_document::TransactionInput { label: "import SVG".into(), actor, ts: 0, idempotency_key: None, ops: pasted.ops, exact: false }) {
+            Ok(applied) => serde_json::json!({
+                "ok": true,
+                "version": applied.version.0,
+                "roots": pasted.roots.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+                "cuts": imported.cuts,
+            }),
+            Err(errors) => serde_json::json!({"ok": false, "error": errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")}),
+        },
+    };
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    result.to_string()
+}
+
 /// "Show in": frame `node` in every open panel that shows it, directly or
 /// through embeds — a 2D panel pans it to the centre, a 3D panel's camera
 /// looks at it (served next frame by `apply_focus`, which logs each panel).
@@ -827,7 +927,7 @@ pub fn document_inspect(ptr: u64, node: String) -> String {
 
 /// Components the inspector offers to add or remove: paint and shape
 /// details, never structure.
-const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow"];
+const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip"];
 
 /// Add (`add`) or remove a component from the inspector, with its defaults,
 /// as one transaction: "add shadow", "remove corners". JSON `{"ok"}` or
@@ -849,6 +949,43 @@ pub fn document_component(ptr: u64, node: String, kind: String, add: bool) -> St
         Ok(_) => serde_json::json!({"ok": true}).to_string(),
         Err(errors) => fail(errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")),
     }
+}
+
+/// Numeric inspector gestures share the store's ownership, previews and undo.
+/// A stale pointer may neither preview nor commit a newer gesture.
+#[wasm_bindgen]
+pub fn document_inspect_scrub(ptr: u64, node: String, leaf: String, phase: String, token: u32, value: f64) -> String {
+    use iron_document::{Actor, GestureId, Handle, Value};
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let mut run = || -> Result<serde_json::Value, String> {
+        let id = node.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
+        let path = leaf.parse::<iron_document::LeafPath>().map_err(|e| e.to_string())?;
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("no store")?;
+        if phase == "begin" {
+            if !matches!(store.0.resolved(id, path), Some(Value::Number(_))) { return Err("only numeric fields can be scrubbed".into()); }
+            if let Handle::Locked(why) = store.0.handle(id, path) { return Err(why); }
+            let gesture = store.0.begin_gesture(&[id]);
+            return Ok(serde_json::json!({"ok": true, "token": gesture.0}));
+        }
+        if store.0.active_gesture() != Some(GestureId(token as u64)) { return Err("the gesture ended or was cancelled by another edit".into()); }
+        match phase.as_str() {
+            "move" => {
+                if !value.is_finite() { return Err("value must be finite".into()); }
+                store.0.preview_target(id, path, Value::Number(value))?;
+            }
+            "commit" => {
+                if let Some(r) = store.0.commit_gesture(format!("set {leaf}"), Actor::Human, js_sys::Date::now() as u64) {
+                    r.map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+                }
+            }
+            "cancel" => store.0.cancel_gesture(),
+            _ => return Err("unknown scrub phase".into()),
+        }
+        Ok(serde_json::json!({"ok": true}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
 /// Set one leaf from the inspector: `text` parsed by the leaf's current
@@ -1045,7 +1182,8 @@ pub fn tool_key(ptr: u64, key: String, bits: u8) {
 }
 
 /// Paste clipboard text the shell read from a paste event. The select tool
-/// places it on its next frame; text that is not an Iron fragment is ignored.
+/// places it on its next frame: an Iron fragment is pasted, SVG imported
+/// (`iron_svg`), anything else ignored.
 #[wasm_bindgen]
 pub fn clipboard_paste(ptr: u64, text: String) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };

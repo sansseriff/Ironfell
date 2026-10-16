@@ -19,14 +19,13 @@
 //! them are baked to their current value and such clips are deleted. A caller
 //! shows the cuts and asks first; with none, nothing is lost.
 
-use crate::component::{Component, ComponentKind, Handles, LeafPath, LeafStruct, PathShape, Transform2d};
+use crate::component::{Component, ComponentKind, LeafPath, LeafStruct, PathShape};
 use crate::document::RelKind;
 use crate::expr::Leaf;
 use crate::id::NodeId;
 use crate::op::Op;
-use crate::order::OrderKey;
 use crate::registry::TypeId;
-use crate::value::{Slot, Value};
+use crate::value::Slot;
 use crate::Store;
 use kurbo::{BezPath, Point, Vec2};
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -198,10 +197,9 @@ pub fn to_path(store: &Store, id: NodeId) -> Result<Conversion, String> {
     if params.is_empty() {
         return Err(format!("{id} is a {ty}; only a rect or an ellipse becomes a path"));
     }
+    // A ring is two outlines, the hole running the other way, so it stays
+    // a ring under the path's default non-zero rule.
     let contours = outline(store, id).expect("a shape has an outline");
-    let [contour] = &contours[..] else {
-        return Err(format!("{id} is a ring, which has two outlines; a path has one"));
-    };
     let leaves: Vec<LeafPath> = params.iter().map(|p| p.parse().expect("declared leaf")).collect();
 
     let mut ops = Vec::new();
@@ -240,28 +238,12 @@ pub fn to_path(store: &Store, id: NodeId) -> Result<Conversion, String> {
         .components_of(id)
         .filter(|c| !matches!(c.kind(), ComponentKind::Size | ComponentKind::Radius | ComponentKind::Corners | ComponentKind::Arc))
         .cloned()
-        .chain(std::iter::once({
-            let mut s = PathShape::default();
-            s.closed = Slot::Const(Value::Bool(true));
-            s.wrap()
-        }))
+        .chain(std::iter::once(PathShape::default().wrap()))
         .collect();
     ops.push(Op::Delete { id });
     ops.push(Op::Create { id, ty: TypeId::lookup("path").expect("registered"), parent: node.parent, order: node.order.clone(), components: carried });
-    let ids = doc.next_ids(contour.len());
-    let mut order = OrderKey::first();
-    for (&pid, a) in ids.iter().zip(contour) {
-        let n = |v: f64| Slot::Const(Value::Number(v));
-        let mut t = Transform2d::default();
-        t.x = n(a.at.x);
-        t.y = n(a.at.y);
-        let mut h = Handles::default();
-        h.ix = n(a.inn.x);
-        h.iy = n(a.inn.y);
-        h.ox = n(a.out.x);
-        h.oy = n(a.out.y);
-        ops.push(Op::Create { id: pid, ty: TypeId::lookup("point").expect("registered"), parent: Some(id), order: order.clone(), components: vec![t.wrap(), h.wrap()] });
-        order = OrderKey::after(&order);
-    }
+    let runs: Vec<(Vec<Anchor>, bool)> = contours.into_iter().map(|c| (c, true)).collect();
+    let mut ids = doc.next_ids(crate::contour::ids_needed(&runs)).into_iter();
+    ops.extend(crate::contour::contours_ops(id, &runs, &mut ids));
     Ok(Conversion { ops, cuts })
 }

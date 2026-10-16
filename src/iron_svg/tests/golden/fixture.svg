@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="472" height="425" viewBox="8 20 472 425" data-iron="1">
+  <defs>
+    <filter id="shadow-1" filterUnits="userSpaceOnUse" x="18" y="182" width="124" height="84" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+    <clipPath id="clip-1">
+      <rect x="0" y="0" width="80" height="60"/>
+    </clipPath>
+  </defs>
+  <g id="card-group" data-iron-type="group" data-iron-name="card group" transform="translate(40 30) rotate(30) scale(1.5 0.75)">
+    <rect id="card" data-iron-type="rect" data-iron-name="card" width="120" height="80" rx="12" fill="#3366e6" stroke="#1a1a1f" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+  <path id="rect-1" data-iron-type="rect" transform="translate(220 20)" d="M0 0 L70 0 C81.0457 0 90 8.9543 90 20 L90 55 C90 57.7614 87.7614 60 85 60 L0 60 Z" data-iron-w="90" data-iron-h="60" data-iron-corners="0 20 5 0" fill="#e63333" fill-opacity="0.5"/>
+  <g filter="url(#shadow-1)">
+    <ellipse id="blob" data-iron-type="ellipse" data-iron-name="blob" transform="translate(80 220)" rx="50" ry="30" fill="#e63333" data-iron-shadow="#000000 0.25 0 4 8"/>
+  </g>
+  <path id="ellipse-1" data-iron-type="ellipse" transform="translate(220 220)" d="M0 0 L0 -40 C22.0914 -40 40 -22.0914 40 0 C40 22.0914 22.0914 40 0 40 C-22.0914 40 -40 22.0914 -40 0 Z" data-iron-rx="40" data-iron-ry="40" data-iron-arc="-1.5707963267948966 4.71238898038469 0" fill="#3366e6"/>
+  <path id="ellipse-2" data-iron-type="ellipse" transform="translate(330 220)" d="M40 0 C40 22.0914 22.0914 40 0 40 C-22.0914 40 -40 22.0914 -40 0 C-40 -22.0914 -22.0914 -40 0 -40 C22.0914 -40 40 -22.0914 40 0 Z M20 0 C20 -11.0457 11.0457 -20 0 -20 C-11.0457 -20 -20 -11.0457 -20 0 C-20 11.0457 -11.0457 20 0 20 C11.0457 20 20 11.0457 20 0 Z" data-iron-rx="40" data-iron-ry="40" data-iron-arc="0 6.283185307179586 0.5" fill="#1a1a1f"/>
+  <path id="wave" data-iron-type="path" data-iron-name="wave" transform="translate(20 320)" d="M0 0 C30 -40 70 40 100 0 C130 -40 170 40 200 0" fill="none" stroke="#1a1a1f" stroke-width="3" stroke-linejoin="miter" stroke-linecap="butt" stroke-miterlimit="8" stroke-dasharray="6 3" stroke-dashoffset="2"/>
+  <path id="path-1" data-iron-type="path" transform="translate(260 300) rotate(5.7296)" d="M0 0 L80 0 C80 0 75.5 60 60 60 C44.5 60 10 50 10 50 C10 50 -20 10 0 0 Z" fill="#4db366" fill-opacity="0.8" stroke="#1a1a1f" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+  <path id="frame" data-iron-type="path" data-iron-name="frame" transform="translate(380 300)" d="M0 0 L60 0 L60 60 L0 60 Z M15 15 L45 15 L45 45 L15 45 Z" fill-rule="evenodd" fill="#3366e6"/>
+  <g id="level" data-iron-type="slider" data-iron-name="level" transform="translate(20 420)">
+    <rect y="9" width="160" height="6" rx="3" fill="#bfc2cc"/>
+    <rect y="9" width="40" height="6" rx="3" fill="#3380e6"/>
+    <circle cx="40" cy="12" r="12" fill="#ffffff" stroke="#4d4d59" stroke-width="1.5"/>
+  </g>
+  <rect id="bar" data-iron-type="rect" data-iron-name="bar" transform="translate(220 420)" width="50" height="20" fill="#3366e6"/>
+  <g id="badge-view" data-iron-type="embed" data-iron-name="badge view" transform="translate(400 20)" clip-path="url(#clip-1)">
+    <ellipse id="ellipse-3" data-iron-type="ellipse" transform="translate(30 30)" rx="30" ry="30" fill="#e63333"/>
+    <rect id="rect-2" data-iron-type="rect" transform="translate(50 10)" width="60" height="20" fill="#3366e6"/>
+  </g>
+</svg>

@@ -58,7 +58,7 @@ optimized artifacts served for the owner; a normal build replaces them.
 
 ```bash
 .claude/skills/run-iron/serve.sh start
-cd .claude/skills/run-iron && bun run drive.ts < smoke.txt; cd -
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < smoke.txt; cd -
 .claude/skills/run-iron/serve.sh stop
 ```
 
@@ -94,7 +94,9 @@ runs the select tool (stage E, plans/specs/select-tool.md): click, a corner
 resize, a Shift-snapped rotation, undo of both, a group's click /
 double-click / Esc / Esc, a marquee, arrow nudges, and delete of the
 pendulum undone in one step; then the pen (a path drawn, closed, the close
-undone, a point dragged), the inspector (a width set, a bound x set
+undone; a click selects the path, a double-click edits its points and one
+is dragged; the pen on a segment of the edited path adds a point there, undone; Cmd-drag bends a
+segment, Delete and the pen's click on a point each remove one, all undone), the inspector (a width set, a bound x set
 through its binding), and stage F's optics chain (laser → fiber → meter in
 the Optics and Schematic tabs: the fiber lengthened by its slider dims both
 gauges, the gauge dragged sets the laser's power back through the chain,
@@ -119,7 +121,14 @@ put the body back), Alt-drag (Alt held from the press on the laser body drags
 a copy, with a second laser entity, and leaves the original; one undo takes back
 the duplicate and its move, which history holds as one entry, though the log
 shows both), and the 3D gizmo (the torus selected in the Assembly tab, its
-green Y arrow dragged up: y only, one "move mesh", undone). Expected output, minus screenshot lines,
+green Y arrow dragged up: y only, one "move mesh", undone), and SVG
+(plans/specs/svg-import-export.md: the Controls composition exported, with its
+cuts; Figma's "Copy as SVG" fixture `src/iron_svg/tests/fixtures/figma.svg`
+imported into the Controls tab by `__iron.importSvg` as one "import SVG": two rects
+(one rounded) and an ellipse recognised, the line a path of two points; Alt+Shift+C putting the
+selection's SVG on the clipboard; undo; the same SVG imported by a paste event and
+by the model's `<import-svg>`, each undone; each count is the Controls
+composition's nodes). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
@@ -129,9 +138,9 @@ redraw (document): 2 of 39 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#11\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.64…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#2m"}}
+{"ok":true,"version":9,"aliases":{"$n":"#2q"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#2m\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#2q\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -151,19 +160,19 @@ true
 ["#l","#Q"]
 clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#2o\" name=\"box\" def=\"#2n\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#2o\">"
+"<entity id=\"#2s\" name=\"box\" def=\"#2r\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#2s\">"
 clicked Show in assembly
 clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#2q\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#2q\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#2u\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#2u\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#11\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":40832}
+{"roundtrip_equal":true,"bytes":42465}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (216 ops, System) -> v1
+applied "open demo scene" (220 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -198,7 +207,7 @@ applied "link" (4 ops, Model) -> v23
 "link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (174 live nodes)
+loaded document v25 (178 live nodes)
 (no page errors)
 undefined
 ["#M"]
@@ -220,8 +229,16 @@ tab Controls
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
-["#2m"]
-"<point id=\"#2p\" x=\"130\" y=\"220\""
+["#2q"]
+"<point id=\"#2u\" x=\"130\" y=\"220\""
+"pen-add"
+[4,"<point id=\"#2v\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
+3
+"bend"
+" ox=\"0.0\" oy=\"-63.4\""
+2
+"pen-remove"
+2
 tab Main
 undefined
 true
@@ -234,29 +251,30 @@ undefined
 ["power=\"10 mW\"","signal=\"7.94… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>"]]
 [75.9,28.5]
 ["power=\"15.78… mW\"","signal=\"4.99… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>"]]
-"<edit-failed applied=\"none\" version=\"19\">\n  <error op=\"2\" kind=\"bad_connection\">#…: cannot connect rf_voltage (#…) to optical_power (#…); a connection joins ports of one kind</error>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"27\">\n  <error op=\"2\" kind=\"bad_connection\">#…: cannot connect rf_voltage (#…) to optical_power (#…); a connection joins ports of one kind</error>\n</edit-failed>"
 tab Thermal
 undefined
 ["out 303.15 K -5 W","a 303.15 K 5 W","b 293.15 K -5 W","p 293.15 K 5 W"]
 ["out 313.15 K -10 W","a 313.15 K 10 W","b 293.15 K -10 W","p 293.15 K 10 W"]
 tab Controls
+undefined
 clicked .toolbar button[aria-label="Rectangle"]
 "Rectangle (R)"
-["<rect id=\"#2q\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
-"<ellipse id=\"#2r\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
-"<ellipse id=\"#2r\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+["<rect id=\"#2w\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
+"<ellipse id=\"#2x\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
+"<ellipse id=\"#2x\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 4
-"<ellipse id=\"#2r\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+"<ellipse id=\"#2x\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 tab Main
 {"cuts":["its h is bound to #10.params.level * 300; the path keeps the current value"],"ok":false}
 ["its h is bound to #10.params.level * 300; the path keeps the current value"]
 clicked Cancel
 null
 tab Controls
-"<rect id=\"#2q\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
+"<rect id=\"#2w\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
 clicked Add shadow
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
-"<ellipse id=\"#2r\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.5707963267948966\" inner=\"0\""
+"<ellipse id=\"#2x\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
 tab Optics
 undefined
 undefined
@@ -286,7 +304,24 @@ tab Pendulum
 [true,false]
 tab Main
 [false,true]
-applied "open demo scene" (216 ops, System) -> v1
+tab Controls
+undefined
+"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"30\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.09… 38.65… 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.57… 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
+["slider level is exported as a picture of itself; it imports as shapes"]
+4
+{"cuts":["filters are not imported"],"nodes":7,"ok":true}
+[8,4]
+["<rect id=\"#3G\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#3H\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#3I\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#3M\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
+["<point id=\"#3K\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#3L\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
+[true,4]
+4
+undefined
+8
+4
+{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#3U #3V #3W #3a\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
+8
+4
+applied "open demo scene" (220 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -295,44 +330,58 @@ applied "nudge rect" (1 ops, Human) -> v6
 applied "nudge rect" (1 ops, Human) -> v7
 applied "delete group" (1 ops, Human) -> v8
 applied "undo: delete group" (16 ops, System) -> v9
-applied "draw path" (2 ops, Human) -> v10
+applied "draw path" (3 ops, Human) -> v10
 applied "add point" (1 ops, Human) -> v11
 applied "add point" (1 ops, Human) -> v12
 applied "close path" (1 ops, Human) -> v13
 applied "undo: close path" (1 ops, System) -> v14
 applied "move point" (2 ops, Human) -> v15
-applied "set size.w" (1 ops, Human) -> v16
-applied "set transform2d.x" (1 ops, Human) -> v17
-applied "set slider" (1 ops, Human) -> v18
-applied "resize rect" (1 ops, Human) -> v19
-applied "set slider" (1 ops, Human) -> v20
-applied "draw rectangle" (1 ops, Human) -> v21
-applied "draw ellipse" (1 ops, Human) -> v22
-applied "resize ellipse" (2 ops, Human) -> v23
-applied "convert ellipse to path" (6 ops, Human) -> v24
-applied "undo: convert ellipse to path" (6 ops, System) -> v25
-applied "round corners" (1 ops, Human) -> v26
-applied "add shadow" (1 ops, Human) -> v27
-applied "edit arc" (1 ops, Human) -> v28
-applied "duplicate 2 nodes" (6 ops, Human) -> v29
-applied "paste 2 nodes" (6 ops, Human) -> v30
-applied "cut 2 nodes" (2 ops, Human) -> v31
-applied "paste 2 nodes" (4 ops, Human) -> v32
-applied "undo: paste 2 nodes" (4 ops, System) -> v33
-applied "undo: cut 2 nodes" (2 ops, System) -> v34
-applied "undo: paste 2 nodes" (6 ops, System) -> v35
-applied "undo: duplicate 2 nodes" (6 ops, System) -> v36
-applied "model edit" (1 ops, Model) -> v37
-applied "model edit" (1 ops, Model) -> v38
-applied "move rect" (2 ops, Human) -> v39
-applied "undo: move rect" (2 ops, System) -> v40
-applied "undo: model edit" (1 ops, System) -> v41
-applied "undo: model edit" (1 ops, System) -> v42
-applied "duplicate rect" (4 ops, Human) -> v43
-applied "duplicate rect" (2 ops, Human) -> v44
-applied "undo: duplicate rect" (6 ops, System) -> v45
-applied "move mesh" (1 ops, Human) -> v46
-applied "undo: move mesh" (1 ops, System) -> v47
+applied "add point" (5 ops, Human) -> v16
+applied "undo: add point" (5 ops, System) -> v17
+applied "bend segment" (4 ops, Human) -> v18
+applied "undo: bend segment" (4 ops, System) -> v19
+applied "delete point" (1 ops, Human) -> v20
+applied "undo: delete point" (1 ops, System) -> v21
+applied "delete point" (1 ops, Human) -> v22
+applied "undo: delete point" (1 ops, System) -> v23
+applied "set size.w" (1 ops, Human) -> v24
+applied "set transform2d.x" (1 ops, Human) -> v25
+applied "set slider" (1 ops, Human) -> v26
+applied "resize rect" (1 ops, Human) -> v27
+applied "set slider" (1 ops, Human) -> v28
+applied "draw rectangle" (1 ops, Human) -> v29
+applied "draw ellipse" (1 ops, Human) -> v30
+applied "resize ellipse" (2 ops, Human) -> v31
+applied "convert ellipse to path" (7 ops, Human) -> v32
+applied "undo: convert ellipse to path" (7 ops, System) -> v33
+applied "round corners" (1 ops, Human) -> v34
+applied "add shadow" (1 ops, Human) -> v35
+applied "edit arc" (1 ops, Human) -> v36
+applied "duplicate 2 nodes" (6 ops, Human) -> v37
+applied "paste 2 nodes" (6 ops, Human) -> v38
+applied "cut 2 nodes" (2 ops, Human) -> v39
+applied "paste 2 nodes" (4 ops, Human) -> v40
+applied "undo: paste 2 nodes" (4 ops, System) -> v41
+applied "undo: cut 2 nodes" (2 ops, System) -> v42
+applied "undo: paste 2 nodes" (6 ops, System) -> v43
+applied "undo: duplicate 2 nodes" (6 ops, System) -> v44
+applied "model edit" (1 ops, Model) -> v45
+applied "model edit" (1 ops, Model) -> v46
+applied "move rect" (2 ops, Human) -> v47
+applied "undo: move rect" (2 ops, System) -> v48
+applied "undo: model edit" (1 ops, System) -> v49
+applied "undo: model edit" (1 ops, System) -> v50
+applied "duplicate rect" (4 ops, Human) -> v51
+applied "duplicate rect" (2 ops, Human) -> v52
+applied "undo: duplicate rect" (6 ops, System) -> v53
+applied "move mesh" (1 ops, Human) -> v54
+applied "undo: move mesh" (1 ops, System) -> v55
+applied "import SVG" (7 ops, Human) -> v56
+applied "undo: import SVG" (7 ops, System) -> v57
+applied "import SVG" (7 ops, Human) -> v58
+applied "undo: import SVG" (7 ops, System) -> v59
+applied "import SVG" (7 ops, Model) -> v60
+applied "undo: import SVG" (7 ops, System) -> v61
 (no page errors)
 ```
 
@@ -640,7 +689,8 @@ cargo test -p iron_document --target aarch64-apple-darwin
 98 tests pass (31 unit, 67 integration; verified 2026-10-14). The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
-tests).
+tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
+(12 tests, verified 2026-10-15; `UPDATE_GOLDEN=1` rewrites `tests/golden/fixture.svg`).
 
 ## Gotchas
 
@@ -680,3 +730,34 @@ tests).
   `run-wasm.sh` does not and is stale.
 - **`wasm-bindgen` "schema version" mismatch**: CLI and crate versions
   differ. `build.sh` reinstalls the CLI at the `Cargo.lock` version.
+
+
+## 2D appearance and inspector regression (2026-10-15)
+
+The default inspector is now 280 px wide. Run the full `smoke.txt` at
+`SIZE=1680x1000@1` so its existing 3D embed hunt retains the same 1020 px canvas;
+its expected document-space results above are unchanged. Inspector field lookup now
+uses `data-leaf` attributes, so human-readable section titles are independent of it.
+
+After building and starting Vite, also run:
+
+```sh
+cd .claude/skills/run-iron
+bun run appearance.ts
+DPR=2 bun run appearance.ts
+```
+
+`appearance.ts` authors overlapping red/blue rectangles under group opacity, a linear
+then radial gradient, an ellipse-clipped group, and an inspector target, through model
+transactions. `appearance-pixels.py` (Pillow) checks actual rendered pixels. Real pointer
+Alt-drags check that previews do not enter save, release commits one undo step, Escape
+keeps selection and cancels the gesture, and a concurrent model edit wins over a stale
+release. DPR 2 uses document/physical pixels, not CSS pixels, as the renderer does.
+Screenshots are in `.agents/appearance/` (gitignored). Expected output for each run:
+
+```text
+pixels: isolated overlap, linear gradient and ellipse clip pass
+inspector: preview, single undo, Escape and concurrent edit pass
+pixels: radial gradient pass
+no page errors
+```

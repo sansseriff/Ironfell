@@ -45,11 +45,11 @@ pub const FRAGMENT_FORMAT: u64 = 1;
 
 /// Types a copy starts from. Roots of the tree (compositions, the model, the
 /// library, timelines), the session, and the parts of a definition are never
-/// copied on their own; ports, equations and points come with their owner.
+/// copied on their own; ports, equations, contours and points come with their owner.
 fn copyable(ty: &str) -> bool {
     !matches!(
         ty,
-        "composition" | "model" | "library" | "timeline" | "session" | "selection" | "definition" | "param_spec" | "port_spec" | "template" | "port" | "equation" | "point"
+        "composition" | "model" | "library" | "timeline" | "session" | "selection" | "definition" | "param_spec" | "port_spec" | "template" | "port" | "equation" | "contour" | "point"
     )
 }
 

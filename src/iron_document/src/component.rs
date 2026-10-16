@@ -196,9 +196,17 @@ components! {
         blur: Number = Value::Number(4.0),
     }
 
-    /// A path's outline (roadmap stage E): its `point` children in sibling
-    /// order, joined by lines or curves, closed back to the first or not.
-    PathShape / "path" => PathShape { closed: Bool = Value::Bool(false) }
+    /// A path (roadmap stage E; plans/specs/svg-import-export.md phase 3):
+    /// its `contour` children, each an outline, filled together. Where
+    /// outlines overlap, `fill_rule` decides what is inside, as in SVG:
+    /// `nonzero` (an outline running the other way cuts a hole) or `evenodd`
+    /// (every enclosed outline cuts a hole).
+    PathShape / "path" => PathShape { fill_rule: Enum = Value::Enum("nonzero".to_owned()) }
+
+    /// One outline of a path: its `point` children in sibling order, joined
+    /// by lines or curves, closed back to the first or not. Only closed
+    /// contours are filled; every contour is stroked.
+    Contour / "contour" => Contour { closed: Bool = Value::Bool(false) }
 
     /// A path point's Bézier handles, relative to the point: `i` leads into
     /// it, `o` out of it. Zero handles make a corner. Leaves on the point,
@@ -210,14 +218,54 @@ components! {
         oy: Number = Value::Number(0.0),
     }
 
+    /// Isolated compositing: applied after a shape (fill, stroke, shadow),
+    /// or the whole group's children, have been painted.
+    Appearance / "appearance" => Appearance {
+        opacity: Number = Value::Number(1.0),
+    }
+
+    /// Initial two-stop fill. Coordinates are fractions of the local bounds;
+    /// radial uses (x0,y0) as centre and the distance to (x1,y1) as radius.
+    /// The solid fill remains the fallback when this component is removed.
+    Gradient / "gradient" => Gradient {
+        kind: Enum = Value::Enum("linear".to_owned()),
+        start: Color = Value::Color([0.35, 0.3, 0.95, 1.0]),
+        end: Color = Value::Color([1.0, 0.45, 0.65, 1.0]),
+        x0: Number = Value::Number(0.0),
+        y0: Number = Value::Number(0.0),
+        x1: Number = Value::Number(1.0),
+        y1: Number = Value::Number(1.0),
+    }
+
+    /// A group's local clip frame. Rectangles support a uniform corner
+    /// radius; ellipses occupy the same (0,0)-(w,h) frame.
+    GroupClip / "group_clip" => GroupClip {
+        enabled: Bool = Value::Bool(true),
+        shape: Enum = Value::Enum("rect".to_owned()),
+        w: Number = Value::Number(200.0),
+        h: Number = Value::Number(200.0),
+        radius: Number = Value::Number(0.0),
+    }
+
     Fill / "fill" => Fill {
         color: Color = Value::Color([0.5, 0.5, 0.5, 1.0]),
         opacity: Number = Value::Number(1.0),
     }
 
+    /// How an outline is stroked, as SVG says it: `join` (`round`,
+    /// `miter`, `bevel`) with its `miter` limit, `cap` (`round`, `butt`,
+    /// `square`), and `dash`, dash and gap lengths separated by spaces
+    /// (SVG's `stroke-dasharray`; empty for a solid line), started
+    /// `dash_offset` along. Round joins and caps were Iron's only style
+    /// before schema 5 and stay the default.
     Stroke / "stroke" => Stroke {
         color: Color = Value::Color([0.0, 0.0, 0.0, 1.0]),
         width: Number = Value::Number(1.0),
+        join: Enum = Value::Enum("round".to_owned()),
+        cap: Enum = Value::Enum("round".to_owned()),
+        miter: Number = Value::Number(4.0),
+        dash: Str = Value::Str(String::new()),
+        dash_offset: Number = Value::Number(0.0),
     }
 
     /// Which mesh asset a `mesh` node shows.

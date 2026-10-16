@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="300" height="200">
+  <defs>
+    <rect id="sq" width="10" height="10" fill="#336699"/>
+  </defs>
+  <g id="outer" transform="translate(100 50) rotate(45) scale(2)">
+    <use id="first" xlink:href="#sq"/>
+    <use id="second" href="#sq" x="30"/>
+    <circle cx="0" cy="40" r="5" fill="red"/>
+  </g>
+  <path id="skewed" transform="skewX(30)" d="M0 0 H10 V10 H0 Z" fill="green"/>
+  <path id="donut" fill-rule="evenodd" fill="black" d="M100 100 h60 v60 h-60 z M115 115 h30 v30 h-30 z"/>
+  <path id="curve" d="M200 20 Q240 0 260 40 A20 20 0 0 1 220 60" stroke="blue" fill="none"/>
+</svg>

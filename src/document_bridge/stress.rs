@@ -13,7 +13,7 @@
 //! place, (50, 90) to (70, 110) in the composition, for a benchmark to
 //! Cmd-drag: an edit inside a group, which is what invalidates a cached group.
 
-use iron_document::component::{Composition, Fill, Handles, Name, PathShape, Radius, Size, Slider, Stroke, Transform2d};
+use iron_document::component::{Composition, Contour, Fill, Handles, Name, PathShape, Radius, Size, Slider, Stroke, Transform2d};
 use iron_document::{Actor, Expr, LeafStruct, NodeId, Op, OrderKey, Slot, Store, TransactionInput, TypeId, Value};
 
 /// Shapes per cell group.
@@ -201,9 +201,12 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
                     ops.push(Op::Create { id, ty: ty("ellipse"), parent: Some(cell), order, components: vec![at(x, y, 0.0), r.wrap(), fill(colour)] });
                 }
                 Kind::Path => {
-                    let mut shape = PathShape::default();
-                    shape.closed = Slot::Const(Value::Bool(true));
-                    ops.push(Op::Create { id, ty: ty("path"), parent: Some(cell), order, components: vec![at(x, y, 0.0), shape.wrap(), fill(colour), stroke([0.1, 0.1, 0.12, 1.0], 1.0)] });
+                    ops.push(Op::Create { id, ty: ty("path"), parent: Some(cell), order, components: vec![at(x, y, 0.0), PathShape::default().wrap(), fill(colour), stroke([0.1, 0.1, 0.12, 1.0], 1.0)] });
+                    let mut closed = Contour::default();
+                    closed.closed = Slot::Const(Value::Bool(true));
+                    let contour = next();
+                    ops.push(Op::Create { id: contour, ty: ty("contour"), parent: Some(id), order: OrderKey::first(), components: vec![closed.wrap()] });
+                    let id = contour;
                     let mut point_key = OrderKey::first();
                     for (px, py) in [(0.0, 0.0), (24.0 + rand() * 10.0, 4.0), (10.0, 20.0 + rand() * 10.0)] {
                         let mut h = Handles::default();

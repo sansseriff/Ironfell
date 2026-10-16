@@ -763,10 +763,9 @@ fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, U
                 fill_rule,
                 shape,
             } => {
-                let Brush::Solid(color) = brush;
                 scene.set_transform(base * *transform);
                 scene.set_fill_rule(*fill_rule);
-                scene.set_paint(*color);
+                match brush { Brush::Solid(c) => scene.set_paint(*c), Brush::Gradient(g) => scene.set_paint(g.clone()) };
                 match shape {
                     // Rects have a dedicated entry point that skips path
                     // handling entirely — the reason `Shape` keeps them apart.
@@ -783,9 +782,8 @@ fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, U
                 brush,
                 shape,
             } => {
-                let Brush::Solid(color) = brush;
                 scene.set_transform(base * *transform);
-                scene.set_paint(*color);
+                match brush { Brush::Solid(c) => scene.set_paint(*c), Brush::Gradient(g) => scene.set_paint(g.clone()) };
                 scene.set_stroke(style.clone());
                 match shape {
                     Shape::Rect(r) => scene.stroke_rect(r),
@@ -818,6 +816,7 @@ fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, U
                 fill_scratch(scratch, shape);
                 scene.push_clip_layer(scratch);
             }
+            DrawCmd::PushOpacity { opacity, .. } => scene.push_opacity_layer(*opacity),
             DrawCmd::PopLayer => scene.pop_layer(),
             DrawCmd::Texture { transform, image, size, .. } => {
                 let id = texture_id(image);

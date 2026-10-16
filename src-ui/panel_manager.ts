@@ -5,6 +5,7 @@ import { InputManager } from './runtime/input_manager';
 import { chooseBackend, type Backend } from './runtime/backend_policy';
 import { DocumentClient } from './runtime/document_client.svelte';
 import { copied, setSelectionCount } from './runtime/clipboard';
+import { applyCursor } from './cursors';
 
 interface PanelEntry {
   id: string;
@@ -225,7 +226,7 @@ export class PanelManager {
         this.docClient.convertQuestion = data.question;
         break;
       case 'cursor':
-        if (this.canvas) this.canvas.style.cursor = cssCursor(data.cursor);
+        if (this.canvas) applyCursor(this.canvas, data.cursor);
         break;
       case 'probeStats':
         (window as any).__lastProbeStats = data.stats;
@@ -316,28 +317,4 @@ export class PanelManager {
     };
     this.session.setPanelViewport(msg);
   }
-}
-
-/**
- * The select tool's cursor as CSS: a standard name, or `rotate:<degrees>`
- * for a curved arrow turned toward the corner it rotates around (CSS has no
- * rotation cursor). Cached, since a drag asks for the same few repeatedly.
- */
-const rotateCursors = new Map<number, string>();
-export function cssCursor(name: string): string {
-  if (!name.startsWith('rotate:')) return name;
-  const deg = Math.round(Number(name.slice(7)) / 15) * 15;
-  let css = rotateCursors.get(deg);
-  if (!css) {
-    // A quarter-circle arrow around the corner, pointing away from the box.
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'>`
-      + `<g transform='rotate(${deg + 135} 12 12)'>`
-      + `<path d='M6 10 A7 7 0 0 1 18 10' fill='none' stroke='white' stroke-width='4'/>`
-      + `<path d='M6 10 A7 7 0 0 1 18 10' fill='none' stroke='black' stroke-width='1.6'/>`
-      + `<path d='M3 8 L6 13 L9 8 Z M15 8 L18 13 L21 8 Z' fill='black' stroke='white' stroke-width='0.8'/>`
-      + `</g></svg>`;
-    css = `url("data:image/svg+xml,${encodeURIComponent(svg)}") 12 12, crosshair`;
-    rotateCursors.set(deg, css);
-  }
-  return css;
 }

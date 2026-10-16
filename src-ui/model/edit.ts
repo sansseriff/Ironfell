@@ -17,6 +17,7 @@
  *   </edit>
  *
  *   <edit><link-figures a="#l" b="#Q" keep="#v"/></edit>   (alone: the store builds it)
+ *   <edit><import-svg to="#4" x="100" y="50"><svg …>…</svg></import-svg></edit>   (alone too)
  */
 import { XMLParser } from 'fast-xml-parser';
 import type { ApplyResult, DocumentApi, SolverSummary } from './api';
@@ -240,7 +241,8 @@ export interface EditOutcome {
   failure?: string;
   /** What the solver did, when constraints were involved. */
   solver?: SolverSummary;
-  /** The solver's outcome as markup for the model: clusters, moved nodes, unmet requests. */
+  /** Markup for the model about an applied edit: the solver's outcome (clusters, moved
+   *  nodes, unmet requests), or an import's new roots and cuts. */
   summary?: string;
 }
 
@@ -278,12 +280,36 @@ function linkFigures(api: DocumentApi, attrText: string): EditOutcome {
   return { ok: false, failure: failed(version, [{ op: 0, kind: 'link', message: r.error ?? 'link failed' }]) };
 }
 
+/** `<import-svg to x y>` with SVG inside (plans/specs/svg-import-export.md):
+ *  the SVG's shapes as new nodes under `to`, its origin at `x`, `y`. Alone in
+ *  its edit, like `<link-figures>`; what SVG could not carry comes back as
+ *  `<cut>` lines in the `<applied>` summary. */
+const IMPORT_SVG = /^\s*<edit(?:\s[^>]*)?>\s*<import-svg\s([^>]*?)>([\s\S]*)<\/import-svg>\s*<\/edit>\s*$/;
+
+function importSvg(api: DocumentApi, attrText: string, svg: string): EditOutcome {
+  const attrs: Record<string, string> = {};
+  for (const m of attrText.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
+  const version = api.version();
+  if (!attrs.to) return { ok: false, failure: failed(version, [{ op: 0, kind: 'parse', message: '<import-svg> needs to="#id" (a composition or group)' }]) };
+  const text = svg.trim().replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/, '$1');
+  const to = attrs.to.startsWith('#') ? attrs.to : `#${attrs.to}`;
+  const r = api.importSvg(text, to, Number(attrs.x ?? 0) || 0, Number(attrs.y ?? 0) || 0, 'model');
+  if (!r.ok) return { ok: false, failure: failed(version, [{ op: 0, kind: 'import_svg', message: r.error ?? 'import failed' }]) };
+  const cuts = (r.cuts ?? []).map((c) => `\n  <cut>${escapeXml(c)}</cut>`).join('');
+  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <imported roots="${(r.roots ?? []).join(' ')}"/>${cuts}\n</applied>` };
+}
+
 /** Parse and apply one edit as the model, answering in the model's terms. */
 export function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): EditOutcome {
   const link = xml.match(LINK_FIGURES);
   if (link) return linkFigures(api, link[1]);
   if (/<link-figures[\s/>]/.test(xml)) {
     return { ok: false, failure: failed(api.version(), [{ op: null, kind: 'parse', message: '<link-figures> must be the only verb in its <edit>' }]) };
+  }
+  const svg = xml.match(IMPORT_SVG);
+  if (svg) return importSvg(api, svg[1], svg[2]);
+  if (/<import-svg[\s/>]/.test(xml)) {
+    return { ok: false, failure: failed(api.version(), [{ op: null, kind: 'parse', message: '<import-svg> must be the only verb in its <edit>' }]) };
   }
   let parsed: ParsedEdit;
   try {

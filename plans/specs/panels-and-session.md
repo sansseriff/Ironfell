@@ -222,7 +222,9 @@ Two input fixes came with it:
 
 **Pan and zoom per 2D view (2026-10-12)**, Figma's controls (`select::navigate_views`):
 - the wheel or a trackpad pans, and Shift turns vertical scrolling horizontal;
-- Ctrl/Cmd+wheel and pinch zoom about the pointer;
+- Ctrl/Cmd+wheel and pinch zoom about the pointer, about 5% a wheel click, each wheel
+  event bounded to one such step so macOS's accelerated bursts do not run away
+  (`input_accum.rs`, 2026-10-15);
 - Space-drag and middle-button drag pan (any tool; the middle button is never a left press);
 - Shift+1 fits the content, Shift+2 fits the selection, Shift+0 sets 100%, and +/−,
   alone or with Cmd/Ctrl, zoom about the centre.
@@ -270,3 +272,29 @@ Follow-ups:
 - **Show in activates or opens the tab** that shows the counterpart's composition,
   instead of only panning views already visible.
 - **The workspace moves into the store** (its own root), then the inspector.
+
+
+**Inspector appearance pass (2026-10-15).** The HTML presenter now uses compact
+sectioned controls, paired numeric fields, percent and degree presentation, Lucide
+icons, colour/hex editing, Bits UI selects and a gradient preview. The default right
+pane is 280 px wide. Bindings still invert through handles and locked values retain
+their reason. Multiple selection explicitly identifies that only its first item is
+being edited; mixed-value batch editing is not implemented.
+
+Alt while hovering a numeric input shows an `ew-resize` cursor. Alt-drag previews through
+`document_inspect_scrub`, which returns a store gesture token; move, release and cancel
+check it before touching the overlay. Release commits one transaction, Escape, pointer
+cancel and window blur cancel, and a conflicting edit invalidates the old token. Shift
+reduces the scrub increment. Percentages display 0–100 while the model stores 0–1;
+angles display degrees while the model stores radians. Inspector fetch generations
+prevent stale replies from displaying the previous selection's fields.
+
+**Composition status is unchanged:** this remains an HTML projection of document leaves,
+not yet an authored inspector composition in the session. All controls write through
+`iron_document` transactions/handles. Moving the template, targets and controls into
+session composition nodes (§6) remains necessary to fulfil the full composition design.
+
+Bits UI was already installed and provided the app's Select primitive; its unstyled
+components support custom presentation without adding another library. Melt's runes
+builders were evaluated as an alternative; direct markup ownership is attractive, but
+this pass needs no markup workaround to stay with Bits UI.

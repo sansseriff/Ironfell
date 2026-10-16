@@ -79,7 +79,9 @@ const GEOMETRY: &[ComponentKind] = &[
     ComponentKind::Arc,
     ComponentKind::Handles,
     ComponentKind::PathShape,
+    ComponentKind::Contour,
     ComponentKind::Frame,
+    ComponentKind::GroupClip,
     ComponentKind::Slider,
 ];
 

@@ -19,12 +19,14 @@
 pub mod component;
 pub mod composition;
 pub mod constraint;
+pub mod contour;
 pub mod copy;
 pub mod definition;
 pub mod document;
 pub mod expr;
 pub mod geom;
 pub mod gesture;
+pub mod appearance;
 pub mod graph;
 pub mod handle;
 pub mod id;

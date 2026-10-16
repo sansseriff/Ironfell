@@ -59,8 +59,13 @@ their boxes, with each node outlined. Grips:
 - **Inside** moves the selection through `Store::begin_drag`, so constraint clusters and
   bound leaves behave as for any drag. Shift constrains the move to an axis.
 
-Cursors follow the grip: CSS resize arrows along the grip's direction, and an SVG
-rotation arrow for rotation, which the shell draws (`cssCursor` in `panel_manager.ts`).
+Cursors follow the grip, in Figma's style (`src-ui/cursors`, 2026-10-15): the engine
+names one (`cursor_for`) and the shell shows its image. The resize and rotate arrows turn
+with the box: a corner's arrow lies along the box's own diagonal and an edge's along its
+normal, and a rotation's arrow swings with the pointer while it turns. The shell rotates
+shadowless arrows on a canvas and adds the drop shadow after, so it always falls
+downward. Space and panning show the hand, the pen its nib, and a shape's corner dot or
+arc handle the arrow with a curve.
 
 ## How it is built
 
@@ -124,16 +129,20 @@ rotation arrow for rotation, which the shell draws (`cssCursor` in `panel_manage
 Stage E's exit: draw, close and edit a path; each click is one transaction; undo per
 point. `bevy_app/pen.rs`, with the types in `iron_document`.
 
-**How a path is stored.** A `path` node holds a `path` component (`closed`) and its
-`point` children, in sibling order. Each point has a `transform2d` (its position in the
-path's space) and `handles` (`ix iy ox oy`, relative to the point; zero is a corner).
+**How a path is stored.** A `path` node holds a `path` component (`fill_rule`) and
+`contour` children (schema 5; plans/specs/svg-import-export.md phase 3), each one
+outline with a `contour` component (`closed`) and its `point` children, in sibling
+order. Several contours make a compound path; the fill rule decides its holes. Each
+point has a `transform2d` (its position in the path's space; a contour has no
+transform) and `handles` (`ix iy ox oy`, relative to the point; zero is a corner).
 The handles are leaves on the point, as decided in roadmap §7 item 4, so a handle can
-be bound like any other value. The bridge builds the outline from the points
-(`materialize::path_outline`): a line where both handles are zero, a cubic otherwise.
-A point's change redraws its path.
+be bound like any other value. `iron_document::contour` builds the outline: a line
+where both handles are zero, a cubic otherwise. A point's or contour's change redraws
+its path. The pen draws into a path's last contour; editing, inserting and removing
+points work within the contour they belong to, and a contour keeps two points.
 
-**Picking.** A click hits a closed, filled path's inside, or any path within 5 px of
-its line.
+**Picking.** A click hits a filled path's inside (its closed contours, by its fill
+rule), or any path within 5 px of its line.
 
 **The pen tool.** Figma's: P picks it, V returns to select, and the toolbar in each
 composition tab bar shows which is active.
@@ -144,13 +153,37 @@ composition tab bar shows which is active.
 - **One transaction per point:** "draw path" makes the path with its first point,
   then each "add point", then "close path". Undo takes back one.
 - The line to the pointer and the handle being dragged are overlay drawing, never
-  stored.
+  stored. While a press is held, the new point is drawn where the press landed (filled,
+  the active anchor), the drag pulls out both mirrored handles, and the segment to it
+  ends there with the mirrored in-handle; only without a press does it follow the
+  pointer (fixed 2026-10-15: it used to end at the pointer mid-drag).
 - A new path goes into the artboard under the press (a top-level embed's composition)
   or the view's own composition.
+- On a segment of the path being drawn or edited, the cursor shows a plus and a click
+  adds a point there ("add point"): a curve is split at that spot (de Casteljau), the
+  neighbours' facing handles trimmed, so the shape holds; a line gets a corner. On the
+  first point, the cursor shows a dot: a click closes the path. On any other point of
+  either, it shows a minus: a click removes the point ("delete point"), never leaving
+  fewer than two.
 
-**Editing.** A lone selected path shows its points and handles.
+**Editing** (Figma's two states, 2026-10-15). A click on a path selects it with its
+transform box, as any node. A double-click on it, or Enter, edits its points
+(`PathEdit`): the box goes, the path is outlined in grey and its points show, and a
+clicked point is selected (filled) with its handles and its neighbours' facing ones.
+Esc leaves editing with the path still selected; so does selecting anything else, or a
+press off the path. A double-click counts by time and place alone, so it edits even
+where the path's ends sit on its box's grips. A rect or ellipse double-clicked is made a
+path and edited.
 - A point drags through `Store::begin_drag` like any node ("move point").
 - A handle drags its leaves ("move handle"), mirrored unless Alt.
+- Cmd-dragging a point pulls out fresh mirrored handles from it instead of moving it
+  (Figma's bend on a point; "move handle"); Cmd over a point shows the adjust cursor.
+- Cmd-dragging a segment bends it ("bend segment"): both its inner handles move by
+  one offset so the curve at the grabbed spot follows the pointer (the weight
+  3t(1-t) clamped near the ends). The neighbours' other handles stay, so a smooth
+  point there may kink. Cmd over a segment shows the bend cursor.
+- Delete or Backspace removes the selected point ("delete point"); the path stays
+  joined across the gap, and keeps two points at least.
 - Resizing a path moves its points and scales its handles (`Kind::Points`), so the
   stroke keeps its width.
 
@@ -198,8 +231,12 @@ transaction ("draw rectangle", "draw ellipse"), placed like a pen path (the
 artboard under the press, else the view's composition); then the shape is
 selected and the tool returns to Move.
 
-**Grips** are about 1.4× larger: corner squares 10 px (were 7), path points
-8 px (6), handle ends radius 4 (3), with hit zones to match.
+**Grips** are sized in CSS px and scaled by the device pixel ratio (`crate::Dpr`, set
+from the shell's scale factor; Rust otherwise works in canvas px), so they look and
+reach the same on every screen (2026-10-15; before, they were canvas px and half size
+on a 2× display). Figma's style: corner squares 8, path anchors 7 px circles (the
+active one filled blue), handle ends 7 px diamonds on grey arms, 1 px lines, with
+hit zones to match. The 3D gizmo's size and stroke scale the same way.
 
 ## Corners, arcs and shadows (2026-10-14)
 
@@ -292,8 +329,7 @@ target; this cache only removes repeated geometry preparation.
   gesture; the current commit makes only `Set`s.
 - The tool-context resource and the hit-test interface of roadmap §4 are still implicit:
   `ActiveTool`, `SelectTool`, `PenTool` and `PointerHits` play those roles.
-- For the pen: adding points to an existing open path, inserting a point on a segment,
-  deleting a point while keeping the path, and converting between corner and smooth.
+- For the pen: adding points to an existing open path, and converting between corner and smooth.
 - Converting a shape lazily on its first point edit instead of on entering.
 - Several shadows per shape, inner shadows (`fill_blurred_rounded_rect`'s
   `invert`), spread, and layer blur.

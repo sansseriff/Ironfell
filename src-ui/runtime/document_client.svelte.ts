@@ -23,6 +23,8 @@
  *   await __iron.timings(reset?)   -> per-phase CPU render timings since the last reset
  *   __iron.copied()                -> the last fragment Cmd+C or Cmd+X copied in this tab
  *   __iron.paste(text?)            -> paste a fragment (default: the last copied), as a paste event does
+ *   await __iron.exportSvg(scope?) -> SVG text of a composition (id or name), a node, or 'selection' (default)
+ *   await __iron.importSvg(text)   -> import SVG as a paste: {ok, cuts, nodes}; placed next frame
  */
 import { lastCopied } from './clipboard';
 
@@ -110,6 +112,13 @@ export class DocumentClient {
       stress: (shapes = 5000) => this.call('stress', [shapes]),
       spatial: (enabled = true) => this.call('spatial', [enabled]),
       timings: (reset = false) => this.call('timings', [reset]),
+      exportSvg: async (scope = 'selection') => {
+        const r = await this.exportSvg(scope);
+        if (!r.ok) throw new Error(r.error);
+        return r.svg;
+      },
+      exportSvgCuts: async (scope = 'selection') => (await this.exportSvg(scope)).cuts,
+      importSvg: (text: string) => this.importSvg(text),
       copied: () => lastCopied(),
       paste: (text?: string) => {
         const dt = new DataTransfer();
@@ -138,6 +147,38 @@ export class DocumentClient {
    *  and lists them in `cuts`. */
   async toPath(node: string, force = false): Promise<{ ok: boolean; cuts?: string[]; error?: string }> {
     return this.call('to_path', [node, force]);
+  }
+
+  /** SVG of a composition (id or name), a node, or `selection`, and what
+   *  it could not carry (plans/specs/svg-import-export.md). */
+  async exportSvg(scope: string): Promise<{ ok: boolean; svg?: string; cuts?: string[]; error?: string }> {
+    const r = await this.call('export_svg', [scope]);
+    for (const cut of r.cuts ?? []) console.info(`export SVG: ${cut}`);
+    return r;
+  }
+
+  /** Import SVG text as a paste: under the pointer or at the view's centre,
+   *  one "import SVG" transaction. `cuts` lists what it could not carry. */
+  async importSvg(text: string): Promise<{ ok: boolean; cuts?: string[]; nodes?: number; error?: string }> {
+    const r = await this.call('import_svg', [text]);
+    if (!r.ok) this.error = `import SVG: ${r.error}`;
+    return r;
+  }
+
+  /** Export `scope` as an .svg download named after it. */
+  async downloadSvg(scope: string, name = 'iron'): Promise<void> {
+    const r = await this.exportSvg(scope);
+    if (!r.ok || !r.svg) {
+      this.error = `export SVG: ${r.error ?? 'nothing to export'}`;
+      return;
+    }
+    this.error = '';
+    const url = URL.createObjectURL(new Blob([r.svg], { type: 'image/svg+xml' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name.replace(/[^\w.-]+/g, '-')}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   /** Apply `<edit>` markup as the model would. Resolves with the outcome. */
@@ -281,7 +322,13 @@ export class DocumentClient {
     URL.revokeObjectURL(url);
   }
 
+  /** Open a saved document, or import an .svg into the view as a paste. */
   async openFile(file: File): Promise<void> {
-    await this.load(await file.text());
+    const text = await file.text();
+    if (file.name.toLowerCase().endsWith('.svg') || file.type === 'image/svg+xml') {
+      await this.importSvg(text);
+      return;
+    }
+    await this.load(text);
   }
 }

@@ -311,10 +311,12 @@ fn init_shared_resources(app: &mut App) {
     // New interaction resources
     app.insert_resource(crate::ActivityControl::new());
     app.init_resource::<crate::PointerState>();
+    app.init_resource::<crate::Dpr>();
     app.init_resource::<crate::PointerHits>();
     app.init_resource::<crate::SelectionState>();
     app.init_resource::<pointer::PressPosition>();
     app.init_resource::<select::SelectTool>();
+    app.init_resource::<select::PathEdit>();
     app.init_resource::<select::SelectionGeometryCache>();
     app.init_resource::<select::ActiveTool>();
     app.init_resource::<pen::PenTool>();

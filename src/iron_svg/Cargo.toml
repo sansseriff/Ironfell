@@ -1,0 +1,19 @@
+[package]
+name = "iron_svg"
+version = "0.1.0"
+edition = "2024"
+description = "SVG export and import for 2D compositions (plans/specs/svg-import-export.md)."
+
+# Keeps the SVG dependency out of `iron_document`. No Bevy: builds and tests
+# natively, like the store (`cargo test -p iron_svg --target aarch64-apple-darwin`).
+[dependencies]
+iron_document = { path = "../iron_document" }
+# Same version as the store's and the app's, so outlines share one type.
+kurbo = "0.13.1"
+# No text (no fontdb, no shaping): text is reported as a cut, not imported.
+usvg = { version = "0.47.0", default-features = false }
+# Exact (f64) parsing of Iron's own transforms and path data; usvg's tree is
+# f32. The same version usvg uses.
+svgtypes = "0.16.1"
+
+serde_json = "1"

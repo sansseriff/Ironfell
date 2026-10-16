@@ -1,9 +1,8 @@
 import { pixelRatio } from './settings.svelte';
 import { AdapterBridge } from './adapter_bridge';
-import { WasmLoader } from './wasm_loader';
 import type { Backend } from './backend_policy';
 
-export type RuntimeMode = 'worker' | 'main';
+export type RuntimeMode = 'worker' | 'main' | 'native';
 
 export interface PanelRectMsg {
   id: string;
@@ -27,7 +26,6 @@ export interface PanelRectMsg {
 export class SessionAdapter {
   readonly mode: RuntimeMode;
   private bridge: AdapterBridge | null = null;
-  private wasmLoader = new WasmLoader();
   private messageHandler: ((msg: any) => void) | null = null;
   private workerIsReady = false;
   private enginePrepared = false;
@@ -69,7 +67,9 @@ export class SessionAdapter {
     this.bridge = new AdapterBridge(this.mode, canvas);
     this.bridge.setHandler((data: any) => this.handleBridgeMessage(data));
     this.pendingInit = { canvas, dpr: pixelRatio() };
-    this.wasmLoader.sendToAdapter(this.bridge, backend).catch(e => console.error('WASM send failed', e));
+    if (import.meta.env.MODE !== 'native' && this.mode !== 'native') {
+      void import('./wasm_loader').then(({ WasmLoader }) => new WasmLoader().sendToAdapter(this.bridge!, backend)).catch(e => console.error('WASM send failed', e));
+    }
   }
 
   /** Full-window canvas backing size (physical px), and the pixel ratio it

@@ -48,7 +48,7 @@ export function extractEdit(text: string): string | null {
   return m ? m[0] : null;
 }
 
-export function parseEdit(api: DocumentApi, xml: string): ParsedEdit {
+export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEdit> {
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '',
@@ -69,7 +69,7 @@ export function parseEdit(api: DocumentApi, xml: string): ParsedEdit {
   // exact="true": refuse the edit if the solver cannot honour every value it
   // sets, instead of adjusting and reporting (constraint-system.md §9.2).
   const exact = /^(true|yes|1)$/i.test(String(rootAttrs['exact'] ?? ''));
-  const schema = api.schema();
+  const schema = await api.schema();
 
   // Pass 1: verbs in order, with their attributes.
   type Verb = { verb: (typeof VERBS)[number]; attrs: Record<string, string>; index: number };
@@ -83,7 +83,7 @@ export function parseEdit(api: DocumentApi, xml: string): ParsedEdit {
 
   // Pass 2: mint ids for aliases, in order of creation.
   const aliasNames = verbs.filter((v) => v.verb === 'create').map((v) => v.attrs.id).filter((id) => id?.startsWith('$'));
-  const minted = api.nextIds(aliasNames.length);
+  const minted = await api.nextIds(aliasNames.length);
   const aliases: Record<string, string> = {};
   aliasNames.forEach((a, i) => (aliases[a] = minted[i]));
   const resolveId = (raw: string | undefined, what: string, index: number): string => {
@@ -116,7 +116,7 @@ export function parseEdit(api: DocumentApi, xml: string): ParsedEdit {
     const count = wantPlacement.filter((w) => w.key === key).length;
     const [parent, after] = key.split('|');
     // A parent created in this same edit has no children yet; keys start fresh.
-    const keys = minted.includes(parent) ? freshKeys(count) : api.place(parent, after, count);
+    const keys = minted.includes(parent) ? freshKeys(count) : await api.place(parent, after, count);
     placementKeys.set(key, keys);
   }
   const takeKey = (v: Verb) => {
@@ -126,7 +126,7 @@ export function parseEdit(api: DocumentApi, xml: string): ParsedEdit {
   };
 
   // Pass 4: ops.
-  const relIds = api.nextRelationIds(verbs.filter((v) => v.verb === 'link').length);
+  const relIds = await api.nextRelationIds(verbs.filter((v) => v.verb === 'link').length);
   let relIndex = 0;
   const ops: object[] = [];
   const skip = new Set(['id', 'type', 'parent', 'after', 'first', 'to', 'from', 'rel', 'path', 'value', 'bind']);
@@ -212,7 +212,7 @@ export function parseEdit(api: DocumentApi, xml: string): ParsedEdit {
 }
 
 /** A leaf written as `component.field`, or a bare field unique across all components. */
-function resolveLeafAnyType(schema: ReturnType<DocumentApi['schema']>, attr: string) {
+function resolveLeafAnyType(schema: Awaited<ReturnType<DocumentApi['schema']>>, attr: string) {
   if (attr === 'name') return { component: 'name', field: 'text', kind: 'string' as const };
   if (attr.includes('.')) {
     const [component, field] = attr.split('.', 2);
@@ -251,15 +251,15 @@ export interface EditOutcome {
  *  `<edit-failed>` naming both entities and asking for `keep`. */
 const LINK_FIGURES = /^\s*<edit(?:\s[^>]*)?>\s*<link-figures\s([^>]*?)\/?>\s*(?:<\/link-figures>)?\s*<\/edit>\s*$/;
 
-function linkFigures(api: DocumentApi, attrText: string): EditOutcome {
+async function linkFigures(api: DocumentApi, attrText: string): Promise<EditOutcome> {
   const attrs: Record<string, string> = {};
   for (const m of attrText.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
   const id = (s: string | undefined) => (s === undefined || s === '' ? '' : s.startsWith('#') ? s : `#${s}`);
-  const version = api.version();
+  const version = await api.version();
   if (!attrs.a || !attrs.b) {
     return { ok: false, failure: failed(version, [{ op: 0, kind: 'parse', message: '<link-figures> needs a="#id" and b="#id"' }]) };
   }
-  const r = api.link(id(attrs.a), id(attrs.b), id(attrs.keep), 'model');
+  const r = await api.link(id(attrs.a), id(attrs.b), id(attrs.keep), 'model');
   if (r.ok) return { ok: true, version: r.version };
   if (r.question) {
     const q = r.question;
@@ -286,39 +286,39 @@ function linkFigures(api: DocumentApi, attrText: string): EditOutcome {
  *  `<cut>` lines in the `<applied>` summary. */
 const IMPORT_SVG = /^\s*<edit(?:\s[^>]*)?>\s*<import-svg\s([^>]*?)>([\s\S]*)<\/import-svg>\s*<\/edit>\s*$/;
 
-function importSvg(api: DocumentApi, attrText: string, svg: string): EditOutcome {
+async function importSvg(api: DocumentApi, attrText: string, svg: string): Promise<EditOutcome> {
   const attrs: Record<string, string> = {};
   for (const m of attrText.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
-  const version = api.version();
+  const version = await api.version();
   if (!attrs.to) return { ok: false, failure: failed(version, [{ op: 0, kind: 'parse', message: '<import-svg> needs to="#id" (a composition or group)' }]) };
   const text = svg.trim().replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/, '$1');
   const to = attrs.to.startsWith('#') ? attrs.to : `#${attrs.to}`;
-  const r = api.importSvg(text, to, Number(attrs.x ?? 0) || 0, Number(attrs.y ?? 0) || 0, 'model');
+  const r = await api.importSvg(text, to, Number(attrs.x ?? 0) || 0, Number(attrs.y ?? 0) || 0, 'model');
   if (!r.ok) return { ok: false, failure: failed(version, [{ op: 0, kind: 'import_svg', message: r.error ?? 'import failed' }]) };
   const cuts = (r.cuts ?? []).map((c) => `\n  <cut>${escapeXml(c)}</cut>`).join('');
   return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <imported roots="${(r.roots ?? []).join(' ')}"/>${cuts}\n</applied>` };
 }
 
 /** Parse and apply one edit as the model, answering in the model's terms. */
-export function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): EditOutcome {
+export async function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): Promise<EditOutcome> {
   const link = xml.match(LINK_FIGURES);
   if (link) return linkFigures(api, link[1]);
   if (/<link-figures[\s/>]/.test(xml)) {
-    return { ok: false, failure: failed(api.version(), [{ op: null, kind: 'parse', message: '<link-figures> must be the only verb in its <edit>' }]) };
+    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<link-figures> must be the only verb in its <edit>' }]) };
   }
   const svg = xml.match(IMPORT_SVG);
   if (svg) return importSvg(api, svg[1], svg[2]);
   if (/<import-svg[\s/>]/.test(xml)) {
-    return { ok: false, failure: failed(api.version(), [{ op: null, kind: 'parse', message: '<import-svg> must be the only verb in its <edit>' }]) };
+    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<import-svg> must be the only verb in its <edit>' }]) };
   }
   let parsed: ParsedEdit;
   try {
-    parsed = parseEdit(api, xml);
+    parsed = await parseEdit(api, xml);
   } catch (e) {
     const err = e instanceof EditError ? e : new EditError(String(e));
-    return { ok: false, failure: failed(api.version(), [{ op: err.line ?? null, kind: 'parse', message: err.message }]) };
+    return { ok: false, failure: failed(await api.version(), [{ op: err.line ?? null, kind: 'parse', message: err.message }]) };
   }
-  const result: ApplyResult = api.apply(
+  const result: ApplyResult = await api.apply(
     { label, actor: 'model', ts: Date.now(), ops: parsed.ops, ...(parsed.exact ? { exact: true } : {}) },
     parsed.expectVersion,
   );
@@ -330,7 +330,7 @@ export function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): 
     }
     return out;
   }
-  return { ok: false, version: result.version, failure: failed(result.version ?? api.version(), result.errors ?? []) };
+  return { ok: false, version: result.version, failure: failed(result.version ?? await api.version(), result.errors ?? []) };
 }
 
 function solverMarkup(version: number, s: SolverSummary): string {

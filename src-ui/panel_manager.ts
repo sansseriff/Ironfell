@@ -1,3 +1,4 @@
+import { isNativeHost } from './runtime/native_host';
 import { pixelRatio, watchPixelRatio } from './runtime/settings.svelte';
 import { onThemeChange, theme } from './runtime/theme.svelte';
 import { SessionAdapter, type RuntimeMode, type PanelRectMsg } from './runtime/session_adapter';
@@ -64,10 +65,10 @@ export class PanelManager {
 
   /** Boot the app on the given full-window canvas. Called once on App mount. */
   async boot(canvas: HTMLCanvasElement, mode: RuntimeMode = 'worker'): Promise<void> {
-    this.mode = mode;
+    this.mode = isNativeHost() ? 'native' : mode;
     this.canvas = canvas;
 
-    if (!hasWebGL2()) {
+    if (!isNativeHost() && !hasWebGL2()) {
       this.backendSupported = false;
       this.showBackendWarning = true;
       return;
@@ -75,7 +76,7 @@ export class PanelManager {
 
     // Decided once, here, and carried through to the worker: the wasm and its
     // glue must come from the same build (see runtime/backend_policy.ts).
-    this.backend = await chooseBackend();
+    this.backend = isNativeHost() ? 'webgl2' : await chooseBackend();
     console.log(`[gfx] backend: ${this.backend}`);
 
     this.loadingInProgress = true;
@@ -127,13 +128,13 @@ export class PanelManager {
    */
   async restart(mode: RuntimeMode = this.mode): Promise<void> {
     if (!this.canvas) {
-      this.mode = mode;
+      this.mode = isNativeHost() ? 'native' : mode;
       return;
     }
 
     this.loadingInProgress = true;
     this.isInitialized = false;
-    this.mode = mode;
+    this.mode = isNativeHost() ? 'native' : mode;
 
     // 1. Detach input from the old canvas.
     this.input.dispose();

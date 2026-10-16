@@ -25,12 +25,17 @@ import pointUrl from './point.png';
 import radiusUrl from './radius.png';
 import resizeUrl from './resize.png';
 import rotateUrl from './rotate.png';
+import { isNativeHost } from '../runtime/native_host';
 
 /** Device px per CSS px the PNGs are drawn for. */
 const DENSITY = 8;
 /** The canvas the turned arrows are drawn on, and their hotspot, device px. */
 const SIZE = 256;
 const CENTRE = 128;
+// Use ordinary 2x Retina rasters in WKWebView. Keep the 8x artwork for
+// rendering/rotation and the browser, then hand the native host 2x pixels.
+const NATIVE = isNativeHost();
+const CURSOR_DENSITY = NATIVE ? 2 : DENSITY;
 
 /** A fixed cursor: its image, hotspot (CSS px) and the keyword it stands in for. */
 const fixed: Record<string, [string, number, number, string]> = {
@@ -55,6 +60,24 @@ const turned: Record<string, { url: string; base: number; img?: HTMLImageElement
 };
 const cache = new Map<string, string>();
 const waiting: (() => void)[] = [];
+const nativeFixed = new Map<string, string>();
+function encodeCursor(c: HTMLCanvasElement): string {
+  if (!NATIVE) return c.toDataURL();
+  const out = document.createElement('canvas');
+  out.width = out.height = SIZE * CURSOR_DENSITY / DENSITY;
+  out.getContext('2d')!.drawImage(c, 0, 0, out.width, out.height);
+  return out.toDataURL();
+}
+if (NATIVE) for (const [name, [url]] of Object.entries(fixed)) {
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas'); c.width = c.height = SIZE;
+    c.getContext('2d')!.drawImage(img, 0, 0);
+    nativeFixed.set(name, encodeCursor(c));
+    for (const f of waiting.splice(0)) f();
+  };
+  img.src = url;
+}
 for (const t of Object.values(turned)) {
   const img = new Image();
   img.onload = () => {
@@ -64,8 +87,8 @@ for (const t of Object.values(turned)) {
   img.src = t.url;
 }
 
-function imageSet(url: string, x: number, y: number): string {
-  return `image-set(url("${url}") ${DENSITY}x) ${x} ${y}, auto`;
+function imageSet(url: string, x: number, y: number, fallback: string): string {
+  return `image-set(url("${url}") ${CURSOR_DENSITY}x) ${x} ${y}, ${fallback}`;
 }
 
 /** An arrow turned `deg` from how it is drawn, as a data URL; cached per degree. */
@@ -84,7 +107,7 @@ function turn(img: HTMLImageElement, deg: number): string {
     g.rotate((deg * Math.PI) / 180);
     g.translate(-CENTRE, -CENTRE);
     g.drawImage(img, 0, 0);
-    url = c.toDataURL();
+    url = encodeCursor(c);
     cache.set(key, url);
   }
   return url;
@@ -107,7 +130,11 @@ export function applyCursor(el: HTMLElement, name: string) {
   const f = fixed[name];
   if (f) {
     el.style.cursor = f[3];
-    el.style.cursor = imageSet(f[0], f[1], f[2]);
+    if (NATIVE && !nativeFixed.has(name)) {
+      waiting.push(() => el.dataset.cursor === name && applyCursor(el, name));
+      return;
+    }
+    el.style.cursor = imageSet(nativeFixed.get(name) ?? f[0], f[1], f[2], f[3]);
     return;
   }
   const [kind, arg] = name.split(':');
@@ -122,5 +149,5 @@ export function applyCursor(el: HTMLElement, name: string) {
     waiting.push(() => el.dataset.cursor === name && applyCursor(el, name));
     return;
   }
-  el.style.cursor = imageSet(turn(t.img, deg - t.base), CENTRE / DENSITY, CENTRE / DENSITY);
+  el.style.cursor = imageSet(turn(t.img, deg - t.base), CENTRE / DENSITY, CENTRE / DENSITY, keyword(kind, deg));
 }

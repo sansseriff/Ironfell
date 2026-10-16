@@ -75,11 +75,7 @@ pub struct DocumentOrigin(pub String);
 
 impl DocumentOrigin {
     pub fn fresh() -> DocumentOrigin {
-        #[cfg(target_arch = "wasm32")]
-        let r = js_sys::Math::random();
-        #[cfg(not(target_arch = "wasm32"))]
-        let r = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.subsec_nanos() as f64 / 1e9);
-        DocumentOrigin(format!("{:016x}", (r * u64::MAX as f64) as u64))
+        DocumentOrigin(crate::host_services::origin_token())
     }
 }
 
@@ -286,6 +282,7 @@ fn check_world_affine(
 /// Apply every pending transaction and history request, then reconcile the
 /// nodes they touched.
 pub(crate) fn sync_document(
+    events: Res<crate::host_events::HostEvents>,
     mut store: ResMut<DocumentStore>,
     mut pending: ResMut<PendingTransactions>,
     mut history: ResMut<HistoryRequests>,
@@ -420,7 +417,7 @@ pub(crate) fn sync_document(
     }
     let version = store.0.document().version();
     if version != version_before {
-        crate::web_ffi::send_document_changed_from_worker(version.0 as u32);
+        events.document_changed(version.0 as u32);
     }
     if affected.is_empty() {
         return;

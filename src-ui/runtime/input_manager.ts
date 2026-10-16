@@ -1,4 +1,4 @@
-import { oppositeVectorBackendUrl } from './wasm_loader';
+import { oppositeVectorBackendUrl } from './variant_policy';
 import { beginCopy, canvasOwnsCopy, pastedFragment } from './clipboard';
 
 export interface InputPoster {
@@ -132,7 +132,10 @@ export class InputManager {
             refreshRect();
             const x = e.clientX - rect.left; const y = e.clientY - rect.top;
             this.sendMods(InputManager.mods(e));
-            if (e.button === 0) this.post({ ty: 'leftBtDown', x, y });
+            if (e.button === 0) {
+                canvas.setPointerCapture?.(e.pointerId);
+                this.post({ ty: 'leftBtDown', x, y });
+            }
             else if (e.button === 1) {
                 e.preventDefault();
                 // Keep the pan going when the pointer leaves the canvas.
@@ -145,6 +148,8 @@ export class InputManager {
             if (e.button === 0) this.post({ ty: 'leftBtUp' });
             else if (e.button === 1) this.post({ ty: 'middleBt', down: false });
         });
+        this.listen(canvas, 'pointercancel', () => this.cancelInput());
+        this.listen(window, 'blur', () => this.cancelInput());
         // A middle press must not start the browser's autoscroll.
         this.listen(canvas, 'mousedown', (e: MouseEvent) => {
             if (e.button === 1) e.preventDefault();
@@ -157,6 +162,15 @@ export class InputManager {
             this.sendMods(InputManager.mods(e));
             this.post({ ty: 'mouseWheel', dx: e.deltaX, dy: e.deltaY, mode: e.deltaMode });
         }, { passive: false });
+    }
+
+    private cancelInput() {
+        this.post({ ty: 'toolKey', key: 'Escape', m: 0 });
+        this.post({ ty: 'leftBtUp' });
+        this.post({ ty: 'middleBt', down: false });
+        for (const key of this.keyPressed) this.post({ ty: 'keyup', key });
+        this.keyPressed.clear();
+        this.sendMods(0);
     }
 
     private attachKeyboard() {

@@ -14,6 +14,10 @@ which plans are historical. Where plans disagree, that index decides.
 
 ## Worktrees
 
+Before starting substantial work, ask the user whether it should be done in a
+worktree. Small-scale work may be done in the main checkout without asking.
+Do not assume that worktree isolation is required.
+
 Worktrees for this repo live in **`.agents/worktrees/<name>`**, inside the repo and
 gitignored. Never create a worktree in `/tmp`, in a session scratchpad, or anywhere
 else outside the repo: those directories are invisible from the editor, get orphaned

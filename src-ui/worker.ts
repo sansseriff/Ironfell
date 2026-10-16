@@ -239,7 +239,7 @@ class IronWorker {
         // Model surface: apply an <edit> as the model, or ask a model for one.
         case "modelEdit":
           try {
-            const outcome = modelEdit(glue, this.appHandle, data.xml, data.label);
+            const outcome = await modelEdit(glue, this.appHandle, data.xml, data.label);
             self.postMessage({ ty: "modelEditResult", requestId: data.requestId, ok: outcome.ok, outcome });
           } catch (e) {
             self.postMessage({ ty: "modelEditResult", requestId: data.requestId, ok: false, error: String(e) });

@@ -1,16 +1,20 @@
+import { NativeAdapter } from './native_adapter';
 import { MainThreadAdapter } from '../main-thread-adapter';
 import type { RuntimeMode } from './session_adapter';
 
 export type MessageHandler = (data: any) => void;
 
 export class AdapterBridge {
-    private adapter: MainThreadAdapter | Worker;
+    private adapter: MainThreadAdapter | NativeAdapter | Worker;
     private handler: MessageHandler | null = null;
     readonly mode: RuntimeMode;
 
     constructor(mode: RuntimeMode, canvas: HTMLCanvasElement) {
         this.mode = mode;
-        if (mode === 'worker') {
+        if (import.meta.env.MODE === 'native' || mode === 'native') {
+            this.adapter = new NativeAdapter();
+            this.adapter.onmessage = (e) => this.handler?.(e.data);
+        } else if (mode === 'worker') {
             this.adapter = new Worker(new URL('../worker.ts', import.meta.url), { type: 'module' });
             (this.adapter as Worker).onmessage = (e) => this.handler?.(e.data);
         } else {

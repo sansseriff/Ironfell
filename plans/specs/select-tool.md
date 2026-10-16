@@ -360,3 +360,15 @@ Marquee and selected-group frames still use the exact oriented `Geo` traversal;
 sharing subtree summaries and finer dependency revisions is a later increment.
 Outlines still contribute commands to the content target until retained overlay
 targets are implemented.
+
+## Wheel zoom tuning (2026-10-16)
+
+Ctrl/Cmd-wheel zoom uses `src/bevy_app/input_accum.rs`: `ZOOM_PER_PX` sets the
+small-delta log-zoom response, and `ZOOM_STEP` caps each individual event before
+events are accumulated. The accelerated-event cap is now 0.065 (about 6.7% per
+event), up from 0.05 (about 5.1%), to make fast wheel spins a little faster. The
+small pixel-delta response stays at 0.005; there is no UI setting yet. This shared
+engine tuning applies to web and native and does not mutate the authored document.
+The WebGL2 build, frontend check and complete run-iron smoke pass after the change
+(`.agents/cursor-zoom-web-smoke.log`); the native cursor probe also passes six
+image/protocol checks. Existing smoke output is unchanged.

@@ -238,7 +238,7 @@ export class MainThreadAdapter {
       case "modelEdit":
         if (this.appHandle !== BigInt(0)) {
           try {
-            const outcome = modelEdit(glue, this.appHandle, data.xml, data.label);
+            const outcome = await modelEdit(glue, this.appHandle, data.xml, data.label);
             this.sendMessage({ ty: "modelEditResult", requestId: data.requestId, ok: outcome.ok, outcome });
           } catch (e) {
             this.sendMessage({ ty: "modelEditResult", requestId: data.requestId, ok: false, error: String(e) });

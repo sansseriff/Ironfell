@@ -4,6 +4,8 @@
   // is running.
   // Stored per browser (runtime/settings.svelte.ts). Render scale applies
   // live; the renderer and runtime restart the app, carrying the document.
+  import { isNativeHost } from "../../runtime/native_host";
+  const native = isNativeHost();
   import { controllerManager } from "../../controller-manager.svelte";
   import { pixelRatioFor, saveSettings, settings, type Appearance, type RenderScale, type Renderer } from "../../runtime/settings.svelte";
   import { setAppearance } from "../../runtime/theme.svelte";
@@ -65,6 +67,7 @@
   </div>
   <p class="note">System follows macOS's light/dark switching.</p>
 
+  {#if !native}
   <h3>Render scale</h3>
   <div class="setting">
     <span>Canvas pixels per CSS pixel</span>
@@ -78,6 +81,7 @@
     can't tell this from a native 5K display, so it is a choice, not a detection. Applies at once.
   </p>
 
+  {/if}
   <h3>2D renderer</h3>
   <div class="setting">
     <span>Vector renderer</span>
@@ -92,17 +96,19 @@
       onChange={(renderer) => apply({ renderer })}
     />
   </div>
-  {#if build && !build.classic}
+  {#if build && !build.classic && !native}
     <p class="note">Classic needs a WebGPU build with it: ./build-wasm.sh webgpu classic</p>
   {/if}
 
   <h3>Runtime</h3>
+  {#if native}<p class="note">Native Bevy runtime with parallel simulation and rendering.</p>{:else}
   <div class="setting">
     <span>Run in a worker</span>
     <Switch.Root class="ui-switch" disabled={busy} checked={controllerManager.runtimeMode === "worker"} onCheckedChange={setMode} aria-label="Run in a worker">
       <Switch.Thumb class="ui-switch-thumb" />
     </Switch.Root>
   </div>
+  {/if}
   <button class="reset" onclick={resetWorkspace}>Reset layout</button>
 
   <h3>Build</h3>
@@ -110,10 +116,10 @@
     <p class:slow={!build.fast} class="build">
       {build.profile} · opt {build.opt} · {build.simd ? "SIMD" : "no SIMD"} · {build.gfx}{build.fast ? "" : " — slow, not for timing"}
     </p>
-    <p class="note">bun run wasm:fast builds the optimized one, bun run wasm the dev one.</p>
+    {#if !native}<p class="note">bun run wasm:fast builds the optimized one, bun run wasm the dev one.</p>{/if}
   {/if}
   {#if busy}<p class="note">Restarting…</p>{/if}
-  <p class="note">A renderer or runtime change restarts the app; the document is kept, its undo history is not.</p>
+  {#if !native}<p class="note">A renderer or runtime change restarts the app; the document is kept, its undo history is not.</p>{/if}
 </section>
 
 <style>

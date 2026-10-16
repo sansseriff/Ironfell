@@ -1,20 +1,22 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import { fileURLToPath } from 'node:url'
 import preload from "vite-plugin-preload";
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [preload(), svelte()],
-  base: '/Ironfell/', // Updated to match the actual repository name
+  base: mode === 'native' ? './' : '/Ironfell/', // Updated to match the actual repository name
   root: '.',
   build: {
-    outDir: 'dist',
+    outDir: mode === 'native' ? 'dist-native' : 'dist',
 
   },
   resolve: {
-    alias: {
-      'src': '/src-ui'
-    }
+    alias: [
+      ...(mode === 'native' ? [{ find: /^\.\/adapter_bridge$/, replacement: fileURLToPath(new URL('./src-ui/runtime/native_bridge.ts', import.meta.url)) }] : []),
+      { find: 'src', replacement: '/src-ui' }
+    ]
   },
   // Ensure WASM files are treated as assets
   assetsInclude: ['**/*.wasm'],
@@ -27,4 +29,4 @@ export default defineConfig({
     // worker is actually instantiated.
     format: 'es',
   },
-})
+}))

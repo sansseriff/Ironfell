@@ -39,8 +39,7 @@ use timeline::TimelinePlugin;
 
 use crate::{
     WorkerApp,
-    asset_reader::WebAssetPlugin,
-    canvas_view::{ViewObj, announce_canvas_window, spawn_canvas_window},
+    surface::announce_window,
     camera_controller::CameraControllerPlugin,
     fps_overlay::FPSOverlayPlugin,
     // tracking_circle::TrackingCircle,
@@ -78,7 +77,7 @@ pub const VARIANT_ALWAYS_RENDER: u32 = 1 << 6;
 /// because `RenderPlugin::build` resolves the GPU adapter and needs the primary
 /// window to exist at that moment. On WebGL2 the adapter *is* the canvas's GL
 /// context, so there is no adapter to find without it.
-pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
+pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Entity) -> WorkerApp {
     let no_log = variant_flags & VARIANT_NO_LOG != 0;
     let min_plugins = variant_flags & VARIANT_MIN_PLUGINS != 0;
     let empty = variant_flags & VARIANT_EMPTY != 0;
@@ -92,7 +91,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
 
     // Before any plugin: `RenderPlugin::build` reads the primary window to pick
     // an adapter, and on WebGL2 finds none without it.
-    let window_entity = spawn_canvas_window(&mut app, view);
+    let window_entity = create_window(&mut app);
 
     if min_plugins {
         // Perf-grid cell B3 (`?bevy=min`): the smallest plugin set that can boot a
@@ -117,7 +116,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
             ImagePlugin::default_nearest(),
         ));
         init_shared_resources(&mut app);
-        announce_canvas_window(&mut app);
+        announce_window(&mut app, window_entity);
         return WorkerApp::new(app, window_entity);
     }
 
@@ -147,7 +146,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
         // no app plugins — "rendering absolutely nothing".
         app.add_plugins(default_plugins);
         init_shared_resources(&mut app);
-        announce_canvas_window(&mut app);
+        announce_window(&mut app, window_entity);
         return WorkerApp::new(app, window_entity);
     }
 
@@ -180,7 +179,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
     ));
 
     init_shared_resources(&mut app);
-    announce_canvas_window(&mut app);
+    announce_window(&mut app, window_entity);
     // Every view renders into its own texture and the window only composites
     // them (plans/specs/view-textures.md), so a frame that changed nothing visible
     // need not render at all.
@@ -305,6 +304,7 @@ pub(crate) fn init_app(variant_flags: u32, view: ViewObj) -> WorkerApp {
 /// Resources the FFI layer touches (Option-guarded there); initialized for every
 /// perf-grid variant so FFI behavior is uniform across cells.
 fn init_shared_resources(app: &mut App) {
+    app.init_resource::<crate::host_events::HostEvents>();
     app.init_resource::<AccumulatedCursorDelta>();
     app.init_resource::<AccumulatedScroll>();
     app.init_resource::<crate::panels::Panels>();

@@ -20,29 +20,31 @@ export interface ApplyResult {
   solver?: SolverSummary;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
 export interface DocumentApi {
-  schema(): Schema;
+  schema(): MaybePromise<Schema>;
   view(query: {
     scope?: string | null;
     fidelity: 'skeleton' | 'summary' | 'full';
     depth?: number | null;
     /** 'tree' (default), 'model', or { composition: '#4' } (ECM §11). */
     relation?: 'tree' | 'model' | { composition: string };
-  }): string;
-  version(): number;
-  nextIds(n: number): string[];
-  nextRelationIds(n: number): string[];
+  }): MaybePromise<string>;
+  version(): MaybePromise<number>;
+  nextIds(n: number): MaybePromise<string[]>;
+  nextRelationIds(n: number): MaybePromise<string[]>;
   /** Order keys under `parent` ('' = roots) after `after` ('' = front, 'end' = back). */
-  place(parent: string, after: string, count: number): string[];
-  apply(transaction: object, expectVersion: number): ApplyResult;
+  place(parent: string, after: string, count: number): MaybePromise<string[]>;
+  apply(transaction: object, expectVersion: number): MaybePromise<ApplyResult>;
   /** Link two pictures to one entity as `actor` (ECM §7.2). */
-  link(a: string, b: string, keep: string, actor: 'human' | 'model'): LinkResult;
+  link(a: string, b: string, keep: string, actor: 'human' | 'model'): MaybePromise<LinkResult>;
   /** What the person has selected, in pick order (the session tier). */
-  selection(): { node: string; type: string | null; name: string | null }[];
+  selection(): MaybePromise<{ node: string; type: string | null; name: string | null }[]>;
   /** Import SVG into `parent` with its origin at `x`, `y` there, as one
    *  transaction (plans/specs/svg-import-export.md). `cuts` lists what it
    *  could not carry. */
-  importSvg(text: string, parent: string, x: number, y: number, actor: 'human' | 'model'): ImportSvgResult;
+  importSvg(text: string, parent: string, x: number, y: number, actor: 'human' | 'model'): MaybePromise<ImportSvgResult>;
 }
 
 export interface ImportSvgResult {

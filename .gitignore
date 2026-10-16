@@ -43,3 +43,6 @@ dist-ssr
 
 # TypeScript incremental build state
 *.tsbuildinfo
+
+/dist-native
+/src-native/gen/

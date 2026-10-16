@@ -8,11 +8,12 @@ pub struct AccumulatedCursorDelta {
 }
 
 /// Log zoom per window px of wheel travel, and the most one wheel event may
-/// zoom: a wheel click (about 10 px) is ~5%, Figma's step, and the bound
+/// zoom: a wheel click (about 10 px) is ~5%, and the bound
 /// keeps an accelerated burst of clicks (100 px or more each on macOS)
-/// to a step apiece. A trackpad pinch sends many small events, unbounded.
+/// to ~6.7% apiece. Raise ZOOM_STEP to speed up fast spins; ZOOM_PER_PX
+/// tunes the small-delta response, including trackpad pinch.
 const ZOOM_PER_PX: f32 = 0.005;
-const ZOOM_STEP: f32 = 0.05;
+const ZOOM_STEP: f32 = 0.065;
 
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct AccumulatedScroll {

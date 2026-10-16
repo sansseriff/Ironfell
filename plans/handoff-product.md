@@ -95,11 +95,19 @@ The user intends a separate agent to test the native direction. The owning plan 
 [`vision/08_native-target-via-tauri.md`](vision/08_native-target-via-tauri.md): read
 its deviation boundary (§2), ownership/protocol (§3) and gates (§6) first. This is
 a bounded macOS experiment, not a full port or a change to rendering-track order;
-there is no raster-cache prerequisite and no native feasibility result yet.
+there is no raster-cache prerequisite. The standalone composition probe has now
+passed dev/packaged checks; the packaged real workspace passes 15 checks and the
+100,000-runtime-entity fixture passes 17, with measured parallel ECS/render overlap.
+Both wasm builds and the complete smoke pass. The title-bar coordinate mismatch
+has a content-area fix; AppKit motion now bypasses JS, with HTML retaining control
+ownership. Next is human alignment/drag/focus/latency/display testing, then the open
+winit comparison, identical command trace and cost/clipboard gates in vision 08.
+Human follow-up fixed clear-window title-bar backing and measured drawable acquisition stalls. The next human retest is CADisplayLink + FIFO/2 (new provisional default); Immediate/2 remains diagnostic because callback jitter persists. See the four-run table in vision 08. Human follow-up now reports decent latency. Cursor image CSP/native raster handling is fixed and six packaged cursor checks pass; human cursor appearance is the next check. The full port is not complete.
 
 1. Record a baseline, dependency revisions and a bounded experiment budget before
-   implementation. Use `.agents/worktrees/<name>` for isolation if needed;
-   preserve unrelated in-progress changes. Begin with the one-window composition
+   implementation. Ask the user whether substantial work should use a worktree;
+   small-scale work may use the main checkout without asking (see `AGENTS.md`).
+   Preserve unrelated in-progress changes. Begin with the one-window composition
    probe on macOS, including supported event-loop ownership, input and a packaged
    build. Review the Bevy example, Wry example and camera demo listed in the plan.
 2. Only after that gate passes, connect the smallest real Iron 2D/3D and document

@@ -55,7 +55,7 @@ export function beginCopy(ask: () => void) {
     } catch {
         // No ClipboardItem: fall back to writeText once the text is here.
         lastWriteFailed = true;
-        text.then((t) => t && navigator.clipboard?.writeText(t).then(() => { lastWriteFailed = false; }, () => { }));
+        text.then((t) => { if (t) return navigator.clipboard?.writeText(t).then(() => { lastWriteFailed = false; }, () => { }); });
     }
 }
 

@@ -23,25 +23,15 @@ pub fn selection_reflect_system(
     }
 }
 
-// Outbound notification systems (hover & selection) – convert sets to js_sys::Array and call externs.
-pub fn outbound_hover_system(selection: Res<crate::SelectionState>) {
-    if !selection.is_changed() {
-        return;
+// Outbound payloads remain Rust data until a host adapter drains the app outbox.
+pub fn outbound_hover_system(selection: Res<crate::SelectionState>, events: Res<crate::host_events::HostEvents>) {
+    if selection.is_changed() {
+        events.push(crate::host_events::EngineEvent::Hover { list:selection.hovered.iter().map(ToString::to_string).collect() });
     }
-    let arr = js_sys::Array::new();
-    for id in selection.hovered.iter() {
-        arr.push(&wasm_bindgen::JsValue::from(id.to_string()));
-    }
-    crate::web_ffi::send_hover_from_worker(arr);
 }
 
-pub fn outbound_selection_system(selection: Res<crate::SelectionState>) {
-    if !selection.is_changed() {
-        return;
+pub fn outbound_selection_system(selection: Res<crate::SelectionState>, events: Res<crate::host_events::HostEvents>) {
+    if selection.is_changed() {
+        events.push(crate::host_events::EngineEvent::Selection { list:selection.selected.iter().map(ToString::to_string).collect() });
     }
-    let arr = js_sys::Array::new();
-    for id in selection.selected.iter() {
-        arr.push(&wasm_bindgen::JsValue::from(id.to_string()));
-    }
-    crate::web_ffi::send_selection_from_worker(arr);
 }

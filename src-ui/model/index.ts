@@ -8,7 +8,7 @@ import { makeDocumentApi } from './api';
 import { applyEdit, type EditOutcome } from './edit';
 import { AnthropicTransport } from './transport';
 
-export function modelEdit(glue: Glue, handle: bigint, xml: string, label?: string): EditOutcome {
+export async function modelEdit(glue: Glue, handle: bigint, xml: string, label?: string): Promise<EditOutcome> {
   return applyEdit(makeDocumentApi(glue, handle), xml, label);
 }
 

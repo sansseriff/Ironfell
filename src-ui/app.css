@@ -177,3 +177,6 @@ a {
     scroll-behavior: auto !important;
   }
 }
+
+/* The native surface is below the webview; HTML panels keep their own fills. */
+:root[data-native], :root[data-native] body { background: transparent; }

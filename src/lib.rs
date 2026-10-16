@@ -14,6 +14,9 @@ compile_error!(
      acquire an adapter. Build each target separately."
 );
 
+#[cfg(all(feature = "native", any(feature = "webgpu", feature = "webgl2", target_arch = "wasm32")))]
+compile_error!("the native feature requires a native target and cannot be combined with a web backend");
+
 // Classic Vello flattens paths in compute shaders. WebGL2 has none, so this is a
 // build that could never run rather than one that merely runs slowly.
 #[cfg(all(feature = "classic", feature = "webgl2"))]
@@ -22,10 +25,9 @@ compile_error!(
      compute shaders, which WebGL2 does not provide."
 );
 
-#[cfg(not(any(feature = "webgpu", feature = "webgl2")))]
+#[cfg(not(any(feature = "webgpu", feature = "webgl2", feature = "native")))]
 compile_error!(
-    "no graphics backend selected: build with `--features webgpu` or \
-     `--features webgl2` (see [features] in Cargo.toml)."
+    "no graphics backend selected: use `--features native`, `webgpu`, or `webgl2`."
 );
 
 use bevy::{
@@ -35,10 +37,18 @@ use bevy::{
 use std::ops::{Deref, DerefMut};
 
 // original web ffi module
+#[cfg(target_arch = "wasm32")]
 mod web_ffi;
+#[cfg(target_arch = "wasm32")]
 pub use web_ffi::*;
 
+#[cfg(target_arch = "wasm32")]
 mod canvas_view;
+pub mod surface;
+pub mod engine_api;
+pub mod engine_dispatch;
+pub mod host_events;
+mod host_services;
 
 pub mod panels;
 
@@ -51,7 +61,8 @@ mod fps_overlay;
 
 mod tracking_circle;
 
-mod asset_reader; // kept private
+#[cfg(target_arch = "wasm32")]
+mod asset_reader; // browser host asset services
 
 
 // mod asset_loader;
@@ -89,7 +100,12 @@ impl DerefMut for WorkerApp {
 }
 
 impl WorkerApp {
-    pub fn new(app: App, window: Entity) -> Self {
+    pub fn new(mut app: App, window: Entity) -> Self {
+        // Rendering is optional per frame; simulation must keep its own
+        // monotonic clock even when no render timestamp arrives. With no
+        // receiver, Bevy's time_system uses Instant::now and its render-side
+        // sender intentionally ignores a disconnected receiver (Bevy 0.19).
+        app.world_mut().remove_resource::<bevy::time::TimeReceiver>();
         Self {
             app,
             window,
@@ -124,6 +140,11 @@ impl WorkerApp {
 
     pub fn to_physical_size(&self, x: f32, y: f32) -> Vec2 {
         Vec2::new(x * self.scale_factor, y * self.scale_factor)
+    }
+
+    /// Host diagnostics: whether the latest frame submitted the render sub-app.
+    pub fn rendered_last_frame(&self) -> bool {
+        self.world().get_resource::<RedrawNeeded>().is_none_or(|r| r.now)
     }
 }
 
@@ -175,6 +196,12 @@ pub(crate) fn decide_redraw(
         || meshes.read().count() > 0
         || materials.read().count() > 0;
     if changed {
+        debug!(
+            texture_camera = texture_cameras.iter().any(|c| c.is_active),
+            lists = !lists.is_empty(), ui = !ui.is_empty(), cameras = !cameras.is_empty(),
+            panels = panels.is_changed(), windows = !windows.is_empty(),
+            "render-on-demand invalidation"
+        );
         redraw.linger = redraw.linger.max(3);
     }
     redraw.now = redraw.linger > 0;

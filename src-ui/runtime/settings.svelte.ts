@@ -1,3 +1,4 @@
+import { isNativeHost } from './native_host';
 /**
  * App settings: how this browser runs Iron, never document state. Kept in
  * browser storage. The Settings view (views/html/SettingsView.svelte)
@@ -80,7 +81,7 @@ export function pixelRatioFor(scale: RenderScale): number {
  *  it with each canvas resize so the app's pointer mapping follows
  *  (`PanelManager.refreshPixelRatio`). */
 export function pixelRatio(): number {
-  return pixelRatioFor(settings.renderScale);
+  return isNativeHost() ? (window.devicePixelRatio || 1) : pixelRatioFor(settings.renderScale);
 }
 
 /**

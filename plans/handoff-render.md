@@ -17,7 +17,9 @@ the measuring agent fell into. §7–9 are verification records of finished incr
 - Run the smoke script before committing; update `.claude/skills/run-iron/SKILL.md`'s
   expected output and the owning plan's status when behaviour changes.
 - Don't push. Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- Worktrees, if used, go in `.agents/worktrees/<name>` (see AGENTS.md; symlink `target`).
+- Ask the user whether substantial work should use a worktree; small-scale work
+  may use the main checkout without asking. If chosen, worktrees go in
+  `.agents/worktrees/<name>` (see `AGENTS.md`).
 - Native store tests: `cargo test -p iron_document --target aarch64-apple-darwin`.
 - `plans/specs/infinite-canvas-architecture-patterns.md` was written by another agent and is
   **untracked**; the user has not asked for it to be committed or implemented wholesale.

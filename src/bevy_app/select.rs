@@ -1219,6 +1219,7 @@ pub struct Views3d<'w, 's> {
 }
 
 pub fn select_tool_system(
+    events: Res<crate::host_events::HostEvents>,
     pointer: Res<crate::PointerState>,
     hits: Res<crate::PointerHits>,
     time: Res<Time<Real>>,
@@ -1316,7 +1317,7 @@ pub fn select_tool_system(
                 set_selection(&mut sel, tool, up);
             }
             "enter" if reaches.len() == 1 && iron_document::shape::convertible(&store.0, reaches[0].node()) => {
-                if edit_as_path(&store.0, &mut pending, reaches[0].node()) {
+                if edit_as_path(&store.0, &mut pending, reaches[0].node(), &events) {
                     *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
                 }
             }
@@ -1382,7 +1383,7 @@ pub fn select_tool_system(
                         String::new()
                     }
                 };
-                crate::web_ffi::send_clipboard_from_worker(text.clone());
+                events.clipboard(text.clone());
                 if key == "x" && !text.is_empty() {
                     let ops = outermost(doc, &sel.selected).into_iter().map(|id| Op::Delete { id }).collect();
                     let label = format!("cut {}", type_label(doc, &sel.selected));
@@ -1408,7 +1409,7 @@ pub fn select_tool_system(
                         String::new()
                     }
                 };
-                crate::web_ffi::send_clipboard_from_worker(text);
+                events.clipboard(text);
             }
             // Delete takes the selected point out of the path being edited,
             // which stays joined across the gap (two points at least stay).
@@ -1536,7 +1537,7 @@ pub fn select_tool_system(
             sel.hovered = None;
         }
         if tool.cursor != "grabbing" {
-            crate::web_ffi::send_cursor_from_worker("grabbing".into());
+            events.cursor("grabbing".into());
             tool.cursor = "grabbing".into();
         }
         return;
@@ -1556,7 +1557,7 @@ pub fn select_tool_system(
             _ => "crosshair",
         };
         if tool.cursor != want {
-            crate::web_ffi::send_cursor_from_worker(want.into());
+            events.cursor(want.into());
             tool.cursor = want.into();
         }
         return;
@@ -1707,7 +1708,7 @@ pub fn select_tool_system(
                 && view.dims == Dims::Two
                 && let [r] = movers(&reaches, &view.panel)[..]
                 && top_hit(&hits).is_some_and(|(chain, _)| chain.contains(&r.node()))
-                && (geo.ty(r.node()) == "path" || (iron_document::shape::convertible(&store.0, r.node()) && edit_as_path(&store.0, &mut pending, r.node())))
+                && (geo.ty(r.node()) == "path" || (iron_document::shape::convertible(&store.0, r.node()) && edit_as_path(&store.0, &mut pending, r.node(), &events)))
             {
                 *edit = PathEdit { reach: Some(r.clone()), point: None };
                 tool.last_click = None;
@@ -1802,7 +1803,7 @@ pub fn select_tool_system(
                 // A double-click on a lone rect or ellipse makes it a path
                 // and edits its points.
                 tool.last_click = None;
-                if edit_as_path(&store.0, &mut pending, chain[k]) {
+                if edit_as_path(&store.0, &mut pending, chain[k], &events) {
                     *edit = PathEdit { reach: Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() }), point: None };
                 }
                 break 'press;
@@ -2135,7 +2136,7 @@ pub fn select_tool_system(
             tool.hover = hover;
         }
         if tool.cursor != cursor {
-            crate::web_ffi::send_cursor_from_worker(cursor.clone());
+            events.cursor(cursor.clone());
             tool.cursor = cursor;
         }
     } else {
@@ -2143,7 +2144,7 @@ pub fn select_tool_system(
             tool.hover = None;
         }
         if matches!(tool.gesture, Gesture::Pan { .. }) && tool.cursor != "grabbing" {
-            crate::web_ffi::send_cursor_from_worker("grabbing".into());
+            events.cursor("grabbing".into());
             tool.cursor = "grabbing".into();
         }
         // A rotation turns its arrow with the box: the grabbed corner's
@@ -2161,7 +2162,7 @@ pub fn select_tool_system(
             let swing = at(t.view.affine().inverse() * screen) - at(t.start);
             let cursor = format!("rotate:{:.0}", grip_angle(t.frame, corner.0, corner.1) + swing);
             if tool.cursor != cursor {
-                crate::web_ffi::send_cursor_from_worker(cursor.clone());
+                events.cursor(cursor.clone());
                 tool.cursor = cursor;
             }
         }
@@ -2216,7 +2217,7 @@ pub(crate) fn shape_grip_writes(geo: &Geo, id: NodeId, grip: ShapeGrip, p: Point
 /// in one transaction (`iron_document::shape`). When that would cut a
 /// binding or a clip, the shell asks first and converts on a yes.
 /// Whether it converted now (rather than asking first, or failing).
-fn edit_as_path(store: &Store, pending: &mut PendingTransactions, id: NodeId) -> bool {
+fn edit_as_path(store: &Store, pending: &mut PendingTransactions, id: NodeId, events: &crate::host_events::HostEvents) -> bool {
     let ty = store.document().live(id).map_or("", |n| n.ty.name());
     match iron_document::shape::to_path(store, id) {
         Ok(c) if c.cuts.is_empty() => {
@@ -2225,7 +2226,7 @@ fn edit_as_path(store: &Store, pending: &mut PendingTransactions, id: NodeId) ->
         }
         Ok(c) => {
             info!("{id}: converting to a path would cut {}", c.cuts.join("; "));
-            crate::web_ffi::send_convert_from_worker(serde_json::json!({"node": id.to_string(), "type": ty, "cuts": c.cuts}).to_string());
+            events.convert_question(serde_json::json!({"node": id.to_string(), "type": ty, "cuts": c.cuts}).to_string());
             false
         }
         Err(e) => {

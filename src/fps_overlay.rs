@@ -110,7 +110,7 @@ fn build_label() -> (String, bevy::color::Srgba) {
 /// Settings view (`web_ffi::document_build_info`).
 pub(crate) fn build_profile() -> (&'static str, &'static str, bool, bool) {
     let opt = env!("IRON_OPT_LEVEL");
-    let simd = cfg!(target_feature = "simd128");
+    let simd = crate::host_services::cpu_simd_available();
     let fast = matches!(opt, "2" | "3" | "s" | "z") && simd;
     let name = match opt {
         "1" => "dev-opt",
@@ -166,7 +166,13 @@ fn update_fps_display(
     mut writer: TextUiWriter,
     time: Res<Time<Real>>,
     mut last: Local<f64>,
+    redraw: Option<Res<crate::RedrawNeeded>>,
 ) {
+    // Diagnostics must not wake an otherwise idle renderer just to count it.
+    // Content/input wakes rendering; the overlay catches up on its next frame.
+    if redraw.is_some_and(|r| !r.now) {
+        return;
+    }
     // Four times a second: rewriting the text every frame would mark the UI
     // changed every frame, and the window would never be idle
     // (plans/specs/view-textures.md, render on demand).

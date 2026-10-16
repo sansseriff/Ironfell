@@ -687,7 +687,7 @@ run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-98 tests pass (31 unit, 67 integration; verified 2026-10-14). The host target is required because
+122 tests pass (31 unit, 91 integration; verified 2026-10-16). The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
@@ -788,3 +788,38 @@ pixels: automatic embed preserves all four stroke outsets pass
 pixels: automatic stroke bounds update after edits; explicit frame clips pass
 no page errors
 ```
+
+## Native feasibility target (2026-10-16)
+
+See `src-native/README.md` for build, packaged self-test and opt-in concurrency
+commands. The normal target is native Rust/Metal under the shared Svelte shell;
+it does not load wasm. Keep the existing web smoke above as a regression gate.
+
+Native pacing diagnostics are documented in that README. The normal window is
+opaque and only the HTML overlay is transparent. `IRON_NATIVE_PRESENTATION`
+confirms actual Metal layer settings: default FIFO/2 has display sync on and three
+drawables; the opt-in Immediate/2 comparison has sync off and three. Timing traces
+measure CPU scopes, not displayed input latency. Do not report the acquisition
+improvement as an event-to-photon measurement or declare the latency waves fixed.
+
+The native cursor probe (`IRON_NATIVE_SELF_TEST=1 IRON_NATIVE_CURSOR_TEST=1`) has
+six passing checks: pen event → CSS, packaged cursor loading, native 64px raster,
+usable keyword fallback, generated image loading and no image CSP violations.
+Web cursor artwork remains 8x. The 2026-10-16 wheel tuning raises only the shared
+per-event log-zoom cap from 0.05 to 0.065; ordinary smoke output is unchanged.
+The complete smoke passed again after these changes against the rebuilt WebGL2
+static preview at `GPU=1 SIZE=1680x1000@1`; log:
+`.agents/cursor-zoom-web-smoke.log` (exit 0, both no-page-errors checks).
+
+The 2026-10-16 native work ran the complete `smoke.txt` at
+`GPU=1 SIZE=1680x1000@1` against a frozen Vite preview on port 5175. When testing
+preview instead of the dev server, first copy
+`src/iron_svg/tests/fixtures/figma.svg` to the same path under `dist/`: smoke's
+relative fixture fetch otherwise receives the SPA HTML fallback. Expected web
+behavior/output is unchanged; the successful log has no command failures or page
+errors (`.agents/web-smoke-pass.log`). Both web backends also compile.
+
+Baseline caveat observed before this port: the existing solver integration test
+`three_link_chain_reaches_a_target` fails its iteration assertion at
+`src/iron_solve/tests/phase1.rs:49` ("50 iterations"). Store, spatial and SVG tests
+pass; this native attempt has not changed that solver test or its implementation.

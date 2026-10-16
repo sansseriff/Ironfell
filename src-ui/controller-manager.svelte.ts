@@ -1,3 +1,4 @@
+import { isNativeHost } from './runtime/native_host';
 import { PanelManager } from "./panel_manager";
 import type { RuntimeMode } from "./runtime/session_adapter";
 import { saveSettings, settings } from "./runtime/settings.svelte";
@@ -10,7 +11,7 @@ class ControllerManagerClass {
   showBackendWarning = $state(false);
   loadingInProgress = $state(false);
   backendSupported = $state(true);
-  runtimeMode: RuntimeMode = $state(settings.runtime);
+  runtimeMode: RuntimeMode = $state(isNativeHost() ? 'native' : settings.runtime);
 
   private manager = new PanelManager();
 
@@ -52,7 +53,7 @@ class ControllerManagerClass {
   async switchMode(mode: RuntimeMode) {
     if (this.loadingInProgress) return;
     if (this.runtimeMode === mode && this.isInitialized) return;
-    this.runtimeMode = mode;
+    this.runtimeMode = isNativeHost() ? 'native' : mode;
     saveSettings({ runtime: mode });
     await this.restart();
   }

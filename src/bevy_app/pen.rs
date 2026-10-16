@@ -127,6 +127,7 @@ pub(crate) fn drop_target(geo: &Geo, hits: &crate::PointerHits, view: &PanelView
 
 #[allow(clippy::too_many_arguments)]
 pub fn pen_tool_system(
+    events: Res<crate::host_events::HostEvents>,
     pointer: Res<crate::PointerState>,
     hits: Res<crate::PointerHits>,
     views: Res<PanelViews>,
@@ -177,7 +178,7 @@ pub fn pen_tool_system(
     }
     keys.0 = rest;
     if *shown != Some(*active) {
-        crate::web_ffi::send_tool_from_worker(active.name().into());
+        events.tool(active.name().into());
         *shown = Some(*active);
     }
     if *active != ActiveTool::Pen {

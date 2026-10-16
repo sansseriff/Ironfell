@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<style>
+html,body { margin:0; width:100%; height:100%; background:transparent; color:#edf0f5; font:14px system-ui; }
+aside { position:absolute; top:24px; left:24px; width:300px; padding:20px; border:1px solid #ffffff30; border-radius:16px; background:#18202bed; }
+h1 { margin:0 0 12px; font-size:21px; } button,input { font:inherit; padding:9px; margin:4px 0; }
+button { cursor:pointer; } input { box-sizing:border-box; width:100%; } pre { white-space:pre-wrap; font-size:11px; }
+</style>
+<aside>
+  <h1>Iron native surface probe</h1>
+  <p>The rotating object behind this panel is native Bevy. This panel is HTML.</p>
+  <input id="focus" placeholder="Type here to check webview focus">
+  <button id="toggle">Pause animation</button>
+  <button id="theme">Change native background</button>
+  <pre id="status">Connecting…</pre>
+</aside>
+<script>
+const invoke = window.__TAURI__.core.invoke;
+document.querySelector('#toggle').onclick = async () => {
+  const running = await invoke('toggle_animation');
+  document.querySelector('#toggle').textContent = running ? 'Pause animation' : 'Resume animation';
+};
+document.querySelector('#theme').onclick = () => invoke('toggle_background');
+setInterval(async () => {
+  const stats = await invoke('probe_stats');
+  document.querySelector('#status').textContent = JSON.stringify(stats,null,2);
+},1000);
+</script>
+</html>

@@ -31,7 +31,7 @@ export function constrain(element: HTMLElement, size: number, min: string, max: 
  * @param {HTMLElement} element
  * @param {number} size
  */
-function normalize(str: string, element: HTMLElement, size) {
+function normalize(str: string, element: HTMLElement, size: number) {
 	const num = parseFloat(str);
 
 	if (str.endsWith('px')) {

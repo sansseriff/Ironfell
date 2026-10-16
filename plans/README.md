@@ -79,8 +79,11 @@ intent" or the "presentation model". Vision 07's current-state sections are supe
 by `rendering/architecture.md`.
 
 [`08_native-target-via-tauri.md`](vision/08_native-target-via-tauri.md) was revised
-2026-10-16: shared web/native boundary and macOS feasibility gates agreed; no native
-implementation or local test evidence yet. A bounded experiment no longer waits
+2026-10-16: the macOS feasibility implementation is now in the main checkout on
+`document-spine`, transferred from the `native-tauri` worktree at the user's request.
+The standalone composition probe passes dev/packaged checks; the packaged workspace
+passes 15 checks and the 100,000-runtime-entity concurrency fixture passes 17.
+Human input/display testing and comparison gates remain. A bounded experiment no longer waits
 for raster caching. Its work order is in `handoff-product.md` §4.1; the full port
 and other platforms remain unscheduled.
 

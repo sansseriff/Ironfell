@@ -59,7 +59,7 @@
     background: linear-gradient(145deg, hsl(222 18% 22%), hsl(222 20% 14%));
     border-color: hsl(220 60% 50% / 70%);
     box-shadow: 0 3px 6px -2px hsl(0 0% 0% / 55%),
-      0 0 0 10pxrgba(208, 208, 208, 0.2)),
+      0 0 0 10px rgba(208, 208, 208, 0.2),
       0 5px 22px -6px var(--glow);
   }
 

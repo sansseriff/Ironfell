@@ -298,3 +298,32 @@ Bits UI was already installed and provided the app's Select primitive; its unsty
 components support custom presentation without adding another library. Melt's runes
 builders were evaluated as an alternative; direct markup ownership is attractive, but
 this pass needs no markup workaround to stay with Bits UI.
+
+
+**Inspector organisation follow-up (2026-10-15).** Appearance now groups layer opacity
+and corner radius. The radius control edits all four leaves as one transaction or one
+Alt-drag gesture; its adjacent toggle exposes individual corners and differing values
+show Mixed. Missing opacity/corner components project defaults without authoring them
+until the first edit. Bindings still invert through their handles, with conflicting
+linked edits rejected atomically.
+
+The corner controls now match the reference's compact disclosure: equal-width opacity
+and radius inputs with leading icons, a separate highlighted Individual corners toggle,
+and a two-column grid of icon-labelled corner inputs underneath. Accessible names remain
+available when visual labels are hidden. Opacity's percentage sits next to its value;
+Alt-drag works across the whole numeric input box, including its icon and empty space.
+
+Fill and Stroke use compact swatch/hex/opacity rows. Fill's paint popover switches
+between solid, linear and radial in one transaction and retains the solid fallback.
+Stroke shows its supported Centre alignment and weight, with joins, caps, miter and
+dash settings in a Bits UI popover. Colour alpha can be Alt-dragged, including stroke
+and shadow alpha, without changing RGB. Drop shadow is an entry in an Effects list,
+added through the effect menu and edited in its own popover. It is the only currently
+supported effect type; the list can add entries as renderer support grows.
+
+`document_inspect_patch` resolves related writes through handles and applies one
+transaction, including optional-component creation and paint mode changes.
+`document_inspect_scrub` accepts linked leaves or the alpha channel of a colour.
+The canvas ignores keys already consumed by DOM controls, so Escape closes a popover
+without also clearing the selection. The inspector remains an HTML projection as
+noted above; no new authored UI-composition representation is introduced here.

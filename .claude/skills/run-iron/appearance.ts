@@ -44,12 +44,62 @@ await begin(40);await page.keyboard.press('Escape');await release();assert((awai
 const selected=(await page.evaluate(()=>(window as any).__iron.selection()))[0];
 await begin(50);await edit(`<edit><set id="${selected}" size.w="260"/></edit>`);await release();assert((await doc()).components.size[key].w===260,'stale scrub overwrote model edit');
 console.log('inspector: preview, single undo, Escape and concurrent edit pass');
+// The appearance presenter groups corners and edits all four atomically.
+const cornerInput = page.getByRole('spinbutton',{name:'Corner radius',exact:true});
+await cornerInput.fill('18');await cornerInput.press('Tab');await wait();
+let saved=await doc();assert(Object.values(saved.components.corners[key]).every(x=>x===18),'uniform radius did not set all corners');
+await page.locator('[data-section="appearance"] .component').click();await page.keyboard.press('Meta+z');await wait();
+assert(!(await doc()).components.corners?.[key],'uniform radius was not one undo');
+await page.keyboard.press('Meta+Shift+z');await wait();
+const scrubProperty=async(input:any,delta:number)=>{await input.scrollIntoViewIfNeeded();const box=(await input.boundingBox())!;await page.keyboard.down('Alt');await page.mouse.move(box.x+box.width/2,box.y+12);await page.mouse.down();await page.mouse.move(box.x+box.width/2+delta,box.y+12,{steps:5});await wait();await release();};
+await scrubProperty(cornerInput,12);assert(Object.values((await doc()).components.corners[key]).every(x=>x===30),'linked radius scrub lost a corner');
+await page.keyboard.press('Meta+z');await wait();assert(Object.values((await doc()).components.corners[key]).every(x=>x===18),'linked radius scrub was not one undo');
+await page.locator('[data-section="appearance"]').screenshot({path:resolve(dir,'corners-collapsed.png')});
+const beforeToggle=JSON.stringify(await doc());
+await page.getByRole('button',{name:'Individual corners',exact:true}).click();
+assert(JSON.stringify(await doc())===beforeToggle,'corner disclosure authored a document change');
+const topLeft=page.getByRole('spinbutton',{name:'Top left',exact:true});
+await topLeft.fill('27');await topLeft.press('Tab');await wait();
+const separate=(await doc()).components.corners[key];
+assert(separate.tl===27 && separate.tr===18 && separate.bl===18 && separate.br===18,'individual corner changed its neighbours');
+assert(await cornerInput.getAttribute('placeholder')==='Mixed','different corner values did not show Mixed');
+await page.locator('[data-section="appearance"]').screenshot({path:resolve(dir,'corners-expanded.png')});
+await page.locator('[data-section="appearance"] .component').click();await page.keyboard.press('Meta+z');await wait();
+assert(Object.values((await doc()).components.corners[key]).every(x=>x===18),'individual radius edit was not one undo');
+await page.getByRole('button',{name:'Individual corners',exact:true}).click();
+// Empty space in the decorated input is also an Alt-drag target; it must
+// not focus the native number input and divert the following document undo.
+const opacityBox=(await page.locator('[data-leaf="appearance.opacity"] .control').boundingBox())!;
+await page.keyboard.down('Alt');await page.mouse.move(opacityBox.x+opacityBox.width-8,opacityBox.y+15);await page.mouse.down();
+await page.mouse.move(opacityBox.x+opacityBox.width-18,opacityBox.y+15,{steps:5});await wait();
+assert((await doc()).components.appearance[key].opacity===.8,'opacity preview leaked into save');
+await release();assert((await doc()).components.appearance[key].opacity===.7,'input box scrub did not commit');
+await page.keyboard.press('Meta+z');await wait();assert((await doc()).components.appearance[key].opacity===.8,'input box scrub diverted document undo');
+await page.getByRole('button',{name:'Add stroke',exact:true}).click();await wait();
+const strokeAlpha=page.locator('[data-paint="stroke"] .paint-opacity input');await scrubProperty(strokeAlpha,-30);
+assert(Math.abs((await doc()).components.stroke[key].color.rgba[3]-.7)<.001,'stroke alpha scrub did not commit');
+await page.keyboard.press('Meta+z');await wait();assert((await doc()).components.stroke[key].color.rgba[3]===1,'stroke alpha scrub was not one undo');
+await page.getByRole('button',{name:'Stroke settings',exact:true}).click();await page.getByRole('button',{name:'Join',exact:true}).waitFor();
+await page.keyboard.press('Escape');await wait();assert((await page.evaluate(()=>(window as any).__iron.selection()))[0]===selected,'closing stroke settings cleared selection');
+await page.getByRole('button',{name:'Add effect',exact:true}).click();await page.getByRole('menuitem',{name:'Drop shadow',exact:true}).click();await wait();
+assert(!!(await doc()).components.shadow[key],'effect menu did not add shadow');
+await page.getByRole('button',{name:'Drop shadow settings',exact:true}).click();await page.getByRole('spinbutton',{name:'Blur',exact:true}).waitFor();
+await page.keyboard.press('Escape');await wait();
+// Switching fill type uses one transaction and keeps the solid fallback.
+await page.getByRole('button',{name:'Fill paint settings',exact:true}).click();await page.getByRole('button',{name:'Fill type',exact:true}).click();
+await page.getByRole('option',{name:'Linear gradient',exact:true}).click();await wait();
+assert((await doc()).components.gradient[key].kind.enum==='linear','fill type switch failed');
+await page.keyboard.press('Escape');await page.keyboard.press('Meta+z');await wait();
+assert(!(await doc()).components.gradient?.[key],'fill type switch was not one undo');
+assert((await page.evaluate(()=>(window as any).__iron.selection()))[0]===selected,'popover Escape cleared selection');
+await page.locator('[data-section="layout"]').scrollIntoViewIfNeeded();await page.screenshot({path:resolve(dir,'panel-sections.png')});
+console.log('inspector layout: linked corners, stroke alpha, paint types and effect settings pass');
 // Verify radial paint on the same transformed local bounds.
 const gradientId=(await view()).match(/<rect id="([^"]+)" name="gradient sample"/)[1];
 await edit(`<edit><set id="${gradientId}" gradient.kind="radial" gradient.x0="0.5" gradient.y0="0.5" gradient.x1="1" gradient.y1="0.5"/></edit>`);
 await page.mouse.move(5,5);await wait();await page.screenshot({path:resolve(dir,'radial.png')});
 execFileSync('python3',[resolve(import.meta.dir,'appearance-pixels.py'),dir,'radial'],{stdio:'inherit'});
 
-await click(650,110);await page.locator('[data-leaf="gradient.kind"]').waitFor();
+await click(650,110);await page.getByRole("button", {name:"Fill paint settings"}).click();await page.getByRole("button", {name:"Fill type"}).waitFor();
 await page.screenshot({path:resolve(dir,'inspector.png')});assert(errors.length===0,errors.join('\n'));console.log('no page errors');
 }catch(e){console.log("page errors",errors);await page.screenshot({path:resolve(dir,"failed.png")});throw e;}finally{await browser.close();}

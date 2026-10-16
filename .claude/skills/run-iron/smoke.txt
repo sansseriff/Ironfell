@@ -429,7 +429,8 @@ sleep 600
 ddrag 512 112 530 130
 sleep 500
 eval shapeView('rectangle')
-click Add shadow
+click Add effect
+clickel [data-effect-type="shadow"]
 sleep 500
 eval (async () => (await __iron.view({fidelity:'full'})).match(/<rect[^>]*name="rectangle"[^>]*>/)[0].match(/ shadow\.color.*blur="[^"]*"/)[0])()
 dclick 800 160

@@ -92,14 +92,31 @@ pub fn preorder(doc: &Document, roots: &[NodeId]) -> Vec<NodeId> {
     out
 }
 
-/// The union of the drawn bounds of a composition's content, in its space,
+/// Conservative local paint outsets, shared by spatial indexing and automatic
+/// embed frames. Geometry alone trims centred strokes at the frame boundary.
+pub fn paint_padding(d: &Doc2d) -> f64 {
+    // The miter limit also covers round/bevel joins and square/round caps.
+    let mut pad = d.stroke.as_ref().map_or(0.0, |(_, st)| st.width * 0.5 * st.miter_limit.max(4.0));
+    if let Some(s) = d.shadow {
+        pad += (s.dx.abs().max(s.dy.abs()) + 3.0 * s.std_dev) as f64;
+    }
+    if let Shape2d::Slider { h, .. } = d.shape {
+        pad = pad.max((h as f64 * 0.5).min(12.0) + 3.0);
+    }
+    pad
+}
+
+/// The union of the painted bounds of a composition's content, in its space,
 /// computed from shapes (not from what was last drawn, so an embed shows on
 /// its first frame).
 pub fn content_bounds(doc: &Document, map: &NodeMap, nodes: &Query<(&Doc2d, &GlobalTransform)>, composition: NodeId) -> Option<kurbo::Rect> {
     preorder(doc, doc.children(composition))
         .into_iter()
         .filter_map(|id| map.entity(id).and_then(|e| nodes.get(e).ok()))
-        .map(|(d, g)| affine_of(g).transform_rect_bbox(shape_path(&d.shape).bounding_box()))
+        .map(|(d, g)| {
+            let pad = paint_padding(d);
+            affine_of(g).transform_rect_bbox(shape_path(&d.shape).bounding_box().inflate(pad, pad))
+        })
         .reduce(|a, b| a.union(b))
 }
 

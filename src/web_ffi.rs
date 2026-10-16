@@ -951,19 +951,117 @@ pub fn document_component(ptr: u64, node: String, kind: String, add: bool) -> St
     }
 }
 
-/// Numeric inspector gestures share the store's ownership, previews and undo.
-/// A stale pointer may neither preview nor commit a newer gesture.
+/// The default shown for an absent optional property is projected, not
+/// authored. The first edit adds its component in the same transaction.
+fn inspector_current(store: &iron_document::Store, id: iron_document::NodeId, path: iron_document::LeafPath) -> Option<iron_document::Value> {
+    store.resolved(id, path).or_else(|| {
+        let node = store.document().live(id)?;
+        if !node.ty.spec().allows(path.component) || !INSPECTOR_OPTIONAL.contains(&path.component.name()) { return None; }
+        path.component.default_component().get(path.field).and_then(|s| s.constant()).cloned()
+    })
+}
+
+/// Parse a displayed property without changing bindings or colour alpha.
+fn inspector_value(current: &iron_document::Value, text: &str) -> Result<iron_document::Value, String> {
+    use iron_document::Value;
+    let t = text.trim();
+    let nums = |n: usize| -> Option<Vec<f64>> {
+        let v: Vec<f64> = t.split(',').map(|x| x.trim().parse().ok()).collect::<Option<_>>()?;
+        (v.len() == n && v.iter().all(|v| v.is_finite())).then_some(v)
+    };
+    let value = match current {
+        Value::Number(_) => t.parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Number),
+        Value::Bool(_) => t.parse().ok().map(Value::Bool),
+        Value::Str(_) => Some(Value::Str(t.to_owned())),
+        Value::Enum(_) => Some(Value::Enum(t.to_owned())),
+        Value::Vec2(_) => nums(2).map(|v| Value::Vec2([v[0], v[1]])),
+        Value::Vec3(_) => nums(3).map(|v| Value::Vec3([v[0], v[1], v[2]])),
+        Value::Color(c) => {
+            let h = t.trim_start_matches('#');
+            let ch = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok().map(|b| b as f32 / 255.0);
+            match h.len() {
+                6 | 8 => (|| Some(Value::Color([ch(0)?, ch(2)?, ch(4)?, if h.len() == 8 { ch(6)? } else { c[3] }])))(),
+                _ => None,
+            }
+        }
+        Value::Quantity { .. } => Value::parse_quantity(t).ok(),
+        _ => None,
+    };
+    value.ok_or_else(|| format!("{t:?} is not a {:?}", current.kind()))
+}
+
+/// Edit related inspector properties atomically through their handles. Used
+/// for linked corners, first edits of defaults, and switching paint types.
 #[wasm_bindgen]
-pub fn document_inspect_scrub(ptr: u64, node: String, leaf: String, phase: String, token: u32, value: f64) -> String {
+pub fn document_inspect_patch(ptr: u64, node: String, patch: String) -> String {
+    use iron_document::{Actor, ComponentKind, Leaf, LeafPath, NodeId, Op, Slot, Value};
+    use std::collections::BTreeMap;
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let mut run = || -> Result<serde_json::Value, String> {
+        let id = node.parse::<NodeId>().map_err(|e| e.to_string())?;
+        let patch: serde_json::Value = serde_json::from_str(&patch).map_err(|e| e.to_string())?;
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("no store")?;
+        let mut writes: BTreeMap<Leaf, Value> = BTreeMap::new();
+        if let Some(values) = patch.get("values").and_then(|v| v.as_object()) {
+            for (leaf, text) in values {
+                let path = leaf.parse::<LeafPath>().map_err(|e| e.to_string())?;
+                let current = inspector_current(&store.0, id, path).ok_or_else(|| format!("no property {id}.{path}"))?;
+                let value = inspector_value(&current, text.as_str().ok_or("a property value must be text")?)?;
+                let (target, value) = iron_document::handle::resolve_target(store.0.document(), store.0.reactive(), Leaf { node: id, path }, value)?;
+                if let Some(prior) = writes.insert(target, value.clone()) && prior != value {
+                    return Err(format!("linked fields require conflicting values of {target}"));
+                }
+            }
+        }
+        let mut adds = BTreeMap::new();
+        let mut ops = Vec::new();
+        for (target, value) in writes {
+            if store.0.document().component(target.node, target.path.component).is_none() {
+                let comp = adds.entry((target.node, target.path.component)).or_insert_with(|| target.path.component.default_component());
+                comp.set(target.path.field, Slot::Const(value)).map_err(|e| e.to_string())?;
+            } else if store.0.document().leaf(target.node, target.path).and_then(|s| s.constant()) != Some(&value) {
+                ops.push(Op::Set { id: target.node, path: target.path, slot: Slot::Const(value) });
+            }
+        }
+        let mut added: Vec<_> = adds.into_iter().map(|((id, _), comp)| Op::AddComp { id, comp }).collect();
+        added.append(&mut ops);
+        if let Some(remove) = patch.get("remove").and_then(|v| v.as_array()) {
+            for kind in remove {
+                let kind = kind.as_str().and_then(ComponentKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
+                if store.0.document().component(id, kind).is_some() { added.push(Op::RemoveComp { id, kind }); }
+            }
+        }
+        if added.is_empty() { return Ok(serde_json::json!({"ok": true})); }
+        let label = patch.get("label").and_then(|v| v.as_str()).unwrap_or("edit appearance").to_owned();
+        store.0.apply(iron_document::TransactionInput { label, actor: Actor::Human, ts: js_sys::Date::now() as u64, idempotency_key: None, ops: added, exact: false })
+            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// Numeric and colour-alpha gestures share store ownership and one undo.
+/// Optional options: linked `leaves`, or `channel: "alpha"` on a colour.
+#[wasm_bindgen]
+pub fn document_inspect_scrub(ptr: u64, node: String, leaf: String, phase: String, token: u32, value: f64, options: Option<String>) -> String {
     use iron_document::{Actor, GestureId, Handle, Value};
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     let mut run = || -> Result<serde_json::Value, String> {
         let id = node.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
-        let path = leaf.parse::<iron_document::LeafPath>().map_err(|e| e.to_string())?;
+        let options: serde_json::Value = serde_json::from_str(options.as_deref().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        let leaves: Vec<String> = if let Some(leaves) = options.get("leaves") { serde_json::from_value(leaves.clone()).map_err(|e| e.to_string())? } else { vec![leaf.clone()] };
+        if leaves.is_empty() { return Err("a scrub needs a property".into()); }
+        let paths = leaves.iter().map(|l| l.parse::<iron_document::LeafPath>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
+        let alpha = options.get("channel").and_then(|v| v.as_str()) == Some("alpha");
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("no store")?;
         if phase == "begin" {
-            if !matches!(store.0.resolved(id, path), Some(Value::Number(_))) { return Err("only numeric fields can be scrubbed".into()); }
-            if let Handle::Locked(why) = store.0.handle(id, path) { return Err(why); }
+            for &path in &paths {
+                let current = inspector_current(&store.0, id, path);
+                if !(matches!(current, Some(Value::Number(_))) && !alpha || matches!(current, Some(Value::Color(_))) && alpha) { return Err("this property cannot be scrubbed as a number".into()); }
+                if let Handle::Locked(why) = store.0.handle(id, path) { return Err(why); }
+            }
             let gesture = store.0.begin_gesture(&[id]);
             return Ok(serde_json::json!({"ok": true, "token": gesture.0}));
         }
@@ -971,7 +1069,14 @@ pub fn document_inspect_scrub(ptr: u64, node: String, leaf: String, phase: Strin
         match phase.as_str() {
             "move" => {
                 if !value.is_finite() { return Err("value must be finite".into()); }
-                store.0.preview_target(id, path, Value::Number(value))?;
+                for path in paths {
+                    let next = if alpha {
+                        let Some(Value::Color(mut color)) = inspector_current(&store.0, id, path) else { return Err("no colour".into()); };
+                        color[3] = value.clamp(0.0, 1.0) as f32;
+                        Value::Color(color)
+                    } else { Value::Number(value) };
+                    store.0.preview_target(id, path, next)?;
+                }
             }
             "commit" => {
                 if let Some(r) = store.0.commit_gesture(format!("set {leaf}"), Actor::Human, js_sys::Date::now() as u64) {
@@ -994,38 +1099,13 @@ pub fn document_inspect_scrub(ptr: u64, node: String, leaf: String, phase: Strin
 /// or `{"ok":false,"error"}`.
 #[wasm_bindgen]
 pub fn document_inspect_set(ptr: u64, node: String, leaf: String, text: String) -> String {
-    use iron_document::Value;
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return fail(format!("bad id {node:?}")) };
     let Ok(path) = leaf.parse::<iron_document::LeafPath>() else { return fail(format!("no leaf {leaf:?}")) };
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
     let Some(current) = store.0.resolved(id, path) else { return fail(format!("{id} has no {leaf}")) };
-    let t = text.trim();
-    let nums = |n: usize| -> Option<Vec<f64>> {
-        let v: Vec<f64> = t.split(',').map(|x| x.trim().parse().ok()).collect::<Option<_>>()?;
-        (v.len() == n).then_some(v)
-    };
-    let value = match current {
-        Value::Number(_) => t.parse().ok().map(Value::Number),
-        Value::Bool(_) => t.parse().ok().map(Value::Bool),
-        Value::Str(_) => Some(Value::Str(t.to_owned())),
-        Value::Enum(_) => Some(Value::Enum(t.to_owned())),
-        Value::Vec2(_) => nums(2).map(|v| Value::Vec2([v[0], v[1]])),
-        Value::Vec3(_) => nums(3).map(|v| Value::Vec3([v[0], v[1], v[2]])),
-        Value::Color(c) => {
-            let h = t.trim_start_matches('#');
-            let ch = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok().map(|b| b as f32 / 255.0);
-            match h.len() {
-                6 => Some(Value::Color([ch(0).unwrap_or(0.0), ch(2).unwrap_or(0.0), ch(4).unwrap_or(0.0), c[3]])),
-                8 => Some(Value::Color([ch(0).unwrap_or(0.0), ch(2).unwrap_or(0.0), ch(4).unwrap_or(0.0), ch(6).unwrap_or(1.0)])),
-                _ => None,
-            }
-        }
-        Value::Quantity { .. } => Value::parse_quantity(t).ok(),
-        _ => None,
-    };
-    let Some(value) = value else { return fail(format!("{t:?} is not a {:?}", current.kind())) };
+    let value = match inspector_value(&current, &text) { Ok(v) => v, Err(e) => return fail(e) };
     // One transaction through the leaf's handle, outside the gesture
     // overlay: a drag in progress is left alone unless this conflicts with it.
     let now = js_sys::Date::now() as u64;

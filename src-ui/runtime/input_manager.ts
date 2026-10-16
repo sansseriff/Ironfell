@@ -203,6 +203,9 @@ export class InputManager {
     private onKeyDown(event: KeyboardEvent) {
         const key = event.key.toLowerCase();
         this.sendMods(InputManager.mods(event));
+        // Headless controls (menus, popovers, selects) consume their keys
+        // before this window listener. Closing one must not also act on canvas.
+        if (event.defaultPrevented) return;
         {
             const target = event.target as HTMLElement | null;
             const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);

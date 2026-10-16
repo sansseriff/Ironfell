@@ -306,3 +306,13 @@ preview cancellation, single-transaction scrubbing, undo/redo and file round tri
 coverage includes both gradient types with alpha, clip frames and nested opacity under
 the exact export→import→export law, plus foreign isolated group opacity. The run-iron
 `appearance.ts` regression checks rendered pixels and real Alt-drag pointer gestures.
+
+**Automatic embed frame correction (2026-10-15).** Unframed 2D embeds previously
+clipped their source to geometry-only content bounds, cutting the outer half of a
+centred stroke at the source composition's edges. Automatic regions now include the
+same local stroke/join, shadow and slider-knob padding used by spatial bounds,
+expanded before mapping each node's transform. SVG export applies the same policy.
+Explicit authored frames retain their intended clipping. The run-iron
+`stroke-clipping.ts` pixel regression covers a rounded gradient shape, all four
+stroke outsets, later width/size edits, explicit clipping and DPR 1/2; a native SVG
+regression checks nonuniform transforms, shadow padding and explicit frames.

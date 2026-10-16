@@ -6,6 +6,15 @@
 science-communication tool, in which a language model authors scenes and behaviour, a
 human edits them directly on a Bevy canvas, and both operate over the same data.
 
+> **Proposed clarification, 2026-10-16; pending approval:**
+> [`../specs/model-interop.md`](../specs/model-interop.md) defines jobs, live
+> sessions and optional local acceleration for computational Models. The
+> slow/debounced call-out guidance below remains the default for expensive jobs;
+> it need not prevent a Model streaming continuously or running in a local
+> worker/host provider. The interaction loop must remain responsive without
+> awaiting an external answer. Model internals and large outputs remain outside
+> authored document state. This proposal has not been implemented or adopted.
+
 ---
 
 ## 1. Problem statement

@@ -546,7 +546,7 @@ impl Writer<'_> {
         self.bounds = union(self.bounds, (parent * self.local(id)).transform_rect_bbox(own));
     }
 
-    /// The outlines' bounds of a composition's shapes, in its space: what
+    /// Conservative painted bounds of a composition's shapes, in its space: what
     /// an embed without a frame shows (`nest::content_bounds`).
     fn content_bounds(&self, composition: NodeId) -> Option<Rect> {
         let mut out = None;
@@ -562,7 +562,19 @@ impl Writer<'_> {
                 _ => None,
             };
             if let Some(bb) = bb {
-                out = union(out, Affine::new(self.store.world_affine(n).0).transform_rect_bbox(bb));
+                // Match automatic embed frames in the live bridge: strokes,
+                // shadows and slider knobs must not be clipped to geometry.
+                let mut pad = self.color(n, "stroke.color").map_or(0.0, |_| {
+                    self.f(n, "stroke.width", 1.0) * 0.5 * self.f(n, "stroke.miter", 4.0).max(4.0)
+                });
+                if self.color(n, "shadow.color").is_some() {
+                    pad += self.f(n, "shadow.dx", 0.0).abs().max(self.f(n, "shadow.dy", 4.0).abs())
+                        + 1.5 * self.f(n, "shadow.blur", 4.0).max(0.0);
+                }
+                if node.ty.name() == "slider" {
+                    pad = pad.max((self.f(n, "size.h", 24.0) * 0.5).min(12.0) + 3.0);
+                }
+                out = union(out, Affine::new(self.store.world_affine(n).0).transform_rect_bbox(bb.inflate(pad, pad)));
             }
         }
         out

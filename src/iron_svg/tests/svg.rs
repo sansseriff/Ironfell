@@ -521,3 +521,24 @@ fn foreign_group_opacity_remains_isolated() {
         assert_eq!(store.resolved(id, "fill.opacity".parse().unwrap()), Some(Value::Number(1.0)));
     }
 }
+
+#[test]
+fn automatic_embed_frame_includes_transformed_stroke_and_shadow() {
+    let mut store = Store::new();
+    let mut b = Build::new(&store);
+    let source = b.add("composition", None, composition("source", "2d"));
+    // A local 8px stroke outset is conservatively padded to 32px for joins,
+    // then 10 + 3*sigma for the shadow, before applying nonuniform scale.
+    b.add("rect", Some(source), vec![trs(40.0, 40.0, 0.0, 2.0, 0.5), size(240.0, 160.0),
+        corners([45.0; 4]), fill(RED, 1.0), stroke(INK, 16.0), shadow(INK, 0.0, 10.0, 4.0)]);
+    let comp = b.add("composition", None, composition("view", "2d"));
+    let e = Embed { source: Slot::Const(Value::Ref(source)) };
+    b.add("embed", Some(comp), vec![e.clone().wrap(), at(0.0, 0.0)]);
+    let frame = Frame { x0: num(0.0), y0: num(0.0), x1: num(280.0), y1: num(200.0) };
+    b.add("embed", Some(comp), vec![e.wrap(), at(600.0, 0.0), frame.wrap()]);
+    b.apply(&mut store);
+    let result = export(&store, &Scope::Composition(comp)).unwrap();
+    valid_svg(&result.svg);
+    assert!(result.svg.contains("<rect x=\"-56\" y=\"16\" width=\"672\" height=\"128\"/>"), "{}", result.svg);
+    assert!(result.svg.contains("<rect x=\"0\" y=\"0\" width=\"280\" height=\"200\"/>"), "{}", result.svg);
+}

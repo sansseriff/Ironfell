@@ -272,7 +272,8 @@ clicked Cancel
 null
 tab Controls
 "<rect id=\"#2w\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
-clicked Add shadow
+clicked Add effect
+clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
 "<ellipse id=\"#2x\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
 tab Optics
@@ -690,7 +691,7 @@ cargo test -p iron_document --target aarch64-apple-darwin
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
-(12 tests, verified 2026-10-15; `UPDATE_GOLDEN=1` rewrites `tests/golden/fixture.svg`).
+(13 tests, verified 2026-10-15; `UPDATE_GOLDEN=1` rewrites `tests/golden/fixture.svg`).
 
 ## Gotchas
 
@@ -752,12 +753,38 @@ then radial gradient, an ellipse-clipped group, and an inspector target, through
 transactions. `appearance-pixels.py` (Pillow) checks actual rendered pixels. Real pointer
 Alt-drags check that previews do not enter save, release commits one undo step, Escape
 keeps selection and cancels the gesture, and a concurrent model edit wins over a stale
-release. DPR 2 uses document/physical pixels, not CSS pixels, as the renderer does.
+release. The inspector layout checks type and Alt-drag a linked corner radius, undo
+it once, expand the individual corner grid without authoring a change, edit one corner
+and show Mixed, scrub opacity from the input box's empty space, scrub stroke alpha
+without changing RGB, switch a fill type in one undo,
+and add/edit Drop shadow through Effects. Escape closes the detail popovers while
+preserving selection. DPR 2 uses document/physical pixels, not CSS pixels, as the renderer does.
 Screenshots are in `.agents/appearance/` (gitignored). Expected output for each run:
 
 ```text
 pixels: isolated overlap, linear gradient and ellipse clip pass
 inspector: preview, single undo, Escape and concurrent edit pass
+inspector layout: linked corners, stroke alpha, paint types and effect settings pass
 pixels: radial gradient pass
+no page errors
+```
+
+### Automatic embed frame / stroke regression
+
+```sh
+cd .claude/skills/run-iron
+bun run stroke-clipping.ts
+DPR=2 bun run stroke-clipping.ts
+```
+
+A hidden source composition has a rounded gradient rectangle with a thick stroke.
+Two embeds show it: one without a frame, one with an explicit geometry-sized frame.
+Pixel checks verify all four stroke outsets survive the automatic frame, including
+after changing stroke width and shape size, while the explicit frame still clips.
+Screenshots are saved under `.agents/stroke-clipping/` (gitignored).
+
+```text
+pixels: automatic embed preserves all four stroke outsets pass
+pixels: automatic stroke bounds update after edits; explicit frame clips pass
 no page errors
 ```

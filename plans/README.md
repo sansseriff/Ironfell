@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-10-15 on `document-spine`. Update this file whenever a plan is added,
+**Updated:** 2026-10-16 on `document-spine`. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -46,6 +46,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`panels-and-session.md`](specs/panels-and-session.md) | Views, dock presenter, session tier, inspectors | Items 1–2 built; 3–5 open |
 | [`view-textures.md`](specs/view-textures.md) | Every view renders to its own texture | Done except the custom final pass and §4 tiling |
 | [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phase 1 done (store ownership, one pointer state machine, the 3D gizmo); phase 2 a product candidate; 4–5 in the render handoff |
+| [`model-interop.md`](specs/model-interop.md) | External computational Models: jobs, live sessions, optional local acceleration; shared web/native data and lifecycle semantics | Proposal drafted 2026-10-16; pending user approval. No implementation; conditional work order in `handoff-product.md` §4.2 |
 
 ## 4. Rendering
 
@@ -76,6 +77,17 @@ projection), 07 (2D backends) and 09 (entities, compositions and ports). 03 reco
 the vocabulary: "Projection" is the ontological term; the rendering stage is "draw
 intent" or the "presentation model". Vision 07's current-state sections are superseded
 by `rendering/architecture.md`.
+
+[`08_native-target-via-tauri.md`](vision/08_native-target-via-tauri.md) was revised
+2026-10-16: shared web/native boundary and macOS feasibility gates agreed; no native
+implementation or local test evidence yet. A bounded experiment no longer waits
+for raster caching. Its work order is in `handoff-product.md` §4.1; the full port
+and other platforms remain unscheduled.
+
+The Model interop proposal in [`specs/model-interop.md`](specs/model-interop.md)
+clarifies that bulk computed results enter the engine independently of the Svelte
+UI transport. It proposes two portable behavior contracts and optional local
+acceleration. It is **not adopted**; wait for user approval before implementation.
 
 ## Keeping this tidy
 

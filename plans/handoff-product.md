@@ -89,6 +89,75 @@ questions. Notably still undecided: what the model sees and may edit of
 solver-maintained values (hide them, make them read-only unless the edit says
 `drive="true"`, or both; CS §9.3).
 
+### 4.1 Native-target feasibility (plan revised 2026-10-16)
+
+The user intends a separate agent to test the native direction. The owning plan is
+[`vision/08_native-target-via-tauri.md`](vision/08_native-target-via-tauri.md): read
+its deviation boundary (§2), ownership/protocol (§3) and gates (§6) first. This is
+a bounded macOS experiment, not a full port or a change to rendering-track order;
+there is no raster-cache prerequisite and no native feasibility result yet.
+
+1. Record a baseline, dependency revisions and a bounded experiment budget before
+   implementation. Use `.agents/worktrees/<name>` for isolation if needed;
+   preserve unrelated in-progress changes. Begin with the one-window composition
+   probe on macOS, including supported event-loop ownership, input and a packaged
+   build. Review the Bevy example, Wry example and camera demo listed in the plan.
+2. Only after that gate passes, connect the smallest real Iron 2D/3D and document
+   slice. Extract shared command/event behavior as needed, keeping platform code
+   confined to the plan's adapters. Reuse the typed UI protocol work; do not require
+   its entire subscription project first. Do not copy native handlers from FFI.
+3. Exercise parity, lifecycle, idle/wake, coordinate and web regression gates.
+   Record pass/fail/untested and the platform-code inventory in the owning plan.
+   Stop at the recorded timebox or a failed architectural gate and report evidence
+   before attempting stacked windows, a custom compositor, engine forks or image
+   transfer through JS. A small successful probe does not mark the port complete.
+
+Agent-harness integration, additional OS support and full-port scheduling remain
+later work. Update this handoff and the roadmap with actual results as they land.
+
+### 4.2 Computational Model interop (proposal; wait for approval)
+
+The user requested a concrete tier/API plan and explicitly asked to approve it
+before implementation. The proposal is
+[`specs/model-interop.md`](specs/model-interop.md). This refers to external
+scientific/computational Models, not the LLM client in `src-ui/model/`. The tiers
+are jobs, live sessions and optional local acceleration. Large outputs enter the
+engine directly; they do not traverse Svelte/Tauri IPC or become authored nodes.
+**No implementation is authorized by this handoff until that approval arrives.**
+
+Conditional sequence after approval:
+
+1. **Protocol/runtime foundation.** Freeze the smallest versioned control/binary
+   schema with cross-language fixtures. Build host-neutral request/session,
+   input-revision, immutable buffer and bounded queue/credit logic. Prove stale
+   rejection, atomic publication, cancellation and slow-consumer behavior in a
+   native headless harness. Do not start with shared memory or a general SDK.
+2. **Portable jobs.** One small Python WebSocket producer; a native Rust consumer
+   and browser engine-worker adapter use the same fixtures. Connect the smallest
+   real Iron invocation/input declaration and derived output port. Match the ECM
+   runtime signal types rather than inventing serializable sample arrays. Verify
+   that local projection changes reuse results and save/undo contain only intent.
+3. **Portable live sessions.** Extend that producer with a synthetic stateful
+   simulation, atomic parameter updates, ordered impulses and complete binary
+   output frames. Exercise latest-state and lossless delivery, partial transfer,
+   controls during bulk load and reconnect behavior. Drive two real compositions
+   from one accepted revision. Record throughput, queue memory/copies and causal
+   input-to-output/presentation latency against declared fixture budgets.
+4. **Native execution evidence.** In coordination with §4.1, enable native Bevy
+   `multi_threaded` and preserve its pipelined renderer. Prove a small authored
+   declaration can drive a large runtime ECS population, and trace concurrency,
+   rendering overlap and independence from a stalled webview. This does not wait
+   for all Model transports; portable protocol work does not wait for Tauri.
+5. **Choose later optimization from measurements.** Raw local sockets/named pipes,
+   shared-memory leases, worker/Wasm providers and WIT/Wasmtime hosting retain the
+   same behavior API. Identify the limiting cost and a concrete provider before
+   expanding that scope. The initial approval does not claim these are built or
+   require them before shipping the portable path.
+
+Keep all gates and evidence in the owning spec; record completion in the roadmap.
+The runtime-driver note's general authored-leaf overrides, full recording/scenario
+design, collider engine and project container are not adopted by this proposal.
+
 ## 5. Decisions already taken (do not reopen)
 
 | Decision | Choice | Where recorded |

@@ -150,6 +150,9 @@ sleep 400
 # box, shift-click the torus, press Link: one "link" transaction creates
 # one entity with both as figures.
 pclick viewer 575 625
+# A frame between the click and the modifier: at a few fps both can land in
+# one frame, and the click then reads as a shift-click that adds.
+sleep 400
 keydown Shift
 pclick viewer 875 200
 keyup Shift

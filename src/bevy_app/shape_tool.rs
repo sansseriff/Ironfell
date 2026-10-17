@@ -16,7 +16,7 @@ use kurbo::{Affine, Point, Rect};
 
 use crate::bevy_app::pen::{after_last, drop_target};
 use crate::bevy_app::select::{ActiveTool, Geo};
-use crate::document_bridge::{Doc2d, DocumentStore, NodeMap, PanelViews, PendingTransactions};
+use crate::document_bridge::{DocumentStore, PanelViews, PendingTransactions};
 
 /// Window px a press must travel to drag out a box instead of clicking.
 const DRAG: f64 = 3.0;
@@ -58,9 +58,8 @@ pub fn shape_tool_system(
     mut sel: ResMut<crate::SelectionState>,
     store: Res<DocumentStore>,
     mut pending: ResMut<PendingTransactions>,
-    map: Res<NodeMap>,
     spatial: Res<crate::document_bridge::SpatialScene>,
-    nodes: Query<&'static Doc2d>,
+    drawables: Res<crate::document_bridge::Drawables>,
 ) {
     let doc = store.0.document();
     if let Some(id) = shapes.select.filter(|&id| doc.live(id).is_some()) {
@@ -79,7 +78,7 @@ pub fn shape_tool_system(
     if pointer.just_pressed_left
         && let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two)
     {
-        let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
+        let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
         shapes.press = drop_target(&geo, &hits, view).map(|(container, to_comp)| ShapePress { panel: view.panel.clone(), container, to_comp, start: screen, rect: None });
     }
     let Some(press) = shapes.press.as_mut() else { return };

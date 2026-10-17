@@ -1,5 +1,10 @@
-//! Node → entity. One function per node type, and a reconcile pass that
-//! spawns, despawns, or rewrites the entities for a set of touched nodes.
+//! Node → draw data, and node → entity where an entity is due. One function
+//! per node type, and a reconcile pass that rewrites what a set of touched
+//! nodes derives: every drawable 2D node's [`Doc2d`] in [`Drawables`], and
+//! an entity for the nodes Bevy acts on (vision 10 §5): every 3D node, and
+//! the 2D nodes in a **Live** subtree ([`Modes`]: the selection's and the
+//! hover's). Everything else is drawn, picked and edited from the store and
+//! the scene without an entity.
 
 use super::{CompositionLayers, InComposition, NodeMap, Provenance};
 use bevy::asset::RenderAssetUsages;
@@ -8,6 +13,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use iron_document::{ComponentKind, LeafPath, NodeId, Store, TypeId, Value};
 use std::collections::BTreeSet;
+use bevy::platform::collections::HashMap;
 
 use crate::bevy_app::scene3d::{ActiveState, Shape};
 
@@ -49,6 +55,93 @@ pub enum Shape2d {
     /// closed ones (what is filled; none when no contour closes), filled by
     /// the even-odd rule or the non-zero one.
     Path { outline: std::sync::Arc<kurbo::BezPath>, fill: Option<std::sync::Arc<kurbo::BezPath>>, even_odd: bool },
+}
+
+/// Every drawable 2D node's draw data, by node, whether or not the node has
+/// an entity. The reconciler keeps it current; the draw walk, picking, the
+/// selection overlay and the tools read it.
+#[derive(Resource, Default)]
+pub struct Drawables(pub HashMap<NodeId, Doc2d>);
+
+/// Which 2D subtrees are **Live** (vision 10 §5.2): their nodes have
+/// entities, so a Bevy-side system can act on them. Chosen by policy each
+/// frame (`decide_modes`): the selection and the hover, with their ancestors
+/// inside the composition and their descendants. Retained subtrees, which is
+/// everything else, have no entities.
+#[derive(Resource, Default, Debug, PartialEq, Eq)]
+pub struct Modes {
+    pub live: BTreeSet<NodeId>,
+}
+
+impl Modes {
+    /// Whether a node is due an entity: 3D nodes always, 2D nodes when Live.
+    pub fn wants_entity(&self, store: &Store, id: NodeId) -> bool {
+        in_3d(store, id) || self.live.contains(&id)
+    }
+}
+
+/// The most descendants a picked node brings into the Live set. Past this
+/// a hovered 100k-shape group would spawn an entity per shape (3.9 s at 100k
+/// on the container); its own node, ancestors and direct children suffice
+/// until a producer asks for more (vision 10 §8 Q2).
+const LIVE_BUDGET: usize = 2_000;
+
+/// The Live set from the selection and hover: each picked node's ancestors
+/// up to its composition and its subtree, the latter within [`LIVE_BUDGET`].
+pub(super) fn decide_modes(store: Res<super::DocumentStore>, sel: Res<crate::SelectionState>, mut modes: ResMut<Modes>) {
+    let doc = store.0.document();
+    let mut live = BTreeSet::new();
+    for &id in sel.selected.iter().chain(sel.hovered.iter()) {
+        if doc.live(id).is_none() {
+            continue;
+        }
+        for n in super::nest::lineage(doc, id) {
+            live.insert(n);
+        }
+        let below = doc.descendants(id);
+        if below.len() <= LIVE_BUDGET {
+            live.extend(below);
+        } else {
+            live.extend(doc.children(id).iter().copied());
+        }
+    }
+    if modes.live != live {
+        modes.live = live;
+    }
+}
+
+/// Spawn and despawn 2D entities as subtrees enter and leave the Live set.
+/// Draw data is already in [`Drawables`]; only the entity comes and goes.
+pub(super) fn sync_live(
+    store: Res<super::DocumentStore>,
+    modes: Res<Modes>,
+    mut map: ResMut<NodeMap>,
+    mut layers: ResMut<CompositionLayers>,
+    mut drawables: ResMut<Drawables>,
+    mut commands: Commands,
+    assets: Option<Res<MeshAssets>>,
+) {
+    if !modes.is_changed() {
+        return;
+    }
+    let Some(assets) = assets else { return };
+    let doc = store.0.document();
+    let gone: Vec<NodeId> = map.ids().filter(|&id| !modes.wants_entity(&store.0, id)).collect();
+    for id in gone {
+        if let Some(e) = map.remove(id)
+            && let Ok(mut ec) = commands.get_entity(e)
+        {
+            ec.try_despawn();
+        }
+    }
+    for &id in &modes.live {
+        if map.entity(id).is_some() || doc.live(id).is_none() || !drawable(doc, id) {
+            continue;
+        }
+        if let Some(e) = spawn(&store.0, id, &mut layers, &mut commands, &assets, &mut drawables) {
+            map.insert(id, e);
+        }
+    }
 }
 
 /// How near (local px) the pointer must come to a path's line to hit it.
@@ -146,6 +239,8 @@ pub(super) fn reconcile(
     layers: &mut CompositionLayers,
     commands: &mut Commands,
     assets: &MeshAssets,
+    drawables: &mut Drawables,
+    modes: &Modes,
 ) {
     let doc = store.document();
     let _ = ComponentKind::ALL; // keep the import meaningful for readers
@@ -167,28 +262,36 @@ pub(super) fn reconcile(
     }
     let affected = &with_paths;
 
-    // Pass 1: existence and values. Hierarchy waits until every entity exists.
+    // Pass 1: draw data for every touched node, and an entity where one is due.
     for &id in affected {
         match (doc.live(id), map.entity(id)) {
             (Some(_), None) => {
-                if drawable(doc, id)
-                    && let Some(e) = spawn(store, id, layers, commands, assets)
-                {
-                    map.insert(id, e);
+                if !drawable(doc, id) {
+                    continue;
+                }
+                if modes.wants_entity(store, id) {
+                    if let Some(e) = spawn(store, id, layers, commands, assets, drawables) {
+                        map.insert(id, e);
+                    }
+                } else {
+                    write_values(store, id, layers, None, assets, drawables);
                 }
             }
             (None, Some(_)) => {
                 let e = map.remove(id).expect("checked");
+                drawables.0.remove(&id);
                 if let Ok(mut ec) = commands.get_entity(e) {
                     ec.try_despawn();
                 }
             }
             (Some(_), Some(e)) => {
                 if let Ok(mut ec) = commands.get_entity(e) {
-                    write_values(store, id, layers, &mut ec, assets);
+                    write_values(store, id, layers, Some(&mut ec), assets, drawables);
                 }
             }
-            (None, None) => {}
+            (None, None) => {
+                drawables.0.remove(&id);
+            }
         }
     }
 
@@ -229,7 +332,7 @@ fn drawable(doc: &iron_document::Document, id: NodeId) -> bool {
 
 /// Spawn the entity for a live node, or `None` for node types that have no
 /// runtime form (clip, timeline, entity, the library types).
-fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &mut Commands, assets: &MeshAssets) -> Option<Entity> {
+fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &mut Commands, assets: &MeshAssets, drawables: &mut Drawables) -> Option<Entity> {
     let node = store.document().live(id)?;
     let mut ec = match node.ty.name() {
         // An embed is placed like a group; what it shows is drawn through it
@@ -258,7 +361,7 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         }
         _ => return None,
     };
-    write_values(store, id, layers, &mut ec, assets);
+    write_values(store, id, layers, Some(&mut ec), assets, drawables);
     // A 3D entity's `Transform` is written once, as its world pose: Bevy's
     // required-component machinery adds one anyway (`Mesh3d`), and its
     // simple-transform sync would copy an identity over the global on the
@@ -274,20 +377,54 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
 /// Rewrite every derived component from the node's current *resolved* values:
 /// a bound slot contributes what its binding evaluates to, a previewed slot
 /// what the gesture says. Authored constants are read the same way.
-fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &mut EntityCommands, assets: &MeshAssets) {
+fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut ec: Option<&mut EntityCommands>, assets: &MeshAssets, drawables: &mut Drawables) {
     let Some(node) = store.document().live(id) else { return };
     let r = Reader { store, id };
     // Which panel draws it: 2D panels filter on this; 3D content goes on its
     // composition's render layer, which only that composition's cameras see.
     let composition = iron_document::composition::composition_of(store.document(), id);
-    ec.insert(InComposition(composition));
+    if let Some(ec) = ec.as_deref_mut() {
+        ec.insert(InComposition(composition));
+    }
+    // 3D nodes always have an entity; 2D ones may not.
+    let Some(ec3) = ec.as_deref_mut() else {
+        if let "rect" | "ellipse" | "slider" | "path" = node.ty.name() {
+            drawables.0.insert(id, r.doc2d(node.ty.name()));
+        }
+        return;
+    };
+    let ec = ec3;
     match node.ty.name() {
         "embed" if in_3d(store, id) => {
             ec.insert((r.global_3d(), RenderLayers::layer(layers.of(composition))));
         }
         "group" | "embed" => {}
         "rect" | "ellipse" | "slider" | "path" => {
-            let shape = match node.ty.name() {
+            let d = r.doc2d(node.ty.name());
+            drawables.0.insert(id, d.clone());
+            ec.insert(d);
+        }
+        "camera" => {
+            ec.insert(r.global_3d());
+        }
+        "mesh" => {
+            ec.insert(r.global_3d());
+            let asset = r.str("mesh.asset").unwrap_or_else(|| "torus".to_owned());
+            if asset != "torus" {
+                warn!("{id}: unknown mesh asset {asset:?}; showing torus");
+            }
+            ec.insert((Mesh3d(assets.torus.clone()), RenderLayers::layer(layers.of(composition))));
+        }
+        _ => {}
+    }
+}
+
+impl Reader<'_> {
+    /// A drawable 2D node's draw data from its resolved values.
+    fn doc2d(&self, ty: &str) -> Doc2d {
+        let (store, id, r) = (self.store, self.id, self);
+        {
+            let shape = match ty {
                 "ellipse" => {
                     // Present, or previewed by a gesture that will add it.
                     let arc = ["arc.start", "arc.sweep", "arc.inner"].iter().any(|l| r.get(l).is_some()).then(|| [r.num("arc.start", 0.0), r.num("arc.sweep", std::f32::consts::TAU), r.num("arc.inner", 0.0)]);
@@ -315,20 +452,8 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
             });
             let stroke = r.color("stroke.color").map(|c| (c, stroke_style(store, id)));
             let shadow = r.color("shadow.color").map(|color| Shadow2d { color, dx: r.num("shadow.dx", 0.0), dy: r.num("shadow.dy", 4.0), std_dev: r.num("shadow.blur", 4.0).max(0.0) * 0.5 });
-            ec.insert(Doc2d { shape, fill, stroke, shadow });
+            Doc2d { shape, fill, stroke, shadow }
         }
-        "camera" => {
-            ec.insert(r.global_3d());
-        }
-        "mesh" => {
-            ec.insert(r.global_3d());
-            let asset = r.str("mesh.asset").unwrap_or_else(|| "torus".to_owned());
-            if asset != "torus" {
-                warn!("{id}: unknown mesh asset {asset:?}; showing torus");
-            }
-            ec.insert((Mesh3d(assets.torus.clone()), RenderLayers::layer(layers.of(composition))));
-        }
-        _ => {}
     }
 }
 

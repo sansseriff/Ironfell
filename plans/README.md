@@ -92,8 +92,9 @@ computes world transforms (Iron, for 2D and 3D; Bevy consumes), what a Bevy enti
 for (the working set and 3D renderables, by presentation mode), and how values return
 from Bevy and Models (runtime signals, never per-frame ops). It answers CS I5 and
 roadmap §5's ownership question and gives a phased work order in its §7. Phases 1
-(the group-local spatial scene) and 2 (flat entities; Bevy consumes Iron's
-transforms) landed 2026-10-17; phases 3–5 are not yet scheduled in either handoff.
+(the group-local spatial scene), 2 (flat entities; Bevy consumes Iron's transforms)
+and 3 (entities only for the Live working set) landed 2026-10-17; phases 4–5 are
+not yet scheduled in either handoff.
 
 The Model interop proposal in [`specs/model-interop.md`](specs/model-interop.md)
 clarifies that bulk computed results enter the engine independently of the Svelte

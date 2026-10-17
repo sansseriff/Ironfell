@@ -1,7 +1,7 @@
 # The engine boundary: what Iron evaluates and what Bevy runs
 
-**Status:** Agreed 2026-10-17. Phases 1 and 2 of §7.1 are built (`rendering/render-benchmark.md`
-§10–11); phases 3–5 are not yet scheduled. Settles CS open question I5 and roadmap §5's ownership question.
+**Status:** Agreed 2026-10-17. Phases 1–3 of §7.1 are built (`rendering/render-benchmark.md`
+§10–12); phases 4–5 are not yet scheduled. Settles CS open question I5 and roadmap §5's ownership question.
 **Date:** 2026-10-17
 **Scope:** Where resolved state (world transforms, solved poses, evaluated bindings) is
 computed; what a Bevy entity is for; how values flow from Bevy and from Models back into
@@ -265,9 +265,17 @@ Each phase leaves the app working and the smoke script passing.
    upgrade. *Amendment to §5.2:* a Live 2D entity gets a `GlobalTransform` only once
    a Bevy-side producer needs one (phase 4), since keeping every descendant's
    current would be the per-node cost this phase removed.
-3. **Modes.** The reconciler consults a mode per subtree; Retained subtrees have no
-   entities. *Exit:* a 100k-shape composition idles with entities only for the
-   selection's neighbourhood.
+3. **Modes.** **Done 2026-10-17:** `Drawables` holds every drawable 2D node's draw
+   data by `NodeId`, and the draw walk, picking, the selection overlay and the tools
+   read it, so no 2D node needs an entity to be drawn, picked or edited. `Modes`
+   names the Live set each frame: the selection's and the hover's nodes, their
+   ancestors inside the composition, and their subtrees up to `LIVE_BUDGET` (2,000
+   descendants; past it only the node's direct children, since a hovered 100k-shape
+   group would otherwise spawn an entity per shape). `sync_live` spawns and despawns
+   2D entities as subtrees enter and leave the set; 3D nodes always have one. Hits
+   and the primary hit carry nodes, not entities. *Exit met:* `?stress=100000` idles
+   at 2 entities for 101k nodes and returns to 2 after a selection is cleared
+   (`render-benchmark.md` §12).
 4. **Runtime signal layer and a first Bevy producer.** A collider/body producer over
    Live entities publishing into the layer; freeze commits. *Exit:* the gas-and-protein
    example runs with zero transactions per frame.
@@ -287,8 +295,10 @@ fewer systems touch entities.
   equally be a Bevy-side producer with joint constraints. Decide when phase 4 lands,
   from whether grab-and-release of a constrained mechanism needs the solver's
   residuals or only its pose.
-- **Q2. Mode policy thresholds.** How large a selection neighbourhood is Live; how many
-  frames unchanged before a bake; whether the user can pin a mode. Measure first.
+- **Q2. Mode policy thresholds.** The first policy is in `materialize::decide_modes`:
+  the picked nodes' lineage and subtrees within `LIVE_BUDGET = 2,000` descendants.
+  Still open: how many frames unchanged before a bake, and whether the user can pin
+  a mode. Revisit the budget when a producer (phase 4) needs a whole group Live.
 - **Q3. Headless use.** A collaboration server, CLI export and replay validation want
   the evaluator without a GPU. §3 makes that possible; nothing here schedules it.
 - **Q4. Runtime signals in the model's view.** The language model reads authored values

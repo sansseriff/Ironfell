@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use crate::bevy_app::scene3d::{CurrentVolume, EmbedCam, PanelCamera, PointerToCamera, ScreenRect, to_camera_px};
 use crate::document_bridge::planes::{EmbedPlane, PX_PER_UNIT};
-use crate::document_bridge::{Doc2d, DocumentStore, EmbedViews, InComposition, NodeMap, PanelViews, Provenance, nest};
+use crate::document_bridge::{DocumentStore, EmbedViews, InComposition, PanelViews, Provenance, nest};
 use iron_document::NodeId;
 use iron_document::composition::Dims;
 
@@ -68,8 +68,7 @@ pub fn pick_document_2d_system(
     views: Res<PanelViews>,
     embeds: Res<EmbedViews>,
     store: Res<DocumentStore>,
-    map: Res<NodeMap>,
-    nodes: Query<&'static Doc2d>,
+    drawables: Res<crate::document_bridge::Drawables>,
     mut hits: ResMut<crate::PointerHits>,
     revision: Res<crate::document_bridge::GeometryRevision>,
     mut cache: Local<Pick2dCache>,
@@ -97,7 +96,7 @@ pub fn pick_document_2d_system(
     let doc = store.0.document();
     let roots = nest::panel_roots(doc, view);
     let screen = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
-    let mut walk = Pick { store: &store.0, doc, map: &map, nodes: &nodes, embeds: &embeds, spatial: &spatial, screen, z: 0, examined: 0, out: Vec::new(), embed: None };
+    let mut walk = Pick { store: &store.0, doc, drawables: &drawables, embeds: &embeds, spatial: &spatial, screen, z: 0, examined: 0, out: Vec::new(), embed: None };
     walk.walk(&roots, &[], kurbo::Point::new(p.x as f64, p.y as f64), kurbo::Affine::IDENTITY, &view.panel, 0);
     let mut out = walk.out;
     // Whatever a 3D embed covers is not hit; whatever is drawn over it is.
@@ -120,11 +119,10 @@ fn sort_hits(hits: &mut [crate::Hit2D]) {
     hits.sort_by(|a, b| a.background.cmp(&b.background).then(b.z.partial_cmp(&a.z).unwrap_or(std::cmp::Ordering::Equal)));
 }
 
-pub(crate) struct Pick<'a, 'w, 's> {
+pub(crate) struct Pick<'a> {
     pub store: &'a iron_document::Store,
     pub doc: &'a iron_document::Document,
-    pub map: &'a NodeMap,
-    pub nodes: &'a Query<'w, 's, &'static Doc2d>,
+    pub drawables: &'a crate::document_bridge::Drawables,
     pub embeds: &'a EmbedViews,
     pub spatial: &'a crate::document_bridge::SpatialScene,
     /// The pointer in window px, for 3D embeds (`EmbedView::texture_point`).
@@ -136,7 +134,7 @@ pub(crate) struct Pick<'a, 'w, 's> {
     pub embed: Option<(String, f32, Vec<NodeId>)>,
 }
 
-impl Pick<'_, '_, '_> {
+impl Pick<'_> {
     /// `p` is in the current composition's space; `space` maps the panel's
     /// document space into it; `prefix` is the chain down to (and including)
     /// the enclosing embed. Painter order: each node, then its children.
@@ -164,9 +162,7 @@ impl Pick<'_, '_, '_> {
                     if e.region.contains(q) {
                         // The embed's own area is a hit below its content:
                         // what a press on its background selects.
-                        if let Some(entity) = self.map.entity(id) {
-                            self.out.push(crate::Hit2D { entity, chain: chain.clone(), background: true, z: self.z as f32, space, through: None });
-                        }
+                        self.out.push(crate::Hit2D { chain: chain.clone(), background: true, z: self.z as f32, space, through: None });
                         let kids: Vec<NodeId> = self.doc.children(e.source).to_vec();
                         self.walk(&kids, &chain, q, inv * space, &key, depth + 1);
                     }
@@ -175,12 +171,10 @@ impl Pick<'_, '_, '_> {
                 }
                 continue;
             }
-            if let Some(entity) = self.map.entity(id)
-                && let Ok(d) = self.nodes.get(entity)
-            {
+            if let Some(d) = self.drawables.0.get(&id) {
                 let local = nest::world_2d(self.store, self.spatial, id).inverse() * p;
                 if d.shape.contains_local(Vec2::new(local.x as f32, local.y as f32)) {
-                    self.out.push(crate::Hit2D { entity, chain: chain.clone(), background: false, z: self.z as f32, space, through: None });
+                    self.out.push(crate::Hit2D { chain: chain.clone(), background: false, z: self.z as f32, space, through: None });
                 }
             }
             if !indexed {
@@ -204,8 +198,7 @@ pub fn pick_world_3d_system(
     query: Query<(Entity, &CurrentVolume, &InComposition, &Provenance)>,
     planes: Query<(Entity, &GlobalTransform, &EmbedPlane, &InComposition, &Provenance)>,
     store: Res<DocumentStore>,
-    map: Res<NodeMap>,
-    nodes: Query<&'static Doc2d>,
+    drawables: Res<crate::document_bridge::Drawables>,
     mut hits: ResMut<crate::PointerHits>,
     spatial: Res<crate::document_bridge::SpatialScene>,
 ) {
@@ -268,7 +261,7 @@ pub fn pick_world_3d_system(
     }
     if let Some((_, plane_entity, p, source, plane_node)) = best {
         let kids: Vec<iron_document::NodeId> = doc.children(source).to_vec();
-        let mut walk = Pick { store: &store.0, doc, map: &map, nodes: &nodes, embeds: &embeds, spatial: &spatial, screen: kurbo::Point::ZERO, z: 0, examined: 0, out: Vec::new(), embed: None };
+        let mut walk = Pick { store: &store.0, doc, drawables: &drawables, embeds: &embeds, spatial: &spatial, screen: kurbo::Point::ZERO, z: 0, examined: 0, out: Vec::new(), embed: None };
         let mut chain = prefix.clone();
         chain.extend(nest::lineage(doc, plane_node));
         walk.walk(&kids, &chain, p, kurbo::Affine::IDENTITY, "plane", 0);
@@ -307,6 +300,6 @@ pub fn resolve_primary_hit_system(mut hits: ResMut<crate::PointerHits>) {
     hits.primary = hits
         .overlay
         .first()
-        .map(|h| h.entity)
-        .or_else(|| hits.world3d.first().map(|h| h.entity));
+        .and_then(|h| h.chain.last().copied())
+        .or_else(|| hits.world3d.first().and_then(|h| h.chain.last().copied()));
 }

@@ -24,7 +24,7 @@ use iron_document::{Actor, LeafStruct, NodeId, Op, OrderKey, Slot, TransactionIn
 use kurbo::{Affine, Point};
 
 use crate::bevy_app::select::{ActiveTool, Geo, PathEdit, Source, ToolKeys, top_hit};
-use crate::document_bridge::{Doc2d, DocumentStore, NodeMap, PanelView, PanelViews, PendingTransactions, nest};
+use crate::document_bridge::{DocumentStore, PanelView, PanelViews, PendingTransactions, nest};
 
 /// CSS px within which a click on the first point closes the path.
 const CLOSE_HIT: f64 = 8.0;
@@ -136,9 +136,8 @@ pub fn pen_tool_system(
     mut keys: ResMut<ToolKeys>,
     store: Res<DocumentStore>,
     mut pending: ResMut<PendingTransactions>,
-    map: Res<NodeMap>,
     spatial: Res<crate::document_bridge::SpatialScene>,
-    nodes: Query<&'static Doc2d>,
+    drawables: Res<crate::document_bridge::Drawables>,
     (dpr, mut shown, mut edit): (Res<crate::Dpr>, Local<Option<ActiveTool>>, ResMut<PathEdit>),
 ) {
     let pen = &mut *pen;
@@ -213,7 +212,7 @@ pub fn pen_tool_system(
     };
     pen.hover = match view {
         Some(v) => {
-            let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
+            let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
             let closing = pen.path.as_ref().filter(|(id, p, _)| p == &v.panel && doc.live(*id).is_some()).is_some_and(|(path, _, to_comp)| {
                 let points = geo.points(*path);
                 let to_screen = v.affine() * to_comp.inverse() * geo.world(*path);
@@ -244,7 +243,7 @@ pub fn pen_tool_system(
     }
     let Some((panel, start, end)) = pen.press.take() else { return };
     let Some(view) = views.get(&panel) else { return };
-    let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
+    let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
     let to_doc = view.affine().inverse();
     let mut drag = (to_doc * end) - (to_doc * start);
     if drag.hypot() * view.zoom as f64 <= DRAG * dpr.0 {

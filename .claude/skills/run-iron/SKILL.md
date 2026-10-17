@@ -647,7 +647,13 @@ reference/indexed screenshot pairs must match across the complete canvas/editor
 `await __iron.spatial(false)` selects exhaustive reference walks; `true` restores
 indexed picking/culling. Bounds continue updating in both modes. The diagnostic
 result contains current ordered hits; allow settled frames after switching before
-comparing. This is a test switch, not persisted document state.
+comparing. This is a test switch, not persisted document state. Its reply also
+reports `entities` (document nodes with a Bevy entity: every 3D node plus the
+Live 2D set) and `live` (the Live set's size); with nothing selected or hovered a
+2D composition of any size shows a handful of entities (vision 10 phase 3).
+
+The smoke's Link step sleeps between the box click and `keydown Shift`: at a few
+fps both can land in one frame, and the click then adds instead of replacing.
 
 Native spatial/store checks:
 `cargo test -p iron_document -p iron_spatial --target aarch64-apple-darwin`.

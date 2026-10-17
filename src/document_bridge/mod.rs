@@ -32,12 +32,12 @@ pub mod stress;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
-use iron_document::{Document, NodeId, Op, Store, TransactionInput, TypeId};
+use iron_document::{Document, NodeId, Op, Store, TransactionInput};
 use std::collections::BTreeSet;
 
 pub use highlight::{Highlights, update_highlights};
 pub use nest::{EmbedImage, EmbedImages, EmbedView, EmbedViews};
-pub use materialize::{Doc2d, Doc3d, MeshAssets, Shape2d, path_outline};
+pub use materialize::{Doc2d, Doc3d, Drawables, MeshAssets, Modes, Shape2d, path_outline};
 pub use panel_views::{CompositionLayers, FocusRequests, InComposition, ViewCameras, PanelView, PanelViews};
 pub use render::{DocumentPanelLayer, LIT_HOVERED, LIT_SELECTED, render_document_layer};
 pub use spatial::SpatialScene;
@@ -109,6 +109,19 @@ impl NodeMap {
 
     pub fn paint_index(&self, id: NodeId) -> Option<u32> {
         self.paint_index.get(&id).copied()
+    }
+
+    /// How many document nodes have an entity.
+    pub fn len(&self) -> usize {
+        self.to_entity.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.to_entity.is_empty()
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.to_entity.keys().copied()
     }
 
     fn insert(&mut self, id: NodeId, e: Entity) {
@@ -218,6 +231,8 @@ impl Plugin for DocumentPlugin {
         app.insert_resource(DocumentStore(Store::new()))
             .init_resource::<PendingTransactions>()
             .init_resource::<NodeMap>()
+            .init_resource::<Drawables>()
+            .init_resource::<Modes>()
             .init_resource::<DocumentChanges>()
             .init_resource::<GeometryRevision>()
             .init_resource::<PropagateTimer>()
@@ -238,7 +253,7 @@ impl Plugin for DocumentPlugin {
             .add_systems(Startup, (materialize::setup_mesh_assets, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking.
-            .add_systems(PreUpdate, (sync_document, panel_views::resolve_panel_views).chain())
+            .add_systems(PreUpdate, (sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
             .add_systems(
                 PostUpdate,
                 (
@@ -278,6 +293,7 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
+    (mut drawables, modes): (ResMut<Drawables>, Res<Modes>),
 ) {
     if pending.0.is_empty()
         && history.0.is_empty()
@@ -303,6 +319,7 @@ pub(crate) fn sync_document(
                 ec.try_despawn();
             }
         }
+        drawables.0.clear();
         store.0 = Store::with_document(doc);
         *origin = DocumentOrigin::fresh();
         synced.0 = store.0.document().version();
@@ -408,7 +425,7 @@ pub(crate) fn sync_document(
         warn!("mesh assets missing; cannot reconcile");
         return;
     };
-    materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets);
+    materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets, &mut drawables, &modes);
     if structure {
         map.paint_index = paint_order(&store.0);
     }
@@ -431,6 +448,8 @@ pub(crate) fn reconcile_gesture(
     mut layers: ResMut<CompositionLayers>,
     mut commands: Commands,
     assets: Option<Res<MeshAssets>>,
+    mut drawables: ResMut<Drawables>,
+    modes: Res<Modes>,
 ) {
     if !store.0.has_changes() {
         return;
@@ -439,7 +458,7 @@ pub(crate) fn reconcile_gesture(
     let affected: BTreeSet<NodeId> = store.0.drain_changes().into_iter().map(|c| c.leaf.node).collect();
     geometry_revision.0 = geometry_revision.0.wrapping_add(1);
     let Some(assets) = assets else { return };
-    materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets);
+    materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets, &mut drawables, &modes);
     changes.nodes.extend(affected);
 }
 
@@ -488,8 +507,3 @@ fn paint_order(store: &Store) -> HashMap<NodeId, u32> {
     out
 }
 
-/// The node type of a materialised entity, for labels such as "move rect".
-pub fn type_of(store: &Store, map: &NodeMap, e: Entity) -> Option<TypeId> {
-    let id = map.node(e)?;
-    store.document().live(id).map(|n| n.ty)
-}

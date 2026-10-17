@@ -25,7 +25,7 @@ use kurbo::{Affine, Point};
 
 use crate::bevy_app::select::{Geo, Part, ShapeGrip, TransformKind, preview_writes, shape_grip_writes};
 use crate::document_bridge::planes::EmbedPlane;
-use crate::document_bridge::{Doc2d, NodeMap, PanelView, PanelViews, Shape2d};
+use crate::document_bridge::{PanelView, PanelViews, Shape2d};
 use crate::vector::DisplayListRebuild;
 
 pub(crate) type DragCameras<'w, 's> = Query<'w, 's, (Entity, &'static Camera, &'static GlobalTransform, Option<&'static crate::bevy_app::scene3d::ScreenRect>, Option<&'static crate::bevy_app::scene3d::PointerToCamera>)>;
@@ -46,8 +46,7 @@ pub(crate) struct Cx<'a, 'w, 's> {
     pub store: &'a mut Store,
     pub pointer: &'a crate::PointerState,
     pub views: &'a PanelViews,
-    pub map: &'a NodeMap,
-    pub nodes: &'a Query<'w, 's, &'static Doc2d>,
+    pub drawables: &'a crate::document_bridge::Drawables,
     pub spatial: &'a crate::document_bridge::SpatialScene,
     pub cameras: &'a DragCameras<'w, 's>,
     pub planes: &'a Planes<'w, 's>,
@@ -197,7 +196,7 @@ pub(crate) enum Manip {
     /// A lone shape's own handle; `arc` is (start, sweep, inner) at the press.
     ShapeGrip { id: NodeId, grip: ShapeGrip, to_local: Affine, arc: [f64; 3] },
     /// Scrubbing a slider's value along its track.
-    Slider { id: NodeId, entity: Entity, mapping: Mapping },
+    Slider { id: NodeId, mapping: Mapping },
     /// 2D content dragged on a plane in 3D, through `Store::begin_drag`.
     Plane { handle: DragHandle, mapping: Mapping, press: Vec2, ty: String },
     World(World),
@@ -348,16 +347,16 @@ impl Manip {
             }
             Manip::ShapeGrip { id, grip, to_local, arc } => {
                 let writes = {
-                    let geo = Geo { store: &*cx.store, map: cx.map, nodes: cx.nodes, spatial: cx.spatial };
+                    let geo = Geo { store: &*cx.store, drawables: cx.drawables, spatial: cx.spatial };
                     shape_grip_writes(&geo, *id, *grip, *to_local * screen, *arc, mods.alt, mods.shift)
                 };
                 preview_writes(cx.store, writes);
             }
-            Manip::Slider { id, entity, mapping } => {
+            Manip::Slider { id, mapping } => {
                 // The pointer along the track, in the slider's own space,
                 // becomes a value; anything bound to it follows this frame.
                 let Some(p) = mapping.point(cx.pointer.screen, cx.views, cx.cameras, cx.planes) else { return };
-                let Some(Shape2d::Slider { w, .. }) = cx.nodes.get(*entity).ok().map(|d| d.shape.clone()) else { return };
+                let Some(Shape2d::Slider { w, .. }) = cx.drawables.0.get(id).map(|d| d.shape.clone()) else { return };
                 let local = crate::document_bridge::nest::world_2d(cx.store, cx.spatial, *id).inverse() * p;
                 let t = (local.x / w.max(1.0) as f64).clamp(0.0, 1.0);
                 let num = |s: &Store, f: &str, d: f64| s.resolved(*id, leaf(f)).and_then(|v| v.as_f64()).unwrap_or(d);
@@ -434,7 +433,6 @@ fn preview_transform3d(store: &mut Store, id: NodeId, t: &transform_gizmo::math:
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn hand_off(
     store: &mut Store,
-    entity: Entity,
     id: NodeId,
     panel: String,
     space: Affine,
@@ -453,7 +451,7 @@ pub(crate) fn hand_off(
         None => Mapping::Panel { panel, space },
     };
     if slider {
-        return Some(Manip::Slider { id, entity, mapping });
+        return Some(Manip::Slider { id, mapping });
     }
     let Some(camera) = camera else {
         // 2D content on a plane in 3D, grabbed where the press landed.

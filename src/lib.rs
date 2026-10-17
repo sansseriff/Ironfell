@@ -272,7 +272,6 @@ pub struct PointerState {
 
 #[derive(Debug, Clone)]
 pub struct Hit2D {
-    pub entity: Entity,
     /// The hit node as reached from the panel: from the panel composition's
     /// top level down to the node, through every embed on the way
     /// (`bevy_app::select`). Selection rules pick a node along it.
@@ -310,7 +309,8 @@ pub struct PointerHits {
     pub embed_chain: Vec<iron_document::NodeId>,
     pub overlay: Vec<Hit2D>,
     pub world3d: Vec<Hit3D>,
-    pub primary: Option<Entity>,
+    /// The topmost hit's node, 2D or 3D.
+    pub primary: Option<iron_document::NodeId>,
 }
 
 /// What the pointer picked, as document nodes (ECM §7.2). Selecting or

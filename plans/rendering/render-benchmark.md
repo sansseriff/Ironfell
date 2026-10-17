@@ -531,3 +531,29 @@ waits raised for SwiftShader (its stationary-pointer re-pick after a
 same-version reload needs more than 500 ms at ~8 fps). Raw samples appended to
 [`render-scene-local-2026-10-17.jsonl`](benchmarks/render-scene-local-2026-10-17.jsonl)
 as `phase2` rows.
+
+## 12. Entities only for the working set (2026-10-17)
+
+Phase 3 of [`../vision/10_engine-boundary.md`](../vision/10_engine-boundary.md).
+Every drawable 2D node's draw data lives in `Drawables`, by node; the draw
+walk, picking, the selection overlay and the tools read it, and hits name nodes,
+not entities. `Modes` decides the **Live** set each frame (the selection's and
+the hover's nodes with their ancestors inside the composition and their
+subtrees, up to `LIVE_BUDGET` = 2,000 descendants, else direct children only),
+and `sync_live` spawns and despawns 2D entities as subtrees enter and leave it.
+3D nodes keep an entity each.
+
+`?stress=100000` on the container (SwiftShader), `__iron.spatial(true)`'s
+`nodes` / `entities` / `live`:
+
+| State | Nodes | Entities | Live |
+|---|---|---|---|
+| Idle, nothing picked | 101,069 | **2** (the demo's 3D nodes) | 0 |
+| Field hovered, then selected | 101,069 | 1,003 | 1,001 (the field and its 1,000 cells; the budget stops at its 100k leaves) |
+| Selection cleared | 101,069 | 2 | 0 |
+
+Without the budget, hovering the field made its whole 141k-node subtree Live:
+101,004 entities and a 3.9 s frame. With it the worst frame is the initial
+load's scene rebuild (3.1 s at 100k here); the idle frame p50 is 77 ms on this
+machine, which is the display-list walk and encode of the visible leaves and
+is what chunking and baking (phases 4–5) are for.

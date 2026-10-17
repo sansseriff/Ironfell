@@ -121,6 +121,9 @@ and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
    the timer's 0.1 ms. This is phase 1 of `vision/10_engine-boundary.md` §7.1.
    **Still open:** the selection cache's `overlay_geometry` keys on the global
    `GeometryRevision`; key it on the selection's subtree revisions instead.
+   *Vision 10 phases 2 and 3 followed the same day* (`render-benchmark.md` §11–12):
+   Bevy propagates nothing for document nodes, and 2D nodes have entities only
+   while in the Live working set.
 4. **Chunks with selective subtree baking** (old item 6, unchanged in substance).
    Start with authored groups as the chunk unit. Bake a static, complex or
    small-on-screen group into an `Offscreen` view at a √2 scale bucket, draw it

@@ -23,7 +23,7 @@
 //! untouched. A plane's view still draws lit nodes outlined, since it has
 //! no overlay of its own.
 
-use super::{SpatialScene, Doc2d, DocumentChanges, DocumentStore, Highlights, NodeMap, PanelViews, Shape2d, nest};
+use super::{SpatialScene, Doc2d, DocumentChanges, DocumentStore, Highlights, PanelViews, Shape2d, nest};
 use iron_document::composition::Dims;
 use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, VectorView, order};
 use bevy::prelude::*;
@@ -73,9 +73,8 @@ pub fn render_document_layer(
     mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer), Without<super::planes::PlaneLayer>>,
     mut plane_layers: Query<(&mut DisplayList, &super::planes::PlaneLayer, &VectorView), Without<DocumentPanelLayer>>,
     new_panels: Query<(), Or<(Added<DocumentPanelLayer>, Changed<super::planes::PlaneLayer>)>>,
-    nodes: Query<&'static Doc2d>,
+    drawables: Res<super::Drawables>,
     store: Res<DocumentStore>,
-    map: Res<NodeMap>,
     mut changes: ResMut<DocumentChanges>,
     spatial: Res<SpatialScene>,
     views: Res<PanelViews>,
@@ -106,7 +105,7 @@ pub fn render_document_layer(
     // Damage belongs to the independently prepared canonical compositions.
     // It is diagnostic here; per-view damage mapping/partial rasterization is later.
     let damage = spatial.damage.iter().copied().reduce(|a,b| a.union(b));
-    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, map: &map, nodes: &nodes, highlights: None, spatial: &spatial, drawn: 0 };
+    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, drawables: &drawables, highlights: None, spatial: &spatial, drawn: 0 };
     // A layer per panel: a panel whose content is unchanged rebuilds to the
     // same commands, so its view does not re-render.
     for (mut panel_list, layer) in panel_layers.iter_mut().filter(|_| !planes_only) {
@@ -145,19 +144,18 @@ pub fn render_document_layer(
 
 /// One rebuild's walk: draws a composition's nodes in painter order and
 /// recurses into 2D embeds through their placement, clipped to their region.
-struct Draw<'a, 'w, 's> {
+struct Draw<'a> {
     store: &'a iron_document::Store,
     embed_images: &'a super::EmbedImages,
     doc: &'a iron_document::Document,
-    map: &'a NodeMap,
-    nodes: &'a Query<'w, 's, &'static Doc2d>,
+    drawables: &'a super::Drawables,
     /// Set for plane views only; panels leave feedback to the overlay.
     highlights: Option<&'a Highlights>,
     spatial: &'a SpatialScene,
     drawn: usize,
 }
 
-impl Draw<'_, '_, '_> {
+impl Draw<'_> {
     fn walk(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32) {
         // Expand in device space for antialiasing, then conservatively map the
         // clip AABB back through the view/occurrence affine. Exact clips remain
@@ -244,8 +242,7 @@ impl Draw<'_, '_, '_> {
     }
 
     fn node(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, id: NodeId, base: kurbo::Affine) {
-        let Some(e) = self.map.entity(id) else { return };
-        let Ok(d) = self.nodes.get(e) else { return };
+        let Some(d) = self.drawables.0.get(&id) else { return };
         self.drawn += 1;
         // Node-local placement; `base` adds the panel offset and any embeds
         // only at emit time, so bounds stay in the node's composition space.

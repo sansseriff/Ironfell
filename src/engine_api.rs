@@ -318,6 +318,8 @@ pub fn document_spatial(app: &mut WorkerApp, enabled: bool) -> String {
     let mut scene = app.world_mut().resource_mut::<crate::document_bridge::SpatialScene>();
     if scene.enabled != enabled { scene.enabled = enabled; }
     let (enabled, generation, nodes) = (scene.enabled, scene.generation, scene.len());
+    let entities = app.world().resource::<crate::document_bridge::NodeMap>().len();
+    let live = app.world().resource::<crate::document_bridge::Modes>().live.len();
     let hits = app.world().resource::<crate::PointerHits>();
     let hits = serde_json::json!({
         "overlay": hits.overlay.iter().map(|h| serde_json::json!({
@@ -326,7 +328,7 @@ pub fn document_spatial(app: &mut WorkerApp, enabled: bool) -> String {
         })).collect::<Vec<_>>(),
         "embed": hits.embed, "embed_chain": hits.embed_chain.iter().map(ToString::to_string).collect::<Vec<_>>()
     });
-    let result = serde_json::json!({"enabled": enabled, "generation": generation, "nodes": nodes, "hits": hits});
+    let result = serde_json::json!({"enabled": enabled, "generation": generation, "nodes": nodes, "entities": entities, "live": live, "hits": hits});
     if let Some(mut active) = app.world_mut().get_resource_mut::<ActivityControl>() { active.remaining_frames = 10; }
     result.to_string()
 }

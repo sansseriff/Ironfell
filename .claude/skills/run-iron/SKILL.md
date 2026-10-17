@@ -575,7 +575,8 @@ tab (`src/document_bridge/stress.rs`); `await __iron.stress(N)` does the same
 from the console. `await __iron.timings(reset)` reads per-phase CPU times
 (`src/perf.rs`): `sync`, `gesture_reconcile`, `display_list`, `extract`,
 `encode` (content views), `overlay_encode` (editor-feedback views), `render`, `pick`,
-`overlay_geometry`, `bounds`, and whole frames as `frame` and `changed_frame`
+`overlay_geometry`, `bounds`, `propagate` (Bevy's transform propagation, timed from
+outside its set; every frame), and whole frames as `frame` and `changed_frame`
 (a frame in which some view, content or overlay, re-encoded). Each phase records only frames on
 which it did work.
 
@@ -635,6 +636,8 @@ python3 check-spatial-images.py
 ```
 
 `picking.txt` verifies stationary-pointer invalidation and zero idle pick work.
+Under SwiftShader its 500 ms settle waits are too short for the re-pick after a
+same-version reload; raise them (`sed 's/^sleep 500$/sleep 2500/; s/^sleep 300$/sleep 1500/'`).
 `spatial.txt` must pass every assertion: exact ordered chains in reference/indexed
 modes, repeated/nested occurrences of hidden sources, clips, transformed paths,
 negative/nonuniform scales, deletion/history and 2D-on-3D plane hits. The four

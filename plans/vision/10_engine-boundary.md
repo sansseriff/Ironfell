@@ -1,7 +1,7 @@
 # The engine boundary: what Iron evaluates and what Bevy runs
 
-**Status:** Agreed 2026-10-17. Phase 1 of §7.1 is built (`rendering/render-benchmark.md`
-§10); phases 2–5 are not yet scheduled. Settles CS open question I5 and roadmap §5's ownership question.
+**Status:** Agreed 2026-10-17. Phases 1 and 2 of §7.1 are built (`rendering/render-benchmark.md`
+§10–11); phases 3–5 are not yet scheduled. Settles CS open question I5 and roadmap §5's ownership question.
 **Date:** 2026-10-17
 **Scope:** Where resolved state (world transforms, solved poses, evaluated bindings) is
 computed; what a Bevy entity is for; how values flow from Bevy and from Models back into
@@ -253,10 +253,18 @@ Each phase leaves the app working and the smoke script passing.
    entry (`render-benchmark.md` §10). Not done: a cached world-affine table in the
    store itself (`world_affine` still walks the chain; the scene caches placements
    per group, which is what phase 2's readers need).
-2. **Bevy consumes.** The reconciler writes `GlobalTransform` from Iron for 2D and 3D
-   and stops using `ChildOf` for document nodes; every 2D reader switches to Iron
-   affines; the drift check is deleted. *Exit:* no document-node propagation in the
-   frame; 3D picking and the gizmo verified on Bevy 0.20.
+2. **Bevy consumes.** **Done 2026-10-17** (commit `26de602`): no `ChildOf` on
+   document entities; a 2D entity carries no transform (its readers use
+   `nest::world_2d`: the scene's cached placements, else the store); a 3D entity
+   receives `GlobalTransform` from `Store::world_affine3` (`geom::Affine3`), written
+   once as its `Transform` at spawn so Bevy's simple-transform sync never overwrites
+   it, and a moved 3D ancestor rewrites its few materialised descendants. The drift
+   check is deleted; `propagate` is timed. *Exit met:* 10k rotation's changed frame
+   67 → 27 ms on the container, `propagate` 0.1 ms (`render-benchmark.md` §11). The
+   gizmo and 3D picking passed the smoke on Bevy 0.19; the 0.20 check moves to the
+   upgrade. *Amendment to §5.2:* a Live 2D entity gets a `GlobalTransform` only once
+   a Bevy-side producer needs one (phase 4), since keeping every descendant's
+   current would be the per-node cost this phase removed.
 3. **Modes.** The reconciler consults a mode per subtree; Retained subtrees have no
    entities. *Exit:* a 100k-shape composition idles with entities only for the
    selection's neighbourhood.

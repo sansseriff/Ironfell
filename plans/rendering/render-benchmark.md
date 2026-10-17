@@ -497,3 +497,37 @@ of ~8 fps frames. Raw samples:
 Two fixes landed alongside: `?stress=N` panicked since paths gained a contour
 node (one id short per path), and `spatial.txt`'s fixture markup predated the
 current edit grammar.
+
+## 11. Bevy consumes Iron's transforms: no propagation for document nodes (2026-10-17)
+
+Phase 2 of [`../vision/10_engine-boundary.md`](../vision/10_engine-boundary.md),
+commit `26de602`. Document entities are flat (no `ChildOf`); a 2D entity carries
+no transform at all and every 2D reader (the draw walk, picking, the selection
+overlay, the tools, embed placement) takes world affines from the spatial
+scene's cached placements or the store (`nest::world_2d`); a 3D entity receives
+its `GlobalTransform` from the store's `Affine3`. This answers the render
+handoff's item 2 as well: Bevy's propagation is now timed (`propagate`), and
+what it cost is visible as the drop below.
+
+Same container and reduced script as §10 (SwiftShader, 1–5 fps, worker CPU p50
+ms, 10k shapes); `drag-one` landed its Cmd-click this time.
+
+| Scenario | Changed frame, baseline | Phase 1 | Phase 2 | `propagate` (phase 2) | Entries rewritten |
+|---|---|---|---|---|---|
+| spin | 84.1 | 67.2 | 26.8–32 (two runs) | 0.1 | 1 |
+| drag-one | – | – | 27.8 | 0.1 | 2 |
+| pan | 29.1 | 32.7 | 25.2 | 0.0 | 0 |
+
+The 10k rotation's remaining ~30 ms on this machine is the display-list walk
+(4–6 ms), content encode (9–12 ms), extract and render; on the M5 those were
+2–4 ms in total (§7), so the rotation there should now sit near the pan cost.
+`pan` is unchanged, as expected: nothing moved in the document.
+
+Not changed: a 2D node still has an entity, holding its `Doc2d` draw data and
+nothing else; phase 3 removes the entity for subtrees outside the working set.
+Verification: native suites; the full smoke (exit 0); `spatial.txt` at DPR 1
+with identical pixels (36/37, as §10); `picking.txt` 10/10 with the settle
+waits raised for SwiftShader (its stationary-pointer re-pick after a
+same-version reload needs more than 500 ms at ~8 fps). Raw samples appended to
+[`render-scene-local-2026-10-17.jsonl`](benchmarks/render-scene-local-2026-10-17.jsonl)
+as `phase2` rows.

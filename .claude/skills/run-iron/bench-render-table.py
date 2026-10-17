@@ -15,7 +15,7 @@ encode's command count.
 import json
 import sys
 
-PHASES = ["changed_frame", "display_list", "extract", "encode", "overlay_encode", "render", "gesture_reconcile", "pick", "frame"]
+PHASES = ["changed_frame", "display_list", "extract", "encode", "overlay_encode", "render", "gesture_reconcile", "pick", "bounds", "propagate", "frame"]
 print("| shapes | size | scenario | fps | " + " | ".join(PHASES) + " | commands |")
 print("|" + "---|" * (5 + len(PHASES)))
 for line in sys.stdin:

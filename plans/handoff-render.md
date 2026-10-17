@@ -102,9 +102,11 @@ and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
    `hover-sweep` at 10k: content `encode.n` = 0, changed frame 2.1 ms; 1k
    selected-group drag at 5K 11.8 → 8.7 ms, its remaining 2.5 ms
    `overlay_geometry` belongs to item 3.
-2. **Time the untimed remainder.** Add a span around Bevy transform propagation
-   (and change-flag scanning in `prepare_spatial`) before designing item 3.
-   Finding 6 (one entity per 2D node) is decided from this number, not before.
+2. ~~**Time the untimed remainder.**~~ **Done 2026-10-17** with vision 10 phase 2
+   (`render-benchmark.md` §11): Bevy's propagation is timed as `propagate`, and
+   removing document nodes from it took the 10k rotation's changed frame from 67
+   to 27 ms on the container. Finding 6 is thereby decided: 2D nodes carry no
+   transform; phase 3 drops their entities outside the working set.
 3. **Per-subtree revisions and the local/placement split.** Replace the global
    `GeometryRevision` dependency of the selection cache and spatial prep with
    per-subtree revisions. Let a group's contents be indexed in group-local space

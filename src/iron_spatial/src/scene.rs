@@ -127,6 +127,19 @@ impl Scene {
         self.chains.get(&id).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// An indexed node's affine from its local space to its composition's:
+    /// its parent scope's placement then its own transform. `None` for a
+    /// node the scene does not hold (an empty group, a 3D node, a point).
+    pub fn world_affine(&self, id: NodeId) -> Option<Affine> {
+        let e = self.entries.get(&id)?;
+        Some(self.placement(e.scope) * e.affine)
+    }
+
+    /// An indexed node's own transform in its parent's space.
+    pub fn local_affine(&self, id: NodeId) -> Option<Affine> {
+        self.entries.get(&id).map(|e| e.affine)
+    }
+
     /// An entry's bounds in its own composition's space.
     pub fn bounds(&self, id: NodeId) -> Option<Bounds> {
         let e = self.entries.get(&id)?;

@@ -176,13 +176,20 @@ impl DocumentChanges {
 #[derive(Resource, Default)]
 pub struct GeometryRevision(pub u64);
 
-/// The projection generation whose Bevy globals have finished propagation.
-/// PreUpdate picking must refresh again after a newly reconciled pose settles.
+/// Bevy's transform propagation, timed from outside its set. Document nodes
+/// are flat entities with store-written transforms, so after vision 10 phase
+/// 2 this covers only Bevy-native hierarchies (cameras, layers, gizmos).
 #[derive(Resource, Default)]
-pub struct PropagatedGeometryRevision(pub u64);
+struct PropagateTimer(Option<bevy::platform::time::Instant>);
 
-fn stamp_propagated_geometry(revision: Res<GeometryRevision>, mut propagated: ResMut<PropagatedGeometryRevision>) {
-    if propagated.0 != revision.0 { propagated.0 = revision.0; }
+fn propagate_begin(mut timer: ResMut<PropagateTimer>) {
+    timer.0 = Some(bevy::platform::time::Instant::now());
+}
+
+fn propagate_end(mut timer: ResMut<PropagateTimer>) {
+    if let Some(start) = timer.0.take() {
+        crate::perf::record(crate::perf::Phase::Propagate, start.elapsed().as_secs_f32() * 1000.0);
+    }
 }
 
 /// The last version the reconciler has caught up to. Anything the log holds
@@ -213,7 +220,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<NodeMap>()
             .init_resource::<DocumentChanges>()
             .init_resource::<GeometryRevision>()
-            .init_resource::<PropagatedGeometryRevision>()
+            .init_resource::<PropagateTimer>()
             .init_resource::<SpatialScene>()
             .init_resource::<HistoryRequests>()
             .init_resource::<PendingLoad>()
@@ -241,35 +248,15 @@ impl Plugin for DocumentPlugin {
                     planes::sync_planes.after(TransformSystems::Propagate).before(render::render_document_layer),
                     spatial::prepare_spatial.after(TransformSystems::Propagate).before(render::render_document_layer).before(crate::bevy_app::select::draw_select_overlay),
                     render::render_document_layer.after(TransformSystems::Propagate),
-                    stamp_propagated_geometry.after(TransformSystems::Propagate),
+                    propagate_begin.before(TransformSystems::Propagate).after(reconcile_gesture),
+                    propagate_end.after(TransformSystems::Propagate).before(spatial::prepare_spatial),
                     // The store's world transforms must agree with Bevy's
                     // (constraint-system.md §4.3); checked whenever one moves.
-                    check_world_affine.after(TransformSystems::Propagate),
                     // Where each 3D embed sits on screen this frame; its
                     // camera follows in the same frame (scene3d).
                     nest::collect_embed_views.after(TransformSystems::Propagate),
                 ),
             );
-    }
-}
-
-/// Compare `Store::world_affine` with Bevy's `GlobalTransform` for every 2D
-/// entity whose transform changed this frame. The native test in `geom.rs`
-/// pins the arithmetic; this catches drift in what the bridge feeds it
-/// (parent links, missing components, unit conversions). Tolerance is f32
-/// precision relative to the largest coefficient.
-fn check_world_affine(
-    store: Res<DocumentStore>,
-    moved: Query<(&Provenance, &GlobalTransform), (With<Doc2d>, Changed<GlobalTransform>)>,
-) {
-    for (prov, global) in &moved {
-        let bevy = iron_document::Affine2(render::affine_of(global).as_coeffs());
-        let ours = store.0.world_affine(prov.0);
-        let scale = ours.0.iter().fold(1.0f64, |m, v| m.max(v.abs()));
-        let diff = ours.max_diff(&bevy);
-        if diff > 1e-4 * scale {
-            warn!("{}: store world affine {:?} differs from Bevy {:?} by {diff}", prov.0, ours.0, bevy.0);
-        }
     }
 }
 

@@ -9,7 +9,7 @@ use iron_document::composition::Dims;
 
 #[derive(Default)]
 pub struct Pick2dCache {
-    key: Option<(Vec2, Option<crate::document_bridge::PanelView>, iron_document::Version, u64, u64, u64, bool)>,
+    key: Option<(Vec2, Option<crate::document_bridge::PanelView>, iron_document::Version, u64, u64, bool)>,
     overlay: Vec<crate::Hit2D>,
     embed: Option<String>,
     chain: Vec<NodeId>,
@@ -69,15 +69,13 @@ pub fn pick_document_2d_system(
     embeds: Res<EmbedViews>,
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
-    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
-    globals: Query<&'static GlobalTransform>,
+    nodes: Query<&'static Doc2d>,
     mut hits: ResMut<crate::PointerHits>,
     revision: Res<crate::document_bridge::GeometryRevision>,
-    propagated: Res<crate::document_bridge::PropagatedGeometryRevision>,
     mut cache: Local<Pick2dCache>,
     spatial: Res<crate::document_bridge::SpatialScene>,
 ) {
-    let key = (pointer.screen, views.get(hits.panel.as_deref().unwrap_or("")).cloned(), store.0.document().version(), revision.0, propagated.0, spatial.generation, spatial.enabled);
+    let key = (pointer.screen, views.get(hits.panel.as_deref().unwrap_or("")).cloned(), store.0.document().version(), revision.0, spatial.generation, spatial.enabled);
     if cache.key.as_ref() == Some(&key) && !embeds.is_changed() {
         // The 3D picker may have replaced overlay with hits on a plane last
         // frame. Restore the 2D base independently, before that pass runs again.
@@ -99,7 +97,7 @@ pub fn pick_document_2d_system(
     let doc = store.0.document();
     let roots = nest::panel_roots(doc, view);
     let screen = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
-    let mut walk = Pick { store: &store.0, doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, spatial: &spatial, screen, z: 0, examined: 0, out: Vec::new(), embed: None };
+    let mut walk = Pick { store: &store.0, doc, map: &map, nodes: &nodes, embeds: &embeds, spatial: &spatial, screen, z: 0, examined: 0, out: Vec::new(), embed: None };
     walk.walk(&roots, &[], kurbo::Point::new(p.x as f64, p.y as f64), kurbo::Affine::IDENTITY, &view.panel, 0);
     let mut out = walk.out;
     // Whatever a 3D embed covers is not hit; whatever is drawn over it is.
@@ -126,8 +124,7 @@ pub(crate) struct Pick<'a, 'w, 's> {
     pub store: &'a iron_document::Store,
     pub doc: &'a iron_document::Document,
     pub map: &'a NodeMap,
-    pub nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
-    pub globals: &'a Query<'w, 's, &'static GlobalTransform>,
+    pub nodes: &'a Query<'w, 's, &'static Doc2d>,
     pub embeds: &'a EmbedViews,
     pub spatial: &'a crate::document_bridge::SpatialScene,
     /// The pointer in window px, for 3D embeds (`EmbedView::texture_point`).
@@ -161,7 +158,7 @@ impl Pick<'_, '_, '_> {
                     continue;
                 }
                 let key = format!("{key}/{id}");
-                if let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id) {
+                if let Some(e) = nest::embed_2d(self.store, self.spatial, id) {
                     let inv = e.placement.inverse();
                     let q = inv * p;
                     if e.region.contains(q) {
@@ -179,10 +176,10 @@ impl Pick<'_, '_, '_> {
                 continue;
             }
             if let Some(entity) = self.map.entity(id)
-                && let Ok((d, global)) = self.nodes.get(entity)
+                && let Ok(d) = self.nodes.get(entity)
             {
-                let local = global.affine().inverse().transform_point3(Vec3::new(p.x as f32, p.y as f32, 0.0));
-                if d.shape.contains_local(local.truncate()) {
+                let local = nest::world_2d(self.store, self.spatial, id).inverse() * p;
+                if d.shape.contains_local(Vec2::new(local.x as f32, local.y as f32)) {
                     self.out.push(crate::Hit2D { entity, chain: chain.clone(), background: false, z: self.z as f32, space, through: None });
                 }
             }
@@ -208,8 +205,7 @@ pub fn pick_world_3d_system(
     planes: Query<(Entity, &GlobalTransform, &EmbedPlane, &InComposition, &Provenance)>,
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
-    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
-    globals: Query<&'static GlobalTransform>,
+    nodes: Query<&'static Doc2d>,
     mut hits: ResMut<crate::PointerHits>,
     spatial: Res<crate::document_bridge::SpatialScene>,
 ) {
@@ -272,7 +268,7 @@ pub fn pick_world_3d_system(
     }
     if let Some((_, plane_entity, p, source, plane_node)) = best {
         let kids: Vec<iron_document::NodeId> = doc.children(source).to_vec();
-        let mut walk = Pick { store: &store.0, doc, map: &map, nodes: &nodes, globals: &globals, embeds: &embeds, spatial: &spatial, screen: kurbo::Point::ZERO, z: 0, examined: 0, out: Vec::new(), embed: None };
+        let mut walk = Pick { store: &store.0, doc, map: &map, nodes: &nodes, embeds: &embeds, spatial: &spatial, screen: kurbo::Point::ZERO, z: 0, examined: 0, out: Vec::new(), embed: None };
         let mut chain = prefix.clone();
         chain.extend(nest::lineage(doc, plane_node));
         walk.walk(&kids, &chain, p, kurbo::Affine::IDENTITY, "plane", 0);

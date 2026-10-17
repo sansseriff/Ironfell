@@ -47,8 +47,8 @@ pub(crate) struct Cx<'a, 'w, 's> {
     pub pointer: &'a crate::PointerState,
     pub views: &'a PanelViews,
     pub map: &'a NodeMap,
-    pub globals: &'a Query<'w, 's, &'static GlobalTransform>,
-    pub nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
+    pub nodes: &'a Query<'w, 's, &'static Doc2d>,
+    pub spatial: &'a crate::document_bridge::SpatialScene,
     pub cameras: &'a DragCameras<'w, 's>,
     pub planes: &'a Planes<'w, 's>,
     pub gizmo: Option<&'a mut Gizmo3d>,
@@ -348,7 +348,7 @@ impl Manip {
             }
             Manip::ShapeGrip { id, grip, to_local, arc } => {
                 let writes = {
-                    let geo = Geo { store: &*cx.store, map: cx.map, globals: cx.globals, nodes: cx.nodes };
+                    let geo = Geo { store: &*cx.store, map: cx.map, nodes: cx.nodes, spatial: cx.spatial };
                     shape_grip_writes(&geo, *id, *grip, *to_local * screen, *arc, mods.alt, mods.shift)
                 };
                 preview_writes(cx.store, writes);
@@ -357,10 +357,9 @@ impl Manip {
                 // The pointer along the track, in the slider's own space,
                 // becomes a value; anything bound to it follows this frame.
                 let Some(p) = mapping.point(cx.pointer.screen, cx.views, cx.cameras, cx.planes) else { return };
-                let Some(Shape2d::Slider { w, .. }) = cx.nodes.get(*entity).ok().map(|(d, _)| d.shape.clone()) else { return };
-                let Ok(global) = cx.globals.get(*entity) else { return };
-                let local = global.affine().inverse().transform_point3(Vec3::new(p.x as f32, p.y as f32, 0.0));
-                let t = (local.x / w.max(1.0)).clamp(0.0, 1.0) as f64;
+                let Some(Shape2d::Slider { w, .. }) = cx.nodes.get(*entity).ok().map(|d| d.shape.clone()) else { return };
+                let local = crate::document_bridge::nest::world_2d(cx.store, cx.spatial, *id).inverse() * p;
+                let t = (local.x / w.max(1.0) as f64).clamp(0.0, 1.0);
                 let num = |s: &Store, f: &str, d: f64| s.resolved(*id, leaf(f)).and_then(|v| v.as_f64()).unwrap_or(d);
                 let (min, max, step) = (num(cx.store, "slider.min", 0.0), num(cx.store, "slider.max", 1.0), num(cx.store, "slider.step", 0.0));
                 let mut value = min + t * (max - min);
@@ -443,7 +442,7 @@ pub(crate) fn hand_off(
     camera: Option<Entity>,
     slider: bool,
     pointer: &crate::PointerState,
-    globals: &Query<&GlobalTransform>,
+    spatial: &crate::document_bridge::SpatialScene,
     cameras: &DragCameras,
     views: &PanelViews,
     planes: &Planes,
@@ -459,8 +458,8 @@ pub(crate) fn hand_off(
     let Some(camera) = camera else {
         // 2D content on a plane in 3D, grabbed where the press landed.
         let p = mapping.point(pointer.screen, views, cameras, planes).unwrap_or(Point::ORIGIN);
-        let local = globals.get(entity).map(|g| g.affine().inverse().transform_point3(Vec3::new(p.x as f32, p.y as f32, 0.0))).unwrap_or(Vec3::ZERO);
-        let handle = store.begin_drag(id, [local.x as f64, local.y as f64]);
+        let local = crate::document_bridge::nest::world_2d(store, spatial, id).inverse() * p;
+        let handle = store.begin_drag(id, [local.x, local.y]);
         if let DragMode::Locked(reasons) = &handle.mode {
             for r in reasons {
                 info!("{id} locked for this drag: {r}");
@@ -478,14 +477,15 @@ pub(crate) fn hand_off(
     let local = crate::bevy_app::scene3d::to_camera_px(pointer.screen, rect, to_camera);
     // A camera-facing plane through the object; Ctrl drags on the ground.
     let normal = if pointer.modifiers.ctrl { Vec3::Y } else { cam_tf.forward().as_vec3() }.normalize_or_zero();
-    let mut origin = globals.get(entity).map(|t| t.translation()).unwrap_or(cam_tf.translation());
+    // The node's world position from the store, as its entity carries it.
+    let [px, py, pz] = store.world_affine3(id).translation();
+    let at = Vec3::new(px as f32, py as f32, pz as f32);
+    let mut origin = at;
     let mut grab_offset = Vec3::ZERO;
     if let Some(ray) = crate::bevy_app::picking::camera_ray_from_window_px(cam, cam_tf, local)
         && let Some(hit) = intersect_ray_plane(ray, origin, normal)
     {
-        if let Ok(t) = globals.get(entity) {
-            grab_offset = t.translation() - hit;
-        }
+        grab_offset = at - hit;
         origin = hit;
     }
     Some(Manip::World(World { id, camera, plane_origin: origin, plane_normal: normal, grab_offset, press: pointer.screen }))

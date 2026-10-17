@@ -257,8 +257,8 @@ impl SelectionGeometryCache {
                     let shape = match geo.ty(id) {
                         "group" | "embed" if boxed.contains(&chain) => None,
                         "group" | "embed" => geo.frame(&chain).map(LitShape::Frame),
-                        _ => geo.map.entity(id).and_then(|e| geo.nodes.get(e).ok()).and_then(|(d, g)| {
-                            Some(LitShape::Outline(geo.space(&chain)? * nest::affine_of(g), nest::shape_path(&d.shape)))
+                        _ => geo.map.entity(id).and_then(|e| geo.nodes.get(e).ok()).and_then(|d| {
+                            Some(LitShape::Outline(geo.space(&chain)? * geo.world(id), nest::shape_path(&d.shape)))
                         }),
                     };
                     if let Some(shape) = shape {
@@ -441,8 +441,9 @@ pub(crate) struct Part {
 pub(crate) struct Geo<'a, 'w, 's> {
     pub store: &'a Store,
     pub map: &'a NodeMap,
-    pub globals: &'a Query<'w, 's, &'static GlobalTransform>,
-    pub nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
+    /// Shapes by entity; placement comes from `spatial` and the store.
+    pub nodes: &'a Query<'w, 's, &'static Doc2d>,
+    pub spatial: &'a crate::document_bridge::SpatialScene,
 }
 
 fn kaffine(a: iron_document::Affine2) -> Affine {
@@ -552,7 +553,7 @@ impl Geo<'_, '_, '_> {
     }
 
     pub(crate) fn world(&self, id: NodeId) -> Affine {
-        kaffine(self.store.world_affine(id))
+        nest::world_2d(self.store, self.spatial, id)
     }
 
     fn has(&self, id: NodeId, kind: iron_document::ComponentKind) -> bool {
@@ -590,7 +591,7 @@ impl Geo<'_, '_, '_> {
                 if self.has(id, K::Size) {
                     return Some((Rect::new(0.0, 0.0, self.num(id, "size.w")?, self.num(id, "size.h")?), Kind::Sized { aspect: false }));
                 }
-                let (d, _) = self.map.entity(id).and_then(|e| self.nodes.get(e).ok())?;
+                let d = self.map.entity(id).and_then(|e| self.nodes.get(e).ok())?;
                 let Shape2d::Slider { w, h, .. } = d.shape.clone() else { return None };
                 Some((Rect::new(0.0, 0.0, w as f64, h as f64), Kind::Fixed))
             }
@@ -602,7 +603,7 @@ impl Geo<'_, '_, '_> {
                 if let Some((_, camera, w, h)) = nest::embed_3d(self.store, id) {
                     return Some((Rect::new(0.0, 0.0, w, h), Kind::Sized { aspect: camera.is_some() }));
                 }
-                let e = nest::embed_2d(doc, self.map, self.globals, self.nodes, id)?;
+                let e = nest::embed_2d(self.store, self.spatial, id)?;
                 Some((e.region, Kind::Window { frame: self.has(id, K::Frame) }))
             }
             "path" => {
@@ -1198,8 +1199,8 @@ pub struct ToolDoc<'w, 's> {
     gestures: ResMut<'w, GestureRequests>,
     pending: ResMut<'w, PendingTransactions>,
     map: Res<'w, NodeMap>,
-    globals: Query<'w, 's, &'static GlobalTransform>,
-    nodes: Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
+    spatial: Res<'w, crate::document_bridge::SpatialScene>,
+    nodes: Query<'w, 's, &'static Doc2d>,
     view_cameras: ResMut<'w, crate::document_bridge::ViewCameras>,
     keyboard: Res<'w, ButtonInput<KeyCode>>,
     geometry_revision: Res<'w, crate::document_bridge::GeometryRevision>,
@@ -1235,7 +1236,7 @@ pub fn select_tool_system(
     (pen, mut edit): (Res<crate::bevy_app::pen::PenTool>, ResMut<PathEdit>),
 ) {
     let tool = &mut *tool;
-    let ToolDoc { mut store, mut gestures, mut pending, map, globals, nodes, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
+    let ToolDoc { mut store, mut gestures, mut pending, map, spatial, nodes, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
     // What the last paste or duplicate made becomes the selection once it
     // exists (its reach is found below, like any selection made elsewhere).
     if !tool.select_when_live.is_empty() && tool.select_when_live.iter().all(|&id| store.0.document().is_live(id)) {
@@ -1442,7 +1443,7 @@ pub fn select_tool_system(
                     "arrowup" => (0.0, -step),
                     _ => (0.0, step),
                 };
-                let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+                let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
                 let mut parts = Vec::new();
                 let mut moved = Vec::new();
                 let panels: Vec<String> = reaches.iter().map(|r| r.panel.clone()).collect();
@@ -1495,7 +1496,7 @@ pub fn select_tool_system(
         arrivals.push((frag, share, "paste"));
     }
     for (frag, share, verb) in arrivals {
-        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
         let reaches = selected_reaches(&sel, tool);
         let Some(place) = paste_placement(&geo, &hits, &views, &reaches, &frag, share) else {
             info!("{verb}: no 2D view to paste into");
@@ -1595,7 +1596,7 @@ pub fn select_tool_system(
         tool.hover = None;
         let view = hits.panel.as_deref().and_then(|p| views.get(p)).cloned();
         let reaches = selected_reaches(&sel, tool);
-        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
         let double = tool.last_press.is_some_and(|(t, p)| now - t <= DOUBLE_CLICK.0 && p.distance(pointer.screen) <= DOUBLE_CLICK.1);
         tool.last_press = Some((now, pointer.screen));
         'press: {
@@ -1824,7 +1825,7 @@ pub fn select_tool_system(
                 _ => None,
             };
             let entity = map.entity(id);
-            let is_slider = entity.and_then(|e| nodes.get(e).ok()).is_some_and(|(d, _)| matches!(d.shape, Shape2d::Slider { .. }));
+            let is_slider = entity.and_then(|e| nodes.get(e).ok()).is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. }));
             let is_3d_target = matches!(source, Source::World(_)) && k + 1 == chain.len();
             let legacy = view.dims == Dims::Three || through.is_some() || is_3d_target || (is_slider && k + 1 == chain.len());
             if legacy {
@@ -1848,7 +1849,7 @@ pub fn select_tool_system(
                     Source::Overlay(i) => hits.overlay[i].space,
                     _ => Affine::IDENTITY,
                 };
-                if let Some(m) = manipulate::hand_off(&mut store.0, entity, id, view.panel.clone(), space, through, camera, is_slider, &pointer, &globals, &cameras, &views, &planes) {
+                if let Some(m) = manipulate::hand_off(&mut store.0, entity, id, view.panel.clone(), space, through, camera, is_slider, &pointer, &spatial, &cameras, &views, &planes) {
                     tool.gesture = Gesture::Edit(m);
                 }
                 break 'press;
@@ -1936,7 +1937,7 @@ pub fn select_tool_system(
     // the pointer last showed is what commits.
     if pointer.buttons.left {
         let reaches = selected_reaches(&sel, tool);
-        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
         // A press that has travelled becomes its drag.
         if let Gesture::Press { panel, start, then } = &tool.gesture
             && pointer.screen.distance(*start) > SLOP
@@ -2002,11 +2003,11 @@ pub fn select_tool_system(
                 view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
             }
             Gesture::Edit(m) => {
-                let mut cx = manipulate::Cx { store: &mut store.0, pointer: &pointer, views: &views, map: &map, globals: &globals, nodes: &nodes, cameras: &cameras, planes: &planes, gizmo: tool.gizmo.as_mut() };
+                let mut cx = manipulate::Cx { store: &mut store.0, pointer: &pointer, views: &views, map: &map, nodes: &nodes, spatial: &spatial, cameras: &cameras, planes: &planes, gizmo: tool.gizmo.as_mut() };
                 m.update(&mut cx);
             }
             Gesture::Marquee { view, start, prefix, roots, base } => {
-                let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+                let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
                 // A marquee changes the selection, never the document.
                 let rect = Rect::from_points(*start, doc_point(view));
                 tool.marquee = Some((view.panel.clone(), rect));
@@ -2071,7 +2072,7 @@ pub fn select_tool_system(
 
     // ---- Hover and cursor, between gestures ----
     if matches!(tool.gesture, Gesture::Idle) {
-        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
         let reaches = selected_reaches(&sel, tool);
         let view = hits.panel.as_deref().and_then(|p| views.get(p));
         let mut cursor = if space { "grab" } else { "default" }.to_owned();
@@ -2268,8 +2269,7 @@ pub fn draw_select_overlay(
     views: Res<PanelViews>,
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
-    globals: Query<&'static GlobalTransform>,
-    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
+    nodes: Query<&'static Doc2d>,
     (pen, shapes, edit): (Res<crate::bevy_app::pen::PenTool>, Res<crate::bevy_app::shape_tool::ShapeTool>, Res<PathEdit>),
     active: Res<ActiveTool>,
     geometry_revision: Res<crate::document_bridge::GeometryRevision>,
@@ -2296,7 +2296,7 @@ pub fn draw_select_overlay(
             }
         }
     }
-    let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+    let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
     let stamp = GeometryStamp::new(&store.0, geometry_revision.0);
     let reaches = selected_reaches(&sel, &tool);
     // Sizes are CSS px; `k` makes them window px.
@@ -2501,8 +2501,8 @@ pub fn navigate_views(
     mut cameras: ResMut<crate::document_bridge::ViewCameras>,
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
-    globals: Query<&'static GlobalTransform>,
-    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
+    spatial: Res<crate::document_bridge::SpatialScene>,
+    nodes: Query<&'static Doc2d>,
 ) {
     let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
     if let Some(view) = under
@@ -2544,7 +2544,7 @@ pub fn navigate_views(
         let at_centre = (size * 0.5 - camera.pan) / camera.zoom;
         match key.as_str() {
             "zoomfit" | "zoomsel" => {
-                let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+                let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
                 // Boxes in the panel's document px: its top-level nodes, or
                 // the selection as reached in this panel.
                 let frames: Vec<Affine> = if key == "zoomsel" {

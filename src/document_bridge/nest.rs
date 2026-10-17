@@ -1,19 +1,19 @@
 //! Embedded compositions in the bridge (ECM §7.4): where an embed puts the
 //! composition it shows, and which part of it shows.
 //!
-//! Every materialised 2D node's `GlobalTransform` is in its own
-//! composition's space (compositions are never materialised, so their
-//! children are roots). An embed adds one more affine: from the embedded
-//! composition's space into its parent's. Drawing and picking walk the tree
-//! of a panel's composition and, at each embed, recurse into the embedded
-//! one through that affine, clipped to its region.
+//! Every 2D node's world affine is in its own composition's space
+//! (compositions are never placed, so their children are roots); the store
+//! computes it and the spatial scene caches it (`world_2d`). An embed adds
+//! one more affine: from the embedded composition's space into its parent's.
+//! Drawing and picking walk the tree of a panel's composition and, at each
+//! embed, recurse into the embedded one through that affine, clipped to its
+//! region.
 
-use super::{Doc2d, NodeMap, PanelView, Shape2d};
+use super::{Doc2d, PanelView, Shape2d};
 use bevy::prelude::*;
 use iron_document::component::Frame;
 use iron_document::composition::{self, Dims};
 use iron_document::{Document, NodeId, TypeId};
-use kurbo::Shape as _;
 
 /// Deepest nesting drawn or picked. Loops are refused by the store; this
 /// only bounds the cost of a legitimately deep stack.
@@ -57,19 +57,6 @@ pub fn draw_shape(shape: &Shape2d) -> crate::vector::Shape {
     }
 }
 
-/// The 2D part of a global transform as a kurbo affine.
-pub fn affine_of(global: &GlobalTransform) -> kurbo::Affine {
-    let a = global.affine();
-    kurbo::Affine::new([
-        a.matrix3.x_axis.x as f64,
-        a.matrix3.x_axis.y as f64,
-        a.matrix3.y_axis.x as f64,
-        a.matrix3.y_axis.y as f64,
-        a.translation.x as f64,
-        a.translation.y as f64,
-    ])
-}
-
 /// The roots one composition panel walks: the composition's children, and
 /// for the viewer, 2D nodes outside every composition.
 pub fn panel_roots(doc: &Document, view: &PanelView) -> Vec<NodeId> {
@@ -106,40 +93,36 @@ pub fn paint_padding(d: &Doc2d) -> f64 {
     pad
 }
 
-/// The union of the painted bounds of a composition's content, in its space,
-/// computed from shapes (not from what was last drawn, so an embed shows on
-/// its first frame).
-pub fn content_bounds(doc: &Document, map: &NodeMap, nodes: &Query<(&Doc2d, &GlobalTransform)>, composition: NodeId) -> Option<kurbo::Rect> {
-    preorder(doc, doc.children(composition))
-        .into_iter()
-        .filter_map(|id| map.entity(id).and_then(|e| nodes.get(e).ok()))
-        .map(|(d, g)| {
-            let pad = paint_padding(d);
-            affine_of(g).transform_rect_bbox(shape_path(&d.shape).bounding_box().inflate(pad, pad))
-        })
-        .reduce(|a, b| a.union(b))
+/// A 2D node's local space to its composition's: the spatial scene's cached
+/// placement for anything it indexes (every drawable node, group with
+/// content and embed), the store's walk for the rest. Both read resolved
+/// values, so previews, bindings and clips are honoured.
+pub fn world_2d(store: &iron_document::Store, spatial: &super::SpatialScene, id: NodeId) -> kurbo::Affine {
+    spatial.world_affine(id).unwrap_or_else(|| kurbo::Affine::new(store.world_affine(id).0))
+}
+
+/// The union of the painted bounds of a composition's content, in its space
+/// (the scene's, kept current even when no view draws the composition, so an
+/// embed shows on its first frame).
+pub fn content_bounds(spatial: &super::SpatialScene, composition: NodeId) -> Option<kurbo::Rect> {
+    spatial.content_bounds(composition)
 }
 
 /// What a 2D embed shows, if it embeds a live 2D composition: placement
 /// from the embed's transform, region from its `frame` or the content.
-pub fn embed_2d(
-    doc: &Document,
-    map: &NodeMap,
-    globals: &Query<&GlobalTransform>,
-    nodes: &Query<(&Doc2d, &GlobalTransform)>,
-    embed: NodeId,
-) -> Option<Embed2d> {
+pub fn embed_2d(store: &iron_document::Store, spatial: &super::SpatialScene, embed: NodeId) -> Option<Embed2d> {
+    let doc = store.document();
     let source = composition::embedded(doc, embed)?;
     if composition::dims(doc, source) != Some(Dims::Two) {
         return None;
     }
-    let placement = map.entity(embed).and_then(|e| globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+    let placement = world_2d(store, spatial, embed);
     let region = match doc.get::<Frame>(embed) {
         Some(f) => {
             let n = |s: &iron_document::Slot| s.constant().and_then(|v| v.as_f64()).unwrap_or(0.0);
             kurbo::Rect::new(n(&f.x0), n(&f.y0), n(&f.x1), n(&f.y1))
         }
-        None => content_bounds(doc, map, nodes, source)?,
+        None => content_bounds(spatial, source)?,
     };
     Some(Embed2d { source, placement, region })
 }
@@ -220,9 +203,7 @@ pub fn embed_3d(store: &iron_document::Store, embed: NodeId) -> Option<(NodeId, 
 pub fn collect_embed_views(
     store: Res<super::DocumentStore>,
     views: Res<super::PanelViews>,
-    map: Res<NodeMap>,
-    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
-    globals: Query<&'static GlobalTransform>,
+    spatial: Res<super::SpatialScene>,
     mut layers: ResMut<super::CompositionLayers>,
     mut out: ResMut<EmbedViews>,
 ) {
@@ -230,7 +211,7 @@ pub fn collect_embed_views(
     let mut found = Vec::new();
     for view in views.0.iter().filter(|v| v.dims == Dims::Two) {
         let roots = panel_roots(doc, view);
-        collect(&store.0, &map, &nodes, &globals, &mut layers, view, &roots, view.affine(), view.rect.to_kurbo(), &view.panel, 0, &mut found);
+        collect(&store.0, &spatial, &mut layers, view, &roots, view.affine(), view.rect.to_kurbo(), &view.panel, 0, &mut found);
     }
     if out.0 != found {
         out.0 = found;
@@ -240,9 +221,7 @@ pub fn collect_embed_views(
 #[allow(clippy::too_many_arguments)]
 fn collect(
     store: &iron_document::Store,
-    map: &NodeMap,
-    nodes: &Query<(&'static Doc2d, &'static GlobalTransform)>,
-    globals: &Query<&'static GlobalTransform>,
+    spatial: &super::SpatialScene,
     layers: &mut super::CompositionLayers,
     view: &PanelView,
     roots: &[NodeId],
@@ -257,13 +236,13 @@ fn collect(
         if !is_embed(doc, id) || depth >= MAX_DEPTH {
             continue;
         }
-        let placement = map.entity(id).and_then(|e| globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+        let placement = world_2d(store, spatial, id);
         let key = format!("{key}/{id}");
-        if let Some(e) = embed_2d(doc, map, globals, nodes, id) {
+        if let Some(e) = embed_2d(store, spatial, id) {
             let inner = base * e.placement;
             let clip = clip.intersect(inner.transform_rect_bbox(e.region));
             let kids: Vec<NodeId> = doc.children(e.source).to_vec();
-            collect(store, map, nodes, globals, layers, view, &kids, inner, clip, &key, depth + 1, found);
+            collect(store, spatial, layers, view, &kids, inner, clip, &key, depth + 1, found);
         } else if let Some((source, camera, w, h)) = embed_3d(store, id) {
             let to_window = base * placement;
             let visible = to_window.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w, h)).intersect(clip);
@@ -285,15 +264,7 @@ fn collect(
 /// its bounds out; a 3D embed contributes its whole rectangle). The first
 /// appearance in painter order wins. For "Show in" (ECM §7.2).
 #[allow(clippy::too_many_arguments)]
-pub fn locate(
-    store: &iron_document::Store,
-    map: &NodeMap,
-    nodes: &Query<(&'static Doc2d, &'static GlobalTransform)>,
-    globals: &Query<&'static GlobalTransform>,
-    spatial: &super::SpatialScene,
-    view: &PanelView,
-    node: NodeId,
-) -> Option<kurbo::Rect> {
+pub fn locate(store: &iron_document::Store, spatial: &super::SpatialScene, view: &PanelView, node: NodeId) -> Option<kurbo::Rect> {
     let doc = store.document();
     let target = composition::composition_of(doc, node);
     // A group's entry is already its subtree's union.
@@ -303,9 +274,7 @@ pub fn locate(
     }
     fn walk(
         store: &iron_document::Store,
-        map: &NodeMap,
-        nodes: &Query<(&'static Doc2d, &'static GlobalTransform)>,
-        globals: &Query<&'static GlobalTransform>,
+        spatial: &super::SpatialScene,
         roots: &[NodeId],
         base: kurbo::Affine,
         target: NodeId,
@@ -318,26 +287,26 @@ pub fn locate(
             if !is_embed(doc, id) || depth >= MAX_DEPTH {
                 continue;
             }
-            if let Some(e) = embed_2d(doc, map, globals, nodes, id) {
+            if let Some(e) = embed_2d(store, spatial, id) {
                 let inner = base * e.placement;
                 if e.source == target {
                     return own(node).map(|r| inner.transform_rect_bbox(r));
                 }
                 let kids: Vec<NodeId> = doc.children(e.source).to_vec();
-                if let Some(r) = walk(store, map, nodes, globals, &kids, inner, target, own, node, depth + 1) {
+                if let Some(r) = walk(store, spatial, &kids, inner, target, own, node, depth + 1) {
                     return Some(r);
                 }
             } else if let Some((source, _, w, h)) = embed_3d(store, id)
                 && source == target
             {
-                let placement = map.entity(id).and_then(|e| globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+                let placement = world_2d(store, spatial, id);
                 return Some((base * placement).transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w, h)));
             }
         }
         None
     }
     let roots = panel_roots(doc, view);
-    walk(store, map, nodes, globals, &roots, kurbo::Affine::IDENTITY, target?, &own, node, 0)
+    walk(store, spatial, &roots, kurbo::Affine::IDENTITY, target?, &own, node, 0)
 }
 
 /// One 3D embed's rendered texture, as the 2D layer draws it: the image, its

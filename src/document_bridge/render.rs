@@ -73,8 +73,7 @@ pub fn render_document_layer(
     mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer), Without<super::planes::PlaneLayer>>,
     mut plane_layers: Query<(&mut DisplayList, &super::planes::PlaneLayer, &VectorView), Without<DocumentPanelLayer>>,
     new_panels: Query<(), Or<(Added<DocumentPanelLayer>, Changed<super::planes::PlaneLayer>)>>,
-    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
-    globals: Query<&'static GlobalTransform>,
+    nodes: Query<&'static Doc2d>,
     store: Res<DocumentStore>,
     map: Res<NodeMap>,
     mut changes: ResMut<DocumentChanges>,
@@ -107,7 +106,7 @@ pub fn render_document_layer(
     // Damage belongs to the independently prepared canonical compositions.
     // It is diagnostic here; per-view damage mapping/partial rasterization is later.
     let damage = spatial.damage.iter().copied().reduce(|a,b| a.union(b));
-    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, map: &map, nodes: &nodes, globals: &globals, highlights: None, spatial: &spatial, drawn: 0 };
+    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, map: &map, nodes: &nodes, highlights: None, spatial: &spatial, drawn: 0 };
     // A layer per panel: a panel whose content is unchanged rebuilds to the
     // same commands, so its view does not re-render.
     for (mut panel_list, layer) in panel_layers.iter_mut().filter(|_| !planes_only) {
@@ -151,8 +150,7 @@ struct Draw<'a, 'w, 's> {
     embed_images: &'a super::EmbedImages,
     doc: &'a iron_document::Document,
     map: &'a NodeMap,
-    nodes: &'a Query<'w, 's, (&'static Doc2d, &'static GlobalTransform)>,
-    globals: &'a Query<'w, 's, &'static GlobalTransform>,
+    nodes: &'a Query<'w, 's, &'static Doc2d>,
     /// Set for plane views only; panels leave feedback to the overlay.
     highlights: Option<&'a Highlights>,
     spatial: &'a SpatialScene,
@@ -198,7 +196,7 @@ impl Draw<'_, '_, '_> {
                         use kurbo::Shape;
                         crate::vector::Shape::Path(kurbo::Ellipse::new((w/2.0, h/2.0), (w/2.0, h/2.0), 0.0).to_path(0.1))
                     } else { crate::vector::Shape::RoundedRect(rect.to_rounded_rect(r)) };
-                    let placement = self.map.entity(id).and_then(|e| self.globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+                    let placement = self.world(id);
                     let affine = base * placement;
                     let inner_clip = clip.intersect(affine.transform_rect_bbox(rect));
                     b.clipped(affine, shape, |b| self.content(b, id, base, inner_clip, key, depth, allowed));
@@ -215,7 +213,7 @@ impl Draw<'_, '_, '_> {
                     return;
                 }
                 let key = format!("{key}/{id}");
-                if let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id) {
+                if let Some(e) = nest::embed_2d(self.store, self.spatial, id) {
                     let inner = base * e.placement;
                     let kids: Vec<NodeId> = self.doc.children(e.source).to_vec();
                     let inner_clip = clip.intersect(inner.transform_rect_bbox(e.region));
@@ -224,7 +222,7 @@ impl Draw<'_, '_, '_> {
                     // The 3D view: its camera's texture (`EmbedImages`), drawn
                     // in painter order under the embed's whole transform, so
                     // it rotates, scales and clips like the 2D around it.
-                    let placement = self.map.entity(id).and_then(|e| self.globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+                    let placement = self.world(id);
                     if let Some(img) = self.embed_images.0.get(&key) {
                         let to_embed = kurbo::Affine::scale_non_uniform(w / img.size.x.max(1) as f64, h / img.size.y.max(1) as f64);
                         b.texture(base * placement * to_embed, img.image.clone(), img.size, img.version);
@@ -240,13 +238,18 @@ impl Draw<'_, '_, '_> {
             self.branches(b, self.doc.children(id), base, clip, key, depth, allowed);
     }
 
+    /// A node's placement in its composition's space (`nest::world_2d`).
+    fn world(&self, id: NodeId) -> kurbo::Affine {
+        nest::world_2d(self.store, self.spatial, id)
+    }
+
     fn node(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, id: NodeId, base: kurbo::Affine) {
         let Some(e) = self.map.entity(id) else { return };
-        let Ok((d, global)) = self.nodes.get(e) else { return };
+        let Ok(d) = self.nodes.get(e) else { return };
         self.drawn += 1;
         // Node-local placement; `base` adds the panel offset and any embeds
         // only at emit time, so bounds stay in the node's composition space.
-        let local = affine_of(global);
+        let local = self.world(id);
         let affine = base * local;
         let shape = nest::draw_shape(&d.shape);
         if let Shape2d::Slider { w, h, t } = d.shape.clone() {
@@ -284,7 +287,7 @@ impl Draw<'_, '_, '_> {
                 Some(s) => {
                     // The offset is in the parent's space, so the shadow
                     // stays below a rotated shape, as in Figma.
-                    let parent = self.doc.live(id).and_then(|n| n.parent).and_then(|p| self.map.entity(p)).and_then(|e| self.globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+                    let parent = self.doc.live(id).and_then(|n| n.parent).map(|p| self.world(p)).unwrap_or(kurbo::Affine::IDENTITY);
                     let offset = kurbo::Vec2::new(s.dx as f64, s.dy as f64);
                     let color = peniko::Color::new(s.color);
                     let std_dev = s.std_dev as f64;
@@ -349,7 +352,4 @@ impl Draw<'_, '_, '_> {
 pub const LIT_SELECTED: [f32; 4] = [0.1, 0.4, 1.0, 1.0];
 pub const LIT_HOVERED: [f32; 4] = [0.1, 0.4, 1.0, 0.5];
 
-/// The 2D part of a global transform as a kurbo affine.
-pub fn affine_of(global: &GlobalTransform) -> kurbo::Affine {
-    nest::affine_of(global)
-}
+

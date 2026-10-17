@@ -13,7 +13,7 @@
 //! powers of √2 so a slow orbit does not reallocate every frame. When the
 //! texture's content changes, the 3D views that show the plane wake up.
 
-use super::{DocumentStore, InComposition, NodeMap, nest};
+use super::{DocumentStore, InComposition, nest};
 use crate::vector::{DisplayList, Offscreen, VectorLayer, VectorView, ViewTarget2d, order};
 use bevy::asset::{RenderAssetUsages, uuid_handle};
 use bevy::camera::visibility::RenderLayers;
@@ -187,8 +187,7 @@ fn step(d: f64) -> f64 {
 pub(super) fn sync_planes(
     mut commands: Commands,
     store: Res<DocumentStore>,
-    map: Res<NodeMap>,
-    nodes: Query<(&'static super::Doc2d, &'static GlobalTransform)>,
+    spatial: Res<super::SpatialScene>,
     cameras: Query<(&Camera, &GlobalTransform, &RenderLayers)>,
     mut planes: Query<(Entity, &crate::document_bridge::Provenance, &GlobalTransform, &RenderLayers, Option<&mut EmbedPlane>), With<InComposition>>,
     mut views: Query<(Entity, &mut PlaneLayer, &mut VectorView, Option<&ViewTarget2d>, Ref<DisplayList>)>,
@@ -208,7 +207,7 @@ pub(super) fn sync_planes(
                 let n = |s: &iron_document::Slot| s.constant().and_then(|v| v.as_f64()).unwrap_or(0.0);
                 kurbo::Rect::new(n(&f.x0), n(&f.y0), n(&f.x1), n(&f.y1))
             }
-            None => nest::content_bounds(doc, &map, &nodes, source).unwrap_or(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0)),
+            None => nest::content_bounds(&spatial, source).unwrap_or(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0)),
         };
         if region.width() < 1.0 || region.height() < 1.0 {
             continue;

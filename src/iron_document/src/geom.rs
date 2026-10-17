@@ -120,6 +120,98 @@ pub fn world_affine(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: No
 }
 
 // ---------------------------------------------------------------------------
+// 3D
+
+/// A 3D affine map: a 3×3 matrix (column-major, `m[c][r]`) and a translation.
+/// In Bevy's `Affine3A` terms `m[0]` is `x_axis`, `m[1]` `y_axis`, `m[2]`
+/// `z_axis`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Affine3 {
+    pub m: [[f64; 3]; 3],
+    pub t: [f64; 3],
+}
+
+impl Affine3 {
+    pub const IDENTITY: Affine3 = Affine3 { m: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], t: [0.0; 3] };
+
+    /// Bevy's `from_scale_rotation_translation` with the rotation given as
+    /// Euler angles applied in `EulerRot::XYZ` order (`Quat::from_euler`):
+    /// scale, then rotate, then translate.
+    pub fn from_trs(pos: [f64; 3], rot: [f64; 3], scale: [f64; 3]) -> Affine3 {
+        let (sx, cx) = rot[0].sin_cos();
+        let (sy, cy) = rot[1].sin_cos();
+        let (sz, cz) = rot[2].sin_cos();
+        // R = Rx · Ry · Rz for EulerRot::XYZ (intrinsic), as glam composes it.
+        let r = [
+            [cy * cz, cx * sz + sx * sy * cz, sx * sz - cx * sy * cz],
+            [-cy * sz, cx * cz - sx * sy * sz, sx * cz + cx * sy * sz],
+            [sy, -sx * cy, cx * cy],
+        ];
+        let m = [
+            [r[0][0] * scale[0], r[0][1] * scale[0], r[0][2] * scale[0]],
+            [r[1][0] * scale[1], r[1][1] * scale[1], r[1][2] * scale[1]],
+            [r[2][0] * scale[2], r[2][1] * scale[2], r[2][2] * scale[2]],
+        ];
+        Affine3 { m, t: pos }
+    }
+
+    /// `self ∘ child`: apply `child` first, then `self`.
+    pub fn then(self, child: Affine3) -> Affine3 {
+        let mul = |v: [f64; 3]| [
+            self.m[0][0] * v[0] + self.m[1][0] * v[1] + self.m[2][0] * v[2],
+            self.m[0][1] * v[0] + self.m[1][1] * v[1] + self.m[2][1] * v[2],
+            self.m[0][2] * v[0] + self.m[1][2] * v[1] + self.m[2][2] * v[2],
+        ];
+        let t = mul(child.t);
+        Affine3 { m: [mul(child.m[0]), mul(child.m[1]), mul(child.m[2])], t: [t[0] + self.t[0], t[1] + self.t[1], t[2] + self.t[2]] }
+    }
+
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        let a = self.then(Affine3 { m: Affine3::IDENTITY.m, t: p });
+        a.t
+    }
+
+    pub fn translation(&self) -> [f64; 3] {
+        self.t
+    }
+
+    /// The twelve coefficients in Bevy's `Affine3A` order: the three axes
+    /// then the translation.
+    pub fn to_cols(&self) -> [f64; 12] {
+        let m = self.m;
+        [m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], self.t[0], self.t[1], self.t[2]]
+    }
+
+    pub fn max_diff(&self, other: &Affine3) -> f64 {
+        self.to_cols().iter().zip(other.to_cols().iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    }
+}
+
+/// A node's own 3D transform. A node without `transform3d` is the identity.
+pub fn local_affine3(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine3 {
+    if doc.component(id, ComponentKind::Transform3d).is_none() {
+        return Affine3::IDENTITY;
+    }
+    let vec = |field: &str, default: [f64; 3]| {
+        let path = LeafPath::new(ComponentKind::Transform3d, field).expect("declared field");
+        read(Leaf { node: id, path }).and_then(|v| v.as_vec3()).unwrap_or(default)
+    };
+    Affine3::from_trs(vec("pos", [0.0; 3]), vec("rot", [0.0; 3]), vec("scale", [1.0; 3]))
+}
+
+/// The node's local space to its composition's 3D space: every live
+/// ancestor's local 3D affine, root first, then the node's own.
+pub fn world_affine3(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine3 {
+    let mut chain = vec![id];
+    let mut cur = doc.live(id).and_then(|n| n.parent);
+    while let Some(p) = cur {
+        chain.push(p);
+        cur = doc.live(p).and_then(|n| n.parent);
+    }
+    chain.iter().rev().fold(Affine3::IDENTITY, |acc, &n| acc.then(local_affine3(doc, read, n)))
+}
+
+// ---------------------------------------------------------------------------
 // Local bounds
 
 /// A drawable node's extent in its own local space, before its transform:
@@ -409,6 +501,39 @@ mod tests {
             // inside a pixel for any document-sized transform.
             let scale = ours.0.iter().fold(1.0f64, |m, v| m.max(v.abs()));
             assert!(ours.max_diff(&bevy) <= 1e-5 * scale, "case {case}: {ours:?} vs bevy {bevy:?}");
+        }
+    }
+
+    #[test]
+    fn affine3_matches_bevy_euler_xyz_and_composition() {
+        let mut seed = 0x3D_5EED;
+        for case in 0..200 {
+            let r = |s: &mut u64, lo: f64, hi: f64| lo + (hi - lo) * lcg(s);
+            let depth = 1 + case % 3;
+            let mut ours = Affine3::IDENTITY;
+            let mut bevy = glam::Affine3A::IDENTITY;
+            for _ in 0..depth {
+                let pos = [r(&mut seed, -10.0, 10.0), r(&mut seed, -10.0, 10.0), r(&mut seed, -10.0, 10.0)];
+                let rot = [r(&mut seed, -3.0, 3.0), r(&mut seed, -3.0, 3.0), r(&mut seed, -3.0, 3.0)];
+                let scale = [r(&mut seed, 0.3, 2.0), r(&mut seed, 0.3, 2.0), r(&mut seed, 0.3, 2.0)];
+                ours = ours.then(Affine3::from_trs(pos, rot, scale));
+                let local = glam::Affine3A::from_scale_rotation_translation(
+                    glam::Vec3::new(scale[0] as f32, scale[1] as f32, scale[2] as f32),
+                    glam::Quat::from_euler(glam::EulerRot::XYZ, rot[0] as f32, rot[1] as f32, rot[2] as f32),
+                    glam::Vec3::new(pos[0] as f32, pos[1] as f32, pos[2] as f32),
+                );
+                bevy = bevy * local;
+            }
+            let b = Affine3 {
+                m: [bevy.matrix3.x_axis.to_array().map(f64::from), bevy.matrix3.y_axis.to_array().map(f64::from), bevy.matrix3.z_axis.to_array().map(f64::from)],
+                t: bevy.translation.to_array().map(f64::from),
+            };
+            let scale = ours.to_cols().iter().fold(1.0f64, |m, v| m.max(v.abs()));
+            assert!(ours.max_diff(&b) <= 2e-5 * scale, "case {case}: {ours:?} vs {b:?}");
+            let p = [1.0, 2.0, 3.0];
+            let q = ours.apply(p);
+            let bq = bevy.transform_point3(glam::Vec3::new(1.0, 2.0, 3.0));
+            assert!((q[0] - bq.x as f64).abs() < 2e-4 * scale && (q[2] - bq.z as f64).abs() < 2e-4 * scale, "{q:?} vs {bq:?}");
         }
     }
 

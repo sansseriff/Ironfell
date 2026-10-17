@@ -12,7 +12,8 @@ use std::collections::BTreeSet;
 use crate::bevy_app::scene3d::{ActiveState, Shape};
 
 /// Drawable 2D node: what the document layer emits for it. Geometry is in the
-/// node's local space; placement comes from the entity's `GlobalTransform`.
+/// node's local space; placement is the store's world affine (vision 10 §3:
+/// a 2D entity carries no transform, the scene and the store place it).
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct Doc2d {
     pub shape: Shape2d,
@@ -191,16 +192,22 @@ pub(super) fn reconcile(
         }
     }
 
-    // Pass 2: parent links, for every touched node that is materialised.
+    // Pass 2: 3D placement below a moved 3D node. Entities are flat (no
+    // `ChildOf`, so Bevy propagates nothing for document nodes); the store
+    // computes every world affine, and a 3D ancestor's move is written to
+    // each materialised descendant here. 3D nodes are few; 2D entities carry
+    // no transform at all.
     for &id in affected {
-        let (Some(node), Some(e)) = (doc.live(id), map.entity(id)) else { continue };
-        let Ok(mut ec) = commands.get_entity(e) else { continue };
-        match node.parent.and_then(|p| map.entity(p)) {
-            Some(pe) => {
-                ec.insert(ChildOf(pe));
+        if doc.live(id).is_none() || !in_3d(store, id) {
+            continue;
+        }
+        for d in doc.descendants(id) {
+            if affected.contains(&d) {
+                continue;
             }
-            None => {
-                ec.remove::<ChildOf>();
+            let Some(e) = map.entity(d) else { continue };
+            if let Ok(mut ec) = commands.get_entity(e) {
+                ec.insert(Reader { store, id: d }.global_3d());
             }
         }
     }
@@ -230,13 +237,13 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         // An embed inside a 3D composition is a plane in it (ECM §7.4): 3D
         // content the composition's cameras see; `planes` gives it its mesh
         // and texture.
-        "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Transform::default(), Visibility::default())),
+        "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Visibility::default())),
         "group" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
         "rect" | "ellipse" | "slider" | "path" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
         // A camera node is a pose: embeds that name it look through it.
-        "camera" => commands.spawn((Provenance(id), Name::new(format!("camera {id}")), Transform::default(), Visibility::default())),
+        "camera" => commands.spawn((Provenance(id), Name::new(format!("camera {id}")), Visibility::default())),
         "mesh" => {
             let bounds = assets.torus_bounds;
             commands.spawn((
@@ -252,6 +259,15 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         _ => return None,
     };
     write_values(store, id, layers, &mut ec, assets);
+    // A 3D entity's `Transform` is written once, as its world pose: Bevy's
+    // required-component machinery adds one anyway (`Mesh3d`), and its
+    // simple-transform sync would copy an identity over the global on the
+    // first frame. After this only `GlobalTransform` is written, so the sync
+    // never runs again for the entity.
+    if in_3d(store, id) {
+        let r = Reader { store, id };
+        ec.insert(Transform::from_matrix(Mat4::from(r.global_3d().affine())));
+    }
     Some(ec.id())
 }
 
@@ -267,13 +283,10 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
     ec.insert(InComposition(composition));
     match node.ty.name() {
         "embed" if in_3d(store, id) => {
-            ec.insert((r.transform_3d(), RenderLayers::layer(layers.of(composition))));
+            ec.insert((r.global_3d(), RenderLayers::layer(layers.of(composition))));
         }
-        "group" | "embed" => {
-            ec.insert(r.transform_2d());
-        }
+        "group" | "embed" => {}
         "rect" | "ellipse" | "slider" | "path" => {
-            ec.insert(r.transform_2d());
             let shape = match node.ty.name() {
                 "ellipse" => {
                     // Present, or previewed by a gesture that will add it.
@@ -305,10 +318,10 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, ec: &
             ec.insert(Doc2d { shape, fill, stroke, shadow });
         }
         "camera" => {
-            ec.insert(r.transform_3d());
+            ec.insert(r.global_3d());
         }
         "mesh" => {
-            ec.insert(r.transform_3d());
+            ec.insert(r.global_3d());
             let asset = r.str("mesh.asset").unwrap_or_else(|| "torus".to_owned());
             if asset != "torus" {
                 warn!("{id}: unknown mesh asset {asset:?}; showing torus");
@@ -350,30 +363,12 @@ impl Reader<'_> {
             .unwrap_or(default)
     }
 
-    /// Document 2D space is y-down with the origin at the viewer panel's
-    /// top-left; the entity transform is that space verbatim, and the layer
-    /// renderer applies the panel offset when it emits commands.
-    fn transform_2d(&self) -> Transform {
-        if self.store.document().component(self.id, ComponentKind::Transform2d).is_none() {
-            return Transform::IDENTITY;
-        }
-        Transform {
-            translation: Vec3::new(self.num("transform2d.x", 0.0), self.num("transform2d.y", 0.0), 0.0),
-            rotation: Quat::from_rotation_z(self.num("transform2d.rot", 0.0)),
-            scale: Vec3::new(self.num("transform2d.sx", 1.0), self.num("transform2d.sy", 1.0), 1.0),
-        }
-    }
-
-    fn transform_3d(&self) -> Transform {
-        if self.store.document().component(self.id, ComponentKind::Transform3d).is_none() {
-            return Transform::IDENTITY;
-        }
-        let r = self.vec3("transform3d.rot", Vec3::ZERO);
-        Transform {
-            translation: self.vec3("transform3d.pos", Vec3::ZERO),
-            rotation: Quat::from_euler(EulerRot::XYZ, r.x, r.y, r.z),
-            scale: self.vec3("transform3d.scale", Vec3::ONE),
-        }
+    /// The node's world pose in its composition's 3D space, from the store
+    /// (`Store::world_affine3`): every live ancestor's `transform3d` then its
+    /// own. Bevy receives it and never propagates it.
+    fn global_3d(&self) -> GlobalTransform {
+        let c = self.store.world_affine3(self.id).to_cols().map(|v| v as f32);
+        GlobalTransform::from(bevy::math::Affine3A::from_cols_array(&c))
     }
 }
 

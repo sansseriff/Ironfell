@@ -59,8 +59,8 @@ pub fn shape_tool_system(
     store: Res<DocumentStore>,
     mut pending: ResMut<PendingTransactions>,
     map: Res<NodeMap>,
-    globals: Query<&'static GlobalTransform>,
-    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
+    spatial: Res<crate::document_bridge::SpatialScene>,
+    nodes: Query<&'static Doc2d>,
 ) {
     let doc = store.0.document();
     if let Some(id) = shapes.select.filter(|&id| doc.live(id).is_some()) {
@@ -79,7 +79,7 @@ pub fn shape_tool_system(
     if pointer.just_pressed_left
         && let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two)
     {
-        let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+        let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
         shapes.press = drop_target(&geo, &hits, view).map(|(container, to_comp)| ShapePress { panel: view.panel.clone(), container, to_comp, start: screen, rect: None });
     }
     let Some(press) = shapes.press.as_mut() else { return };

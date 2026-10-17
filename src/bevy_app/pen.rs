@@ -137,8 +137,8 @@ pub fn pen_tool_system(
     store: Res<DocumentStore>,
     mut pending: ResMut<PendingTransactions>,
     map: Res<NodeMap>,
-    globals: Query<&'static GlobalTransform>,
-    nodes: Query<(&'static Doc2d, &'static GlobalTransform)>,
+    spatial: Res<crate::document_bridge::SpatialScene>,
+    nodes: Query<&'static Doc2d>,
     (dpr, mut shown, mut edit): (Res<crate::Dpr>, Local<Option<ActiveTool>>, ResMut<PathEdit>),
 ) {
     let pen = &mut *pen;
@@ -213,7 +213,7 @@ pub fn pen_tool_system(
     };
     pen.hover = match view {
         Some(v) => {
-            let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+            let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
             let closing = pen.path.as_ref().filter(|(id, p, _)| p == &v.panel && doc.live(*id).is_some()).is_some_and(|(path, _, to_comp)| {
                 let points = geo.points(*path);
                 let to_screen = v.affine() * to_comp.inverse() * geo.world(*path);
@@ -244,7 +244,7 @@ pub fn pen_tool_system(
     }
     let Some((panel, start, end)) = pen.press.take() else { return };
     let Some(view) = views.get(&panel) else { return };
-    let geo = Geo { store: &store.0, map: &map, globals: &globals, nodes: &nodes };
+    let geo = Geo { store: &store.0, map: &map, nodes: &nodes, spatial: &spatial };
     let to_doc = view.affine().inverse();
     let mut drag = (to_doc * end) - (to_doc * start);
     if drag.hypot() * view.zoom as f64 <= DRAG * dpr.0 {

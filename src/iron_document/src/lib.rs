@@ -46,7 +46,7 @@ pub mod view;
 pub use component::{Component, ComponentKind, LeafError, LeafPath, LeafStruct};
 pub use document::{Document, Node, RelKind, Relation};
 pub use expr::{Expr, Leaf};
-pub use geom::Affine2;
+pub use geom::{Affine2, Affine3};
 pub use gesture::{GestureId, GestureStatus};
 pub use graph::ResolvedChange;
 pub use handle::Handle;
@@ -382,6 +382,11 @@ impl Store {
     /// to the materialised entity's `GlobalTransform`; see `geom`.
     pub fn world_affine(&self, id: NodeId) -> Affine2 {
         geom::world_affine(&self.doc, &|l| self.reactive.read(&self.doc, l), id)
+    }
+
+    /// The node's local 3D space to its composition's (`geom::world_affine3`).
+    pub fn world_affine3(&self, id: NodeId) -> geom::Affine3 {
+        geom::world_affine3(&self.doc, &|l| self.reactive.read(&self.doc, l), id)
     }
 
     /// The node's own transform in its parent's space, from resolved values.

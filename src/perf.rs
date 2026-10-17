@@ -39,6 +39,9 @@ pub enum Phase {
     OverlayGeometry,
     /// Independent resolved bounds/index update, including hidden compositions.
     Bounds,
+    /// Bevy's transform propagation (`TransformSystems::Propagate`), timed
+    /// from outside the set; every frame, idle ones included.
+    Propagate,
     /// One whole frame on the worker (`WorkerApp::frame`), main world and,
     /// when it renders, extraction and rendering. CPU only: the GPU's share
     /// shows in frames per second.
@@ -49,7 +52,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    const ALL: [Phase; 12] = [
+    const ALL: [Phase; 13] = [
         Phase::Sync,
         Phase::GestureReconcile,
         Phase::DisplayList,
@@ -60,6 +63,7 @@ impl Phase {
         Phase::Pick,
         Phase::OverlayGeometry,
         Phase::Bounds,
+        Phase::Propagate,
         Phase::Frame,
         Phase::ChangedFrame,
     ];
@@ -76,6 +80,7 @@ impl Phase {
             Phase::Pick => "pick",
             Phase::OverlayGeometry => "overlay_geometry",
             Phase::Bounds => "bounds",
+            Phase::Propagate => "propagate",
             Phase::Frame => "frame",
             Phase::ChangedFrame => "changed_frame",
         }
@@ -86,7 +91,7 @@ impl Phase {
 const CAP: usize = 7200;
 
 struct Table {
-    samples: [Vec<f32>; 12],
+    samples: [Vec<f32>; 13],
     bounds_updated: u32,
     pick_candidates: u32,
     /// Whether a view encoded during the current frame.
@@ -99,7 +104,7 @@ struct Table {
     drawn: u32,
 }
 
-static TABLE: Mutex<Table> = Mutex::new(Table { samples: [const { Vec::new() }; 12], encoded: false, commands: 0, culled: 0, drawn: 0, bounds_updated: 0, pick_candidates: 0 });
+static TABLE: Mutex<Table> = Mutex::new(Table { samples: [const { Vec::new() }; 13], encoded: false, commands: 0, culled: 0, drawn: 0, bounds_updated: 0, pick_candidates: 0 });
 
 pub fn set_bounds_updates(n: u32) { if let Ok(mut t) = TABLE.lock() { t.bounds_updated = t.bounds_updated.max(n); } }
 pub fn set_pick_candidates(n: u32) { if let Ok(mut t) = TABLE.lock() { t.pick_candidates = t.pick_candidates.max(n); } }

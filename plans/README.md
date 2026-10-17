@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-10-16 on `document-spine`. Update this file whenever a plan is added,
+**Updated:** 2026-10-17 on `master`. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -86,6 +86,13 @@ passes 15 checks and the 100,000-runtime-entity concurrency fixture passes 17.
 Human input/display testing and comparison gates remain. A bounded experiment no longer waits
 for raster caching. Its work order is in `handoff-product.md` §4.1; the full port
 and other platforms remain unscheduled.
+
+[`10_engine-boundary.md`](vision/10_engine-boundary.md) (2026-10-17) settles who
+computes world transforms (Iron, for 2D and 3D; Bevy consumes), what a Bevy entity is
+for (the working set and 3D renderables, by presentation mode), and how values return
+from Bevy and Models (runtime signals, never per-frame ops). It answers CS I5 and
+roadmap §5's ownership question and gives a phased work order in its §7; phase 1 is
+the render handoff's item 3. Not yet scheduled in either handoff.
 
 The Model interop proposal in [`specs/model-interop.md`](specs/model-interop.md)
 clarifies that bulk computed results enter the engine independently of the Svelte

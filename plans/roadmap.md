@@ -214,11 +214,14 @@ Findings from reading Understory's source (`forest-rs/understory`, August 2026):
   Partial raster invalidation, shared subtree geometry summaries, independent overlay
   targets and caches remain unfinished; stage H is not complete.
 
-One ownership question stays open: world transforms are computed by Bevy for rendering,
-by the store for the solver (stage A), and would be computed again by the box tree.
-The current spatial adapter consumes Bevy globals and adds no third transform tree.
-Long term, store/Bevy ownership is still CS open question I5; adding
-`understory_box_tree` requires resolving that question rather than duplicating propagation.
+The ownership question is settled (2026-10-17,
+[`vision/10_engine-boundary.md`](vision/10_engine-boundary.md)): Iron computes world
+transforms for every document node, 2D and 3D, in a retained pass keyed on per-subtree
+local and placement revisions; Bevy entities receive them and never propagate document
+nodes; `understory_box_tree` stays rejected. Entities exist per presentation mode (Live
+subtrees and 3D renderables only), and values return from Bevy through runtime signals,
+not per-frame ops. The work order is that document's §7.1; its phase 1 is
+`handoff-render.md` item 3.
 
 ---
 

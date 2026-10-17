@@ -867,9 +867,11 @@ phases above assume.
   them for ideas only. Inkling's repository has no licence file, so the same applies.
 - **I4. Linear algebra.** Hand-rolled dense versus `nalgebra` versus `faer`; finite
   differences versus dual numbers. Decide from the phase 1 benchmark.
-- **I5. Who owns world transforms.** The store now computes them for the solver, Bevy
-  computes them for rendering, and the caching plan's Understory box tree would compute
-  them a third time. Long term, one should be the authority and the others consumers.
+- **I5. Who owns world transforms.** *Settled 2026-10-17:* Iron, for 2D and 3D, in a
+  retained revision-keyed pass; Bevy consumes and never propagates document nodes; no
+  box tree. See [`../vision/10_engine-boundary.md`](../vision/10_engine-boundary.md)
+  §1–3. Its §8 Q1 reopens where §11's simulation runs (in `iron_solve` or as a
+  Bevy-side producer); the pose still flows through the simulation layer either way.
 - **I6. Quaternion migration** (§12): the timing and the file migration for existing
   documents.
 - **I7. Cross-platform floating point.** Replay is safe because it applies recorded ops.

@@ -112,6 +112,10 @@ and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
    canonical index per composition, an affine per occurrence). Rotating the field
    should then update one placement, not 10,002 bounds. Do not add
    `understory_box_tree` or another transform hierarchy for this (roadmap §5).
+   *2026-10-17:* this is phase 1 of `vision/10_engine-boundary.md` §7.1, which
+   decided that Iron owns world transforms for 2D and 3D and Bevy consumes them;
+   build the revisions in the store, not the bridge, so phase 2 can drop Bevy
+   propagation for document nodes.
 4. **Chunks with selective subtree baking** (old item 6, unchanged in substance).
    Start with authored groups as the chunk unit. Bake a static, complex or
    small-on-screen group into an `Offscreen` view at a √2 scale bucket, draw it
@@ -123,9 +127,12 @@ and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
    which routes a whole panel through an intermediate layer texture. 0.2 also has
    `push_clip_path`. Measure before switching.
 
-Later, when Bevy is on wgpu 30: upgrade to `vello_gpu` 0.3 (renamed from
-`vello_hybrid`; `draw_texture_rects` became external-texture image paints) and
-try chunk-level vector retention with `TargetInit::SrcOver`. Item 3's revisions
+Bevy 0.20 (wgpu 30) shipped 2026-10-08 and `vello_gpu` 0.3 on 2026-10-02, so the
+upgrade is available now: `vello_gpu` 0.3 (renamed from `vello_hybrid`;
+`draw_texture_rects` became external-texture image paints), `app-surface` 1.13,
+and `bevy_vello` dropped (its `main` is still on Bevy 0.19; Classic is rebuilt
+later on the shared view-texture path, probe crate first). Then try chunk-level
+vector retention with `TargetInit::SrcOver`. Item 3's revisions
 are what it needs. Renderer alternatives (Vello Classic on WebGPU, a tessellated
 mesh baseline, Rive as a reference) are experiments for the
 `iron_renderer_probe` harness, not priorities; see `renderer-sanity-checks.md` §10.

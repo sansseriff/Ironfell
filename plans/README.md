@@ -91,8 +91,9 @@ and other platforms remain unscheduled.
 computes world transforms (Iron, for 2D and 3D; Bevy consumes), what a Bevy entity is
 for (the working set and 3D renderables, by presentation mode), and how values return
 from Bevy and Models (runtime signals, never per-frame ops). It answers CS I5 and
-roadmap §5's ownership question and gives a phased work order in its §7; phase 1 is
-the render handoff's item 3. Not yet scheduled in either handoff.
+roadmap §5's ownership question and gives a phased work order in its §7. Phase 1
+(the render handoff's item 3, the group-local spatial scene) landed 2026-10-17;
+phases 2–5 are not yet scheduled in either handoff.
 
 The Model interop proposal in [`specs/model-interop.md`](specs/model-interop.md)
 clarifies that bulk computed results enter the engine independently of the Svelte

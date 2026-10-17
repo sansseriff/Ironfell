@@ -1,7 +1,7 @@
 # The engine boundary: what Iron evaluates and what Bevy runs
 
-**Status:** Vision draft, agreed in conversation 2026-10-17; the work order is not yet
-scheduled. Settles CS open question I5 and roadmap §5's ownership question.
+**Status:** Agreed 2026-10-17. Phase 1 of §7.1 is built (`rendering/render-benchmark.md`
+§10); phases 2–5 are not yet scheduled. Settles CS open question I5 and roadmap §5's ownership question.
 **Date:** 2026-10-17
 **Scope:** Where resolved state (world transforms, solved poses, evaluated bindings) is
 computed; what a Bevy entity is for; how values flow from Bevy and from Models back into
@@ -245,10 +245,14 @@ solver, gestures, SVG, the Vello backend, views and textures and the UI protocol
 
 Each phase leaves the app working and the smoke script passing.
 
-1. **Retained transforms in Iron** (2D). Revisions, cached world affines and bounds in
-   the store; `iron_spatial` moves to local space plus placements. Bevy still spawns and
-   propagates; the drift check now compares the other way. *Exit:* rotating the 10k
-   field updates one placement; bounds cost is flat in descendants.
+1. **Retained transforms in Iron** (2D). **Done 2026-10-17** (commit `161648c`):
+   `geom::Revisions` (placement, local, structure), `Store::local_affine`,
+   `local_bounds` and `take_geometry_changes`; `iron_spatial::Scene` in local space
+   plus placements; `prepare_spatial` reads no Bevy transform. Bevy still spawns and
+   propagates; the drift check stays. *Exit met:* rotating the 10k field rewrites one
+   entry (`render-benchmark.md` §10). Not done: a cached world-affine table in the
+   store itself (`world_affine` still walks the chain; the scene caches placements
+   per group, which is what phase 2's readers need).
 2. **Bevy consumes.** The reconciler writes `GlobalTransform` from Iron for 2D and 3D
    and stops using `ChildOf` for document nodes; every 2D reader switches to Iron
    affines; the drift check is deleted. *Exit:* no document-node propagation in the

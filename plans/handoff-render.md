@@ -112,10 +112,13 @@ and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
    canonical index per composition, an affine per occurrence). Rotating the field
    should then update one placement, not 10,002 bounds. Do not add
    `understory_box_tree` or another transform hierarchy for this (roadmap §5).
-   *2026-10-17:* this is phase 1 of `vision/10_engine-boundary.md` §7.1, which
-   decided that Iron owns world transforms for 2D and 3D and Bevy consumes them;
-   build the revisions in the store, not the bridge, so phase 2 can drop Bevy
-   propagation for document nodes.
+   *2026-10-17:* **the spatial half is done** (`render-benchmark.md` §10): the
+   store classifies placement, local and structure changes (`geom::Revisions`)
+   and `iron_spatial::Scene` indexes each group in its own space, so rotating
+   the 10k field rewrites one entry (was 10,002) and the bounds phase drops below
+   the timer's 0.1 ms. This is phase 1 of `vision/10_engine-boundary.md` §7.1.
+   **Still open:** the selection cache's `overlay_geometry` keys on the global
+   `GeometryRevision`; key it on the selection's subtree revisions instead.
 4. **Chunks with selective subtree baking** (old item 6, unchanged in substance).
    Start with authored groups as the chunk unit. Bake a static, complex or
    small-on-screen group into an `Offscreen` view at a √2 scale bucket, draw it

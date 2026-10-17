@@ -30,7 +30,9 @@ Verified on macOS (Apple Silicon) on 2026-09-18 and on a Linux cloud container
   on the container the card's dot is at (934, 150). Driver-paced drags may
   also stop a few pixels short of their target, so values like the
   slider's 0.8 can read 0.76 and a resize's 120 can read 116 in the smoke
-  output; a wrong *target* (another node) is the failure to look for.
+  output (a baseline build on the same container showed 0.81 and the same
+  solver-count and version drift); a wrong *target* (another node) is the
+  failure to look for.
 
 ## Prerequisites
 

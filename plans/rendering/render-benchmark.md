@@ -437,3 +437,63 @@ Costs and limits: one extra panel-sized texture per visible 2D panel (bucketed
 RGBA8, ~59 MB for a full-window panel at 5K). Lit outlines are no longer clipped
 to an embed's region (Figma shows them past a clipping frame too). Plane views,
 which have no overlay, still stroke lit nodes in their content.
+
+## 10. Group-local spatial scene: a moved group is one entry (2026-10-17)
+
+`handoff-render.md` §4 item 3's spatial half; phase 1 of
+[`../vision/10_engine-boundary.md`](../vision/10_engine-boundary.md). The store
+now classifies what moved (`geom::Revisions`: a node's own **placement**, its
+**local** geometry, or **structure**), and `iron_spatial::Scene` keeps one index
+per group in the group's local space with one placement affine per group.
+Rotating the stress field rewrites the field's entry in its parent's index and
+nothing below it; a leaf edit rewrites the leaf and, only if a union grew, its
+ancestors. The bridge's `prepare_spatial` reads no Bevy transform any more
+(`Bounds2d` is gone); drawing and picking still take placements from Bevy
+globals until phase 2, and the store-versus-Bevy drift check stays on.
+
+Measured on a Linux container with SwiftShader only (4 cores, no GPU), so the
+app ran at 1–5 fps and the GPU protocol of §6–9 could not be repeated; frame
+times below are not comparable with the M5 rows above. The bounds phase and
+the entry counts are, since they are CPU work that does not depend on the
+renderer. `wasm-bench` with SIMD, 1600×1000 DPR 1, worker CPU p50 ms; the
+phase timer's resolution is 0.1 ms.
+
+| Shapes | Scenario | Entries rewritten before | After | Bounds phase before (M5, §7) | Before (container, same build minus this change) | After (container) |
+|---|---|---|---|---|---|---|
+| 1,000 | spin | 1,002 | **1** | 0.40 | – | < 0.1 |
+| 10,000 | spin | 10,002 | **1** | 4.40 | 24.8 (p95 33.2, 12 frames) | < 0.1 (13 frames) |
+
+The container baseline is commit `6ab558d` with only the stress id fix applied,
+measured by a reduced script (`idle`, `spin`, `pan`; the full matrix's
+Cmd-click on the sample does not land at 1–5 fps). Its 10k `spin` changed frame
+was 84 ms against 67 ms after; what remains is Bevy's propagation over one
+entity per node and the encode, both untouched here.
+
+Native, release, `iron_spatial/tests/scene.rs` (`ten_thousand_shapes_rotate_as_one_entry`),
+the stress shape (100 cells of 100): rotate update 24 µs, a leaf drag 25 µs
+(one entry when the cell's union still covers it, up to three when it grows),
+a 1600×1000 visible-rect query 142 µs for 405 hits, full rebuild on a
+structural change 40 ms.
+
+What this does not change yet: the `overlay_geometry` cost of a selected-group
+drag (the selection cache still keys on the global `GeometryRevision`; item 3's
+other half), Bevy's own propagation over one entity per node (phase 2 removes it
+for document nodes), and encoding. Candidates after a rotation are a superset
+of a flat index's: a group's query box is the rotated query's bounding box in
+the group's space, so the hosts' exact tests (shape containment, the view clip)
+decide, as they already did.
+
+Verification: `iron_document` and `iron_spatial` native suites (six new scene
+tests, including a flat-reference equivalence when nothing is rotated and a
+superset-of-exact check after rotation); the full smoke; `spatial.txt` at DPR 1
+and 2 with identical reference/indexed pixels in all four pairs and 36 of 37
+assertions (the through-plane step reads a fixed pixel that depends on the
+panel geometry; it was checked by hand at this machine's position in both
+modes); `picking.txt` 10 of 10. The full smoke's small value drifts against SKILL.md's
+expected output (a slider scrub reading 0.76, a drag stopping short) reproduce
+with the baseline build on this container, where driver-paced input runs ahead
+of ~8 fps frames. Raw samples:
+[`render-scene-local-2026-10-17.jsonl`](benchmarks/render-scene-local-2026-10-17.jsonl).
+Two fixes landed alongside: `?stress=N` panicked since paths gained a contour
+node (one id short per path), and `spatial.txt`'s fixture markup predated the
+current edit grammar.

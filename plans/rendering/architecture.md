@@ -125,8 +125,9 @@ Levels 2 and 3 both need per-subtree revisions from Iron, which is why those com
   the view-texture graph, takes `NodeId`-mapped partitions, revisions and resolved
   affines, and could drive another backend.
 - **No new transform hierarchy.** Partitions receive resolved composition-space affines
-  (as `iron_spatial` does from Bevy globals); parent edges express compositing
-  containment only. `understory_box_tree` is not adopted (roadmap §5, CS I5).
+  from the store's own transforms (since 2026-10-17 `iron_spatial::Scene` reads
+  `Store::local_affine` and the store's revisions, not Bevy globals; vision 10 §3);
+  parent edges express compositing containment only. `understory_box_tree` is not adopted (roadmap §5, CS I5).
 - **Understory:** `understory_index` is adopted inside `iron_spatial` with private
   handles and `NodeId` payloads. `understory_presentation` would duplicate
   `DisplayList` and is not adopted. Its roadmap lists a future render-tree crate.

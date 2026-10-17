@@ -332,6 +332,72 @@ pub fn document_spatial(app: &mut WorkerApp, enabled: bool) -> String {
     result.to_string()
 }
 
+/// The runtime signal layer (vision 10 §4): registered producers, every
+/// published signal with its producer and stamp, and conflicts.
+pub fn document_signals(app: &mut WorkerApp) -> String {
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
+    };
+    let gas = app.world().resource::<crate::document_bridge::gas::GasSim>();
+    let producers: Vec<_> = [(iron_document::ProducerId::CLIPS, "clips".to_owned()), (iron_document::ProducerId::NETWORK, "network".to_owned())]
+        .into_iter()
+        .chain(store.0.producers().map(|(p, n)| (p, n.to_owned())))
+        .map(|(p, name)| {
+            let running = if name == crate::document_bridge::gas::PRODUCER { Some(gas.running) } else { None };
+            serde_json::json!({"id": p.0, "name": name, "running": running, "held": store.0.signals().values().filter(|s| s.producer == p).count()})
+        })
+        .collect();
+    let signals: Vec<_> = store
+        .0
+        .signals()
+        .iter()
+        .map(|(leaf, s)| serde_json::json!({"leaf": leaf.to_string(), "value": s.value, "producer": store.0.producer_name(s.producer), "stamp": s.stamp}))
+        .collect();
+    let errors: Vec<_> = store.0.signal_errors().iter().map(|(leaf, e)| serde_json::json!({"leaf": leaf.to_string(), "message": e})).collect();
+    let result = serde_json::json!({"ok": true, "producers": producers, "signals": signals, "errors": errors, "gas": {"frames": gas.frames, "pressure": gas.pressure}});
+    if let Some(mut active) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active.remaining_frames = 10;
+    }
+    result.to_string()
+}
+
+/// Control a host producer: `freeze` commits what it publishes as one
+/// transaction and stops it, `stop` only stops it, `run` starts it again.
+pub fn document_producer(app: &mut WorkerApp, name: String, action: String) -> String {
+    use crate::document_bridge::gas;
+    if name != gas::PRODUCER {
+        return serde_json::json!({"ok": false, "error": format!("unknown producer {name:?}; only {:?} exists", gas::PRODUCER)}).to_string();
+    }
+    let now = app.world().resource::<Time>().elapsed().as_millis() as u64;
+    let world = app.world_mut();
+    let mut sim = world.resource_mut::<gas::GasSim>();
+    let result = match action.as_str() {
+        "run" => {
+            sim.running = true;
+            serde_json::json!({"ok": true, "running": true})
+        }
+        "stop" => {
+            sim.running = false;
+            serde_json::json!({"ok": true, "running": false})
+        }
+        "freeze" => {
+            sim.running = false;
+            let mut store = world.resource_mut::<crate::document_bridge::DocumentStore>();
+            let producer = gas::producer_id(&mut store.0);
+            match store.0.freeze(producer, format!("freeze {name}"), iron_document::Actor::Human, now) {
+                None => serde_json::json!({"ok": true, "running": false, "frozen": 0}),
+                Some(Ok(applied)) => serde_json::json!({"ok": true, "running": false, "frozen": 1, "version": applied.version.0}),
+                Some(Err(errors)) => serde_json::json!({"ok": false, "errors": errors}),
+            }
+        }
+        other => serde_json::json!({"ok": false, "error": format!("unknown action {other:?}; use run, stop or freeze")}),
+    };
+    if let Some(mut active) = world.get_resource_mut::<ActivityControl>() {
+        active.remaining_frames = 10;
+    }
+    result.to_string()
+}
+
 pub fn document_timings(_app: &mut WorkerApp, reset: bool) -> String {
     crate::perf::report(reset).to_string()
 }

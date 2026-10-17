@@ -13,7 +13,7 @@
 
 use crate::document::Document;
 use crate::expr::{BinOp, Expr, Leaf};
-use crate::graph::Reactive;
+use crate::graph::{ProducerId, Reactive};
 use crate::value::{Value, ValueKind};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,11 +46,12 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
         }
         return Handle::Locked(format!("{leaf} does not exist"));
     };
-    if reactive.animated().contains_key(&leaf) {
-        return Handle::Locked(format!("{leaf} is driven by a clip at the current time"));
-    }
-    if reactive.physics().contains_key(&leaf) {
-        return Handle::Locked(format!("{leaf} is solved by its across/through network; change a source or a parameter instead"));
+    if let Some(signal) = reactive.signal(leaf) {
+        return Handle::Locked(match signal.producer {
+            ProducerId::CLIPS => format!("{leaf} is driven by a clip at the current time"),
+            ProducerId::NETWORK => format!("{leaf} is solved by its across/through network; change a source or a parameter instead"),
+            p => format!("{leaf} is published by producer {} at runtime; freeze it to edit", p.0),
+        });
     }
     // A connection's in-port has no binding of its own but resolves through
     // its partner (`port::derived_signals`), so it inverts like one.
@@ -65,7 +66,7 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
         .deps()
         .into_iter()
         .filter(|d| {
-            !reactive.animated().contains_key(d)
+            !reactive.is_driven(*d)
                 && doc.leaf(d.node, d.path).and_then(|s| s.constant()).is_some_and(|v| matches!(v.kind(), ValueKind::Number | ValueKind::Quantity))
         })
         .collect();

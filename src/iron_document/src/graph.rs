@@ -29,6 +29,28 @@ pub struct ResolvedChange {
     pub value: Value,
 }
 
+/// Who publishes a runtime signal. Two producers are built in; a host
+/// registers more through `Store::register_producer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProducerId(pub u32);
+
+impl ProducerId {
+    /// Clips sampled at the playhead (`time.rs`).
+    pub const CLIPS: ProducerId = ProducerId(0);
+    /// The across/through network's solution (`Store::resolve_physics`).
+    pub const NETWORK: ProducerId = ProducerId(1);
+    /// The first id a host producer receives.
+    pub const FIRST_HOST: ProducerId = ProducerId(2);
+}
+
+/// One published value: who published it and at which of their frames.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Signal {
+    pub value: Value,
+    pub producer: ProducerId,
+    pub stamp: u64,
+}
+
 #[derive(Clone, Debug)]
 struct BoundNode {
     expr: Expr,
@@ -43,12 +65,17 @@ pub struct Reactive {
     dependents: BTreeMap<Leaf, BTreeSet<Leaf>>,
     resolved: BTreeMap<Leaf, Value>,
     overlay: BTreeMap<Leaf, Value>,
-    /// Clip-sampled values at the current time (`time.rs`). Read beneath the
-    /// gesture overlay and above the authored constant.
-    animated: BTreeMap<Leaf, Value>,
-    /// Values the across/through network solved for (`port::network`,
-    /// `Store::resolve_physics`): derived, read beneath bindings.
-    physics: BTreeMap<Leaf, Value>,
+    /// The runtime layer (vision 10 §4): named signals published by
+    /// producers, read beneath bindings and above authored constants, never
+    /// serialised. Clips (`time.rs`) and the across/through network
+    /// (`Store::resolve_physics`) are two producers; a host system (a Bevy
+    /// simulation, a Model) is another. A leaf claimed by two producers keeps
+    /// the first claim and reports the second (`signal_errors`).
+    runtime: BTreeMap<Leaf, Signal>,
+    /// Which leaves each producer currently holds, for whole-set republish.
+    held: BTreeMap<ProducerId, BTreeSet<Leaf>>,
+    /// Leaves a producer asked for while another held them, by producer.
+    signal_errors: BTreeMap<Leaf, String>,
     changes: BTreeMap<Leaf, Value>,
     /// Every leaf whose resolved value moved since `take_touched`. Unlike
     /// `changes`, which the reconciler drains, this feeds the store's
@@ -67,54 +94,82 @@ impl Reactive {
     /// Value of any leaf as a reader sees it: the gesture overlay first, then
     /// the resolved value of a binding, then the authored constant.
     pub fn read(&self, doc: &Document, leaf: Leaf) -> Option<Value> {
-        read_with(&self.overlay, &self.animated, &self.physics, &self.resolved, &self.nodes, doc, leaf)
+        read_with(&self.overlay, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
     }
 
-    pub fn physics(&self) -> &BTreeMap<Leaf, Value> {
-        &self.physics
+    /// The runtime layer as published.
+    pub fn signals(&self) -> &BTreeMap<Leaf, Signal> {
+        &self.runtime
     }
 
-    /// Replace the network's solution; leaves whose value moved are
-    /// reported and their dependents re-evaluated, as for the animated layer.
-    pub fn set_physics(&mut self, doc: &Document, values: BTreeMap<Leaf, Value>) {
-        let mut changed: Vec<Leaf> = values.iter().filter(|(l, v)| self.physics.get(l) != Some(v)).map(|(l, _)| *l).collect();
-        changed.extend(self.physics.keys().filter(|l| !values.contains_key(l)).copied());
-        if changed.is_empty() {
-            return;
-        }
-        self.physics = values;
-        for &l in &changed {
-            if !self.overlay.contains_key(&l)
-                && let Some(v) = self.read(doc, l)
-            {
-                self.note(l, v);
-            }
-        }
-        self.invalidate(doc, changed);
+    /// The signal on a leaf, if a producer holds it.
+    pub fn signal(&self, leaf: Leaf) -> Option<&Signal> {
+        self.runtime.get(&leaf)
     }
 
-    pub fn animated(&self) -> &BTreeMap<Leaf, Value> {
-        &self.animated
+    /// Whether some producer currently drives this leaf.
+    pub fn is_driven(&self, leaf: Leaf) -> bool {
+        self.runtime.contains_key(&leaf)
     }
 
-    /// Replace the animated layer with a fresh sample; leaves whose value
-    /// moved are reported and their dependents re-evaluated.
-    pub fn set_animated(&mut self, doc: &Document, sample: BTreeMap<Leaf, Value>) {
+    /// Whether this producer currently drives this leaf.
+    pub fn driven_by(&self, leaf: Leaf, producer: ProducerId) -> bool {
+        self.runtime.get(&leaf).is_some_and(|s| s.producer == producer)
+    }
+
+    /// The leaves a producer holds, with their values.
+    pub fn published_by(&self, producer: ProducerId) -> BTreeMap<Leaf, Value> {
+        self.held.get(&producer).map(|ls| ls.iter().filter_map(|l| self.runtime.get(l).map(|s| (*l, s.value.clone()))).collect()).unwrap_or_default()
+    }
+
+    /// Leaves a producer asked for while another held them, with why.
+    pub fn signal_errors(&self) -> &BTreeMap<Leaf, String> {
+        &self.signal_errors
+    }
+
+    /// Replace everything `producer` publishes with `values`: leaves it no
+    /// longer names are released, leaves another producer holds are refused
+    /// and reported. Leaves whose readable value moved are noted and their
+    /// dependents re-evaluated, as for a constant that was set.
+    pub fn publish(&mut self, doc: &Document, producer: ProducerId, values: BTreeMap<Leaf, Value>, stamp: u64) {
         let mut changed: Vec<Leaf> = Vec::new();
-        for (leaf, v) in &sample {
-            if self.animated.get(leaf) != Some(v) {
+        let was: BTreeSet<Leaf> = self.held.remove(&producer).unwrap_or_default();
+        let mut now: BTreeSet<Leaf> = BTreeSet::new();
+        for (leaf, value) in values {
+            if self.nodes.contains_key(&leaf) {
+                self.signal_errors.insert(leaf, format!("{leaf} is bound; producer {} cannot drive it", producer.0));
+                continue;
+            }
+            match self.runtime.get(&leaf) {
+                Some(s) if s.producer != producer => {
+                    self.signal_errors.insert(leaf, format!("{leaf} is already driven by producer {}; producer {} cannot also drive it", s.producer.0, producer.0));
+                    continue;
+                }
+                Some(s) if s.value == value => {
+                    self.runtime.insert(leaf, Signal { value, producer, stamp });
+                }
+                _ => {
+                    self.runtime.insert(leaf, Signal { value, producer, stamp });
+                    changed.push(leaf);
+                }
+            }
+            self.signal_errors.remove(&leaf);
+            now.insert(leaf);
+        }
+        for leaf in was.difference(&now) {
+            if self.runtime.get(leaf).is_some_and(|s| s.producer == producer) {
+                self.runtime.remove(leaf);
                 changed.push(*leaf);
             }
         }
-        for leaf in self.animated.keys() {
-            if !sample.contains_key(leaf) {
-                changed.push(*leaf);
-            }
+        // Another producer's errors on leaves this one released may now be
+        // stale; they clear on that producer's next publish.
+        if !now.is_empty() {
+            self.held.insert(producer, now);
         }
         if changed.is_empty() {
             return;
         }
-        self.animated = sample;
         for &l in &changed {
             // Only visible when no gesture is previewing this leaf.
             if !self.overlay.contains_key(&l)
@@ -124,6 +179,11 @@ impl Reactive {
             }
         }
         self.invalidate(doc, changed);
+    }
+
+    /// Release everything `producer` publishes.
+    pub fn retract(&mut self, doc: &Document, producer: ProducerId) {
+        self.publish(doc, producer, BTreeMap::new(), 0);
     }
 
     pub fn is_bound(&self, leaf: Leaf) -> bool {
@@ -306,11 +366,10 @@ impl Reactive {
             let expr = self.nodes[&leaf].expr.clone();
             let result = {
                 let overlay = &self.overlay;
-                let animated = &self.animated;
-                let physics = &self.physics;
+                let runtime = &self.runtime;
                 let resolved = &self.resolved;
                 let nodes = &self.nodes;
-                expr.eval(&|l| read_with(overlay, animated, physics, resolved, nodes, doc, l))
+                expr.eval(&|l| read_with(overlay, runtime, resolved, nodes, doc, l))
             };
             match result {
                 Ok(v) => {
@@ -333,8 +392,7 @@ impl Reactive {
 
 fn read_with(
     overlay: &BTreeMap<Leaf, Value>,
-    animated: &BTreeMap<Leaf, Value>,
-    physics: &BTreeMap<Leaf, Value>,
+    runtime: &BTreeMap<Leaf, Signal>,
     resolved: &BTreeMap<Leaf, Value>,
     nodes: &BTreeMap<Leaf, BoundNode>,
     doc: &Document,
@@ -346,11 +404,8 @@ fn read_with(
     if nodes.contains_key(&leaf) {
         return resolved.get(&leaf).cloned();
     }
-    if let Some(v) = physics.get(&leaf) {
-        return Some(v.clone());
-    }
-    if let Some(v) = animated.get(&leaf) {
-        return Some(v.clone());
+    if let Some(s) = runtime.get(&leaf) {
+        return Some(s.value.clone());
     }
     doc.leaf(leaf.node, leaf.path)?.constant().cloned()
 }

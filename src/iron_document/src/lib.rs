@@ -48,7 +48,7 @@ pub use document::{Document, Node, RelKind, Relation};
 pub use expr::{Expr, Leaf};
 pub use geom::{Affine2, Affine3};
 pub use gesture::{GestureId, GestureStatus};
-pub use graph::ResolvedChange;
+pub use graph::{ProducerId, ResolvedChange, Signal};
 pub use handle::Handle;
 pub use id::{NodeId, RelationId, Version};
 pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
@@ -175,6 +175,11 @@ pub struct Store {
     next_gesture: u64,
     /// What moved, for spatial consumers (`geom::Revisions`).
     geometry: geom::Revisions,
+    /// Host producers of runtime signals, by id (vision 10 §4). The two
+    /// built-in producers (clips, the network) are not listed.
+    producers: std::collections::BTreeMap<ProducerId, String>,
+    /// Bumped on every publish: the stamp signals carry.
+    signal_stamp: u64,
 }
 
 impl Default for Store {
@@ -211,6 +216,8 @@ impl Store {
             ended: None,
             next_gesture: 1,
             geometry: geom::Revisions::default(),
+            producers: Default::default(),
+            signal_stamp: 0,
         };
         store.geometry.note_structure();
         store.reactive.rebuild(&store.doc);
@@ -360,7 +367,79 @@ impl Store {
     fn resample(&mut self) {
         let sample = time::sample(&self.doc, self.time);
         self.time_errors = sample.errors;
-        self.reactive.set_animated(&self.doc, sample.values);
+        self.signal_stamp += 1;
+        self.reactive.publish(&self.doc, ProducerId::CLIPS, sample.values, self.signal_stamp);
+    }
+
+    /// Name a host producer of runtime signals (a simulation, a Model) and
+    /// get the id its publishes carry. Names are for reporting only.
+    pub fn register_producer(&mut self, name: &str) -> ProducerId {
+        let id = ProducerId(self.producers.keys().next_back().map_or(ProducerId::FIRST_HOST.0, |p| p.0 + 1));
+        self.producers.insert(id, name.to_owned());
+        id
+    }
+
+    /// The host producers registered so far, by id.
+    pub fn producers(&self) -> impl Iterator<Item = (ProducerId, &str)> {
+        self.producers.iter().map(|(p, n)| (*p, n.as_str()))
+    }
+
+    /// The host producer registered under `name`, if any.
+    pub fn producer(&self, name: &str) -> Option<ProducerId> {
+        self.producers.iter().find(|(_, n)| n.as_str() == name).map(|(p, _)| *p)
+    }
+
+    /// A producer's name: the two built-in ones, or what the host registered.
+    pub fn producer_name(&self, producer: ProducerId) -> String {
+        match producer {
+            ProducerId::CLIPS => "clips".to_owned(),
+            ProducerId::NETWORK => "network".to_owned(),
+            p => self.producers.get(&p).cloned().unwrap_or_else(|| format!("producer {}", p.0)),
+        }
+    }
+
+    /// Publish a host producer's signals for this frame (vision 10 §4):
+    /// `values` replaces everything the producer published before. The
+    /// values are read beneath bindings and above authored constants, never
+    /// enter the document or its history, and re-evaluate what reads them.
+    /// A leaf another producer holds, or a bound leaf, is refused and listed
+    /// in `signal_errors`.
+    pub fn publish(&mut self, producer: ProducerId, values: std::collections::BTreeMap<Leaf, Value>) {
+        self.signal_stamp += 1;
+        self.reactive.publish(&self.doc, producer, values, self.signal_stamp);
+        if !self.clusters.list.is_empty() {
+            self.resolve_clusters_live();
+        }
+        self.resolve_physics();
+    }
+
+    /// Release everything a producer published; its leaves read as authored.
+    pub fn unpublish(&mut self, producer: ProducerId) {
+        self.publish(producer, Default::default());
+    }
+
+    /// Every runtime signal currently published, by leaf.
+    pub fn signals(&self) -> &std::collections::BTreeMap<Leaf, Signal> {
+        self.reactive.signals()
+    }
+
+    /// Leaves a producer asked for while another held them, or while bound.
+    pub fn signal_errors(&self) -> &std::collections::BTreeMap<Leaf, String> {
+        self.reactive.signal_errors()
+    }
+
+    /// Freeze a producer's signals into the document: one transaction that
+    /// sets every leaf it holds to the published value as a constant, after
+    /// which the producer holds nothing (the host stops it or it republishes,
+    /// and takes the leaves back). `None` when it holds nothing.
+    pub fn freeze(&mut self, producer: ProducerId, label: String, actor: Actor, ts: u64) -> Option<Result<Applied, Vec<ApplyError>>> {
+        let held = self.reactive.published_by(producer);
+        if held.is_empty() {
+            return None;
+        }
+        let ops: Vec<Op> = held.into_iter().map(|(leaf, value)| Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Const(value) }).collect();
+        self.unpublish(producer);
+        Some(self.apply(TransactionInput { label, actor, ts, idempotency_key: None, ops, exact: false }))
     }
 
     pub fn reactive(&self) -> &graph::Reactive {
@@ -704,8 +783,8 @@ impl Store {
     pub fn resolve_physics(&mut self) {
         let net = crate::port::network(&self.doc);
         if net.unknowns.is_empty() {
-            if !self.reactive.physics().is_empty() {
-                self.reactive.set_physics(&self.doc, Default::default());
+            if !self.reactive.published_by(ProducerId::NETWORK).is_empty() {
+                self.reactive.retract(&self.doc, ProducerId::NETWORK);
             }
             self.physics_error = None;
             return;
@@ -716,7 +795,7 @@ impl Store {
             _ => None,
         };
         let index: std::collections::BTreeMap<Leaf, usize> = net.unknowns.iter().enumerate().map(|(i, (l, _))| (*l, i)).collect();
-        let x0: Vec<f64> = net.unknowns.iter().map(|(l, _)| self.reactive.physics().get(l).and_then(magnitude).unwrap_or(0.0)).collect();
+        let x0: Vec<f64> = net.unknowns.iter().map(|(l, _)| self.reactive.signal(*l).map(|s| &s.value).and_then(magnitude).unwrap_or(0.0)).collect();
         let solution = {
             let doc = &self.doc;
             let reactive = &self.reactive;
@@ -762,7 +841,8 @@ impl Store {
         }
         self.physics_error = None;
         let values = net.unknowns.iter().zip(&solution.vars).map(|((l, dim), x)| (*l, Value::quantity(*x, *dim))).collect();
-        self.reactive.set_physics(&self.doc, values);
+        self.signal_stamp += 1;
+        self.reactive.publish(&self.doc, ProducerId::NETWORK, values, self.signal_stamp);
     }
 
     /// Why the across/through network kept its last solution, if it did.

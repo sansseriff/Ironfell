@@ -125,7 +125,7 @@ static TYPES: &[TypeSpec] = &[
     },
     TypeSpec {
         name: "mesh",
-        components: &[(K::Transform3d, true), (K::Mesh, true), (K::Name, false)],
+        components: &[(K::Transform3d, true), (K::Mesh, true), (K::Fill, false), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },

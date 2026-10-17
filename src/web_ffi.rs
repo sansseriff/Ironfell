@@ -344,6 +344,18 @@ pub fn document_spatial(ptr: u64, enabled: bool) -> String {
 }
 
 #[wasm_bindgen]
+pub fn document_signals(ptr: u64) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_signals(app)
+}
+
+#[wasm_bindgen]
+pub fn document_producer(ptr: u64, name: String, action: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_producer(app, name, action)
+}
+
+#[wasm_bindgen]
 pub fn document_timings(_ptr: u64, reset: bool) -> String {
     let app = unsafe { &mut *(_ptr as *mut WorkerApp) };
     crate::engine_api::document_timings(app, reset)

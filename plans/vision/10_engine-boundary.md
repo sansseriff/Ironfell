@@ -233,10 +233,10 @@ solver, gestures, SVG, the Vello backend, views and textures and the UI protocol
 | Area | Change |
 |---|---|
 | `iron_document/geom.rs` | `Affine3`; a retained world-transform and bounds pass keyed on local and placement revisions |
-| `iron_document/graph.rs` | runtime signal layer replacing the `animated`/`physics`/`simulation` special cases (clips keep their own stamp semantics) |
+| `iron_document/graph.rs` | runtime signal layer replacing the `animated`/`physics`/`simulation` special cases (clips keep their own stamp semantics). *Done:* `Signal`, `ProducerId`, `publish` |
 | `iron_spatial` | local-space indexing per group with placements; 3D bounds for document nodes |
 | `document_bridge/materialize.rs` | mode-driven: spawns flat entities for Live subtrees and 3D renderables only; writes `GlobalTransform` from Iron |
-| `document_bridge/mod.rs` | `check_world_affine` removed; a `publish` pass drains Bevy-side producers into the runtime layer |
+| `document_bridge/mod.rs` | `check_world_affine` removed; a `publish` pass drains Bevy-side producers into the runtime layer. *Done:* producers run first in `PreUpdate` (`gas::step_and_publish`) |
 | `document_bridge/render.rs`, `spatial.rs`, `highlight.rs`, `nest.rs` | read Iron's world affines, not `GlobalTransform` |
 | `bevy_app/select.rs`, `picking.rs`, `manipulate.rs`, `pen.rs`, `shape_tool.rs` | same: Iron affines for 2D; the 3D gizmo keeps Bevy transforms for its own entities |
 | `vector/hybrid.rs` | chunk recorder and bake policy consume subtree revisions (the render handoff's items 3–4) |
@@ -276,15 +276,37 @@ Each phase leaves the app working and the smoke script passing.
    and the primary hit carry nodes, not entities. *Exit met:* `?stress=100000` idles
    at 2 entities for 101k nodes and returns to 2 after a selection is cleared
    (`render-benchmark.md` §12).
-4. **Runtime signal layer and a first Bevy producer.** A collider/body producer over
-   Live entities publishing into the layer; freeze commits. *Exit:* the gas-and-protein
-   example runs with zero transactions per frame.
+4. **Runtime signal layer and a first Bevy producer.** **Done 2026-10-17.** The
+   graph's `animated` and `physics` maps became one runtime layer of `Signal`s
+   (value, `ProducerId`, stamp): clips are producer 0, the across/through network
+   producer 1, and a host registers more (`Store::register_producer`). A producer's
+   `publish` replaces its whole set each frame, notes only values that moved, and
+   refuses a leaf another producer holds or a bound leaf (`signal_errors`; the
+   first claim wins). `Store::freeze` commits what a producer holds as one
+   transaction and releases it; a published leaf is `Handle::Locked` to gestures,
+   naming its producer. The first Bevy producer is the piston demo's gas
+   (`document_bridge::gas`): particles with no document nodes bounce in a
+   `cylinder` composition whose chamber and piston poses it reads from the store
+   each frame (Iron's affines, as §2 requires), and the momentum on the piston
+   face is published as `pressure` onto a library parameter. The `pressure` bar is
+   bound to it; a `P·V` bar bound to pressure times the gas length stays level as
+   the stroke slider moves the piston (the gas is isothermal). The producer runs
+   only while some panel shows its composition, so a hidden demo costs nothing.
+   `__iron.signals()` reports producers, signals and conflicts;
+   `__iron.producer('gas', 'freeze')` commits and stops. *Exit met:* the demo
+   runs with zero transactions per frame (`piston.txt`); `tests/signals.rs`
+   covers layering, conflicts, bound leaves and the freeze. The gas-and-protein
+   example of §4 was replaced by this one at the owner's request (a modelled
+   apparatus driving something Bevy manages). Not done: a collider/body producer
+   over Live *document* entities (the gas has none); the §4 pattern for one is
+   the same `publish`.
 5. **Chunks and bakes** keyed on the revisions from phase 1, per the render handoff.
    Baked 3D (merged mesh or impostor) follows when a 3D scene needs it.
 
 Phase 1 is handoff item 3 and can start now. Phases 2–3 are the bridge rewrite. The
 Bevy 0.20 / `vello_gpu` 0.3 upgrade is independent and is easier after phase 3, since
-fewer systems touch entities.
+fewer systems touch entities. *2026-10-17:* the upgrade landed between phases 3 and 4
+(`handoff-render.md` §4); the gizmo and 3D picking passed the smoke on 0.20.
 
 ---
 
@@ -292,9 +314,10 @@ fewer systems touch entities.
 
 - **Q1. The kinematic simulation (CS §11).** The spec puts XPBD in `iron_solve` so the
   sim and the kinematic solver share residuals per constraint kind. Under §2 it could
-  equally be a Bevy-side producer with joint constraints. Decide when phase 4 lands,
-  from whether grab-and-release of a constrained mechanism needs the solver's
-  residuals or only its pose.
+  equally be a Bevy-side producer with joint constraints. Phase 4 landed without
+  deciding it: the gas producer has no constraints, so nothing yet needs the
+  solver's residuals. Decide when a constrained mechanism is simulated, from whether
+  grab-and-release needs the residuals or only the pose.
 - **Q2. Mode policy thresholds.** The first policy is in `materialize::decide_modes`:
   the picked nodes' lineage and subtrees within `LIVE_BUDGET = 2,000` descendants.
   Still open: how many frames unchanged before a bake, and whether the user can pin

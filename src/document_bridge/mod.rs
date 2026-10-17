@@ -20,6 +20,7 @@
 //!   are re-examined.
 
 mod demo;
+pub mod gas;
 mod highlight;
 mod materialize;
 pub mod nest;
@@ -37,7 +38,7 @@ use std::collections::BTreeSet;
 
 pub use highlight::{Highlights, update_highlights};
 pub use nest::{EmbedImage, EmbedImages, EmbedView, EmbedViews};
-pub use materialize::{Doc2d, Doc3d, Drawables, MeshAssets, Modes, Shape2d, path_outline};
+pub use materialize::{Doc2d, Doc3d, Drawables, MeshAssets, MeshColor, Modes, Shape2d, path_outline};
 pub use panel_views::{CompositionLayers, FocusRequests, InComposition, ViewCameras, PanelView, PanelViews};
 pub use render::{DocumentPanelLayer, LIT_HOVERED, LIT_SELECTED, render_document_layer};
 pub use spatial::SpatialScene;
@@ -249,11 +250,15 @@ impl Plugin for DocumentPlugin {
             .init_resource::<EmbedImages>()
             .init_resource::<FocusRequests>()
             .init_resource::<CompositionLayers>()
+            .init_resource::<materialize::MeshMaterials>()
+            .init_resource::<gas::GasSim>()
             .add_plugins(planes::PlanePlugin)
             .add_systems(Startup, (materialize::setup_mesh_assets, demo::queue_demo_scene))
             // Before input collection, so a transaction queued last frame is
-            // visible to this frame's picking.
-            .add_systems(PreUpdate, (sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
+            // visible to this frame's picking. Producers publish first, so
+            // their signals reconcile with everything else this frame.
+            .add_systems(PreUpdate, (gas::step_and_publish, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
+            .add_systems(Update, materialize::assign_mesh_materials)
             .add_systems(
                 PostUpdate,
                 (

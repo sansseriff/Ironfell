@@ -42,6 +42,9 @@ pub enum Phase {
     /// Bevy's transform propagation (`TransformSystems::Propagate`), timed
     /// from outside the set; every frame, idle ones included.
     Propagate,
+    /// A Bevy-side producer's step and publish (`document_bridge::gas`),
+    /// only while it runs.
+    Produce,
     /// One whole frame on the worker (`WorkerApp::frame`), main world and,
     /// when it renders, extraction and rendering. CPU only: the GPU's share
     /// shows in frames per second.
@@ -52,7 +55,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    const ALL: [Phase; 13] = [
+    const ALL: [Phase; 14] = [
         Phase::Sync,
         Phase::GestureReconcile,
         Phase::DisplayList,
@@ -64,6 +67,7 @@ impl Phase {
         Phase::OverlayGeometry,
         Phase::Bounds,
         Phase::Propagate,
+        Phase::Produce,
         Phase::Frame,
         Phase::ChangedFrame,
     ];
@@ -81,6 +85,7 @@ impl Phase {
             Phase::OverlayGeometry => "overlay_geometry",
             Phase::Bounds => "bounds",
             Phase::Propagate => "propagate",
+            Phase::Produce => "produce",
             Phase::Frame => "frame",
             Phase::ChangedFrame => "changed_frame",
         }
@@ -91,7 +96,7 @@ impl Phase {
 const CAP: usize = 7200;
 
 struct Table {
-    samples: [Vec<f32>; 13],
+    samples: [Vec<f32>; Phase::ALL.len()],
     bounds_updated: u32,
     pick_candidates: u32,
     /// Whether a view encoded during the current frame.
@@ -104,7 +109,7 @@ struct Table {
     drawn: u32,
 }
 
-static TABLE: Mutex<Table> = Mutex::new(Table { samples: [const { Vec::new() }; 13], encoded: false, commands: 0, culled: 0, drawn: 0, bounds_updated: 0, pick_candidates: 0 });
+static TABLE: Mutex<Table> = Mutex::new(Table { samples: [const { Vec::new() }; Phase::ALL.len()], encoded: false, commands: 0, culled: 0, drawn: 0, bounds_updated: 0, pick_candidates: 0 });
 
 pub fn set_bounds_updates(n: u32) { if let Ok(mut t) = TABLE.lock() { t.bounds_updated = t.bounds_updated.max(n); } }
 pub fn set_pick_candidates(n: u32) { if let Ok(mut t) = TABLE.lock() { t.pick_candidates = t.pick_candidates.max(n); } }

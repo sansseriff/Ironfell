@@ -21,6 +21,8 @@
  *   await __iron.session()         -> the session's selection [{node, panel, chain, …}]
  *   await __iron.stress(5000)      -> add the render benchmark's `stress` composition
  *   await __iron.timings(reset?)   -> per-phase CPU render timings since the last reset
+ *   await __iron.signals()         -> runtime signals: producers, published leaves, conflicts
+ *   await __iron.producer('gas', 'freeze' | 'stop' | 'run') -> commit a producer's values as one transaction and stop it, stop, or run
  *   __iron.copied()                -> the last fragment Cmd+C or Cmd+X copied in this tab
  *   __iron.paste(text?)            -> paste a fragment (default: the last copied), as a paste event does
  *   await __iron.exportSvg(scope?) -> SVG text of a composition (id or name), a node, or 'selection' (default)
@@ -112,6 +114,9 @@ export class DocumentClient {
       stress: (shapes = 5000) => this.call('stress', [shapes]),
       spatial: (enabled = true) => this.call('spatial', [enabled]),
       timings: (reset = false) => this.call('timings', [reset]),
+      // The runtime signal layer (vision 10 §4) and its host producers.
+      signals: () => this.call('signals', []),
+      producer: (name = 'gas', action = 'freeze') => this.call('producer', [name, action]),
       exportSvg: async (scope = 'selection') => {
         const r = await this.exportSvg(scope);
         if (!r.ok) throw new Error(r.error);

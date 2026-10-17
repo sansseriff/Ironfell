@@ -206,13 +206,52 @@ pub fn stroke_style(store: &Store, id: NodeId) -> kurbo::Stroke {
 pub struct Doc3d;
 
 /// Shared handles for `mesh` nodes. Meshes are looked up by the node's
-/// `mesh.asset` string; only `torus` exists today.
+/// `mesh.asset` string: `torus` (the default), and the unit `cube`,
+/// `cylinder` (radius 0.5, height 1 along Y) and `sphere` (radius 0.5),
+/// sized through `transform3d.scale`.
 #[derive(Resource)]
 pub struct MeshAssets {
     pub torus: Handle<Mesh>,
     pub torus_bounds: Cuboid,
+    pub cube: Handle<Mesh>,
+    pub cylinder: Handle<Mesh>,
+    pub sphere: Handle<Mesh>,
+    /// The checker material a mesh without a `fill` shows.
     pub material: Handle<StandardMaterial>,
+    /// What the gas producer's particles are drawn with (`gas.rs`).
+    pub gas_material: Handle<StandardMaterial>,
 }
+
+impl MeshAssets {
+    /// The mesh for an asset name; `None` for an unknown one.
+    pub fn mesh(&self, asset: &str) -> Option<Handle<Mesh>> {
+        Some(match asset {
+            "torus" => self.torus.clone(),
+            "cube" => self.cube.clone(),
+            "cylinder" => self.cylinder.clone(),
+            "sphere" => self.sphere.clone(),
+            _ => return None,
+        })
+    }
+
+    /// The asset's extent before the node's scale (`scene3d::update_aabbes`
+    /// applies it).
+    pub fn bounds(&self, asset: &str) -> Cuboid {
+        match asset {
+            "cube" | "cylinder" | "sphere" => Cuboid::from_size(Vec3::ONE),
+            _ => self.torus_bounds,
+        }
+    }
+}
+
+/// A mesh node's `fill.color`, resolved; `assign_mesh_materials` turns it
+/// into a material.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct MeshColor(pub [f32; 4]);
+
+/// One `StandardMaterial` per distinct colour seen so far.
+#[derive(Resource, Default)]
+pub struct MeshMaterials(HashMap<[u32; 4], Handle<StandardMaterial>>);
 
 pub(super) fn setup_mesh_assets(
     mut commands: Commands,
@@ -224,12 +263,63 @@ pub(super) fn setup_mesh_assets(
         base_color_texture: Some(images.add(uv_debug_texture())),
         ..default()
     });
+    let gas_material = materials.add(StandardMaterial { base_color: Color::srgb(0.98, 0.6, 0.15), perceptual_roughness: 0.6, ..default() });
     let torus = meshes.add(Torus::default().mesh().major_resolution(8).minor_resolution(6));
+    let cube = meshes.add(Cuboid::from_size(Vec3::ONE).mesh());
+    let cylinder = meshes.add(Cylinder::new(0.5, 1.0).mesh().resolution(24));
+    let sphere = meshes.add(Sphere::new(0.5).mesh().ico(1).expect("icosphere"));
     commands.insert_resource(MeshAssets {
         torus,
         torus_bounds: Cuboid::from_size(Vec3::new(1.75, 0.52, 1.75)),
+        cube,
+        cylinder,
+        sphere,
         material,
+        gas_material,
     });
+}
+
+/// Give every mesh whose colour changed a material of that colour; a
+/// translucent colour blends. Materials are shared by colour.
+pub(super) fn assign_mesh_materials(
+    mut cache: ResMut<MeshMaterials>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    assets: Option<Res<MeshAssets>>,
+    mut removed: RemovedComponents<MeshColor>,
+    mut query: Query<(&mut MeshMaterial3d<StandardMaterial>, Option<&MeshColor>), Changed<MeshColor>>,
+    mut uncoloured: Query<&mut MeshMaterial3d<StandardMaterial>, Without<MeshColor>>,
+) {
+    let Some(assets) = assets else { return };
+    for e in removed.read() {
+        if let Ok(mut material) = uncoloured.get_mut(e)
+            && material.0 != assets.material
+        {
+            material.0 = assets.material.clone();
+        }
+    }
+    for (mut material, color) in &mut query {
+        let handle = match color {
+            None => assets.material.clone(),
+            Some(MeshColor(c)) => {
+                let key = c.map(f32::to_bits);
+                cache
+                    .0
+                    .entry(key)
+                    .or_insert_with(|| {
+                        materials.add(StandardMaterial {
+                            base_color: Color::srgba(c[0], c[1], c[2], c[3]),
+                            alpha_mode: if c[3] < 1.0 { AlphaMode::Blend } else { AlphaMode::Opaque },
+                            perceptual_roughness: 0.7,
+                            ..default()
+                        })
+                    })
+                    .clone()
+            }
+        };
+        if material.0 != handle {
+            material.0 = handle;
+        }
+    }
 }
 
 pub(super) fn reconcile(
@@ -348,29 +438,20 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         // A camera node is a pose: embeds that name it look through it.
         "camera" => commands.spawn((Provenance(id), Name::new(format!("camera {id}")), Visibility::default())),
         "mesh" => {
-            let bounds = assets.torus_bounds;
+            let asset = Reader { store, id }.str("mesh.asset").unwrap_or_else(|| "torus".to_owned());
             commands.spawn((
                 Provenance(id),
                 Doc3d,
                 Name::new(format!("mesh {id}")),
-                Mesh3d(assets.torus.clone()),
+                Mesh3d(assets.mesh(&asset).unwrap_or_else(|| assets.torus.clone())),
                 MeshMaterial3d(assets.material.clone()),
-                Shape::Box(bounds),
+                Shape::Box(assets.bounds(&asset)),
                 ActiveState::default(),
             ))
         }
         _ => return None,
     };
     write_values(store, id, layers, Some(&mut ec), assets, drawables);
-    // A 3D entity's `Transform` is written once, as its world pose: Bevy's
-    // required-component machinery adds one anyway (`Mesh3d`), and its
-    // simple-transform sync would copy an identity over the global on the
-    // first frame. After this only `GlobalTransform` is written, so the sync
-    // never runs again for the entity.
-    if in_3d(store, id) {
-        let r = Reader { store, id };
-        ec.insert(Transform::from_matrix(Mat4::from(r.global_3d().affine())));
-    }
     Some(ec.id())
 }
 
@@ -394,9 +475,13 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut e
         return;
     };
     let ec = ec3;
+    // A 3D entity's pose is Iron's world affine, written as both the
+    // `Transform` and the `GlobalTransform`: flat entities have nothing to
+    // propagate, so Bevy's sync only ever copies the same value, and the
+    // `Transform` keeps `scene3d::update_aabbes` and the gizmo current.
     match node.ty.name() {
         "embed" if in_3d(store, id) => {
-            ec.insert((r.global_3d(), RenderLayers::layer(layers.of(composition))));
+            ec.insert((r.pose_3d(), RenderLayers::layer(layers.of(composition))));
         }
         "group" | "embed" => {}
         "rect" | "ellipse" | "slider" | "path" => {
@@ -405,15 +490,24 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut e
             ec.insert(d);
         }
         "camera" => {
-            ec.insert(r.global_3d());
+            ec.insert(r.pose_3d());
         }
         "mesh" => {
-            ec.insert(r.global_3d());
+            ec.insert(r.pose_3d());
             let asset = r.str("mesh.asset").unwrap_or_else(|| "torus".to_owned());
-            if asset != "torus" {
+            let mesh = assets.mesh(&asset).unwrap_or_else(|| {
                 warn!("{id}: unknown mesh asset {asset:?}; showing torus");
+                assets.torus.clone()
+            });
+            ec.insert((Mesh3d(mesh), Shape::Box(assets.bounds(&asset)), RenderLayers::layer(layers.of(composition))));
+            match r.color("fill.color") {
+                Some(c) => {
+                    ec.insert(MeshColor(c));
+                }
+                None => {
+                    ec.remove::<MeshColor>();
+                }
             }
-            ec.insert((Mesh3d(assets.torus.clone()), RenderLayers::layer(layers.of(composition))));
         }
         _ => {}
     }
@@ -494,6 +588,12 @@ impl Reader<'_> {
     fn global_3d(&self) -> GlobalTransform {
         let c = self.store.world_affine3(self.id).to_cols().map(|v| v as f32);
         GlobalTransform::from(bevy::math::Affine3A::from_cols_array(&c))
+    }
+
+    /// The same pose as a `Transform` and a `GlobalTransform` pair.
+    fn pose_3d(&self) -> (Transform, GlobalTransform) {
+        let global = self.global_3d();
+        (Transform::from_matrix(Mat4::from(global.affine())), global)
     }
 }
 

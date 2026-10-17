@@ -1,0 +1,47 @@
+# Vision 10 phase 4: the piston demo (document_bridge/gas.rs, demo.rs
+# `piston`). The Piston tab shows the 3D `cylinder` composition through an
+# embed, the `stroke` slider (20,380) 300x24 and two gauge bars at y 420
+# and 450. Bevy's gas particles push on the piston face; their pressure is
+# published onto the library's `pressure` parameter as a runtime signal,
+# which the `pressure` bar reads (50 px per unit) and the `P·V` bar
+# multiplies by the gas length (~100 px, steady: the gas is isothermal).
+# Nothing enters the history until the producer is frozen.
+nav
+ready
+tab Piston
+sleep 6000
+shot piston-start
+eval window.bars = async () => { const v = await __iron.view({fidelity:'full'}); const w = (name) => { const m = v.match(new RegExp('<rect[^>]*name="' + name + '"[^>]*w="([^"]+)"')); return m ? Math.round(Number(m[1])) : null; }; return { pressure: w('pressure'), pv: w('P·V') }; }
+eval window.gas = async () => { const s = await __iron.signals(); return { producers: s.producers.map(p => p.name + (p.running === null ? '' : p.running ? ' running' : ' stopped') + ' holds ' + p.held), signals: s.signals.map(x => x.producer + ' -> ' + x.leaf.replace(/#\w+/, '#…') + ' = ' + (typeof x.value === 'number' ? x.value.toFixed(1) : JSON.stringify(x.value))), errors: s.errors, frames: s.frames }; }
+eval gas()
+# The gas fills the chamber at stroke 0.2: pressure near 1.2, P·V near 100.
+eval bars()
+# Compress: stroke 0.2 -> 0.9. The piston's position is bound to the
+# slider, so the mesh moves through Iron's affine; the pressure rises
+# about fivefold and P·V holds.
+pdrag piston 80 392 290 392
+sleep 6000
+shot piston-compressed
+eval bars()
+eval gas()
+# A bound mesh position is locked to the gizmo; the signal's leaf is locked
+# to edits while published.
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<mesh[^>]*name="piston"[^>]*>/); return m ? m[0].replace(/ id="[^"]*"/, '').replace(/#\w+/g, '#…') : 'no piston'; })()
+# Freeze: one "freeze gas" transaction sets the parameter to the published
+# value; the producer stops and holds nothing; the bars keep their reading.
+eval (async () => { const r = await __iron.producer('gas', 'freeze'); return [r.ok, r.frozen, r.running]; })()
+sleep 600
+peek applied "freeze gas"
+eval gas()
+eval bars()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<definition[^>]*name="gas"[\s\S]*?<\/definition>/); return m ? m[0].replace(/ id="[^"]*"/g, '').replace(/\s+/g, ' ') : 'no definition'; })()
+# Undo restores the authored 0; running the producer again republishes.
+key Meta+z
+sleep 600
+eval bars()
+eval (async () => { const r = await __iron.producer('gas', 'run'); return r.running; })()
+sleep 6000
+eval gas()
+eval bars()
+shot piston-end
+errors

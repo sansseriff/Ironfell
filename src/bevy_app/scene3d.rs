@@ -170,7 +170,7 @@ pub(crate) fn render_active_shapes(
         match shape {
             Shape::Box(cuboid) => {
                 gizmos.primitive_3d(
-                    cuboid,
+                    &Cuboid::from_size(cuboid.size() * transform.scale),
                     Isometry3d::new(translation, transform.rotation),
                     color,
                 );
@@ -191,7 +191,7 @@ pub(crate) fn update_aabbes(
         let translation = transform.translation;
         let rotation = transform.rotation;
         let aabb = match shape {
-            Shape::Box(b) => b.aabb_3d(Isometry3d::new(translation, rotation)),
+            Shape::Box(b) => Cuboid::from_size(b.size() * transform.scale).aabb_3d(Isometry3d::new(translation, rotation)),
         };
         commands.entity(entity).insert(CurrentVolume(aabb));
     }

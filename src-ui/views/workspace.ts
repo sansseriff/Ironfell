@@ -30,6 +30,7 @@ function defaultLayout(api: DockviewApi) {
     ['optics', 'Optics'],
     ['schematic', 'Schematic'],
     ['thermal', 'Thermal'],
+    ['piston', 'Piston'],
   ]) {
     view(id, title, { source: id, notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' }, { inactive: true });
   }

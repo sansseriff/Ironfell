@@ -515,8 +515,145 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     // Stage F step 3: a heater, a thermal link and an ambient sink, solved
     // as an across/through network (ECM §6.1).
     ops.extend(thermal(store, &ops, library, model));
+    // Vision 10 phase 4: a gas in a cylinder, simulated by Bevy, read by
+    // the document through a runtime signal.
+    ops.extend(piston(store, &ops, library));
 
     iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false }
+}
+
+/// The piston demo (vision 10 §4, phase 4). A 3D composition `cylinder`:
+/// a translucent `chamber` (a unit cylinder scaled to radius 0.6, length 3,
+/// along X), a `piston` disc whose position is bound to the `stroke`
+/// slider, and a `rod` bound to the piston. A 2D composition `piston`
+/// shows it through an embed, with the slider and two gauges. The gas is
+/// Bevy's (`document_bridge::gas`): particles with no document nodes,
+/// bouncing in the chamber; the pressure they put on the piston face is
+/// published onto the library's `pressure` parameter every frame, as a
+/// runtime signal. The `pressure` bar reads it; the `P·V` bar multiplies it
+/// by the gas length and stays put as the piston moves (the gas is
+/// isothermal), which is the physics check. Nothing enters the history
+/// until `__iron.producer('gas', 'freeze')`.
+fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op> {
+    let ty = |s: &str| TypeId::lookup(s).expect("registered type");
+    let mut scratch = iron_document::Store::with_document(base.document().clone());
+    scratch
+        .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: before.to_vec(), exact: false })
+        .expect("demo scene applies");
+    let after = |s: &iron_document::Store, parent: Option<NodeId>| {
+        let doc = s.document();
+        let kids = match parent {
+            Some(p) => doc.children(p).to_vec(),
+            None => doc.roots().to_vec(),
+        };
+        kids.last().and_then(|&k| doc.live(k)).map(|n| n.order.clone())
+    };
+    let next_key = |k: Option<OrderKey>| k.map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+    let named = |s: &str| {
+        let mut n = DocName::default();
+        n.text = Slot::Const(Value::Str(s.into()));
+        n.wrap()
+    };
+    let fill = |c: [f32; 4]| {
+        let mut f = Fill::default();
+        f.color = Slot::Const(Value::Color(c));
+        f.wrap()
+    };
+    let bound = |e: String| Slot::Bound(Expr::parse(&e).expect("demo binding"));
+    let v3 = |v: [f64; 3]| Slot::Const(Value::Vec3(v));
+    // In creation order: ids must ascend with the ops that mint them.
+    let ids = scratch.document().next_ids(13);
+    let (gas_def, pressure, cylinder, chamber, piston, rod) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5]);
+    let (comp, view, stroke, p_frame, p_bar, pv_frame, pv_bar) = (ids[6], ids[7], ids[8], ids[9], ids[10], ids[11], ids[12]);
+    let mut ops = Vec::new();
+
+    // The signal's host: a parameter of a `gas` definition in the library.
+    // Not drawn; bindings read it, the producer publishes onto it.
+    let mut spec = ParamSpec::default();
+    spec.kind = Slot::Const(Value::Enum("number".into()));
+    spec.default = n(0.0);
+    ops.push(Op::Create { id: gas_def, ty: ty("definition"), parent: Some(library), order: next_key(after(&scratch, Some(library))), components: vec![named("gas")] });
+    ops.push(Op::Create { id: pressure, ty: ty("param_spec"), parent: Some(gas_def), order: OrderKey::first(), components: vec![spec.wrap(), named("pressure")] });
+
+    // The 3D composition.
+    let root0 = next_key(after(&scratch, None));
+    let root1 = OrderKey::after(&root0);
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("3d".into()));
+    ops.push(Op::Create { id: cylinder, ty: ty("composition"), parent: None, order: root0, components: vec![named("cylinder"), c.wrap()] });
+    let mesh = |asset: &str| {
+        let mut m = Mesh::default();
+        m.asset = Slot::Const(Value::Str(asset.into()));
+        m.wrap()
+    };
+    let k0 = OrderKey::first();
+    let k1 = OrderKey::after(&k0);
+    let k2 = OrderKey::after(&k1);
+    // The chamber: axis along +X (a unit cylinder is along Y; rotated by
+    // −90° about Z, so its local +Y is world +X and the closed end is at
+    // x = −1.5), radius 0.6, length 3, centred at (0, 1.2, 0).
+    let mut t = Transform3d::default();
+    t.pos = v3([0.0, 1.2, 0.0]);
+    t.rot = v3([0.0, 0.0, -std::f64::consts::FRAC_PI_2]);
+    t.scale = v3([1.2, 3.0, 1.2]);
+    ops.push(Op::Create { id: chamber, ty: ty("mesh"), parent: Some(cylinder), order: k0, components: vec![t.wrap(), mesh("cylinder"), fill([0.55, 0.7, 0.9, 0.3]), named("chamber")] });
+    // The piston: a disc at x = 1.3 − 2.2·stroke, so the gas fills the
+    // chamber at stroke 0 and is compressed five-fold at stroke 1.
+    let mut t = Transform3d::default();
+    t.pos = bound(format!("[1, 0, 0] * (1.3 - {stroke}.slider.value * 2.2) + [0, 1.2, 0]"));
+    t.rot = v3([0.0, 0.0, -std::f64::consts::FRAC_PI_2]);
+    t.scale = v3([1.16, 0.12, 1.16]);
+    ops.push(Op::Create { id: piston, ty: ty("mesh"), parent: Some(cylinder), order: k1, components: vec![t.wrap(), mesh("cylinder"), fill([0.75, 0.45, 0.2, 1.0]), named("piston")] });
+    let mut t = Transform3d::default();
+    t.pos = bound(format!("{piston}.transform3d.pos + [0.9, 0, 0]"));
+    t.scale = v3([1.7, 0.12, 0.12]);
+    ops.push(Op::Create { id: rod, ty: ty("mesh"), parent: Some(cylinder), order: k2, components: vec![t.wrap(), mesh("cube"), fill([0.5, 0.5, 0.55, 1.0]), named("rod")] });
+
+    // The 2D composition: the view, the stroke slider and the gauges.
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    ops.push(Op::Create { id: comp, ty: ty("composition"), parent: None, order: root1, components: vec![named("piston"), c.wrap()] });
+    let mut e = Embed::default();
+    e.source = Slot::Const(Value::Ref(cylinder));
+    let mut t = Transform2d::default();
+    t.x = n(20.0);
+    t.y = n(20.0);
+    let mut s = Size::default();
+    s.w = n(620.0);
+    s.h = n(340.0);
+    let mut key = OrderKey::first();
+    let mut order = move || {
+        let k = key.clone();
+        key = OrderKey::after(&key);
+        k
+    };
+    ops.push(Op::Create { id: view, ty: ty("embed"), parent: Some(comp), order: order(), components: vec![e.wrap(), t.wrap(), s.wrap(), named("cylinder view")] });
+    let mut sl = Slider::default();
+    sl.value = n(0.2);
+    let mut t = Transform2d::default();
+    t.x = n(20.0);
+    t.y = n(380.0);
+    let mut s = Size::default();
+    s.w = n(300.0);
+    s.h = n(24.0);
+    ops.push(Op::Create { id: stroke, ty: ty("slider"), parent: Some(comp), order: order(), components: vec![t.wrap(), s.wrap(), sl.wrap(), named("stroke")] });
+    let rect = |id: NodeId, order: OrderKey, y: f64, w: Slot, c: [f32; 4], name: &str| {
+        let mut t = Transform2d::default();
+        t.x = n(20.0);
+        t.y = n(y);
+        let mut s = Size::default();
+        s.w = w;
+        s.h = n(20.0);
+        Op::Create { id, ty: ty("rect"), parent: Some(comp), order, components: vec![t.wrap(), s.wrap(), fill(c), named(name)] }
+    };
+    // Pressure relative to the gas filling the whole chamber: 50 px per unit.
+    ops.push(rect(p_frame, order(), 420.0, n(300.0), [0.9, 0.9, 0.92, 1.0], "pressure scale"));
+    ops.push(rect(p_bar, order(), 420.0, bound(format!("clamp({pressure}.param_spec.default * 50, 0, 300)")), [0.9, 0.25, 0.15, 1.0], "pressure"));
+    // P·V: the pressure times the gas length (2.74 − 2.2·stroke, in world
+    // units), scaled so the whole chamber reads 100 px.
+    ops.push(rect(pv_frame, order(), 450.0, n(300.0), [0.9, 0.9, 0.92, 1.0], "P·V scale"));
+    ops.push(rect(pv_bar, order(), 450.0, bound(format!("clamp({pressure}.param_spec.default * (2.74 - 2.2 * {stroke}.slider.value) * 100 / 3, 0, 300)")), [0.2, 0.65, 0.3, 1.0], "P·V"));
+    ops
 }
 
 /// The optics chain (ECM §6.1, phase 3's exit): definitions `laser`, `fiber`

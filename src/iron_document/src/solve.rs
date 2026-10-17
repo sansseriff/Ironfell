@@ -118,7 +118,7 @@ fn num(read: &dyn Fn(Leaf) -> Option<Value>, node: NodeId, path: LeafPath, defau
 fn is_free(doc: &Document, reactive: &crate::graph::Reactive, leaf: Leaf) -> bool {
     doc.leaf(leaf.node, leaf.path).is_some_and(|s| s.constant().is_some())
         && !reactive.is_bound(leaf)
-        && !reactive.animated().contains_key(&leaf)
+        && !reactive.is_driven(leaf)
 }
 
 /// Group the document's constraints into clusters. `Err` when a constraint

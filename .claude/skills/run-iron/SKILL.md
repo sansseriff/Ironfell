@@ -159,10 +159,10 @@ redraw (document): 2 of 39 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#11\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #10.params.level * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#10.params.level * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#11\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
-"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.64…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#2q"}}
+"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.14…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+{"ok":true,"version":9,"aliases":{"$n":"#33"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#2q\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#33\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -182,19 +182,19 @@ true
 ["#l","#Q"]
 clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#2s\" name=\"box\" def=\"#2r\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#2s\">"
+"<entity id=\"#35\" name=\"box\" def=\"#34\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#35\">"
 clicked Show in assembly
 clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#2u\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#2u\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#37\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#37\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#11\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":42465}
+{"roundtrip_equal":true,"bytes":45629}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (220 ops, System) -> v1
+applied "open demo scene" (233 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -229,35 +229,35 @@ applied "link" (4 ops, Model) -> v23
 "link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (178 live nodes)
+loaded document v25 (191 live nodes)
 (no page errors)
 undefined
 ["#M"]
 ["#M viewer [#o #M]"]
-{"x":500,"y":420,"w":120,"h":100,"deg":0}
-{"x":553,"y":392,"w":120,"h":100,"deg":45}
+{"x":500,"y":420,"w":116,"h":98,"deg":0}
+{"x":552,"y":393,"w":116,"h":98,"deg":45}
 {"x":500,"y":420,"w":80,"h":80,"deg":0}
 ["#V"]
-["#a"]
 ["#V"]
 ["#14"]
+[]
 []
 ["#o","#14","#15"]
 {"x":501,"y":430,"w":80,"h":80,"deg":0}
 true
 true
 tab Controls
-"Pen (P)"
+"Move (V)"
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
-["#2q"]
-"<point id=\"#2u\" x=\"130\" y=\"220\""
+["#33"]
+"<point id=\"#37\" x=\"130\" y=\"220\""
 "pen-add"
-[4,"<point id=\"#2v\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
+[4,"<point id=\"#38\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
 3
 "bend"
-" ox=\"0.0\" oy=\"-63.4\""
+" ox=\"0.0\" oy=\"-57.0\""
 2
 "pen-remove"
 2
@@ -282,22 +282,22 @@ tab Controls
 undefined
 clicked .toolbar button[aria-label="Rectangle"]
 "Rectangle (R)"
-["<rect id=\"#2w\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
-"<ellipse id=\"#2x\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
-"<ellipse id=\"#2x\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+["<rect id=\"#39\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
+"<ellipse id=\"#3A\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
+"<ellipse id=\"#3A\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 4
-"<ellipse id=\"#2x\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+"<ellipse id=\"#3A\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 tab Main
 {"cuts":["its h is bound to #10.params.level * 300; the path keeps the current value"],"ok":false}
 ["its h is bound to #10.params.level * 300; the path keeps the current value"]
 clicked Cancel
 null
 tab Controls
-"<rect id=\"#2w\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
+"<rect id=\"#39\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"28.20…\" tr=\"28.20…\" br=\"28.20…\" bl=\"28.20…\""
 clicked Add effect
 clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
-"<ellipse id=\"#2x\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
+"<ellipse id=\"#3A\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
 tab Optics
 undefined
 undefined
@@ -329,22 +329,22 @@ tab Main
 [false,true]
 tab Controls
 undefined
-"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"30\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.09… 38.65… 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.57… 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
+"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"28.2\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.0914 38.6599 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.57… 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
 ["slider level is exported as a picture of itself; it imports as shapes"]
 4
 {"cuts":["filters are not imported"],"nodes":7,"ok":true}
 [8,4]
-["<rect id=\"#3G\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#3H\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#3I\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#3M\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
-["<point id=\"#3K\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#3L\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
+["<rect id=\"#3T\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#3U\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#3V\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#3Z\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
+["<point id=\"#3X\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#3Y\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
 [true,4]
 4
 undefined
 8
 4
-{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#3U #3V #3W #3a\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
+{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#3h #3i #3j #3n\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
 8
 4
-applied "open demo scene" (220 ops, System) -> v1
+applied "open demo scene" (233 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -576,7 +576,8 @@ from the console. `await __iron.timings(reset)` reads per-phase CPU times
 (`src/perf.rs`): `sync`, `gesture_reconcile`, `display_list`, `extract`,
 `encode` (content views), `overlay_encode` (editor-feedback views), `render`, `pick`,
 `overlay_geometry`, `bounds`, `propagate` (Bevy's transform propagation, timed from
-outside its set; every frame), and whole frames as `frame` and `changed_frame`
+outside its set; every frame), `produce` (a Bevy-side producer's step and publish,
+only while one runs), and whole frames as `frame` and `changed_frame`
 (a frame in which some view, content or overlay, re-encoded). Each phase records only frames on
 which it did work.
 
@@ -654,6 +655,41 @@ Live 2D set) and `live` (the Live set's size); with nothing selected or hovered 
 
 The smoke's Link step sleeps between the box click and `keydown Shift`: at a few
 fps both can land in one frame, and the click then adds instead of replacing.
+Likewise it rests after the length-slider drag (its commit lands a frame after
+the release) and before the save/load roundtrip. Undo and redo themselves are
+ordered with the other keys since 2026-10-17 (`engine_api::history_request`
+queues them as tool keys), so a Backspace followed by Cmd+Z undoes the delete
+even when both land in one slow frame. What still varies run to run is the
+driver's pace: a drag can stop short (the slider at 1.18 instead of 1.2, the
+ball at y 414 instead of 420) or, rarely, miss its press.
+
+### Runtime signals and the piston demo (vision 10 phase 4)
+
+`await __iron.signals()` lists the runtime layer: `producers` (`clips`, `network`
+and every host producer, with `running` and how many leaves each holds),
+`signals` (leaf, value, producer, stamp) and `errors` (a leaf two producers
+asked for, or a bound leaf). `await __iron.producer('gas', 'freeze' | 'stop' |
+'run')` commits what the gas producer holds as one `freeze gas` transaction and
+stops it, stops it, or runs it again. `piston.txt` drives the Piston tab:
+
+```bash
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < piston.txt; cd -
+```
+
+Expected: `gas()` names `clips holds 0`, `network holds 8` (the thermal demo's
+ports) and `gas running holds 1`, one `gas -> #….param_spec.default = 1.x`
+signal among the network's, no errors; `bars()` reads pressure ≈ 55–75 and `pv`
+≈ 90–115 at stroke 0.2; after the slider drag (to ≈ 0.83 here; the drag is
+driver-paced) pressure is ≈ 130–180 and `pv` still ≈ 80–115; the piston mesh prints
+`pos.bind="[1, 0, 0] * (1.3 - #….slider.value * 2.2) + [0, 1.2, 0]"` with `rot="0,0,-1.57…"`; the freeze
+returns `[true, 1, false]`, logs `applied "freeze gas" (1 ops, Human)`, leaves
+`gas stopped holds 0` with no signals and the bars unchanged; undo returns both
+bars to 0 and `run` republishes. The gas's values are noisy (160 particles) and
+differ run to run, and the gauge has a 0.4 s time constant in *gas* time: a
+frame integrates at most 0.1 s, so at the container's 2–3 fps in this tab the
+readings after a 6 s settle are ~90% converged (the compressed reading keeps
+rising after `run`). On a display they settle within a second. The producer
+publishes only while the Piston tab (or an embed of `cylinder`) is shown.
 
 Native spatial/store checks:
 `cargo test -p iron_document -p iron_spatial --target aarch64-apple-darwin`.
@@ -723,14 +759,20 @@ run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-125 tests pass (34 unit, 91 integration; verified 2026-10-17, minus the two
-platform-precision tests noted above on Linux). The host target is required because
+130 tests pass (35 unit, 95 integration; verified 2026-10-17 after vision 10
+phase 4 added `tests/signals.rs`, minus the two platform-precision tests noted
+above on Linux). The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
 (13 tests, verified 2026-10-15; `UPDATE_GOLDEN=1` rewrites `tests/golden/fixture.svg`).
 
 ## Gotchas
+
+- Bevy 0.20 on this adapter logs `Clustered light or decal … had no assigned
+  index!` twice a frame (bevy_pbr `cluster/mod.rs:527`, the scene's two point
+  lights; CPU clustering under WebGL2). Rendering is unaffected; filter the
+  line out of `logs` when reading the console. Not yet reported upstream.
 
 - **Headless Chrome's own `--screenshot` flag is useless here.** It fires at
   page load, and neither `--virtual-time-budget` nor `--timeout` waits for

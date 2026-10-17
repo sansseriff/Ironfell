@@ -557,3 +557,9 @@ Without the budget, hovering the field made its whole 141k-node subtree Live:
 load's scene rebuild (3.1 s at 100k here); the idle frame p50 is 77 ms on this
 machine, which is the display-list walk and encode of the visible leaves and
 is what chunking and baking (phases 4–5) are for.
+
+At 10k the reduced script of §10 reads the same as phase 2 within its spread
+(`spin` changed frame 28.9 ms, `pan` 29.7, `display_list` 5.7–6.1,
+`propagate` 0.1): reading draw data from `Drawables` instead of entity
+components costs nothing measurable. Rows `phase3` in
+[`render-scene-local-2026-10-17.jsonl`](benchmarks/render-scene-local-2026-10-17.jsonl).

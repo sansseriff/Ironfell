@@ -166,8 +166,7 @@ pub fn is_embed(doc: &Document, id: NodeId) -> bool {
     doc.live(id).is_some_and(|n| n.ty.name() == "embed")
 }
 
-/// Default on-screen size of a 3D embed with no `size`, in document px.
-pub const EMBED_3D_SIZE: (f64, f64) = (320.0, 240.0);
+pub use iron_document::composition::EMBED_3D_SIZE;
 
 /// A 3D composition seen from a 2D one (ECM §7.4), resolved for one frame:
 /// which composition, through which camera node (none: the derived default
@@ -212,24 +211,10 @@ impl EmbedView {
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct EmbedViews(pub Vec<EmbedView>);
 
-/// The on-screen-size of a 3D embed in its parent's space, and the camera
-/// it names: `size` (default [`EMBED_3D_SIZE`]); with a camera, the height
-/// follows the camera's aspect.
+/// The on-screen size of a 3D embed in its parent's space, and the camera
+/// it names (`composition::embed_3d_extent`).
 pub fn embed_3d(store: &iron_document::Store, embed: NodeId) -> Option<(NodeId, Option<NodeId>, f64, f64)> {
-    let doc = store.document();
-    let source = composition::embedded(doc, embed)?;
-    if composition::dims(doc, source) != Some(Dims::Three) {
-        return None;
-    }
-    let num = |id: NodeId, leaf: &str| leaf.parse().ok().and_then(|p| store.resolved(id, p)).and_then(|v| v.as_f64());
-    let has_size = doc.component(embed, iron_document::ComponentKind::Size).is_some();
-    let w = if has_size { num(embed, "size.w").unwrap_or(EMBED_3D_SIZE.0) } else { EMBED_3D_SIZE.0 };
-    let mut h = if has_size { num(embed, "size.h").unwrap_or(EMBED_3D_SIZE.1) } else { EMBED_3D_SIZE.1 };
-    let camera = composition::embed_camera(doc, embed);
-    if let Some(aspect) = camera.and_then(|c| num(c, "camera.aspect")).filter(|a| *a > 0.0) {
-        h = w / aspect;
-    }
-    Some((source, camera, w, h))
+    composition::embed_3d_extent(store, embed)
 }
 
 pub fn collect_embed_views(
@@ -305,15 +290,14 @@ pub fn locate(
     map: &NodeMap,
     nodes: &Query<(&'static Doc2d, &'static GlobalTransform)>,
     globals: &Query<&'static GlobalTransform>,
-    bounds: &bevy::platform::collections::HashMap<NodeId, kurbo::Rect>,
+    spatial: &super::SpatialScene,
     view: &PanelView,
     node: NodeId,
 ) -> Option<kurbo::Rect> {
     let doc = store.document();
     let target = composition::composition_of(doc, node);
-    let own = |n: NodeId| -> Option<kurbo::Rect> {
-        std::iter::once(n).chain(doc.descendants(n)).filter_map(|x| bounds.get(&x).copied()).reduce(|a, b| a.union(b))
-    };
+    // A group's entry is already its subtree's union.
+    let own = |n: NodeId| -> Option<kurbo::Rect> { spatial.painted(n) };
     if target == view.composition || (target.is_none() && view.loose) {
         return own(node);
     }

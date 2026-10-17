@@ -1,18 +1,30 @@
-//! World transforms inside the store (constraint-system.md §4.3).
+//! Geometry inside the store: local and world transforms, local bounds, and
+//! the revisions that say what moved (constraint-system.md §4.3; vision 10
+//! §3, where Iron is the authority for world transforms and Bevy a consumer).
 //!
-//! Bevy computes `GlobalTransform` for rendering; the solver and the gesture
-//! code need the same world positions without a round trip through the ECS.
 //! `world_affine` walks a node's parent chain, reading resolved values through
 //! the same reader the reactive graph uses, so previews, bindings and clips
 //! are honoured. Its composition order (`T · R · S`, parent before child) is
 //! Bevy's `Transform::compute_affine` and `GlobalTransform` propagation
 //! exactly; a test against `glam` keeps the two from drifting.
+//!
+//! [`Revisions`] separates two kinds of change so a spatial index can keep a
+//! group's contents in the group's own space: a **placement** change (the
+//! node's own `transform2d` moved; its descendants' local-space bounds are
+//! untouched) and a **local** change (the node's own geometry or paint
+//! outsets moved). Rotating a group of ten thousand shapes is one placement
+//! change, not ten thousand bounds. Structure (create, delete, reparent,
+//! reorder) is a third, global, revision.
 
 use crate::component::{ComponentKind, LeafPath};
 use crate::document::Document;
 use crate::expr::Leaf;
 use crate::id::NodeId;
+use crate::op::Op;
 use crate::value::Value;
+use crate::Store;
+use kurbo::{Rect, Shape as _};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A 2D affine map, kurbo's coefficient order: `x' = a·x + c·y + e`,
 /// `y' = b·x + d·y + f`. In Bevy's `Affine3A` terms `(a, b)` is `x_axis`,
@@ -105,6 +117,214 @@ pub fn world_affine(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: No
         cur = doc.live(p).and_then(|n| n.parent);
     }
     chain.iter().rev().fold(Affine2::IDENTITY, |acc, &n| acc.then(local_affine(doc, read, n)))
+}
+
+// ---------------------------------------------------------------------------
+// Local bounds
+
+/// A drawable node's extent in its own local space, before its transform:
+/// the geometry, and how far paint (strokes, shadows, a slider's knob) and
+/// hit-testing (a path's grab margin) reach beyond it. Inflate in local space
+/// before mapping, so a nonuniform scale scales the margins too.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalBounds {
+    pub geometry: Rect,
+    pub paint_pad: f64,
+    pub hit_pad: f64,
+}
+
+/// How near (local px) the pointer must come to a path's line to hit it.
+pub const PATH_HIT: f64 = 5.0;
+
+/// Conservative local paint outsets. Geometry alone trims centred strokes at
+/// a frame boundary; the miter limit also covers round and bevel joins and
+/// square and round caps; a shadow reaches its offset plus three standard
+/// deviations (half the authored blur radius each).
+pub fn paint_padding(store: &Store, id: NodeId) -> f64 {
+    let read = |leaf: &str| store.resolved(id, leaf.parse().expect("declared leaf"));
+    let num = |leaf: &str, default: f64| read(leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);
+    let mut pad = if read("stroke.color").is_some() { num("stroke.width", 1.0) * 0.5 * num("stroke.miter", 4.0).max(4.0) } else { 0.0 };
+    if read("shadow.color").is_some() {
+        pad += num("shadow.dx", 0.0).abs().max(num("shadow.dy", 4.0).abs()) + 3.0 * (num("shadow.blur", 4.0).max(0.0) * 0.5);
+    }
+    if store.document().live(id).is_some_and(|n| n.ty.name() == "slider") {
+        pad = pad.max((num("size.h", 24.0) * 0.5).min(12.0) + 3.0);
+    }
+    pad
+}
+
+/// The local bounds of a drawable 2D node (`rect`, `ellipse`, `slider`,
+/// `path`), or of a 3D embed's on-screen frame. `None` for a group, an
+/// embed of a 2D composition (its region is the source's content, which a
+/// spatial scene knows), and anything else.
+pub fn local_bounds(store: &Store, id: NodeId) -> Option<LocalBounds> {
+    let doc = store.document();
+    let node = doc.live(id)?;
+    let num = |leaf: &str, default: f64| store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);
+    let (geometry, hit_pad) = match node.ty.name() {
+        "rect" => (Rect::new(0.0, 0.0, num("size.w", 100.0), num("size.h", 100.0)), 0.0),
+        "slider" => (Rect::new(0.0, 0.0, num("size.w", 200.0), num("size.h", 24.0)), 0.0),
+        "ellipse" => {
+            let outline = crate::shape::outline(store, id)?;
+            (crate::shape::to_bez(&outline).bounding_box(), 0.0)
+        }
+        "path" => (crate::contour::outline(&crate::contour::contours(store, id)).bounding_box(), PATH_HIT),
+        "embed" => {
+            let (_, _, w, h) = crate::composition::embed_3d_extent(store, id)?;
+            return Some(LocalBounds { geometry: Rect::new(0.0, 0.0, w, h), paint_pad: 2.0, hit_pad: 0.0 });
+        }
+        _ => return None,
+    };
+    let geometry = Rect::new(geometry.x0.min(geometry.x1), geometry.y0.min(geometry.y1), geometry.x0.max(geometry.x1), geometry.y0.max(geometry.y1));
+    Some(LocalBounds { geometry, paint_pad: paint_padding(store, id), hit_pad })
+}
+
+// ---------------------------------------------------------------------------
+// Revisions
+
+/// What one leaf's change means for spatial bookkeeping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeometryEffect {
+    /// The node's own placement in its parent moved.
+    Placement(NodeId),
+    /// The node's own local geometry or paint outset moved.
+    Local(NodeId),
+    /// Nothing an index cares about (a colour, a 3D transform, a name).
+    None,
+}
+
+/// The `path` a `contour` or `point` belongs to, if it is inside one.
+fn enclosing_path(doc: &Document, id: NodeId) -> Option<NodeId> {
+    let mut at = doc.live(id)?.parent;
+    while let Some(p) = at.and_then(|p| doc.live(p)) {
+        if p.ty.name() == "path" {
+            return Some(p.id);
+        }
+        at = p.parent;
+    }
+    None
+}
+
+/// Classify a resolved-value change. A point's position is part of its
+/// path's outline, not a placement of its own.
+pub fn effect_of(doc: &Document, leaf: Leaf) -> GeometryEffect {
+    let Some(node) = doc.live(leaf.node) else { return GeometryEffect::None };
+    let ty = node.ty.name();
+    match leaf.path.component {
+        ComponentKind::Transform2d if matches!(ty, "point" | "contour") => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
+        ComponentKind::Transform2d => GeometryEffect::Placement(leaf.node),
+        ComponentKind::Handles | ComponentKind::Contour => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
+        ComponentKind::Size | ComponentKind::Radius | ComponentKind::Arc | ComponentKind::Stroke | ComponentKind::Shadow | ComponentKind::Frame | ComponentKind::Embed | ComponentKind::EmbedCamera => {
+            GeometryEffect::Local(leaf.node)
+        }
+        // A camera's aspect shapes every embed that looks through it; rare,
+        // and structure-free, so the embeds are found by the scene on demand.
+        ComponentKind::Camera => GeometryEffect::Local(leaf.node),
+        _ => GeometryEffect::None,
+    }
+}
+
+/// The changes since the last take, classified. `structure` means the tree's
+/// shape changed and painter order, scopes and chains must be rebuilt.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GeometryChanges {
+    pub structure: bool,
+    pub placement: BTreeSet<NodeId>,
+    pub local: BTreeSet<NodeId>,
+}
+
+impl GeometryChanges {
+    pub fn is_empty(&self) -> bool {
+        !self.structure && self.placement.is_empty() && self.local.is_empty()
+    }
+}
+
+/// Monotonic counters per node and for the tree, bumped as changes are
+/// taken. A consumer stamps what it derived with the revisions it read and
+/// re-derives when they move; a chain's placement stamp is the sum of its
+/// nodes' placement revisions, so a cached world affine stays valid until
+/// some ancestor moves.
+#[derive(Clone, Debug, Default)]
+pub struct Revisions {
+    structure: u64,
+    placement: BTreeMap<NodeId, u64>,
+    local: BTreeMap<NodeId, u64>,
+    /// Leaves set by transactions since the last take (the reactive graph
+    /// reports only re-evaluated bindings and previews).
+    pending_leaves: BTreeSet<Leaf>,
+    pending_structure: bool,
+}
+
+impl Revisions {
+    pub fn structure(&self) -> u64 {
+        self.structure
+    }
+
+    pub fn placement(&self, id: NodeId) -> u64 {
+        self.placement.get(&id).copied().unwrap_or(0)
+    }
+
+    pub fn local(&self, id: NodeId) -> u64 {
+        self.local.get(&id).copied().unwrap_or(0)
+    }
+
+    /// The placement revisions of `id` and its live ancestors, summed: a
+    /// cheap stamp for anything derived from the node's world affine.
+    pub fn chain_stamp(&self, doc: &Document, id: NodeId) -> u64 {
+        let mut stamp = 0u64;
+        let mut at = Some(id);
+        while let Some(n) = at {
+            stamp = stamp.wrapping_add(self.placement(n));
+            at = doc.live(n).and_then(|n| n.parent);
+        }
+        stamp
+    }
+
+    /// Record a transaction's ops (requested, derived, and inverse: the
+    /// union names everything an undo or redo touches).
+    pub(crate) fn note_ops<'a>(&mut self, ops: impl IntoIterator<Item = &'a Op>) {
+        for op in ops {
+            match op {
+                Op::Set { id, path, .. } => {
+                    self.pending_leaves.insert(Leaf { node: *id, path: *path });
+                }
+                Op::Create { .. } | Op::Delete { .. } | Op::Reparent { .. } | Op::Reorder { .. } | Op::AddComp { .. } | Op::RemoveComp { .. } => self.pending_structure = true,
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn note_structure(&mut self) {
+        self.pending_structure = true;
+    }
+
+    /// Classify everything pending plus `touched` from the reactive graph,
+    /// bump the counters, and hand the change set to the caller.
+    pub(crate) fn take(&mut self, doc: &Document, touched: BTreeSet<Leaf>) -> GeometryChanges {
+        let mut out = GeometryChanges::default();
+        if std::mem::take(&mut self.pending_structure) {
+            self.structure += 1;
+            out.structure = true;
+        }
+        for leaf in std::mem::take(&mut self.pending_leaves).into_iter().chain(touched) {
+            match effect_of(doc, leaf) {
+                GeometryEffect::Placement(n) => {
+                    out.placement.insert(n);
+                }
+                GeometryEffect::Local(n) => {
+                    out.local.insert(n);
+                }
+                GeometryEffect::None => {}
+            }
+        }
+        for &n in &out.placement {
+            *self.placement.entry(n).or_insert(0) += 1;
+        }
+        for &n in &out.local {
+            *self.local.entry(n).or_insert(0) += 1;
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -207,6 +427,147 @@ mod tests {
         // a.then(b): rotate first, then translate: (1,0) -> (-1,0) -> (4,0).
         let q = a.then(b).apply([1.0, 0.0]);
         assert!((q[0] - 4.0).abs() < 1e-12 && q[1].abs() < 1e-12, "{q:?}");
+    }
+
+    /// A rect under a group under a root group; returns (root, group, rect).
+    fn nested(store: &mut Store) -> [NodeId; 3] {
+        use crate::component::Size;
+        let ids = store.document().next_ids(3);
+        let mut t = Transform2d::default();
+        t.x = Slot::Const(Value::Number(10.0));
+        let mut size = Size::default();
+        size.w = Slot::Const(Value::Number(20.0));
+        size.h = Slot::Const(Value::Number(30.0));
+        store
+            .apply(TransactionInput {
+                label: "tree".into(),
+                actor: Actor::System,
+                ts: 0,
+                idempotency_key: None,
+                ops: vec![
+                    Op::Create { id: ids[0], ty: TypeId::lookup("group").unwrap(), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap()] },
+                    Op::Create { id: ids[1], ty: TypeId::lookup("group").unwrap(), parent: Some(ids[0]), order: OrderKey::first(), components: vec![t.wrap()] },
+                    Op::Create { id: ids[2], ty: TypeId::lookup("rect").unwrap(), parent: Some(ids[1]), order: OrderKey::first(), components: vec![Transform2d::default().wrap(), size.wrap()] },
+                ],
+                exact: false,
+            })
+            .unwrap();
+        [ids[0], ids[1], ids[2]]
+    }
+
+    #[test]
+    fn revisions_separate_placement_from_local_and_structure() {
+        let mut store = Store::new();
+        let [root, group, rect] = nested(&mut store);
+        let first = store.take_geometry_changes();
+        assert!(first.structure, "creation is structure");
+        let s0 = store.revisions().structure();
+        assert!(store.take_geometry_changes().is_empty(), "nothing moved since");
+
+        // Rotating the group is one placement change; the rect's local
+        // revision and the chain stamp of anything outside the group stay.
+        let rect_local = store.revisions().local(rect);
+        let root_stamp = store.revisions().chain_stamp(store.document(), root);
+        store
+            .apply(TransactionInput {
+                label: "rotate".into(),
+                actor: Actor::Human,
+                ts: 0,
+                idempotency_key: None,
+                ops: vec![Op::Set { id: group, path: "transform2d.rot".parse().unwrap(), slot: Slot::Const(Value::Number(0.5)) }],
+                exact: false,
+            })
+            .unwrap();
+        let c = store.take_geometry_changes();
+        assert_eq!((c.structure, c.placement.len(), c.local.len()), (false, 1, 0), "{c:?}");
+        assert!(c.placement.contains(&group));
+        assert_eq!(store.revisions().local(rect), rect_local);
+        assert_eq!(store.revisions().chain_stamp(store.document(), root), root_stamp);
+        assert_ne!(store.revisions().chain_stamp(store.document(), rect), 0, "the rect's chain includes the moved group");
+        assert_eq!(store.revisions().structure(), s0);
+
+        // A size preview is a local change of the rect, through the graph.
+        store.preview(rect, "size.w".parse().unwrap(), Value::Number(99.0));
+        let c = store.take_geometry_changes();
+        assert_eq!((c.placement.len(), c.local.len()), (0, 1), "{c:?}");
+        assert!(c.local.contains(&rect));
+        assert_eq!(store.local_bounds(rect).unwrap().geometry, kurbo::Rect::new(0.0, 0.0, 99.0, 30.0));
+
+        // Undo is structure-free but moves the group back: a placement.
+        store.cancel_gesture();
+        let _ = store.take_geometry_changes();
+        store.undo(0).unwrap().unwrap();
+        let c = store.take_geometry_changes();
+        assert!(!c.structure && c.placement.contains(&group), "{c:?}");
+    }
+
+    #[test]
+    fn a_points_move_is_its_paths_local_change() {
+        use crate::component::PathShape;
+        let mut store = Store::new();
+        let ids = store.document().next_ids(4);
+        let [path, contour, point, other] = [ids[0], ids[1], ids[2], ids[3]];
+        let mut at = Transform2d::default();
+        at.x = Slot::Const(Value::Number(5.0));
+        store
+            .apply(TransactionInput {
+                label: "path".into(),
+                actor: Actor::System,
+                ts: 0,
+                idempotency_key: None,
+                ops: vec![
+                    Op::Create { id: path, ty: TypeId::lookup("path").unwrap(), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), PathShape::default().wrap()] },
+                    Op::Create { id: contour, ty: TypeId::lookup("contour").unwrap(), parent: Some(path), order: OrderKey::first(), components: vec![crate::component::Contour::default().wrap()] },
+                    Op::Create { id: point, ty: TypeId::lookup("point").unwrap(), parent: Some(contour), order: OrderKey::first(), components: vec![at.clone().wrap(), crate::component::Handles::default().wrap()] },
+                    Op::Create { id: other, ty: TypeId::lookup("point").unwrap(), parent: Some(contour), order: OrderKey::after(&OrderKey::first()), components: vec![at.wrap(), crate::component::Handles::default().wrap()] },
+                ],
+                exact: false,
+            })
+            .unwrap();
+        let _ = store.take_geometry_changes();
+        store.preview(point, "transform2d.y".parse().unwrap(), Value::Number(40.0));
+        let c = store.take_geometry_changes();
+        assert_eq!(c.placement.len(), 0, "{c:?}");
+        assert_eq!(c.local.iter().copied().collect::<Vec<_>>(), vec![path]);
+        let b = store.local_bounds(path).unwrap();
+        assert_eq!(b.hit_pad, PATH_HIT);
+        assert_eq!(b.geometry, kurbo::Rect::new(5.0, 0.0, 5.0, 40.0));
+    }
+
+    #[test]
+    fn local_bounds_follow_shape_type_and_paint() {
+        use crate::component::{Radius, Shadow, Stroke};
+        let mut store = Store::new();
+        let ids = store.document().next_ids(2);
+        let mut r = Radius::default();
+        r.rx = Slot::Const(Value::Number(10.0));
+        r.ry = Slot::Const(Value::Number(4.0));
+        let mut stroke = Stroke::default();
+        stroke.width = Slot::Const(Value::Number(6.0));
+        let mut shadow = Shadow::default();
+        shadow.dx = Slot::Const(Value::Number(2.0));
+        shadow.dy = Slot::Const(Value::Number(-7.0));
+        shadow.blur = Slot::Const(Value::Number(4.0));
+        store
+            .apply(TransactionInput {
+                label: "shapes".into(),
+                actor: Actor::System,
+                ts: 0,
+                idempotency_key: None,
+                ops: vec![
+                    Op::Create { id: ids[0], ty: TypeId::lookup("ellipse").unwrap(), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), r.wrap(), stroke.wrap()] },
+                    Op::Create { id: ids[1], ty: TypeId::lookup("rect").unwrap(), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), crate::component::Size::default().wrap(), shadow.wrap()] },
+                ],
+                exact: false,
+            })
+            .unwrap();
+        let e = store.local_bounds(ids[0]).unwrap();
+        assert!((e.geometry.x0 + 10.0).abs() < 1e-9 && (e.geometry.y1 - 4.0).abs() < 1e-9, "{e:?}");
+        assert_eq!(e.paint_pad, 6.0 * 0.5 * 4.0, "stroke: half width times the miter limit");
+        let r = store.local_bounds(ids[1]).unwrap();
+        assert_eq!(r.geometry, kurbo::Rect::new(0.0, 0.0, 100.0, 100.0));
+        assert_eq!(r.paint_pad, 7.0 + 3.0 * 2.0, "shadow: the larger offset plus three standard deviations");
+        assert!(store.local_bounds(store.document().next_id()).is_none());
     }
 
     #[test]

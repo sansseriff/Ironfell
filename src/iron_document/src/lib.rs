@@ -173,6 +173,8 @@ pub struct Store {
     /// How the last gesture ended, for its tool to find out.
     ended: Option<(GestureId, GestureStatus)>,
     next_gesture: u64,
+    /// What moved, for spatial consumers (`geom::Revisions`).
+    geometry: geom::Revisions,
 }
 
 impl Default for Store {
@@ -208,7 +210,9 @@ impl Store {
             gesture: None,
             ended: None,
             next_gesture: 1,
+            geometry: geom::Revisions::default(),
         };
+        store.geometry.note_structure();
         store.reactive.rebuild(&store.doc);
         store.resample();
         store.rebuild_clusters();
@@ -378,6 +382,31 @@ impl Store {
     /// to the materialised entity's `GlobalTransform`; see `geom`.
     pub fn world_affine(&self, id: NodeId) -> Affine2 {
         geom::world_affine(&self.doc, &|l| self.reactive.read(&self.doc, l), id)
+    }
+
+    /// The node's own transform in its parent's space, from resolved values.
+    pub fn local_affine(&self, id: NodeId) -> Affine2 {
+        geom::local_affine(&self.doc, &|l| self.reactive.read(&self.doc, l), id)
+    }
+
+    /// A drawable node's extent in its own space (`geom::local_bounds`).
+    pub fn local_bounds(&self, id: NodeId) -> Option<geom::LocalBounds> {
+        geom::local_bounds(self, id)
+    }
+
+    /// Per-node placement and local revisions and the structure revision,
+    /// as of the last `take_geometry_changes`.
+    pub fn revisions(&self) -> &geom::Revisions {
+        &self.geometry
+    }
+
+    /// Everything that moved spatially since the last take, classified
+    /// (`geom::GeometryChanges`), with the revisions bumped to match. One
+    /// consumer owns this: the spatial scene. It is independent of
+    /// `drain_changes`, which the reconciler owns.
+    pub fn take_geometry_changes(&mut self) -> geom::GeometryChanges {
+        let touched = self.reactive.take_touched();
+        self.geometry.take(&self.doc, touched)
     }
 
     /// Leaves whose resolved value changed since the last drain.
@@ -785,6 +814,7 @@ impl Store {
 
     /// Keep the graph in step with a transaction that just applied.
     fn after_transaction(&mut self, tx: &Transaction) {
+        self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()));
         let structural = tx.ops.iter().chain(tx.inverse.iter()).any(|op| match op {
             // A link can be a connection's end, which derives a signal.
             Op::Create { .. } | Op::Delete { .. } | Op::AddComp { .. } | Op::RemoveComp { .. } | Op::Link { .. } | Op::Unlink { .. } => true,

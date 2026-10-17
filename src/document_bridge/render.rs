@@ -166,7 +166,7 @@ impl Draw<'_, '_, '_> {
         // in the display list, so rotation cannot expose extra pixels.
         let visible = base.inverse().transform_rect_bbox(clip.inflate(2.0, 2.0));
         let candidates = if self.spatial.enabled {
-            self.spatial.candidates(roots, self.doc, None, visible)
+            self.spatial.candidates(roots, None, visible)
         } else { nest::preorder(self.doc, roots) };
         // Preserve the spatial query, then restore ancestor scopes around its
         // painter-ordered leaves. A group composites once, not once per leaf.

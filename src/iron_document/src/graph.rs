@@ -50,6 +50,11 @@ pub struct Reactive {
     /// `Store::resolve_physics`): derived, read beneath bindings.
     physics: BTreeMap<Leaf, Value>,
     changes: BTreeMap<Leaf, Value>,
+    /// Every leaf whose resolved value moved since `take_touched`. Unlike
+    /// `changes`, which the reconciler drains, this feeds the store's
+    /// geometry revisions (`geom::Revisions`), so the two consumers never
+    /// starve each other.
+    touched: BTreeSet<Leaf>,
     /// Errors from the last evaluation pass, by leaf. A leaf in error keeps
     /// its previous resolved value.
     pub errors: BTreeMap<Leaf, String>,
@@ -82,7 +87,7 @@ impl Reactive {
             if !self.overlay.contains_key(&l)
                 && let Some(v) = self.read(doc, l)
             {
-                self.changes.insert(l, v);
+                self.note(l, v);
             }
         }
         self.invalidate(doc, changed);
@@ -115,7 +120,7 @@ impl Reactive {
             if !self.overlay.contains_key(&l)
                 && let Some(v) = self.read(doc, l)
             {
-                self.changes.insert(l, v);
+                self.note(l, v);
             }
         }
         self.invalidate(doc, changed);
@@ -185,7 +190,7 @@ impl Reactive {
                 self.resolved.remove(&leaf);
                 self.errors.remove(&leaf);
                 if let Some(v) = self.read(doc, leaf) {
-                    self.changes.insert(leaf, v);
+                    self.note(leaf, v);
                 }
             }
         }
@@ -221,7 +226,7 @@ impl Reactive {
         let before = self.read(doc, leaf);
         self.overlay.insert(leaf, value.clone());
         if before.as_ref() != Some(&value) {
-            self.changes.insert(leaf, value);
+            self.note(leaf, value);
             self.invalidate(doc, [leaf]);
         }
     }
@@ -232,7 +237,7 @@ impl Reactive {
         self.overlay.clear();
         for &l in &leaves {
             if let Some(v) = self.read(doc, l) {
-                self.changes.insert(l, v);
+                self.note(l, v);
             }
         }
         self.invalidate(doc, leaves);
@@ -240,6 +245,17 @@ impl Reactive {
 
     pub fn has_changes(&self) -> bool {
         !self.changes.is_empty()
+    }
+
+    /// The one place a resolved change is recorded.
+    fn note(&mut self, leaf: Leaf, value: Value) {
+        self.touched.insert(leaf);
+        self.changes.insert(leaf, value);
+    }
+
+    /// Leaves whose resolved value moved since the last take.
+    pub fn take_touched(&mut self) -> BTreeSet<Leaf> {
+        std::mem::take(&mut self.touched)
     }
 
     pub fn drain_changes(&mut self) -> Vec<ResolvedChange> {
@@ -301,7 +317,7 @@ impl Reactive {
                     self.errors.remove(&leaf);
                     if self.resolved.get(&leaf) != Some(&v) {
                         self.resolved.insert(leaf, v.clone());
-                        self.changes.insert(leaf, v);
+                        self.note(leaf, v);
                         if let Some(ds) = self.dependents.get(&leaf) {
                             primed.extend(ds.iter().copied());
                         }

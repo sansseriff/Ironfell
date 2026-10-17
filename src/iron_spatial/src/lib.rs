@@ -1,5 +1,14 @@
 //! Spatial acceleration, not another document or transform hierarchy.
-//! Hosts supply resolved composition-space bounds; Understory keys remain private.
+//!
+//! [`BoundsIndex`] is one flat index over caller-owned ids in one space;
+//! Understory keys remain private. [`Scene`] stacks them along the document's
+//! own hierarchy: each group's contents are indexed in the group's local space
+//! with one placement per group, so moving a group touches one entry (vision
+//! 10 §3.1; the render handoff's item 3).
+
+pub mod scene;
+
+pub use scene::Scene;
 
 use iron_document::NodeId;
 use kurbo::{Affine, Point, Rect};
@@ -22,6 +31,21 @@ impl Bounds {
             painted: transform.transform_rect_bbox(local.inflate(paint_pad, paint_pad)),
             interaction: transform.transform_rect_bbox(local.inflate(hit_pad, hit_pad)),
         }
+    }
+    /// From a drawable node's own extent (`iron_document::geom::LocalBounds`).
+    pub fn of_local(local: &iron_document::geom::LocalBounds, transform: Affine) -> Self {
+        Self::transformed(local.geometry, transform, local.paint_pad, local.hit_pad)
+    }
+    /// The conservative box of each bound under `transform`.
+    pub fn mapped(self, transform: Affine) -> Self {
+        Self {
+            geometry: transform.transform_rect_bbox(self.geometry),
+            painted: transform.transform_rect_bbox(self.painted),
+            interaction: transform.transform_rect_bbox(self.interaction),
+        }
+    }
+    pub fn union(self, other: Self) -> Self {
+        Self { geometry: self.geometry.union(other.geometry), painted: self.painted.union(other.painted), interaction: self.interaction.union(other.interaction) }
     }
     fn indexed(self) -> Rect { self.painted.union(self.interaction) }
     fn finite(self) -> bool {

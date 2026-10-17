@@ -170,11 +170,6 @@ impl DocumentChanges {
     }
 }
 
-/// Painted bounds in each node's canonical composition space, kept current
-/// by the spatial preparation pass even when no view draws the node.
-#[derive(Resource, Default)]
-pub struct Bounds2d(pub HashMap<NodeId, kurbo::Rect>);
-
 /// Monotonic projection generation, including resolved previews and document
 /// replacement. Unlike DocumentChanges this is never drained by rendering.
 /// Consumers can retain derived geometry across unchanged frames.
@@ -217,7 +212,6 @@ impl Plugin for DocumentPlugin {
             .init_resource::<PendingTransactions>()
             .init_resource::<NodeMap>()
             .init_resource::<DocumentChanges>()
-            .init_resource::<Bounds2d>()
             .init_resource::<GeometryRevision>()
             .init_resource::<PropagatedGeometryRevision>()
             .init_resource::<SpatialScene>()

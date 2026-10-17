@@ -121,8 +121,9 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
         })
         .collect();
     let paths = kinds.iter().filter(|k| matches!(k, Kind::Path)).count();
-    // The sample rect is one extra shape.
-    let total = 4 + cells + shapes + 3 * paths;
+    // The sample rect is one extra shape; a path is its contour and three
+    // points besides itself.
+    let total = 4 + cells + shapes + 4 * paths;
     let mut ids = doc.next_ids(total).into_iter();
     let mut next = move || ids.next().expect("reserved");
 

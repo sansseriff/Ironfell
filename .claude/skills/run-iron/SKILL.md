@@ -9,8 +9,28 @@ stdin-scripted Playwright driver that launches the installed Google Chrome
 headless (SwiftShader, WebGL2), waits for the engine, and takes screenshots,
 drags, and console dumps. All paths below are relative to the repo root.
 
-Verified on macOS (Apple Silicon) on 2026-09-18. Linux is untested; the only
-platform-specific piece is the Chrome path (`CHROME` env var overrides it).
+Verified on macOS (Apple Silicon) on 2026-09-18 and on a Linux cloud container
+(4 cores, SwiftShader only) on 2026-10-17. Platform-specific pieces:
+
+- The Chrome path (`CHROME` env var overrides it; Playwright's bundled build
+  works: `CHROME=/opt/pw-browsers/chromium-*/chrome-linux/chrome`).
+- The scripts are `#!/bin/zsh`; where there is no zsh, `bash build.sh` and
+  `bash serve.sh start` run them unchanged.
+- Native tests take the host triple: `--target x86_64-unknown-linux-gnu` on
+  Linux instead of `aarch64-apple-darwin`. Two store tests compare solver
+  output to the last digit (`the_pendulum_view_matches_the_golden_file`,
+  `converting_an_ellipse_reports_and_bakes_what_reads_or_drives_its_radii`)
+  and differ at 1e-12 between platforms' libm (constraint-system.md I7); they
+  are not regressions.
+- Without a GPU the app runs at ~8 fps. The 200 ms settle waits in
+  `spatial.txt` are then too short (reference and indexed hits are read from
+  different frames and differ spuriously); run it with the waits raised
+  (`sed 's/^sleep 200$/sleep 1500/; s/^sleep 500$/sleep 2000/'`). Its
+  through-plane step at viewer (960, 180) depends on the panel geometry;
+  on the container the card's dot is at (934, 150). Driver-paced drags may
+  also stop a few pixels short of their target, so values like the
+  slider's 0.8 can read 0.76 and a resize's 120 can read 116 in the smoke
+  output; a wrong *target* (another node) is the failure to look for.
 
 ## Prerequisites
 
@@ -626,6 +646,11 @@ comparing. This is a test switch, not persisted document state.
 
 Native spatial/store checks:
 `cargo test -p iron_document -p iron_spatial --target aarch64-apple-darwin`.
+`iron_spatial` has five unit tests and six scene tests (`tests/scene.rs`): the
+hierarchical scene against a flat composition-space reference when nothing is
+rotated, a superset-of-exact check after rotation, and the 10k stress shape,
+where rotating the field must update one entry (`--release -- --nocapture`
+prints its timings: ~24 µs for the rotate update, ~40 ms for a rebuild).
 Don't run performance measurements concurrently with other browser tests/builds.
 
 ## Display-paced interaction and independent renderer controls
@@ -687,7 +712,8 @@ run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-122 tests pass (31 unit, 91 integration; verified 2026-10-16). The host target is required because
+125 tests pass (34 unit, 91 integration; verified 2026-10-17, minus the two
+platform-precision tests noted above on Linux). The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`

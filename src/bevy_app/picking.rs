@@ -146,7 +146,7 @@ impl Pick<'_, '_, '_> {
     pub fn walk(&mut self, roots: &[NodeId], prefix: &[NodeId], p: kurbo::Point, space: kurbo::Affine, key: &str, depth: u32) {
         let indexed = self.spatial.enabled;
         let candidates = if indexed {
-            self.spatial.candidates(roots, self.doc, Some(p), kurbo::Rect::ZERO)
+            self.spatial.candidates(roots, Some(p), kurbo::Rect::ZERO)
         } else { roots.to_vec() };
         self.examined += candidates.len() as u32;
         crate::perf::set_pick_candidates(self.examined);

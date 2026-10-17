@@ -311,6 +311,31 @@ pub fn embed_camera(doc: &Document, embed: NodeId) -> Option<NodeId> {
     }
 }
 
+/// Default on-screen size of a 3D embed with no `size`, in document px.
+pub const EMBED_3D_SIZE: (f64, f64) = (320.0, 240.0);
+
+/// The on-screen extent of a 3D embed in its parent's space, and the camera
+/// it names: the composition shown, the camera (none: the derived default
+/// view), and `size` (default [`EMBED_3D_SIZE`]); with a camera, the height
+/// follows the camera's aspect. `None` unless the embed shows a live 3D
+/// composition.
+pub fn embed_3d_extent(store: &crate::Store, embed: NodeId) -> Option<(NodeId, Option<NodeId>, f64, f64)> {
+    let doc = store.document();
+    let source = embedded(doc, embed)?;
+    if dims(doc, source) != Some(Dims::Three) {
+        return None;
+    }
+    let num = |id: NodeId, leaf: &str| leaf.parse().ok().and_then(|p| store.resolved(id, p)).and_then(|v| v.as_f64());
+    let has_size = doc.component(embed, crate::component::ComponentKind::Size).is_some();
+    let w = if has_size { num(embed, "size.w").unwrap_or(EMBED_3D_SIZE.0) } else { EMBED_3D_SIZE.0 };
+    let mut h = if has_size { num(embed, "size.h").unwrap_or(EMBED_3D_SIZE.1) } else { EMBED_3D_SIZE.1 };
+    let camera = embed_camera(doc, embed);
+    if let Some(aspect) = camera.and_then(|c| num(c, "camera.aspect")).filter(|a| *a > 0.0) {
+        h = w / aspect;
+    }
+    Some((source, camera, w, h))
+}
+
 /// Every live embed inside `composition`, in preorder.
 pub fn embeds_in(doc: &Document, composition: NodeId) -> Vec<NodeId> {
     let embed = TypeId::lookup("embed").expect("registered");

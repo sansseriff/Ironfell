@@ -210,7 +210,7 @@ pub(crate) fn apply_focus(
     store: Res<crate::document_bridge::DocumentStore>,
     views: Res<crate::document_bridge::PanelViews>,
     map: Res<crate::document_bridge::NodeMap>,
-    bounds: Res<crate::document_bridge::Bounds2d>,
+    spatial: Res<crate::document_bridge::SpatialScene>,
     nodes: Query<(&'static crate::document_bridge::Doc2d, &'static GlobalTransform)>,
     globals: Query<&'static GlobalTransform>,
     mut view_cameras: ResMut<crate::document_bridge::ViewCameras>,
@@ -226,7 +226,7 @@ pub(crate) fn apply_focus(
                 Dims::Two => {
                     // `locate` answers in the panel's document space, so
                     // the pan is absolute; the zoom is kept.
-                    let Some(r) = crate::document_bridge::nest::locate(&store.0, &map, &nodes, &globals, &bounds.0, view, id) else { continue };
+                    let Some(r) = crate::document_bridge::nest::locate(&store.0, &map, &nodes, &globals, &spatial, view, id) else { continue };
                     let centre = Vec2::new(r.center().x as f32, r.center().y as f32);
                     let camera = view_cameras.0.entry(view.panel.clone()).or_default();
                     camera.pan = Vec2::new(view.rect.w, view.rect.h) * 0.5 - centre * camera.zoom;

@@ -65,8 +65,8 @@ view. Editor feedback has its own target since 2026-10-14.
 
 ## 3. What Vello Hybrid can and cannot retain
 
-`vello_hybrid` (renamed `vello_gpu` upstream) does its expensive work on the CPU, in
-**device space**, at recording time:
+`vello_gpu` (0.3; named `vello_hybrid` through 0.2, and Iron's backend module keeps
+that name) does its expensive work on the CPU, in **device space**, at recording time:
 
 ```
 fill_path(path) → transform to device px → flatten → 4×4 tiles → sparse strips + AA coverage
@@ -89,7 +89,7 @@ removed upstream (vello#1611) and its envelope was mainly integer translation.
 
 **Version facts that shape the plan:**
 
-| | `vello_hybrid` 0.2 (Iron, wgpu 29) | `vello_gpu` 0.3 (upstream `db90a73`, wgpu 30) |
+| | `vello_hybrid` 0.2 (Iron until 2026-10-17, wgpu 29) | `vello_gpu` 0.3 (Iron now, on Bevy 0.20 / wgpu 30) |
 |---|---|---|
 | Target handling | `render` always clears its target | `TargetInit::SrcOver` composes onto existing pixels; `ClearSettings::Rects` clears only listed rects |
 | Clips | `push_clip_path`, `push_clip_layer` | adds `push_clip_rect` |

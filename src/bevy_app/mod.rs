@@ -56,10 +56,9 @@ pub const VARIANT_EMPTY: u32 = 1 << 2;
 /// Add the alpha-blending stress fixture (`?bevy=alpha`). Combines with
 /// the other diagnostic variants.
 pub const VARIANT_ALPHA_STRESS: u32 = 1 << 4;
-/// Explicitly initialize classic Vello instead of Hybrid. Requires the `classic`
-/// feature (WebGPU builds only); ignored otherwise. The ordinary app defaults to
-/// a Hybrid-only plugin set so classic's eager compute-pipeline creation cannot
-/// affect cold start.
+/// Once selected classic Vello instead of Hybrid. Classic is no longer wired
+/// in (`bevy_vello` lags Bevy releases; see plans/handoff-render.md), so the
+/// flag is accepted and ignored.
 pub const VARIANT_CLASSIC_BACKEND: u32 = 1 << 5;
 
 /// The canvas background in the light and dark themes: behind 2D panels and
@@ -82,9 +81,6 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
     let min_plugins = variant_flags & VARIANT_MIN_PLUGINS != 0;
     let empty = variant_flags & VARIANT_EMPTY != 0;
     let alpha_stress = variant_flags & VARIANT_ALPHA_STRESS != 0;
-    #[cfg(feature = "classic")]
-    let classic_backend = variant_flags & VARIANT_CLASSIC_BACKEND != 0;
-
     let mut app = App::new();
 
     app.insert_resource(ClearColor(CANVAS_LIGHT));
@@ -154,17 +150,8 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
         // WebAssetPlugin::default(),
         default_plugins,
         // TrackingCircle,
-        // Exactly one renderer is installed. Classic cannot be added later:
-        // `VelloPlugin` builds its compute pipelines in `Plugin::finish`, so a
-        // present-but-idle classic backend would still cost cold start. Switching
-        // renderers therefore rebuilds the `App` rather than toggling a resource.
-        #[cfg(feature = "classic")]
-        if classic_backend {
-            VectorPlugin::classic_only()
-        } else {
-            VectorPlugin::hybrid_only()
-        },
-        #[cfg(not(feature = "classic"))]
+        // One renderer: the sparse-strips backend. A second one would be a
+        // sibling of `vector::hybrid` on the same view-texture path.
         VectorPlugin::hybrid_only(),
         FPSOverlayPlugin,
         FrameTimeDiagnosticsPlugin {
@@ -178,6 +165,10 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
         DocumentPlugin,
     ));
 
+    // A command that fails (one on an entity despawned earlier in the frame,
+    // say) is logged, not fatal: a dead canvas loses the user's session, a
+    // warning does not. Bevy's default is to panic.
+    app.set_error_handler(bevy::ecs::error::warn);
     init_shared_resources(&mut app);
     announce_window(&mut app, window_entity);
     // Every view renders into its own texture and the window only composites

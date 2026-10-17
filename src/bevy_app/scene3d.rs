@@ -1,5 +1,5 @@
 use crate::camera_controller::CameraController;
-use bevy::math::bounding::{Aabb3d, Bounded3d};
+use bevy::shape::{Aabb3d, Bounded3d};
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use std::ops::Deref;

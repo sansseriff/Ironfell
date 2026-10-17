@@ -34,13 +34,14 @@ const MAX_SIDE: u32 = 4096;
 
 const PLANE_SHADER: Handle<Shader> = uuid_handle!("2a7c9e14-5b3d-4f6a-8e21-c0d9b7a4f512");
 
+// WESL (Bevy 0.20).
 const PLANE_WGSL: &str = r#"
-#import bevy_pbr::forward_io::VertexOutput
+import bevy_pbr::render::forward_io::VertexOutput;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var plane_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var plane_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var plane_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var plane_sampler: sampler;
 // xy: the part of the texture the content fills (it is bucket-sized).
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var<uniform> uv_scale: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var<uniform> uv_scale: vec4<f32>;
 
 fn linear_from_srgb(srgb: vec3<f32>) -> vec3<f32> {
     return select(srgb / 12.92, pow((srgb + 0.055) / 1.055, vec3(2.4)), srgb > vec3(0.04045));
@@ -93,7 +94,7 @@ pub(super) struct PlanePlugin;
 
 impl Plugin for PlanePlugin {
     fn build(&self, app: &mut App) {
-        let _ = app.world_mut().resource_mut::<Assets<Shader>>().insert(PLANE_SHADER.id(), Shader::from_wgsl(PLANE_WGSL, file!()));
+        let _ = app.world_mut().resource_mut::<Assets<Shader>>().insert(PLANE_SHADER.id(), Shader::from_wesl(PLANE_WGSL, file!()));
         app.add_plugins(MaterialPlugin::<PlaneMaterial>::default());
     }
 }

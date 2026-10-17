@@ -28,9 +28,9 @@ pub const MODE_STRAIGHT_SRGB: f32 = 1.0;
 
 const VIEW_COMPOSITE_SHADER: Handle<Shader> = uuid_handle!("8c1d7f0e-3b5a-4e8f-9d2c-6a1b4c7e9f30");
 
+// WESL (Bevy 0.20); the vertex output is this shader's own.
 const VIEW_COMPOSITE_WGSL: &str = r#"
-#import bevy_render::view::View
-#import bevy_sprite::mesh2d_vertex_output::VertexOutput
+import bevy_render::view::View;
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(2) @binding(0) var view_texture: texture_2d<f32>;
@@ -42,6 +42,10 @@ const VIEW_COMPOSITE_WGSL: &str = r#"
 
 struct Vertex {
     @location(0) position: vec3<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
 };
 
 @vertex
@@ -107,6 +111,7 @@ impl Material2d for ViewCompositeMaterial {
     }
 
     fn specialize(
+        _pipeline: &bevy::sprite_render::Material2dPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &bevy::mesh::MeshVertexBufferLayoutRef,
         _key: Material2dKey<Self>,
@@ -126,7 +131,7 @@ impl Plugin for ViewCompositePlugin {
     fn build(&self, app: &mut App) {
         let _ = app.world_mut().resource_mut::<Assets<Shader>>().insert(
             VIEW_COMPOSITE_SHADER.id(),
-            Shader::from_wgsl(VIEW_COMPOSITE_WGSL, file!()),
+            Shader::from_wesl(VIEW_COMPOSITE_WGSL, file!()),
         );
         app.add_plugins(Material2dPlugin::<ViewCompositeMaterial>::default());
     }

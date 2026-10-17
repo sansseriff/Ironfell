@@ -19,15 +19,9 @@
 use bevy::prelude::*;
 
 /// Which renderer realizes a [`DisplayList`](super::DisplayList).
-///
-/// `ClassicVello` exists only under the `classic` feature: it is not merely
-/// unused without it, the dependency is absent entirely.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum BackendKind {
-    /// `vello` classic, via `bevy_vello`. GPU compute flattening; WebGPU only.
-    #[cfg(feature = "classic")]
-    ClassicVello,
-    /// `vello_hybrid` sparse strips. CPU strip generation, no compute shaders.
+    /// `vello_gpu` sparse strips. CPU strip generation, no compute shaders.
     Hybrid,
 }
 

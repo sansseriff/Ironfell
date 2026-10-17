@@ -6,8 +6,9 @@ members = [".", "src/iron_document", "src/iron_solve", "src/iron_spatial", "src/
 
 
 [workspace.dependencies]
-bevy = { version = "0.19", features = [
+bevy = { version = "0.20", features = [
     "std",
+
     "bevy_pbr",
     "bevy_gizmos",
     # Without it gizmos are recorded but never drawn: 3D selection outlines.
@@ -65,10 +66,6 @@ webgl2 = ["bevy/webgl2"]
 # Native engine execution is independent of the window host.
 native = ["bevy/multi_threaded"]
 
-# Classic Vello as a second, selectable renderer. WebGPU only: vello classic
-# flattens paths in compute shaders, which WebGL2 does not have. Enabling it
-# alongside `webgl2` is rejected in `src/lib.rs`.
-classic = ["dep:bevy_vello"]
 
 [dependencies]
 bevy.workspace = true
@@ -89,13 +86,9 @@ iron_solve = { path = "./src/iron_solve" }
 # SVG export and import (plans/specs/svg-import-export.md). Bevy-free.
 iron_svg = { path = "./src/iron_svg" }
 
-# Classic Vello, behind the `classic` feature. Optional because its plugin
-# creates every compute pipeline in `Plugin::finish`, so an unused-but-present
-# backend is not free — and because those compute shaders cannot run on WebGL2
-# at all.
-# 0.13.1 requires bevy ^0.18. `main` is on bevy 0.19 + vello 0.9 (PR #223,
-# 2026-07-30) but is unreleased, so track git until a release lands.
-bevy_vello = { git = "https://github.com/linebender/bevy_vello", branch = "main", optional = true }
+# Classic Vello (compute flattening, WebGPU only) is not wired in. `bevy_vello`
+# lags Bevy releases; when a Classic backend returns it is a sibling of
+# `vector::hybrid` on the shared view-texture path (plans/handoff-render.md).
 
 # Geometry and style vocabulary shared by the app's display lists and
 # `vello_hybrid`. Versions must match the renderer's resolved versions so their
@@ -113,21 +106,23 @@ peniko = "0.6.1"
 # Sparse-strips vector renderer.
 # `text` is off: this app draws no vector text (the FPS overlay is bevy_ui),
 # and it would pull in the whole glifo font stack.
-vello_hybrid = { version = "0.2.0", default-features = false, features = [
+# `vello_gpu` is `vello_hybrid` renamed at 0.3 (wgpu 30; `TargetInit`,
+# `ClearSettings::Rects`, image paints in place of `draw_texture_rects`).
+vello_gpu = { version = "0.3.0", default-features = false, features = [
     "wgpu",
 ] }
-# For `RectU16` (texture-rect source regions), which `vello_hybrid` uses but
-# does not re-export. Same version as `vello_hybrid` resolves.
-vello_common = { version = "0.2.0", default-features = false }
+# For `RectU16` (texture-rect source regions), which `vello_gpu` uses but
+# does not re-export. Same version as `vello_gpu` resolves.
+vello_common = { version = "0.3.0", default-features = false }
 
 # Pin app-surface: it must resolve to the SAME wgpu major as bevy_render, or the
-# two end up with incompatible wgpu types. bevy 0.19 -> wgpu 29, and app-surface
-# 1.12.x is the last release on wgpu ^29 (1.13 moved to 30).
+# two end up with incompatible wgpu types. bevy 0.20 -> wgpu 30, and app-surface
+# 1.13 is the release on wgpu ^30.
 raw-window-handle = "0.6"
-wgpu = "29"
+wgpu = "30"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-app-surface = { version = "=1.12.0", features = ["web_rwh"] }
+app-surface = { version = "=1.13.0", features = ["web_rwh"] }
 # Web only
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.51"

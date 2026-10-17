@@ -17,14 +17,6 @@ compile_error!(
 #[cfg(all(feature = "native", any(feature = "webgpu", feature = "webgl2", target_arch = "wasm32")))]
 compile_error!("the native feature requires a native target and cannot be combined with a web backend");
 
-// Classic Vello flattens paths in compute shaders. WebGL2 has none, so this is a
-// build that could never run rather than one that merely runs slowly.
-#[cfg(all(feature = "classic", feature = "webgl2"))]
-compile_error!(
-    "feature `classic` requires `webgpu`: vello classic flattens paths in \
-     compute shaders, which WebGL2 does not provide."
-);
-
 #[cfg(not(any(feature = "webgpu", feature = "webgl2", feature = "native")))]
 compile_error!(
     "no graphics backend selected: use `--features native`, `webgpu`, or `webgl2`."

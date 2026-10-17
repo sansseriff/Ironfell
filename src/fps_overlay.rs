@@ -152,9 +152,7 @@ fn update_backend_display(
     *initialised = true;
 
     let (label, colour) = match *backend {
-        #[cfg(feature = "classic")]
-        BackendKind::ClassicVello => ("vello classic", AQUA),
-        BackendKind::Hybrid => ("vello_hybrid (sparse strips)", LIME),
+        BackendKind::Hybrid => ("vello_gpu (sparse strips)", LIME),
     };
     *writer.text(*query, 8) = label.to_owned();
     *writer.color(*query, 8) = TextColor(colour.into());

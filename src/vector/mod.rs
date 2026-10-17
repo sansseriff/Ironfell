@@ -21,8 +21,6 @@
 //! the canvas are reused — nothing is re-downloaded).
 
 mod backend;
-#[cfg(feature = "classic")]
-mod classic;
 mod composite;
 mod composite_material;
 mod display_list;
@@ -57,14 +55,6 @@ impl VectorPlugin {
             backend: BackendKind::Hybrid,
         }
     }
-
-    /// Explicit fallback path, entered after the user requests classic.
-    #[cfg(feature = "classic")]
-    pub fn classic_only() -> Self {
-        Self {
-            backend: BackendKind::ClassicVello,
-        }
-    }
 }
 
 impl Plugin for VectorPlugin {
@@ -72,14 +62,7 @@ impl Plugin for VectorPlugin {
         app.insert_resource(self.backend)
             .add_plugins((composite::CompositePlugin, view_composite::ViewCompositePlugin));
 
-        // `VelloPlugin` creates the classic renderer and all of its compute
-        // pipelines in `Plugin::finish`, so selecting Hybrid must omit it
-        // entirely rather than leave it installed and idle.
         match self.backend {
-            #[cfg(feature = "classic")]
-            BackendKind::ClassicVello => {
-                app.add_plugins(classic::ClassicVelloBackend);
-            }
             BackendKind::Hybrid => {
                 app.add_plugins((
                     composite_material::CompositeMaterialPlugin,

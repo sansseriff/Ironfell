@@ -1194,6 +1194,7 @@ pub struct ToolDoc<'w> {
     store: ResMut<'w, DocumentStore>,
     gestures: ResMut<'w, GestureRequests>,
     pending: ResMut<'w, PendingTransactions>,
+    history: ResMut<'w, crate::document_bridge::HistoryRequests>,
     map: Res<'w, NodeMap>,
     spatial: Res<'w, crate::document_bridge::SpatialScene>,
     drawables: Res<'w, crate::document_bridge::Drawables>,
@@ -1232,7 +1233,7 @@ pub fn select_tool_system(
     (pen, mut edit): (Res<crate::bevy_app::pen::PenTool>, ResMut<PathEdit>),
 ) {
     let tool = &mut *tool;
-    let ToolDoc { mut store, mut gestures, mut pending, map, spatial, drawables, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
+    let ToolDoc { mut store, mut gestures, mut pending, mut history, map, spatial, drawables, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
     // What the last paste or duplicate made becomes the selection once it
     // exists (its reach is found below, like any selection made elsewhere).
     if !tool.select_when_live.is_empty() && tool.select_when_live.iter().all(|&id| store.0.document().is_live(id)) {
@@ -1281,6 +1282,9 @@ pub fn select_tool_system(
         let reaches = selected_reaches(&sel, tool);
         let doc = store.0.document();
         match key.as_str() {
+            // In key order with everything above (`engine_api::history_request`).
+            "undo" => history.0.push(crate::document_bridge::HistoryOp::Undo),
+            "redo" => history.0.push(crate::document_bridge::HistoryOp::Redo),
             "escape" if !matches!(tool.gesture, Gesture::Idle) => {
                 // Esc mid-gesture puts everything back, an Alt-drag's
                 // copies included.

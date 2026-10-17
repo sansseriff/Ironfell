@@ -116,8 +116,15 @@ key Meta+z
 keydown Meta
 sleep 400
 # 5. Scrub the length slider to about 1.2: the links re-solve live and the
-#    release is one "set slider" transaction.
+#    release is one "set slider" transaction. Rest on the knob first, so the
+#    press lands on a picked slider rather than a frame behind the pointer.
+dmove 250 672
+sleep 400
 ddrag 250 672 310 672
+# The release commits on the next frame; at a few fps the model edit below
+# would otherwise apply first and the slider's commit re-solve from the
+# ball's fix (the platform would rise instead of the ball dropping).
+sleep 400
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const l = v.match(/<constraint[^>]*name="link1"[^>]*>/); return l && l[0]; })()
 # 4. Move the fix from the platform to the ball (one model transaction), then
 #    drag the platform: the arms bend and the ball stays put.
@@ -198,7 +205,9 @@ eval (async () => { const r = await __iron.edit('<edit><link-figures a="#l" b="#
 eval (async () => { const r = await __iron.edit('<edit><link-figures a="#11" b="#Q"/></edit>'); return r.failure; })()
 eval (async () => { const r = await __iron.edit('<edit><link-figures a="#11" b="#Q" keep="#10"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
 key Meta+z
-sleep 400
+# Long enough for the undo to land before the load replaces the history
+# (a slow frame here once left "nothing to Undo" after the load).
+sleep 1000
 # Exit criterion 2: save, load, save again; the bytes must match.
 eval (async () => { const a = await __iron.save(); await __iron.load(a); await new Promise(r => setTimeout(r, 800)); const b = await __iron.save(); return { roundtrip_equal: a === b, bytes: a.length }; })()
 sleep 500
@@ -254,12 +263,14 @@ eval __iron.selection()
 shot select-marquee
 key Escape
 sleep 300
-# Arrows nudge (Shift: 10 px), one transaction per press.
+# Arrows nudge (Shift: 10 px), one transaction per press. The waits span a
+# slow frame (the overlay's first pipeline), so the presses never share one.
 dclick 540 460
+sleep 400
 key ArrowRight
-sleep 300
+sleep 600
 key Shift+ArrowDown
-sleep 300
+sleep 600
 eval sq()
 # Delete the pendulum group, then undo: the whole subtree returns.
 dclick 320 360

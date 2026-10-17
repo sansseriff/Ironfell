@@ -44,7 +44,7 @@ Not started: ECM phases 4–7, stage G's semantic views and lessons, CS phases 4
 | Spatial | `src/iron_spatial/` | Bounds and `understory_index` per composition; see `handoff-render.md` |
 | The bridge | `src/document_bridge/` | `mod.rs` sync and `reconcile_gesture`, `DocumentChanges`, `GeometryRevision`; `materialize.rs` node → entity; `render.rs` the 2D walk per view; `spatial.rs` bounds preparation; `nest.rs` embeds; `panel_views.rs` views per panel; `planes.rs` 2D in 3D; `highlight.rs`; `demo.rs`, `stress.rs` |
 | Interaction | `src/bevy_app/` | `select.rs` the select tool, selection cache, navigation; `pen.rs`; `interaction.rs` 3D, plane and slider drags; `picking.rs` |
-| Rendering | `src/vector/` | Display lists and the `vello_hybrid` backend; see `rendering/architecture.md` |
+| Rendering | `src/vector/` | Display lists and the `vello_gpu` (sparse strips) backend; see `rendering/architecture.md` |
 | FFI | `src/web_ffi.rs` | Document, session, inspector, stress, timings, spatial toggles |
 | Shell | `src-ui/` | Svelte. `views/` the dockview workspace and view registry; `model/` the model surface (manifest, `<edit>` parser, agent); `runtime/document_client.svelte.ts`; `__iron` on `window` for driving |
 | Tests | `src/iron_document/tests/*.rs`, `src/iron_spatial`, `src/iron_solve/tests/` | Golden views in `tests/golden/` (pendulum, cartoon, model) |

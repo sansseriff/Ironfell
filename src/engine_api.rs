@@ -282,7 +282,6 @@ pub fn document_build_info(_app: &mut WorkerApp) -> String {
         "opt": opt,
         "simd": simd,
         "fast": fast,
-        "classic": cfg!(feature = "classic"),
         "gfx": crate::host_services::graphics_backend(),
     })
     .to_string()
@@ -847,12 +846,18 @@ pub fn redo(app: &mut WorkerApp) {
     history_request(app, crate::document_bridge::HistoryOp::Redo);
 }
 
+/// Undo and redo travel with the other shortcuts (`ToolKeys`), so they
+/// apply in the order the keys were pressed: a tool's transaction from an
+/// earlier key reaches `PendingTransactions` when the tool handles it, and
+/// an undo queued straight into `HistoryRequests` would overtake it on a
+/// slow frame (undoing the previous change instead).
 fn history_request(app: &mut WorkerApp, op: crate::document_bridge::HistoryOp) {
-    if let Some(mut requests) = app
-        .world_mut()
-        .get_resource_mut::<crate::document_bridge::HistoryRequests>()
-    {
-        requests.0.push(op);
+    if let Some(mut keys) = app.world_mut().get_resource_mut::<crate::bevy_app::select::ToolKeys>() {
+        let key = match op {
+            crate::document_bridge::HistoryOp::Undo => "undo",
+            crate::document_bridge::HistoryOp::Redo => "redo",
+        };
+        keys.0.push((key.to_owned(), 0));
     }
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;

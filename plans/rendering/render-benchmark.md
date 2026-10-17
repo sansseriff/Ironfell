@@ -563,3 +563,28 @@ At 10k the reduced script of §10 reads the same as phase 2 within its spread
 `propagate` 0.1): reading draw data from `Drawables` instead of entity
 components costs nothing measurable. Rows `phase3` in
 [`render-scene-local-2026-10-17.jsonl`](benchmarks/render-scene-local-2026-10-17.jsonl).
+
+## 13. Bevy 0.20 / wgpu 30 / `vello_gpu` 0.3 (2026-10-17)
+
+The upgrade (`handoff-render.md` §4) on the same container and reduced 10k
+script as §10–12 (SwiftShader, 1–5 fps, worker CPU p50 ms, 10k shapes),
+`wasm-bench` profile, phase 4 of vision 10 in the build (its producer idle).
+`drag-one` missed its Cmd-click this run (as in §10), so its row drags the
+cell's rect with nothing selected.
+
+| Scenario | Changed frame, phase 3 | Changed frame, 0.3 | Encode, phase 3 | Encode, 0.3 | Render, phase 3 | Render, 0.3 |
+|---|---|---|---|---|---|---|
+| spin | 28.9 | 28.9 | 12.1 | 7.6 | 2.6 | 2.2 |
+| drag-one | 23.8 | 26.1 | 0 | 0 | 1.4 | 1.0 |
+| pan | 29.7 | 30.6 | 12.6 | 12.4 | 2.9 | 2.4 |
+
+No regression; the rotation's content encode is a third cheaper on 0.3
+(`vello_gpu`'s persistent strip arena), and `render` a little. The idle
+frame reads 11.4 ms against 8.3 (the HUD and compositing only; within this
+machine's noise). What the upgrade makes possible, chunk-level vector
+retention with `TargetInit::SrcOver`, is handoff item 4 and not measured
+here. Raw samples appended to
+[`render-scene-local-2026-10-17.jsonl`](benchmarks/render-scene-local-2026-10-17.jsonl)
+as `upgrade` rows. Verification on this build: `piston.txt`, the full smoke
+(exit 0, no page errors), `spatial.txt` at DPR 1 with identical pixels
+(36/37, as §10) and `picking.txt` 10/10.

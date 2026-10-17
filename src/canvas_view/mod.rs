@@ -61,7 +61,7 @@ pub fn spawn_canvas_window(app: &mut App, view: ViewObj) -> Entity {
     }.expect("failed to wrap canvas window handle");
     let entity=crate::surface::spawn_external_window(app,raw,width,height,PresentMode::AutoNoVsync);
 
-    app.insert_non_send_resource(ActiveCanvas {
+    app.insert_non_send(ActiveCanvas {
         view,
         window: entity,
     });
@@ -75,7 +75,7 @@ pub fn spawn_canvas_window(app: &mut App, view: ViewObj) -> Entity {
 pub fn update_canvas_window(app: &mut App) {
     let Some((width, height)) = app
         .world()
-        .get_non_send_resource::<ActiveCanvas>()
+        .get_non_send::<ActiveCanvas>()
         .map(|c| c.view.physical_resolution())
     else {
         return;

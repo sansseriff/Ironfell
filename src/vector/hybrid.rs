@@ -1,4 +1,4 @@
-//! Sparse-strips backend, via `vello_hybrid`.
+//! Sparse-strips backend, via `vello_gpu` (`vello_hybrid` before 0.3).
 //!
 //! Vello Hybrid realizes the app's renderer-independent display lists. It
 //! flattens, tiles and computes antialiasing coverage on
@@ -53,10 +53,12 @@ use bevy::window::PrimaryWindow;
 use kurbo::{Affine, BezPath, PathEl, Rect, Shape as _};
 use peniko::Fill;
 use std::sync::Mutex;
-use vello_common::geometry::RectU16;
-use vello_hybrid::{
-    LayersConfig, MemorySettings, RenderSettings, RenderSize, RenderTargetConfig, Renderer,
-    Resources, SampleRect, Scene, SizeU16, TextureId,
+use vello_common::TextureId;
+use vello_common::geometry::{RectU16, SizeU16};
+use vello_common::paint::{Image as VelloImage, ImageSource};
+use vello_gpu::{
+    ClearSettings, LayersConfig, MemorySettings, RenderSettings, RenderSize, RenderTargetConfig, Renderer,
+    Resources, Scene, TargetInit,
 };
 use wgpu::TextureFormat;
 
@@ -824,12 +826,16 @@ fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, U
                     textures.push((id, image.clone(), *size));
                 }
                 scene.set_transform(base * *transform);
-                let (w, h) = (size.x.min(u16::MAX as u32) as u16, size.y.min(u16::MAX as u32) as u16);
-                scene.draw_texture_rects(
-                    id,
-                    peniko::ImageQuality::Medium,
-                    [SampleRect { source_region: RectU16::new(0, 0, w, h), transform: Affine::IDENTITY }],
-                );
+                let (w, h) = (size.x.clamp(1, u16::MAX as u32) as u16, size.y.clamp(1, u16::MAX as u32) as u16);
+                // 0.3: an external texture is a paint; the rect it fills is
+                // its whole source region in local px (as `draw_texture_rects`
+                // drew in 0.2). The view's texture is premultiplied and may
+                // be transparent outside its content.
+                scene.set_paint(VelloImage {
+                    image: ImageSource::external_texture(id, RectU16::new(0, 0, w, h), true),
+                    sampler: peniko::ImageSampler::default(),
+                });
+                scene.fill_rect(&Rect::new(0.0, 0.0, w as f64, h as f64));
             }
         }
         emitted += 1;
@@ -893,15 +899,15 @@ fn render_scene(
             .max_texture_dimension_2d
             .min(u16::MAX as u32) as u16;
         info!(
-            "vello_hybrid renderer {}x{}, intermediate layer textures capped at {device_max}",
+            "vello_gpu renderer {}x{}, intermediate layer textures capped at {device_max}",
             size.x, size.y
         );
         state.inner = Some(Renderer::new_with(
             device.wgpu_device(),
             &RenderTargetConfig {
                 format: TARGET_FORMAT,
-                width: size.x,
-                height: size.y,
+                width: size.x.min(u16::MAX as u32) as u16,
+                height: size.y.min(u16::MAX as u32) as u16,
             },
             RenderSettings {
                 memory_settings: MemorySettings {
@@ -929,7 +935,7 @@ fn render_scene(
         if t.rendered || !t.textures.is_empty() {
             continue;
         }
-        let bindings = vello_hybrid::TextureBindings::new();
+        let bindings = vello_gpu::TextureBindings::new();
         let handle = match key {
             None => target.as_ref().map(|t| &t.0),
             Some(e) => views.0.get(e).map(|v| &v.image),
@@ -943,7 +949,7 @@ fn render_scene(
         // renderer's upload buffers.
         let mut encoder = device
             .wgpu_device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("vello_hybrid") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("vello_gpu") });
         // Note: `render` clears `view` before drawing. That is why this backend
         // owns its targets instead of writing into Bevy's `ViewTarget`.
         if let Err(err) = renderer_inner.render(
@@ -952,11 +958,13 @@ fn render_scene(
             device.wgpu_device(),
             queue.as_ref(),
             &mut encoder,
-            &RenderSize { width: t.size.x, height: t.size.y },
+            &RenderSize { width: t.size.x.min(u16::MAX as u32) as u16, height: t.size.y.min(u16::MAX as u32) as u16 },
             &gpu_image.texture_view,
+            None,
             &bindings,
+            TargetInit::Clear(ClearSettings::default()),
         ) {
-            error!("vello_hybrid render failed: {err}");
+            error!("vello_gpu render failed: {err}");
             continue;
         }
         queue.submit([encoder.finish()]);
@@ -1126,7 +1134,7 @@ fn render_textured_scenes(
             Some(e) => views.0.get(e).map(|v| &v.image),
         };
         let Some(gpu_image) = handle.and_then(|h| gpu_images.get(h)) else { continue };
-        let mut bindings = vello_hybrid::TextureBindings::new();
+        let mut bindings = vello_gpu::TextureBindings::new();
         let mut missing = false;
         for (id, image, size) in &t.textures {
             let Some(src) = gpu_images.get(image) else {
@@ -1147,7 +1155,7 @@ fn render_textured_scenes(
         let (own, resources) = t.own.get_or_insert_with(|| {
             Renderer::new_with(
                 device.wgpu_device(),
-                &RenderTargetConfig { format: TARGET_FORMAT, width: window.x, height: window.y },
+                &RenderTargetConfig { format: TARGET_FORMAT, width: window.x.min(u16::MAX as u32) as u16, height: window.y.min(u16::MAX as u32) as u16 },
                 RenderSettings::default(),
             )
         });
@@ -1157,11 +1165,13 @@ fn render_textured_scenes(
             device.wgpu_device(),
             queue.as_ref(),
             ctx.command_encoder(),
-            &RenderSize { width: t.size.x, height: t.size.y },
+            &RenderSize { width: t.size.x.min(u16::MAX as u32) as u16, height: t.size.y.min(u16::MAX as u32) as u16 },
             &gpu_image.texture_view,
+            None,
             &bindings,
+            TargetInit::Clear(ClearSettings::default()),
         ) {
-            error!("vello_hybrid render failed: {err}");
+            error!("vello_gpu render failed: {err}");
             continue;
         }
         t.rendered = true;

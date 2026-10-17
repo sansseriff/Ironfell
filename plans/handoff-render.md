@@ -135,13 +135,22 @@ and `ClearSettings::Rects`, but needs wgpu 30, i.e. a Bevy release on wgpu 30.
    which routes a whole panel through an intermediate layer texture. 0.2 also has
    `push_clip_path`. Measure before switching.
 
-Bevy 0.20 (wgpu 30) shipped 2026-10-08 and `vello_gpu` 0.3 on 2026-10-02, so the
-upgrade is available now: `vello_gpu` 0.3 (renamed from `vello_hybrid`;
-`draw_texture_rects` became external-texture image paints), `app-surface` 1.13,
-and `bevy_vello` dropped (its `main` is still on Bevy 0.19; Classic is rebuilt
-later on the shared view-texture path, probe crate first). Then try chunk-level
-vector retention with `TargetInit::SrcOver`. Item 3's revisions
-are what it needs. Renderer alternatives (Vello Classic on WebGPU, a tessellated
+**The upgrade is done (2026-10-17):** Bevy 0.20 (wgpu 30), `vello_gpu` 0.3
+(renamed from `vello_hybrid`; `draw_texture_rects` became external-texture image
+paints, `RenderSize` is `u16`, `render` takes a `TargetInit`), `app-surface` 1.13,
+and `bevy_vello` dropped with the `classic` feature (Classic is rebuilt later on the
+shared view-texture path, probe crate first; `iron_renderer_probe` still pins
+`vello_hybrid` 0.2 for the standalone control). Bevy 0.20 replaced naga_oil with
+WESL, so the three shaders Iron writes (`composite_material.rs`,
+`view_composite.rs`, `planes.rs`) are WESL now (`import bevy_render::view::View;`,
+`bevy_pbr::render::forward_io::VertexOutput`, `constants::MATERIAL_BIND_GROUP`);
+with the old `#import`s every view composited as nothing. Failed ECS commands
+log a warning instead of panicking (`App::set_error_handler`). The smoke, spatial
+and picking scripts pass; `render-benchmark.md` §13 has the 10k numbers on 0.3.
+The constraint paragraph above no longer applies: chunk-level vector retention
+with `TargetInit::SrcOver` is now possible, and item 3's revisions are what it
+needs. Vision 10 phase 4 (the runtime signal layer, `produce` phase) landed the
+same day; nothing in it touches rendering. Renderer alternatives (Vello Classic on WebGPU, a tessellated
 mesh baseline, Rive as a reference) are experiments for the
 `iron_renderer_probe` harness, not priorities; see `renderer-sanity-checks.md` §10.
 

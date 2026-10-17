@@ -59,9 +59,10 @@ use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlug
 
 const COMPOSITE_SHADER: Handle<Shader> = uuid_handle!("4f2f0a52-9d61-4f0e-9a3e-6f3f9a1c77b1");
 
+// WESL (Bevy 0.20): the view uniform comes from `bevy_render::view`; the
+// vertex output is this shader's own, since both stages are here.
 const COMPOSITE_WGSL: &str = r#"
-#import bevy_render::view::{View, frag_coord_to_uv}
-#import bevy_sprite::mesh2d_vertex_output::VertexOutput
+import bevy_render::view::{View, frag_coord_to_uv};
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(2) @binding(0) var composite_texture: texture_2d<f32>;
@@ -69,6 +70,10 @@ const COMPOSITE_WGSL: &str = r#"
 
 struct Vertex {
     @location(0) position: vec3<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
 };
 
 @vertex
@@ -125,6 +130,7 @@ impl Material2d for VectorCompositeMaterial {
     }
 
     fn specialize(
+        _pipeline: &bevy::sprite_render::Material2dPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &bevy::mesh::MeshVertexBufferLayoutRef,
         _key: Material2dKey<Self>,
@@ -149,7 +155,7 @@ impl Plugin for CompositeMaterialPlugin {
         // would mean a missing-file failure at runtime instead of at build time.
         let _ = app.world_mut().resource_mut::<Assets<Shader>>().insert(
             COMPOSITE_SHADER.id(),
-            Shader::from_wgsl(COMPOSITE_WGSL, file!()),
+            Shader::from_wesl(COMPOSITE_WGSL, file!()),
         );
         app.add_plugins(Material2dPlugin::<VectorCompositeMaterial>::default());
     }

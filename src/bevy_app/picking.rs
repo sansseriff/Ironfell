@@ -1,4 +1,4 @@
-use bevy::math::bounding::RayCast3d;
+use bevy::shape::RayCast3d;
 use bevy::prelude::*;
 
 use crate::bevy_app::scene3d::{CurrentVolume, EmbedCam, PanelCamera, PointerToCamera, ScreenRect, to_camera_px};

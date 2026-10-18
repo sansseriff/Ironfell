@@ -23,6 +23,7 @@ mod demo;
 pub mod gas;
 mod highlight;
 mod materialize;
+pub use materialize::EMPTY_HALF;
 pub mod nest;
 mod panel_views;
 pub mod planes;

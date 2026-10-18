@@ -587,6 +587,7 @@ impl Geo<'_> {
 
     /// The node's box in its own space and what resizing it writes.
     fn local_box(&self, id: NodeId) -> Option<(Rect, Kind)> {
+        use crate::document_bridge::EMPTY_HALF;
         use iron_document::FacetKind as K;
         let doc = self.doc();
         match self.ty(id) {
@@ -622,7 +623,15 @@ impl Geo<'_> {
                 let r = outline.control_box();
                 (r.width() > 0.0 || r.height() > 0.0 || outline.elements().len() > 0).then_some((r, Kind::Points))
             }
-            "group" | "use" | "empty" => {
+            // An empty's marker, with what hangs off it: picked and framed as
+            // one, not resized.
+            "empty" => {
+                let inv = self.world(id).inverse();
+                let marker = Rect::new(-EMPTY_HALF, -EMPTY_HALF, EMPTY_HALF, EMPTY_HALF);
+                let r = doc.children(id).iter().filter_map(|&c| self.local_box(c).map(|(b, _)| (inv * self.world(c)).transform_rect_bbox(b))).fold(marker, |a, b| a.union(b));
+                Some((r, Kind::Fixed))
+            }
+            "group" | "use" => {
                 let inv = self.world(id).inverse();
                 let r = doc
                     .children(id)

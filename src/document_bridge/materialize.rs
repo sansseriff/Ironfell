@@ -208,6 +208,9 @@ pub fn stroke_style(store: &Store, id: NodeId) -> kurbo::Stroke {
     if solid { style } else { style.with_dashes(r.num("stroke.dash_offset", 0.0) as f64, dash) }
 }
 
+/// Half the side of an `empty`'s marker box, in document units.
+pub const EMPTY_HALF: f64 = 6.0;
+
 /// Marker for materialised 3D nodes.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Doc3d;
@@ -438,8 +441,8 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         // content the composition's cameras see; `planes` gives it its mesh
         // and texture.
         "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Visibility::default())),
-        "group" | "use" | "empty" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
-        "rect" | "ellipse" | "slider" | "path" | "text" => {
+        "group" | "use" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
+        "rect" | "ellipse" | "slider" | "path" | "text" | "empty" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
         // A camera node is a pose: embeds that name it look through it.
@@ -490,8 +493,8 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut e
         "embed" if in_3d(store, id) => {
             ec.insert((r.pose_3d(), RenderLayers::layer(layers.of(composition))));
         }
-        "group" | "use" | "empty" | "embed" => {}
-        "rect" | "ellipse" | "slider" | "path" | "text" => {
+        "group" | "use" | "embed" => {}
+        "rect" | "ellipse" | "slider" | "path" | "text" | "empty" => {
             let d = r.doc2d(node.ty.name());
             drawables.0.insert(id, d.clone());
             ec.insert(d);
@@ -525,6 +528,23 @@ impl Reader<'_> {
     fn doc2d(&self, ty: &str) -> Doc2d {
         let (store, id, r) = (self.store, self.id, self);
         {
+            // An empty draws as an editor marker: a small box with a cross,
+            // a hairline in a quiet colour, so it can be seen and picked.
+            if ty == "empty" {
+                let h = EMPTY_HALF;
+                let mut marker = kurbo::BezPath::new();
+                marker.move_to((-h, -h));
+                marker.line_to((h, -h));
+                marker.line_to((h, h));
+                marker.line_to((-h, h));
+                marker.close_path();
+                marker.move_to((-h, 0.0));
+                marker.line_to((h, 0.0));
+                marker.move_to((0.0, -h));
+                marker.line_to((0.0, h));
+                let shape = Shape2d::Path { outline: std::sync::Arc::new(marker), fill: None, even_odd: false };
+                return Doc2d { shape, fill: None, stroke: Some(([0.45, 0.55, 0.75, 0.9], kurbo::Stroke::new(1.0))), shadow: None };
+            }
             let shape = match ty {
                 "ellipse" => {
                     // Present, or previewed by a gesture that will add it.

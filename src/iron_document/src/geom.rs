@@ -262,6 +262,9 @@ pub fn local_bounds(store: &Store, id: NodeId) -> Option<LocalBounds> {
         }
         "path" => (crate::contour::outline(&crate::contour::contours(store, id)).bounding_box(), PATH_HIT),
         "text" => (crate::text::measure(store, id).frame, 0.0),
+        // A bare empty is its marker (the bridge draws a box with a cross);
+        // one with children is a container, like a group, its bounds theirs.
+        "empty" if doc.children(id).is_empty() => (Rect::new(-6.0, -6.0, 6.0, 6.0), 2.0),
         "embed" => {
             let (_, _, w, h) = crate::composition::embed_3d_extent(store, id)?;
             return Some(LocalBounds { geometry: Rect::new(0.0, 0.0, w, h), paint_pad: 2.0, hit_pad: 0.0 });

@@ -609,3 +609,25 @@ svg .s-comp { fill: color-mix(in srgb, var(--sys-comp) 14%, var(--surface)); str
 svg .s-render { fill: color-mix(in srgb, var(--sys-render) 14%, var(--surface)); stroke: var(--sys-render); }
 svg .s-tools { fill: color-mix(in srgb, var(--sys-tools) 14%, var(--surface)); stroke: var(--sys-tools); }
 svg .s-ports { fill: color-mix(in srgb, var(--sys-ports) 14%, var(--surface)); stroke: var(--sys-ports); }
+
+/* ---- Guide 2, Parts 10–13: the engine boundary ------------------------ */
+:root { --sys-bound: #1f7a99; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --sys-bound: #62c3e6; }
+}
+:root[data-theme="dark"] { --sys-bound: #62c3e6; }
+.sys-bound { --c: var(--sys-bound); }
+svg .s-bound { fill: color-mix(in srgb, var(--sys-bound) 14%, var(--surface)); stroke: var(--sys-bound); }
+/* Small labels, emphasis and matrix marks used by the Part 10–13 diagrams. */
+svg .t-xs { fill: var(--muted); font-size: 10px; }
+svg .t-mono-s { fill: currentColor; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 10px; }
+svg .t-acc { fill: var(--accent-ink); font-size: 11.5px; font-weight: 600; }
+svg .t-edge { fill: var(--edge); font-size: 11.5px; font-weight: 600; }
+svg .band { fill: var(--sunk); stroke: none; }
+svg .band-alt { fill: color-mix(in srgb, var(--sunk) 40%, var(--surface)); stroke: none; }
+svg .hl { fill: var(--accent-wash); stroke: var(--accent); }
+svg .warn { fill: var(--edge-wash); stroke: var(--edge); }
+svg .dot-w { fill: var(--accent); stroke: var(--accent); }
+svg .dot-r { fill: var(--surface); stroke: var(--accent); stroke-width: 1.6; }
+svg .grid { stroke: var(--rule); stroke-width: 1; fill: none; }
+svg .ln-thin { stroke: currentColor; stroke-width: 1; fill: none; }

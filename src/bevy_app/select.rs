@@ -85,6 +85,8 @@ pub enum ActiveTool {
     Pen,
     Rect,
     Ellipse,
+    /// Making text, or editing it (`text_tool`).
+    Text,
 }
 
 impl ActiveTool {
@@ -94,6 +96,7 @@ impl ActiveTool {
             ActiveTool::Pen => "pen",
             ActiveTool::Rect => "rect",
             ActiveTool::Ellipse => "ellipse",
+            ActiveTool::Text => "text",
         }
     }
 }
@@ -422,6 +425,11 @@ enum Kind {
     /// A path: its points and their handles move, so its stroke keeps its
     /// width.
     Points,
+    /// Text: `size.w`, `size.h`, and the box's sizing, which a resize
+    /// changes as Figma's does (plans/specs/text.md §7): a width-only drag
+    /// makes auto-width text wrap (auto height), any height change fixes
+    /// the box.
+    Text(iron_document::text::Sizing),
 }
 
 /// One node a resize or rotation writes, as it was when the gesture began.
@@ -595,6 +603,13 @@ impl Geo<'_> {
                 let (rx, ry) = (self.num(id, "radius.rx")?, self.num(id, "radius.ry")?);
                 Some((Rect::new(-rx, -ry, rx, ry), Kind::Ellipse))
             }
+            // The laid-out box, as drawn: its size follows the words unless
+            // the text is fixed.
+            "text" => {
+                let Shape2d::Text { w, h, .. } = self.drawables.0.get(&id)?.shape.clone() else { return None };
+                let sizing = iron_document::text::Sizing::parse(self.store.resolved(id, leaf("text.sizing")).and_then(|v| v.as_str().map(str::to_owned)).as_deref().unwrap_or(""));
+                Some((Rect::new(0.0, 0.0, w as f64, h as f64), Kind::Text(sizing)))
+            }
             "embed" => {
                 if let Some((_, camera, w, h)) = nest::embed_3d(self.store, id) {
                     return Some((Rect::new(0.0, 0.0, w, h), Kind::Sized { aspect: camera.is_some() }));
@@ -683,6 +698,7 @@ impl Geo<'_> {
         !parts.is_empty()
             && parts.iter().all(|p| match p.kind {
                 Kind::Sized { .. } => self.free(p.id, "size.w") || self.free(p.id, "size.h"),
+                Kind::Text(_) => self.free(p.id, "text.sizing"),
                 Kind::Ellipse => self.free(p.id, "radius.rx") || self.free(p.id, "radius.ry"),
                 Kind::Window { frame } => frame,
                 Kind::Points => true,
@@ -706,6 +722,7 @@ impl Geo<'_> {
         if self.space(chain).is_none() { return; }
         out.push(match kind {
             Kind::Sized { .. } => self.free(id, "size.w") || self.free(id, "size.h"),
+            Kind::Text(_) => self.free(id, "text.sizing"),
             Kind::Ellipse => self.free(id, "radius.rx") || self.free(id, "radius.ry"),
             Kind::Window { frame } => frame,
             Kind::Points => true,
@@ -823,6 +840,15 @@ impl Part {
                 }
                 put("transform2d.sy", sy, if flip { -sy } else { sy });
             }
+            (true, Kind::Text(_)) => {
+                let (nx, ny, nrot, w, h, flip) = decompose(q * l * Affine::scale_non_uniform(bw.max(1e-6), bh.max(1e-6)), self.trs);
+                put("transform2d.x", x, nx);
+                put("transform2d.y", y, ny);
+                put("transform2d.rot", rot, nrot);
+                put("size.w", bw, w);
+                put("size.h", bh, h);
+                put("transform2d.sy", sy, if flip { -sy } else { sy });
+            }
             (true, Kind::Ellipse) => {
                 // As a rect, about the centre: either axis stretches alone,
                 // so a circle becomes an ellipse.
@@ -867,6 +893,35 @@ impl Part {
             }
         }
         out
+    }
+}
+
+impl Part {
+    /// The sizing a resize by `a` gives a text node (`Kind::Text`): fixed
+    /// once its height changes, auto height once an auto-width text's width
+    /// does, else as it was. `None` for anything else.
+    pub(crate) fn text_sizing(&self, a: Affine, resize: bool) -> Option<(NodeId, &'static str)> {
+        use iron_document::text::Sizing;
+        let Kind::Text(sizing) = self.kind else { return None };
+        if !resize {
+            return None;
+        }
+        let [x, y, rot, sx, sy] = self.trs;
+        let q = self.parent.inverse() * a * self.parent;
+        let l = Affine::translate((x, y)) * Affine::rotate(rot) * Affine::scale_non_uniform(sx, sy);
+        let (bw, bh) = (self.bounds.width(), self.bounds.height());
+        let (.., w, h, _) = decompose(q * l * Affine::scale_non_uniform(bw.max(1e-6), bh.max(1e-6)), self.trs);
+        let (dw, dh) = ((w - bw).abs() > 0.5, (h - bh).abs() > 0.5);
+        Some((
+            self.id,
+            match sizing {
+                Sizing::Fixed => "fixed",
+                _ if dh => "fixed",
+                Sizing::AutoWidth if dw => "auto_height",
+                Sizing::AutoWidth => "auto_width",
+                Sizing::AutoHeight => "auto_height",
+            },
+        ))
     }
 }
 
@@ -1160,7 +1215,7 @@ fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
     let id = r.node();
     let kids = if nest::is_embed(doc, id) { composition::embedded(doc, id).map(|s| doc.children(s).to_vec()).unwrap_or_default() } else { doc.children(id).to_vec() };
     kids.into_iter()
-        .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "group" | "embed" | "mesh")))
+        .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "embed" | "mesh")))
         .map(|k| {
             let mut chain = r.chain.clone();
             chain.push(k);
@@ -1351,7 +1406,7 @@ pub fn select_tool_system(
                 };
                 let all = roots
                     .into_iter()
-                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "group" | "embed")))
+                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "embed")))
                     .map(|n| {
                         let mut chain = prefix.clone();
                         chain.push(n);
@@ -1480,6 +1535,19 @@ pub fn select_tool_system(
             continue;
         }
         if !Fragment::is_fragment_text(&text) {
+            // Anything else is words: a text node, centred in the view the
+            // pointer is over (Figma's paste of plain text).
+            if text.trim().is_empty() {
+                continue;
+            }
+            let view = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two).or_else(|| views.0.iter().find(|v| v.dims == Dims::Two));
+            let Some(view) = view else { continue };
+            let r = view.rect;
+            let c = view.affine().inverse() * Point::new((r.x + r.w * 0.5) as f64, (r.y + r.h * 0.5) as f64);
+            match iron_document::text::fragment(&text, [c.x, c.y]) {
+                Ok(f) => arrivals.push((f, false, "paste text")),
+                Err(e) => warn!("paste text: {e}"),
+            }
             continue;
         }
         let frag = match Fragment::from_text(&text) {
@@ -1555,6 +1623,7 @@ pub fn select_tool_system(
             ActiveTool::Pen if pen.hover == crate::bevy_app::pen::PenHover::Add => "pen-add",
             ActiveTool::Pen if pen.hover == crate::bevy_app::pen::PenHover::Remove => "pen-remove",
             ActiveTool::Pen => "pen",
+            ActiveTool::Text => "text",
             _ => "crosshair",
         };
         if tool.cursor != want {
@@ -2010,7 +2079,7 @@ pub fn select_tool_system(
                 tool.marquee = Some((view.panel.clone(), rect));
                 let mut list = base.clone();
                 for &n in roots.iter() {
-                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "group" | "embed")) {
+                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "embed")) {
                         continue;
                     }
                     let mut chain = prefix.clone();
@@ -2266,7 +2335,7 @@ pub fn draw_select_overlay(
     views: Res<PanelViews>,
     store: Res<DocumentStore>,
     drawables: Res<crate::document_bridge::Drawables>,
-    (pen, shapes, edit): (Res<crate::bevy_app::pen::PenTool>, Res<crate::bevy_app::shape_tool::ShapeTool>, Res<PathEdit>),
+    (pen, shapes, edit, text_tool): (Res<crate::bevy_app::pen::PenTool>, Res<crate::bevy_app::shape_tool::ShapeTool>, Res<PathEdit>, Res<crate::bevy_app::text_tool::TextTool>),
     active: Res<ActiveTool>,
     geometry_revision: Res<crate::document_bridge::GeometryRevision>,
     mut geometry_cache: ResMut<SelectionGeometryCache>,
@@ -2459,6 +2528,12 @@ pub fn draw_select_overlay(
                     let a = to_screen * press.to_comp.inverse();
                     let outline = if *active == ActiveTool::Ellipse { kurbo::Ellipse::from_rect(r).to_path(0.1) } else { r.to_path(0.1) };
                     b.stroke(Affine::IDENTITY, thin.clone(), blue, a * outline);
+                }
+                // The box the text tool is dragging out.
+                if let Some((panel, to_comp, r)) = text_tool.drag_box()
+                    && panel == o.panel
+                {
+                    b.stroke(Affine::IDENTITY, thin.clone(), blue, (to_screen * to_comp.inverse()) * r.to_path(0.1));
                 }
                 if let Some((p, r)) = &tool.marquee
                     && p == &o.panel

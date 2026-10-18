@@ -3250,9 +3250,17 @@ dependencies = [
  "hashbrown 0.17.1",
  "linebender_resource_handle",
  "memmap2",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-text",
+ "objc2-foundation 0.3.2",
  "parlance",
  "read-fonts",
+ "roxmltree",
  "smallvec",
+ "windows 0.62.2",
+ "windows-core 0.62.2",
+ "yeslogic-fontconfig-sys",
 ]
 
 [[package]]
@@ -4290,6 +4298,7 @@ dependencies = [
  "bevy",
  "block2 0.6.2",
  "iron_document",
+ "iron_text",
  "ironfell",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -4308,6 +4317,7 @@ version = "0.1.0"
 dependencies = [
  "glam 0.32.1",
  "iron_solve",
+ "iron_text",
  "kurbo",
  "serde",
  "serde_json",
@@ -4348,10 +4358,23 @@ name = "iron_svg"
 version = "0.1.0"
 dependencies = [
  "iron_document",
+ "iron_text",
  "kurbo",
  "serde_json",
  "svgtypes",
  "usvg",
+]
+
+[[package]]
+name = "iron_text"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+ "parley",
+ "peniko",
+ "serde",
+ "serde_json",
+ "skrifa",
 ]
 
 [[package]]
@@ -4368,6 +4391,7 @@ dependencies = [
  "iron_solve",
  "iron_spatial",
  "iron_svg",
+ "iron_text",
  "js-sys",
  "kurbo",
  "log",
@@ -9827,6 +9851,17 @@ name = "yazi"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e01738255b5a16e78bbb83e7fbba0a1e7dd506905cfc53f4622d89015a03fbb5"
+
+[[package]]
+name = "yeslogic-fontconfig-sys"
+version = "6.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d8b8abf912b9a29ff112e1671c97c33636903d13a69712037190e6805af4f76"
+dependencies = [
+ "dlib",
+ "once_cell",
+ "pkg-config",
+]
 
 [[package]]
 name = "yoke"

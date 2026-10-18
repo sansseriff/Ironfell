@@ -307,6 +307,12 @@ impl Reactive {
         !self.changes.is_empty()
     }
 
+    /// Report a leaf as changed with no change to its value: something it
+    /// derives (a text's glyphs, when a font arrives) moved.
+    pub(crate) fn mark(&mut self, leaf: Leaf, value: Value) {
+        self.note(leaf, value);
+    }
+
     /// The one place a resolved change is recorded.
     fn note(&mut self, leaf: Leaf, value: Value) {
         self.touched.insert(leaf);

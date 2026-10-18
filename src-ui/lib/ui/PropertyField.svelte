@@ -6,12 +6,14 @@
   import { onDestroy, type Snippet } from "svelte";
   import Select from "./Select.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
-  let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, inlineUnit = false, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8 }: {
+  let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, inlineUnit = false, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8, zeroLabel }: {
     field: Property; node: string;
     onSet: (field: Property, text: string) => void;
     onRefresh: () => void; onError: (error: string) => void;
     compact?: boolean; label?: string; prefix?: string; icon?: Snippet; inlineUnit?: boolean; channel?: "alpha";
     scrubLeaves?: string[]; mixed?: boolean; hideSwatch?: boolean; colorDigits?: 6 | 8;
+    /** Shown instead of a zero value (a text's line height 0 is "Auto"). */
+    zeroLabel?: string;
   } = $props();
   const doc = controllerManager.docClient;
   const locked = $derived(f.edit === "locked");
@@ -19,7 +21,9 @@
   const percent = $derived(channel === "alpha" || f.field === "opacity" || f.leaf === "arc.inner");
   const angle = $derived(f.leaf === "transform2d.rot" || f.leaf === "arc.start" || f.leaf === "arc.sweep");
   const factor = $derived(percent ? 100 : angle ? 180 / Math.PI : 1);
-  const unit = $derived(percent ? "%" : angle ? "°" : "");
+  // Stored as a percent already (plans/specs/text.md §2): shown with %, unscaled.
+  const percentStored = $derived(f.leaf === "font.line_height" || f.leaf === "font.letter_spacing");
+  const unit = $derived(percent || percentStored ? "%" : angle ? "°" : "");
   const options = $derived(({
     "gradient.kind": ["linear", "radial"], "group_clip.shape": ["rect", "ellipse"],
     "stroke.join": ["miter", "round", "bevel"], "stroke.cap": ["butt", "round", "square"],
@@ -60,7 +64,8 @@
     const step = /\.(sx|sy|x0|y0|x1|y1)$/.test(s.leaf) ? 0.01 : 1;
     draft = Math.round((s.origin + (e.clientX - s.x) * step * (e.shiftKey ? 0.1 : 1)) * 1000) / 1000;
     if (percent) draft = Math.max(0, Math.min(100, draft));
-    if (/^(size\.|radius\.|corners\.|group_clip\.(w|h|radius)|stroke.width|shadow.blur)/.test(s.leaf)) draft = Math.max(0, draft);
+    if (/^(size\.|radius\.|corners\.|group_clip\.(w|h|radius)|stroke.width|shadow.blur|font\.line_height)/.test(s.leaf)) draft = Math.max(0, draft);
+    if (s.leaf === "font.size") draft = Math.max(1, draft);
     const value = draft / factor;
     s.queue = s.queue.then(async () => {
       if (s.failed) return;
@@ -114,9 +119,10 @@
       {#if !hideSwatch}<input aria-label={displayLabel} class="swatch" type="color" value={(f.text ?? "#000000").slice(0, 7)} disabled={locked} onchange={(e) => onSet(f, e.currentTarget.value + (f.text ?? "").slice(7, 9))} />{/if}
       <input aria-label={`${displayLabel} hex`} class="hex" value={(f.text ?? "").slice(1, colorDigits + 1).toUpperCase()} disabled={locked} onchange={(e) => onSet(f, `#${e.currentTarget.value.replace("#", "")}`)} />
     {:else}
-      <input aria-label={displayLabel} class:number={numeric} type={numeric ? "number" : "text"} step="any" value={mixed && !dragging ? "" : shown} placeholder={mixed ? "Mixed" : undefined} disabled={locked}
+      {@const zero = !!zeroLabel && !dragging && numeric && Number(shown) === 0}
+      <input aria-label={displayLabel} class:number={numeric} type={numeric ? "number" : "text"} step="any" value={(mixed && !dragging) || zero ? "" : shown} placeholder={mixed ? "Mixed" : zero ? zeroLabel : undefined} disabled={locked}
         onchange={(e) => { if (!dragging) change(e.currentTarget.value); }} />
-      {#if unit}<span class="unit">{unit}</span>{/if}
+      {#if unit && !(zeroLabel && !dragging && numeric && Number(shown) === 0)}<span class="unit">{unit}</span>{/if}
     {/if}
   </span>
   {#if f.bind}<span class="binding">↳ {f.via ?? f.bind}</span>{/if}

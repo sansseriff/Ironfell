@@ -75,22 +75,23 @@
 
 <h2 id="run"><span class="sec">F2.5</span>All or nothing: <code>Store::run</code></h2>
 <p>Several ops in one transaction must all apply or none. The simplest correct approach, which is the one used: copy the whole document, apply every op to the copy, and swap it in only if nothing failed.</p>
-<snip file="src/iron_document/src/lib.rs" lines="891-944" mark="900,904-909,910-925,929"/>
-<p>The loop doesn't stop at the first error (904–909); it collects every one, because a model fixing a rejected edit wants the whole list in one round trip. The deferred checks follow (910–925). Only if both passes are clean does the copy get the new version and go back to the caller. The comment above <code>run</code> covers the cost: one clone per <em>commit</em>, not per frame, because a drag produces one transaction when it ends (F3.5).</p>
+<snip file="src/iron_document/src/lib.rs" lines="1192-1245" mark="1201,1205-1210,1211-1226,1230"/>
+<p>The loop doesn't stop at the first error (1205–1210); it collects every one, because a model fixing a rejected edit wants the whole list in one round trip. The deferred checks follow (1211–1226). Only if both passes are clean does the copy get the new version and go back to the caller. The comment above <code>run</code> covers the cost: one clone per <em>commit</em>, not per frame, because a drag produces one transaction when it ends (F3.5).</p>
 
 <h2 id="apply"><span class="sec">F2.6</span><code>Store::apply</code>, the public entry point</h2>
-<snip file="src/iron_document/src/lib.rs" lines="681-728" mark="684-692,694-696,697-708,717-722"/>
+<p><code>apply</code> is now two layers. The outer one deals with a gesture that may be running (it classifies the transaction against the gesture, sets the gesture's previews aside, and afterwards resumes or cancels it; Part 13 covers that). The inner one, <code>apply_now</code>, is the transaction path proper:</p>
+<snip file="src/iron_document/src/lib.rs" lines="978-1023" mark="979-987,989-991,992-1003,1012-1017"/>
 <ul>
-  <li><strong>Idempotency</strong> (684–692). A key matching one of the last 64 transactions returns that version and does nothing, so a network retry can't apply a model edit twice.</li>
-  <li><strong>Run and swap</strong> (694–696), then <code>after_transaction</code>, which keeps everything derived in step: the reactive graph and clips (F3), constraint clusters (Part 4), the physics network (Part 9).</li>
-  <li><strong>Solve</strong> (697–708). <code>post_apply</code> runs the constraint solver over the committed document (Part 4). If the constraints can't hold, the old document is put back and the transaction never happened.</li>
-  <li><strong>Record</strong> (717–722): push onto the undo stack (trimmed to 200), clear the redo stack, append to the log.</li>
+  <li><strong>Idempotency</strong> (979–987). A key matching one of the last 64 transactions returns that version and does nothing, so a network retry can't apply a model edit twice.</li>
+  <li><strong>Run and swap</strong> (989–991), then <code>after_transaction</code>, which keeps everything derived in step: the reactive graph and clips (F3), constraint clusters (Part 4), the physics network (Part 9), and the geometry revisions the spatial scene reads (Part 10).</li>
+  <li><strong>Solve</strong> (992–1003). <code>post_apply</code> runs the constraint solver over the committed document (Part 4). If the constraints can't hold, the old document is put back and the transaction never happened.</li>
+  <li><strong>Record</strong> (1012–1017): push onto the undo stack (trimmed to 200), clear the redo stack, append to the log.</li>
 </ul>
 
 <h2 id="undo"><span class="sec">F2.7</span>Undo and redo: ordinary transactions</h2>
 <p><code>History</code> keeps three lists: <code>past</code> (what undo will reverse), <code>future</code> (what redo will replay), and <code>log</code> (every transaction that applied, undo and redo included). The log is what the Bevy bridge reads (F4).</p>
-<snip file="src/iron_document/src/lib.rs" lines="751-781"/>
-<p>Undo pops the last transaction, builds a new one from its inverse, labels it "undo: …" with actor <code>System</code>, and runs it through the same <code>run</code> as everything else. Redo replays the original ops plus its <code>derived_ops</code>, without solving, so redo reproduces exactly what happened. Because both go through the normal path, validation, the version bump, the Bevy sync and the model's view of history need no special cases.</p>
+<snip file="src/iron_document/src/lib.rs" lines="1046-1079"/>
+<p>Undo pops the last transaction, builds a new one from its inverse, labels it "undo: …" with actor <code>System</code>, and runs it through the same <code>run</code> as everything else. Redo replays the original ops plus its <code>derived_ops</code>, without solving, so redo reproduces exactly what happened. Because both go through the normal path, validation, the version bump, the Bevy sync and the model's view of history need no special cases. Two newer details: undo first cancels any running gesture (1049–1051), so Cmd+Z mid-drag takes the drag back; and two calls edit the undo stack without new semantics, <code>retract</code> and <code>merge_with_previous</code>, which make an Alt-drag one undo step (Part 13).</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Action</th><th>Version</th><th>past</th><th>future</th><th>Appended to the log</th></tr></thead>
   <tbody>
@@ -104,11 +105,11 @@
 
 <h2 id="file"><span class="sec">F2.8</span>Out to disk: canonical JSON</h2>
 <p>The saved file from the same example, after the move:</p>
-<raw title="cargo run -p iron_document --example dump (file)">{"schema": 3, "next_id": 4, "next_rel": 1, "version": 2,
+<raw title="cargo run -p iron_document --example dump (file)">{"schema": 5, "next_id": 4, "next_rel": 1, "version": 2,
  "nodes": {
   "#1": {"order":"a0","parent":null,"ty":"group"},
   "#2": {"order":"a0","parent":"#1","ty":"rect"},
-  "#3": {"order":"a1","parent":"#1","ty":"circle"}
+  "#3": {"order":"a1","parent":"#1","ty":"ellipse"}
  },
  "components": {
   "name": {
@@ -122,7 +123,7 @@
    "#2": {"h":100.0,"w":100.0}
   },
   "radius": {
-   "#3": {"r":50.0}
+   "#3": {"rx":50.0,"ry":50.0}
   },
   "fill": {
    "#2": {"color":{"rgba":[0.5,0.5,0.5,1.0]},"opacity":1.0}
@@ -135,14 +136,14 @@
   <li><strong>Canonical.</strong> Keys sorted, one record per line. Saving the same document twice gives the same bytes, and a git diff of two saves reads like a list of ops.</li>
   <li><strong>Tombstones and counters are saved</strong>, so ids stay unique across save and reload. Session-tier nodes (Part 8) are left out.</li>
 </ul>
-<p><code>load</code> (<ref file="src/iron_document/src/serial.rs" line="116" has="pub fn load">serial.rs:116</ref>) trusts nothing. It checks the schema version (renaming the older spellings from schemas 1 and 2), every id against its counter, every parent and child policy, parent cycles, required components, and relation endpoints, then rebuilds the indexes and runs <code>check_invariants</code>. A bad file is an error with a message before anything else sees it.</p>
+<p><code>load</code> (<ref file="src/iron_document/src/serial.rs" line="228" has="pub fn load">serial.rs:228</ref>) trusts nothing. It checks the schema version (renaming the older spellings from schemas 1 and 2, turning schema 3's <code>circle</code> into an <code>ellipse</code>, and moving schema 4's path points under a <code>contour</code>), every id against its counter, every parent and child policy, parent cycles, required components, and relation endpoints, then rebuilds the indexes and runs <code>check_invariants</code>. A bad file is an error with a message before anything else sees it.</p>
 
 <h2 id="views"><span class="sec">F2.9</span>Out to a reader: views</h2>
 <p>The file is for machines. A <em>view</em> is for a reader, a person or the model:</p>
 <raw title="cargo run -p iron_document --example dump (view)">&lt;document version="2"&gt;
   &lt;group id="#1" name="scene" count="2"&gt;
     &lt;rect id="#2" x="200" y="80" rot="0" sx="1" sy="1" w="100" h="100" color="#808080ff" opacity="1"/&gt;
-    &lt;circle id="#3" x="0" y="0" rot="0" sx="1" sy="1" r="50"/&gt;
+    &lt;ellipse id="#3" x="0" y="0" rot="0" sx="1" sy="1" rx="50" ry="50"/&gt;
   &lt;/group&gt;
 &lt;/document&gt;</raw>
 <p>It's XML-shaped because the tree is the information, and models read XML well. A view is requested with a <code>ViewQuery</code>:</p>

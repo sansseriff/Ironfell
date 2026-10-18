@@ -432,6 +432,51 @@ fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
     })
 }
 
+/// A number as text: fixed `digits` after the point, or, without, up to
+/// twelve significant digits with trailing zeros dropped.
+pub fn format_number(n: f64, digits: Option<usize>) -> String {
+    if !n.is_finite() {
+        return n.to_string();
+    }
+    match digits {
+        Some(d) => format!("{:.*}", d.min(15), n),
+        None => {
+            let s = format!("{:.*}", 12usize.saturating_sub(n.abs().log10().max(0.0) as usize), n);
+            let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_owned() } else { s };
+            if s == "-0" { "0".to_owned() } else { s }
+        }
+    }
+}
+
+fn fmt(args: &[Value]) -> Result<String, EvalError> {
+    let bad = |m: String| EvalError::Type(format!("fmt: {m}"));
+    let digits = |v: &Value| v.as_f64().filter(|d| d.is_finite()).map(|d| d.clamp(0.0, 15.0) as usize).ok_or_else(|| bad(format!("digits must be a number, got {}", v.kind().name())));
+    match args {
+        [v] => Ok(match v {
+            Value::Quantity { si, dim } => crate::units::format(*si, *dim),
+            other => crate::text::display(other),
+        }),
+        [v, Value::Str(unit)] | [v, Value::Str(unit), _] => {
+            let d = match args.get(2) { Some(d) => Some(digits(d)?), None => None };
+            let u = crate::units::parse_unit(unit).map_err(|_| bad(format!("unknown unit {unit:?}")))?;
+            let (si, dim) = v.as_quantity().ok_or_else(|| bad(format!("takes a number, got {}", v.kind().name())))?;
+            if dim != u.dim {
+                return Err(bad(format!("{} is not in {unit}", if dim.is_none() { "a plain number".to_owned() } else { dim.canonical_unit() })));
+            }
+            Ok(format!("{} {unit}", format_number(crate::units::convert(si, u), d)))
+        }
+        [v, d] => {
+            let d = digits(d)?;
+            Ok(match v.as_quantity() {
+                Some((si, dim)) if !dim.is_none() => format!("{} {}", format_number(si, Some(d)), dim.canonical_unit()),
+                Some((x, _)) => format_number(x, Some(d)),
+                None => return Err(bad(format!("takes a number, got {}", v.kind().name()))),
+            })
+        }
+        _ => Err(EvalError::Arity { func: "fmt".to_owned(), expected: 2, got: args.len() }),
+    }
+}
+
 /// The floor: pure, total, bounded functions available to expressions
 /// (doc 02 §6). Each is one arm; adding one is a Rust change by design.
 pub mod floor {
@@ -440,7 +485,7 @@ pub mod floor {
 
     pub const NAMES: &[&str] = &[
         "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt",
-        "pow", "hypot",
+        "pow", "hypot", "fmt", "sci", "str",
     ];
 
     /// Magnitudes and dimensions of `n` number-or-quantity arguments.
@@ -482,6 +527,24 @@ pub mod floor {
     }
 
     pub fn call(func: &str, args: &[Value]) -> Result<Value, EvalError> {
+        // Text from values (plans/specs/text.md §6): readouts bind a text
+        // node's content to these, so formatting is visible in the binding.
+        match func {
+            "str" => {
+                let [v] = args else { return Err(EvalError::Arity { func: func.to_owned(), expected: 1, got: args.len() }) };
+                return Ok(Value::Str(crate::text::display(v)));
+            }
+            // fmt(x), fmt(x, digits), fmt(q, "unit"), fmt(q, "unit", digits)
+            "fmt" => return super::fmt(args).map(Value::Str),
+            // sci(x, digits): scientific notation, `digits` after the point.
+            "sci" => {
+                let a = args_of(func, args, 2)?;
+                let digits = a[1].0.clamp(0.0, 15.0) as usize;
+                let unit = if a[0].1.is_none() { String::new() } else { format!(" {}", a[0].1.canonical_unit()) };
+                return Ok(Value::Str(format!("{:.*e}{unit}", digits, a[0].0)));
+            }
+            _ => {}
+        }
         let n = |k| args_of(func, args, k);
         let q = Value::quantity;
         Ok(match func {

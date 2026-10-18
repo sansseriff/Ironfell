@@ -331,6 +331,7 @@ impl Writer<'_> {
             "ellipse" => self.shape(id, "ellipse", parent, depth),
             "path" => self.shape(id, "path", parent, depth),
             "slider" => self.slider(id, parent, depth),
+            "text" => self.text(id, parent, depth),
             "embed" => self.embed(id, parent, depth, embeds),
             "constraint" => self.cuts.add("constraints are not exported"),
             other => self.cuts.add(format!("{other} {id} is not exported; only 2D shapes are")),
@@ -512,6 +513,113 @@ impl Writer<'_> {
         }
     }
 
+    /// A text node as SVG `<text>` (plans/specs/text.md §9): one `<tspan>`
+    /// per line and styled part, placed where Iron's layout put it, so
+    /// wrapping and alignment survive in any viewer that has the font.
+    /// `data-iron-text` keeps the node's own description for a round trip.
+    fn text(&mut self, id: NodeId, parent: Affine, depth: usize) {
+        use iron_document::text as t;
+        let m = t::measure(self.store, id);
+        let style = t::style(self.store, id);
+        let runs = t::runs(self.store, id);
+        let content = t::content(self.store, id);
+        let mut attrs = self.head(id, "text");
+        let family = |f: &str| format!("'{}', {}, sans-serif", f.replace('\'', ""), iron_text::DEFAULT_FAMILY);
+        attrs.push(("font-family", family(&style.family)));
+        attrs.push(("font-size", num(style.size as f64)));
+        if style.weight != 400.0 {
+            attrs.push(("font-weight", num(style.weight as f64)));
+        }
+        if style.italic {
+            attrs.push(("font-style", "italic".into()));
+        }
+        if style.letter_spacing != 0.0 {
+            attrs.push(("letter-spacing", num((style.letter_spacing / 100.0 * style.size) as f64)));
+        }
+        let deco = |u: bool, s: bool| match (u, s) {
+            (true, true) => Some("underline line-through"),
+            (true, false) => Some("underline"),
+            (false, true) => Some("line-through"),
+            _ => None,
+        };
+        if let Some(d) = deco(style.underline, style.strike) {
+            attrs.push(("text-decoration", d.into()));
+        }
+        if style.tabular {
+            attrs.push(("font-variant-numeric", "tabular-nums".into()));
+        }
+        if self.color(id, "gradient.start").is_some() {
+            self.cuts.add("a text's gradient fill is exported as its solid fill");
+        }
+        match self.color(id, "fill.color") {
+            Some(c) => {
+                let (h, a) = hex(c);
+                attrs.push(("fill", h));
+                let op = a * self.f(id, "fill.opacity", 1.0);
+                if num(op) != "1" {
+                    attrs.push(("fill-opacity", num(op)));
+                }
+            }
+            None => attrs.push(("fill", "none".into())),
+        }
+        if let Some(c) = self.color(id, "stroke.color") {
+            let (h, a) = hex(c);
+            attrs.push(("stroke", h));
+            attrs.push(("stroke-width", num(self.f(id, "stroke.width", 1.0))));
+            if num(a) != "1" {
+                attrs.push(("stroke-opacity", num(a)));
+            }
+        }
+        if self.color(id, "shadow.color").is_some() {
+            self.cuts.add("a text's drop shadow is not exported");
+        }
+        attrs.push(("xml:space", "preserve".into()));
+        let own = serde_json::json!({
+            "content": content,
+            "sizing": self.get(id, "text.sizing").map(|v| v.to_string()).unwrap_or_default(),
+            "runs": iron_text::runs::to_json(&runs),
+            "w": m.frame.width(),
+            "h": m.frame.height(),
+            "align": self.get(id, "font.align").map(|v| v.to_string()).unwrap_or_default(),
+            "valign": self.get(id, "font.valign").map(|v| v.to_string()).unwrap_or_default(),
+            "line_height": style.line_height,
+        });
+        attrs.push(("data-iron-text", own.to_string()));
+        let breaks: Vec<usize> = runs.iter().flat_map(|r| [r.start, r.end]).collect();
+        let pieces = m.layout.segments(&breaks);
+        self.line(depth, &element("text", &attrs, false));
+        for (range, x, baseline) in pieces {
+            let r = iron_text::runs::of_char(&runs, range.start);
+            let mut a: Attrs = vec![("x", num(x + m.offset.x)), ("y", num(baseline + m.offset.y))];
+            if let Some(f) = &r.family {
+                a.push(("font-family", family(f)));
+            }
+            if let Some(px) = r.size {
+                a.push(("font-size", num(px as f64)));
+            }
+            if let Some(w) = r.weight {
+                a.push(("font-weight", num(w as f64)));
+            }
+            if let Some(i) = r.italic {
+                a.push(("font-style", if i { "italic" } else { "normal" }.into()));
+            }
+            if let Some(c) = r.color {
+                let (h, op) = hex(c);
+                a.push(("fill", h));
+                if num(op) != "1" {
+                    a.push(("fill-opacity", num(op)));
+                }
+            }
+            if r.underline.is_some() || r.strike.is_some() {
+                let d = deco(r.underline.unwrap_or(style.underline), r.strike.unwrap_or(style.strike));
+                a.push(("text-decoration", d.unwrap_or("none").into()));
+            }
+            self.line(depth + 1, &format!("{}{}</tspan>", element("tspan", &a, false), escape(&content[range])));
+        }
+        self.line(depth, "</text>");
+        self.bounds = union(self.bounds, (parent * self.local(id)).transform_rect_bbox(m.frame));
+    }
+
     /// An id for a definition, unique among the element ids.
     fn ident_raw(&mut self, base: String) -> String {
         let mut id = base.clone();
@@ -555,6 +663,7 @@ impl Writer<'_> {
             let bb = match node.ty.name() {
                 "rect" | "ellipse" => shape::outline(self.store, n).map(|c| shape::to_bez(&c).bounding_box()),
                 "slider" => Some(Rect::new(0.0, 0.0, self.f(n, "size.w", 200.0), self.f(n, "size.h", 24.0))),
+                "text" => Some(iron_document::text::measure(self.store, n).frame),
                 "path" => {
                     let pts: Vec<Point> = contour::contours(self.store, n).into_iter().flat_map(|c| c.points).map(|p| p.1.at).collect();
                     pts.iter().map(|&p| Rect::from_points(p, p)).reduce(|a, b| a.union(b))

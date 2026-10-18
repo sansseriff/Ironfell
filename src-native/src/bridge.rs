@@ -60,6 +60,18 @@ pub enum Request {
     Paste {
         text: String,
     },
+    TextInput {
+        text: String,
+        anchor: u32,
+        focus: u32,
+    },
+    TextMotion {
+        motion: String,
+        extend: bool,
+    },
+    TextToggle {
+        what: String,
+    },
     Theme {
         dark: bool,
     },
@@ -253,6 +265,21 @@ pub fn dispatch(app: &mut ironfell::WorkerApp, request: Request) -> (Option<Valu
         }
         Paste { text } => {
             api::clipboard_paste(app, text);
+            edge = true;
+            None
+        }
+        TextInput { text, anchor, focus } => {
+            api::text_input(app, text, anchor, focus);
+            edge = true;
+            None
+        }
+        TextMotion { motion, extend } => {
+            api::text_motion(app, motion, extend);
+            edge = true;
+            None
+        }
+        TextToggle { what } => {
+            api::text_toggle(app, what);
             edge = true;
             None
         }

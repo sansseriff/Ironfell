@@ -60,6 +60,16 @@ extern "C" {
     /// is waiting on it to finish its clipboard write.
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_clipboard_from_worker(text: String);
+    /// Font files to fetch, as JSON `[{family, file}]`, most needed first.
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_fonts_from_worker(fonts: String);
+    /// The text editor's state for the host's textarea, as JSON.
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_text_edit_from_worker(state: String);
+}
+
+fn event_json(event: &crate::host_events::EngineEvent) -> serde_json::Value {
+    serde_json::to_value(event).unwrap_or_default()
 }
 
 #[wasm_bindgen]
@@ -464,6 +474,37 @@ pub fn document_place(ptr: u64, parent: String, after: String, count: u32) -> Re
 }
 
 #[wasm_bindgen]
+pub fn document_inspect_bind(ptr: u64, node: String, leaf: String, expr: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_inspect_bind(app, node, leaf, expr)
+}
+
+#[wasm_bindgen]
+pub fn document_text_style(ptr: u64, node: String, patch: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_text_style(app, node, patch)
+}
+
+/// A style shortcut in a text edit (`bold`, `italic`, `underline`, `strike`).
+#[wasm_bindgen]
+pub fn text_toggle(ptr: u64, what: String) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::text_toggle(app, what)
+}
+
+/// The font picker's list (`engine_api::fonts`). The handle is unused:
+/// fonts are a process resource.
+#[wasm_bindgen]
+pub fn document_fonts(_ptr: u64) -> String {
+    crate::engine_api::fonts()
+}
+
+#[wasm_bindgen]
+pub fn document_font_previews(_ptr: u64, names: Vec<String>) -> String {
+    crate::engine_api::font_previews(names)
+}
+
+#[wasm_bindgen]
 pub fn document_schema() -> String {
     crate::engine_api::document_schema()
 }
@@ -515,6 +556,35 @@ pub fn solve_bench(iterations: u32, repeats: u32) -> String {
     crate::engine_api::solve_bench(iterations, repeats)
 }
 
+/// A font file's bytes, fetched by the host after an `EngineEvent::Fonts`
+/// (plans/specs/text.md §4). Returns the family names it registered. Fonts
+/// are a process resource, so no app handle is needed.
+#[wasm_bindgen]
+pub fn register_font(bytes: Vec<u8>) -> String {
+    iron_text::engine().register(bytes).join(", ")
+}
+
+/// The host's textarea changed: the whole draft and its selection, in
+/// UTF-16 offsets (`bevy_app::text_tool`).
+#[wasm_bindgen]
+pub fn text_input(ptr: u64, text: String, anchor: u32, focus: u32) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::text_input(app, text, anchor, focus)
+}
+
+/// A caret motion only the canvas layout knows (`up`, `down`, `home`, `end`).
+#[wasm_bindgen]
+pub fn text_motion(ptr: u64, motion: String, extend: bool) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::text_motion(app, motion, extend)
+}
+
+/// The font catalog as JSON, for the picker.
+#[wasm_bindgen]
+pub fn font_catalog() -> String {
+    iron_text::catalog::to_json()
+}
+
 /// Deliver engine-owned Rust events through the existing wasm callbacks.
 fn flush_events(app: &mut WorkerApp) {
     use crate::host_events::EngineEvent;
@@ -528,6 +598,8 @@ fn flush_events(app: &mut WorkerApp) {
             EngineEvent::Tool { tool } => send_tool_from_worker(tool),
             EngineEvent::ConvertQuestion { question } => send_convert_from_worker(question),
             EngineEvent::Clipboard { text } => send_clipboard_from_worker(text),
+            EngineEvent::TextEdit { .. } => send_text_edit_from_worker(serde_json::to_string(&event_json(&event)).unwrap_or_default()),
+            EngineEvent::Fonts { fonts } => send_fonts_from_worker(serde_json::to_string(&fonts).unwrap_or_default()),
         }
     }
 }

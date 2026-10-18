@@ -90,6 +90,26 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // Text (plans/specs/text.md): origin at the box's top-left, like a
+    // rect. `size` matters only when `text.sizing` is not `auto_width`.
+    TypeSpec {
+        name: "text",
+        components: &[
+            (K::Transform2d, true),
+            (K::Text, true),
+            (K::Font, true),
+            (K::Size, false),
+            (K::Fill, false),
+            (K::Gradient, false),
+            (K::Appearance, false),
+            (K::Stroke, false),
+            (K::Shadow, false),
+            (K::Name, false),
+            (K::Host, false),
+        ],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     // A path (roadmap stage E): its outlines are `contour` children, so it
     // can have holes (schema 5; before, its points were its children).
     TypeSpec {

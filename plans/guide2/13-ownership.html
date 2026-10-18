@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+<title>Part 13 · Gestures have owners — Iron, Part Two</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
+<link rel="stylesheet" href="guide.css">
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager"><a href="12-signals.html" aria-label="Previous part">&larr;</a><span class="here">Part 13 of 13</span><a href="field-guide.html" aria-label="Next part">&rarr;</a></div></div></header>
+<div class="frame">
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html" aria-current="page"><span class="num">13</span>Gestures have owners</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<main>
+<header class="chapter-head">
+  <p class="kicker">Part 13 of 13 · <span class="chip sys-react">Bindings & handles</span> <span class="chip sys-solve">Solver & constraints</span> <span class="chip sys-tools">Select & pen</span></p>
+  <h1>Gestures have owners</h1>
+  <p class="lede">Part 3's gestures were a store-wide overlay of previews plus one commit on release. That was safe only while nothing else wrote the document during a drag. Since the model applies edits between frames, the inspector writes immediately, and undo can arrive mid-drag, other things do. Commit <code>ac92fa7</code> gave each gesture an identity and a set of watched nodes, and made every other transaction be classified against it first. This part covers the three leaks that forced it (one of them inside the constraint solver), the algorithm in <code>Store::apply</code>, how tools find out, Alt-drag as one undo step, copy and paste, and the pointer state machine that now drives every edit.</p>
+  <div class="prereq">
+    <div><b>You need</b>F2 (<code>apply</code>, <code>run</code>, history), F3.5 (the overlay), Part 3 (handles, <code>begin_drag</code>), Part 4 (clusters, fingers, solve-on-apply).</div>
+    <div><b>Files</b><code>iron_document/src/{gesture,lib,copy}.rs</code>, <code>bevy_app/{select,manipulate}.rs</code>; tests <code>tests/gestures.rs</code>, <code>tests/copies.rs</code>. Specs: <code>infinite-canvas-architecture-patterns.md</code> §4, <code>clipboard-and-assets.md</code>, amendment to <code>document-spine.md</code> §6.</div>
+  </div>
+</header>
+
+<h2 id="leaks"><span class="sec">13.1</span>Three ways a drag used to leak</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Scenario</th><th>What happened</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>The model moves the square while you drag it</td><td>On release your drag's last pose overwrote the model's edit</td><td>The commit wrote every driver in the overlay, whatever had happened to the document since</td></tr>
+    <tr><td>You drag the pendulum; meanwhile something recolours an unrelated rect</td><td>The recolour transaction <em>committed the half-finished drag pose</em> as derived ops</td><td>Solve-on-apply re-solved every cluster reading through the overlay, with your finger still active</td></tr>
+    <tr><td>You type into the inspector during a drag</td><td>The field's transaction committed whatever the overlay held</td><td>The inspector edited through the overlay too</td></tr>
+  </tbody>
+</table></div>
+<p>The second one is the subtle one, and it's a property of how the solver and gestures interact, so it's worth tracing:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 330" role="img" aria-label="Before: during a cluster drag, the store holds the document constants, an overlay with the dragged ball's previewed pose, and a finger. A recolour transaction applies; post_apply solves every cluster, reading through the overlay and with the finger, and writes the dragged pose as derived ops into the recolour's transaction. After: apply first sets the gesture aside, clearing overlay and fingers into a Suspended record; post_apply solves the document alone, finds nothing to move, and the previews are put back.">
+  <defs><marker id="e1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="440" height="310" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="32">Before: the recolour carries the drag</text>
+  <rect x="24" y="46" width="412" height="74" rx="4" class="box-fill"/>
+  <text class="t-mono-s" x="34" y="64">doc:     ball.x = 300, ball.y = 200</text>
+  <text class="t-mono-s" x="34" y="80">overlay: ball.x = 340, ball.y = 260  (preview)</text>
+  <text class="t-mono-s" x="34" y="96">fingers: [ball @ anchor → (352, 270)]</text>
+  <text class="t-xs" x="34" y="112">mid-drag, nothing committed</text>
+  <rect x="24" y="132" width="412" height="30" rx="4" class="s-store"/><text class="t-mono-s" x="34" y="151">apply("recolour #R")  ops: [set R.fill.color]</text>
+  <rect x="24" y="174" width="412" height="56" rx="4" class="warn"/>
+  <text class="t-mono-s" x="34" y="192">post_apply: solve_cluster(read = overlay-aware,</text>
+  <text class="t-mono-s" x="34" y="208">                          fingers = [ball…])</text>
+  <text class="t-xs" x="34" y="222">the solver sees the dragged pose as the truth</text>
+  <rect x="24" y="242" width="412" height="64" rx="4" class="warn"/>
+  <text class="t-mono-s" x="34" y="260">tx.derived_ops += set ball.x 340, ball.y 260</text>
+  <text class="t-edge" x="34" y="280">the drag is in history under "recolour",</text>
+  <text class="t-edge" x="34" y="296">and Esc can no longer take it back</text>
+  <line x1="230" y1="162" x2="230" y2="172" class="ln" marker-end="url(#e1)"/>
+  <line x1="230" y1="230" x2="230" y2="240" class="ln" marker-end="url(#e1)"/>
+
+  <rect x="470" y="10" width="440" height="310" rx="8" class="zone"/>
+  <text class="t-b" x="484" y="32">After: set aside, apply, put back</text>
+  <rect x="484" y="46" width="412" height="56" rx="4" class="hl"/>
+  <text class="t-mono-s" x="494" y="64">suspend_gesture() → Suspended {</text>
+  <text class="t-mono-s" x="494" y="80">  values: driven overlay, drivers, fingers }</text>
+  <text class="t-xs" x="494" y="96">overlay cleared: readers see the document</text>
+  <rect x="484" y="114" width="412" height="56" rx="4" class="s-store"/>
+  <text class="t-mono-s" x="494" y="132">apply_now: run → after_transaction →</text>
+  <text class="t-mono-s" x="494" y="148">post_apply(fingers = [], no overlay)</text>
+  <text class="t-xs" x="494" y="162">the pendulum is where the document says: nothing to derive</text>
+  <rect x="484" y="182" width="412" height="56" rx="4" class="box-fill"/>
+  <text class="t-mono-s" x="494" y="200">conflict(ops)? moved(derived_ops)?</text>
+  <text class="t-xs" x="494" y="216">a colour on another node: neither</text>
+  <rect x="484" y="250" width="412" height="56" rx="4" class="hl"/>
+  <text class="t-mono-s" x="494" y="268">resume_gesture(s): re-preview drivers,</text>
+  <text class="t-mono-s" x="494" y="284">resolve clusters live with the finger</text>
+  <text class="t-xs" x="494" y="298">the drag carries on from where it was</text>
+  <line x1="690" y1="102" x2="690" y2="112" class="ln" marker-end="url(#e1)"/>
+  <line x1="690" y1="170" x2="690" y2="180" class="ln" marker-end="url(#e1)"/>
+  <line x1="690" y1="238" x2="690" y2="248" class="ln" marker-end="url(#e1)"/>
+</svg>
+<figcaption>Solve-on-apply (Part 4) treats leaves the transaction set as drivers and everything else as "keep where it is". "Where it is" has to mean the <em>document</em>, not a gesture's preview, or any transaction during a drag commits the drag.</figcaption>
+</figure>
+
+<h2 id="data"><span class="sec">13.2</span>What a gesture is now</h2>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/gesture.rs:44">src/iron_document/src/gesture.rs</a><span class="range">lines 44–68</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, PartialEq)]
+pub enum GestureStatus {
+    Active,
+    /// Released; its previews became a transaction (or nothing had moved).
+    Committed,
+    /// Dropped with no transaction: Esc, a conflicting edit, undo, or a
+    /// newer gesture. Says why.
+    Cancelled(String),
+    /// Not a gesture this store knows: an older one, or one from before the
+    /// document was replaced. Treat it as over.
+    Unknown,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ActiveGesture {
+    pub id: GestureId,
+    pub nodes: BTreeSet&lt;NodeId&gt;,
+}
+
+/// The previews of a gesture set aside while another transaction applies.
+pub(crate) struct Suspended {
+    pub values: Vec&lt;(Leaf, crate::value::Value)&gt;,
+    pub drivers: BTreeSet&lt;Leaf&gt;,
+    pub fingers: Vec&lt;crate::solve::Finger&gt;,
+}</code></pre></div></div></figure>
+<p>Next to those, the store keeps the fields a gesture is made of. <code>drivers</code> is the set of leaves the tool previewed on purpose (what a commit writes); <code>fingers</code> are the drag grips the solver satisfies; <code>ended</code> remembers how the last gesture finished, so its tool can ask afterwards.</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 210" role="img" aria-label="Store fields for a gesture: gesture is an optional ActiveGesture with id and watched nodes; drivers, a set of leaves; fingers, a list of Finger; the overlay in the reactive graph; ended, the last gesture's id and status. Lifecycle: begin_gesture or an implicit watch creates it; preview and begin_drag add watched nodes, drivers and fingers; commit_gesture records Committed; cancel, a conflict, undo, redo or a newer gesture record Cancelled with a reason; an id from before a load is Unknown.">
+  <rect x="10" y="10" width="420" height="190" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="32">Store fields</text>
+  <text class="t-mono-s" x="24" y="56">gesture: Option&lt;ActiveGesture { id, nodes }&gt;</text>
+  <text class="t-mono-s" x="24" y="76">drivers: BTreeSet&lt;Leaf&gt;</text>
+  <text class="t-mono-s" x="24" y="96">fingers: Vec&lt;Finger { node, anchor, target }&gt;</text>
+  <text class="t-mono-s" x="24" y="116">reactive.overlay: BTreeMap&lt;Leaf, Value&gt;</text>
+  <text class="t-mono-s" x="24" y="136">ended: Option&lt;(GestureId, GestureStatus)&gt;</text>
+  <text class="t-mono-s" x="24" y="156">next_gesture: u64</text>
+  <text class="t-xs" x="24" y="184">nodes = the "watched" set: whose pose the tool interprets the pointer against</text>
+  <rect x="450" y="10" width="460" height="190" rx="8" class="zone"/>
+  <text class="t-b" x="464" y="32">Lifecycle</text>
+  <text class="t-mono-s" x="464" y="56">begin_gesture(nodes) / first preview → Active</text>
+  <text class="t-mono-s" x="464" y="76">preview, begin_drag → watch(node), drivers, fingers</text>
+  <text class="t-mono-s" x="464" y="96">commit_gesture → Committed (one transaction, or none)</text>
+  <text class="t-mono-s" x="464" y="116">cancel / conflict / undo / redo /</text>
+  <text class="t-mono-s" x="464" y="132">  a newer gesture → Cancelled(reason)</text>
+  <text class="t-mono-s" x="464" y="152">an id the store doesn't know → Unknown</text>
+  <text class="t-xs" x="464" y="184">There is one pointer, so one gesture: a new one cancels the old.</text>
+</svg>
+<figcaption>A preview with no gesture running starts one implicitly (<code>watch</code>), so older callers keep working. Tools that want to notice a cancellation call <code>begin_gesture</code> and keep the id.</figcaption>
+</figure>
+
+<h2 id="apply"><span class="sec">13.3</span>The classification in <code>Store::apply</code></h2>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:957">src/iron_document/src/lib.rs</a><span class="range">lines 957–976</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:5;--len:1"></span><span class="band" style="--from:6;--len:1"></span><span class="band" style="--from:9;--len:4"></span><span class="band" style="--from:13;--len:4"></span><pre class="gutter" aria-hidden="true">957
+958
+959
+960
+961
+962
+963
+964
+965
+966
+967
+968
+969
+970
+971
+972
+973
+974
+975
+976</pre><pre class="src"><code class="language-rust">/// Apply a transaction atomically. Either every op applies and the
+/// version advances, or nothing applies and every error is reported.
+pub fn apply(&amp;mut self, input: TransactionInput) -&gt; Result&lt;Applied, Vec&lt;ApplyError&gt;&gt; {
+    // A transaction from outside a running gesture is classified against
+    // it (`gesture`) and applied without its previews.
+    let conflict = self.gesture.as_ref().and_then(|g| gesture::conflict(&amp;self.doc, &amp;input.ops, g, &amp;self.drivers));
+    let suspended = self.suspend_gesture();
+    let result = self.apply_now(input);
+    if let Some(s) = suspended {
+        let moved = match (&amp;result, &amp;self.gesture) {
+            (Ok(a), Some(g)) if !a.replayed =&gt; self.history.past.last().and_then(|tx| gesture::moved(&amp;tx.derived_ops, g)),
+            _ =&gt; None,
+        };
+        match conflict.filter(|_| result.is_ok()).or(moved) {
+            Some(reason) =&gt; self.end_gesture(GestureStatus::Cancelled(reason)),
+            None =&gt; self.resume_gesture(s),
+        }
+    }
+    result
+}</code></pre></div></div></figure>
+<p>Four steps, in this order for reasons:</p>
+<ol>
+  <li><strong>Classify before applying</strong> (962). <code>conflict</code> asks "is a watched node, or an ancestor of one, deleted?" against the document <em>before</em> the delete, while <code>is_ancestor</code> can still answer.</li>
+  <li><strong>Suspend</strong> (963): take the driven overlay values, drivers and fingers into a <code>Suspended</code> record and clear the overlay, so the transaction runs and solves against the document alone.</li>
+  <li><strong>Apply</strong>: the ordinary path of F2: run on a clone, swap, <code>after_transaction</code>, solve-on-apply.</li>
+  <li><strong>Decide</strong> (966–973): a classified conflict, but only if the transaction actually applied, or the solver having moved a watched node (<code>moved</code> scans <code>derived_ops</code>), ends the gesture with that reason. Otherwise the previews go back on top of the new document and clusters re-solve live with the finger.</li>
+</ol>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:587">src/iron_document/src/lib.rs</a><span class="range">lines 587–610</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">587
+588
+589
+590
+591
+592
+593
+594
+595
+596
+597
+598
+599
+600
+601
+602
+603
+604
+605
+606
+607
+608
+609
+610</pre><pre class="src"><code class="language-rust">/// Set the running gesture&#x27;s previews aside, so another transaction
+/// applies and solves against the document alone.
+fn suspend_gesture(&amp;mut self) -&gt; Option&lt;gesture::Suspended&gt; {
+    self.gesture.as_ref()?;
+    let values = self.reactive.overlay().iter().filter(|(l, _)| self.drivers.contains(l)).map(|(l, v)| (*l, v.clone())).collect();
+    let suspended = gesture::Suspended { values, drivers: std::mem::take(&amp;mut self.drivers), fingers: std::mem::take(&amp;mut self.fingers) };
+    self.reactive.clear_overlay(&amp;self.doc);
+    Some(suspended)
+}
+
+/// Put suspended previews back on the document as it now is.
+fn resume_gesture(&amp;mut self, s: gesture::Suspended) {
+    self.drivers = s.drivers;
+    self.fingers = s.fingers;
+    for (leaf, v) in s.values {
+        if self.doc.leaf(leaf.node, leaf.path).is_some() {
+            self.reactive.preview(&amp;self.doc, leaf, v);
+        }
+    }
+    if !self.clusters.list.is_empty() {
+        self.resolve_clusters_live();
+    }
+    self.resolve_physics();
+}</code></pre></div></div></figure>
+<p>Resume checks that each leaf still exists (602) before re-previewing it. What counts as a conflict:</p>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/gesture.rs:92">src/iron_document/src/gesture.rs</a><span class="range">lines 92–116</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116</pre><pre class="src"><code class="language-rust">/// Why `ops`, about to apply to `doc`, conflict with the gesture; `None`
+/// when they are compatible.
+pub(crate) fn conflict(doc: &amp;Document, ops: &amp;[Op], g: &amp;ActiveGesture, drivers: &amp;BTreeSet&lt;Leaf&gt;) -&gt; Option&lt;String&gt; {
+    for op in ops {
+        let reason = match op {
+            Op::Delete { id } if watched(doc, g, *id) =&gt; format!(&quot;{id} was deleted&quot;),
+            Op::Reparent { id, .. } if watched(doc, g, *id) =&gt; format!(&quot;{id} moved to another parent&quot;),
+            Op::Create { id, .. } if g.nodes.contains(id) =&gt; format!(&quot;{id} was replaced&quot;),
+            Op::Set { id, path, .. } if drivers.contains(&amp;Leaf { node: *id, path: *path }) =&gt; format!(&quot;{id}.{path}, which the gesture drives, was set&quot;),
+            Op::Set { id, path, slot } if watched(doc, g, *id) &amp;&amp; (GEOMETRY.contains(&amp;path.component) || slot.expr().is_some()) =&gt; format!(&quot;{id}.{path} was set&quot;),
+            Op::AddComp { id, comp } if watched(doc, g, *id) &amp;&amp; GEOMETRY.contains(&amp;comp.kind()) =&gt; format!(&quot;{id} gained {}&quot;, comp.kind().name()),
+            Op::RemoveComp { id, kind } if watched(doc, g, *id) &amp;&amp; GEOMETRY.contains(kind) =&gt; format!(&quot;{id} lost {}&quot;, kind.name()),
+            Op::Link { rel } if matches!(rel.rel, RelKind::Constrains | RelKind::Animates) &amp;&amp; g.nodes.contains(&amp;rel.to) =&gt; {
+                format!(&quot;{} now {} {}&quot;, rel.from, rel.rel.name(), rel.to)
+            }
+            Op::Unlink { id } =&gt; match doc.relation(*id) {
+                Some(r) if matches!(r.rel, RelKind::Constrains | RelKind::Animates) &amp;&amp; g.nodes.contains(&amp;r.to) =&gt; format!(&quot;{} no longer {} {}&quot;, r.from, r.rel.name(), r.to),
+                _ =&gt; continue,
+            },
+            _ =&gt; continue,
+        };
+        return Some(reason);
+    }
+    None
+}</code></pre></div></div></figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>The other transaction…</th><th>Verdict</th><th>Example</th></tr></thead>
+  <tbody>
+    <tr><td>deletes or reparents a watched node or an ancestor</td><td>cancel</td><td>the model deletes the group you're dragging a child of</td></tr>
+    <tr><td>sets a leaf the gesture drives</td><td>cancel</td><td>the model sets the slider you're scrubbing</td></tr>
+    <tr><td>sets a <code>GEOMETRY</code> leaf of a watched node, or binds any of its leaves</td><td>cancel</td><td>the model moves the square you're dragging</td></tr>
+    <tr><td>adds or removes a geometry component on one</td><td>cancel</td><td>a <code>corners</code> component appears</td></tr>
+    <tr><td>links or unlinks a constraint or clip to one</td><td>cancel</td><td>a <code>distance</code> constraint now holds it</td></tr>
+    <tr><td>makes the solver move a watched node</td><td>cancel</td><td>the model drags the pendulum's platform while you hold the ball</td></tr>
+    <tr><td>anything else</td><td>carry on</td><td>a colour, a name, another node's position</td></tr>
+  </tbody>
+</table></div>
+<p><code>GEOMETRY</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/gesture.rs:73" title="src/iron_document/src/gesture.rs:73"><code>gesture.rs:73</code></a>) lists the components a gesture reads to turn the pointer into values: transforms, size, radius, corners, arc, handles, path shape, contour, frame, group clip, slider. A colour isn't one, so recolouring the node you're dragging doesn't stop the drag.</p>
+<p>Undo and redo always cancel a running gesture first (<code>Store::undo</code>, <a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1049" title="src/iron_document/src/lib.rs:1049"><code>lib.rs:1049</code></a>), so Cmd+Z mid-drag takes the drag back rather than undoing something underneath it.</p>
+
+<h2 id="notice"><span class="sec">13.4</span>How the tool finds out</h2>
+<p>The store can't call the tool. The tool keeps the id of the gesture it owns and asks each frame:</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1886">src/bevy_app/select.rs</a><span class="range">lines 1886–1905</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1886
+1887
+1888
+1889
+1890
+1891
+1892
+1893
+1894
+1895
+1896
+1897
+1898
+1899
+1900
+1901
+1902
+1903
+1904
+1905</pre><pre class="src"><code class="language-rust">// ---- Gesture ownership ----
+// A gesture that edits the document is the store&#x27;s: an edit it conflicts
+// with, undo, or a newer gesture can end it while the button is down.
+// Then it stops here, and its release commits nothing.
+if let Some(g) = tool.owned {
+    match store.0.gesture_status(g) {
+        GestureStatus::Active =&gt; {}
+        status =&gt; {
+            if let GestureStatus::Cancelled(why) = &amp;status {
+                info!(&quot;gesture {g} cancelled: {why}&quot;);
+            }
+            tool.owned = None;
+            if let Gesture::Edit(m) = &amp;tool.gesture {
+                m.end(&amp;mut store.0);
+            }
+            if !matches!(tool.gesture, Gesture::Pan { .. } | Gesture::Press { .. } | Gesture::Idle) {
+                tool.gesture = Gesture::Idle;
+                tool.marquee = None;
+            }
+        }</code></pre></div></div></figure>
+<p>Once cancelled, the overlay, drivers and fingers are already gone, so even a commit request would find nothing to write. The tool goes idle, its release does nothing, and the model's edit stands. The inspector's number scrubbing uses the same contract over the host boundary: <code>inspect_scrub("begin")</code> returns the gesture id as a token, and every <code>"move"</code> checks <code>active_gesture() == token</code> before previewing (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/engine_api.rs:764" title="src/engine_api.rs:764"><code>engine_api.rs:764</code></a>). One-off inspector edits go through <code>Store::set_through_handle</code>: a normal transaction through the leaf's handle, outside the overlay, classified like any other.</p>
+
+<h3 id="commit">Commit can now add components</h3>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:677">src/iron_document/src/lib.rs</a><span class="range">lines 677–719</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:15"></span><span class="band" style="--from:37;--len:2"></span><pre class="gutter" aria-hidden="true">677
+678
+679
+680
+681
+682
+683
+684
+685
+686
+687
+688
+689
+690
+691
+692
+693
+694
+695
+696
+697
+698
+699
+700
+701
+702
+703
+704
+705
+706
+707
+708
+709
+710
+711
+712
+713
+714
+715
+716
+717
+718
+719</pre><pre class="src"><code class="language-rust">// The gesture&#x27;s own commit: taken first, so `apply` neither suspends
+// its previews nor finds it in conflict with itself.
+let gesture = self.gesture.take();
+if let Some(g) = &amp;gesture {
+    self.ended = Some((g.id, GestureStatus::Committed));
+}
+let mut ops = Vec::new();
+// Leaves of components the node lacks but allows: the component is
+// added, defaults with the previewed fields set, before the `Set`s.
+let mut added: BTreeMap&lt;(NodeId, ComponentKind), Component&gt; = BTreeMap::new();
+for (leaf, value) in self.reactive.overlay() {
+    if !self.drivers.contains(leaf) {
+        continue;
+    }
+    let Some(slot) = self.doc.leaf(leaf.node, leaf.path) else {
+        let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.component));
+        if allowed &amp;&amp; self.doc.component(leaf.node, leaf.path.component).is_none() {
+            let c = added.entry((leaf.node, leaf.path.component)).or_insert_with(|| leaf.path.component.default_component());
+            let _ = c.set(leaf.path.field, Slot::Const(value.clone()));
+        }
+        continue;
+    };
+    if slot.expr().is_some() {
+        continue;
+    }
+    let same = match (slot.constant(), value) {
+        (Some(Value::Number(a)), Value::Number(b)) =&gt; (a - b).abs() &lt; 1e-9,
+        (c, v) =&gt; c == Some(v),
+    };
+    if !same {
+        ops.push(Op::Set {
+            id: leaf.node,
+            path: leaf.path,
+            slot: Slot::Const(value.clone()),
+        });
+    }
+}
+let adds = added.into_iter().map(|((id, _), comp)| Op::AddComp { id, comp });
+ops = adds.chain(ops).collect();
+if ops.is_empty() {
+    self.cancel_gesture();
+    return None;
+}</code></pre></div></div></figure>
+<p>Dragging a rect's corner-radius dot previews <code>corners.tl</code> on a rect that has no <code>corners</code> component. <code>handle</code> answers <code>Direct</code> for a leaf of a component the type allows but the node lacks, and the commit prepends an <code>AddComp</code> with defaults plus the previewed fields (684–698, 714–715). So "round this corner" is one transaction.</p>
+
+<h2 id="alt"><span class="sec">13.5</span>Alt-drag: a structural edit inside a gesture</h2>
+<p>Figma's Alt-drag duplicates the selection and drags the copies; releasing Alt mid-drag takes the copies back. The spine's rule was that a gesture never spans a structural op. Alt-drag is the one exception, and it's built from three store calls:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 330" role="img" aria-label="Alt-drag timeline with the history's past stack and log. Press and drag: a gesture on the originals. Alt down: the gesture is cancelled, copy::duplicate builds paste ops, they are applied at once as v8 duplicate rect, a new gesture drags the copies. Alt up: retract v8 undoes it and drops it from redo, and the originals are dragged again. Release with Alt held: CommitMerged; the next sync commits the move as v9 and merge_with_previous folds v8 and v9 into one past entry. The log keeps both.">
+  <defs><marker id="e2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <g class="t-b"><text x="24" y="26">Event</text><text x="330" y="26">Store calls</text><text x="640" y="26">history.past (top right)</text></g>
+  <rect x="10" y="38" width="900" height="44" class="band"/>
+  <text class="t-mono-s" x="24" y="64">press, drag past 3 px</text>
+  <text class="t-mono-s" x="330" y="64">begin_gesture([#R]); begin_drag(#R)</text>
+  <text class="t-mono-s" x="640" y="64">… v7</text>
+  <text class="t-mono-s" x="24" y="108">Alt down</text>
+  <text class="t-mono-s" x="330" y="100">cancel_gesture; duplicate → apply now</text>
+  <text class="t-mono-s" x="330" y="116">= v8; begin_gesture([#R']); drag copy</text>
+  <text class="t-mono-s" x="640" y="108">… v7, v8 "duplicate rect"</text>
+  <rect x="10" y="130" width="900" height="44" class="band"/>
+  <text class="t-mono-s" x="24" y="156">Alt up (optional)</text>
+  <text class="t-mono-s" x="330" y="148">retract(v8): undo, then pop redo;</text>
+  <text class="t-mono-s" x="330" y="164">begin_gesture([#R]); drag original</text>
+  <text class="t-mono-s" x="640" y="156">… v7   (log: v8, v9 "undo: …")</text>
+  <text class="t-mono-s" x="24" y="200">release with Alt held</text>
+  <text class="t-mono-s" x="330" y="200">GestureRequests ← CommitMerged(label, v8)</text>
+  <rect x="10" y="218" width="900" height="64" class="band"/>
+  <text class="t-mono-s" x="24" y="240">next frame: sync_document</text>
+  <text class="t-mono-s" x="330" y="240">commit_gesture → v9 "move";</text>
+  <text class="t-mono-s" x="330" y="256">merge_with_previous(v8, label)</text>
+  <text class="t-mono-s" x="640" y="240">… v7, v9 "duplicate rect"</text>
+  <text class="t-xs" x="640" y="256">ops = v8.ops + v8.derived + v9.ops;</text>
+  <text class="t-xs" x="640" y="270">inverse = v8.inverse + v9.inverse</text>
+  <text class="t-s" x="24" y="310">One Cmd+Z removes the copy and its move. The log keeps v8 and v9 separately, so the bridge reconciled each when it applied.</text>
+</svg>
+<figcaption>The duplicate is applied synchronously, not queued, because the copies have to exist for <code>begin_drag</code> to grab them in the same frame. The bridge picks the transaction up from the log at the next sync like any other synchronous apply. Esc mid-drag cancels and retracts.</figcaption>
+</figure>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:612">src/iron_document/src/lib.rs</a><span class="range">lines 612–646</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">612
+613
+614
+615
+616
+617
+618
+619
+620
+621
+622
+623
+624
+625
+626
+627
+628
+629
+630
+631
+632
+633
+634
+635
+636
+637
+638
+639
+640
+641
+642
+643
+644
+645
+646</pre><pre class="src"><code class="language-rust">/// Take back transaction `version` if it is the latest: undo it and drop
+/// it from redo, as if it had never been applied. For a gesture that
+/// made something and then thought better of it (releasing Alt during an
+/// Alt-drag removes the copies). `false` when it is not the latest.
+pub fn retract(&amp;mut self, version: Version, ts: u64) -&gt; bool {
+    if self.history.past.last().is_none_or(|t| t.version != version) {
+        return false;
+    }
+    match self.undo(ts) {
+        Some(Ok(_)) =&gt; {
+            self.history.future.pop();
+            true
+        }
+        _ =&gt; false,
+    }
+}
+
+/// Fold the latest transaction into the one before it, when that one is
+/// `previous`: one history entry, labelled `label`, undone in one step.
+/// An Alt-drag&#x27;s duplicate and its move are one edit. The log keeps both.
+pub fn merge_with_previous(&amp;mut self, previous: Version, label: impl Into&lt;String&gt;) -&gt; bool {
+    let n = self.history.past.len();
+    if n &lt; 2 || self.history.past[n - 2].version != previous {
+        return false;
+    }
+    let b = self.history.past.pop().expect(&quot;two entries&quot;);
+    let a = self.history.past.pop().expect(&quot;two entries&quot;);
+    let mut ops = a.ops;
+    ops.extend(a.derived_ops);
+    ops.extend(b.ops);
+    let mut inverse = a.inverse;
+    inverse.extend(b.inverse);
+    self.history.past.push(Transaction { version: b.version, label: label.into(), actor: b.actor, ts: b.ts, idempotency_key: None, ops, derived_ops: b.derived_ops, inverse, solver: b.solver });
+    true
+}</code></pre></div></div></figure>
+<p>The merged entry's inverse is <code>v8.inverse</code> followed by <code>v9.inverse</code>, and <code>undo_ops</code> applies an inverse list in reverse, so undo first moves the copy back, then deletes it.</p>
+
+<h2 id="copy"><span class="sec">13.6</span>Copy and paste: a fragment and its closure</h2>
+<p>There is no copy op. Copying computes a <em>closure</em> (the roots, their descendants, and what belongs with them though nobody selected it) into a <code>Fragment</code>: a small document holding the nodes under their original ids. Pasting turns it into <code>Create</code> and <code>Link</code> ops with fresh ids, one transaction. The interesting part is what happens to each reference that leaves the copied set:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Reference</th><th>Rule</th></tr></thead>
+  <tbody>
+    <tr><td><code>figures</code> (shape → entity)</td><td>the entity is copied too, with its ports and equations: a copied laser is a second laser</td></tr>
+    <tr><td><code>connection</code></td><td>copied when both ports are; otherwise the copy's port is unconnected</td></tr>
+    <tr><td><code>constraint</code>, clip</td><td>copied when every operand or target is</td></tr>
+    <tr><td>binding reading an outside leaf</td><td>kept within the same document; <em>frozen</em> to the value it read when pasted elsewhere</td></tr>
+    <tr><td><code>instance.def</code>, <code>embed.source</code>, camera</td><td>kept: definitions and compositions are shared</td></tr>
+    <tr><td><code>selects</code> (session)</td><td>never copied</td></tr>
+  </tbody>
+</table></div>
+<p>"Same document" is decided by <code>DocumentOrigin</code>, a random token renewed whenever a document is loaded and stamped into every fragment. A paste in the same tab and session keeps references to outside nodes; one from another tab or an earlier document freezes them. The fragment's text form is the canonical file format with paste metadata, so it survives the system clipboard and migrates like an old file. A paste into a different container keeps the copy where it was on screen, by composing world affines (<code>a_paste_into_another_container_keeps_its_place_on_screen</code>).</p>
+
+<h2 id="machine"><span class="sec">13.7</span>One pointer state machine, one manipulator lifecycle</h2>
+<p>Commit <code>34389a8</code> folded the select tool's separate drag paths (2D moves, box transforms, 3D moves, plane drags, sliders) into one state machine whose editing state holds one <code>Manip</code>:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 310" role="img" aria-label="The select tool's Gesture states: Idle; Press with a planned click and what a drag would become; Edit holding a Manip; Marquee; Pan. Press goes to Press; travel past three pixels turns Press into Edit or Marquee; release from Press performs the click; release from Edit pushes a commit request; Esc or a store cancellation returns Edit to Idle with nothing written. Manip variants: Drag, Transform, PathHandle, Bend, ShapeGrip, Slider, Plane, World, Gizmo, each watching nodes, updating previews each frame and committing one labelled transaction.">
+  <defs><marker id="e3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="20" y="110" width="100" height="40" rx="20" class="box-fill"/><text class="t-mono" x="48" y="135">Idle</text>
+  <rect x="190" y="110" width="150" height="40" rx="6" class="box-fill"/><text class="t-mono-s" x="200" y="128">Press{panel, start,</text><text class="t-mono-s" x="200" y="142">  then: AfterPress}</text>
+  <rect x="420" y="40" width="170" height="40" rx="6" class="hl"/><text class="t-mono-s" x="430" y="64">Edit(Manip)</text>
+  <rect x="420" y="180" width="170" height="40" rx="6" class="box-fill"/><text class="t-mono-s" x="430" y="204">Marquee{…}</text>
+  <rect x="190" y="230" width="150" height="40" rx="6" class="box-fill"/><text class="t-mono-s" x="200" y="254">Pan (Space-drag)</text>
+  <line x1="120" y1="130" x2="188" y2="130" class="ln" marker-end="url(#e3)"/><text class="t-xs" x="130" y="122">press</text>
+  <path d="M340,120 L418,64" class="ln" marker-end="url(#e3)"/><text class="t-xs" x="330" y="86">moved &gt; 3 px</text>
+  <path d="M340,140 L418,196" class="ln" marker-end="url(#e3)"/><text class="t-xs" x="352" y="182">on background</text>
+  <path d="M265,150 C265,178 70,178 70,152" class="ln" marker-end="url(#e3)"/><text class="t-xs" x="110" y="190">release: the click</text>
+  <path d="M505,40 C505,8 70,8 70,108" class="ln" marker-end="url(#e3)"/><text class="t-xs" x="190" y="18">release: GestureRequest::Commit · Esc or store cancel: nothing</text>
+  <path d="M505,220 C505,305 30,305 30,152" class="ln-dim" marker-end="url(#e3)"/><text class="t-xs" x="380" y="292">release: selection set</text>
+  <rect x="620" y="20" width="290" height="270" rx="8" class="zone"/>
+  <text class="t-b" x="634" y="42">Manip: every document edit</text>
+  <text class="t-mono-s" x="634" y="66">Drag</text><text class="t-s" x="722" y="66">move via begin_drag</text>
+  <text class="t-mono-s" x="634" y="84">Transform</text><text class="t-s" x="722" y="84">resize/rotate the box</text>
+  <text class="t-mono-s" x="634" y="102">PathHandle</text><text class="t-s" x="722" y="102">a point's Bézier handle</text>
+  <text class="t-mono-s" x="634" y="120">Bend</text><text class="t-s" x="722" y="120">Cmd-drag a segment</text>
+  <text class="t-mono-s" x="634" y="138">ShapeGrip</text><text class="t-s" x="722" y="138">corner radius, arc</text>
+  <text class="t-mono-s" x="634" y="156">Slider</text><text class="t-s" x="722" y="156">scrub along the track</text>
+  <text class="t-mono-s" x="634" y="174">Plane</text><text class="t-s" x="722" y="174">2D content on a 3D plane</text>
+  <text class="t-mono-s" x="634" y="192">World</text><text class="t-s" x="722" y="192">3D move in a plane</text>
+  <text class="t-mono-s" x="634" y="210">Gizmo</text><text class="t-s" x="722" y="210">the 3D transform gizmo</text>
+  <text class="t-s" x="634" y="240">Same lifecycle for all: watch nodes,</text>
+  <text class="t-s" x="634" y="256">update() previews each frame, commit</text>
+  <text class="t-s" x="634" y="272">one labelled transaction on release.</text>
+</svg>
+<figcaption>What differs between manipulators is only how a pointer becomes leaf values: through a panel's affine, through a camera ray onto a plane, through an affine decomposed into position, rotation and size, or through the gizmo handing back a whole transform.</figcaption>
+</figure>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/manipulate.rs:184">src/bevy_app/manipulate.rs</a><span class="range">lines 184–205</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205</pre><pre class="src"><code class="language-rust">/// Every document edit a pointer can make.
+pub(crate) enum Manip {
+    Drag(Drag),
+    Transform(Transform2),
+    /// A path point&#x27;s Bézier handle, `out` or in, mirrored unless Alt;
+    /// `to_local` maps window px into the path&#x27;s space.
+    PathHandle { point: NodeId, out: bool, to_local: Affine, at: Point },
+    /// A path&#x27;s segment bent (Figma&#x27;s Cmd-drag on a segment): the curve
+    /// at `t` follows the pointer by moving both its inner handles, from
+    /// point `a`&#x27;s out-handle to `b`&#x27;s in-handle; `curve` is the segment at
+    /// the press, in the path&#x27;s space, which `to_local` maps window px to.
+    Bend { a: NodeId, b: NodeId, curve: kurbo::CubicBez, t: f64, to_local: Affine },
+    /// A lone shape&#x27;s own handle; `arc` is (start, sweep, inner) at the press.
+    ShapeGrip { id: NodeId, grip: ShapeGrip, to_local: Affine, arc: [f64; 3] },
+    /// Scrubbing a slider&#x27;s value along its track.
+    Slider { id: NodeId, mapping: Mapping },
+    /// 2D content dragged on a plane in 3D, through `Store::begin_drag`.
+    Plane { handle: DragHandle, mapping: Mapping, press: Vec2, ty: String },
+    World(World),
+    /// The 3D transform gizmo (`Gizmo3d`), on the selected meshes.
+    Gizmo { targets: Vec&lt;NodeId&gt;, kind: Option&lt;&amp;&#x27;static str&gt; },
+}</code></pre></div></div></figure>
+
+<h2 id="tests"><span class="sec">13.8</span>What the tests promise</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Test (<code>tests/gestures.rs</code>)</th><th>Proves</th></tr></thead>
+  <tbody>
+    <tr><td><code>a_model_pose_edit_mid_drag_survives_cancel_and_release</code></td><td>Leak 1 is closed</td></tr>
+    <tr><td><code>an_unrelated_edit_mid_drag_leaves_the_drag_running</code></td><td>Compatible edits apply and the gesture resumes</td></tr>
+    <tr><td><code>structural_and_binding_changes_cancel</code></td><td>Delete, reparent, rebind cancel</td></tr>
+    <tr><td><code>a_bound_source_gesture_cancels_when_its_source_is_set</code></td><td>Setting a driven leaf (through a handle's source) cancels</td></tr>
+    <tr><td><code>a_constrained_gesture_cancels_when_the_solver_moves_its_node</code></td><td>The <code>moved</code> check: leak 2's other face</td></tr>
+    <tr><td><code>undo_mid_gesture_cancels_it_first</code></td><td>Undo takes the gesture back, not something under it</td></tr>
+    <tr><td><code>cancel_writes_nothing_and_a_release_writes_one_transaction</code></td><td>The basic contract</td></tr>
+    <tr><td><code>a_one_off_edit_through_a_handle_leaves_a_drag_alone</code></td><td>Leak 3 is closed (<code>set_through_handle</code>)</td></tr>
+    <tr><td><code>an_alt_drag_duplicates_moves_the_copy_and_undoes_in_one_step</code></td><td>Retract and merge</td></tr>
+  </tbody>
+</table></div>
+
+<div class="box edge"><span class="tab">Rough edges</span>
+<p><code>merge_with_previous</code> only folds when the duplicate is still directly below the move in <code>past</code>. If anything else lands in between (a model edit mid-Alt-drag), the move stays a separate undo step, and <code>retract</code> refuses with "the copies stay". Selection changes still aren't in undo (Part 8).</p>
+</div>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>A gesture has an id and watched nodes. Every other transaction is classified against it, applied and solved without its previews, and then either resumes it or cancels it with a reason.</li>
+  <li>Solving without the overlay and fingers is what stops an unrelated transaction from committing a half-finished constrained drag.</li>
+  <li>Tools poll <code>gesture_status</code>; a cancelled gesture's release writes nothing. Undo and redo cancel first.</li>
+  <li>Alt-drag duplicates mid-gesture (applied at once), and the duplicate and move become one undo entry; the log keeps both. Paste is one transaction of fresh ids, with rules for every reference that leaves the copied set.</li>
+</ul>
+</div>
+
+<nav class="nextprev"><a href="12-signals.html"><small>Previous</small><span>Part 12: Runtime signals and producers</span></a><a class="next" href="field-guide.html"><small>Next</small><span>Field guide</span></a></nav>
+</main>
+</div>
+<script src="highlight.min.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

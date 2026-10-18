@@ -2,14 +2,14 @@
 
 The series is four Foundations pages (`f1-…` to `f4-…`, numbered `F1`–`F4`), which
 replace the older `plans/guide/` with only what is still true of the code, then Parts
-1–9 and the field guide.
+1–13 and the field guide. Parts 10–13 (October 17) cover the engine boundary; the earlier pages were corrected at the same time, so they describe the code as of the last rebuild rather than as of the commit they were first written at.
 
 `plans/guide2/*.html` is generated. Edit the pages in `src/` and the field-guide table in
 `entries.py`, then rebuild from the repo root:
 
 ```sh
 python3 plans/guide2/_src/build.py              # every page
-python3 plans/guide2/_src/build.py 09-ports     # one page
+python3 plans/guide2/_src/build.py 10-boundary  # one page
 ```
 
 Code excerpts (`<snip file=… lines=…>`) are copied from the working tree at build time, so a

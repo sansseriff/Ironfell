@@ -8,6 +8,7 @@ import { loadGlue, type Glue } from "./runtime/glue";
 import type { Backend } from "./runtime/backend_policy";
 import { CadenceProbe } from "./runtime/cadence_probe";
 import { modelAsk, modelEdit } from "./model";
+import { FontLoader } from "./runtime/font_loader";
 
 // Assigned before any FFI call; see the "wasmData" case below.
 let glue: Glue;
@@ -30,6 +31,11 @@ class IronWorker {
   private latestMouseY: number = 0;
   private hasMouseUpdate: boolean = false;
   private postedEnginePrepared: boolean = false;
+  // Fetches the font files the engine asks for (plans/specs/text.md §4).
+  private fonts = new FontLoader(
+    (bytes) => glue.register_font(bytes),
+    (families) => self.postMessage({ ty: "fontsLoaded", families }),
+  );
 
   constructor() {
     // Create a dedicated object for Rust FFI functions
@@ -42,6 +48,8 @@ class IronWorker {
       send_cursor_from_worker: (cursor: string) => self.postMessage({ ty: "cursor", cursor }),
       send_document_changed_from_worker: (version: number) => self.postMessage({ ty: "documentChanged", version }),
       send_clipboard_from_worker: (text: string) => self.postMessage({ ty: "clipboard", text }),
+      send_text_edit_from_worker: (state: string) => self.postMessage({ ty: "textEdit", ...JSON.parse(state) }),
+      send_fonts_from_worker: (fonts: string) => this.fonts.request(JSON.parse(fonts)),
     };
 
     // Make it globally accessible
@@ -153,6 +161,18 @@ class IronWorker {
 
         case "paste":
           if (this.appHandle !== BigInt(0)) glue.clipboard_paste(this.appHandle, data.text);
+          break;
+
+        case "textInput":
+          if (this.appHandle !== BigInt(0)) glue.text_input(this.appHandle, data.text, data.anchor, data.focus);
+          break;
+
+        case "textMotion":
+          if (this.appHandle !== BigInt(0)) glue.text_motion(this.appHandle, data.motion, !!data.extend);
+          break;
+
+        case "textToggle":
+          if (this.appHandle !== BigInt(0)) glue.text_toggle(this.appHandle, data.what);
           break;
 
         case "theme":

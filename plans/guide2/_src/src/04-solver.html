@@ -57,7 +57,7 @@
 <p><code>solve.rs</code> decides, per solve, what is a variable and what is known:</p>
 <snip file="src/iron_document/src/solve.rs" lines="1-10"/>
 <snip file="src/iron_document/src/solve.rs" lines="118-122"/>
-<p>A leaf is free if it holds a constant, isn't bound, and no clip drives it right now. Each operand node contributes its free <code>x</code>, <code>y</code> and <code>rot</code>. Constraints connected through shared nodes form one cluster. Then each kind becomes a residual closure:</p>
+<p>A leaf is free if it holds a constant, isn't bound, and no producer (a clip, the network, a host simulation; Part 12) drives it right now. Each operand node contributes its free <code>x</code>, <code>y</code> and <code>rot</code>. Constraints connected through shared nodes form one cluster. Then each kind becomes a residual closure:</p>
 <snip file="src/iron_document/src/solve.rs" lines="358-430" mark="372-384,406-410,412-428"/>
 <p>Every residual is written in world positions (<code>pose.point(v, anchor)</code>, which uses Part 3's world transforms), so a joint inside a rotated group is constrained where it actually is. Lines 406–410 turn a transaction's <code>Set</code> into a strong "be this value" term; lines 412–428 turn a drag's <em>finger</em> into a strong "this anchor is at the pointer" term.</p>
 
@@ -72,19 +72,22 @@
     <tr><td>On failure</td><td>Keep the last good pose</td><td>Reject the transaction, naming the culprits</td></tr>
   </tbody>
 </table></div>
-<snip file="src/iron_document/src/lib.rs" lines="218-248" mark="236-246"/>
+<snip file="src/iron_document/src/lib.rs" lines="243-273" mark="261-271"/>
 <p>Solve-on-apply is what keeps the document consistent no matter who edits it. A model edit that sets the ball's <code>x</code> to 900 is a driver; the solver moves the joints, and their new positions are recorded as derived ops on the same transaction, so one undo puts everything back:</p>
-<snip file="src/iron_document/src/lib.rs" lines="814-889" mark="837-847,860-875,882-885"/>
+<snip file="src/iron_document/src/lib.rs" lines="1115-1190" mark="1138-1148,1161-1176,1183-1186"/>
 <p>Two refinements matter for the model. The returned <code>SolverSummary</code> reports causes, not every changed value: which clusters re-solved, which nodes moved, and any request the solver couldn't honour (<code>&lt;unmet&gt;</code>). And <code>exact: true</code> on a transaction turns an unmet request into a rejection instead of an adjustment, for edits that must land exactly or not at all.</p>
 <snip file="src/iron_document/src/solve.rs" lines="68-91"/>
-<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<ref file="src/iron_document/src/lib.rs" line="697" has="post_apply">lib.rs:697</ref>).</p>
+<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<ref file="src/iron_document/src/lib.rs" line="992" has="post_apply">lib.rs:992</ref>).</p>
+<div class="box rust"><span class="tab">Solve-on-apply and a running drag</span>
+<p>The two columns of the table above used to overlap. <code>post_apply</code> reads leaves through the reactive graph and passes the store's active fingers, so if a transaction arrived <em>during</em> a cluster drag (a model edit, an inspector field, even a recolour of something else), the solver read the dragged pose from the overlay, honoured the drag's finger, and wrote the half-finished pose into that unrelated transaction as derived ops. Since October 15, <code>apply</code> first sets the gesture aside (overlay values, drivers and fingers move into a <code>Suspended</code> record), applies and solves against the document alone, and then resumes the gesture or cancels it if the edit conflicts with it, including when the solver moved a node the drag holds. Part 13 has the algorithm.</p>
+</div>
 
 <h2 id="pendulum"><span class="sec">4.6</span>The pendulum</h2>
 <p>The demo that exercises all of it lives in the Pendulum tab (and in Main, through its embed; Part 5):</p>
 <raw title="The pendulum, as nodes">group "pendulum"
   rect   platform              fixed by a `fix` constraint
-  circle j0, j1, j2            joints (free x, y)
-  circle ball                  free x, y
+  ellipse j0, j1, j2           joints (free x, y)
+  ellipse ball                 free x, y
   rect   arm1..arm3            x, y, rot BOUND to the joints they connect (bindings read solved positions)
   rect   height                h bound to 640 − ball.y
   slider length                0.5–1.5

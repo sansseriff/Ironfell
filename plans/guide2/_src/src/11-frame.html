@@ -1,0 +1,301 @@
+<header class="chapter-head">
+  <p class="kicker">Part 11 of 13 · <chip sys="bound"/> <chip sys="shell"/></p>
+  <h1>One frame, in order</h1>
+  <p class="lede">F4 described the bridge as "a sync at the start of the frame and a reconcile pass for gestures". There is more to it now: the engine has a second host (a native macOS app), the boundary is one shared module instead of a wasm-only file, the store has a producer that publishes before the sync, and an ordering bug showed that <em>when</em> a message lands matters as much as what it says. This part follows a frame from the messages that arrive before it to the events that leave after it, system by system, with what each one reads and writes.</p>
+  <div class="prereq">
+    <div><b>You need</b>F4 (the bridge's queues, <code>sync_document</code>), Part 10 (<code>Drawables</code>, <code>Modes</code>, the spatial scene).</div>
+    <div><b>Files</b><code>src/engine_api.rs</code>, <code>engine_dispatch.rs</code>, <code>host_events.rs</code>, <code>web_ffi.rs</code>, <code>src-ui/worker.ts</code>, <code>src-native/src/{main,bridge}.rs</code>, <code>bevy_app/mod.rs</code> (the schedule), <code>document_bridge/mod.rs</code>, <code>src/lib.rs</code> (<code>WorkerApp::frame</code>).</div>
+  </div>
+</header>
+
+<h2 id="hosts"><span class="sec">11.1</span>Two hosts, one engine</h2>
+<p>Commit <code>9dc4928</code> added a macOS target in which Tauri owns the window, a <code>CADisplayLink</code> drives Bevy on Metal, and the same Svelte shell runs in a transparent webview on top. To share behaviour, everything the web FFI used to do was moved into <code>engine_api.rs</code>, plain Rust functions over <code>&amp;mut WorkerApp</code>. Each host only decodes its own transport:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 420" role="img" aria-label="Web: the Svelte shell on the main thread posts messages to worker.ts, which calls wasm-bindgen exports in web_ffi.rs, which call engine_api; requestAnimationFrame calls enter_frame, which runs WorkerApp::frame and then drains HostEvents into rustBridge callbacks posted back to the shell. Native: the shell in a WKWebView invokes Tauri commands that enqueue into a bounded mailbox; each display-link tick samples the native pointer, pops up to 256 requests stopping at button or key edges, dispatches them through engine_api, runs frame, then drains HostEvents onto a Tauri channel.">
+  <defs><marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="900" height="190" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="32">Web (wasm in a worker)</text>
+  <rect x="24" y="46" width="150" height="56" rx="5" class="s-shell"/><text class="t-mono-s" x="34" y="66">Svelte shell</text><text class="t-xs" x="34" y="82">main thread</text><text class="t-xs" x="34" y="94">input_manager.ts</text>
+  <rect x="214" y="46" width="150" height="56" rx="5" class="s-shell"/><text class="t-mono-s" x="224" y="66">worker.ts</text><text class="t-xs" x="224" y="82">onmessage switch</text><text class="t-xs" x="224" y="94">buffers mouse moves</text>
+  <rect x="404" y="46" width="150" height="56" rx="5" class="s-shell"/><text class="t-mono-s" x="414" y="66">web_ffi.rs</text><text class="t-xs" x="414" y="82">#[wasm_bindgen] wrappers</text><text class="t-xs" x="414" y="94">ptr → &amp;mut WorkerApp</text>
+  <rect x="594" y="46" width="150" height="56" rx="5" class="s-bound"/><text class="t-mono-s" x="604" y="66">engine_api.rs</text><text class="t-xs" x="604" y="82">engine_dispatch.rs</text><text class="t-xs" x="604" y="94">shared operations</text>
+  <rect x="784" y="46" width="112" height="56" rx="5" class="box-fill"/><text class="t-mono-s" x="794" y="66">WorkerApp</text><text class="t-xs" x="794" y="82">Bevy App</text>
+  <line x1="174" y1="74" x2="212" y2="74" class="ln" marker-end="url(#c1)"/><text class="t-xs" x="170" y="42">postMessage</text>
+  <line x1="364" y1="74" x2="402" y2="74" class="ln" marker-end="url(#c1)"/>
+  <line x1="554" y1="74" x2="592" y2="74" class="ln" marker-end="url(#c1)"/>
+  <line x1="744" y1="74" x2="782" y2="74" class="ln" marker-end="url(#c1)"/>
+  <rect x="214" y="122" width="682" height="30" rx="4" class="hl"/>
+  <text class="t-mono-s" x="224" y="141">rAF → enter_frame_with_mouse → app.frame() → flush_events: HostEvents.drain() → rustBridge.send_*</text>
+  <path d="M214,168 L100,168 L100,104" class="ln" marker-end="url(#c1)"/><text class="t-xs" x="120" y="186">events posted back: hover, selection, documentChanged, cursor, tool, clipboard…</text>
+
+  <rect x="10" y="214" width="900" height="196" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="236">Native macOS (src-native, Tauri)</text>
+  <rect x="24" y="250" width="150" height="56" rx="5" class="s-shell"/><text class="t-mono-s" x="34" y="270">Svelte shell</text><text class="t-xs" x="34" y="286">WKWebView, transparent</text>
+  <rect x="214" y="250" width="150" height="56" rx="5" class="s-bound"/><text class="t-mono-s" x="224" y="270">mailbox</text><text class="t-xs" x="224" y="286">256/batch · 1024 queued</text><text class="t-xs" x="224" y="298">· 2 MiB; IPC never borrows ECS</text>
+  <rect x="404" y="250" width="150" height="56" rx="5" class="s-bound"/><text class="t-mono-s" x="414" y="270">bridge::dispatch</text><text class="t-xs" x="414" y="286">Request → engine_api</text>
+  <rect x="594" y="250" width="150" height="56" rx="5" class="s-bound"/><text class="t-mono-s" x="604" y="270">engine_api.rs</text><text class="t-xs" x="604" y="286">the same functions</text>
+  <rect x="784" y="250" width="112" height="56" rx="5" class="box-fill"/><text class="t-mono-s" x="794" y="270">WorkerApp</text><text class="t-xs" x="794" y="286">multithreaded</text>
+  <line x1="174" y1="278" x2="212" y2="278" class="ln" marker-end="url(#c1)"/><text class="t-xs" x="178" y="246">invoke</text>
+  <line x1="364" y1="278" x2="402" y2="278" class="ln" marker-end="url(#c1)"/>
+  <line x1="554" y1="278" x2="592" y2="278" class="ln" marker-end="url(#c1)"/>
+  <line x1="744" y1="278" x2="782" y2="278" class="ln" marker-end="url(#c1)"/>
+  <rect x="24" y="320" width="872" height="44" rx="4" class="hl"/>
+  <text class="t-mono-s" x="34" y="338">CADisplayLink tick: native pointer sample (NSEvent monitor, latest-sample slot) → mouse_move →</text>
+  <text class="t-mono-s" x="34" y="354">pop ≤256 requests, stop after a button/key edge → app.frame() → HostEvents.drain() → Tauri Channel</text>
+  <text class="t-s" x="24" y="390">A release that arrives with fresh native motion is held one tick, so the tools preview the final pose before it commits.</text>
+</svg>
+<figcaption>The webview never moves the pointer on native: motion comes from an AppKit event monitor read by the engine at each tick. Buttons, keys, the wheel and document calls still use the shared UI protocol.</figcaption>
+</figure>
+<p>Document calls cross as a name plus JSON arguments, decoded against an allowlist that maps each name to one <code>engine_api</code> function:</p>
+<snip file="src/engine_dispatch.rs" lines="12-21"/>
+<p>Answers that the engine produces <em>during</em> a frame (the hover changed, the document's version moved, the cursor should be a rotation arrow) can't be return values, so systems push them into an outbox that each host drains after the frame:</p>
+<snip file="src/host_events.rs" lines="7-30"/>
+<p>A mutex, because on native the systems that push may run on ECS worker threads; the host drains on the thread that owns the app.</p>
+
+<h2 id="landing"><span class="sec">11.2</span>When a message lands</h2>
+<p>Every host call does one of three things, and which one matters for ordering:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Kind</th><th>Calls</th><th>Takes effect</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Read now</strong></td><td><code>document_view</code>, <code>save</code>, <code>selection</code>, <code>inspect</code>, <code>signals</code>, <code>schema</code>, <code>next_ids</code>, <code>place</code></td><td>Between frames, from the store as it is</td></tr>
+    <tr><td><strong>Apply now</strong></td><td><code>document_apply</code> (the model's edits, with compare-and-swap on the version), <code>inspect_set</code> (<code>set_through_handle</code>), <code>inspect_scrub</code> (a store gesture), <code>producer</code> freeze, <code>link</code>, <code>import_svg</code></td><td>Between frames, as a real transaction on the store; the next sync finds it in the log</td></tr>
+    <tr><td><strong>Queue for a system</strong></td><td>pointer moves, presses (<code>left_bt_down_at</code> carries its position), <code>tool_key</code> (now including undo and redo), <code>clipboard_paste</code>, <code>document_load</code> (validated now, swapped by the sync)</td><td>Read by a system in the next frame, in schedule order</td></tr>
+  </tbody>
+</table></div>
+<p>Every call also sets <code>ActivityControl.remaining_frames = 10</code>, which keeps the frame loop running for ten frames (the loop otherwise stops when idle). On the web, pointer moves are buffered by the worker and only the latest is written as a <code>CursorMoved</code> at the start of the next <code>enter_frame</code>. A press lands at its own coordinates, so a press and the first moves of a drag in one slow frame still resolve where the press happened.</p>
+
+<h2 id="schedule"><span class="sec">11.3</span>The frame, system by system</h2>
+<p>The schedule is declared in <code>bevy_app/mod.rs</code> and <code>document_bridge/mod.rs</code>. Here it is as one table: rows in execution order, columns for the resources that carry state between systems. A filled dot means the system writes that resource, a hollow dot means it only reads it.</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 760" role="img" aria-label="A matrix of systems in schedule order against the resources they read or write. PreUpdate: pointer collection, the gas producer, sync_document, decide_modes, sync_live, resolve_panel_views, 2D and 3D picking. PostUpdate: navigate_views, pen, shape tool, select tool, sync_session_selection, reconcile_gesture, update_highlights, Bevy propagation, prepare_spatial, embed and view camera systems, render_document_layer, draw_select_overlay. Last: decide_redraw. Then the conditional render sub-app and the host's event drain.">
+  <g font-family="JetBrains Mono, monospace">
+  <!-- column headers -->
+  <g class="t-xs">
+    <text transform="translate(338,96) rotate(-55)">Store</text>
+    <text transform="translate(378,96) rotate(-55)">PendingTransactions</text>
+    <text transform="translate(418,96) rotate(-55)">GestureRequests</text>
+    <text transform="translate(458,96) rotate(-55)">HistoryRequests</text>
+    <text transform="translate(498,96) rotate(-55)">ToolKeys</text>
+    <text transform="translate(538,96) rotate(-55)">PointerState / Hits</text>
+    <text transform="translate(578,96) rotate(-55)">SelectionState</text>
+    <text transform="translate(618,96) rotate(-55)">Drawables / NodeMap</text>
+    <text transform="translate(658,96) rotate(-55)">Modes</text>
+    <text transform="translate(698,96) rotate(-55)">SpatialScene</text>
+    <text transform="translate(738,96) rotate(-55)">DocumentChanges</text>
+    <text transform="translate(778,96) rotate(-55)">DisplayList / Views</text>
+    <text transform="translate(818,96) rotate(-55)">HostEvents</text>
+  </g>
+  </g>
+  <!-- bands -->
+  <rect x="10" y="104" width="900" height="214" class="band"/>
+  <text class="t-b" x="16" y="122">PreUpdate</text>
+  <rect x="10" y="318" width="900" height="22" class="band-alt"/>
+  <text class="t-b" x="16" y="334">Update</text>
+  <rect x="10" y="340" width="900" height="340" class="band"/>
+  <text class="t-b" x="16" y="358">PostUpdate</text>
+  <rect x="10" y="680" width="900" height="70" class="band-alt"/>
+  <text class="t-b" x="16" y="698">Last, then</text>
+  <!-- grid columns -->
+  <g class="grid">
+    <line x1="340" y1="104" x2="340" y2="750"/><line x1="380" y1="104" x2="380" y2="750"/><line x1="420" y1="104" x2="420" y2="750"/>
+    <line x1="460" y1="104" x2="460" y2="750"/><line x1="500" y1="104" x2="500" y2="750"/><line x1="540" y1="104" x2="540" y2="750"/>
+    <line x1="580" y1="104" x2="580" y2="750"/><line x1="620" y1="104" x2="620" y2="750"/><line x1="660" y1="104" x2="660" y2="750"/>
+    <line x1="700" y1="104" x2="700" y2="750"/><line x1="740" y1="104" x2="740" y2="750"/><line x1="780" y1="104" x2="780" y2="750"/>
+    <line x1="820" y1="104" x2="820" y2="750"/>
+  </g>
+  <!-- rows: label at x=110; y step 22 -->
+  <g class="t-mono-s">
+    <text x="110" y="144">pointer_collect, panel</text>
+    <text x="110" y="166">gas::step_and_publish</text>
+    <text x="110" y="188">sync_document</text>
+    <text x="110" y="210">decide_modes</text>
+    <text x="110" y="232">sync_live</text>
+    <text x="110" y="254">resolve_panel_views</text>
+    <text x="110" y="276">pick_document_2d</text>
+    <text x="110" y="298">pick_world_3d, primary</text>
+    <text x="110" y="334">camera, panels, mats</text>
+    <text x="110" y="380">navigate_views</text>
+    <text x="110" y="402">pen / shape tool</text>
+    <text x="110" y="424">select_tool_system</text>
+    <text x="110" y="446">sync_session_selection</text>
+    <text x="110" y="468">reconcile_gesture</text>
+    <text x="110" y="490">update_highlights</text>
+    <text x="110" y="512">Propagate (Bevy-native)</text>
+    <text x="110" y="534">prepare_spatial</text>
+    <text x="110" y="556">planes, embed views</text>
+    <text x="110" y="578">sync_view_images</text>
+    <text x="110" y="600">render_document_layer</text>
+    <text x="110" y="622">draw_select_overlay</text>
+    <text x="110" y="644">outbound hover/sel.</text>
+    <text x="110" y="666">gizmo, 3D outlines</text>
+    <text x="110" y="716">decide_redraw</text>
+    <text x="110" y="738">render sub-app, drain</text>
+  </g>
+  <g>
+    <!-- pointer_collect y=140 -->
+    <circle cx="540" cy="140" r="5" class="dot-w"/>
+    <!-- gas y=162 -->
+    <circle cx="340" cy="162" r="5" class="dot-w"/>
+    <!-- sync y=184 -->
+    <circle cx="340" cy="184" r="5" class="dot-w"/><circle cx="380" cy="184" r="5" class="dot-w"/><circle cx="420" cy="184" r="5" class="dot-w"/><circle cx="460" cy="184" r="5" class="dot-w"/><circle cx="620" cy="184" r="5" class="dot-w"/><circle cx="660" cy="184" r="5" class="dot-r"/><circle cx="740" cy="184" r="5" class="dot-w"/><circle cx="820" cy="184" r="5" class="dot-w"/>
+    <!-- decide_modes y=206 -->
+    <circle cx="340" cy="206" r="5" class="dot-r"/><circle cx="580" cy="206" r="5" class="dot-r"/><circle cx="660" cy="206" r="5" class="dot-w"/>
+    <!-- sync_live y=228 -->
+    <circle cx="340" cy="228" r="5" class="dot-r"/><circle cx="620" cy="228" r="5" class="dot-w"/><circle cx="660" cy="228" r="5" class="dot-r"/>
+    <!-- panel views y=250 -->
+    <circle cx="340" cy="250" r="5" class="dot-r"/>
+    <!-- pick 2d y=272 -->
+    <circle cx="340" cy="272" r="5" class="dot-r"/><circle cx="540" cy="272" r="5" class="dot-w"/><circle cx="620" cy="272" r="5" class="dot-r"/><circle cx="700" cy="272" r="5" class="dot-r"/>
+    <!-- pick 3d y=294 -->
+    <circle cx="540" cy="294" r="5" class="dot-w"/>
+    <!-- navigate y=376 -->
+    <circle cx="500" cy="376" r="5" class="dot-w"/><circle cx="540" cy="376" r="5" class="dot-r"/>
+    <!-- pen y=398 -->
+    <circle cx="380" cy="398" r="5" class="dot-w"/><circle cx="540" cy="398" r="5" class="dot-r"/>
+    <!-- select y=420 -->
+    <circle cx="340" cy="420" r="5" class="dot-w"/><circle cx="380" cy="420" r="5" class="dot-w"/><circle cx="420" cy="420" r="5" class="dot-w"/><circle cx="460" cy="420" r="5" class="dot-w"/><circle cx="500" cy="420" r="5" class="dot-w"/><circle cx="540" cy="420" r="5" class="dot-r"/><circle cx="580" cy="420" r="5" class="dot-w"/><circle cx="620" cy="420" r="5" class="dot-r"/><circle cx="700" cy="420" r="5" class="dot-r"/><circle cx="820" cy="420" r="5" class="dot-w"/>
+    <!-- session y=442 -->
+    <circle cx="340" cy="442" r="5" class="dot-w"/><circle cx="580" cy="442" r="5" class="dot-r"/>
+    <!-- reconcile_gesture y=464 -->
+    <circle cx="340" cy="464" r="5" class="dot-w"/><circle cx="620" cy="464" r="5" class="dot-w"/><circle cx="660" cy="464" r="5" class="dot-r"/><circle cx="740" cy="464" r="5" class="dot-w"/>
+    <!-- highlights y=486 -->
+    <circle cx="580" cy="486" r="5" class="dot-r"/>
+    <!-- prepare_spatial y=530 -->
+    <circle cx="340" cy="530" r="5" class="dot-w"/><circle cx="700" cy="530" r="5" class="dot-w"/>
+    <!-- planes y=552 -->
+    <circle cx="700" cy="552" r="5" class="dot-r"/><circle cx="780" cy="552" r="5" class="dot-w"/>
+    <!-- view images y=574 -->
+    <circle cx="780" cy="574" r="5" class="dot-w"/>
+    <!-- render y=596 -->
+    <circle cx="340" cy="596" r="5" class="dot-r"/><circle cx="620" cy="596" r="5" class="dot-r"/><circle cx="700" cy="596" r="5" class="dot-r"/><circle cx="740" cy="596" r="5" class="dot-w"/><circle cx="780" cy="596" r="5" class="dot-w"/>
+    <!-- overlay y=618 -->
+    <circle cx="340" cy="618" r="5" class="dot-r"/><circle cx="580" cy="618" r="5" class="dot-r"/><circle cx="620" cy="618" r="5" class="dot-r"/><circle cx="700" cy="618" r="5" class="dot-r"/><circle cx="780" cy="618" r="5" class="dot-w"/>
+    <!-- outbound y=640 -->
+    <circle cx="580" cy="640" r="5" class="dot-r"/><circle cx="820" cy="640" r="5" class="dot-w"/>
+    <!-- decide_redraw y=712 -->
+    <circle cx="780" cy="712" r="5" class="dot-r"/>
+    <!-- drain y=734 -->
+    <circle cx="820" cy="734" r="5" class="dot-w"/>
+  </g>
+  <text class="t-xs" x="850" y="190">doc changed</text>
+  <text class="t-xs" x="850" y="426">cursor, tool</text>
+  <text class="t-xs" x="850" y="740">drained</text>
+  <circle cx="30" cy="40" r="5" class="dot-w"/><text class="t-s" x="42" y="44">writes</text>
+  <circle cx="30" cy="62" r="5" class="dot-r"/><text class="t-s" x="42" y="66">reads</text>
+</svg>
+<figcaption>The PreUpdate chain <code>gas → sync_document → decide_modes → sync_live → resolve_panel_views</code> is declared with <code>.chain()</code>; the pickers are ordered after it. In PostUpdate the tools run first, then the gesture's same-frame reconcile, then everything that reads geometry. The table leaves out diagnostics and the timeline.</figcaption>
+</figure>
+<p>Read down the Store column to see who touches the document. It is written in exactly four places in a frame: the producer's publish, the sync (transactions, gesture commits, undo), the tools (previews and drags), and the session's selection. Two of those, the sync and <code>reconcile_gesture</code>, drain its changes into <code>Drawables</code> and <code>DocumentChanges</code>; <code>prepare_spatial</code> takes its geometry changes. Everything after that only reads.</p>
+
+<h3 id="sync">Inside <code>sync_document</code>, in order</h3>
+<ol>
+  <li><strong>Skip</strong> if no queue has work, the graph has no changes and the version equals <code>SyncedVersion</code>. An idle frame costs one comparison.</li>
+  <li><strong>Load</strong>: a pending document replaces the store, all entities and all draw data go, and every live node counts as affected.</li>
+  <li><strong>Transactions</strong> from <code>PendingTransactions</code>, in order; a rejected one is logged and skipped.</li>
+  <li><strong>Gesture requests</strong>: <code>Commit</code>, <code>CommitMerged</code> (an Alt-drag, Part 13) or <code>Cancel</code>.</li>
+  <li><strong>History requests</strong>: undo, redo.</li>
+  <li><strong>The log since <code>SyncedVersion</code></strong>, whoever applied it, including the model's synchronous applies from between frames: collect node ids from ops, derived ops and inverses; note whether the tree's shape changed.</li>
+  <li><strong>Drain the graph's changes</strong>: nodes whose resolved values moved, including the producer's publish from the system just before.</li>
+  <li>If the version moved, push <code>DocumentChanged</code> to <code>HostEvents</code>. Then <strong>reconcile</strong> the affected set (Part 10's two passes) and, on a structural change, recompute paint order.</li>
+</ol>
+<p>The order of 3–5 is fixed in the code: everything queued as a transaction applies before any queued undo. The next section shows why that ordering had to be fed correctly.</p>
+
+<h2 id="journeys"><span class="sec">11.4</span>Three journeys</h2>
+<h3 id="drag-frame">A drag frame</h3>
+<p>The pointer moved while a selected rect is being dragged. Everything happens within one frame:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 470" role="img" aria-label="A sequence diagram of one drag frame with lifelines for the host, the select tool, the store, the bridge, the spatial scene and the renderer. The host buffers the move and writes CursorMoved at frame start. In PostUpdate the select tool's Manip::Drag calls drag_to, which previews through handles into the overlay; the graph invalidates dependents and notes changes; clusters and the network re-solve. reconcile_gesture drains changes into Drawables and DocumentChanges. prepare_spatial takes geometry changes and rewrites one entry. render_document_layer rebuilds the panel's display list; decide_redraw sees it changed; the render sub-app encodes and composites.">
+  <defs><marker id="c2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <g class="t-b">
+    <text x="40" y="24">host</text><text x="170" y="24">select tool</text><text x="330" y="24">Store</text><text x="490" y="24">bridge</text><text x="640" y="24">Scene</text><text x="790" y="24">render</text>
+  </g>
+  <g class="ln-dim">
+    <line x1="60" y1="34" x2="60" y2="460"/><line x1="200" y1="34" x2="200" y2="460"/><line x1="350" y1="34" x2="350" y2="460"/>
+    <line x1="510" y1="34" x2="510" y2="460"/><line x1="660" y1="34" x2="660" y2="460"/><line x1="810" y1="34" x2="810" y2="460"/>
+  </g>
+  <text class="t-xs" x="70" y="56">1 latest move → CursorMoved (frame start)</text>
+  <line x1="60" y1="66" x2="198" y2="66" class="ln" marker-end="url(#c2)"/>
+  <text class="t-xs" x="210" y="88">2 Manip::Drag.update: pointer → panel px → node's space</text>
+  <line x1="200" y1="98" x2="348" y2="98" class="ln" marker-end="url(#c2)"/>
+  <text class="t-mono-s" x="210" y="114">drag_to(handle, [x, y])</text>
+  <rect x="290" y="124" width="200" height="104" rx="4" class="s-react"/>
+  <text class="t-mono-s" x="298" y="140">preview_target → handle</text>
+  <text class="t-mono-s" x="298" y="156">overlay.insert(leaf, v)</text>
+  <text class="t-mono-s" x="298" y="172">invalidate: height order,</text>
+  <text class="t-mono-s" x="298" y="188">equality cut-off</text>
+  <text class="t-mono-s" x="298" y="204">note → changes, touched</text>
+  <text class="t-mono-s" x="298" y="220">re-solve clusters, network</text>
+  <text class="t-xs" x="370" y="248">3 drain_changes()</text>
+  <line x1="350" y1="256" x2="508" y2="256" class="ln" marker-end="url(#c2)"/>
+  <rect x="440" y="266" width="140" height="44" rx="4" class="s-bound"/>
+  <text class="t-mono-s" x="448" y="282">Drawables[#r] =</text><text class="t-mono-s" x="448" y="298">doc2d(resolved)</text>
+  <text class="t-xs" x="370" y="330">4 take_geometry_changes() → placement {#r}</text>
+  <line x1="350" y1="338" x2="658" y2="338" class="ln" marker-end="url(#c2)"/>
+  <rect x="600" y="348" width="130" height="30" rx="4" class="s-bound"/>
+  <text class="t-mono-s" x="608" y="367">upsert 1 entry</text>
+  <text class="t-xs" x="530" y="398">5 DocumentChanges + scene changed → rebuild display list</text>
+  <line x1="510" y1="406" x2="808" y2="406" class="ln" marker-end="url(#c2)"/>
+  <text class="t-xs" x="600" y="430">6 decide_redraw: list changed → extract, encode, composite</text>
+  <line x1="660" y1="440" x2="808" y2="440" class="ln" marker-end="url(#c2)"/>
+</svg>
+<figcaption>The pointer's position on this frame is on screen this frame. No transaction exists yet; on release the tool pushes <code>GestureRequest::Commit</code>, and the next frame's <code>sync_document</code> turns the overlay into one transaction.</figcaption>
+</figure>
+
+<h3 id="model-edit">A model edit that arrives mid-drag</h3>
+<ol>
+  <li>Between frames, the worker handles <code>documentCall("apply", …)</code>: <code>engine_api::document_apply</code> checks <code>expect_version</code>, then calls <code>Store::apply</code> right away.</li>
+  <li>The store classifies the edit against the running gesture, sets the gesture's previews aside, applies and solves against the document alone, then either puts the previews back or cancels the gesture with a reason (Part 13).</li>
+  <li>Next frame, <code>sync_document</code> finds the new transaction in the log and reconciles it.</li>
+  <li>In <code>PostUpdate</code>, the select tool polls <code>gesture_status</code> for the gesture it owns. If that reads <code>Cancelled</code>, the tool stops: its release will commit nothing, and the model's edit stands.</li>
+</ol>
+
+<h3 id="keys">Keys in the order they were pressed</h3>
+<p>The ordering bug fixed with phase 4: press Delete, then Cmd+Z quickly, and on a slow frame Cmd+Z undid the edit <em>before</em> the delete. The cause was two routes into the frame:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 330" role="img" aria-label="Before: Delete went into ToolKeys, handled by the select tool in PostUpdate, which queued a transaction applied in the next frame's sync; Cmd+Z went straight into HistoryRequests and was applied by this frame's sync, so the undo ran first and reverted the previous edit. After: both go into ToolKeys in key order; the select tool queues the delete transaction and the undo request in the same frame; the next sync applies pending transactions before history, so the undo reverts the delete.">
+  <defs><marker id="c3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="900" height="150" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="32">Before</text>
+  <text class="t-xs" x="150" y="32">between frames</text><text class="t-xs" x="320" y="32">frame N: PreUpdate sync</text><text class="t-xs" x="520" y="32">frame N: PostUpdate tools</text><text class="t-xs" x="730" y="32">frame N+1: sync</text>
+  <rect x="140" y="44" width="150" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="148" y="63">Delete → ToolKeys</text>
+  <rect x="140" y="84" width="150" height="30" rx="4" class="warn"/><text class="t-mono-s" x="148" y="103">⌘Z → History</text>
+  <rect x="320" y="84" width="170" height="30" rx="4" class="warn"/><text class="t-mono-s" x="328" y="103">undo (previous edit!)</text>
+  <rect x="520" y="44" width="180" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="528" y="63">delete → Pending</text>
+  <rect x="730" y="44" width="160" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="738" y="63">apply delete</text>
+  <line x1="290" y1="59" x2="518" y2="59" class="ln" marker-end="url(#c3)"/>
+  <line x1="700" y1="59" x2="728" y2="59" class="ln" marker-end="url(#c3)"/>
+  <line x1="290" y1="99" x2="318" y2="99" class="ln" marker-end="url(#c3)"/>
+  <text class="t-edge" x="24" y="144">The undo overtook the key pressed before it: it reverted whatever came before the delete, and the delete then applied.</text>
+  <rect x="10" y="170" width="900" height="150" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="192">After</text>
+  <rect x="140" y="204" width="150" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="148" y="223">Delete → ToolKeys</text>
+  <rect x="140" y="244" width="150" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="148" y="263">⌘Z → ToolKeys</text>
+  <rect x="520" y="204" width="180" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="528" y="223">delete → Pending</text>
+  <rect x="520" y="244" width="180" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="528" y="263">"undo" → History</text>
+  <rect x="730" y="204" width="160" height="70" rx="4" class="hl"/><text class="t-mono-s" x="738" y="223">1 pending: delete</text><text class="t-mono-s" x="738" y="243">2 gestures</text><text class="t-mono-s" x="738" y="263">3 history: undo</text>
+  <line x1="290" y1="219" x2="518" y2="219" class="ln" marker-end="url(#c3)"/>
+  <line x1="290" y1="259" x2="518" y2="259" class="ln" marker-end="url(#c3)"/>
+  <line x1="700" y1="234" x2="728" y2="234" class="ln" marker-end="url(#c3)"/>
+  <text class="t-acc" x="24" y="304">One queue in key order, and the sync's fixed order (transactions, then gestures, then history) does the rest.</text>
+</svg>
+<figcaption>Undo and redo are now tool keys like Delete and the arrows. <code>engine_api::undo</code> pushes <code>"undo"</code> into <code>ToolKeys</code>; the select tool turns it into a <code>HistoryRequest</code> in the order it was pressed.</figcaption>
+</figure>
+<snip file="src/engine_api.rs" lines="915-931"/>
+<snip file="src/bevy_app/select.rs" lines="1280-1287"/>
+<div class="box edge"><span class="tab">Rough edge</span>
+<p>The fix restores the order "a transaction, then undo". The reverse within one frame, "undo, then a key that makes a transaction", is still reordered: both reach their queues in the same <code>PostUpdate</code>, and the next sync applies <code>PendingTransactions</code> before <code>HistoryRequests</code>, so the undo would revert the new edit. That follows from <code>sync_document</code>'s fixed order. It takes two keys inside one frame, which only a slow frame makes likely.</p>
+</div>
+
+<h2 id="on-demand"><span class="sec">11.5</span>After the schedule: render, or don't</h2>
+<p><code>WorkerApp::frame</code> runs the main world's schedule, asks <code>RedrawNeeded</code> (set by <code>decide_redraw</code> in <code>Last</code>) whether anything visible changed, and only then extracts and runs the render sub-app:</p>
+<snip file="src/lib.rs" lines="108-131"/>
+<p>Then the host drains <code>HostEvents</code> (<code>flush_events</code> on the web; the tick loop on native). The shell reacts to <code>documentChanged</code> by re-reading the views it shows; hover and selection events update its own state.</p>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>Both hosts call the same <code>engine_api</code>. Inbound document calls are decoded by <code>engine_dispatch</code>'s allowlist; outbound events go through <code>HostEvents</code>, drained after each frame.</li>
+  <li>A message is read now, applied now (the model's edits, the inspector), or queued for a system. Undo and redo are queued with the tool keys so they keep their place in key order.</li>
+  <li>In a frame: the producer publishes, then the sync applies transactions, gesture commits and history in that order and reconciles from the log, then the Live set is decided. The tools preview in <code>PostUpdate</code>, <code>reconcile_gesture</code> rewrites draw data the same frame, <code>prepare_spatial</code> updates the scene, and the views rebuild.</li>
+  <li>The render sub-app runs only when something visible changed.</li>
+</ul>
+</div>

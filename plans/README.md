@@ -16,7 +16,7 @@ finishes, or is superseded.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as
-   built.
+   built, rebuilt 2026-10-17 with Parts 10–13 on the engine boundary (vision 10).
 
 Where documents disagree, the higher one in this list wins: roadmap Status, then the
 handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `archive/`.
@@ -46,6 +46,8 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`panels-and-session.md`](specs/panels-and-session.md) | Views, dock presenter, session tier, inspectors | Items 1–2 built; 3–5 open |
 | [`view-textures.md`](specs/view-textures.md) | Every view renders to its own texture | Done except the custom final pass and §4 tiling |
 | [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phase 1 done (store ownership, one pointer state machine, the 3D gizmo); phase 2 a product candidate; 4–5 in the render handoff |
+| [`text.md`](specs/text.md) | Text nodes, fonts (catalog, on-demand loading, installed fonts natively), glyph rendering, editing, `fmt` readouts, the Text inspector | Scaffold done 2026-10-17; §9 lists what is open |
+| [`component-model.md`](specs/component-model.md) | Components: authored vs expanded instances, ports as the one interface, overrides, scope, libraries, render analysis; amends ECM §4, §6.1, §9 | Proposed 2026-10-18; pending user review. No implementation |
 | [`model-interop.md`](specs/model-interop.md) | External computational Models: jobs, live sessions, optional local acceleration; shared web/native data and lifecycle semantics | Proposal drafted 2026-10-16; pending user approval. No implementation; conditional work order in `handoff-product.md` §4.2 |
 
 ## 4. Rendering

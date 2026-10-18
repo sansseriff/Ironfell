@@ -1,0 +1,22 @@
+[package]
+name = "iron_text"
+version = "0.1.0"
+edition = "2024"
+description = "Text layout, glyph outlines, caret geometry and the font catalog. No Bevy; shared by the document store (bounds, picking) and the renderer (plans/specs/text.md)."
+
+# Versions match what bevy_text already resolves (parley 0.11, skrifa 0.44),
+# so the app links one font stack, not two.
+[dependencies]
+parley = { version = "0.11.1", default-features = false, features = ["std"] }
+skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
+kurbo = "0.13.1"
+# Colour glyphs' gradients (`color`); the version the app's peniko is.
+peniko = { version = "0.6.1", default-features = false, features = ["std"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+# Installed fonts through CoreText / DirectWrite / fontconfig, for the
+# native (Tauri) host. Off on the web, which has no font enumeration; the
+# catalog is fetched there instead (plans/specs/text.md §4.3).
+system = ["parley/system"]

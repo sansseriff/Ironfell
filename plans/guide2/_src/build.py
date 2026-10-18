@@ -28,6 +28,7 @@ SYSTEMS = {
     "ports": "Ports & physics",
     "shell": "Shell & views",
     "model": "Model surface",
+    "bound": "Engine boundary",
 }
 
 PAGES = [
@@ -46,7 +47,11 @@ PAGES = [
     ("07-tools", "7", "The select tool and the pen", "Figma's selection rules, the transform box, paths of point nodes, the inspector"),
     ("08-workspace", "8", "The workspace and the session", "Views and notations, the dock, pan and zoom, and state that is never saved"),
     ("09-ports", "9", "Ports, connections and physics", "One-way signals derived from connections, and across/through pairs solved as equations"),
-    ("10-field-guide", "", "Field guide", "Every new function and type, searchable, with its system and file:line"),
+    ("10-boundary", "10", "Who computes where things are", "Iron owns every world transform: revisions, a spatial scene in group-local space, flat entities, and entities only for the working set"),
+    ("11-frame", "11", "One frame, in order", "Two hosts, one engine: what crosses the boundary, which system runs when, what each reads and writes, and how answers get out"),
+    ("12-signals", "12", "Runtime signals and producers", "Clips, the port network and Bevy simulations as producers of one runtime layer; freeze; the piston demo"),
+    ("13-ownership", "13", "Gestures have owners", "Previews that belong to a gesture, edits that race it, Alt-drag as one undo step, copy and paste, one pointer state machine"),
+    ("field-guide", "", "Field guide", "Every function and type the guide covers, searchable, with its system and file:line"),
 ]
 
 errors = []
@@ -68,12 +73,14 @@ def lines_of(path, rev=None):
 def system_of(path):
     p = path
     name = os.path.basename(p)
+    if p.startswith("src/iron_spatial/") or p.startswith("src-native/") or name in ("engine_api.rs", "engine_dispatch.rs", "host_events.rs", "host_services.rs", "materialize.rs", "spatial.rs", "gas.rs"):
+        return "bound"
     if p.startswith("src/iron_document/"):
         if "/tests/" in p:
-            return {"constraints.rs": "solve", "handles.rs": "react", "compositions.rs": "comp", "embeds.rs": "comp", "ports.rs": "ports", "session.rs": "store"}.get(name, "store")
+            return {"constraints.rs": "solve", "handles.rs": "react", "compositions.rs": "comp", "embeds.rs": "comp", "ports.rs": "ports", "session.rs": "store", "signals.rs": "react", "gestures.rs": "react"}.get(name, "store")
         return {
             "expr.rs": "react", "graph.rs": "react", "handle.rs": "react", "geom.rs": "react",
-            "constraint.rs": "solve", "solve.rs": "solve", "composition.rs": "comp", "port.rs": "ports",
+            "constraint.rs": "solve", "solve.rs": "solve", "composition.rs": "comp", "port.rs": "ports", "gesture.rs": "react",
         }.get(name, "store")
     if p.startswith("src/iron_solve/"):
         return "solve"
@@ -81,7 +88,7 @@ def system_of(path):
         return "render"
     if p.startswith("src/document_bridge/"):
         return {"nest.rs": "comp", "panel_views.rs": "comp", "demo.rs": "store"}.get(name, "react")
-    if name in ("select.rs", "pen.rs", "interaction.rs", "picking.rs", "pointer.rs"):
+    if name in ("select.rs", "pen.rs", "interaction.rs", "picking.rs", "pointer.rs", "manipulate.rs", "shape_tool.rs"):
         return "tools"
     if p.startswith("src-ui/model/"):
         return "model"
@@ -220,7 +227,7 @@ def page(i, body):
     if prev_:
         pager += f'<a href="{href(prev_[0])}" aria-label="Previous part">&larr;</a>'
     if num:
-        pager += f'<span class="here">{label(num)} of {4 if num.startswith("F") else 9}</span>'
+        pager += f'<span class="here">{label(num)} of {4 if num.startswith("F") else 13}</span>'
     if next_:
         pager += f'<a href="{href(next_[0])}" aria-label="Next part">&rarr;</a>'
     np = '<nav class="nextprev">'
@@ -233,7 +240,7 @@ def page(i, body):
     inner = f"""<title>{html.escape(doc_title)}</title>
 {FONTS}
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager">{pager}</div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager">{pager}</div></div></header>
 <div class="frame">
 <nav class="sidebar" aria-label="Series"><h4>The series</h4><ol>{''.join(nav)}</ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>

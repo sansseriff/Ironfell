@@ -1012,3 +1012,154 @@ pub fn solve_bench(iterations: u32, repeats: u32) -> String {
 }
 
 const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip"];
+
+/// The font picker's list (plans/specs/text.md §4): the catalog, the
+/// installed families on a native host, and which are loaded now.
+pub fn fonts() -> String {
+    let e = iron_text::engine();
+    let mut v: serde_json::Value = serde_json::from_str(&iron_text::catalog::to_json()).expect("catalog JSON");
+    v["system"] = serde_json::json!(e.system_families());
+    v["loaded"] = serde_json::json!(iron_text::catalog::FAMILIES.iter().filter(|f| e.has_family(f.name)).map(|f| f.name).collect::<Vec<_>>());
+    v.to_string()
+}
+
+/// Live previews for families the build step could not draw (installed
+/// fonts), as `previews.json` holds them.
+pub fn font_previews(names: Vec<String>) -> String {
+    iron_text::previews_json(&names, 20.0).to_string()
+}
+
+/// The host's textarea changed (`bevy_app::text_tool::TextInput::Replace`).
+pub fn text_input(app: &mut WorkerApp, text: String, anchor: u32, focus: u32) {
+    if let Some(mut t) = app.world_mut().get_resource_mut::<crate::bevy_app::text_tool::TextTool>() {
+        t.inputs.push(crate::bevy_app::text_tool::TextInput::Replace { text, anchor, focus });
+    }
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+}
+
+/// A caret motion by the canvas layout: `up`, `down`, `home`, `end`.
+pub fn text_motion(app: &mut WorkerApp, motion: String, extend: bool) {
+    use iron_text::Motion;
+    let motion = match motion.as_str() {
+        "up" => Motion::Up,
+        "down" => Motion::Down,
+        "home" => Motion::LineStart,
+        "end" => Motion::LineEnd,
+        "left" => Motion::Left,
+        "right" => Motion::Right,
+        _ => return,
+    };
+    if let Some(mut t) = app.world_mut().get_resource_mut::<crate::bevy_app::text_tool::TextTool>() {
+        t.inputs.push(crate::bevy_app::text_tool::TextInput::Motion { motion, extend });
+    }
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+}
+
+/// Bind a leaf to an expression, or with `expr` empty, unbind it, keeping
+/// its current value (plans/specs/text.md §6: a readout's content). One
+/// transaction either way.
+pub fn document_inspect_bind(app: &mut WorkerApp, node: String, leaf: String, expr: String) -> String {
+    use iron_document::{Actor, Expr, LeafPath, NodeId, Op, Slot, TransactionInput};
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    let Ok(id) = node.parse::<NodeId>() else { return fail(format!("bad id {node:?}")) };
+    let Ok(path) = leaf.parse::<LeafPath>() else { return fail(format!("no leaf {leaf:?}")) };
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    let slot = if expr.trim().is_empty() {
+        match store.0.resolved(id, path) {
+            Some(v) => Slot::Const(v),
+            None => return fail(format!("{id} has no {leaf}")),
+        }
+    } else {
+        match Expr::parse(expr.trim()) {
+            Ok(e) => Slot::Bound(e),
+            Err(e) => return fail(e.to_string()),
+        }
+    };
+    let label = if matches!(slot, Slot::Bound(_)) { format!("bind {leaf}") } else { format!("unbind {leaf}") };
+    let input = TransactionInput { label, actor: Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops: vec![Op::Set { id, path, slot }], exact: false };
+    let result = match store.0.apply(input) {
+        Ok(a) => serde_json::json!({"ok": true, "version": a.version.0}),
+        Err(es) => serde_json::json!({"ok": false, "error": es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")}),
+    };
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    result.to_string()
+}
+
+/// Style text (plans/specs/text.md §2.1): `patch` is a `RunStyle` as JSON.
+/// While `node` is being edited with a range selected, the range takes it
+/// (previewed with the edit, committed with it); otherwise the whole node
+/// does, in one transaction, and its runs lose the properties it sets, as
+/// in Figma.
+pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> String {
+    use iron_document::component::Fill;
+    use iron_document::{Actor, ComponentKind, LeafStruct, NodeId, Op, Slot, TransactionInput, Value};
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    let Ok(id) = node.parse::<NodeId>() else { return fail(format!("bad id {node:?}")) };
+    let patch: iron_text::RunStyle = match serde_json::from_str(&patch) {
+        Ok(p) => p,
+        Err(e) => return fail(e.to_string()),
+    };
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    if let Some(mut tool) = app.world_mut().get_resource_mut::<crate::bevy_app::text_tool::TextTool>()
+        && tool.editing() == Some(id)
+        && tool.has_range()
+    {
+        tool.inputs.push(crate::bevy_app::text_tool::TextInput::Style(patch));
+        return serde_json::json!({"ok": true, "range": true}).to_string();
+    }
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    if store.0.document().live(id).is_none_or(|n| n.ty.name() != "text") {
+        return fail(format!("{id} is not text"));
+    }
+    let leaf = |p: &str| p.parse::<iron_document::LeafPath>().expect("declared leaf");
+    let mut ops = Vec::new();
+    let mut set = |path: &str, v: Value| ops.push(Op::Set { id, path: leaf(path), slot: Slot::Const(v) });
+    if let Some(f) = &patch.family { set("font.family", Value::Str(f.clone())); }
+    if let Some(v) = patch.size { set("font.size", Value::Number(v as f64)); }
+    if let Some(v) = patch.weight { set("font.weight", Value::Number(v as f64)); }
+    if let Some(v) = patch.italic { set("font.italic", Value::Bool(v)); }
+    if let Some(v) = patch.underline { set("font.underline", Value::Bool(v)); }
+    if let Some(v) = patch.strike { set("font.strike", Value::Bool(v)); }
+    if let Some(c) = patch.color {
+        if store.0.document().component(id, ComponentKind::Fill).is_some() {
+            set("fill.color", Value::Color(c));
+        } else {
+            let mut fill = Fill::default();
+            fill.color = Slot::Const(Value::Color(c));
+            ops.push(Op::AddComp { id, comp: fill.wrap() });
+        }
+    }
+    let text = iron_document::text::content(&store.0, id);
+    let runs = iron_document::text::runs(&store.0, id);
+    let cleared = iron_text::runs::clear(&text, &runs, &patch);
+    if cleared != runs {
+        ops.push(Op::Set { id, path: leaf("text.runs"), slot: Slot::Const(Value::Str(iron_text::runs::to_json(&cleared))) });
+    }
+    if ops.is_empty() {
+        return serde_json::json!({"ok": true}).to_string();
+    }
+    let input = TransactionInput { label: "style text".into(), actor: Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false };
+    match store.0.apply(input) {
+        Ok(a) => serde_json::json!({"ok": true, "version": a.version.0}).to_string(),
+        Err(es) => fail(es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")),
+    }
+}
+
+/// A style shortcut inside a text edit: `bold`, `italic`, `underline`,
+/// `strike` (`bevy_app::text_tool::TextInput::Toggle`).
+pub fn text_toggle(app: &mut WorkerApp, what: String) {
+    if let Some(mut t) = app.world_mut().get_resource_mut::<crate::bevy_app::text_tool::TextTool>() {
+        t.inputs.push(crate::bevy_app::text_tool::TextInput::Toggle(what));
+    }
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+}

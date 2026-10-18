@@ -55,6 +55,13 @@ pub enum Shape2d {
     /// closed ones (what is filled; none when no contour closes), filled by
     /// the even-odd rule or the non-zero one.
     Path { outline: std::sync::Arc<kurbo::BezPath>, fill: Option<std::sync::Arc<kurbo::BezPath>>, even_odd: bool },
+    /// Text (plans/specs/text.md): its box spans `(0, 0)` to `(w, h)`, as a
+    /// rect's does, and is what picking and selection use; `glyphs` are
+    /// every glyph's outline in the same space, what fill, stroke and
+    /// shadow paint. `layout` is kept for the editor's caret.
+    /// `paints` are what is drawn (outline glyphs by colour, decorations,
+    /// colour glyphs), placed by `offset` like the glyphs.
+    Text { w: f32, h: f32, glyphs: std::sync::Arc<kurbo::BezPath>, paints: std::sync::Arc<Vec<iron_text::TextPaint>>, layout: std::sync::Arc<iron_text::TextLayout>, offset: [f32; 2] },
 }
 
 /// Every drawable 2D node's draw data, by node, whether or not the node has
@@ -154,7 +161,7 @@ impl Shape2d {
                 use kurbo::Shape;
                 super::nest::rounded_rect(w, h, radii).contains(kurbo::Point::new(p.x as f64, p.y as f64))
             }
-            &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
+            &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } | &Shape2d::Text { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
             &Shape2d::Ellipse { rx, ry, arc: None } => (p / Vec2::new(rx, ry).max(Vec2::splat(1e-6))).length_squared() <= 1.0,
             Shape2d::Ellipse { .. } => {
                 use kurbo::Shape;
@@ -432,7 +439,7 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         // and texture.
         "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Visibility::default())),
         "group" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
-        "rect" | "ellipse" | "slider" | "path" => {
+        "rect" | "ellipse" | "slider" | "path" | "text" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
         // A camera node is a pose: embeds that name it look through it.
@@ -469,7 +476,7 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut e
     }
     // 3D nodes always have an entity; 2D ones may not.
     let Some(ec3) = ec.as_deref_mut() else {
-        if let "rect" | "ellipse" | "slider" | "path" = node.ty.name() {
+        if let "rect" | "ellipse" | "slider" | "path" | "text" = node.ty.name() {
             drawables.0.insert(id, r.doc2d(node.ty.name()));
         }
         return;
@@ -484,7 +491,7 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut e
             ec.insert((r.pose_3d(), RenderLayers::layer(layers.of(composition))));
         }
         "group" | "embed" => {}
-        "rect" | "ellipse" | "slider" | "path" => {
+        "rect" | "ellipse" | "slider" | "path" | "text" => {
             let d = r.doc2d(node.ty.name());
             drawables.0.insert(id, d.clone());
             ec.insert(d);
@@ -531,6 +538,11 @@ impl Reader<'_> {
                     let fill = (!fill.elements().is_empty() && (r.color("fill.color").is_some() || r.color("gradient.start").is_some())).then(|| std::sync::Arc::new(fill));
                     let even_odd = contour::fill_rule(store, id) == contour::FillRule::EvenOdd;
                     Shape2d::Path { outline: std::sync::Arc::new(contour::outline(&contours)), fill, even_odd }
+                }
+                "text" => {
+                    let m = iron_document::text::measure(store, id);
+                    let glyphs = if m.offset == kurbo::Vec2::ZERO { m.layout.outline.clone() } else { std::sync::Arc::new(kurbo::Affine::translate(m.offset) * &*m.layout.outline) };
+                    Shape2d::Text { w: m.frame.width() as f32, h: m.frame.height() as f32, glyphs, paints: m.layout.paints.clone(), layout: m.layout.clone(), offset: [m.offset.x as f32, m.offset.y as f32] }
                 }
                 "slider" => {
                     let (min, max) = (r.num("slider.min", 0.0), r.num("slider.max", 1.0));

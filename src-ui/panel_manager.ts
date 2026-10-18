@@ -7,6 +7,7 @@ import { chooseBackend, type Backend } from './runtime/backend_policy';
 import { DocumentClient } from './runtime/document_client.svelte';
 import { copied, setSelectionCount } from './runtime/clipboard';
 import { applyCursor } from './cursors';
+import { TextInputMirror } from './runtime/text_input';
 
 interface PanelEntry {
   id: string;
@@ -44,6 +45,8 @@ export class PanelManager {
   private mode: RuntimeMode = 'worker';
   private canvas: HTMLCanvasElement | null = null;
   private input = new InputManager({ enableRaw: true });
+  // Canvas text editing's keystrokes (runtime/text_input.ts).
+  private textInput: TextInputMirror | null = null;
   /** Save, load, and views of the authored document. Reactive; the shell binds to it. */
   readonly docClient = new DocumentClient();
   private panels = new Map<string, PanelEntry>();
@@ -228,6 +231,14 @@ export class PanelManager {
         break;
       case 'cursor':
         if (this.canvas) applyCursor(this.canvas, data.cursor);
+        break;
+      case 'textEdit':
+        if (this.canvas && !this.textInput) this.textInput = new TextInputMirror(this.canvas, (m) => this.session?.post(m));
+        this.textInput?.update(data);
+        this.docClient.textEdit = { active: !!data.active, node: data.node ?? '', anchor: data.anchor ?? 0, focus: data.focus ?? 0 };
+        break;
+      case 'fontsLoaded':
+        this.docClient.fontsLoaded(data.families ?? []);
         break;
       case 'probeStats':
         (window as any).__lastProbeStats = data.stats;

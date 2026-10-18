@@ -2,7 +2,7 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = [".", "src/iron_document", "src/iron_solve", "src/iron_spatial", "src/iron_renderer_probe", "src/iron_svg", "src-native"]
+members = [".", "src/iron_document", "src/iron_solve", "src/iron_spatial", "src/iron_renderer_probe", "src/iron_svg", "src/iron_text", "src-native"]
 
 
 [workspace.dependencies]
@@ -64,7 +64,7 @@ default = []
 webgpu = ["bevy/webgpu"]
 webgl2 = ["bevy/webgl2"]
 # Native engine execution is independent of the window host.
-native = ["bevy/multi_threaded"]
+native = ["bevy/multi_threaded", "iron_text/system"]
 
 
 [dependencies]
@@ -85,6 +85,8 @@ iron_spatial = { path = "./src/iron_spatial" }
 iron_solve = { path = "./src/iron_solve" }
 # SVG export and import (plans/specs/svg-import-export.md). Bevy-free.
 iron_svg = { path = "./src/iron_svg" }
+# Text layout and the font catalog (plans/specs/text.md). Bevy-free.
+iron_text = { path = "./src/iron_text" }
 
 # Classic Vello (compute flattening, WebGPU only) is not wired in. `bevy_vello`
 # lags Bevy releases; when a Classic backend returns it is a sibling of
@@ -104,8 +106,9 @@ getrandom = { version = "0.3.4", features = ["wasm_js"] }
 peniko = "0.6.1"
 
 # Sparse-strips vector renderer.
-# `text` is off: this app draws no vector text (the FPS overlay is bevy_ui),
-# and it would pull in the whole glifo font stack.
+# `text` is off: canvas text draws as glyph outlines from `iron_text` through
+# the ordinary fill path (plans/specs/text.md §5). glifo's glyph atlas is the
+# later optimisation; it needs the renderer's `Resources` at encode time.
 # `vello_gpu` is `vello_hybrid` renamed at 0.3 (wgpu 30; `TargetInit`,
 # `ClearSettings::Rects`, image paints in place of `draw_texture_rects`).
 vello_gpu = { version = "0.3.0", default-features = false, features = [

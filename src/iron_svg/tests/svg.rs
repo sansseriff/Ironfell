@@ -542,3 +542,36 @@ fn automatic_embed_frame_includes_transformed_stroke_and_shadow() {
     assert!(result.svg.contains("<rect x=\"-56\" y=\"16\" width=\"672\" height=\"128\"/>"), "{}", result.svg);
     assert!(result.svg.contains("<rect x=\"0\" y=\"0\" width=\"280\" height=\"200\"/>"), "{}", result.svg);
 }
+
+/// Text exports as `<text>` with a `<tspan>` per line and styled part, at
+/// Iron's own layout (plans/specs/text.md §9).
+#[test]
+fn text_exports_as_tspans() {
+    use iron_document::component::{Font, Text};
+    static FONTS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    FONTS.get_or_init(|| {
+        iron_text::engine().register(std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../public/fonts/Inter.ttf")).unwrap());
+    });
+    let mut store = Store::new();
+    let mut b = Build::new(&store);
+    let comp = b.add("composition", None, composition("labels", "2d"));
+    let mut body = Text::default();
+    body.content = Slot::Const(Value::Str("Hot & cold\nsecond line".into()));
+    body.runs = Slot::Const(Value::Str(r#"[{"start":0,"end":3,"weight":700,"color":[1,0,0,1]},{"start":6,"end":10,"underline":true}]"#.into()));
+    let mut font = Font::default();
+    font.size = num(20.0);
+    b.add("text", Some(comp), vec![at(10.0, 20.0), body.wrap(), font.wrap(), fill([0.0, 0.0, 0.0, 1.0], 1.0), named("label")]);
+    b.apply(&mut store);
+    let svg = export(&store, &Scope::Composition(comp)).unwrap().svg;
+    assert!(svg.contains(r#"<text id="label" data-iron-type="text""#), "{svg}");
+    assert!(svg.contains("font-family=\"'Inter', Inter, sans-serif\""), "{svg}");
+    assert!(svg.contains(r##"font-weight="700" fill="#ff0000">Hot</tspan>"##), "{svg}");
+    assert!(svg.contains(r#"text-decoration="underline">cold</tspan>"#), "{svg}");
+    assert!(svg.contains(">second line</tspan>"), "{svg}");
+    // The piece after a styled run does not inherit it.
+    assert!(svg.contains(r#"y="19.375"> &amp; </tspan>"#) || svg.contains(r#""> &amp; </tspan>"#), "{svg}");
+    assert!(svg.contains("&amp;"), "escaped: {svg}");
+    // Lines stack: the second line's baseline is below the first's.
+    let ys: Vec<f64> = svg.match_indices(" y=\"").map(|(i, _)| svg[i + 4..].split('"').next().unwrap().parse().unwrap()).collect();
+    assert!(ys.last().unwrap() > ys.first().unwrap(), "{ys:?}");
+}

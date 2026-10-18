@@ -8,9 +8,9 @@
 <title>Part 2 · Richer values and definitions — Iron, Part Two</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="01-orientation.html" aria-label="Previous part">&larr;</a><span class="here">Part 2 of 9</span><a href="03-handles.html" aria-label="Next part">&rarr;</a></div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager"><a href="01-orientation.html" aria-label="Previous part">&larr;</a><span class="here">Part 2 of 13</span><a href="03-handles.html" aria-label="Next part">&rarr;</a></div></div></header>
 <div class="frame">
-<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html" aria-current="page"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html" aria-current="page"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
   <p class="kicker">Part 2 of 9 · <span class="chip sys-store">Document model</span> <span class="chip sys-react">Bindings & handles</span></p>
@@ -230,23 +230,7 @@ pub enum Value {
     _ =&gt; Err(&quot;q must be [magnitude, \&quot;unit\&quot;] or \&quot;magnitude unit\&quot;&quot;.to_owned()),</code></pre></div></div></figure>
 
 <h3 id="arith">Arithmetic that checks dimensions</h3>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:352">src/iron_document/src/expr.rs</a><span class="range">lines 352–378</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:10"></span><span class="band" style="--from:16;--len:4"></span><pre class="gutter" aria-hidden="true">352
-353
-354
-355
-356
-357
-358
-359
-360
-361
-362
-363
-364
-365
-366
-367
-368
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:368">src/iron_document/src/expr.rs</a><span class="range">lines 368–394</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:10"></span><span class="band" style="--from:16;--len:4"></span><pre class="gutter" aria-hidden="true">368
 369
 370
 371
@@ -256,7 +240,23 @@ pub enum Value {
 375
 376
 377
-378</pre><pre class="src"><code class="language-rust">/// `a &lt;op&gt; b` on two numbers or quantities, dimension-checked: `+ - %` and
+378
+379
+380
+381
+382
+383
+384
+385
+386
+387
+388
+389
+390
+391
+392
+393
+394</pre><pre class="src"><code class="language-rust">/// `a &lt;op&gt; b` on two numbers or quantities, dimension-checked: `+ - %` and
 /// comparisons need equal dimensions (a plain number is dimensionless, so
 /// `9.58 mW + 2` is an error and `9.58 mW * 2` is not); `*` and `/` combine
 /// them, and a result whose dimension cancels is a plain number.
@@ -284,7 +284,7 @@ fn quantity_op(op: BinOp, a: &amp;Value, b: &amp;Value) -&gt; Option&lt;Result&l
     })
 }</code></pre></div></div></figure>
 <p>Addition, subtraction, remainder and comparison need equal dimensions; multiplication and division combine them. A plain number is a quantity with no dimension, so <code>9.58 mW * 2</code> is fine and <code>9.58 mW + 2</code> is the error <code>cannot combine 9.58 mW + 2</code>. That's exactly the warning you'd have seen in the thermal demo before its port defaults were fixed: <code>cannot combine a plain number - K</code>.</p>
-<p>The lexer turns a number followed by unit characters into a quantity literal, so <code>640 - x * 300</code> stays plain numbers while <code>x / 1 mW</code> reads <code>1 mW</code> as one token (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:610" title="src/iron_document/src/expr.rs:610"><code>expr.rs:610</code></a>). The same stage added the floor functions geometry needs (<code>sin</code>, <code>cos</code>, <code>atan2</code>, <code>sqrt</code>, <code>pow</code>, <code>hypot</code>) and the constant <code>pi</code>. The fiber's loss in Part 9 is <code>pow(10, -loss * length / 10)</code>.</p>
+<p>The lexer turns a number followed by unit characters into a quantity literal, so <code>640 - x * 300</code> stays plain numbers while <code>x / 1 mW</code> reads <code>1 mW</code> as one token (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:626" title="src/iron_document/src/expr.rs:626"><code>expr.rs:626</code></a>). The same stage added the floor functions geometry needs (<code>sin</code>, <code>cos</code>, <code>atan2</code>, <code>sqrt</code>, <code>pow</code>, <code>hypot</code>) and the constant <code>pi</code>. The fiber's loss in Part 9 is <code>pow(10, -loss * length / 10)</code>.</p>
 <div class="box rust"><span class="tab">Reading the Rust</span>
 <p><code>fn quantity_op(...) -&gt; Option&lt;Result&lt;Value, EvalError&gt;&gt;</code> has two layers of "maybe". The outer <code>Option</code> says "is this my case at all?": <code>a.as_quantity()?</code> returns <code>None</code> early if either side isn't a number or quantity, and <code>binary</code> then tries vectors and strings. The inner <code>Result</code> says "it is my case; did it work?". <code>same().map(|_| ...)</code> runs the closure only when the dimensions matched.</p>
 </div>
@@ -349,20 +349,20 @@ pub fn intern(name: &amp;str) -&gt; &amp;&#x27;static str {
     leaked
 }</code></pre></div></div></figure>
 <p>The cost is one small allocation per distinct parameter name for the life of the process, which is nothing. The one component with run-time fields is <code>params</code>, declared in the macro's <code>@dynamic</code> block:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:316">src/iron_document/src/component.rs</a><span class="range">lines 316–329</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">316
-317
-318
-319
-320
-321
-322
-323
-324
-325
-326
-327
-328
-329</pre><pre class="src"><code class="language-rust">pub struct Params {
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:398">src/iron_document/src/component.rs</a><span class="range">lines 398–411</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411</pre><pre class="src"><code class="language-rust">pub struct Params {
     pub slots: BTreeMap&lt;&amp;&#x27;static str, Slot&gt;,
 }
 
@@ -381,7 +381,7 @@ impl Params {
 <h2 id="definitions"><span class="sec">2.3</span>Definitions are data</h2>
 <div class="compare">
   <div class="box naive"><span class="tab">The simple version</span><p><strong>A node type per thing.</strong> The demo once had a <code>bar</code> type in the registry. Every new kind of thing (laser, fiber, meter) would need a Rust change, a rebuild and a schema bump, and the model could never invent one.</p></div>
-  <div class="box built"><span class="tab">What was built</span><p><strong>The registry holds primitives only</strong> (rect, circle, path, slider, group, mesh…). A "bar" or a "laser" is a <code>definition</code> node in a <code>library</code> subtree: its parameters, its ports (Part 9), its behaviour equations, and a <em>template</em> per notation saying how to draw it. An <code>entity</code> instantiates a definition.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>The registry holds primitives only</strong> (rect, ellipse, path, slider, group, mesh…; the ellipse was a <code>circle</code> until schema 4). A "bar" or a "laser" is a <code>definition</code> node in a <code>library</code> subtree: its parameters, its ports (Part 9), its behaviour equations, and a <em>template</em> per notation saying how to draw it. An <code>entity</code> instantiates a definition.</p></div>
 </div>
 <figure class="plainfig"><figcaption>A definition in the document</figcaption><pre class="plain"><code class="language-plaintext">library
   definition &quot;bar&quot;
@@ -395,22 +395,22 @@ scene (composition)
   rect &quot;bar&quot;     y = 640 − #entity.params.level · 300      ← a copy, rewritten
                  figures → #entity</code></pre></figure>
 <p>The three component types that make this work:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:226">src/iron_document/src/component.rs</a><span class="range">lines 226–241</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">226
-227
-228
-229
-230
-231
-232
-233
-234
-235
-236
-237
-238
-239
-240
-241</pre><pre class="src"><code class="language-rust">/// Which definition an `entity` instantiates (ECM §4.3).
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:308">src/iron_document/src/component.rs</a><span class="range">lines 308–323</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">308
+309
+310
+311
+312
+313
+314
+315
+316
+317
+318
+319
+320
+321
+322
+323</pre><pre class="src"><code class="language-rust">/// Which definition an `entity` instantiates (ECM §4.3).
 Instance / &quot;instance&quot; =&gt; Instance { def: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
 
 /// One parameter a definition declares (ECM §4.2): the kind its values
@@ -623,20 +623,20 @@ pub fn place_figures(doc: &amp;Document, entity: NodeId, notation: &amp;str, par
 
 <h3 id="demo-bar">The bar in the demo</h3>
 <p>The demo builds its library with ordinary ops, then instantiates. To let <code>instantiate</code> read a definition that isn't applied yet, the ops so far are applied to a scratch copy of the store first:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:460">src/document_bridge/demo.rs</a><span class="range">lines 460–473</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:4"></span><span class="band" style="--from:9;--len:1"></span><pre class="gutter" aria-hidden="true">460
-461
-462
-463
-464
-465
-466
-467
-468
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:468">src/document_bridge/demo.rs</a><span class="range">lines 468–481</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:4"></span><span class="band" style="--from:9;--len:1"></span><pre class="gutter" aria-hidden="true">468
 469
 470
 471
 472
-473</pre><pre class="src"><code class="language-rust">// Instantiate it into the scene. The ops so far are applied to a scratch
+473
+474
+475
+476
+477
+478
+479
+480
+481</pre><pre class="src"><code class="language-rust">// Instantiate it into the scene. The ops so far are applied to a scratch
 // copy so the instantiation can read the definition and allocate ids
 // past everything above; all of it stays one transaction.
 let mut scratch = iron_document::Store::with_document(store.document().clone());
@@ -654,28 +654,28 @@ ops.extend(inst);</code></pre></div></div></figure>
 
 <h2 id="rename"><span class="sec">2.4</span>The rename: depiction → figure</h2>
 <p>The first plans called a picture of an entity a <em>depiction</em>. It was renamed to <strong>figure</strong> before it reached the UI: the relation is <code>figures</code>, the definition's template holder is <code>template</code>, and a composition view writes <code>of="#entity"</code>. Files written before the rename still load, because the loader renames on read:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:104">src/iron_document/src/serial.rs</a><span class="range">lines 104–114</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">104
-105
-106
-107
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:107">src/iron_document/src/serial.rs</a><span class="range">lines 107–117</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">107
 108
 109
 110
 111
 112
 113
-114</pre><pre class="src"><code class="language-rust">/// A type, component or relation name as this build spells it, for a file
+114
+115
+116
+117</pre><pre class="src"><code class="language-rust">/// A type, component or relation name as this build spells it, for a file
 /// written under `schema`. Schema 3 renamed `depiction` (the definition&#x27;s
 /// template holder and its component) to `template`, and the `depicts`
 /// relation to `figures`.
 fn renamed(schema: u64, name: &amp;str) -&gt; &amp;str {
-    match (schema &lt; 3, name) {
-        (true, &quot;depiction&quot;) =&gt; &quot;template&quot;,
-        (true, &quot;depicts&quot;) =&gt; &quot;figures&quot;,
+    match (schema &lt; 3, schema &lt; 4, name) {
+        (true, _, &quot;depiction&quot;) =&gt; &quot;template&quot;,
+        (true, _, &quot;depicts&quot;) =&gt; &quot;figures&quot;,
+        (_, true, &quot;circle&quot;) =&gt; &quot;ellipse&quot;,
         _ =&gt; name,
-    }
-}</code></pre></div></div></figure>
-<p>The schema number went to 3 (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:20" title="src/iron_document/src/serial.rs:20"><code>serial.rs:20</code></a>), and schemas 1 and 2 still load.</p>
+    }</code></pre></div></div></figure>
+<p>The schema number went to 3 (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:23" title="src/iron_document/src/serial.rs:23"><code>serial.rs:23</code></a>). It is 5 now (schema 4 turned <code>circle</code> into <code>ellipse</code>, schema 5 put path points under <code>contour</code> nodes), and older files are migrated on load.</p>
 
 <div class="box edge"><span class="tab">Rough edge</span>
 <p>A template is evaluated where it sits in the library, so its bindings must make sense at the defaults. A port spec whose signal defaults to the plain number <code>0</code>, read by a template gauge as <code>signal / 1 mW</code>, is a dimension error, and it was logged every frame until the demo gave port specs defaults in their kind's units (Part 9). Nothing yet checks a template's bindings when the definition is written.</p>

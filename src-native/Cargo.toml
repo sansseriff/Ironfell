@@ -17,6 +17,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ironfell = { path = "..", features = ["native"] }
 iron_document = { path = "../src/iron_document" }
+iron_text = { path = "../src/iron_text", features = ["system"] }
 raw-window-handle = "0.6"
 block2 = "0.6"
 objc2 = "0.6"

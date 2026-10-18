@@ -75,17 +75,17 @@
   <div class="box built"><span class="tab">What was built</span><p><strong>A Rust struct per component</strong>, one <code>Slot</code> field per leaf, plus a static table of field names and kinds. Readers get typed access; the validator, file loader, view renderer and the model's schema all read the same table.</p></div>
 </div>
 <p><code>component.rs</code> declares every component in one table and lets a macro generate the structs and lookups. A few entries:</p>
-<snip file="src/iron_document/src/component.rs" lines="143-199"/>
-<p>Read <code>Radius / "radius" =&gt; Radius { r: Number = Value::Number(50.0) }</code> as: "a component whose enum variant is <code>Radius</code>, whose JSON name is <code>"radius"</code>, whose struct is <code>Radius</code>, with one field <code>r</code> of kind <code>Number</code>, defaulting to 50." The table now has about thirty entries; the later parts introduce them as they come up. Here is the per-component half of the macro that consumes them:</p>
+<snip file="src/iron_document/src/component.rs" lines="143-169"/>
+<p>Read <code>Radius / "radius" =&gt; Radius { rx: Number = Value::Number(50.0), ry: … }</code> as: "a component whose enum variant is <code>Radius</code>, whose JSON name is <code>"radius"</code>, whose struct is <code>Radius</code>, with fields <code>rx</code> and <code>ry</code> of kind <code>Number</code>, each defaulting to 50." (Until schema 4 there was a <code>circle</code> type with one <code>r</code>; the loader migrates it to an <code>ellipse</code> with equal radii.) The table now has about forty entries, including the Figma-style appearance added on October 14–15 (<code>corners</code>, <code>arc</code>, <code>shadow</code>, <code>gradient</code>, <code>appearance</code>, <code>group_clip</code>, <code>contour</code>); the later parts introduce them as they come up. Here is the per-component half of the macro that consumes them:</p>
 <snip file="src/iron_document/src/component.rs" lines="34-66"/>
 <div class="box rust"><span class="tab">Reading the Rust</span>
-<p><code>$( … )*</code> means "repeat for each match". The outer repetition matches each component entry, the inner one each field. Lines 40–66 run once per component and produce the struct, its <code>Default</code>, and its <code>LeafStruct</code> implementation. <code>stringify!($field)</code> turns the identifier <code>r</code> into the string <code>"r"</code>. The rest of the macro (after line 66) runs once in total and lists every component again, producing the <code>ComponentKind</code> and <code>Component</code> enums. Written out by hand, the <code>Radius</code> entry becomes:</p>
-<pre><code>pub struct Radius { pub r: Slot }
-impl Default for Radius { fn default() -&gt; Self { Self { r: Slot::Const(Value::Number(50.0)) } } }
+<p><code>$( … )*</code> means "repeat for each match". The outer repetition matches each component entry, the inner one each field. Lines 40–66 run once per component and produce the struct, its <code>Default</code>, and its <code>LeafStruct</code> implementation. <code>stringify!($field)</code> turns the identifier <code>rx</code> into the string <code>"rx"</code>. The rest of the macro (after line 66) runs once in total and lists every component again, producing the <code>ComponentKind</code> and <code>Component</code> enums. Written out by hand, the <code>Radius</code> entry becomes:</p>
+<pre><code>pub struct Radius { pub rx: Slot, pub ry: Slot }
+impl Default for Radius { fn default() -&gt; Self { Self { rx: Slot::Const(Value::Number(50.0)), ry: Slot::Const(Value::Number(50.0)) } } }
 impl LeafStruct for Radius {
     const KIND: ComponentKind = ComponentKind::Radius;
-    const FIELDS: &amp;'static [(&amp;'static str, ValueKind)] = &amp;[("r", ValueKind::Number)];
-    fn get(&amp;self, field: &amp;str) -&gt; Option&lt;&amp;Slot&gt; { match field { "r" =&gt; Some(&amp;self.r), _ =&gt; None } }
+    const FIELDS: &amp;'static [(&amp;'static str, ValueKind)] = &amp;[("rx", ValueKind::Number), ("ry", ValueKind::Number)];
+    fn get(&amp;self, field: &amp;str) -&gt; Option&lt;&amp;Slot&gt; { match field { "rx" =&gt; Some(&amp;self.rx), "ry" =&gt; Some(&amp;self.ry), _ =&gt; None } }
     /* get_mut, wrap, unwrap_ref likewise */
 }</code></pre>
 <p>The final <code>@dynamic</code> entry, <code>Params</code>, is the one component whose fields aren't known at compile time: an entity's parameters, named by its definition (Part 2).</p>
@@ -100,21 +100,21 @@ impl LeafStruct for Radius {
   </tbody>
 </table></div>
 <p>The one hand-written method that matters is <code>set</code>, which replaces one field's slot. It type-checks constants and returns the old slot, which, as F2 shows, is exactly what undo needs:</p>
-<snip file="src/iron_document/src/component.rs" lines="415-441" mark="426-438,440"/>
+<snip file="src/iron_document/src/component.rs" lines="497-523" mark="508-520,522"/>
 
 <h3 id="leafpath">The leaf address: <code>LeafPath</code></h3>
-<snip file="src/iron_document/src/component.rs" lines="514-543"/>
+<snip file="src/iron_document/src/component.rs" lines="596-625"/>
 <p>A <code>LeafPath</code> is a component kind plus a field name. The field is a <code>&amp;'static str</code> pointing into the generated table (or, for a parameter, an interned name), so a path is two small values that are free to copy. The only way to make one is <code>LeafPath::new</code> (or <code>"fill.color".parse()</code>), which rejects unknown fields. <strong>An unknown path is an error, never a silent no-op</strong>; that rule recurs all the way up to the model's edit parser.</p>
 <p>When a leaf also needs to say which node, it becomes a <code>Leaf { node, path }</code> (<ref file="src/iron_document/src/expr.rs" line="27" has="pub struct Leaf">expr.rs:27</ref>), printed <code>#O.slider.value</code>: exactly the syntax expressions use.</p>
 
 <h2 id="registry"><span class="sec">F1.6</span>The registry: which types exist</h2>
 <p>A node's <code>ty</code> says what kind of thing it is. The registry lists every type: which components it allows (and requires), what it may contain, and which renderer draws it by default:</p>
-<snip file="src/iron_document/src/registry.rs" lines="40-69"/>
+<snip file="src/iron_document/src/registry.rs" lines="40-73"/>
 <p>The registry holds <strong>primitives only</strong>. Domain things (a bar chart, a laser) are <em>definitions</em> in the document's own library, built from these (Part 2). Today's types, grouped:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Group</th><th>Types</th><th>Covered in</th></tr></thead>
   <tbody>
-    <tr><td>Drawing</td><td><code>group</code>, <code>rect</code>, <code>circle</code>, <code>path</code>, <code>point</code>, <code>mesh</code>, <code>slider</code></td><td>here, Part 7</td></tr>
+    <tr><td>Drawing</td><td><code>group</code>, <code>rect</code>, <code>ellipse</code>, <code>path</code> → <code>contour</code> → <code>point</code>, <code>mesh</code>, <code>slider</code></td><td>here, Part 7</td></tr>
     <tr><td>Time</td><td><code>timeline</code>, <code>clip</code></td><td>F3</td></tr>
     <tr><td>Things and their kinds</td><td><code>library</code>, <code>definition</code>, <code>param_spec</code>, <code>template</code>, <code>model</code>, <code>entity</code></td><td>Part 2</td></tr>
     <tr><td>Constraints</td><td><code>constraint</code></td><td>Part 4</td></tr>
@@ -123,7 +123,7 @@ impl LeafStruct for Radius {
     <tr><td>Wiring</td><td><code>port_spec</code>, <code>port</code>, <code>equation</code>, <code>connection</code></td><td>Part 9</td></tr>
   </tbody>
 </table></div>
-<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<ref file="src/iron_document/src/registry.rs" line="316" has="pub fn schema_json">registry.rs:316</ref>) exports the registry and the component table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
+<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<ref file="src/iron_document/src/registry.rs" line="339" has="pub fn schema_json">registry.rs:339</ref>) exports the registry and the component table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
 
 <h2 id="document"><span class="sec">F1.7</span>The <code>Document</code>: tables and indexes</h2>
 <snip file="src/iron_document/src/document.rs" lines="84-104" mark="86-94,98-103"/>

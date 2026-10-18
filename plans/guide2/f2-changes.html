@@ -8,9 +8,9 @@
 <title>Foundations 2 · Ops, transactions and undo — Iron, Part Two</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="f1-document.html" aria-label="Previous part">&larr;</a><span class="here">Foundations 2 of 4</span><a href="f3-bindings.html" aria-label="Next part">&rarr;</a></div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager"><a href="f1-document.html" aria-label="Previous part">&larr;</a><span class="here">Foundations 2 of 4</span><a href="f3-bindings.html" aria-label="Next part">&rarr;</a></div></div></header>
 <div class="frame">
-<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html" aria-current="page"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html" aria-current="page"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
   <p class="kicker">Foundations 2 of 4 · <span class="chip sys-store">Document model</span></p>
@@ -561,60 +561,60 @@ pub(crate) fn apply_op(
 
 <h2 id="run"><span class="sec">F2.5</span>All or nothing: <code>Store::run</code></h2>
 <p>Several ops in one transaction must all apply or none. The simplest correct approach, which is the one used: copy the whole document, apply every op to the copy, and swap it in only if nothing failed.</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:891">src/iron_document/src/lib.rs</a><span class="range">lines 891–944</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:1"></span><span class="band" style="--from:13;--len:6"></span><span class="band" style="--from:19;--len:16"></span><span class="band" style="--from:38;--len:1"></span><pre class="gutter" aria-hidden="true">891
-892
-893
-894
-895
-896
-897
-898
-899
-900
-901
-902
-903
-904
-905
-906
-907
-908
-909
-910
-911
-912
-913
-914
-915
-916
-917
-918
-919
-920
-921
-922
-923
-924
-925
-926
-927
-928
-929
-930
-931
-932
-933
-934
-935
-936
-937
-938
-939
-940
-941
-942
-943
-944</pre><pre class="src"><code class="language-rust">/// Run the ops against a working copy and return it with the
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1192">src/iron_document/src/lib.rs</a><span class="range">lines 1192–1245</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:1"></span><span class="band" style="--from:13;--len:6"></span><span class="band" style="--from:19;--len:16"></span><span class="band" style="--from:38;--len:1"></span><pre class="gutter" aria-hidden="true">1192
+1193
+1194
+1195
+1196
+1197
+1198
+1199
+1200
+1201
+1202
+1203
+1204
+1205
+1206
+1207
+1208
+1209
+1210
+1211
+1212
+1213
+1214
+1215
+1216
+1217
+1218
+1219
+1220
+1221
+1222
+1223
+1224
+1225
+1226
+1227
+1228
+1229
+1230
+1231
+1232
+1233
+1234
+1235
+1236
+1237
+1238
+1239
+1240
+1241
+1242
+1243
+1244
+1245</pre><pre class="src"><code class="language-rust">/// Run the ops against a working copy and return it with the
 /// transaction; the caller commits the copy.
 ///
 /// Cloning per transaction is the simplest way to report every error in a
@@ -668,59 +668,56 @@ fn run(&amp;mut self, input: TransactionInput) -&gt; Result&lt;(Transaction, Doc
         work,
     ))
 }</code></pre></div></div></figure>
-<p>The loop doesn't stop at the first error (904–909); it collects every one, because a model fixing a rejected edit wants the whole list in one round trip. The deferred checks follow (910–925). Only if both passes are clean does the copy get the new version and go back to the caller. The comment above <code>run</code> covers the cost: one clone per <em>commit</em>, not per frame, because a drag produces one transaction when it ends (F3.5).</p>
+<p>The loop doesn't stop at the first error (1205–1210); it collects every one, because a model fixing a rejected edit wants the whole list in one round trip. The deferred checks follow (1211–1226). Only if both passes are clean does the copy get the new version and go back to the caller. The comment above <code>run</code> covers the cost: one clone per <em>commit</em>, not per frame, because a drag produces one transaction when it ends (F3.5).</p>
 
 <h2 id="apply"><span class="sec">F2.6</span><code>Store::apply</code>, the public entry point</h2>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:681">src/iron_document/src/lib.rs</a><span class="range">lines 681–728</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:9"></span><span class="band" style="--from:13;--len:3"></span><span class="band" style="--from:16;--len:12"></span><span class="band" style="--from:36;--len:6"></span><pre class="gutter" aria-hidden="true">681
-682
-683
-684
-685
-686
-687
-688
-689
-690
-691
-692
-693
-694
-695
-696
-697
-698
-699
-700
-701
-702
-703
-704
-705
-706
-707
-708
-709
-710
-711
-712
-713
-714
-715
-716
-717
-718
-719
-720
-721
-722
-723
-724
-725
-726
-727
-728</pre><pre class="src"><code class="language-rust">/// Apply a transaction atomically. Either every op applies and the
-/// version advances, or nothing applies and every error is reported.
-pub fn apply(&amp;mut self, input: TransactionInput) -&gt; Result&lt;Applied, Vec&lt;ApplyError&gt;&gt; {
+<p><code>apply</code> is now two layers. The outer one deals with a gesture that may be running (it classifies the transaction against the gesture, sets the gesture's previews aside, and afterwards resumes or cancels it; Part 13 covers that). The inner one, <code>apply_now</code>, is the transaction path proper:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:978">src/iron_document/src/lib.rs</a><span class="range">lines 978–1023</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:9"></span><span class="band" style="--from:11;--len:3"></span><span class="band" style="--from:14;--len:12"></span><span class="band" style="--from:34;--len:6"></span><pre class="gutter" aria-hidden="true">978
+979
+980
+981
+982
+983
+984
+985
+986
+987
+988
+989
+990
+991
+992
+993
+994
+995
+996
+997
+998
+999
+1000
+1001
+1002
+1003
+1004
+1005
+1006
+1007
+1008
+1009
+1010
+1011
+1012
+1013
+1014
+1015
+1016
+1017
+1018
+1019
+1020
+1021
+1022
+1023</pre><pre class="src"><code class="language-rust">fn apply_now(&amp;mut self, input: TransactionInput) -&gt; Result&lt;Applied, Vec&lt;ApplyError&gt;&gt; {
     if let Some(k) = &amp;input.idempotency_key
         &amp;&amp; let Some((_, v)) = self.recent_keys.iter().find(|(key, _)| key == k)
     {
@@ -767,47 +764,53 @@ pub fn apply(&amp;mut self, input: TransactionInput) -&gt; Result&lt;Applied, Ve
     })
 }</code></pre></div></div></figure>
 <ul>
-  <li><strong>Idempotency</strong> (684–692). A key matching one of the last 64 transactions returns that version and does nothing, so a network retry can't apply a model edit twice.</li>
-  <li><strong>Run and swap</strong> (694–696), then <code>after_transaction</code>, which keeps everything derived in step: the reactive graph and clips (F3), constraint clusters (Part 4), the physics network (Part 9).</li>
-  <li><strong>Solve</strong> (697–708). <code>post_apply</code> runs the constraint solver over the committed document (Part 4). If the constraints can't hold, the old document is put back and the transaction never happened.</li>
-  <li><strong>Record</strong> (717–722): push onto the undo stack (trimmed to 200), clear the redo stack, append to the log.</li>
+  <li><strong>Idempotency</strong> (979–987). A key matching one of the last 64 transactions returns that version and does nothing, so a network retry can't apply a model edit twice.</li>
+  <li><strong>Run and swap</strong> (989–991), then <code>after_transaction</code>, which keeps everything derived in step: the reactive graph and clips (F3), constraint clusters (Part 4), the physics network (Part 9), and the geometry revisions the spatial scene reads (Part 10).</li>
+  <li><strong>Solve</strong> (992–1003). <code>post_apply</code> runs the constraint solver over the committed document (Part 4). If the constraints can't hold, the old document is put back and the transaction never happened.</li>
+  <li><strong>Record</strong> (1012–1017): push onto the undo stack (trimmed to 200), clear the redo stack, append to the log.</li>
 </ul>
 
 <h2 id="undo"><span class="sec">F2.7</span>Undo and redo: ordinary transactions</h2>
 <p><code>History</code> keeps three lists: <code>past</code> (what undo will reverse), <code>future</code> (what redo will replay), and <code>log</code> (every transaction that applied, undo and redo included). The log is what the Bevy bridge reads (F4).</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:751">src/iron_document/src/lib.rs</a><span class="range">lines 751–781</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">751
-752
-753
-754
-755
-756
-757
-758
-759
-760
-761
-762
-763
-764
-765
-766
-767
-768
-769
-770
-771
-772
-773
-774
-775
-776
-777
-778
-779
-780
-781</pre><pre class="src"><code class="language-rust">/// Undo the most recent transaction. `ts` is the caller&#x27;s clock.
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1046">src/iron_document/src/lib.rs</a><span class="range">lines 1046–1079</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1046
+1047
+1048
+1049
+1050
+1051
+1052
+1053
+1054
+1055
+1056
+1057
+1058
+1059
+1060
+1061
+1062
+1063
+1064
+1065
+1066
+1067
+1068
+1069
+1070
+1071
+1072
+1073
+1074
+1075
+1076
+1077
+1078
+1079</pre><pre class="src"><code class="language-rust">/// Undo the most recent transaction. `ts` is the caller&#x27;s clock.
 /// `None` when there is nothing to undo.
 pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;ApplyError&gt;&gt;&gt; {
+    if self.gesture.is_some() &amp;&amp; self.history.can_undo() {
+        self.end_gesture(GestureStatus::Cancelled(&quot;undo&quot;.into()));
+    }
     let tx = self.history.past.pop()?;
     let input = TransactionInput {
         label: format!(&quot;undo: {}&quot;, tx.label),
@@ -836,7 +839,7 @@ pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;Ap
         }
     })
 }</code></pre></div></div></figure>
-<p>Undo pops the last transaction, builds a new one from its inverse, labels it "undo: …" with actor <code>System</code>, and runs it through the same <code>run</code> as everything else. Redo replays the original ops plus its <code>derived_ops</code>, without solving, so redo reproduces exactly what happened. Because both go through the normal path, validation, the version bump, the Bevy sync and the model's view of history need no special cases.</p>
+<p>Undo pops the last transaction, builds a new one from its inverse, labels it "undo: …" with actor <code>System</code>, and runs it through the same <code>run</code> as everything else. Redo replays the original ops plus its <code>derived_ops</code>, without solving, so redo reproduces exactly what happened. Because both go through the normal path, validation, the version bump, the Bevy sync and the model's view of history need no special cases. Two newer details: undo first cancels any running gesture (1049–1051), so Cmd+Z mid-drag takes the drag back; and two calls edit the undo stack without new semantics, <code>retract</code> and <code>merge_with_previous</code>, which make an Alt-drag one undo step (Part 13).</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Action</th><th>Version</th><th>past</th><th>future</th><th>Appended to the log</th></tr></thead>
   <tbody>
@@ -850,11 +853,11 @@ pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;Ap
 
 <h2 id="file"><span class="sec">F2.8</span>Out to disk: canonical JSON</h2>
 <p>The saved file from the same example, after the move:</p>
-<figure class="plainfig"><figcaption>cargo run -p iron_document --example dump (file)</figcaption><pre class="plain"><code class="language-plaintext">{&quot;schema&quot;: 3, &quot;next_id&quot;: 4, &quot;next_rel&quot;: 1, &quot;version&quot;: 2,
+<figure class="plainfig"><figcaption>cargo run -p iron_document --example dump (file)</figcaption><pre class="plain"><code class="language-plaintext">{&quot;schema&quot;: 5, &quot;next_id&quot;: 4, &quot;next_rel&quot;: 1, &quot;version&quot;: 2,
  &quot;nodes&quot;: {
   &quot;#1&quot;: {&quot;order&quot;:&quot;a0&quot;,&quot;parent&quot;:null,&quot;ty&quot;:&quot;group&quot;},
   &quot;#2&quot;: {&quot;order&quot;:&quot;a0&quot;,&quot;parent&quot;:&quot;#1&quot;,&quot;ty&quot;:&quot;rect&quot;},
-  &quot;#3&quot;: {&quot;order&quot;:&quot;a1&quot;,&quot;parent&quot;:&quot;#1&quot;,&quot;ty&quot;:&quot;circle&quot;}
+  &quot;#3&quot;: {&quot;order&quot;:&quot;a1&quot;,&quot;parent&quot;:&quot;#1&quot;,&quot;ty&quot;:&quot;ellipse&quot;}
  },
  &quot;components&quot;: {
   &quot;name&quot;: {
@@ -868,7 +871,7 @@ pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;Ap
    &quot;#2&quot;: {&quot;h&quot;:100.0,&quot;w&quot;:100.0}
   },
   &quot;radius&quot;: {
-   &quot;#3&quot;: {&quot;r&quot;:50.0}
+   &quot;#3&quot;: {&quot;rx&quot;:50.0,&quot;ry&quot;:50.0}
   },
   &quot;fill&quot;: {
    &quot;#2&quot;: {&quot;color&quot;:{&quot;rgba&quot;:[0.5,0.5,0.5,1.0]},&quot;opacity&quot;:1.0}
@@ -881,14 +884,14 @@ pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;Ap
   <li><strong>Canonical.</strong> Keys sorted, one record per line. Saving the same document twice gives the same bytes, and a git diff of two saves reads like a list of ops.</li>
   <li><strong>Tombstones and counters are saved</strong>, so ids stay unique across save and reload. Session-tier nodes (Part 8) are left out.</li>
 </ul>
-<p><code>load</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:116" title="src/iron_document/src/serial.rs:116"><code>serial.rs:116</code></a>) trusts nothing. It checks the schema version (renaming the older spellings from schemas 1 and 2), every id against its counter, every parent and child policy, parent cycles, required components, and relation endpoints, then rebuilds the indexes and runs <code>check_invariants</code>. A bad file is an error with a message before anything else sees it.</p>
+<p><code>load</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:228" title="src/iron_document/src/serial.rs:228"><code>serial.rs:228</code></a>) trusts nothing. It checks the schema version (renaming the older spellings from schemas 1 and 2, turning schema 3's <code>circle</code> into an <code>ellipse</code>, and moving schema 4's path points under a <code>contour</code>), every id against its counter, every parent and child policy, parent cycles, required components, and relation endpoints, then rebuilds the indexes and runs <code>check_invariants</code>. A bad file is an error with a message before anything else sees it.</p>
 
 <h2 id="views"><span class="sec">F2.9</span>Out to a reader: views</h2>
 <p>The file is for machines. A <em>view</em> is for a reader, a person or the model:</p>
 <figure class="plainfig"><figcaption>cargo run -p iron_document --example dump (view)</figcaption><pre class="plain"><code class="language-plaintext">&amp;lt;document version=&quot;2&quot;&amp;gt;
   &amp;lt;group id=&quot;#1&quot; name=&quot;scene&quot; count=&quot;2&quot;&amp;gt;
     &amp;lt;rect id=&quot;#2&quot; x=&quot;200&quot; y=&quot;80&quot; rot=&quot;0&quot; sx=&quot;1&quot; sy=&quot;1&quot; w=&quot;100&quot; h=&quot;100&quot; color=&quot;#808080ff&quot; opacity=&quot;1&quot;/&amp;gt;
-    &amp;lt;circle id=&quot;#3&quot; x=&quot;0&quot; y=&quot;0&quot; rot=&quot;0&quot; sx=&quot;1&quot; sy=&quot;1&quot; r=&quot;50&quot;/&amp;gt;
+    &amp;lt;ellipse id=&quot;#3&quot; x=&quot;0&quot; y=&quot;0&quot; rot=&quot;0&quot; sx=&quot;1&quot; sy=&quot;1&quot; rx=&quot;50&quot; ry=&quot;50&quot;/&amp;gt;
   &amp;lt;/group&amp;gt;
 &amp;lt;/document&amp;gt;</code></pre></figure>
 <p>It's XML-shaped because the tree is the information, and models read XML well. A view is requested with a <code>ViewQuery</code>:</p>

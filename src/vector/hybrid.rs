@@ -819,6 +819,7 @@ fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, U
                 scene.push_clip_layer(scratch);
             }
             DrawCmd::PushOpacity { opacity, .. } => scene.push_opacity_layer(*opacity),
+            DrawCmd::PushBlend { mode } => scene.push_blend_layer(*mode),
             DrawCmd::PopLayer => scene.pop_layer(),
             DrawCmd::Texture { transform, image, size, .. } => {
                 let id = texture_id(image);

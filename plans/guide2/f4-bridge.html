@@ -8,9 +8,9 @@
 <title>Foundations 4 · Bevy and the model — Iron, Part Two</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="f3-bindings.html" aria-label="Previous part">&larr;</a><span class="here">Foundations 4 of 4</span><a href="01-orientation.html" aria-label="Next part">&rarr;</a></div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager"><a href="f3-bindings.html" aria-label="Previous part">&larr;</a><span class="here">Foundations 4 of 4</span><a href="01-orientation.html" aria-label="Next part">&rarr;</a></div></div></header>
 <div class="frame">
-<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html" aria-current="page"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html" aria-current="page"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
   <p class="kicker">Foundations 4 of 4 · <span class="chip sys-react">Bindings & handles</span> <span class="chip sys-shell">Shell & views</span> <span class="chip sys-model">Model surface</span></p>
@@ -18,7 +18,7 @@
   <p class="lede">The store from F1–F3 knows nothing about Bevy, the browser or Claude. This page covers the three ways it meets the outside: the bridge that turns document nodes into Bevy entities and redraws only what changed; the wasm boundary the Svelte shell talks through; and the model surface, where Claude reads a view and writes an edit that becomes an ordinary transaction.</p>
   <div class="prereq">
     <div><b>You need</b>F2 (transactions, the log, <code>Store::apply</code>) and F3 (resolved values, <code>drain_changes</code>, previews).</div>
-    <div><b>Files</b><code>src/document_bridge/{mod,materialize,demo}.rs</code>, <code>src/web_ffi.rs</code>, <code>src-ui/worker.ts</code>, <code>src-ui/model/{agent,edit,schema,manifest,transport}.ts</code>.</div>
+    <div><b>Files</b><code>src/document_bridge/{mod,materialize,demo}.rs</code>, <code>src/engine_api.rs</code> (with thin hosts in <code>web_ffi.rs</code> and <code>src-native/</code>), <code>src-ui/worker.ts</code>, <code>src-ui/model/{agent,edit,schema,manifest,transport}.ts</code>.</div>
   </div>
 </header>
 
@@ -43,15 +43,11 @@
   <div class="box naive"><span class="tab">The simple version B</span><p><strong>Diff every frame.</strong> Compare each node with its entity and patch differences. Cheaper, but it still touches every node every frame and has no idea <em>why</em> anything changed.</p></div>
 </div>
 <div class="box built"><span class="tab">What was built</span>
-<p><strong>Reconcile from the log.</strong> After each batch of transactions, read the new entries in the history log, collect the node ids their ops touched, and re-examine only those. Add the nodes whose resolved values moved (bindings, previews, clips). A frame with nothing new does no work. Every entity carries <code>Provenance(NodeId)</code>, and <code>NodeMap</code> maps both ways.</p>
+<p><strong>Reconcile from the log.</strong> After each batch of transactions, read the new entries in the history log, collect the node ids their ops touched, and re-examine only those. Add the nodes whose resolved values moved (bindings, previews, signals). A frame with nothing new does no work. For each touched node the reconciler rewrites its draw data, and its entity if it has one. Since October 17 most 2D nodes don't: draw data lives by <code>NodeId</code>, and entities exist only for 3D nodes and the working set (Part 10). Every entity carries <code>Provenance(NodeId)</code>, and <code>NodeMap</code> maps both ways.</p>
 </div>
 
 <h2 id="resources"><span class="sec">F4.3</span>The bridge's resources</h2>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:42">src/document_bridge/mod.rs</a><span class="range">lines 42–68</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">42
-43
-44
-45
-46
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:46">src/document_bridge/mod.rs</a><span class="range">lines 46–68</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">46
 47
 48
 49
@@ -95,112 +91,30 @@ impl PendingTransactions {
             exact: false,
         });
     }
-}
-
-/// Names the document node an entity materialises.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Provenance(pub NodeId);</code></pre></div></div></figure>
+}</code></pre></div></div></figure>
 <div class="table-wrap"><table>
   <thead><tr><th>Resource</th><th>Holds</th><th>Written by</th></tr></thead>
   <tbody>
-    <tr><td><code>DocumentStore</code></td><td>The <code>Store</code> itself</td><td>Only the sync, gesture previews, and the synchronous FFI apply</td></tr>
+    <tr><td><code>DocumentStore</code></td><td>The <code>Store</code> itself</td><td>The sync, the tools' previews, producers' publishes, and the synchronous host calls (Part 11)</td></tr>
     <tr><td><code>PendingTransactions</code></td><td>Transactions waiting for the next sync</td><td>Tools, keyboard commands, the demo scene</td></tr>
-    <tr><td><code>GestureRequests</code></td><td>Commit or cancel the current preview</td><td>Gesture release</td></tr>
-    <tr><td><code>HistoryRequests</code></td><td>Queued undo and redo</td><td>The <code>undo</code>/<code>redo</code> FFI calls</td></tr>
+    <tr><td><code>GestureRequests</code></td><td>Commit, commit-and-merge (Alt-drag) or cancel the current preview</td><td>Gesture release</td></tr>
+    <tr><td><code>HistoryRequests</code></td><td>Queued undo and redo</td><td>The select tool, from <code>"undo"</code>/<code>"redo"</code> tool keys (Part 11)</td></tr>
     <tr><td><code>PendingLoad</code></td><td>A validated document to swap in</td><td><code>document_load</code></td></tr>
-    <tr><td><code>NodeMap</code></td><td><code>NodeId ↔ Entity</code>, plus paint order</td><td>The reconciler</td></tr>
+    <tr><td><code>Drawables</code></td><td>Every drawable 2D node's draw data, by <code>NodeId</code></td><td>The reconciler</td></tr>
+    <tr><td><code>NodeMap</code></td><td><code>NodeId ↔ Entity</code> for nodes that have one, plus paint order</td><td>The reconciler, <code>sync_live</code></td></tr>
+    <tr><td><code>Modes</code></td><td>The Live set: which 2D nodes get entities</td><td><code>decide_modes</code> (Part 10)</td></tr>
+    <tr><td><code>SpatialScene</code></td><td>Bounds and placements per group</td><td><code>prepare_spatial</code> (Part 10)</td></tr>
     <tr><td><code>SyncedVersion</code></td><td>The last version the reconciler caught up to</td><td>The sync</td></tr>
     <tr><td><code>DocumentChanges</code></td><td>Which nodes were rewritten, and whether the tree's shape changed</td><td>The reconciler; read by rendering (Part 6)</td></tr>
+    <tr><td><code>DocumentOrigin</code></td><td>A random token for this document in this session</td><td>Renewed on load; read by copy and paste (Part 13)</td></tr>
   </tbody>
 </table></div>
-<p>The pattern throughout: anything that wants to change the document pushes a request into a queue, and one system, <code>sync_document</code>, drains every queue in a fixed order at the start of each frame.</p>
+<p>The pattern throughout: anything that wants to change the document pushes a request into a queue, and one system, <code>sync_document</code>, drains every queue in a fixed order early in each frame. Part 11 lists the exceptions (host calls that apply immediately) and shows the whole frame.</p>
 
 <h2 id="sync"><span class="sec">F4.4</span><code>sync_document</code>: the heart of the bridge</h2>
-<p>It runs once per frame in <code>PreUpdate</code>. In three pieces:</p>
+<p>It runs once per frame in <code>PreUpdate</code>, right after any producer has published. In three pieces:</p>
 <h3 id="skip">Skip, or load</h3>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:253">src/document_bridge/mod.rs</a><span class="range">lines 253–283</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">253
-254
-255
-256
-257
-258
-259
-260
-261
-262
-263
-264
-265
-266
-267
-268
-269
-270
-271
-272
-273
-274
-275
-276
-277
-278
-279
-280
-281
-282
-283</pre><pre class="src"><code class="language-rust">if pending.0.is_empty()
-    &amp;&amp; history.0.is_empty()
-    &amp;&amp; load.0.is_none()
-    &amp;&amp; gestures.0.is_empty()
-    &amp;&amp; !store.0.has_changes()
-    &amp;&amp; store.0.document().version() == synced.0
-{
-    return;
-}
-let now = time.elapsed().as_millis() as u64;
-let mut affected: BTreeSet&lt;NodeId&gt; = BTreeSet::new();
-let mut structure = false;
-let version_before = synced.0;
-if let Some(doc) = load.0.take() {
-    structure = true;
-    // Everything materialised belongs to the old document. Tear it all
-    // down rather than diffing: ids may coincide with different types.
-    for e in map.drain() {
-        if let Ok(mut ec) = commands.get_entity(e) {
-            ec.try_despawn();
-        }
-    }
-    store.0 = Store::with_document(doc);
-    synced.0 = store.0.document().version();
-    affected.extend(store.0.document().live_nodes().map(|n| n.id));
-    info!(
-        &quot;loaded document v{} ({} live nodes)&quot;,
-        store.0.document().version().0,
-        affected.len()
-    );
-}</code></pre></div></div></figure>
-<p>The early return is why an idle frame costs nothing: no queued work, no pending value changes, and the version equals the one already synced. A load tears down every entity rather than diffing (the same id may be a different type in the new document) and installs a fresh <code>Store</code> with empty history.</p>
-<h3 id="drain">Drain the queues, in order</h3>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:284">src/document_bridge/mod.rs</a><span class="range">lines 284–321</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">284
-285
-286
-287
-288
-289
-290
-291
-292
-293
-294
-295
-296
-297
-298
-299
-300
-301
-302
-303
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:303">src/document_bridge/mod.rs</a><span class="range">lines 303–337</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">303
 304
 305
 306
@@ -218,7 +132,108 @@ if let Some(doc) = load.0.take() {
 318
 319
 320
-321</pre><pre class="src"><code class="language-rust">for mut input in pending.0.drain(..) {
+321
+322
+323
+324
+325
+326
+327
+328
+329
+330
+331
+332
+333
+334
+335
+336
+337</pre><pre class="src"><code class="language-rust">if pending.0.is_empty()
+    &amp;&amp; history.0.is_empty()
+    &amp;&amp; load.0.is_none()
+    &amp;&amp; gestures.0.is_empty()
+    &amp;&amp; !store.0.has_changes()
+    &amp;&amp; store.0.document().version() == synced.0
+{
+    return;
+}
+let _timing = crate::perf::span(crate::perf::Phase::Sync);
+let now = time.elapsed().as_millis() as u64;
+let mut affected: BTreeSet&lt;NodeId&gt; = BTreeSet::new();
+let mut structure = false;
+let version_before = synced.0;
+if let Some(doc) = load.0.take() {
+    geometry_revision.0 = geometry_revision.0.wrapping_add(1);
+    structure = true;
+    // Everything materialised belongs to the old document. Tear it all
+    // down rather than diffing: ids may coincide with different types.
+    for e in map.drain() {
+        if let Ok(mut ec) = commands.get_entity(e) {
+            ec.try_despawn();
+        }
+    }
+    drawables.0.clear();
+    store.0 = Store::with_document(doc);
+    *origin = DocumentOrigin::fresh();
+    synced.0 = store.0.document().version();
+    affected.extend(store.0.document().live_nodes().map(|n| n.id));
+    info!(
+        &quot;loaded document v{} ({} live nodes)&quot;,
+        store.0.document().version().0,
+        affected.len()
+    );
+}</code></pre></div></div></figure>
+<p>The early return is why an idle frame costs nothing: no queued work, no pending value changes, and the version equals the one already synced. A load tears down every entity and all draw data rather than diffing (the same id may be a different type in the new document) and installs a fresh <code>Store</code> with empty history.</p>
+<h3 id="drain">Drain the queues, in order</h3>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:338">src/document_bridge/mod.rs</a><span class="range">lines 338–386</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">338
+339
+340
+341
+342
+343
+344
+345
+346
+347
+348
+349
+350
+351
+352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376
+377
+378
+379
+380
+381
+382
+383
+384
+385
+386</pre><pre class="src"><code class="language-rust">for mut input in pending.0.drain(..) {
     if input.ts == 0 {
         input.ts = now;
     }
@@ -238,6 +253,17 @@ for g in gestures.0.drain(..) {
                 }
             }
         }
+        GestureRequest::CommitMerged(label, before) =&gt; match store.0.commit_gesture(label.clone(), iron_document::Actor::Human, now) {
+            Some(Ok(_)) =&gt; {
+                store.0.merge_with_previous(before, label);
+            }
+            Some(Err(errors)) =&gt; {
+                for e in errors {
+                    warn!(&quot;gesture rejected: {e}&quot;);
+                }
+            }
+            None =&gt; {}
+        },
         GestureRequest::Cancel =&gt; store.0.cancel_gesture(),
     }
 }
@@ -256,12 +282,177 @@ for op in history.0.drain(..) {
         }
     }
 }</code></pre></div></div></figure>
-<p>Transactions, then gesture commits, then undo and redo. A rejected transaction is logged and simply doesn't happen. <code>ts == 0</code> means "stamp me with the frame clock".</p>
+<p>Transactions, then gesture commits, then undo and redo. A rejected transaction is logged and simply doesn't happen. <code>ts == 0</code> means "stamp me with the frame clock". <code>CommitMerged</code> commits and then folds the commit into the duplicate before it, so an Alt-drag is one undo step (Part 13).</p>
 <h3 id="reconcile-log">Read the log, then reconcile</h3>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:322">src/document_bridge/mod.rs</a><span class="range">lines 322–373</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:1"></span><span class="band" style="--from:21;--len:3"></span><span class="band" style="--from:28;--len:3"></span><span class="band" style="--from:35;--len:3"></span><span class="band" style="--from:45;--len:1"></span><pre class="gutter" aria-hidden="true">322
-323
-324
-325
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:387">src/document_bridge/mod.rs</a><span class="range">lines 387–439</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:1"></span><span class="band" style="--from:21;--len:3"></span><span class="band" style="--from:28;--len:3"></span><span class="band" style="--from:34;--len:4"></span><span class="band" style="--from:46;--len:1"></span><pre class="gutter" aria-hidden="true">387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439</pre><pre class="src"><code class="language-rust">    // Everything the log gained since the last sync, whoever applied it.
+    for tx in store.0.history().log().filter(|tx| tx.version &gt; synced.0) {
+        info!(&quot;applied {:?} ({} ops, {:?}) -&gt; v{}&quot;, tx.label, tx.ops.len(), tx.actor, tx.version.0);
+        if let Some(s) = &amp;tx.solver {
+            // The cause line the model hears (CS §9.1): who drove what, which
+            // clusters re-solved; inferred values are on demand, never pushed.
+            let list = |ids: &amp;[NodeId]| ids.iter().map(|i| i.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot; &quot;);
+            info!(
+                &quot;{:?} by {:?}: cluster {} re-solved; moved {} node(s): {}{}&quot;,
+                tx.label,
+                tx.actor,
+                list(&amp;s.clusters),
+                s.moved.len(),
+                list(&amp;s.moved),
+                if s.unmet.is_empty() {
+                    String::new()
+                } else {
+                    format!(&quot;; unmet: {}&quot;, s.unmet.iter().map(|u| format!(&quot;{} wanted {} got {}&quot;, u.leaf, u.requested, u.solved)).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot;, &quot;))
+                }
+            );
+        }
+        for op in tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()) {
+            structure |= collect_ids(op, &amp;mut affected);
+        }
+    }
+    synced.0 = store.0.document().version();
+    // Resolved values that moved: bindings re-evaluated, or a gesture
+    // previewed. Their nodes are rewritten like any other change.
+    for change in store.0.drain_changes() {
+        affected.insert(change.leaf.node);
+    }
+    for (leaf, err) in &amp;store.0.reactive().errors {
+        warn!(&quot;binding {leaf}: {err}&quot;);
+    }
+    let version = store.0.document().version();
+    if version != version_before {
+        events.document_changed(version.0 as u32);
+    }
+    if affected.is_empty() {
+        return;
+    }
+    geometry_revision.0 = geometry_revision.0.wrapping_add(1);
+    let Some(assets) = assets else {
+        warn!(&quot;mesh assets missing; cannot reconcile&quot;);
+        return;
+    };
+    materialize::reconcile(&amp;store.0, &amp;affected, &amp;mut map, &amp;mut layers, &amp;mut commands, &amp;assets, &amp;mut drawables, &amp;modes);
+    if structure {
+        map.paint_index = paint_order(&amp;store.0);
+    }
+    changes.nodes.extend(affected);
+    changes.structure |= structure;
+}</code></pre></div></div></figure>
+<p>Line 388 is the design decision in code. It doesn't look at what was queued; it reads everything the log gained since <code>SyncedVersion</code>. That covers queued transactions, undo and redo, and also transactions applied by other routes: the model surface calls <code>Store::apply</code> synchronously through the host boundary, and the sync picks those up here without being told. For each, it collects ids from the ops, the solver's derived ops and the inverse (408–410):</p>
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:470">src/document_bridge/mod.rs</a><span class="range">lines 470–499</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">470
+471
+472
+473
+474
+475
+476
+477
+478
+479
+480
+481
+482
+483
+484
+485
+486
+487
+488
+489
+490
+491
+492
+493
+494
+495
+496
+497
+498
+499</pre><pre class="src"><code class="language-rust">/// The nodes an op touches. Returns whether it changed the tree&#x27;s shape
+/// (existence, parent, or sibling order), which is what invalidates the
+/// painter order.
+fn collect_ids(op: &amp;Op, out: &amp;mut BTreeSet&lt;NodeId&gt;) -&gt; bool {
+    match op {
+        Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } =&gt; {
+            out.insert(*id);
+            if let Some(p) = parent {
+                out.insert(*p);
+            }
+            true
+        }
+        Op::Delete { id } | Op::Reorder { id, .. } =&gt; {
+            out.insert(*id);
+            true
+        }
+        Op::Set { id, .. } | Op::AddComp { id, .. } | Op::RemoveComp { id, .. } =&gt; {
+            out.insert(*id);
+            false
+        }
+        // A `figures` link changes what a figure highlights with, so both
+        // ends redraw. An unlink&#x27;s inverse is the link, which names them.
+        Op::Link { rel } =&gt; {
+            out.insert(rel.from);
+            out.insert(rel.to);
+            false
+        }
+        Op::Unlink { .. } =&gt; false,
+    }
+}</code></pre></div></div></figure>
+<p>Why the inverse too? For a <code>Reparent</code>, the op names the new parent and the inverse the old one; both child lists changed. Then come the nodes whose resolved values moved (415–417), such as a bar whose height binding re-evaluated or a gauge a producer just published. If the version moved, a <code>DocumentChanged</code> event is pushed for the shell (421–424), which is how HTML views refresh. Then the affected set goes to the reconciler (433).</p>
+
+<h2 id="reconciler"><span class="sec">F4.5</span>The reconciler: node → draw data, and an entity where one is due</h2>
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:325">src/document_bridge/materialize.rs</a><span class="range">lines 325–386</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:15;--len:14"></span><span class="band" style="--from:31;--len:31"></span><pre class="gutter" aria-hidden="true">325
 326
 327
 328
@@ -309,253 +500,94 @@ for op in history.0.drain(..) {
 370
 371
 372
-373</pre><pre class="src"><code class="language-rust">    // Everything the log gained since the last sync, whoever applied it.
-    for tx in store.0.history().log().filter(|tx| tx.version &gt; synced.0) {
-        info!(&quot;applied {:?} ({} ops, {:?}) -&gt; v{}&quot;, tx.label, tx.ops.len(), tx.actor, tx.version.0);
-        if let Some(s) = &amp;tx.solver {
-            // The cause line the model hears (CS §9.1): who drove what, which
-            // clusters re-solved; inferred values are on demand, never pushed.
-            let list = |ids: &amp;[NodeId]| ids.iter().map(|i| i.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot; &quot;);
-            info!(
-                &quot;{:?} by {:?}: cluster {} re-solved; moved {} node(s): {}{}&quot;,
-                tx.label,
-                tx.actor,
-                list(&amp;s.clusters),
-                s.moved.len(),
-                list(&amp;s.moved),
-                if s.unmet.is_empty() {
-                    String::new()
-                } else {
-                    format!(&quot;; unmet: {}&quot;, s.unmet.iter().map(|u| format!(&quot;{} wanted {} got {}&quot;, u.leaf, u.requested, u.solved)).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot;, &quot;))
-                }
-            );
-        }
-        for op in tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()) {
-            structure |= collect_ids(op, &amp;mut affected);
-        }
-    }
-    synced.0 = store.0.document().version();
-    // Resolved values that moved: bindings re-evaluated, or a gesture
-    // previewed. Their nodes are rewritten like any other change.
-    for change in store.0.drain_changes() {
-        affected.insert(change.leaf.node);
-    }
-    for (leaf, err) in &amp;store.0.reactive().errors {
-        warn!(&quot;binding {leaf}: {err}&quot;);
-    }
-    let version = store.0.document().version();
-    if version != version_before {
-        crate::web_ffi::send_document_changed_from_worker(version.0 as u32);
-    }
-    if affected.is_empty() {
-        return;
-    }
-    let Some(assets) = assets else {
-        warn!(&quot;mesh assets missing; cannot reconcile&quot;);
-        return;
-    };
-    materialize::reconcile(&amp;store.0, &amp;affected, &amp;mut map, &amp;mut layers, &amp;mut commands, &amp;assets);
-    if structure {
-        map.paint_index = paint_order(&amp;store.0);
-    }
-    changes.nodes.extend(affected);
-    changes.structure |= structure;
-}</code></pre></div></div></figure>
-<p>Line 323 is the design decision in code. It doesn't look at what was queued; it reads everything the log gained since <code>SyncedVersion</code>. That covers queued transactions, undo and redo, and also transactions applied by other routes: the model surface calls <code>Store::apply</code> synchronously through the FFI, and the sync picks those up here without being told. For each, it collects ids from the ops, the solver's derived ops and the inverse:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:399">src/document_bridge/mod.rs</a><span class="range">lines 399–428</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">399
-400
-401
-402
-403
-404
-405
-406
-407
-408
-409
-410
-411
-412
-413
-414
-415
-416
-417
-418
-419
-420
-421
-422
-423
-424
-425
-426
-427
-428</pre><pre class="src"><code class="language-rust">/// The nodes an op touches. Returns whether it changed the tree&#x27;s shape
-/// (existence, parent, or sibling order), which is what invalidates the
-/// painter order.
-fn collect_ids(op: &amp;Op, out: &amp;mut BTreeSet&lt;NodeId&gt;) -&gt; bool {
-    match op {
-        Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } =&gt; {
-            out.insert(*id);
-            if let Some(p) = parent {
-                out.insert(*p);
-            }
-            true
-        }
-        Op::Delete { id } | Op::Reorder { id, .. } =&gt; {
-            out.insert(*id);
-            true
-        }
-        Op::Set { id, .. } | Op::AddComp { id, .. } | Op::RemoveComp { id, .. } =&gt; {
-            out.insert(*id);
-            false
-        }
-        // A `figures` link changes what a figure highlights with, so both
-        // ends redraw. An unlink&#x27;s inverse is the link, which names them.
-        Op::Link { rel } =&gt; {
-            out.insert(rel.from);
-            out.insert(rel.to);
-            false
-        }
-        Op::Unlink { .. } =&gt; false,
-    }
-}</code></pre></div></div></figure>
-<p>Why the inverse too? For a <code>Reparent</code>, the op names the new parent and the inverse the old one; both child lists changed. Then come the nodes whose resolved values moved (350–352), such as a bar whose height binding re-evaluated. If the version moved, the shell is told (357–359), which is how HTML views refresh. Then the affected set goes to the reconciler (367).</p>
-
-<h2 id="reconciler"><span class="sec">F4.5</span>The reconciler: node → entity</h2>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:127">src/document_bridge/materialize.rs</a><span class="range">lines 127–186</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:22;--len:23"></span><span class="band" style="--from:47;--len:12"></span><pre class="gutter" aria-hidden="true">127
-128
-129
-130
-131
-132
-133
-134
-135
-136
-137
-138
-139
-140
-141
-142
-143
-144
-145
-146
-147
-148
-149
-150
-151
-152
-153
-154
-155
-156
-157
-158
-159
-160
-161
-162
-163
-164
-165
-166
-167
-168
-169
-170
-171
-172
-173
-174
-175
-176
-177
-178
-179
-180
-181
-182
-183
-184
-185
-186</pre><pre class="src"><code class="language-rust">pub(super) fn reconcile(
+373
+374
+375
+376
+377
+378
+379
+380
+381
+382
+383
+384
+385
+386</pre><pre class="src"><code class="language-rust">pub(super) fn reconcile(
     store: &amp;Store,
     affected: &amp;BTreeSet&lt;NodeId&gt;,
     map: &amp;mut NodeMap,
     layers: &amp;mut CompositionLayers,
     commands: &amp;mut Commands,
     assets: &amp;MeshAssets,
+    drawables: &amp;mut Drawables,
+    modes: &amp;Modes,
 ) {
     let doc = store.document();
     let _ = ComponentKind::ALL; // keep the import meaningful for readers
-    // A point has no entity of its own: its path is redrawn instead.
-    let point_ty = TypeId::lookup(&quot;point&quot;).expect(&quot;registered&quot;);
+    // A contour or a point has no entity of its own: its path is redrawn
+    // instead. Tombstoned nodes still name their parent, so a deleted point
+    // finds its path.
+    let parts = [&quot;point&quot;, &quot;contour&quot;].map(|t| TypeId::lookup(t).expect(&quot;registered&quot;));
+    let path_ty = TypeId::lookup(&quot;path&quot;).expect(&quot;registered&quot;);
     let mut with_paths = affected.clone();
     for &amp;id in affected {
-        let point = doc.node(id).is_some_and(|n| n.ty == point_ty);
-        if point &amp;&amp; let Some(parent) = doc.node(id).and_then(|n| n.parent) {
-            with_paths.insert(parent);
+        let mut cur = doc.node(id).filter(|n| parts.contains(&amp;n.ty)).and_then(|n| n.parent);
+        while let Some(p) = cur.and_then(|p| doc.node(p)) {
+            if p.ty == path_ty {
+                with_paths.insert(p.id);
+                break;
+            }
+            cur = p.parent;
         }
     }
     let affected = &amp;with_paths;
 
-    // Pass 1: existence and values. Hierarchy waits until every entity exists.
+    // Pass 1: draw data for every touched node, and an entity where one is due.
     for &amp;id in affected {
         match (doc.live(id), map.entity(id)) {
             (Some(_), None) =&gt; {
-                if drawable(doc, id)
-                    &amp;&amp; let Some(e) = spawn(store, id, layers, commands, assets)
-                {
-                    map.insert(id, e);
+                if !drawable(doc, id) {
+                    continue;
+                }
+                if modes.wants_entity(store, id) {
+                    if let Some(e) = spawn(store, id, layers, commands, assets, drawables) {
+                        map.insert(id, e);
+                    }
+                } else {
+                    write_values(store, id, layers, None, assets, drawables);
                 }
             }
             (None, Some(_)) =&gt; {
                 let e = map.remove(id).expect(&quot;checked&quot;);
+                drawables.0.remove(&amp;id);
                 if let Ok(mut ec) = commands.get_entity(e) {
                     ec.try_despawn();
                 }
             }
             (Some(_), Some(e)) =&gt; {
                 if let Ok(mut ec) = commands.get_entity(e) {
-                    write_values(store, id, layers, &amp;mut ec, assets);
+                    write_values(store, id, layers, Some(&amp;mut ec), assets, drawables);
                 }
             }
-            (None, None) =&gt; {}
-        }
-    }
-
-    // Pass 2: parent links, for every touched node that is materialised.
-    for &amp;id in affected {
-        let (Some(node), Some(e)) = (doc.live(id), map.entity(id)) else { continue };
-        let Ok(mut ec) = commands.get_entity(e) else { continue };
-        match node.parent.and_then(|p| map.entity(p)) {
-            Some(pe) =&gt; {
-                ec.insert(ChildOf(pe));
-            }
-            None =&gt; {
-                ec.remove::&lt;ChildOf&gt;();
+            (None, None) =&gt; {
+                drawables.0.remove(&amp;id);
             }
         }
-    }
-}</code></pre></div></div></figure>
-<p>For each affected id, four cases (149–171): live with no entity, spawn one; entity with no live node, despawn it; both, rewrite the entity's values; neither, nothing. Parent links come in a second pass (174–185), because a child may be spawned before its parent. Two details at the top: a path's <code>point</code> children have no entities, so a changed point redraws its path (Part 7); and nothing under a <code>library</code> is drawn (Part 2).</p>
-<p><code>write_values</code> turns document components into Bevy components, one arm per node type, and reads every value through <code>Reader</code>:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:293">src/document_bridge/materialize.rs</a><span class="range">lines 293–303</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">293
-294
-295
-296
-297
-298
-299
-300
-301
-302
-303</pre><pre class="src"><code class="language-rust">/// Resolved-value reads for one node, with defaults for absent components.
+    }</code></pre></div></div></figure>
+<p>First (340–353), a touched <code>point</code> or <code>contour</code> adds its enclosing <code>path</code>, since points have no draw data of their own (Part 7). Then, for each affected id, four cases: live with no entity, write its draw data and spawn an entity only if <code>Modes</code> says one is due; entity with no live node, despawn it; both, rewrite; neither, drop any draw data. Nothing under a <code>library</code> is drawn (Part 2). A second pass, shown in Part 10, places 3D descendants, because entities are flat.</p>
+<p><code>write_values</code> turns document components into draw data and Bevy components, one arm per node type, and reads every value through <code>Reader</code>:</p>
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:554">src/document_bridge/materialize.rs</a><span class="range">lines 554–564</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">554
+555
+556
+557
+558
+559
+560
+561
+562
+563
+564</pre><pre class="src"><code class="language-rust">/// Resolved-value reads for one node, with defaults for absent components.
 struct Reader&lt;&#x27;a&gt; {
     store: &amp;&#x27;a Store,
     id: NodeId,
@@ -566,10 +598,10 @@ impl Reader&lt;&#x27;_&gt; {
         let path: LeafPath = leaf.parse().expect(&quot;declared leaf&quot;);
         self.store.resolved(self.id, path)
     }</code></pre></div></div></figure>
-<p>It calls <code>store.resolved(…)</code>, not <code>doc.leaf(…)</code>: the value a reader should see now, through every layer of F3. So the reconciler draws bound, previewed, animated and solved values with no special cases. Document 2D space is y-down with the origin at the top-left, as in SVG, and the entity's <code>Transform</code> holds those coordinates as they are; each panel's own pan and zoom are applied when drawing (Part 5).</p>
+<p>It calls <code>store.resolved(…)</code>, not <code>doc.leaf(…)</code>: the value a reader should see now, through every layer of F3. So the reconciler draws bound, previewed, animated, published and solved values with no special cases. Document 2D space is y-down with the origin at the top-left, as in SVG. A 2D node's draw data is in its own local space, and its placement comes from the store (Part 10); each panel's pan and zoom are applied when drawing (Part 5).</p>
 
 <h3 id="frame">Where gestures fit in the frame</h3>
-<p><code>sync_document</code> runs at the <em>start</em> of the frame. Tools run in <code>PostUpdate</code>, where a drag previews into the store (F3.5). Without help, every preview would reach the screen a frame late, so a second, smaller pass, <code>reconcile_gesture</code>, drains the preview's changes and rewrites those entities before Bevy propagates transforms. Part 3 covers it. On release, the tool pushes a <code>GestureRequest::Commit</code>, and the next frame's sync turns the previews into one transaction.</p>
+<p><code>sync_document</code> runs at the <em>start</em> of the frame. Tools run in <code>PostUpdate</code>, where a drag previews into the store (F3.5). Without help, every preview would reach the screen a frame late, so a second, smaller pass, <code>reconcile_gesture</code>, drains the preview's changes and rewrites that draw data in the same frame. Part 3 covers it; Part 11 places it in the whole schedule. On release, the tool pushes a <code>GestureRequest::Commit</code>, and the next frame's sync turns the previews into one transaction.</p>
 
 <h3 id="demo">The starting scene is a transaction</h3>
 <figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/demo.rs:13">src/document_bridge/demo.rs</a><span class="range">lines 13–31</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">13
@@ -609,83 +641,77 @@ pub fn demo_scene(store: &amp;iron_document::Store) -&gt; iron_document::Transac
         key = OrderKey::after(&amp;key);
         k
     };</code></pre></div></div></figure>
-<p>The app spawns nothing by hand. <code>demo_scene</code> builds one <code>TransactionInput</code> and queues it at startup, so the demo is saved, viewed and undone like anything else. Lines 23–31 set up two generators: <code>next_ids(61)</code> reserves ids up front and <code>next</code> hands them out; <code>order</code> hands out <code>a0</code>, <code>a1</code>, <code>a2</code>…. The rest of the file (now long) builds the compositions, the pendulum, the bar definition, the optics and thermal chains, and the timeline. Parts 2–9 show its pieces.</p>
+<p>The app spawns nothing by hand. <code>demo_scene</code> builds one <code>TransactionInput</code> and queues it at startup, so the demo is saved, viewed and undone like anything else. Lines 23–31 set up two generators: <code>next_ids(61)</code> reserves ids up front and <code>next</code> hands them out; <code>order</code> hands out <code>a0</code>, <code>a1</code>, <code>a2</code>…. The rest of the file (now long) builds the compositions, the pendulum, the bar definition, the optics and thermal chains, the timeline, and since October 17 the piston demo. Parts 2–12 show its pieces.</p>
 
-<h2 id="ffi"><span class="sec">F4.6</span>The wasm boundary</h2>
-<p>The app runs in a web worker: Bevy, the store and the model surface's TypeScript together. The Svelte shell on the main thread sends messages; <code>worker.ts</code> calls <code>#[wasm_bindgen]</code> functions in <code>web_ffi.rs</code>, which either read the store directly or queue a request for the next sync.</p>
-<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:816">src/web_ffi.rs</a><span class="range">lines 816–839</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">816
-817
-818
-819
-820
-821
-822
-823
-824
-825
-826
-827
-828
-829
-830
-831
-832
-833
-834
-835
-836
-837
-838
-839</pre><pre class="src"><code class="language-rust">/// Editor history, requested by the shell. Which keystroke means &quot;undo&quot; is
-/// chrome policy on the main thread; only the command crosses here.
-#[wasm_bindgen]
-pub fn undo(ptr: u64) {
-    history_request(ptr, crate::document_bridge::HistoryOp::Undo);
+<h2 id="ffi"><span class="sec">F4.6</span>The host boundary</h2>
+<p>On the web the app runs in a web worker: Bevy, the store and the model surface's TypeScript together. The Svelte shell on the main thread sends messages; <code>worker.ts</code> calls <code>#[wasm_bindgen]</code> functions in <code>web_ffi.rs</code>. Since the macOS target (Part 11), those are thin wrappers: the behaviour lives in <code>engine_api.rs</code>, shared by both hosts, and each function either reads the store directly, applies to it, or queues a request for a system.</p>
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/engine_api.rs:907">src/engine_api.rs</a><span class="range">lines 907–931</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">907
+908
+909
+910
+911
+912
+913
+914
+915
+916
+917
+918
+919
+920
+921
+922
+923
+924
+925
+926
+927
+928
+929
+930
+931</pre><pre class="src"><code class="language-rust">pub fn undo(app: &amp;mut WorkerApp) {
+    history_request(app, crate::document_bridge::HistoryOp::Undo);
 }
 
-#[wasm_bindgen]
-pub fn redo(ptr: u64) {
-    history_request(ptr, crate::document_bridge::HistoryOp::Redo);
+pub fn redo(app: &amp;mut WorkerApp) {
+    history_request(app, crate::document_bridge::HistoryOp::Redo);
 }
 
-fn history_request(ptr: u64, op: crate::document_bridge::HistoryOp) {
-    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
-    if let Some(mut requests) = app
-        .world_mut()
-        .get_resource_mut::&lt;crate::document_bridge::HistoryRequests&gt;()
-    {
-        requests.0.push(op);
+/// Undo and redo travel with the other shortcuts (`ToolKeys`), so they
+/// apply in the order the keys were pressed: a tool&#x27;s transaction from an
+/// earlier key reaches `PendingTransactions` when the tool handles it, and
+/// an undo queued straight into `HistoryRequests` would overtake it on a
+/// slow frame (undoing the previous change instead).
+fn history_request(app: &amp;mut WorkerApp, op: crate::document_bridge::HistoryOp) {
+    if let Some(mut keys) = app.world_mut().get_resource_mut::&lt;crate::bevy_app::select::ToolKeys&gt;() {
+        let key = match op {
+            crate::document_bridge::HistoryOp::Undo =&gt; &quot;undo&quot;,
+            crate::document_bridge::HistoryOp::Redo =&gt; &quot;redo&quot;,
+        };
+        keys.0.push((key.to_owned(), 0));
     }
     if let Some(mut active_info) = app.world_mut().get_resource_mut::&lt;ActivityControl&gt;() {
         active_info.remaining_frames = 10;
     }
 }</code></pre></div></div></figure>
-<p>Which keystroke means undo is chrome policy, decided on the main thread (and ignored while you type in a text field); only the command crosses. It is queued, and the next sync runs <code>Store::undo</code> and reconciles; <code>remaining_frames</code> keeps the frame loop ticking, since the app stops rendering when idle (Part 6). Save and view read the store directly and return strings. Load validates on the spot, so a broken file is an error to the caller and never reaches the scene:</p>
-<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:415">src/web_ffi.rs</a><span class="range">lines 415–430</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">415
-416
-417
-418
-419
-420
-421
-422
-423
-424
-425
-426
-427
-428
-429
-430</pre><pre class="src"><code class="language-rust">/// Replace the document. Validated here, so a bad file is an error to the
-/// caller and never reaches the store; applied on the next frame.
-#[wasm_bindgen]
-pub fn document_load(ptr: u64, text: String) -&gt; Result&lt;(), JsValue&gt; {
-    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
-    let doc = iron_document::serial::load(&amp;text).map_err(|e| JsValue::from_str(&amp;e.to_string()))?;
+<p>Which keystroke means undo is chrome policy, decided on the main thread (and ignored while you type in a text field); only the command crosses. It is queued with the other tool keys, so it keeps its place relative to a Delete pressed just before it (Part 11 shows the bug this fixed); <code>remaining_frames</code> keeps the frame loop ticking, since the app stops rendering when idle (Part 6). Save and view read the store directly and return strings. Load validates on the spot, so a broken file is an error to the caller and never reaches the scene:</p>
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/engine_api.rs:220">src/engine_api.rs</a><span class="range">lines 220–231</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231</pre><pre class="src"><code class="language-rust">pub fn document_load(app: &amp;mut WorkerApp, text: String) -&gt; Result&lt;(), String&gt; {
+    let doc = iron_document::serial::load(&amp;text).map_err(|e| String::from(&amp;e.to_string()))?;
     let mut load = app
         .world_mut()
         .get_resource_mut::&lt;crate::document_bridge::PendingLoad&gt;()
-        .ok_or_else(|| JsValue::from_str(&quot;document bridge not installed&quot;))?;
+        .ok_or_else(|| String::from(&quot;document bridge not installed&quot;))?;
     load.0 = Some(doc);
     if let Some(mut active_info) = app.world_mut().get_resource_mut::&lt;ActivityControl&gt;() {
         active_info.remaining_frames = 10;
@@ -693,54 +719,40 @@ pub fn document_load(ptr: u64, text: String) -&gt; Result&lt;(), JsValue&gt; {
     Ok(())
 }</code></pre></div></div></figure>
 <p>One call is different. The model needs every error in one round trip, so <code>document_apply</code> applies <em>now</em> and answers in JSON instead of queueing:</p>
-<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:446">src/web_ffi.rs</a><span class="range">lines 446–486</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:18;--len:9"></span><span class="band" style="--from:27;--len:9"></span><pre class="gutter" aria-hidden="true">446
-447
-448
-449
-450
-451
-452
-453
-454
-455
-456
-457
-458
-459
-460
-461
-462
-463
-464
-465
-466
-467
-468
-469
-470
-471
-472
-473
-474
-475
-476
-477
-478
-479
-480
-481
-482
-483
-484
-485
-486</pre><pre class="src"><code class="language-rust">/// Apply a transaction now and answer synchronously: the model surface needs
-/// every error in one round trip (doc 04 §9.5). `expect_version`, when not
-/// zero, is compare-and-swap: the transaction is refused if the document has
-/// moved since the caller last read it. Returns JSON:
-/// `{&quot;ok&quot;:true,&quot;version&quot;:N}` or `{&quot;ok&quot;:false,&quot;errors&quot;:[...]}`.
-#[wasm_bindgen]
-pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -&gt; String {
-    let app = unsafe { &amp;mut *(ptr as *mut WorkerApp) };
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/engine_api.rs:243">src/engine_api.rs</a><span class="range">lines 243–276</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:9"></span><span class="band" style="--from:20;--len:9"></span><pre class="gutter" aria-hidden="true">243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256
+257
+258
+259
+260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+271
+272
+273
+274
+275
+276</pre><pre class="src"><code class="language-rust">pub fn document_apply(app: &amp;mut WorkerApp, transaction_json: String, expect_version: u32) -&gt; String {
     let input: iron_document::TransactionInput = match serde_json::from_str(&amp;transaction_json) {
         Ok(t) =&gt; t,
         Err(e) =&gt; {
@@ -774,8 +786,8 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
     }
     result.to_string()
 }</code></pre></div></div></figure>
-<p><code>expect_version</code> is compare-and-swap. The model read <code>&lt;document version="7"&gt;</code>; if you dragged something while it was thinking, the document is at 8 and its edit, based on a stale view, is refused with "re-read before retrying". On success the bridge still picks the transaction up from the log on the next frame.</p>
-<p>The other calls the model surface uses keep the store in charge of what only it should decide: <code>document_next_ids</code> and <code>document_next_relation_ids</code> (ids come from the store's counter), <code>document_place</code> (order keys, F1.8), and <code>document_schema</code> (the registry as JSON, F1.6). Later parts add more: <code>document_link</code>, <code>document_inspect</code>, <code>document_selection</code>, <code>set_panel_viewport</code>; the field guide lists them.</p>
+<p><code>expect_version</code> is compare-and-swap. The model read <code>&lt;document version="7"&gt;</code>; if you dragged something while it was thinking, the document is at 8 and its edit, based on a stale view, is refused with "re-read before retrying". If you are dragging <em>while</em> it applies, the edit is classified against your gesture (Part 13). On success the bridge still picks the transaction up from the log on the next frame.</p>
+<p>The other calls the model surface uses keep the store in charge of what only it should decide: <code>document_next_ids</code> and <code>document_next_relation_ids</code> (ids come from the store's counter), <code>document_place</code> (order keys, F1.8), and <code>document_schema</code> (the registry as JSON, F1.6). On the web they reach Rust as <code>documentCall</code> messages, decoded by name through <code>engine_dispatch</code>'s allowlist. Later parts add more: <code>link</code>, <code>inspect</code>, <code>selection</code>, <code>signals</code>, <code>export_svg</code>; the field guide lists them.</p>
 
 <h2 id="model"><span class="sec">F4.7</span>The model surface</h2>
 <div class="compare">
@@ -791,7 +803,7 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
 <p>TypeScript turns that into <em>one</em> transaction: it resolves <code>$n</code> to a real id, asks Rust for order keys, maps <code>w</code> to <code>size.w</code> and <code>color</code> to <code>fill.color</code>, coerces <code>#ff0000</code> to a colour, turns <code>{= …}</code> into a binding, and applies it with the version check.</p>
 </div>
 <p>It runs in the worker, next to the wasm, so every question it asks the store is a plain synchronous call; only the network call to Claude is asynchronous. One turn:</p>
-<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/agent.ts:21">src-ui/model/agent.ts</a><span class="range">lines 21–59</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">21
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/agent.ts:21">src-ui/model/agent.ts</a><span class="range">lines 21–58</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">21
 22
 23
 24
@@ -828,15 +840,14 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
 55
 56
 57
-58
-59</pre><pre class="src"><code class="language-typescript">export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string): Promise&lt;AskResult&gt; {
-  const system = manifest(api.schema());
+58</pre><pre class="src"><code class="language-typescript">export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string): Promise&lt;AskResult&gt; {
+  const system = manifest(await api.schema());
   // The model view first (what things are and where each is drawn, ECM §11),
   // then the tree, which also holds what no composition does (the library,
   // timelines, loose roots).
-  const view = `${api.view({ fidelity: &#x27;full&#x27;, relation: &#x27;model&#x27; })}\n${api.view({ fidelity: &#x27;full&#x27; })}`;
+  const view = `${await api.view({ fidelity: &#x27;full&#x27;, relation: &#x27;model&#x27; })}\n${await api.view({ fidelity: &#x27;full&#x27; })}`;
   // What the person has selected, so &quot;this&quot; and &quot;the selected one&quot; resolve.
-  const picked = api.selection();
+  const picked = await api.selection();
   const selection = picked.length
     ? `SELECTED\n${picked.map((p) =&gt; `${p.node} (${p.type ?? &#x27;node&#x27;}${p.name ? ` &quot;${p.name}&quot;` : &#x27;&#x27;})`).join(&#x27;\n&#x27;)}\n\n`
     : &#x27;&#x27;;
@@ -861,17 +872,15 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
       return { ok: false, note, edit: null, outcome: null, attempts, transport: transport.name, error: &#x27;the reply had no &lt;edit&gt; block&#x27; };
     }
     lastEdit = edit;
-    lastOutcome = applyEdit(api, edit, `model: ${instruction.slice(0, 60)}`);
+    lastOutcome = await applyEdit(api, edit, `model: ${instruction.slice(0, 60)}`);
     if (lastOutcome.ok) break;
     messages.push({ role: &#x27;assistant&#x27;, content: text });
     messages.push({ role: &#x27;user&#x27;, content: `${lastOutcome.failure}\n\nSend one corrected &lt;edit&gt;.` });
   }
-  return { ok: !!lastOutcome?.ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name };
-}</code></pre></div></div></figure>
+  return { ok: !!lastOutcome?.ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name };</code></pre></div></div></figure>
 <p>Build the system prompt from the schema, and the user message from the model view, the tree view, the current selection (Part 8) and the request (22–34). Call the model. Pull out the <code>&lt;edit&gt;</code>. Apply it with the label "model: …". If it failed, send back the failure and ask for one corrected edit. At most two attempts. The actor is <code>model</code>, so the edit sits on the same undo stack as your drags, and Cmd+Z undoes it.</p>
 <h3 id="parse">The edit parser: four passes, one transaction</h3>
-<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/edit.ts:73">src-ui/model/edit.ts</a><span class="range">lines 73–125</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">73
-74
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/edit.ts:74">src-ui/model/edit.ts</a><span class="range">lines 74–127</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">74
 75
 76
 77
@@ -922,7 +931,9 @@ pub fn document_apply(ptr: u64, transaction_json: String, expect_version: u32) -
 122
 123
 124
-125</pre><pre class="src"><code class="language-typescript">// Pass 1: verbs in order, with their attributes.
+125
+126
+127</pre><pre class="src"><code class="language-typescript">// Pass 1: verbs in order, with their attributes.
 type Verb = { verb: (typeof VERBS)[number]; attrs: Record&lt;string, string&gt;; index: number };
 const verbs: Verb[] = [];
 for (const child of root.edit as any[]) {
@@ -934,7 +945,7 @@ for (const child of root.edit as any[]) {
 
 // Pass 2: mint ids for aliases, in order of creation.
 const aliasNames = verbs.filter((v) =&gt; v.verb === &#x27;create&#x27;).map((v) =&gt; v.attrs.id).filter((id) =&gt; id?.startsWith(&#x27;$&#x27;));
-const minted = api.nextIds(aliasNames.length);
+const minted = await api.nextIds(aliasNames.length);
 const aliases: Record&lt;string, string&gt; = {};
 aliasNames.forEach((a, i) =&gt; (aliases[a] = minted[i]));
 const resolveId = (raw: string | undefined, what: string, index: number): string =&gt; {
@@ -967,14 +978,15 @@ for (const key of new Set(wantPlacement.map((w) =&gt; w.key))) {
   const count = wantPlacement.filter((w) =&gt; w.key === key).length;
   const [parent, after] = key.split(&#x27;|&#x27;);
   // A parent created in this same edit has no children yet; keys start fresh.
-  const keys = minted.includes(parent) ? freshKeys(count) : api.place(parent, after, count);
+  const keys = minted.includes(parent) ? freshKeys(count) : await api.place(parent, after, count);
   placementKeys.set(key, keys);
 }
 const takeKey = (v: Verb) =&gt; {
   const p = placementOf(v);
   const keys = placementKeys.get(`${p.parent}|${p.after}`)!;
   return { parent: p.parent || null, order: keys.shift()! };
-};</code></pre></div></div></figure>
+};
+</code></pre></div></div></figure>
 <ol>
   <li><strong>Collect verbs</strong> in order, rejecting unknown ones with the list of valid ones.</li>
   <li><strong>Mint aliases.</strong> Every <code>&lt;create id="$something"&gt;</code> gets a real id from the store, so later verbs can say <code>parent="$group"</code>. The model never invents a real id.</li>
@@ -1031,10 +1043,10 @@ export function resolveLeaf(schema: Schema, type: string, attr: string): { compo
 }</code></pre></div></div></figure>
 <p>A bare field name resolves to the first component, in the type's declared order, that has it: on a rect <code>color</code> is <code>fill.color</code>, and <code>stroke.color</code> must be written in full. <code>coerce</code> is forgiving about format (<code>"12"</code>, <code>12px</code>; <code>#rrggbb</code> or <code>rgba(…)</code>; <code>9.58 mW</code> for a quantity) and strict about meaning.</p>
 <p>Parse errors and store errors come back the same way, as markup the model reads just as it read the view:</p>
-<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/edit.ts:317">src-ui/model/edit.ts</a><span class="range">lines 317–320</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">317
-318
-319
-320</pre><pre class="src"><code class="language-typescript">function failed(version: number, errors: { op: number | null; kind: string; message: string }[]): string {
+<figure class="code"><figcaption><span class="chip sys-model">Model surface</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/model/edit.ts:343">src-ui/model/edit.ts</a><span class="range">lines 343–346</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">343
+344
+345
+346</pre><pre class="src"><code class="language-typescript">function failed(version: number, errors: { op: number | null; kind: string; message: string }[]): string {
   const lines = errors.map((e) =&gt; `  &lt;error${e.op === null ? &#x27;&#x27; : ` op=&quot;${e.op}&quot;`} kind=&quot;${e.kind}&quot;&gt;${escapeXml(e.message)}&lt;/error&gt;`);
   return `&lt;edit-failed applied=&quot;none&quot; version=&quot;${version}&quot;&gt;\n${lines.join(&#x27;\n&#x27;)}\n&lt;/edit-failed&gt;`;
 }</code></pre></div></div></figure>
@@ -1044,8 +1056,8 @@ export function resolveLeaf(schema: Schema, type: string, attr: string): { compo
 <ul>
   <li>The document (<code>iron_document</code>) holds all authored state: stable ids, typed components, slots, relations. Its writes are private to the op applier.</li>
   <li>Every change is a transaction of ops that commits entirely or not at all and records its own inverse. Undo is another transaction.</li>
-  <li>The reactive graph layers previews, bindings, physics and clips over the constants; every reader, including the reconciler, sees the same resolved values.</li>
-  <li>The bridge reconciles Bevy from the transaction log, whoever applied the transaction, and gestures preview each frame and commit once.</li>
+  <li>The reactive graph layers previews, bindings and runtime signals over the constants; every reader, including the reconciler, sees the same resolved values.</li>
+  <li>The bridge reconciles from the transaction log, whoever applied the transaction, writing draw data by node and entities only where Bevy acts. Gestures preview each frame and commit once.</li>
   <li>The model reads views and writes <code>&lt;edit&gt;</code> markup, which becomes an ordinary transaction with a version check. Part 1 picks up from here.</li>
 </ul>
 </div>

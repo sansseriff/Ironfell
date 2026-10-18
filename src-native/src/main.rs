@@ -241,6 +241,22 @@ impl Host {
             .resource::<ironfell::host_events::HostEvents>()
             .drain()
         {
+            // Font files ship inside the bundled frontend (`public/fonts`),
+            // so the native host reads them in place of the web's fetch
+            // (plans/specs/text.md §4). Installed fonts need no file at all.
+            if let ironfell::host_events::EngineEvent::Fonts { fonts } = &event {
+                use tauri::Manager;
+                let resolver = self.native.app_handle().asset_resolver();
+                for f in fonts {
+                    match resolver.get(format!("fonts/{}", f.file)) {
+                        Some(asset) => {
+                            iron_text::engine().register(asset.bytes);
+                        }
+                        None => eprintln!("font {} ({}) is not in the bundle", f.family, f.file),
+                    }
+                }
+                continue;
+            }
             let mut value = serde_json::to_value(event).unwrap();
             if value["ty"] == "convertQuestion" {
                 if let Some(text) = value["question"].as_str() {

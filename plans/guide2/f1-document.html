@@ -8,9 +8,9 @@
 <title>Foundations 1 · What the document is made of — Iron, Part Two</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="index.html" aria-label="Previous part">&larr;</a><span class="here">Foundations 1 of 4</span><a href="f2-changes.html" aria-label="Next part">&rarr;</a></div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager"><a href="index.html" aria-label="Previous part">&larr;</a><span class="here">Foundations 1 of 4</span><a href="f2-changes.html" aria-label="Next part">&rarr;</a></div></div></header>
 <div class="frame">
-<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html" aria-current="page"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html" aria-current="page"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
   <p class="kicker">Foundations 1 of 4 · <span class="chip sys-store">Document model</span></p>
@@ -325,7 +325,7 @@ impl Slot {
   <div class="box built"><span class="tab">What was built</span><p><strong>A Rust struct per component</strong>, one <code>Slot</code> field per leaf, plus a static table of field names and kinds. Readers get typed access; the validator, file loader, view renderer and the model's schema all read the same table.</p></div>
 </div>
 <p><code>component.rs</code> declares every component in one table and lets a macro generate the structs and lookups. A few entries:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:143">src/iron_document/src/component.rs</a><span class="range">lines 143–199</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">143
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:143">src/iron_document/src/component.rs</a><span class="range">lines 143–169</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">143
 144
 145
 146
@@ -351,37 +351,7 @@ impl Slot {
 166
 167
 168
-169
-170
-171
-172
-173
-174
-175
-176
-177
-178
-179
-180
-181
-182
-183
-184
-185
-186
-187
-188
-189
-190
-191
-192
-193
-194
-195
-196
-197
-198
-199</pre><pre class="src"><code class="language-rust">Transform2d / &quot;transform2d&quot; =&gt; Transform2d {
+169</pre><pre class="src"><code class="language-rust">Transform2d / &quot;transform2d&quot; =&gt; Transform2d {
     x: Number = Value::Number(0.0),
     y: Number = Value::Number(0.0),
     rot: Number = Value::Number(0.0),
@@ -401,44 +371,14 @@ Size / &quot;size&quot; =&gt; Size {
     h: Number = Value::Number(100.0),
 }
 
-Radius / &quot;radius&quot; =&gt; Radius { r: Number = Value::Number(50.0) }
-
-/// A path&#x27;s outline (roadmap stage E): its `point` children in sibling
-/// order, joined by lines or curves, closed back to the first or not.
-PathShape / &quot;path&quot; =&gt; PathShape { closed: Bool = Value::Bool(false) }
-
-/// A path point&#x27;s Bézier handles, relative to the point: `i` leads into
-/// it, `o` out of it. Zero handles make a corner. Leaves on the point,
-/// not child nodes (roadmap §7 item 4), so each can be bound.
-Handles / &quot;handles&quot; =&gt; Handles {
-    ix: Number = Value::Number(0.0),
-    iy: Number = Value::Number(0.0),
-    ox: Number = Value::Number(0.0),
-    oy: Number = Value::Number(0.0),
+/// An ellipse&#x27;s radii along its own x and y; equal for a circle. The
+/// ellipse is centred on its origin (SVG&#x27;s `rx`, `ry`).
+Radius / &quot;radius&quot; =&gt; Radius {
+    rx: Number = Value::Number(50.0),
+    ry: Number = Value::Number(50.0),
 }
-
-Fill / &quot;fill&quot; =&gt; Fill {
-    color: Color = Value::Color([0.5, 0.5, 0.5, 1.0]),
-    opacity: Number = Value::Number(1.0),
-}
-
-Stroke / &quot;stroke&quot; =&gt; Stroke {
-    color: Color = Value::Color([0.0, 0.0, 0.0, 1.0]),
-    width: Number = Value::Number(1.0),
-}
-
-/// Which mesh asset a `mesh` node shows.
-Mesh / &quot;mesh&quot; =&gt; Mesh { asset: Str = Value::Str(&quot;torus&quot;.to_owned()) }
-
-/// A scalar-on-a-track control (doc 02 §9.3). `value` is the leaf other
-/// properties will bind to.
-Slider / &quot;slider&quot; =&gt; Slider {
-    min: Number = Value::Number(0.0),
-    max: Number = Value::Number(1.0),
-    step: Number = Value::Number(0.01),
-    value: Number = Value::Number(0.5),
-}</code></pre></div></div></figure>
-<p>Read <code>Radius / "radius" =&gt; Radius { r: Number = Value::Number(50.0) }</code> as: "a component whose enum variant is <code>Radius</code>, whose JSON name is <code>"radius"</code>, whose struct is <code>Radius</code>, with one field <code>r</code> of kind <code>Number</code>, defaulting to 50." The table now has about thirty entries; the later parts introduce them as they come up. Here is the per-component half of the macro that consumes them:</p>
+</code></pre></div></div></figure>
+<p>Read <code>Radius / "radius" =&gt; Radius { rx: Number = Value::Number(50.0), ry: … }</code> as: "a component whose enum variant is <code>Radius</code>, whose JSON name is <code>"radius"</code>, whose struct is <code>Radius</code>, with fields <code>rx</code> and <code>ry</code> of kind <code>Number</code>, each defaulting to 50." (Until schema 4 there was a <code>circle</code> type with one <code>r</code>; the loader migrates it to an <code>ellipse</code> with equal radii.) The table now has about forty entries, including the Figma-style appearance added on October 14–15 (<code>corners</code>, <code>arc</code>, <code>shadow</code>, <code>gradient</code>, <code>appearance</code>, <code>group_clip</code>, <code>contour</code>); the later parts introduce them as they come up. Here is the per-component half of the macro that consumes them:</p>
 <figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:34">src/iron_document/src/component.rs</a><span class="range">lines 34–66</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">34
 35
 36
@@ -505,13 +445,13 @@ Slider / &quot;slider&quot; =&gt; Slider {
             }
         )*</code></pre></div></div></figure>
 <div class="box rust"><span class="tab">Reading the Rust</span>
-<p><code>$( … )*</code> means "repeat for each match". The outer repetition matches each component entry, the inner one each field. Lines 40–66 run once per component and produce the struct, its <code>Default</code>, and its <code>LeafStruct</code> implementation. <code>stringify!($field)</code> turns the identifier <code>r</code> into the string <code>"r"</code>. The rest of the macro (after line 66) runs once in total and lists every component again, producing the <code>ComponentKind</code> and <code>Component</code> enums. Written out by hand, the <code>Radius</code> entry becomes:</p>
-<pre><code>pub struct Radius { pub r: Slot }
-impl Default for Radius { fn default() -&gt; Self { Self { r: Slot::Const(Value::Number(50.0)) } } }
+<p><code>$( … )*</code> means "repeat for each match". The outer repetition matches each component entry, the inner one each field. Lines 40–66 run once per component and produce the struct, its <code>Default</code>, and its <code>LeafStruct</code> implementation. <code>stringify!($field)</code> turns the identifier <code>rx</code> into the string <code>"rx"</code>. The rest of the macro (after line 66) runs once in total and lists every component again, producing the <code>ComponentKind</code> and <code>Component</code> enums. Written out by hand, the <code>Radius</code> entry becomes:</p>
+<pre><code>pub struct Radius { pub rx: Slot, pub ry: Slot }
+impl Default for Radius { fn default() -&gt; Self { Self { rx: Slot::Const(Value::Number(50.0)), ry: Slot::Const(Value::Number(50.0)) } } }
 impl LeafStruct for Radius {
     const KIND: ComponentKind = ComponentKind::Radius;
-    const FIELDS: &amp;'static [(&amp;'static str, ValueKind)] = &amp;[("r", ValueKind::Number)];
-    fn get(&amp;self, field: &amp;str) -&gt; Option&lt;&amp;Slot&gt; { match field { "r" =&gt; Some(&amp;self.r), _ =&gt; None } }
+    const FIELDS: &amp;'static [(&amp;'static str, ValueKind)] = &amp;[("rx", ValueKind::Number), ("ry", ValueKind::Number)];
+    fn get(&amp;self, field: &amp;str) -&gt; Option&lt;&amp;Slot&gt; { match field { "rx" =&gt; Some(&amp;self.rx), "ry" =&gt; Some(&amp;self.ry), _ =&gt; None } }
     /* get_mut, wrap, unwrap_ref likewise */
 }</code></pre>
 <p>The final <code>@dynamic</code> entry, <code>Params</code>, is the one component whose fields aren't known at compile time: an entity's parameters, named by its definition (Part 2).</p>
@@ -526,33 +466,33 @@ impl LeafStruct for Radius {
   </tbody>
 </table></div>
 <p>The one hand-written method that matters is <code>set</code>, which replaces one field's slot. It type-checks constants and returns the old slot, which, as F2 shows, is exactly what undo needs:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:415">src/iron_document/src/component.rs</a><span class="range">lines 415–441</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:13"></span><span class="band" style="--from:25;--len:1"></span><pre class="gutter" aria-hidden="true">415
-416
-417
-418
-419
-420
-421
-422
-423
-424
-425
-426
-427
-428
-429
-430
-431
-432
-433
-434
-435
-436
-437
-438
-439
-440
-441</pre><pre class="src"><code class="language-rust">/// Replace one field&#x27;s slot, checking the value kind. Returns the previous
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:497">src/iron_document/src/component.rs</a><span class="range">lines 497–523</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:13"></span><span class="band" style="--from:25;--len:1"></span><pre class="gutter" aria-hidden="true">497
+498
+499
+500
+501
+502
+503
+504
+505
+506
+507
+508
+509
+510
+511
+512
+513
+514
+515
+516
+517
+518
+519
+520
+521
+522
+523</pre><pre class="src"><code class="language-rust">/// Replace one field&#x27;s slot, checking the value kind. Returns the previous
 /// slot, which is what an inverse op needs. A parameter must already
 /// exist: parameters are created with the component (so an inverse is
 /// always a `Set` back), and validated against the definition by the
@@ -581,36 +521,36 @@ pub fn set(&amp;mut self, field: &amp;str, slot: Slot) -&gt; Result&lt;Slot, Lea
 }</code></pre></div></div></figure>
 
 <h3 id="leafpath">The leaf address: <code>LeafPath</code></h3>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:514">src/iron_document/src/component.rs</a><span class="range">lines 514–543</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">514
-515
-516
-517
-518
-519
-520
-521
-522
-523
-524
-525
-526
-527
-528
-529
-530
-531
-532
-533
-534
-535
-536
-537
-538
-539
-540
-541
-542
-543</pre><pre class="src"><code class="language-rust">/// `component.field`, the address of one editable value.
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:596">src/iron_document/src/component.rs</a><span class="range">lines 596–625</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">596
+597
+598
+599
+600
+601
+602
+603
+604
+605
+606
+607
+608
+609
+610
+611
+612
+613
+614
+615
+616
+617
+618
+619
+620
+621
+622
+623
+624
+625</pre><pre class="src"><code class="language-rust">/// `component.field`, the address of one editable value.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LeafPath {
     pub component: ComponentKind,
@@ -645,7 +585,7 @@ impl LeafPath {
 
 <h2 id="registry"><span class="sec">F1.6</span>The registry: which types exist</h2>
 <p>A node's <code>ty</code> says what kind of thing it is. The registry lists every type: which components it allows (and requires), what it may contain, and which renderer draws it by default:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/registry.rs:40">src/iron_document/src/registry.rs</a><span class="range">lines 40–69</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">40
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/registry.rs:40">src/iron_document/src/registry.rs</a><span class="range">lines 40–73</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">40
 41
 42
 43
@@ -674,7 +614,11 @@ impl LeafPath {
 66
 67
 68
-69</pre><pre class="src"><code class="language-rust">pub struct TypeSpec {
+69
+70
+71
+72
+73</pre><pre class="src"><code class="language-rust">pub struct TypeSpec {
     pub name: &amp;&#x27;static str,
     /// Allowed components, with whether each is required on create.
     pub components: &amp;&#x27;static [(ComponentKind, bool)],
@@ -687,7 +631,7 @@ use ComponentKind as K;
 static TYPES: &amp;[TypeSpec] = &amp;[
     TypeSpec {
         name: &quot;group&quot;,
-        components: &amp;[(K::Name, false), (K::Transform2d, false), (K::Host, false)],
+        components: &amp;[(K::Name, false), (K::Transform2d, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -696,8 +640,12 @@ static TYPES: &amp;[TypeSpec] = &amp;[
         components: &amp;[
             (K::Transform2d, true),
             (K::Size, true),
+            (K::Corners, false),
             (K::Fill, false),
+            (K::Gradient, false),
+            (K::Appearance, false),
             (K::Stroke, false),
+            (K::Shadow, false),
             (K::Name, false),
             (K::Host, false),
         ],
@@ -708,7 +656,7 @@ static TYPES: &amp;[TypeSpec] = &amp;[
 <div class="table-wrap"><table>
   <thead><tr><th>Group</th><th>Types</th><th>Covered in</th></tr></thead>
   <tbody>
-    <tr><td>Drawing</td><td><code>group</code>, <code>rect</code>, <code>circle</code>, <code>path</code>, <code>point</code>, <code>mesh</code>, <code>slider</code></td><td>here, Part 7</td></tr>
+    <tr><td>Drawing</td><td><code>group</code>, <code>rect</code>, <code>ellipse</code>, <code>path</code> → <code>contour</code> → <code>point</code>, <code>mesh</code>, <code>slider</code></td><td>here, Part 7</td></tr>
     <tr><td>Time</td><td><code>timeline</code>, <code>clip</code></td><td>F3</td></tr>
     <tr><td>Things and their kinds</td><td><code>library</code>, <code>definition</code>, <code>param_spec</code>, <code>template</code>, <code>model</code>, <code>entity</code></td><td>Part 2</td></tr>
     <tr><td>Constraints</td><td><code>constraint</code></td><td>Part 4</td></tr>
@@ -717,7 +665,7 @@ static TYPES: &amp;[TypeSpec] = &amp;[
     <tr><td>Wiring</td><td><code>port_spec</code>, <code>port</code>, <code>equation</code>, <code>connection</code></td><td>Part 9</td></tr>
   </tbody>
 </table></div>
-<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/registry.rs:316" title="src/iron_document/src/registry.rs:316"><code>registry.rs:316</code></a>) exports the registry and the component table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
+<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/registry.rs:339" title="src/iron_document/src/registry.rs:339"><code>registry.rs:339</code></a>) exports the registry and the component table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
 
 <h2 id="document"><span class="sec">F1.7</span>The <code>Document</code>: tables and indexes</h2>
 <figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:84">src/iron_document/src/document.rs</a><span class="range">lines 84–104</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:2;--len:9"></span><span class="band" style="--from:14;--len:6"></span><pre class="gutter" aria-hidden="true">84

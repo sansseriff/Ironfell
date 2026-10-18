@@ -323,6 +323,13 @@ impl Manip {
                 };
                 let resize = matches!(t.kind, TransformKind::Resize { .. });
                 let writes: Vec<(NodeId, &'static str, f64)> = t.parts.iter().flat_map(|part| part.apply(a, resize)).collect();
+                // A text's sizing first, so its box measures the new way.
+                for (id, sizing) in t.parts.iter().filter_map(|part| part.text_sizing(a, resize)) {
+                    let path = "text.sizing".parse().expect("declared leaf");
+                    if cx.store.resolved(id, path).and_then(|v| v.as_str().map(str::to_owned)).as_deref() != Some(sizing) {
+                        cx.store.preview(id, path, iron_document::Value::Enum(sizing.into()));
+                    }
+                }
                 preview_writes(cx.store, writes);
             }
             Manip::PathHandle { point, out, to_local, at } => {

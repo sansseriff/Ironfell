@@ -159,6 +159,10 @@ pub enum DrawCmd {
         shape: Shape,
     },
     PushOpacity { opacity: f32, bounds: Rect },
+    /// Begin a group composited with `mode` onto what is under it within
+    /// the enclosing layer (a colour glyph's COLR composite). Always
+    /// balanced by [`DrawCmd::PopLayer`].
+    PushBlend { mode: peniko::BlendMode },
     PopLayer,
 }
 
@@ -228,7 +232,7 @@ impl DisplayList {
                     transform.transform_rect_bbox(rect.inflate(pad, pad))
                 }
                 DrawCmd::PushShadow { transform, bounds, .. } => transform.transform_rect_bbox(*bounds),
-                DrawCmd::PushOpacity { .. } | DrawCmd::PopLayer => continue,
+                DrawCmd::PushOpacity { .. } | DrawCmd::PushBlend { .. } | DrawCmd::PopLayer => continue,
             };
             acc = Some(match acc {
                 Some(a) => a.union(b),
@@ -306,6 +310,16 @@ impl DisplayListBuilder<'_> {
         if opacity >= 1.0 { f(self); return; }
         if opacity <= 0.0 { return; }
         self.out.push(DrawCmd::PushOpacity { opacity, bounds });
+        self.depth += 1;
+        f(self);
+        self.depth -= 1;
+        self.out.push(DrawCmd::PopLayer);
+    }
+
+    /// Composite what `f` draws onto what is under it with `mode`; see
+    /// [`DrawCmd::PushBlend`]. Scoped, as [`Self::clipped`] is.
+    pub fn blended(&mut self, mode: peniko::BlendMode, f: impl FnOnce(&mut Self)) {
+        self.out.push(DrawCmd::PushBlend { mode });
         self.depth += 1;
         f(self);
         self.depth -= 1;

@@ -41,8 +41,8 @@ export interface ViewQuery {
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
 /** The pointer's tools and their keys (Figma's). */
-export type Tool = 'select' | 'pen' | 'rect' | 'ellipse';
-const TOOL_KEYS: Record<Tool, string> = { select: 'v', pen: 'p', rect: 'r', ellipse: 'o' };
+export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text';
+const TOOL_KEYS: Record<Tool, string> = { select: 'v', pen: 'p', rect: 'r', ellipse: 'o', text: 't' };
 
 export class DocumentClient {
   view = $state('');
@@ -66,6 +66,12 @@ export class DocumentClient {
   /** The tool the pointer drives (`select`, `pen`, `rect`, `ellipse`), as
    *  the engine reports it. */
   tool: Tool = $state('select');
+  /** Font families whose files have arrived (plans/specs/text.md §4), so
+   *  the picker can mark what will draw at once. */
+  loadedFonts: string[] = $state([]);
+  /** The canvas text edit, as the engine last reported it: which node, and
+   *  the selection (UTF-16 offsets). Styling goes to a selected range. */
+  textEdit: { active: boolean; node: string; anchor: number; focus: number } = $state({ active: false, node: '', anchor: 0, focus: 0 });
   /** Editing a shape's points would cut bindings or clips: what they are,
    *  for the dialog. Answered with `toPath(node, true)` or dismissed. */
   convertQuestion: { node: string; type: string; cuts: string[] } | null = $state(null);
@@ -223,6 +229,16 @@ export class DocumentClient {
   }
 
   /** Returns true if the message was one of ours. */
+  /** Bold, italic, underline or strikethrough on the selected characters
+   *  of the canvas text edit (the engine decides on or off). */
+  textToggle(what: 'bold' | 'italic' | 'underline' | 'strike') {
+    this.post?.({ ty: 'textToggle', what });
+  }
+
+  fontsLoaded(families: string[]) {
+    this.loadedFonts = [...new Set([...this.loadedFonts, ...families])];
+  }
+
   handleMessage(data: any): boolean {
     switch (data?.ty) {
       case 'selection':

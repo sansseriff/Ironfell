@@ -1,0 +1,402 @@
+<header class="chapter-head">
+  <p class="kicker">Part 10 of 13 · <chip sys="bound"/> <chip sys="react"/></p>
+  <h1>Who computes where things are</h1>
+  <p class="lede">Up to Part 9, three different pieces of code each worked out where a node sits on screen, and Bevy's was the one that drew. On October 17 that was settled the other way round: <strong>Iron computes every world transform, and Bevy only receives them</strong>. That one decision changed what the store tracks, gave the spatial index a different shape, removed Bevy's transform tree for document nodes, and removed most of the entities. This part follows the four commits that did it (<code>161648c</code>, <code>26de602</code>, <code>1cbe2d1</code>, and the signal layer of Part 12), with the data structures each one introduced.</p>
+  <div class="prereq">
+    <div><b>You need</b>F3 (the reactive graph, <code>drain_changes</code>), F4 (the reconciler), Part 3 (<code>geom::world_affine</code>), Part 6 (views and display lists).</div>
+    <div><b>Files</b><code>iron_document/src/geom.rs</code>, <code>iron_spatial/src/scene.rs</code>, <code>document_bridge/{materialize,spatial,nest,render}.rs</code>. Design record: <code>plans/vision/10_engine-boundary.md</code>; measurements: <code>rendering/render-benchmark.md</code> §10–12.</div>
+  </div>
+</header>
+
+<h2 id="three"><span class="sec">10.1</span>Three answers to "where is this node?"</h2>
+<p>Before phase 1, the question had three answers, computed three ways, and they had to agree:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 430" role="img" aria-label="Before: the store's world_affine walk, Bevy's ChildOf and GlobalTransform propagation, and a spatial index reading Bevy's result, with a drift check. After: the store with revisions feeds one spatial scene whose cached placements every 2D reader uses; Bevy receives 3D world affines only.">
+  <defs><marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="900" height="190" rx="8" class="zone"/>
+  <text class="t-b" x="26" y="32">Before (up to 6ab558d): three computations</text>
+  <rect x="26" y="46" width="262" height="84" rx="5" class="s-store"/>
+  <text class="t-mono" x="40" y="68">geom::world_affine(id)</text>
+  <text class="t-s" x="40" y="88">walks parent chain on demand,</text>
+  <text class="t-s" x="40" y="104">reading resolved values</text>
+  <text class="t-xs" x="40" y="122">solver · copy · SVG · gestures</text>
+  <rect x="320" y="46" width="270" height="84" rx="5" class="s-old"/>
+  <text class="t-mono" x="334" y="68">Bevy: ChildOf + Transform</text>
+  <text class="t-s" x="334" y="88">TransformSystems::Propagate →</text>
+  <text class="t-s" x="334" y="104">GlobalTransform, one entity per node</text>
+  <text class="t-xs" x="334" y="122">drawing · picking · selection overlay</text>
+  <rect x="622" y="46" width="272" height="84" rx="5" class="s-old"/>
+  <text class="t-mono" x="636" y="68">BoundsIndex per composition</text>
+  <text class="t-s" x="636" y="88">one flat R-tree; each node's bounds</text>
+  <text class="t-s" x="636" y="104">from its GlobalTransform</text>
+  <text class="t-xs" x="636" y="122">culling · picking candidates</text>
+  <line x1="590" y1="88" x2="620" y2="88" class="ln" marker-end="url(#b1)"/>
+  <path d="M157,130 C157,160 455,160 455,132" class="ln-edge"/>
+  <text class="t-edge" x="190" y="164">check_world_affine: the two compared every frame</text>
+  <text class="t-s" x="26" y="188">Rotate a group of 10,000 shapes: 10,002 GlobalTransforms and 10,002 bounds rewritten. Changed frame 84 ms (container, §10).</text>
+
+  <rect x="10" y="214" width="900" height="206" rx="8" class="zone"/>
+  <text class="t-b" x="26" y="236">After (26de602): one authority, two consumers</text>
+  <rect x="26" y="250" width="262" height="98" rx="5" class="s-store"/>
+  <text class="t-mono" x="40" y="272">Store</text>
+  <text class="t-s" x="40" y="292">local_affine · world_affine</text>
+  <text class="t-s" x="40" y="308">world_affine3 (Affine3, f64)</text>
+  <text class="t-s" x="40" y="324">Revisions: placement · local</text>
+  <text class="t-s" x="40" y="340">· structure</text>
+  <rect x="320" y="250" width="270" height="98" rx="5" class="s-bound"/>
+  <text class="t-mono" x="334" y="272">iron_spatial::Scene</text>
+  <text class="t-s" x="334" y="292">an index per group, in the</text>
+  <text class="t-s" x="334" y="308">group's own space; one placement</text>
+  <text class="t-s" x="334" y="324">affine per group, cached</text>
+  <rect x="622" y="250" width="272" height="98" rx="5" class="s-tools"/>
+  <text class="t-mono" x="636" y="272">2D readers</text>
+  <text class="t-s" x="636" y="292">draw walk · picking · overlay ·</text>
+  <text class="t-s" x="636" y="308">tools, through nest::world_2d:</text>
+  <text class="t-s" x="636" y="324">scene placement, else store walk</text>
+  <line x1="288" y1="300" x2="318" y2="300" class="ln" marker-end="url(#b1)"/>
+  <line x1="590" y1="300" x2="620" y2="300" class="ln" marker-end="url(#b1)"/>
+  <rect x="320" y="360" width="270" height="50" rx="5" class="box-fill"/>
+  <text class="t-mono" x="334" y="380">Bevy: flat entities</text>
+  <text class="t-s" x="334" y="398">3D: GlobalTransform ← world_affine3</text>
+  <path d="M157,348 L157,385 L318,385" class="ln" marker-end="url(#b1)"/>
+  <text class="t-s" x="622" y="380">Same rotation: 1 entry rewritten,</text>
+  <text class="t-s" x="622" y="398">changed frame 27 ms, propagate 0.1 ms (§11).</text>
+</svg>
+<figcaption>The drift check existed because there were two authorities. With one, it was deleted. Bevy's propagation still runs, but only over Bevy's own hierarchies: cameras, view layers, the gizmo.</figcaption>
+</figure>
+<p>The question wasn't "which is fastest" but "which one <em>has</em> to be right". Vision 10 §1 answers it from what transforms are for.</p>
+
+<h2 id="why"><span class="sec">10.2</span>Why the store: transforms sit in the middle of the graph</h2>
+<p>A world transform isn't only an output for drawing. The solver reads the world position of a constraint's anchors, a binding can read a solved leaf, a clip can drive a leaf that the solver treats as known, and a binding can read the result again. Here is one chain built from pieces the demo scenes already have:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 300" role="img" aria-label="A dependency chain: a clip drives a platform's x; the platform's world affine places a constraint anchor; the solver writes the ball's position; a binding places a shadow from the ball's x; the shadow's world affine is drawn. Below, two schedules: one evaluator runs it once per change; a split between the store and Bevy leaves the shadow a frame behind or needs iterating.">
+  <defs><marker id="b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <g>
+  <rect x="10" y="20" width="138" height="66" rx="5" class="s-time"/><text class="t-mono-s" x="20" y="42">clip (producer 0)</text><text class="t-s" x="20" y="60">platform.</text><text class="t-s" x="20" y="76">transform2d.x</text>
+  <rect x="164" y="20" width="138" height="66" rx="5" class="s-react"/><text class="t-mono-s" x="174" y="42">geom</text><text class="t-s" x="174" y="60">world_affine</text><text class="t-s" x="174" y="76">(platform)</text>
+  <rect x="318" y="20" width="138" height="66" rx="5" class="s-solve"/><text class="t-mono-s" x="328" y="42">iron_solve</text><text class="t-s" x="328" y="60">distance(ball,</text><text class="t-s" x="328" y="76">platform anchor)</text>
+  <rect x="472" y="20" width="138" height="66" rx="5" class="s-solve"/><text class="t-mono-s" x="482" y="42">solved leaves</text><text class="t-s" x="482" y="60">ball.transform2d</text><text class="t-s" x="482" y="76">.x, .y</text>
+  <rect x="626" y="20" width="138" height="66" rx="5" class="s-react"/><text class="t-mono-s" x="636" y="42">binding</text><text class="t-s" x="636" y="60">shadow.x =</text><text class="t-s" x="636" y="76">#ball.x + 12</text>
+  <rect x="780" y="20" width="130" height="66" rx="5" class="s-render"/><text class="t-mono-s" x="790" y="42">draw</text><text class="t-s" x="790" y="60">world_affine</text><text class="t-s" x="790" y="76">(shadow)</text>
+  <line x1="148" y1="53" x2="162" y2="53" class="ln" marker-end="url(#b2)"/>
+  <line x1="302" y1="53" x2="316" y2="53" class="ln" marker-end="url(#b2)"/>
+  <line x1="456" y1="53" x2="470" y2="53" class="ln" marker-end="url(#b2)"/>
+  <line x1="610" y1="53" x2="624" y2="53" class="ln" marker-end="url(#b2)"/>
+  <line x1="764" y1="53" x2="778" y2="53" class="ln" marker-end="url(#b2)"/>
+  </g>
+  <rect x="10" y="112" width="440" height="176" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="134">One evaluator (Iron)</text>
+  <rect x="24" y="148" width="412" height="26" rx="4" class="hl"/><text class="t-mono-s" x="34" y="165">one frame: sample → affine → solve → bindings, in height order</text>
+  <text class="t-s" x="24" y="196">Each step runs once per change, with the equality</text>
+  <text class="t-s" x="24" y="212">cut-off. A transaction either yields a solved pose or</text>
+  <text class="t-s" x="24" y="228">is refused before history records it. A preview never</text>
+  <text class="t-s" x="24" y="244">becomes a transaction.</text>
+  <rect x="470" y="112" width="440" height="176" rx="8" class="zone"/>
+  <text class="t-b" x="484" y="134">Split (Bevy owns transforms)</text>
+  <rect x="484" y="148" width="190" height="26" rx="4" class="s-store"/><text class="t-mono-s" x="492" y="165">PreUpdate: store, bindings</text>
+  <rect x="690" y="148" width="206" height="26" rx="4" class="s-old"/><text class="t-mono-s" x="698" y="165">PostUpdate: Bevy propagates</text>
+  <path d="M790,174 C790,200 580,200 580,176" class="ln-edge" marker-end="url(#b2)"/>
+  <text class="t-edge" x="604" y="214">the solver needs this frame's result</text>
+  <text class="t-s" x="484" y="236">Either the shadow lags a frame, or the schedule</text>
+  <text class="t-s" x="484" y="252">iterates to a fixpoint. And "write the document after</text>
+  <text class="t-s" x="484" y="268">Bevy computes" makes every frame a transaction.</text>
+</svg>
+<figcaption>Bevy systems run in an order fixed when the app is built. The store's graph runs in an order computed from the data (heights). A graph with transforms in the middle can only be evaluated once per change by the scheduler that owns the whole graph.</figcaption>
+</figure>
+<p>The project had already hit this once: when Bevy owned the drag, nothing bound to a dragged shape moved until release, and the fix was to move drags into the store (Part 3). Vision 10 states the general rule: <strong>the evaluator lives in Iron; producers live wherever fits</strong> (Part 12). It doesn't say Bevy is the wrong place for physics. A dynamics engine over a population of bodies is a <em>producer</em>; dragging a constrained assembly with one undo step is a <em>document operation</em>.</p>
+<p>One small consequence: Iron computes in <code>f64</code>. An <code>f32</code> at document coordinate 1,000,000 resolves to about 0.06 px, which an infinite canvas reaches. Bevy receives <code>f32</code> only at the end.</p>
+
+<h2 id="revisions"><span class="sec">10.3</span>Revisions: the store says <em>what kind</em> of thing moved</h2>
+<div class="compare">
+  <div class="box naive"><span class="tab">The simple version</span><p><strong>Recompute the world bounds of every node that changed.</strong> When you rotate a group, every descendant's world bounds change, so "every node that changed" is the whole subtree, and the 10k rotation costs 10k bounds.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>Classify each change.</strong> A node's own <code>transform2d</code> moving is a <em>placement</em> change: its descendants' bounds, <em>in its own space</em>, didn't move. Its own size, radius, stroke or outline moving is a <em>local</em> change. Creating, deleting, reparenting or reordering is <em>structure</em>. An index that keeps each group's contents in the group's space then rewrites one entry for a rotation.</p></div>
+</div>
+<p>The classification is one function from a changed leaf to its effect:</p>
+<snip file="src/iron_document/src/geom.rs" lines="300-317" mark="306-308"/>
+<p>Line 306 is the subtle one: a <code>point</code> or <code>contour</code> moving isn't a placement of its own. A path's points are its outline, so moving one is a <em>local</em> change of the enclosing <code>path</code> (Part 7 covers contours). A colour, a name or a 3D transform is <code>None</code>: nothing a 2D index cares about.</p>
+<p>The counters live in the store:</p>
+<snip file="src/iron_document/src/geom.rs" lines="334-348"/>
+<p>The counters are bumped when someone <em>takes</em> the changes, not when they happen, so there is exactly one consumer: the spatial scene. That raised a problem, because the reconciler already drains the graph's change list every frame. If both read the same list, whichever ran first would leave nothing for the other. So the graph's one place that records a change now writes two sets:</p>
+<snip file="src/iron_document/src/graph.rs" lines="310-319"/>
+<figure class="diagram">
+<svg viewBox="0 0 920 360" role="img" aria-label="Two sources and two drains. Reactive::note writes both changes (a map leaf to value) and touched (a set of leaves). A transaction's ops go to the reconciler through the log and to Revisions as pending leaves and a pending structure flag. The reconciler drains changes; the spatial scene takes touched plus pending, classifies them with effect_of and bumps counters.">
+  <defs><marker id="b3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <text class="t-b" x="20" y="24">Sources</text><text class="t-b" x="330" y="24">State in the store</text><text class="t-b" x="650" y="24">Drains (one owner each)</text>
+  <rect x="20" y="40" width="250" height="72" rx="5" class="s-react"/>
+  <text class="t-mono" x="32" y="62">Reactive::note(leaf, v)</text>
+  <text class="t-s" x="32" y="80">a preview, a publish, a binding that</text>
+  <text class="t-s" x="32" y="96">re-evaluated to a different value</text>
+  <rect x="20" y="210" width="250" height="88" rx="5" class="s-store"/>
+  <text class="t-mono" x="32" y="232">after_transaction(tx)</text>
+  <text class="t-s" x="32" y="250">ops ∪ derived_ops ∪ inverse</text>
+  <text class="t-s" x="32" y="266">(the inverse names what an undo</text>
+  <text class="t-s" x="32" y="282">or a reparent's old parent touched)</text>
+  <rect x="330" y="40" width="270" height="44" rx="5" class="box-fill"/>
+  <text class="t-mono-s" x="342" y="58">changes: BTreeMap&lt;Leaf, Value&gt;</text>
+  <text class="t-xs" x="342" y="74">Reactive</text>
+  <rect x="330" y="96" width="270" height="44" rx="5" class="box-fill"/>
+  <text class="t-mono-s" x="342" y="114">touched: BTreeSet&lt;Leaf&gt;</text>
+  <text class="t-xs" x="342" y="130">Reactive</text>
+  <rect x="330" y="200" width="270" height="44" rx="5" class="box-fill"/>
+  <text class="t-mono-s" x="342" y="218">pending_leaves: BTreeSet&lt;Leaf&gt;</text>
+  <text class="t-xs" x="342" y="234">Revisions (Set ops only)</text>
+  <rect x="330" y="256" width="270" height="44" rx="5" class="box-fill"/>
+  <text class="t-mono-s" x="342" y="274">pending_structure: bool</text>
+  <text class="t-xs" x="342" y="290">Revisions (create, delete, reparent…)</text>
+  <rect x="330" y="312" width="270" height="40" rx="5" class="box-fill"/>
+  <text class="t-mono-s" x="342" y="330">history.log: VecDeque&lt;Transaction&gt;</text>
+  <text class="t-xs" x="342" y="345">read since SyncedVersion</text>
+  <line x1="270" y1="70" x2="328" y2="62" class="ln" marker-end="url(#b3)"/>
+  <line x1="270" y1="80" x2="328" y2="116" class="ln" marker-end="url(#b3)"/>
+  <line x1="270" y1="240" x2="328" y2="222" class="ln" marker-end="url(#b3)"/>
+  <line x1="270" y1="260" x2="328" y2="276" class="ln" marker-end="url(#b3)"/>
+  <line x1="270" y1="280" x2="328" y2="330" class="ln" marker-end="url(#b3)"/>
+  <rect x="650" y="40" width="260" height="110" rx="5" class="s-bound"/>
+  <text class="t-mono" x="662" y="62">drain_changes()</text>
+  <text class="t-s" x="662" y="80">sync_document, reconcile_gesture</text>
+  <text class="t-s" x="662" y="98">→ Drawables, entities,</text>
+  <text class="t-s" x="662" y="114">DocumentChanges (render)</text>
+  <text class="t-xs" x="662" y="136">plus the log's op ids (collect_ids)</text>
+  <rect x="650" y="190" width="260" height="140" rx="5" class="s-bound"/>
+  <text class="t-mono" x="662" y="212">take_geometry_changes()</text>
+  <text class="t-s" x="662" y="230">prepare_spatial, once per frame</text>
+  <text class="t-s" x="662" y="248">touched ∪ pending → effect_of →</text>
+  <text class="t-mono-s" x="662" y="268">GeometryChanges {</text>
+  <text class="t-mono-s" x="672" y="282">structure: bool,</text>
+  <text class="t-mono-s" x="672" y="296">placement, local: {NodeId} }</text>
+  <text class="t-s" x="662" y="316">counters += 1 → Scene::update</text>
+  <line x1="600" y1="62" x2="648" y2="80" class="ln" marker-end="url(#b3)"/>
+  <line x1="600" y1="332" x2="648" y2="130" class="ln-dim" marker-end="url(#b3)"/>
+  <line x1="600" y1="118" x2="648" y2="230" class="ln" marker-end="url(#b3)"/>
+  <line x1="600" y1="222" x2="648" y2="250" class="ln" marker-end="url(#b3)"/>
+  <line x1="600" y1="278" x2="648" y2="268" class="ln" marker-end="url(#b3)"/>
+</svg>
+<figcaption>Each consumer pairs the graph's changes with the transaction's ops, because the graph only notes leaves whose <em>resolved</em> value moved through it: previews and re-evaluated bindings. A plain <code>Set</code> of a constant reaches the reconciler through the log and the scene through <code>pending_leaves</code>.</figcaption>
+</figure>
+<p>What a few edits produce, using the render benchmark's stress scene (a <code>field</code> group of cells, each a group of rects):</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Edit</th><th>Leaves noted</th><th><code>GeometryChanges</code></th><th>Scene entries rewritten</th></tr></thead>
+  <tbody>
+    <tr><td>Rotate <code>field</code></td><td><code>field.transform2d.rot</code></td><td>placement {field}</td><td>1</td></tr>
+    <tr><td>Drag one rect</td><td><code>r.transform2d.x</code>, <code>.y</code></td><td>placement {r}</td><td>1, up to 3 if the cell's union grows</td></tr>
+    <tr><td>Resize one rect</td><td><code>r.size.w</code></td><td>local {r}</td><td>same</td></tr>
+    <tr><td>Move a path's point</td><td><code>p.transform2d.x</code></td><td>local {path}</td><td>same</td></tr>
+    <tr><td>Recolour</td><td><code>r.fill.color</code></td><td>(empty)</td><td>0</td></tr>
+    <tr><td>Delete, paste, reorder</td><td></td><td>structure</td><td>rebuild (40 ms at 10k, native)</td></tr>
+  </tbody>
+</table></div>
+<p><code>Revisions::chain_stamp</code> (<ref file="src/iron_document/src/geom.rs" line="365" has="pub fn chain_stamp">geom.rs:365</ref>) sums the placement revisions up a node's chain: a cheap key for anything derived from a world affine, which stays equal until some ancestor moves. Only a test uses it today; the selection overlay's cache is its intended first user (see the rough edges at the end).</p>
+
+<h2 id="scene"><span class="sec">10.4</span>The spatial scene: a tree of indexes</h2>
+<p><code>iron_spatial::Scene</code> mirrors the document's groups. Every node with children that hold 2D content gets a <em>scope</em>: one R-tree (<code>BoundsIndex</code>, over <code>understory_index</code>) of its children, in its own local space. A group is then an <em>entry</em> in its parent's scope whose bounds are its own scope's union mapped through its affine.</p>
+<snip file="src/iron_spatial/src/scene.rs" lines="29-81" mark="41-50,53-58"/>
+<p>Drawn out for the stress scene, rotated:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 470" role="img" aria-label="Left: a composition containing a rotated field group, whose cells are groups of rects; each group has its own axes. Right: the Scene's maps. scopes keyed by Some(composition), Some(field), Some(cell) each hold an R-tree and a union in that scope's space. entries map each node to its scope, kind, own affine, bounds in the scope's space and painter order. Rotating the field rewrites only the field's entry in the composition's scope.">
+  <defs><marker id="b4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="380" height="450" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="32">composition #C "stress", document space</text>
+  <line x1="40" y1="60" x2="370" y2="60" class="grid"/><line x1="40" y1="60" x2="40" y2="440" class="grid"/>
+  <text class="t-xs" x="44" y="74">x →</text><text class="t-xs" x="44" y="90">y ↓</text>
+  <g transform="translate(205,240) rotate(-14) scale(0.8)">
+    <rect x="-130" y="-130" width="260" height="260" class="hl" stroke-width="1.6"/>
+    <line x1="-130" y1="-130" x2="-80" y2="-130" class="ln-accent" marker-end="url(#b4)"/>
+    <line x1="-130" y1="-130" x2="-130" y2="-80" class="ln-accent" marker-end="url(#b4)"/>
+    <g>
+      <rect x="-118" y="-118" width="70" height="70" class="s-bound"/>
+      <rect x="-35" y="-118" width="70" height="70" class="s-bound"/>
+      <rect x="48" y="-118" width="70" height="70" class="s-bound"/>
+      <rect x="-118" y="-35" width="70" height="70" class="s-bound"/>
+      <rect x="-35" y="-35" width="70" height="70" class="s-bound"/>
+      <rect x="48" y="-35" width="70" height="70" class="s-bound"/>
+      <rect x="-118" y="48" width="70" height="70" class="s-bound"/>
+      <rect x="-35" y="48" width="70" height="70" class="s-bound"/>
+      <rect x="48" y="48" width="70" height="70" class="s-bound"/>
+    </g>
+    <g class="s-render">
+      <rect x="-112" y="-112" width="14" height="14"/><rect x="-92" y="-112" width="14" height="14"/><rect x="-72" y="-112" width="14" height="14"/>
+      <rect x="-112" y="-92" width="14" height="14"/><rect x="-92" y="-92" width="14" height="14"/><rect x="-72" y="-92" width="14" height="14"/>
+      <rect x="-112" y="-72" width="14" height="14"/><rect x="-92" y="-72" width="14" height="14"/><rect x="-72" y="-72" width="14" height="14"/>
+    </g>
+    <text class="t-acc" x="-60" y="-142">field: affine = T·R(rot)·S</text>
+    <text class="t-xs" x="-116" y="-122">cell c0</text>
+  </g>
+  <text class="t-s" x="24" y="420">Blue frame: the field's own space. Teal: cells (groups),</text>
+  <text class="t-s" x="24" y="436">each its own space. Orange: rects, the leaves.</text>
+
+  <rect x="410" y="10" width="500" height="450" rx="8" class="zone"/>
+  <text class="t-b" x="424" y="32">Scene</text>
+  <text class="t-mono-s" x="424" y="56">scopes: BTreeMap&lt;Option&lt;NodeId&gt;, Scope&gt;</text>
+  <rect x="424" y="66" width="472" height="34" rx="4" class="box-fill"/>
+  <text class="t-mono-s" x="434" y="81">Some(#C)   R-tree{ field }          union in #C space</text>
+  <text class="t-xs" x="434" y="94">depth 0</text>
+  <rect x="424" y="104" width="472" height="34" rx="4" class="box-fill"/>
+  <text class="t-mono-s" x="434" y="119">Some(field) R-tree{ c0 … c99 }      union in field space</text>
+  <text class="t-xs" x="434" y="132">depth 1</text>
+  <rect x="424" y="142" width="472" height="34" rx="4" class="box-fill"/>
+  <text class="t-mono-s" x="434" y="157">Some(c0)   R-tree{ r0 … r99 }       union in c0 space</text>
+  <text class="t-xs" x="434" y="170">depth 2   (and one scope per cell)</text>
+  <text class="t-mono-s" x="424" y="204">entries: BTreeMap&lt;NodeId, Entry&gt;</text>
+  <rect x="424" y="214" width="472" height="50" rx="4" class="hl"/>
+  <text class="t-mono-s" x="434" y="230">field → scope Some(#C), Group, affine T·R·S,</text>
+  <text class="t-mono-s" x="434" y="244">        bounds = union(field scope).mapped(affine)</text>
+  <text class="t-xs" x="434" y="258">rotating the field rewrites this one entry</text>
+  <rect x="424" y="270" width="472" height="38" rx="4" class="box-fill"/>
+  <text class="t-mono-s" x="434" y="286">c0    → scope Some(field), Group, affine translate,</text>
+  <text class="t-mono-s" x="434" y="300">        bounds = union(c0 scope).mapped(affine)</text>
+  <rect x="424" y="314" width="472" height="38" rx="4" class="box-fill"/>
+  <text class="t-mono-s" x="434" y="330">r0    → scope Some(c0), Leaf, affine (x, y, rot…),</text>
+  <text class="t-mono-s" x="434" y="344">        bounds = local_bounds(r0) under affine</text>
+  <text class="t-mono-s" x="424" y="378">chains: r0 → [field, c0, r0]   (what a hit reports)</text>
+  <text class="t-mono-s" x="424" y="396">shown_by: composition → [2D embeds showing it]</text>
+  <text class="t-mono-s" x="424" y="414">camera_embeds: camera → [3D embeds through it]</text>
+  <text class="t-s" x="424" y="440">order: the document's preorder index, i.e. painter order.</text>
+</svg>
+<figcaption>A scope key is <code>Option&lt;NodeId&gt;</code>: <code>Some(node)</code> for that node's children, <code>None</code> for loose roots outside every composition. A leaf entry stores its bounds already mapped into its scope; a group entry's bounds come from its child scope's union.</figcaption>
+</figure>
+
+<h3 id="update">Updating: placement versus local</h3>
+<p>Each frame, <code>prepare_spatial</code> calls <code>Scene::update</code>, which takes the store's changes and branches on their kind:</p>
+<snip file="src/iron_spatial/src/scene.rs" lines="219-285" mark="222-225,243-259,273-280"/>
+<p>Structure rebuilds everything (222–225); the scene can't patch painter order or chains cheaply, and structural edits are rare. A local change recomputes one leaf's bounds from <code>Store::local_bounds</code> (247–248). A placement change of a <em>group</em> (273–280) is the case the whole design is for: the group's subtree union is already in its child scope, so its entry in the parent scope becomes that union under the new affine. Nothing below it is touched. Then <code>settle</code> carries changed unions upward:</p>
+<snip file="src/iron_spatial/src/scene.rs" lines="287-317"/>
+<p>Dirty scopes are processed deepest first (290). After committing a scope's R-tree, if its union changed, either the scope is a composition, in which case every frameless 2D embed showing it must grow or shrink (306–311), or it's a group, whose entry in its parent is rewritten and the parent marked dirty (312–317). So a dragged leaf costs one entry, and up to its depth more only when it pushes a union outward.</p>
+
+<h3 id="query">Querying: map the question, not the content</h3>
+<p>A point or rectangle query descends the same tree. At each group entry it hits, it maps the query <em>into</em> the group's space through the inverse affine, rather than mapping the group's content out:</p>
+<snip file="src/iron_spatial/src/scene.rs" lines="192-215" mark="205-212"/>
+<figure class="diagram">
+<svg viewBox="0 0 920 210" role="img" aria-label="A point query: p in composition space hits the field entry; p is mapped by the field's inverse affine into field space, where it hits cell c17; mapped again by c17's inverse into cell space, it hits rect r42. Results are sorted by painter order.">
+  <defs><marker id="b5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="20" width="240" height="120" rx="6" class="box-fill"/>
+  <text class="t-b" x="22" y="42">scope Some(#C)</text><text class="t-mono-s" x="22" y="64">p = (612, 380)</text><text class="t-s" x="22" y="86">R-tree hits: field (Group)</text><text class="t-xs" x="22" y="108">a Leaf hit would be output here</text>
+  <rect x="330" y="20" width="250" height="120" rx="6" class="box-fill"/>
+  <text class="t-b" x="342" y="42">scope Some(field)</text><text class="t-mono-s" x="342" y="64">p' = field.affine⁻¹ · p</text><text class="t-s" x="342" y="86">R-tree hits: c17 (Group)</text><text class="t-xs" x="342" y="108">a rect query maps to its bounding box</text>
+  <rect x="660" y="20" width="250" height="120" rx="6" class="box-fill"/>
+  <text class="t-b" x="672" y="42">scope Some(c17)</text><text class="t-mono-s" x="672" y="64">p'' = c17.affine⁻¹ · p'</text><text class="t-s" x="672" y="86">R-tree hits: r42 (Leaf) → out</text>
+  <line x1="250" y1="80" x2="328" y2="80" class="ln" marker-end="url(#b5)"/>
+  <line x1="580" y1="80" x2="658" y2="80" class="ln" marker-end="url(#b5)"/>
+  <text class="t-s" x="10" y="170">Output: candidates sorted by Entry.order (painter order). The query box after a rotation is the rotated box's bounding box in</text>
+  <text class="t-s" x="10" y="188">the group's space, so candidates are a superset of the exact answer; the hosts' exact tests (shape containment, clips) decide.</text>
+</svg>
+<figcaption>Each step is one R-tree lookup in a scope and one affine inverse. A singular affine (a zero scale) shows nothing and is skipped.</figcaption>
+</figure>
+<p>The same scope tree answers the other question readers need, "what is this node's world affine?", in O(depth) without walking any content: <code>placement(scope)</code> multiplies the group affines above a scope, and <code>world_affine(id) = placement(entry.scope) · entry.affine</code>.</p>
+<snip file="src/iron_spatial/src/scene.rs" lines="130-136"/>
+<snip file="src/iron_spatial/src/scene.rs" lines="165-176"/>
+<p>Native numbers for the stress shape (100 cells of 100), from <code>tests/scene.rs</code>: rotate update 24 µs, one leaf drag 25 µs, a 1600×1000 visible-rect query 142 µs for 405 hits, structural rebuild 40 ms. In the app, the bounds phase fell from 24.8 ms to under 0.1 ms for the 10k rotation.</p>
+<div class="box rust"><span class="tab">Reading the code</span>
+<p><code>prepare_spatial</code> (<ref file="src/document_bridge/spatial.rs" line="33" has="pub fn prepare_spatial">spatial.rs:33</ref>) calls <code>bypass_change_detection()</code> on both the scene and the store before updating. Bevy marks a resource changed whenever a system takes it mutably, and the 2D layer rebuilds its display lists when the scene is changed. So the system compares <code>generation</code> before and after and calls <code>set_changed()</code> only when something moved. Without that, every idle frame would rebuild every view.</p>
+</div>
+
+<h2 id="consume"><span class="sec">10.5</span>Bevy consumes: flat entities and draw data by node</h2>
+<p>Phase 2 (<code>26de602</code>) removed <code>ChildOf</code> between document entities and took transforms off 2D entities entirely. Phase 3 (<code>1cbe2d1</code>) then asked why a 2D node needs an entity at all, since nothing in Bevy acts on it. The answer was that it mostly didn't:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 400" role="img" aria-label="Before: an entity per document node in a ChildOf tree, each with Provenance, Transform and GlobalTransform, rects with Doc2d; propagation walks all of them. After: Drawables, a HashMap from NodeId to Doc2d, holds every drawable 2D node's draw data; NodeMap holds only Live 2D nodes and 3D nodes; 3D entities are flat and receive GlobalTransform from world_affine3; Live 2D entities carry Doc2d and no transform.">
+  <defs><marker id="b6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="360" height="380" rx="8" class="zone"/>
+  <text class="t-b" x="24" y="32">Before: an entity per node, a tree</text>
+  <rect x="24" y="48" width="330" height="44" rx="4" class="s-old"/>
+  <text class="t-mono-s" x="34" y="66">e1 field  Provenance(#F) Transform</text><text class="t-mono-s" x="34" y="82">          GlobalTransform</text>
+  <rect x="54" y="104" width="300" height="44" rx="4" class="s-old"/>
+  <text class="t-mono-s" x="64" y="122">e2 cell   Provenance Transform</text><text class="t-mono-s" x="64" y="138">          GlobalTransform ChildOf(e1)</text>
+  <rect x="84" y="160" width="270" height="58" rx="4" class="s-old"/>
+  <text class="t-mono-s" x="94" y="178">e3 rect   Provenance Transform</text><text class="t-mono-s" x="94" y="194">          GlobalTransform ChildOf(e2)</text><text class="t-mono-s" x="94" y="210">          Doc2d</text>
+  <line x1="40" y1="92" x2="40" y2="126" class="ln-thin"/><line x1="40" y1="126" x2="52" y2="126" class="ln-thin"/>
+  <line x1="70" y1="148" x2="70" y2="188" class="ln-thin"/><line x1="70" y1="188" x2="82" y2="188" class="ln-thin"/>
+  <text class="t-s" x="24" y="250">× 10,101 for the 10k scene, all propagated by</text>
+  <text class="t-s" x="24" y="266">TransformSystems::Propagate whenever the field moved.</text>
+  <text class="t-s" x="24" y="290">Picking and drawing read GlobalTransform; the</text>
+  <text class="t-s" x="24" y="306">store's own walk was checked against it.</text>
+
+  <rect x="390" y="10" width="520" height="380" rx="8" class="zone"/>
+  <text class="t-b" x="404" y="32">After: data by NodeId, entities only where Bevy acts</text>
+  <rect x="404" y="46" width="492" height="96" rx="4" class="s-bound"/>
+  <text class="t-mono" x="414" y="66">Drawables(HashMap&lt;NodeId, Doc2d&gt;)   resource</text>
+  <text class="t-mono-s" x="414" y="86">#r0 → Doc2d { shape: Rect{w,h,radii}, fill, stroke, shadow }</text>
+  <text class="t-mono-s" x="414" y="102">#e5 → Doc2d { shape: Ellipse{rx,ry,arc}, … }</text>
+  <text class="t-mono-s" x="414" y="118">#p9 → Doc2d { shape: Path{outline: Arc&lt;BezPath&gt;, fill, even_odd} }</text>
+  <text class="t-xs" x="414" y="134">every drawable 2D node, entity or not; read by drawing, picking, overlay, tools</text>
+  <rect x="404" y="154" width="492" height="40" rx="4" class="box-fill"/>
+  <text class="t-mono-s" x="414" y="172">NodeMap: NodeId ↔ Entity   only Live 2D nodes and 3D nodes</text>
+  <text class="t-xs" x="414" y="186">a NodeId maps to 0..N entities; an entity to 0..1 nodes (vision 10 §5.1)</text>
+  <rect x="404" y="206" width="238" height="110" rx="4" class="s-render"/>
+  <text class="t-mono-s" x="414" y="224">mesh entity (flat)</text>
+  <text class="t-mono-s" x="414" y="242">Provenance  Doc3d  Mesh3d</text>
+  <text class="t-mono-s" x="414" y="258">Transform = GlobalTransform</text>
+  <text class="t-mono-s" x="414" y="274">  = world_affine3(id)</text>
+  <text class="t-mono-s" x="414" y="290">RenderLayers  MeshColor</text>
+  <text class="t-xs" x="414" y="308">no ChildOf: nothing to propagate</text>
+  <rect x="658" y="206" width="238" height="110" rx="4" class="s-tools"/>
+  <text class="t-mono-s" x="668" y="224">Live 2D entity</text>
+  <text class="t-mono-s" x="668" y="242">Provenance  Name</text>
+  <text class="t-mono-s" x="668" y="258">InComposition  Doc2d</text>
+  <text class="t-mono-s" x="668" y="274">no Transform at all</text>
+  <text class="t-xs" x="668" y="292">exists so a Bevy system can act on</text>
+  <text class="t-xs" x="668" y="306">it (Part 12); placement is Iron's</text>
+  <text class="t-s" x="404" y="342">Idle with ?stress=100000: 2 entities for 101,069 nodes.</text>
+  <text class="t-s" x="404" y="360">Bevy's propagation still runs for cameras, view layers and</text>
+  <text class="t-s" x="404" y="376">the gizmo: Bevy-native hierarchies under no document node.</text>
+</svg>
+<figcaption>What a 2D entity carried was a copy of its node's draw data and a transform Iron also computed. Both now live by <code>NodeId</code> (draw data in <code>Drawables</code>, placement in the scene), and an entity is spawned only when something in Bevy needs a handle on the node.</figcaption>
+</figure>
+<p>The reconciler's first pass now writes draw data for every touched node and spawns an entity only where one is due:</p>
+<snip file="src/document_bridge/materialize.rs" lines="355-386" mark="362-368"/>
+<p>A 3D entity's pose comes from <code>Store::world_affine3</code>, written as both <code>Transform</code> and <code>GlobalTransform</code>. A root entity without a parent gets its <code>GlobalTransform</code> copied from its <code>Transform</code> by Bevy's simple sync, so writing both makes that copy a no-op instead of an overwrite, and keeps <code>update_aabbes</code> and the gizmo, which read <code>Transform</code>, current. Since entities are flat, moving a 3D parent has to rewrite its materialised descendants explicitly. That's the second pass:</p>
+<snip file="src/document_bridge/materialize.rs" lines="388-406"/>
+<p>A 2D reader asks for a world affine through one function, which prefers the scene's cached placement and falls back to the store's walk for nodes the scene doesn't hold (an empty group, a point):</p>
+<snip file="src/document_bridge/nest.rs" lines="96-102"/>
+<p>And the draw walk queries the scene for visible candidates, then restores the groups above them, because a group's opacity or clip must still wrap its visible children once, not once per leaf:</p>
+<snip file="src/document_bridge/render.rs" lines="159-178"/>
+
+<h2 id="modes"><span class="sec">10.6</span>Modes: entities only for the working set</h2>
+<p>Vision 10 §5.2 says every subtree is in one <em>presentation mode</em>, which decides both what Bevy holds for it and how it's drawn. Two of the modes are built:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Mode</th><th>Entities per node</th><th>Encoded</th><th>Typical use</th><th>Built</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Live</strong></td><td>one, flat</td><td>every change</td><td>the selection and the hover: what is being edited</td><td>yes</td></tr>
+    <tr><td><strong>Live + simulating</strong></td><td>the same, plus a producer's components (collider, body)</td><td>every change</td><td>physics on document shapes</td><td>no (Part 12's producer has no document entities)</td></tr>
+    <tr><td><strong>Retained vector</strong></td><td>none</td><td>today: the whole view re-encodes on a change</td><td>everything else on screen</td><td>yes, the default</td></tr>
+    <tr><td><strong>Baked</strong></td><td>none in 2D; one per subtree in 3D</td><td>drawn from a texture or merged mesh</td><td>static, complex or tiny on screen</td><td>no (phase 5)</td></tr>
+    <tr><td><strong>Compiled</strong></td><td>none</td><td>raster or video made deliberately</td><td></td><td>no</td></tr>
+  </tbody>
+</table></div>
+<p>The Live set is chosen by policy each frame, from the selection and the hover:</p>
+<snip file="src/document_bridge/materialize.rs" lines="83-111" mark="98-106"/>
+<p><code>sync_live</code>, chained right after it in <code>PreUpdate</code>, despawns entities for nodes that left the set and spawns them for nodes that entered. The draw data is already in <code>Drawables</code>, so only the entity comes and goes. The budget exists because of one measured disaster:</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 230" role="img" aria-label="The 100k stress scene as a tree: composition, the field, a thousand cells, a hundred rects each. Hovering the field makes the field and its thousand cells Live, 1,001 nodes, because its 101,000 descendants exceed the 2,000 budget. Selecting one rect makes its lineage Live: field, cell, rect. Clearing returns to the two 3D entities.">
+  <rect x="10" y="10" width="900" height="210" rx="8" class="zone"/>
+  <rect x="30" y="30" width="120" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="40" y="49">composition</text>
+  <rect x="60" y="76" width="120" height="30" rx="4" class="hl"/><text class="t-mono-s" x="70" y="95">field (hover)</text>
+  <rect x="90" y="122" width="300" height="30" rx="4" class="hl"/><text class="t-mono-s" x="100" y="141">c0  c1  c2  …  c999   (children)</text>
+  <rect x="120" y="168" width="380" height="30" rx="4" class="box-fill"/><text class="t-mono-s" x="130" y="187">100,000 rects   (beyond LIVE_BUDGET)</text>
+  <line x1="45" y1="60" x2="45" y2="91" class="ln-thin"/><line x1="45" y1="91" x2="58" y2="91" class="ln-thin"/>
+  <line x1="75" y1="106" x2="75" y2="137" class="ln-thin"/><line x1="75" y1="137" x2="88" y2="137" class="ln-thin"/>
+  <line x1="105" y1="152" x2="105" y2="183" class="ln-thin"/><line x1="105" y1="183" x2="118" y2="183" class="ln-thin"/>
+  <text class="t-b" x="540" y="40">State</text><text class="t-b" x="740" y="40">Entities</text><text class="t-b" x="820" y="40">Live</text>
+  <text class="t-mono-s" x="540" y="66">idle, nothing picked</text><text class="t-mono-s" x="740" y="66">2</text><text class="t-mono-s" x="820" y="66">0</text>
+  <text class="t-mono-s" x="540" y="88">field hovered, selected</text><text class="t-mono-s" x="740" y="88">1,003</text><text class="t-mono-s" x="820" y="88">1,001</text>
+  <text class="t-mono-s" x="540" y="110">selection cleared</text><text class="t-mono-s" x="740" y="110">2</text><text class="t-mono-s" x="820" y="110">0</text>
+  <text class="t-mono-s" x="540" y="132">no budget, field hovered</text><text class="t-mono-s" x="740" y="132">101,004</text><text class="t-mono-s" x="820" y="132">3.9 s frame</text>
+  <text class="t-s" x="540" y="166">A selected rect brings its lineage: [field, cell, rect].</text>
+  <text class="t-s" x="540" y="184">The 2 are the demo's 3D nodes, which always have one.</text>
+</svg>
+<figcaption>Shaded: the Live set while the field is hovered. Its subtree is 101,000 nodes, over the 2,000 budget, so only its direct children join.</figcaption>
+</figure>
+
+<div class="box edge"><span class="tab">Rough edges</span>
+<p><strong>Stale comments.</strong> The module comment at the top of <code>document_bridge/mod.rs</code> still says a drag "moves the entity's <code>Transform</code> each frame for latency"; that stopped being true in Part 3. The comment in <code>spatial.rs</code> still says drawing and picking take placements from Bevy and that the drift check stays; both ended with <code>26de602</code>. <code>rendering/architecture.md</code> §1 still lists "Bevy entities, transform propagation" as a pipeline step. The code here is the reference.</p>
+<p><strong>The selection overlay's cache</strong> (<code>SelectionGeometryCache</code>, Part 7) is still keyed on the global <code>GeometryRevision</code>, so any change anywhere rebuilds the selection's box and outlines. With Part 12's producer publishing every frame, a ticking gauge invalidates whatever is selected. Keying it on the selected subtrees' revisions (<code>chain_stamp</code> plus local revisions) is the render handoff's open item 3.</p>
+<p><strong>The store itself caches no world affine.</strong> <code>Store::world_affine</code> still walks the chain each call; the scene caches placements per group, which is what the 2D readers use. 3D world affines are recomputed per write.</p>
+<p><strong>A picker runs a little before the scene updates.</strong> Picking runs in <code>PreUpdate</code>, but <code>prepare_spatial</code> runs in <code>PostUpdate</code>. So a transaction applied by this frame's sync reaches the picker's placements next frame. Picking re-runs whenever the version changes, so this shows only as one frame of staleness for nodes the sync just moved.</p>
+</div>
+
+<div class="box recap"><span class="tab">Before you go on</span>
+<ul>
+  <li>Iron computes every world transform, in <code>f64</code>, because transforms sit inside the one dependency graph the store evaluates. Bevy receives 3D world affines and nothing for 2D.</li>
+  <li>The store classifies each change as <strong>placement</strong>, <strong>local</strong> or <strong>structure</strong> (<code>geom::Revisions</code>). The reconciler and the spatial scene each have their own drain, so neither starves the other.</li>
+  <li><code>iron_spatial::Scene</code> keeps one R-tree per group in the group's own space. A rotation rewrites one entry; queries map the question down through inverse affines.</li>
+  <li>Draw data lives in <code>Drawables</code> by <code>NodeId</code>. Entities exist for 3D nodes and for the Live working set (selection and hover, within a budget), and they're flat.</li>
+</ul>
+</div>

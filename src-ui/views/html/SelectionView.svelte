@@ -9,6 +9,7 @@
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
   import { Popover, DropdownMenu } from "bits-ui";
   import PaintRow from "../../lib/ui/PaintRow.svelte";
+  import TextSection from "../../lib/ui/TextSection.svelte";
   import AppearanceIcon from "../../lib/ui/AppearanceIcon.svelte";
   import Scan from "@lucide/svelte/icons/scan";
   import Minus from "@lucide/svelte/icons/minus";
@@ -80,7 +81,10 @@
     return { ...corners[0], edit: locked ? "locked" : corners[0].edit, why: locked?.why ?? null, bind: corners.find(f => f.bind)?.bind ?? null };
   });
   const mixedCorners = $derived(["tr", "br", "bl"].some(k => field("corners", k).text !== field("corners", "tl").text));
-  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "shadow"].includes(c.kind)));
+  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "shadow", "text", "font"].includes(c.kind)));
+  // A text node's box is its words' unless it is fixed (or wraps): only
+  // then are W and H its own (plans/specs/text.md §2).
+  const textSizing = $derived(fields("text").length ? (field("text", "sizing", "auto_width", "enum").text ?? "auto_width") : null);
   // Effects have their own list/presenter. Drop shadow is the currently
   // supported effect; future renderable effect components get entries here.
   const effectTypes = [{ kind: "shadow", label: "Drop shadow" }];
@@ -154,12 +158,15 @@
           </div></details>
         </div>
       {/if}
-      {#if fields("size").length || fields("radius").length}
+      {#if fields("text").length}
+        <TextSection node={inspected.node} {field} {patch} {refresh} onError={(e) => setError = e} />
+      {/if}
+      {#if (fields("size").length && textSizing !== "auto_width") || fields("radius").length}
         <div class="property-section" data-section="layout">
           <div class="component"><span>Layout</span></div>
           <div class="subheading">{fields("size").length ? "Dimensions" : "Radii"}</div>
           <div class="field-grid">
-            {#each (fields("size").length ? fields("size") : fields("radius")) as f (f.leaf)}
+            {#each (fields("size").length ? fields("size").filter(f => textSizing !== "auto_height" || f.field === "w") : fields("radius")) as f (f.leaf)}
               <PropertyField field={f} node={inspected.node} compact prefix={f.field.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
             {/each}
           </div>

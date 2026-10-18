@@ -247,6 +247,39 @@ components! {
         radius: Number = Value::Number(0.0),
     }
 
+    /// A text node's words and how its box sizes (plans/specs/text.md §2).
+    /// `content` is an ordinary leaf: typed, bound to an expression
+    /// (`"P = " + fmt(p, "kPa", 1)`), or driven by a runtime signal.
+    /// `sizing` is Figma's: `auto_width` (one line per paragraph, the box
+    /// fits it), `auto_height` (wraps at `size.w`, the height fits), or
+    /// `fixed` (`size.w` by `size.h`; text may overflow).
+    Text / "text" => Text {
+        content: Str = Value::Str(String::new()),
+        sizing: Enum = Value::Enum("auto_width".to_owned()),
+        // Styled parts (§2.1): JSON, `[{"start":0,"end":5,"weight":700}]`,
+        // byte ranges of `content` and the properties they override.
+        runs: Str = Value::Str(String::new()),
+    }
+
+    /// One style for a whole text node. `line_height` and `letter_spacing`
+    /// are percents of `size`, as Figma shows them; a `line_height` of 0
+    /// is Auto (the font's own metrics). `tabular` turns on tabular
+    /// figures, for readouts whose digits should not jitter. `underline`
+    /// and `strike` decorate the whole node; runs may override them.
+    Font / "font" => Font {
+        family: Str = Value::Str("Inter".to_owned()),
+        size: Number = Value::Number(24.0),
+        weight: Number = Value::Number(400.0),
+        italic: Bool = Value::Bool(false),
+        line_height: Number = Value::Number(0.0),
+        letter_spacing: Number = Value::Number(0.0),
+        align: Enum = Value::Enum("left".to_owned()),
+        valign: Enum = Value::Enum("top".to_owned()),
+        tabular: Bool = Value::Bool(false),
+        underline: Bool = Value::Bool(false),
+        strike: Bool = Value::Bool(false),
+    }
+
     Fill / "fill" => Fill {
         color: Color = Value::Color([0.5, 0.5, 0.5, 1.0]),
         opacity: Number = Value::Number(1.0),

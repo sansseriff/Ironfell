@@ -246,7 +246,7 @@ pub fn paint_padding(store: &Store, id: NodeId) -> f64 {
 }
 
 /// The local bounds of a drawable 2D node (`rect`, `ellipse`, `slider`,
-/// `path`), or of a 3D embed's on-screen frame. `None` for a group, an
+/// `path`, `text`), or of a 3D embed's on-screen frame. `None` for a group, an
 /// embed of a 2D composition (its region is the source's content, which a
 /// spatial scene knows), and anything else.
 pub fn local_bounds(store: &Store, id: NodeId) -> Option<LocalBounds> {
@@ -261,6 +261,7 @@ pub fn local_bounds(store: &Store, id: NodeId) -> Option<LocalBounds> {
             (crate::shape::to_bez(&outline).bounding_box(), 0.0)
         }
         "path" => (crate::contour::outline(&crate::contour::contours(store, id)).bounding_box(), PATH_HIT),
+        "text" => (crate::text::measure(store, id).frame, 0.0),
         "embed" => {
             let (_, _, w, h) = crate::composition::embed_3d_extent(store, id)?;
             return Some(LocalBounds { geometry: Rect::new(0.0, 0.0, w, h), paint_pad: 2.0, hit_pad: 0.0 });
@@ -306,7 +307,7 @@ pub fn effect_of(doc: &Document, leaf: Leaf) -> GeometryEffect {
         ComponentKind::Transform2d if matches!(ty, "point" | "contour") => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
         ComponentKind::Transform2d => GeometryEffect::Placement(leaf.node),
         ComponentKind::Handles | ComponentKind::Contour => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
-        ComponentKind::Size | ComponentKind::Radius | ComponentKind::Arc | ComponentKind::Stroke | ComponentKind::Shadow | ComponentKind::Frame | ComponentKind::Embed | ComponentKind::EmbedCamera => {
+        ComponentKind::Size | ComponentKind::Text | ComponentKind::Font | ComponentKind::Radius | ComponentKind::Arc | ComponentKind::Stroke | ComponentKind::Shadow | ComponentKind::Frame | ComponentKind::Embed | ComponentKind::EmbedCamera => {
             GeometryEffect::Local(leaf.node)
         }
         // A camera's aspect shapes every embed that looks through it; rare,

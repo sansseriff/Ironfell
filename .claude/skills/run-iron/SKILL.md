@@ -902,3 +902,57 @@ Baseline caveat observed before this port: the existing solver integration test
 `three_link_chain_reaches_a_target` fails its iteration assertion at
 `src/iron_solve/tests/phase1.rs:49` ("50 iterations"). Store, spatial and SVG tests
 pass; this native attempt has not changed that solver test or its implementation.
+
+## Text (2026-10-17)
+
+`plans/specs/text.md`. After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < text.txt; cd -
+```
+
+T and a click make a text node and focus the hidden textarea (`[true,""]`).
+Typing through it shows on the canvas, and Esc commits. The font picker shows 15
+previews; picking Playfair Display fetches that file in the worker. Content bound
+to `"level = " + fmt(#O.slider.value, 3)` follows the level slider. Four undos
+remove everything, the last one undoing the creation and the typing as one entry.
+Expected, minus screenshot and `WARN` lines:
+
+```
+[true,""]
+"Pressure"
+["<text id=\"#33\" name=\"Text\" x=\"260\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"100\" content=\"Pressure\""]
+clicked button[aria-label="Font family"]
+15
+clicked button[title="Playfair Display"]
+clicked button[aria-label="Bind content"]
+1
+[["content=\"level = 0.200\"","family=\"Playfair Display\""]]
+0
+applied "open demo scene" (233 ops, System) -> v1
+applied "add text" (1 ops, Human) -> v2
+applied "add text" (1 ops, Human) -> v3
+applied "style text" (1 ops, Human) -> v4
+applied "bind text.content" (1 ops, Human) -> v5
+applied "set slider" (1 ops, Human) -> v6
+applied "undo: set slider" (1 ops, System) -> v7
+applied "undo: bind text.content" (1 ops, System) -> v8
+applied "undo: style text" (1 ops, System) -> v9
+applied "undo: add text" (2 ops, System) -> v10
+(no page errors)
+```
+
+Picking a font is a `text_style` call ("style text"): with no characters selected
+it styles the whole node. The log shows "add text" twice (the creation, then the typed words folded into
+it); history holds one entry, as for Alt-drag. The slider value depends on the
+driver's pace (0.200 here). Native: `cargo test -p iron_text --target
+aarch64-apple-darwin` (6 tests; 7 with `--features system`, which lays out an
+installed font).
+
+`text-styles.txt` covers the rest of plans/specs/text.md: an emoji text (Noto COLR v1 chunks
+fetched on demand, drawn as colour glyphs), ⌘B on a selected range, the
+inspector's Underline and colour on another range, a plain-text paste, and SVG
+export. Expected: the runs JSON holds `weight` 700 on 0–5 and `color` plus
+`underline` on 15–19; the paste makes a second text node ("paste text"); the
+export has three `<tspan>`s for the first text (bold "Party", plain emoji, red
+underlined "time") and one for the pasted text; no page errors.

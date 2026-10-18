@@ -30,9 +30,9 @@
 <snip file="src/iron_document/src/value.rs" lines="246-259"/>
 
 <h3 id="arith">Arithmetic that checks dimensions</h3>
-<snip file="src/iron_document/src/expr.rs" lines="352-378" mark="356-365,368-371"/>
+<snip file="src/iron_document/src/expr.rs" lines="368-394" mark="372-381,384-387"/>
 <p>Addition, subtraction, remainder and comparison need equal dimensions; multiplication and division combine them. A plain number is a quantity with no dimension, so <code>9.58 mW * 2</code> is fine and <code>9.58 mW + 2</code> is the error <code>cannot combine 9.58 mW + 2</code>. That's exactly the warning you'd have seen in the thermal demo before its port defaults were fixed: <code>cannot combine a plain number - K</code>.</p>
-<p>The lexer turns a number followed by unit characters into a quantity literal, so <code>640 - x * 300</code> stays plain numbers while <code>x / 1 mW</code> reads <code>1 mW</code> as one token (<ref file="src/iron_document/src/expr.rs" line="610" has="A unit after a number">expr.rs:610</ref>). The same stage added the floor functions geometry needs (<code>sin</code>, <code>cos</code>, <code>atan2</code>, <code>sqrt</code>, <code>pow</code>, <code>hypot</code>) and the constant <code>pi</code>. The fiber's loss in Part 9 is <code>pow(10, -loss * length / 10)</code>.</p>
+<p>The lexer turns a number followed by unit characters into a quantity literal, so <code>640 - x * 300</code> stays plain numbers while <code>x / 1 mW</code> reads <code>1 mW</code> as one token (<ref file="src/iron_document/src/expr.rs" line="626" has="A unit after a number">expr.rs:626</ref>). The same stage added the floor functions geometry needs (<code>sin</code>, <code>cos</code>, <code>atan2</code>, <code>sqrt</code>, <code>pow</code>, <code>hypot</code>) and the constant <code>pi</code>. The fiber's loss in Part 9 is <code>pow(10, -loss * length / 10)</code>.</p>
 <div class="box rust"><span class="tab">Reading the Rust</span>
 <p><code>fn quantity_op(...) -&gt; Option&lt;Result&lt;Value, EvalError&gt;&gt;</code> has two layers of "maybe". The outer <code>Option</code> says "is this my case at all?": <code>a.as_quantity()?</code> returns <code>None</code> early if either side isn't a number or quantity, and <code>binary</code> then tries vectors and strings. The inner <code>Result</code> says "it is my case; did it work?". <code>same().map(|_| ...)</code> runs the closure only when the dimensions matched.</p>
 </div>
@@ -45,13 +45,13 @@
 </div>
 <snip file="src/iron_document/src/sym.rs" lines="1-27" mark="18-27"/>
 <p>The cost is one small allocation per distinct parameter name for the life of the process, which is nothing. The one component with run-time fields is <code>params</code>, declared in the macro's <code>@dynamic</code> block:</p>
-<snip file="src/iron_document/src/component.rs" lines="316-329"/>
+<snip file="src/iron_document/src/component.rs" lines="398-411"/>
 <p>So a laser entity's power is the leaf <code>params.power</code>, bindable like any other: <code>params.power = {= #slider.slider.value * 1 mW}</code> is how the optics demo connects its slider.</p>
 
 <h2 id="definitions"><span class="sec">2.3</span>Definitions are data</h2>
 <div class="compare">
   <div class="box naive"><span class="tab">The simple version</span><p><strong>A node type per thing.</strong> The demo once had a <code>bar</code> type in the registry. Every new kind of thing (laser, fiber, meter) would need a Rust change, a rebuild and a schema bump, and the model could never invent one.</p></div>
-  <div class="box built"><span class="tab">What was built</span><p><strong>The registry holds primitives only</strong> (rect, circle, path, slider, group, mesh…). A "bar" or a "laser" is a <code>definition</code> node in a <code>library</code> subtree: its parameters, its ports (Part 9), its behaviour equations, and a <em>template</em> per notation saying how to draw it. An <code>entity</code> instantiates a definition.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>The registry holds primitives only</strong> (rect, ellipse, path, slider, group, mesh…; the ellipse was a <code>circle</code> until schema 4). A "bar" or a "laser" is a <code>definition</code> node in a <code>library</code> subtree: its parameters, its ports (Part 9), its behaviour equations, and a <em>template</em> per notation saying how to draw it. An <code>entity</code> instantiates a definition.</p></div>
 </div>
 <raw title="A definition in the document">library
   definition "bar"
@@ -65,7 +65,7 @@ scene (composition)
   rect "bar"     y = 640 − #entity.params.level · 300      ← a copy, rewritten
                  figures → #entity</raw>
 <p>The three component types that make this work:</p>
-<snip file="src/iron_document/src/component.rs" lines="226-241"/>
+<snip file="src/iron_document/src/component.rs" lines="308-323"/>
 <p>Note the template's bindings read <code>param_spec.default</code>. That makes the template itself a live, evaluable subtree: it shows what the thing looks like at its defaults, and nothing special is needed to evaluate it.</p>
 
 <h3 id="instantiate">Instantiation is copying with rewritten references</h3>
@@ -83,13 +83,13 @@ scene (composition)
 
 <h3 id="demo-bar">The bar in the demo</h3>
 <p>The demo builds its library with ordinary ops, then instantiates. To let <code>instantiate</code> read a definition that isn't applied yet, the ops so far are applied to a scratch copy of the store first:</p>
-<snip file="src/document_bridge/demo.rs" lines="460-473" mark="463-466,469-469"/>
+<snip file="src/document_bridge/demo.rs" lines="468-481" mark="471-474,477-477"/>
 <p>All of it still lands as <em>one</em> transaction, "open demo scene". The same scratch-store pattern builds the optics and thermal demos in Part 9, which is also why every late demo node has a high id: they are allocated after everything earlier, so earlier ids (and the smoke script that names them) never shift.</p>
 
 <h2 id="rename"><span class="sec">2.4</span>The rename: depiction → figure</h2>
 <p>The first plans called a picture of an entity a <em>depiction</em>. It was renamed to <strong>figure</strong> before it reached the UI: the relation is <code>figures</code>, the definition's template holder is <code>template</code>, and a composition view writes <code>of="#entity"</code>. Files written before the rename still load, because the loader renames on read:</p>
-<snip file="src/iron_document/src/serial.rs" lines="104-114"/>
-<p>The schema number went to 3 (<ref file="src/iron_document/src/serial.rs" line="20" has="SCHEMA">serial.rs:20</ref>), and schemas 1 and 2 still load.</p>
+<snip file="src/iron_document/src/serial.rs" lines="107-117"/>
+<p>The schema number went to 3 (<ref file="src/iron_document/src/serial.rs" line="23" has="SCHEMA">serial.rs:23</ref>). It is 5 now (schema 4 turned <code>circle</code> into <code>ellipse</code>, schema 5 put path points under <code>contour</code> nodes), and older files are migrated on load.</p>
 
 <div class="box edge"><span class="tab">Rough edge</span>
 <p>A template is evaluated where it sits in the library, so its bindings must make sense at the defaults. A port spec whose signal defaults to the plain number <code>0</code>, read by a template gauge as <code>signal / 1 mW</code>, is a dimension error, and it was logged every frame until the demo gave port specs defaults in their kind's units (Part 9). Nothing yet checks a template's bindings when the definition is written.</p>

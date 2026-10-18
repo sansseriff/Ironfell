@@ -8,9 +8,9 @@
 <title>Part 8 · The workspace and the session — Iron, Part Two</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="07-tools.html" aria-label="Previous part">&larr;</a><span class="here">Part 8 of 9</span><a href="09-ports.html" aria-label="Next part">&rarr;</a></div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager"><a href="07-tools.html" aria-label="Previous part">&larr;</a><span class="here">Part 8 of 13</span><a href="09-ports.html" aria-label="Next part">&rarr;</a></div></div></header>
 <div class="frame">
-<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html" aria-current="page"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html" aria-current="page"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
   <p class="kicker">Part 8 of 9 · <span class="chip sys-shell">Shell & views</span> <span class="chip sys-store">Document model</span></p>
@@ -18,7 +18,7 @@
   <p class="lede">The main view had become crowded, and the left panel was a card of leftovers. This part covers the shell's answer: a dock of tabs and splits where every tab is a <em>view onto a composition</em>, drawn by the canvas, by HTML, or both; per-view pan and zoom; and a third tier of state, the <em>session</em>, for things like the selection that belong in the store but not in the file or the undo history.</p>
   <div class="prereq">
     <div><b>You need</b>Part 5's panels; Part 6's views and textures.</div>
-    <div><b>Files</b><code>src-ui/views/{views,workspace}.ts</code>, <code>src-ui/views/{Workspace,ViewPanel,AddViewMenu,Toolbar}.svelte</code>, <code>src-ui/views/html/*</code>, <code>src/panels.rs</code>, <code>bevy_app/select.rs</code> (<code>navigate_views</code>, <code>sync_session_selection</code>), <code>iron_document/src/{id,document,lib,serial,view}.rs</code>. Design: <code>plans/panels-and-session.md</code>.</div>
+    <div><b>Files</b><code>src-ui/views/{views,workspace}.ts</code>, <code>src-ui/views/{Workspace,ViewPanel,ViewTab,AddViewMenu}.svelte</code>, <code>src-ui/views/html/CompositionTools.svelte</code>, <code>src-ui/views/html/*</code>, <code>src/panels.rs</code>, <code>bevy_app/select.rs</code> (<code>navigate_views</code>, <code>sync_session_selection</code>), <code>iron_document/src/{id,document,lib,serial,view}.rs</code>. Design: <code>plans/panels-and-session.md</code>.</div>
   </div>
 </header>
 
@@ -27,7 +27,7 @@
 <div class="box built"><span class="tab">The idea</span>
 <p><strong>A view is a source plus a notation.</strong> The source is what it shows: a composition, the timeline root, the document, the session's selection. The notation is how it's drawn, and decides which part the canvas draws (a Rust panel kind) and which part is HTML (a Svelte component). <strong>A presenter</strong> is where the view sits: today a dock tab or split; later a popover, a context menu, a tooltip. The view doesn't change with its presenter.</p>
 </div>
-<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/views/views.ts:1">src-ui/views/views.ts</a><span class="range">lines 1–42</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:20;--len:6"></span><span class="band" style="--from:35;--len:7"></span><pre class="gutter" aria-hidden="true">1
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/views/views.ts:1">src-ui/views/views.ts</a><span class="range">lines 1–45</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:21;--len:6"></span><span class="band" style="--from:36;--len:8"></span><pre class="gutter" aria-hidden="true">1
 2
 3
 4
@@ -68,8 +68,11 @@
 39
 40
 41
-42</pre><pre class="src"><code class="language-typescript">/**
- * Views (plans/panels-and-session.md): every tab or panel in the workspace is
+42
+43
+44
+45</pre><pre class="src"><code class="language-typescript">/**
+ * Views (plans/specs/panels-and-session.md): every tab or panel in the workspace is
  * a view, a window onto something in the document drawn in some notation.
  *
  *   source    what it is a view of: a composition (id or name), the timeline
@@ -87,8 +90,10 @@ import type { Component } from &#x27;svelte&#x27;;
 import DocumentView from &#x27;./html/DocumentView.svelte&#x27;;
 import SelectionView from &#x27;./html/SelectionView.svelte&#x27;;
 import ModelView from &#x27;./html/ModelView.svelte&#x27;;
+import SettingsView from &#x27;./html/SettingsView.svelte&#x27;;
+import CompositionTools from &#x27;./html/CompositionTools.svelte&#x27;;
 
-export type Notation = &#x27;composition&#x27; | &#x27;timeline&#x27; | &#x27;markup&#x27; | &#x27;selection&#x27; | &#x27;conversation&#x27;;
+export type Notation = &#x27;composition&#x27; | &#x27;timeline&#x27; | &#x27;markup&#x27; | &#x27;selection&#x27; | &#x27;conversation&#x27; | &#x27;settings&#x27;;
 
 export interface ViewSpec {
   source: string;
@@ -104,13 +109,14 @@ export interface NotationDef {
 }
 
 export const NOTATIONS: Record&lt;Notation, NotationDef&gt; = {
-  composition: { label: &#x27;Composition&#x27;, canvas: &#x27;composition&#x27; },
+  composition: { label: &#x27;Composition&#x27;, canvas: &#x27;composition&#x27;, html: CompositionTools },
   timeline: { label: &#x27;Timeline&#x27;, canvas: &#x27;timeline&#x27; },
   markup: { label: &#x27;Document&#x27;, html: DocumentView },
   selection: { label: &#x27;Inspector&#x27;, html: SelectionView },
   conversation: { label: &#x27;Model&#x27;, html: ModelView },
+  settings: { label: &#x27;Settings&#x27;, html: SettingsView },
 };</code></pre></div></div></figure>
-<p>The Document, Model and Inspector tabs are HTML views; Main, Scene, Pendulum and the rest are canvas views of compositions; the Timeline is a canvas view of the timeline root. A hybrid (an inspector with canvas sliders and HTML text fields) is a notation with both parts; the HTML is laid over the canvas part and takes the pointer only where it actually draws something.</p>
+<p>The Document, Model, Inspector and Settings tabs are HTML views; Main, Scene, Pendulum and the rest are canvas views of compositions; the Timeline is a canvas view of the timeline root. A hybrid (an inspector with canvas sliders and HTML text fields) is a notation with both parts; the HTML is laid over the canvas part and takes the pointer only where it actually draws something.</p>
 <p>On the Rust side, nothing about tabs exists. Whatever part of a <em>visible</em> view the canvas draws arrives as a panel rectangle, exactly as before:</p>
 <figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/panels.rs:1">src/panels.rs</a><span class="range">lines 1–17</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1
 2
@@ -128,7 +134,7 @@ export const NOTATIONS: Record&lt;Notation, NotationDef&gt; = {
 14
 15
 16
-17</pre><pre class="src"><code class="language-rust">//! The canvas side of views (plans/panels-and-session.md).
+17</pre><pre class="src"><code class="language-rust">//! The canvas side of views (plans/specs/panels-and-session.md).
 //!
 //! A **view** is a window onto a composition: what it shows (`source`), how
 //! (`kind`, its notation: `composition` draws a 2D or 3D composition,
@@ -255,30 +261,35 @@ function defaultLayout(api: DockviewApi) {
     [&#x27;optics&#x27;, &#x27;Optics&#x27;],
     [&#x27;schematic&#x27;, &#x27;Schematic&#x27;],
     [&#x27;thermal&#x27;, &#x27;Thermal&#x27;],
+    [&#x27;piston&#x27;, &#x27;Piston&#x27;],
   ]) {
     view(id, title, { source: id, notation: &#x27;composition&#x27; }, { referencePanel: &#x27;viewer&#x27;, direction: &#x27;within&#x27; }, { inactive: true });
   }
-  view(&#x27;timeline&#x27;, &#x27;Timeline&#x27;, { source: &#x27;timeline&#x27;, notation: &#x27;timeline&#x27; }, { direction: &#x27;below&#x27; }, { initialHeight: 220 });
-  view(&#x27;document&#x27;, &#x27;Document&#x27;, { source: &#x27;document&#x27;, notation: &#x27;markup&#x27; }, { referencePanel: &#x27;viewer&#x27;, direction: &#x27;left&#x27; }, { initialWidth: 380 });
-  view(&#x27;model&#x27;, &#x27;Model&#x27;, { source: &#x27;document&#x27;, notation: &#x27;conversation&#x27; }, { referencePanel: &#x27;document&#x27;, direction: &#x27;within&#x27; }, { inactive: true });
-  view(&#x27;selection&#x27;, &#x27;Inspector&#x27;, { source: &#x27;selection&#x27;, notation: &#x27;selection&#x27; }, { referencePanel: &#x27;viewer&#x27;, direction: &#x27;right&#x27; }, { initialWidth: 200 });
-}</code></pre></div></div></figure>
+  // The render benchmark&#x27;s composition (`?stress=N`), shown in front.
+  if (new URLSearchParams(location.search).has(&#x27;stress&#x27;)) {
+    view(&#x27;stress&#x27;, &#x27;Stress&#x27;, { source: &#x27;stress&#x27;, notation: &#x27;composition&#x27; }, { referencePanel: &#x27;viewer&#x27;, direction: &#x27;within&#x27; });
+  }</code></pre></div></div></figure>
 <p>The layout is workspace state: saved in the browser (<code>iron.workspace.v4</code>) and restored on reload; <code>?layout=default</code> or <em>Reset layout</em> in the Document tab forgets it. It is never in the document or its undo. "+" in any tab bar opens any composition (Rust lists them through <code>document_compositions</code>) or a fixed view.</p>
 <h3 id="pointer">The dock floats over the canvas</h3>
 <p>The dock is HTML over the one full-window canvas. Its chrome must take the pointer (tabs, sashes, HTML views), and everything over a canvas view must let it through to the canvas, except while a tab is being dragged, when drop targets over canvas views must see the pointer:</p>
-<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/views/Workspace.svelte:49">src-ui/views/Workspace.svelte</a><span class="range">lines 49–61</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">49
-50
-51
-52
-53
-54
-55
-56
-57
-58
-59
-60
-61</pre><pre class="src"><code class="language-xml">.dock :global(*) {
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src-ui/views/Workspace.svelte:132">src-ui/views/Workspace.svelte</a><span class="range">lines 132–149</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149</pre><pre class="src"><code class="language-xml">.dock :global(*) {
   pointer-events: none;
 }
 .dock :global(.dv-tabs-and-actions-container),
@@ -286,65 +297,39 @@ function defaultLayout(api: DockviewApi) {
 .dock :global(.dv-sash),
 .dock :global(.html-view),
 .dock :global(.html-view *),
+/* Controls a hybrid view lays over its canvas (the composition toolbar). */
+.dock :global(.canvas-ui),
+.dock :global(.canvas-ui *),
 .dock :global(.dv-tabs-overflow-dropdown-root),
 .dock :global(.dv-tabs-overflow-dropdown-root *),
 .dock.dragging :global(*) {
   pointer-events: auto;
-}</code></pre></div></div></figure>
+}
+
+/* HTML views: a page in the theme&#x27;s background, scrolling, inside their tab. */</code></pre></div></div></figure>
 <p>Tab drags use pointer events rather than native HTML drag-and-drop (<code>dndStrategy: 'pointer'</code>), which is unreliable in Safari and hung the test browser.</p>
 <div class="box edge"><span class="tab">Rough edge</span>
 <p>dockview's ESM build ships without its stylesheet, so <code>src-ui/views/dockview.css</code> is a copy extracted from the UMD bundle of version 8.5.1. Upgrading dockview means regenerating it.</p>
 </div>
 
+<div class="box rust"><span class="tab">Since October 14</span>
+<p>The chrome was restyled after VS Code: tabs with icons (<code>ViewTab.svelte</code>, lucide icons), menus from <code>bits-ui</code>, a light and dark theme that follows the system and is sent to Rust (<code>set_dark_mode</code>) so the canvas background matches the active tab. The tool row became a bottom toolbar inside each composition view (<code>CompositionTools.svelte</code>, the composition notation's HTML part): select, pen, rect, ellipse. A Settings view sets render scale and screen density live.</p>
+</div>
+
 <h2 id="panzoom"><span class="sec">8.3</span>Pan and zoom per view</h2>
 <p>Every 2D view has its own pan and zoom in <code>ViewCameras</code>, keyed by view id, and <code>PanelView::affine</code> (Part 5) carries them to drawing, picking, the select tool and 3D embed textures, so nothing else had to change. The controls are Figma's:</p>
-<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1520">src/bevy_app/select.rs</a><span class="range">lines 1520–1565</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:36;--len:5"></span><pre class="gutter" aria-hidden="true">1520
-1521
-1522
-1523
-1524
-1525
-1526
-1527
-1528
-1529
-1530
-1531
-1532
-1533
-1534
-1535
-1536
-1537
-1538
-1539
-1540
-1541
-1542
-1543
-1544
-1545
-1546
-1547
-1548
-1549
-1550
-1551
-1552
-1553
-1554
-1555
-1556
-1557
-1558
-1559
-1560
-1561
-1562
-1563
-1564
-1565</pre><pre class="src"><code class="language-rust">/// Zoom limits, window px per document px.
-const ZOOM: (f32, f32) = (0.05, 64.0);
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:2476">src/bevy_app/select.rs</a><span class="range">lines 2476–2487</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">2476
+2477
+2478
+2479
+2480
+2481
+2482
+2483
+2484
+2485
+2486
+2487</pre><pre class="src"><code class="language-rust">const ZOOM: (f32, f32) = (0.05, 64.0);
 
 /// Keep `doc` (document px) under `screen` (window px) at zoom `z`.
 fn pan_keeping(view: &amp;PanelView, doc: Vec2, screen: Vec2, z: f32) -&gt; Vec2 {
@@ -353,42 +338,9 @@ fn pan_keeping(view: &amp;PanelView, doc: Vec2, screen: Vec2, z: f32) -&gt; Vec2
 
 /// Pan and zoom 2D views, Figma&#x27;s way: the wheel or a trackpad pans (Shift
 /// turns vertical into horizontal), Ctrl/Cmd+wheel and pinch zoom about the
-/// pointer, Shift+1 fits the content, Shift+0 is 100%, Cmd/Ctrl +/− zoom
-/// about the view&#x27;s centre. Space-drag pans (`select_tool_system`).
-#[allow(clippy::too_many_arguments)]
-pub fn navigate_views(
-    pointer: Res&lt;crate::PointerState&gt;,
-    hits: Res&lt;crate::PointerHits&gt;,
-    scroll: Res&lt;crate::bevy_app::AccumulatedScroll&gt;,
-    views: Res&lt;PanelViews&gt;,
-    tool: Res&lt;SelectTool&gt;,
-    sel: Res&lt;crate::SelectionState&gt;,
-    mut keys: ResMut&lt;ToolKeys&gt;,
-    mut cameras: ResMut&lt;crate::document_bridge::ViewCameras&gt;,
-    store: Res&lt;DocumentStore&gt;,
-    map: Res&lt;NodeMap&gt;,
-    globals: Query&lt;&amp;&#x27;static GlobalTransform&gt;,
-    nodes: Query&lt;(&amp;&#x27;static Doc2d, &amp;&#x27;static GlobalTransform)&gt;,
-) {
-    let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
-    if let Some(view) = under
-        &amp;&amp; scroll.delta != Vec2::ZERO
-    {
-        let px = match scroll.unit {
-            bevy::input::mouse::MouseScrollUnit::Line =&gt; scroll.delta * 16.0,
-            bevy::input::mouse::MouseScrollUnit::Pixel =&gt; scroll.delta,
-        };
-        let camera = cameras.0.entry(view.panel.clone()).or_default();
-        if pointer.modifiers.ctrl || pointer.modifiers.meta {
-            let doc = (pointer.screen - Vec2::new(view.rect.x, view.rect.y) - camera.pan) / camera.zoom;
-            let z = (camera.zoom * (-px.y * 0.01).exp()).clamp(ZOOM.0, ZOOM.1);
-            camera.pan = pan_keeping(view, doc, pointer.screen, z);
-            camera.zoom = z;
-        } else {
-            let d = if pointer.modifiers.shift &amp;&amp; px.x == 0.0 { Vec2::new(px.y, 0.0) } else { px };
-            camera.pan -= d;
-        }
-    }</code></pre></div></div></figure>
+/// pointer, Shift+1 fits the content, Shift+2 fits the selection, Shift+0 is
+/// 100%, +/− (with or without Cmd/Ctrl) zoom about the view&#x27;s centre.
+/// Space-drag and middle-drag pan (`select_tool_system`).</code></pre></div></div></figure>
 <p>Scrolling pans; Ctrl/Cmd+wheel or a trackpad pinch (which browsers send as Ctrl+wheel) zooms about the pointer, keeping the document point under it fixed (<code>pan_keeping</code>); Space-drag pans; Shift+1 fits the content, Shift+0 is 100%, Cmd/Ctrl +/− zoom about the centre. "Show in" (Part 5) now sets the pan and keeps the zoom. The 3D camera controller acts only on the view under the pointer, so Space and the wheel no longer fly a camera in another tab.</p>
 
 <h2 id="session"><span class="sec">8.4</span>The session tier</h2>
@@ -411,80 +363,70 @@ pub fn navigate_views(
 <figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/id.rs:14">src/iron_document/src/id.rs</a><span class="range">lines 14–17</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">14
 15
 16
-17</pre><pre class="src"><code class="language-rust">/// Session-tier ids (plans/panels-and-session.md) start here: session nodes
+17</pre><pre class="src"><code class="language-rust">/// Session-tier ids (plans/specs/panels-and-session.md) start here: session nodes
 /// and relations are allocated from their own range, so they never shift
 /// the ids of content, and nothing at or above it is ever saved.
 pub const SESSION_BASE: u64 = 1 &lt;&lt; 40;</code></pre></div></div></figure>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:299">src/iron_document/src/document.rs</a><span class="range">lines 299–313</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">299
-300
-301
-302
-303
-304
-305
-306
-307
-308
-309
-310
-311
-312
-313</pre><pre class="src"><code class="language-rust">pub(crate) fn advance_next_id(&amp;mut self, past: NodeId) {
-    if past.is_session() {
-        self.next_session_id = self.next_session_id.max(past.raw() + 1);
-    } else {
-        self.next_id = self.next_id.max(past.raw() + 1);
-    }
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:142">src/iron_document/src/document.rs</a><span class="range">lines 142–151</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">142
+143
+144
+145
+146
+147
+148
+149
+150
+151</pre><pre class="src"><code class="language-rust">/// Ids for session-tier nodes, from their own range.
+pub fn next_session_ids(&amp;self, n: usize) -&gt; Vec&lt;NodeId&gt; {
+    let base = self.next_session_id.max(crate::id::SESSION_BASE);
+    (0..n as u64).map(|i| NodeId::from_raw(base + i)).collect()
 }
 
-pub(crate) fn advance_next_relation_id(&amp;mut self, past: RelationId) {
-    if past.is_session() {
-        self.next_session_rel = self.next_session_rel.max(past.raw() + 1);
-    } else {
-        self.next_rel = self.next_rel.max(past.raw() + 1);
-    }
+pub fn next_session_relation_ids(&amp;self, n: usize) -&gt; Vec&lt;RelationId&gt; {
+    let base = self.next_session_rel.max(crate::id::SESSION_BASE);
+    (0..n as u64).map(|i| RelationId::from_raw(base + i)).collect()
 }</code></pre></div></div></figure>
 
 <h3 id="apply-session">Applied without a transaction</h3>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:465">src/iron_document/src/lib.rs</a><span class="range">lines 465–503</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:12"></span><span class="band" style="--from:23;--len:8"></span><pre class="gutter" aria-hidden="true">465
-466
-467
-468
-469
-470
-471
-472
-473
-474
-475
-476
-477
-478
-479
-480
-481
-482
-483
-484
-485
-486
-487
-488
-489
-490
-491
-492
-493
-494
-495
-496
-497
-498
-499
-500
-501
-502
-503</pre><pre class="src"><code class="language-rust">// ---- The session tier (plans/panels-and-session.md) ----------------
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:739">src/iron_document/src/lib.rs</a><span class="range">lines 739–777</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:11"></span><span class="band" style="--from:24;--len:6"></span><pre class="gutter" aria-hidden="true">739
+740
+741
+742
+743
+744
+745
+746
+747
+748
+749
+750
+751
+752
+753
+754
+755
+756
+757
+758
+759
+760
+761
+762
+763
+764
+765
+766
+767
+768
+769
+770
+771
+772
+773
+774
+775
+776
+777</pre><pre class="src"><code class="language-rust">// ---- The session tier (plans/specs/panels-and-session.md) ----------------
 
 /// Apply session-tier ops: nodes, relations and leaves in the session&#x27;s
 /// id range only. Not a transaction: the document&#x27;s version, history and
@@ -527,43 +469,43 @@ pub fn apply_session(&amp;mut self, ops: Vec&lt;Op&gt;) -&gt; Result&lt;(), Appl
 
 <h3 id="selection">The selection is relations</h3>
 <p>A selection is a <code>selection</code> node under a <code>session</code> root, with one ordered <code>selects</code> relation per selected node. Relations, not children: a child is owned and placed by its parent, and a selected square stays where it is. Each relation's data records how the select tool reached the node: the panel and the chain (Part 7), so a selection made in Main through the scene's embed is restored to the same place.</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:587">src/iron_document/src/lib.rs</a><span class="range">lines 587–623</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">587
-588
-589
-590
-591
-592
-593
-594
-595
-596
-597
-598
-599
-600
-601
-602
-603
-604
-605
-606
-607
-608
-609
-610
-611
-612
-613
-614
-615
-616
-617
-618
-619
-620
-621
-622
-623</pre><pre class="src"><code class="language-rust">/// The selected nodes, in pick order, with how each was reached
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:862">src/iron_document/src/lib.rs</a><span class="range">lines 862–898</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">862
+863
+864
+865
+866
+867
+868
+869
+870
+871
+872
+873
+874
+875
+876
+877
+878
+879
+880
+881
+882
+883
+884
+885
+886
+887
+888
+889
+890
+891
+892
+893
+894
+895
+896
+897
+898</pre><pre class="src"><code class="language-rust">/// The selected nodes, in pick order, with how each was reached
 /// (`data.panel`, `data.chain`). Deleted nodes drop out.
 pub fn selection(&amp;self) -&gt; Vec&lt;(NodeId, std::collections::BTreeMap&lt;String, Value&gt;)&gt; {
     let Some(sel) = self.live_of_type(&quot;selection&quot;) else { return Vec::new() };
@@ -601,61 +543,61 @@ pub fn set_selection(&amp;mut self, items: &amp;[(NodeId, std::collections::BTre
     self.apply_session(ops)
 }</code></pre></div></div></figure>
 <p>In the app, the select tool keeps working on a per-frame copy (<code>SelectionState</code> plus its reaches), and one system keeps the copy and the record in step:</p>
-<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:1615">src/bevy_app/select.rs</a><span class="range">lines 1615–1668</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:11;--len:24"></span><span class="band" style="--from:35;--len:16"></span><pre class="gutter" aria-hidden="true">1615
-1616
-1617
-1618
-1619
-1620
-1621
-1622
-1623
-1624
-1625
-1626
-1627
-1628
-1629
-1630
-1631
-1632
-1633
-1634
-1635
-1636
-1637
-1638
-1639
-1640
-1641
-1642
-1643
-1644
-1645
-1646
-1647
-1648
-1649
-1650
-1651
-1652
-1653
-1654
-1655
-1656
-1657
-1658
-1659
-1660
-1661
-1662
-1663
-1664
-1665
-1666
-1667
-1668</pre><pre class="src"><code class="language-rust">/// The selection&#x27;s record is the store&#x27;s session tier (a `selection` node
-/// with `selects` relations, plans/panels-and-session.md); `SelectionState`
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/select.rs:2576">src/bevy_app/select.rs</a><span class="range">lines 2576–2629</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">2576
+2577
+2578
+2579
+2580
+2581
+2582
+2583
+2584
+2585
+2586
+2587
+2588
+2589
+2590
+2591
+2592
+2593
+2594
+2595
+2596
+2597
+2598
+2599
+2600
+2601
+2602
+2603
+2604
+2605
+2606
+2607
+2608
+2609
+2610
+2611
+2612
+2613
+2614
+2615
+2616
+2617
+2618
+2619
+2620
+2621
+2622
+2623
+2624
+2625
+2626
+2627
+2628
+2629</pre><pre class="src"><code class="language-rust">/// The selection&#x27;s record is the store&#x27;s session tier (a `selection` node
+/// with `selects` relations, plans/specs/panels-and-session.md); `SelectionState`
 /// and the tool&#x27;s reaches are the frame&#x27;s working copy. Whatever changed
 /// the session elsewhere (a load, the shell, later undo) is read back;
 /// otherwise a change here is written there, once per frame.

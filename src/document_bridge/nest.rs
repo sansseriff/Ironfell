@@ -48,7 +48,7 @@ pub fn draw_shape(shape: &Shape2d) -> crate::vector::Shape {
     use crate::vector::Shape;
     match shape {
         &Shape2d::Rect { w, h, radii } if radii.iter().any(|&r| r > 0.0) => Shape::RoundedRect(rounded_rect(w, h, radii)),
-        &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } => Shape::Rect(kurbo::Rect::new(0.0, 0.0, w as f64, h as f64)),
+        &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } | &Shape2d::Text { w, h, .. } => Shape::Rect(kurbo::Rect::new(0.0, 0.0, w as f64, h as f64)),
         &Shape2d::Ellipse { rx, ry, arc } => {
             let arc = arc.map(|a| a.map(f64::from));
             Shape::Path(iron_document::shape::to_bez(&iron_document::shape::ellipse_outline(rx as f64, ry as f64, arc)))

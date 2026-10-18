@@ -14,6 +14,20 @@ pub enum EngineEvent {
     Tool { tool: String },
     ConvertQuestion { question: String },
     Clipboard { text: String },
+    /// Font files the engine wants, most needed first (plans/specs/text.md §4).
+    Fonts { fonts: Vec<FontRequest> },
+    /// Text editing on the canvas (`bevy_app::text_tool`): the draft and
+    /// its selection (UTF-16 offsets) for the host's hidden textarea, and
+    /// the caret's top-left and height in window px, where the textarea
+    /// goes so an IME's candidates appear by the text.
+    TextEdit { active: bool, node: String, text: String, anchor: u32, focus: u32, caret: [f32; 3] },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FontRequest {
+    pub family: String,
+    /// Relative to the host's font root.
+    pub file: String,
 }
 
 #[derive(Resource, Default)]

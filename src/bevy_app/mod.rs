@@ -9,6 +9,7 @@ mod pointer;
 pub(crate) mod select;
 mod pen;
 mod shape_tool;
+pub(crate) mod text_tool;
 pub(crate) mod scene3d;
 mod timeline;
 mod ui_panels;
@@ -230,6 +231,7 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
             select::navigate_views.before(pen::pen_tool_system),
             pen::pen_tool_system.before(select::select_tool_system),
             shape_tool::shape_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
+            text_tool::text_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
             select::select_tool_system,
             select::sync_session_selection.after(select::select_tool_system),
             // A drag previews into the store, the bridge rewrites the
@@ -271,6 +273,7 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
             outbound_hover_system.after(select::select_tool_system),
             outbound_selection_system.after(select::select_tool_system),
             select::draw_select_overlay.after(TransformSystems::Propagate),
+            text_tool::draw_text_overlay.after(TransformSystems::Propagate),
             render_active_shapes
                 .after(GestureSystems)
                 .after(selection_reflect_system),
@@ -312,6 +315,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<select::ActiveTool>();
     app.init_resource::<pen::PenTool>();
     app.init_resource::<shape_tool::ShapeTool>();
+    app.init_resource::<text_tool::TextTool>();
     app.init_resource::<select::ShellModifiers>();
     app.init_resource::<select::ToolKeys>();
     app.init_resource::<select::Clipboard>();

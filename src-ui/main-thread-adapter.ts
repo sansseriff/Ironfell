@@ -5,6 +5,7 @@
 // is not interchangeable with the WebGPU one. Assigned on "wasmData", before
 // any FFI call can occur.
 import { loadGlue, type Glue } from "./runtime/glue";
+import { FontLoader } from "./runtime/font_loader";
 import type { Backend } from "./runtime/backend_policy";
 import { CadenceProbe } from "./runtime/cadence_probe";
 import { modelAsk, modelEdit } from "./model";
@@ -29,6 +30,11 @@ export class MainThreadAdapter {
   private rafId: number | null = null;
   private postedEnginePrepared: boolean = false;
   private disposed = false;
+  // Fetches the font files the engine asks for (plans/specs/text.md §4).
+  private fonts = new FontLoader(
+    (bytes) => glue.register_font(bytes),
+    (families) => this.sendMessage({ ty: "fontsLoaded", families }),
+  );
 
   constructor() {
     // Create a dedicated object for Rust FFI functions
@@ -41,6 +47,8 @@ export class MainThreadAdapter {
       send_cursor_from_worker: (cursor: string) => this.sendMessage({ ty: "cursor", cursor }),
       send_document_changed_from_worker: (version: number) => this.sendMessage({ ty: "documentChanged", version }),
       send_clipboard_from_worker: (text: string) => this.sendMessage({ ty: "clipboard", text }),
+      send_text_edit_from_worker: (state: string) => this.sendMessage({ ty: "textEdit", ...JSON.parse(state) }),
+      send_fonts_from_worker: (fonts: string) => this.fonts.request(JSON.parse(fonts)),
     };
 
     // Make it globally accessible
@@ -142,6 +150,18 @@ export class MainThreadAdapter {
 
       case "paste":
         if (this.appHandle !== BigInt(0)) glue.clipboard_paste(this.appHandle, data.text);
+        break;
+
+      case "textInput":
+        if (this.appHandle !== BigInt(0)) glue.text_input(this.appHandle, data.text, data.anchor, data.focus);
+        break;
+
+      case "textMotion":
+        if (this.appHandle !== BigInt(0)) glue.text_motion(this.appHandle, data.motion, !!data.extend);
+        break;
+
+      case "textToggle":
+        if (this.appHandle !== BigInt(0)) glue.text_toggle(this.appHandle, data.what);
         break;
 
       case "theme":

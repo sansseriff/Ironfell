@@ -249,6 +249,12 @@ impl Draw<'_> {
         let local = self.world(id);
         let affine = base * local;
         let shape = nest::draw_shape(&d.shape);
+        // What fill, stroke and shadow paint: the shape, or a text's glyphs
+        // (its `shape` is its box, which only picking and outlines use).
+        let painted = match &d.shape {
+            Shape2d::Text { glyphs, .. } => crate::vector::Shape::Path((**glyphs).clone()),
+            _ => shape.clone(),
+        };
         if let Shape2d::Slider { w, h, t } = d.shape.clone() {
             // Track, filled part, knob. The hit shape stays the whole w×h
             // box so the knob is easy to grab.
@@ -265,6 +271,35 @@ impl Draw<'_> {
             // A path fills its closed contours by its rule; an open contour
             // has no inside.
             let paint = |b: &mut crate::vector::DisplayListBuilder<'_>| {
+                // Text paints its own pieces: outline glyphs in the node's
+                // fill or a run's colour (and the node's stroke), colour
+                // glyphs in their own colours.
+                if let Shape2d::Text { paints, offset, .. } = &d.shape {
+                    let at = affine * kurbo::Affine::translate((offset[0] as f64, offset[1] as f64));
+                    let node_brush = self.fill_brush(id, d, &shape);
+                    let node_color = d.fill.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                    for p in paints.iter() {
+                        match p {
+                            iron_text::TextPaint::Fill { color, path } => {
+                                let path = crate::vector::Shape::Path((**path).clone());
+                                let brush = match color {
+                                    Some(c) => Some(peniko::Color::new(*c).into()),
+                                    None => node_brush.clone(),
+                                };
+                                if let Some(brush) = brush {
+                                    b.fill(at, brush, path.clone());
+                                }
+                                if let Some((c, style)) = &d.stroke {
+                                    b.stroke(at, style.clone(), peniko::Color::new(*c), path);
+                                }
+                            }
+                            iron_text::TextPaint::Color { transform, ops, foreground } => {
+                                color_glyph(b, at * *transform, &mut ops.iter(), foreground.unwrap_or(node_color));
+                            }
+                        }
+                    }
+                    return;
+                }
                 if let Some(brush) = self.fill_brush(id, d, &shape) {
                     match &d.shape {
                         Shape2d::Path { fill: Some(f), even_odd, .. } => {
@@ -272,11 +307,11 @@ impl Draw<'_> {
                             b.fill_with_rule(affine, brush, rule, crate::vector::Shape::Path((**f).clone()));
                         }
                         Shape2d::Path { fill: None, .. } => {}
-                        _ => b.fill(affine, brush, shape.clone()),
+                        _ => b.fill(affine, brush, painted.clone()),
                     }
                 }
                 if let Some((c, style)) = &d.stroke {
-                    b.stroke(affine, style.clone(), peniko::Color::new(*c), shape.clone());
+                    b.stroke(affine, style.clone(), peniko::Color::new(*c), painted.clone());
                 }
             };
             match d.shadow.filter(|s| s.color[3] > 0.0) {
@@ -290,7 +325,7 @@ impl Draw<'_> {
                     let std_dev = s.std_dev as f64;
                     // A plain or evenly rounded rect: Vello's analytic blur,
                     // no offscreen pass. Anything else: a filter layer.
-                    let analytic = match &shape {
+                    let analytic = match &painted {
                         crate::vector::Shape::Rect(r) => Some((*r, 0.0)),
                         crate::vector::Shape::RoundedRect(r) => r.radii().as_single_radius().map(|radius| (r.rect(), radius)),
                         _ => None,
@@ -304,7 +339,7 @@ impl Draw<'_> {
                         None => {
                             let in_parent = parent.inverse() * local;
                             let pad = d.stroke.as_ref().map_or(0.0, |(_, st)| st.width);
-                            let own = in_parent.transform_rect_bbox(shape.bounding_box().inflate(pad, pad));
+                            let own = in_parent.transform_rect_bbox(painted.bounding_box().union(shape.bounding_box()).inflate(pad, pad));
                             let blur = 3.0 * std_dev;
                             let bounds = own.union((own + offset).inflate(blur, blur));
                             b.shadowed(base * parent, color, offset, std_dev, bounds, paint);
@@ -341,6 +376,30 @@ impl Draw<'_> {
             (true, _) => Some(LIT_SELECTED),
             (_, true) => Some(LIT_HOVERED),
             _ => None,
+        }
+    }
+}
+
+/// Replay a colour glyph's ops (`iron_text::ColorOp`), placed by `at`,
+/// until the op that closes the current scope: a clip nests what follows
+/// up to its `PopClip`, a layer up to its `PopLayer`.
+fn color_glyph<'a>(b: &mut crate::vector::DisplayListBuilder<'_>, at: kurbo::Affine, ops: &mut impl Iterator<Item = &'a iron_text::ColorOp>, foreground: [f32; 4]) {
+    use iron_text::{ColorFill, ColorOp};
+    while let Some(op) = ops.next() {
+        match op {
+            ColorOp::PushClip { transform, path } => {
+                b.clipped(at * *transform, crate::vector::Shape::Path(path.clone()), |b| color_glyph(b, at, ops, foreground));
+            }
+            ColorOp::PushLayer(mode) => b.blended(*mode, |b| color_glyph(b, at, ops, foreground)),
+            ColorOp::PopClip | ColorOp::PopLayer => return,
+            ColorOp::Fill { transform, path, fill } => {
+                let brush: crate::vector::Brush = match fill {
+                    ColorFill::Solid(c) => peniko::Color::new(*c).into(),
+                    ColorFill::Foreground(a) => peniko::Color::new([foreground[0], foreground[1], foreground[2], foreground[3] * a]).into(),
+                    ColorFill::Gradient(g) => g.clone().into(),
+                };
+                b.fill(at * *transform, brush, crate::vector::Shape::Path(path.clone()));
+            }
         }
     }
 }

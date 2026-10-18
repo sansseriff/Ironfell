@@ -20,7 +20,7 @@
 <p>The vocabulary is code, like node types and constraint kinds:</p>
 <snip file="src/iron_document/src/port.rs" lines="22-53" mark="43-49"/>
 <p>Every port carries all five fields; the kind decides which ones mean anything. Storing <code>signal</code>, <code>across</code> and <code>through</code> on every port was step 1 of the plan: the file format holds both variable sorts from the start, so files never need migrating as the solving arrives.</p>
-<snip file="src/iron_document/src/component.rs" lines="273-297"/>
+<snip file="src/iron_document/src/component.rs" lines="355-379"/>
 
 <h3 id="specs">Ports come from definitions</h3>
 <p>A definition (Part 2) gains two kinds of child: <code>port_spec</code> and <code>equation</code>. An out-port's spec carries its <em>behaviour</em> as a binding: the laser's <code>out.signal</code> is bound to its <code>power</code> parameter; the fiber's is its input attenuated by length and loss. <code>instantiate</code> copies each spec onto the new entity as a <code>port</code>, and each equation as an equation, with every reference rewritten the same way template bindings are:</p>
@@ -47,12 +47,12 @@
 </div>
 <snip file="src/iron_document/src/port.rs" lines="91-110"/>
 <p>The reactive graph (Part 3) folds them in alongside the stored bindings, so a signal is evaluated in topological order with everything else, in the same pass:</p>
-<snip file="src/iron_document/src/graph.rs" lines="160-180" mark="164-167"/>
+<snip file="src/iron_document/src/graph.rs" lines="225-245" mark="229-232"/>
 <p>This is what makes the chain feel instant. Move the laser-power slider: the entity's <code>params.power</code> (bound to the slider) changes, then the laser's <code>out.signal</code>, the fiber's <code>in.signal</code> (derived), the fiber's <code>out.signal</code>, the meter's <code>in.signal</code> (derived), and both gauges, all in one glitch-free pass.</p>
 
 <h3 id="invert">Dragging the meter's reading</h3>
 <p>Part 3's handle resolution asks "what is this leaf's expression?". An in-port has no stored expression, so it asks the graph for its derived one:</p>
-<snip file="src/iron_document/src/handle.rs" lines="46-53" mark="49-51"/>
+<snip file="src/iron_document/src/handle.rs" lines="56-60"/>
 <p>Inlining walks back through the fiber (which multiplies by a constant at the current length) to the laser's <code>power</code>, which is bound to the slider. The result is a linear handle with one free source, the slider, so dragging the meter's gauge sets the laser's power. The test asks for 5 mW at the meter and checks the laser is set to 5 mW / 10<sup>−0.1</sup>:</p>
 <snip file="src/iron_document/tests/ports.rs" lines="185-198"/>
 
@@ -99,21 +99,20 @@
 <p>Line 273 skips equations on <em>definitions</em>: a definition's equations describe the template, which has no network of its own. An unconnected terminal ends up in a net of one, where "throughs sum to zero" means it carries no flow, which is the physically right default for an open end.</p>
 
 <h3 id="resolve">Solving, and where the answer lives</h3>
-<snip file="src/iron_document/src/lib.rs" lines="505-571" mark="530-538,539-558,564-570"/>
-<p>Every equation becomes a <code>Required</code> term (Part 4's tiers). <code>Linear</code> rows are plain sums; <code>Expr</code> rows evaluate both sides with the unknowns substituted (as quantities with their dimensions, so <code>2 K/W · 5 W</code> is a temperature) and everything else read from the store. The previous solution is the starting point, so a slider drag converges in a step or two.</p>
-<p>The solution is <strong>not written to the document</strong>. It goes into a new layer of the reactive graph, <code>physics</code>, which readers see beneath bindings:</p>
-<snip file="src/iron_document/src/graph.rs" lines="318-340"/>
+<snip file="src/iron_document/src/lib.rs" lines="779-846" mark="784-791,804-834,838-845"/>
+<p>Every equation becomes a <code>Required</code> term (Part 4's tiers). <code>Linear</code> rows are plain sums; <code>Expr</code> rows evaluate both sides with the unknowns substituted (as quantities with their dimensions, so <code>2 K/W · 5 W</code> is a temperature) and everything else read from the store. The previous solution (read back from the network's own published signals) is the starting point, so a slider drag converges in a step or two.</p>
+<p>The solution is <strong>not written to the document</strong>. It is <em>published</em> into the reactive graph's runtime layer as producer 1, <code>ProducerId::NETWORK</code> (838–845), which readers see beneath bindings. When this part was first written the network had its own <code>physics</code> map; on October 17 it became one producer among several (clips are producer 0, host simulations 2 and up; Part 12):</p>
+<snip file="src/iron_document/src/graph.rs" lines="393-411"/>
 <div class="table-wrap"><table>
   <thead><tr><th>Order</th><th>Layer</th><th>Comes from</th><th>Stored?</th></tr></thead>
   <tbody>
     <tr><td>1</td><td>overlay</td><td>A gesture's previews (Part 3)</td><td>no</td></tr>
     <tr><td>2</td><td>resolved</td><td>Bindings, stored and derived</td><td>no</td></tr>
-    <tr><td>3</td><td>physics</td><td>The across/through network</td><td>no</td></tr>
-    <tr><td>4</td><td>animated</td><td>Clips at the playhead</td><td>no</td></tr>
-    <tr><td>5</td><td>constant</td><td>The document</td><td>yes</td></tr>
+    <tr><td>3</td><td>runtime</td><td>Producers: this network (1), clips (0), host simulations (2+)</td><td>no</td></tr>
+    <tr><td>4</td><td>constant</td><td>The document</td><td>yes</td></tr>
   </tbody>
 </table></div>
-<p>So the heater's gauge, bound to <code>(#out.port.across − 293.15 K) / 1 K · 6</code>, reads the solved temperature like any value, and when the solution changes, <code>set_physics</code> invalidates its dependents like any change. <code>resolve_physics</code> runs after every transaction, on load, and when the playhead moves (<ref file="src/iron_document/src/lib.rs" line="654" has="resolve_physics">lib.rs:654</ref>). A solved leaf is <code>Locked</code> for editing, with the reason "solved by its across/through network; change a source or a parameter instead" (<ref file="src/iron_document/src/handle.rs" line="46" has="physics">handle.rs:46</ref>).</p>
+<p>So the heater's gauge, bound to <code>(#out.port.across − 293.15 K) / 1 K · 6</code>, reads the solved temperature like any value, and when the solution changes, <code>publish</code> invalidates its dependents like any change. <code>resolve_physics</code> runs after every transaction, preview, publish and playhead move (<ref file="src/iron_document/src/lib.rs" line="930" has="resolve_physics">lib.rs:930</ref>). A solved leaf is <code>Locked</code> for editing, because a producer holds it, with the reason "solved by its across/through network; change a source or a parameter instead" (<ref file="src/iron_document/src/handle.rs" line="52" has="across/through network">handle.rs:52</ref>).</p>
 <div class="box rust"><span class="tab">Why not solve-on-apply like constraints?</span>
 <p>Constraint solutions (Part 4) are <em>positions</em>: authored state the user owns, so they are written as derived ops and undone with the transaction. Physics solutions are <em>consequences</em>: the temperature is whatever the heater's power and the link's resistance make it. Storing it would put a cache in the file that could disagree with its own inputs. A network that fails to converge keeps its previous solution and reports why through <code>physics_error()</code>; it never rejects a transaction.</p>
 </div>
@@ -121,15 +120,15 @@
 <h2 id="demos"><span class="sec">9.5</span>The two demos</h2>
 <h3 id="optics">Optics: laser → fiber → meter</h3>
 <p>The Optics and Schematic tabs are two compositions of the same three entities: a cartoon (a laser body whose beam brightens with power, a curved fiber path, a meter dial with a gauge) and a block diagram with wires. Each definition carries both templates:</p>
-<snip file="src/document_bridge/demo.rs" lines="631-654" mark="634,646"/>
+<snip file="src/document_bridge/demo.rs" lines="776-799" mark="779,791"/>
 <p>Each entity is instantiated in the cartoon, then drawn again in the schematic with <code>place_figures</code>. The two connections are created with a schematic wire each, and each wire is a figure of its <em>connection</em>, so selecting a wire highlights the connection's ends through the usual <code>figures</code> machinery (Part 5):</p>
-<snip file="src/document_bridge/demo.rs" lines="712-731" mark="726-730"/>
+<snip file="src/document_bridge/demo.rs" lines="858-882" mark="869-871,876"/>
 <p>Two sliders in the cartoon drive the laser's <code>power</code> and the fiber's <code>length_km</code>. Drag either gauge (cartoon or schematic), and the power slider moves.</p>
 
 <h3 id="thermal">Thermal: heater → link → ambient</h3>
 <p>The Thermal tab is the same pattern with pair ports. Each definition has a <code>heat_flow</code> port per terminal and its behaviour as <code>equation</code> children; the heater's template draws a temperature bar and a heat-flow bar bound to its port:</p>
-<snip file="src/document_bridge/demo.rs" lines="850-876" mark="854,859,861,866-867,873"/>
-<p>Note the port defaults (lines 809–812): <code>293.15 K</code> and <code>0 W</code>, in the kind's own units. The template's gauges read the definition's ports before any network exists, and with plain-number defaults they failed with a unit error. An instance's values are then overridden by the physics layer.</p>
+<snip file="src/document_bridge/demo.rs" lines="996-1022" mark="1000,1005,1007,1012-1013,1019"/>
+<p>Note the port defaults (lines 957–958, set where the port specs are built): <code>293.15 K</code> and <code>0 W</code>, in the kind's own units. The template's gauges read the definition's ports before any network exists, and with plain-number defaults they failed with a unit error. An instance's values are then overridden by the physics layer.</p>
 <p>The test that pins the arithmetic: 5 W through 2 K/W into 293.15 K settles at 303.15 K with 5 W flowing (<ref file="src/iron_document/tests/ports.rs" line="228" has="fn a_heater_settles_through_its_thermal_link">ports.rs:228</ref>).</p>
 
 <h2 id="model"><span class="sec">9.6</span>What the model sees</h2>

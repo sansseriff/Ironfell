@@ -19,13 +19,13 @@
 
 <h2 id="layers"><span class="sec">6.2</span>Vector views</h2>
 <p>A 2D layer is an entity with a <code>DisplayList</code> (the renderer-independent list of fills and strokes the bridge draws) and a <code>VectorLayer</code>. The change is one field: which view the layer renders into.</p>
-<snip file="src/vector/backend.rs" lines="43-71" mark="54-56,58-66"/>
-<p>Each 2D composition panel spawns one entity that is both a layer and a <code>VectorView</code> over the panel's rectangle (<ref file="src/document_bridge/render.rs" line="37" has="pub(super) fn sync_document_views">render.rs:37</ref>). Other layers can target the same view by entity: Part 7's select overlay draws into the panel's view at a higher order, so redrawing the selection box never re-encodes the document's layer.</p>
+<snip file="src/vector/backend.rs" lines="37-72" mark="47-49,56-60,66-72"/>
+<p>Each 2D composition panel spawns one entity that is both a layer and a <code>VectorView</code> over the panel's rectangle (<ref file="src/document_bridge/render.rs" line="41" has="pub(super) fn sync_document_views">render.rs:41</ref>). Editor feedback (the selection box, grips, hover outlines, the marquee) has its own <code>Overlay</code> view stacked above each panel's content view since October 14, so a hover or selection change re-encodes only that small overlay texture and never the content beneath it.</p>
 <p>The backend gives every view a texture and a quad that pastes it into the window. Sizes round up to 64 px buckets, so dragging a pane divider rarely reallocates:</p>
-<snip file="src/vector/hybrid.rs" lines="294-301"/>
-<snip file="src/vector/hybrid.rs" lines="307-317"/>
+<snip file="src/vector/hybrid.rs" lines="296-303"/>
+<snip file="src/vector/hybrid.rs" lines="309-319"/>
 <p>Each target keeps its own retained Vello scene and remembers whether its texture already holds it. When no layer of a view changed, the view isn't rendered at all; its texture is still on the GPU and the window pastes it again:</p>
-<snip file="src/vector/hybrid.rs" lines="626-639" mark="630-631"/>
+<snip file="src/vector/hybrid.rs" lines="636-649" mark="640-641"/>
 
 <h3 id="paste">Pasting texel for pixel</h3>
 <p>The window has exactly one camera now. It clears to the background and draws every view's quad with <code>ViewCompositeMaterial</code>, whose shader computes the texture coordinate from the fragment's window position, so the mapping is exact by construction:</p>
@@ -34,24 +34,24 @@
 
 <h2 id="3d"><span class="sec">6.3</span>3D views</h2>
 <p>A 3D panel's camera renders into its own texture instead of the window, with the same bucketing and the same retention. <code>ViewImage</code> tracks the texture and when the camera needs to run:</p>
-<snip file="src/bevy_app/scene3d.rs" lines="441-461" mark="447-452,456-460"/>
+<snip file="src/bevy_app/scene3d.rs" lines="439-459" mark="445-450,454-458"/>
 <p><code>sync_view_images</code> marks a camera active only when something it shows changed: its rectangle, its pose or lens, or any 3D content on its render layers moving, highlighting, appearing or disappearing. Otherwise it sleeps and its texture is reused. Two practical details from getting this right: a camera woken for one frame can render with stale per-view state (lights, visibility), so it stays <em>awake</em> for a few frames after a change; and the system runs before Bevy's frustum and visibility systems, so a camera woken this frame is culled and lit as an active view this frame.</p>
-<p>Camera orders (Bevy needs them unique) come from the lowest free slot, so cameras appearing and disappearing never collide (<ref file="src/bevy_app/scene3d.rs" line="272" has="fn free_order">scene3d.rs:272</ref>).</p>
+<p>Camera orders (Bevy needs them unique) come from the lowest free slot, so cameras appearing and disappearing never collide (<ref file="src/bevy_app/scene3d.rs" line="270" has="fn free_order">scene3d.rs:270</ref>).</p>
 
 <h3 id="3d-in-2d">3D inside 2D</h3>
-<p>A 3D embed's camera renders into a texture sized to the embed's on-screen size (Part 5's <code>EmbedView</code>), and the 2D view that contains the embed draws that texture with <code>DrawCmd::Texture</code>, under the embed's whole transform, in painter order. So a 3D view inside a 2D composition can be rotated, scaled, clipped and drawn over like any other shape. Vello can't read a Bevy camera's sRGB texture directly, so each one is converted into Vello's encoding first (<code>Convert</code>, <ref file="src/vector/hybrid.rs" line="937" has="struct Convert">hybrid.rs:937</ref>).</p>
+<p>A 3D embed's camera renders into a texture sized to the embed's on-screen size (Part 5's <code>EmbedView</code>), and the 2D view that contains the embed draws that texture with <code>DrawCmd::Texture</code>, under the embed's whole transform, in painter order. So a 3D view inside a 2D composition can be rotated, scaled, clipped and drawn over like any other shape. Vello can't read a Bevy camera's sRGB texture directly, so each one is converted into Vello's encoding first (<code>Convert</code>, <ref file="src/vector/hybrid.rs" line="990" has="struct Convert">hybrid.rs:990</ref>).</p>
 <p>Picking goes the other way: <code>PointerToCamera</code> stores the map from window pixels to the embed camera's own texture pixels, through every transform on the way, so clicking the torus inside a rotated embed casts the ray from the right place.</p>
-<snip file="src/bevy_app/scene3d.rs" lines="463-479"/>
+<snip file="src/bevy_app/scene3d.rs" lines="461-477"/>
 
 <h3 id="planes">2D on a plane in 3D</h3>
 <p>A 2D composition embedded in 3D is a plane mesh whose material samples an <em>offscreen</em> vector view: a <code>VectorView</code> marked <code>Offscreen</code>, rendered but never pasted into the window. Its resolution comes from how large the plane appears: project the plane's corners through every camera that sees it, and take the largest screen-space length of one document pixel:</p>
-<snip file="src/document_bridge/planes.rs" lines="152-183" mark="166-172,179-183"/>
+<snip file="src/document_bridge/planes.rs" lines="153-184" mark="167-173,180-184"/>
 <p>Densities step by powers of √2, so a slow camera dolly changes the texture size rarely. This is the first piece of the user's "tiled, demand-driven textures" extension (plan §4): views are already described as a content-space region at a density, and demand is already computed per use. The tiles themselves are future work.</p>
 
 <h2 id="on-demand"><span class="sec">6.4</span>Render on demand</h2>
 <p>With every view retaining its texture, a frame where nothing visible changed needs no GPU work at all. <code>WorkerApp::frame</code> runs the main world, asks whether anything the window shows changed, and only then runs extraction and rendering:</p>
-<snip file="src/lib.rs" lines="97-117" mark="106-114"/>
-<snip file="src/lib.rs" lines="144-176" mark="160-171"/>
+<snip file="src/lib.rs" lines="108-131" mark="119-128"/>
+<snip file="src/lib.rs" lines="163-201" mark="179-189,198-199"/>
 <p>"Changed" covers display lists, views, active texture cameras, UI text, panel layout and asset events. A change keeps rendering for three more frames (<code>linger</code>), since per-view state settles over a frame or two. Two things had to stop changing every frame for this to pay off: the camera controller wrote its transform every frame even at rest, and the FPS text updated every frame; both were fixed. The FPS overlay now updates four times a second.</p>
 <p>The numbers, measured on the GPU with the frame rate unthrottled:</p>
 <div class="table-wrap"><table>
@@ -66,13 +66,26 @@
 
 <h2 id="latency"><span class="sec">6.5</span>Two latency fixes</h2>
 <p>After the migration you reported more lag on your display. Headless pacing was a steady 16.7 ms in every case, so the report wasn't reproduced, but reading the schedule turned up two real one-frame delays:</p>
-<snip file="src/vector/hybrid.rs" lines="140-158" mark="144-147,150-156"/>
+<snip file="src/vector/hybrid.rs" lines="142-160" mark="146-149,152-158"/>
 <ol>
-  <li><strong>2D could reach the window a frame late.</strong> Vello's <code>render_scene</code> and Bevy's <code>render_system</code> (which runs every camera and composites the window) were in the same render phase with no order between them. If Vello ran second, the window pasted last frame's 2D. Now Vello is ordered first (line 147).</li>
-  <li><strong>3D inside 2D was a frame behind its camera.</strong> The 2D view sampled the 3D texture before Bevy had rendered this frame's image. Views that draw a 3D texture now render inside the window camera's own schedule, after every 3D camera and before the composite, in the same GPU submission (150–156). Each such view has its own Vello renderer, because a renderer's queued buffer writes all land before the submission, and two views sharing one would overwrite each other.</li>
+  <li><strong>2D could reach the window a frame late.</strong> Vello's <code>render_scene</code> and Bevy's <code>render_system</code> (which runs every camera and composites the window) were in the same render phase with no order between them. If Vello ran second, the window pasted last frame's 2D. Now Vello is ordered first (line 149).</li>
+  <li><strong>3D inside 2D was a frame behind its camera.</strong> The 2D view sampled the 3D texture before Bevy had rendered this frame's image. Views that draw a 3D texture now render inside the window camera's own schedule, after every 3D camera and before the composite, in the same GPU submission (152–158). Each such view has its own Vello renderer, because a renderer's queued buffer writes all land before the submission, and two views sharing one would overwrite each other.</li>
 </ol>
-<snip file="src/vector/hybrid.rs" lines="1052-1057"/>
+<snip file="src/vector/hybrid.rs" lines="1105-1110"/>
+
+<h2 id="stage-h"><span class="sec">6.6</span>Since then: culling, a retained overlay, and one renderer</h2>
+<p>Stage H started on October 13 with a measurement (<code>rendering/render-benchmark.md</code>), not a plan. What landed, in order:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>When</th><th>Change</th><th>Effect</th></tr></thead>
+  <tbody>
+    <tr><td>Oct 13–14</td><td>A selection/hover geometry cache; change-driven picking (re-pick only when the pointer, the version or the scene moved); independent bounds and an R-tree per composition; the draw walk emits only visible candidates</td><td>Idle and pan frames stop scaling with document size</td></tr>
+    <tr><td>Oct 14</td><td>The <code>Overlay</code> view: editor feedback in its own retained texture; a lit group shows its frame, not every descendant</td><td>Hover never re-encodes content</td></tr>
+    <tr><td>Oct 17</td><td>Vision 10 phases 1–3 (Part 10): the scene in group-local space, no Bevy propagation for document nodes, entities only for the working set</td><td>10k rotation: bounds 24.8 → &lt;0.1 ms, changed frame 84 → 27 ms (container)</td></tr>
+    <tr><td>Oct 17</td><td>Bevy 0.20, wgpu 30, <code>vello_gpu</code> 0.3 (renamed from <code>vello_hybrid</code>); <code>bevy_vello</code> and the "classic" backend removed; the 3D-in-2D texture is an external-texture image paint; Iron's three custom shaders ported from naga_oil imports to WESL</td><td>10k rotation encode 12.1 → 7.6 ms (persistent strip arena)</td></tr>
+  </tbody>
+</table></div>
+<p>The pipeline as it stands, per view: changed nodes → visible candidates from the scene → a <code>DisplayList</code> per panel (an unchanged list compares equal and stops there) → one retained Vello <code>Scene</code> per view target, re-recorded whole when anything in it changed → its own bucketed texture → the window composite. The remaining cost is that last whole-view re-encode: one changed shape re-encodes every visible shape in its view. <code>vello_gpu</code> 0.3's <code>TargetInit::SrcOver</code> (draw onto existing pixels) is what lets several retained <em>chunks</em> share one view texture, and Part 10's revisions are what the chunking and bake policy will key on. That is vision 10 phase 5 and the render handoff's item 4; <code>rendering/architecture.md</code> is the current record.</p>
 
 <div class="box edge"><span class="tab">Rough edges</span>
-<p>The window still pays one full-window composite pass on any frame that renders; a custom final pass that pastes only changed rectangles is the next lever if it ever shows in a profile. Plane textures have no mipmaps yet, so a plane seen at a glancing angle shimmers. Tonemapping shifts plane colours slightly, since the card is lit like any surface. None of the tiled-texture extension (plan §4) exists beyond the foundation described above.</p>
+<p>Bevy 0.20 logs a harmless clustered-light error twice a frame on the test adapter (noted in <code>SKILL.md</code>). The window still pays one full-window composite pass on any frame that renders; a custom final pass that pastes only changed rectangles is the next lever if it ever shows in a profile. Plane textures have no mipmaps yet, so a plane seen at a glancing angle shimmers. Tonemapping shifts plane colours slightly, since the card is lit like any surface. None of the tiled-texture extension (plan §4) exists beyond the foundation described above.</p>
 </div>

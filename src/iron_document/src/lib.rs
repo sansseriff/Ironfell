@@ -38,6 +38,7 @@ pub mod serial;
 pub mod shape;
 pub mod solve;
 pub mod sym;
+pub mod text;
 pub mod time;
 pub mod units;
 pub mod value;
@@ -180,6 +181,9 @@ pub struct Store {
     producers: std::collections::BTreeMap<ProducerId, String>,
     /// Bumped on every publish: the stamp signals carry.
     signal_stamp: u64,
+    /// The text engine generation text was last measured under
+    /// (`refresh_text`).
+    text_generation: u64,
 }
 
 impl Default for Store {
@@ -218,6 +222,7 @@ impl Store {
             geometry: geom::Revisions::default(),
             producers: Default::default(),
             signal_stamp: 0,
+            text_generation: iron_text::engine().generation(),
         };
         store.geometry.note_structure();
         store.reactive.rebuild(&store.doc);
@@ -491,6 +496,27 @@ impl Store {
     pub fn take_geometry_changes(&mut self) -> geom::GeometryChanges {
         let touched = self.reactive.take_touched();
         self.geometry.take(&self.doc, touched)
+    }
+
+    /// Re-measure every text node if the fonts changed since the last
+    /// call (a family arrived): their bounds and glyphs move with no
+    /// document change, so they are reported as changed here. Cheap when
+    /// nothing changed; a host calls it once a frame.
+    pub fn refresh_text(&mut self) -> bool {
+        let generation = iron_text::engine().generation();
+        if generation == self.text_generation {
+            return false;
+        }
+        self.text_generation = generation;
+        let text = TypeId::lookup("text").expect("registered");
+        let path: LeafPath = "text.content".parse().expect("declared leaf");
+        let ids: Vec<NodeId> = self.doc.nodes_of_type(text).filter(|&n| self.doc.is_live(n)).collect();
+        for id in &ids {
+            let leaf = Leaf { node: *id, path };
+            let value = self.reactive.read(&self.doc, leaf).unwrap_or(Value::Str(String::new()));
+            self.reactive.mark(leaf, value);
+        }
+        !ids.is_empty()
     }
 
     /// Leaves whose resolved value changed since the last drain.

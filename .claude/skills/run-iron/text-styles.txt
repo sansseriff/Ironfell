@@ -1,0 +1,29 @@
+nav
+ready
+tab Controls
+sleep 800
+key t
+dclick 480 120
+sleep 1500
+eval (() => { const t = document.querySelector('textarea[aria-label="Text"]'); t.value = 'Party 🎉🚀 time'; t.setSelectionRange(t.value.length, t.value.length); t.dispatchEvent(new Event('input')); return t.value.length; })()
+sleep 1500
+eval (() => { const t = document.querySelector('textarea[aria-label="Text"]'); t.setSelectionRange(0, 5); document.dispatchEvent(new Event('selectionchange')); return [t.selectionStart, t.selectionEnd]; })()
+sleep 800
+key Meta+b
+sleep 800
+eval (() => { const t = document.querySelector('textarea[aria-label="Text"]'); t.setSelectionRange(t.value.length - 4, t.value.length); document.dispatchEvent(new Event('selectionchange')); return [t.selectionStart, t.selectionEnd]; })()
+sleep 800
+clickel button[aria-label="Underline"]
+sleep 800
+eval (() => { const i = document.querySelector('input[aria-label="Selection colour"]'); i.value = '#e63946'; i.dispatchEvent(new Event('change', {bubbles: true})); return !!i; })()
+sleep 1500
+key Escape
+sleep 2500
+shot text-styles
+eval (async () => (await __iron.view({fidelity:'full'})).split('\n').filter(l => l.includes('<text')).map(l => l.trim().match(/runs="[^"]*"/g)))()
+eval __iron.paste('Pasted from the clipboard')
+sleep 2500
+eval (async () => (await __iron.exportSvg('controls')).split('\n').filter(l => /<tspan/.test(l)).map(l => l.trim()))()
+logs applied
+errors
+quit

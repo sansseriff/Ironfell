@@ -8,9 +8,9 @@
 <title>Part 5 · Compositions, figures and embeds — Iron, Part Two</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&amp;display=swap">
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to ports and physics</span></a><div class="pager"><a href="04-solver.html" aria-label="Previous part">&larr;</a><span class="here">Part 5 of 9</span><a href="06-rendering.html" aria-label="Next part">&rarr;</a></div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager"><a href="04-solver.html" aria-label="Previous part">&larr;</a><span class="here">Part 5 of 13</span><a href="06-rendering.html" aria-label="Next part">&rarr;</a></div></div></header>
 <div class="frame">
-<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html" aria-current="page"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
+<nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html" aria-current="page"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
   <p class="kicker">Part 5 of 9 · <span class="chip sys-comp">Compositions</span> <span class="chip sys-render">Rendering</span></p>
@@ -241,11 +241,7 @@ impl CompositionLayers {
 
 <h2 id="crossprobe"><span class="sec">5.3</span>Selection lifts through figures</h2>
 <p>Select the cartoon box and the torus lights up too, in another panel, because both are figures of one entity. Highlights are derived from the selection and the <code>figures</code> relations every time either changes:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/highlight.rs:25">src/document_bridge/highlight.rs</a><span class="range">lines 25–41</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">25
-26
-27
-28
-29
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/highlight.rs:29">src/document_bridge/highlight.rs</a><span class="range">lines 29–40</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">29
 30
 31
 32
@@ -256,25 +252,19 @@ impl CompositionLayers {
 37
 38
 39
-40
-41</pre><pre class="src"><code class="language-rust">pub fn lit(doc: &amp;Document, picked: impl IntoIterator&lt;Item = NodeId&gt;) -&gt; BTreeSet&lt;NodeId&gt; {
+40</pre><pre class="src"><code class="language-rust">/// The nodes that light up for `picked`.
+pub fn lit(doc: &amp;Document, picked: impl IntoIterator&lt;Item = NodeId&gt;) -&gt; BTreeSet&lt;NodeId&gt; {
     let mut out = BTreeSet::new();
-    let mut add = |n: NodeId, out: &amp;mut BTreeSet&lt;NodeId&gt;| {
-        out.insert(n);
-        out.extend(doc.descendants(n));
-    };
     for node in picked {
         match composition::figure_of(doc, node) {
-            Some((_, entity)) =&gt; {
-                for f in composition::figures_of(doc, entity) {
-                    add(f, &amp;mut out);
-                }
+            Some((_, entity)) =&gt; out.extend(composition::figures_of(doc, entity)),
+            None =&gt; {
+                out.insert(node);
             }
-            None =&gt; add(node, &amp;mut out),
         }
     }
     out</code></pre></div></div></figure>
-<p>The 2D layer draws a node highlighted if it's in <code>Highlights</code>; the 3D side reflects the same set into each mesh's outline state. Hover works the same way, which gives the "hover either, both light up" behaviour from the C1 exit.</p>
+<p>The selection overlay (a separate view above each panel since stage H; Part 6) outlines what's in <code>Highlights</code>: a leaf by its shape, a group or embed by its frame, as in Figma. Plane views, which have no overlay, outline lit nodes in their content, and the 3D side reflects the same set into each mesh's outline state. Hover works the same way, which gives the "hover either, both light up" behaviour from the C1 exit.</p>
 
 <h3 id="link">Link, and the merge question</h3>
 <p>Link says "these two pictures are the same thing". Four cases:</p>
@@ -365,7 +355,7 @@ impl CompositionLayers {
   <li>Both picture the same entity already: nothing to do.</li>
   <li>Both picture <em>different</em> entities: one of them must go, and the user (or the model) is asked which, never left to a guess. The question carries a summary of each entity (definition, parameters, figures, ports) so the answer is informed. Answering with <code>keep</code> moves the other entity's figures over and deletes it, all in one transaction.</li>
 </ul>
-<p>"Show in" is the reverse journey: from a figure, find its counterparts' compositions and frame them (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:568" title="src/web_ffi.rs:568"><code>document_focus</code></a>). A 2D view pans the node to its centre; a 3D panel backs its camera off until the node fills about half the view.</p>
+<p>"Show in" is the reverse journey: from a figure, find its counterparts' compositions and frame them (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:401" title="src/web_ffi.rs:401"><code>document_focus</code></a>). A 2D view pans the node to its centre; a 3D panel backs its camera off until the node fills about half the view.</p>
 
 <h3 id="views">Two new views for the model</h3>
 <p>The tree view shows the document as stored. Two more relations were added (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/view.rs:31" title="src/iron_document/src/view.rs:31"><code>view.rs:31</code></a>): <code>Model</code> lists entities with their parameters, ports (Part 9) and figures, and <code>Composition(id)</code> shows one composition's layout with each figure naming its entity as <code>of="#e"</code>. The model surface sends the model view first, then the tree, so the model reads "what things are" before "how they're drawn".</p>
@@ -381,82 +371,38 @@ impl CompositionLayers {
     <tr><td>3D composition</td><td>3D composition</td><td>A group (the obvious meaning; not yet needed)</td></tr>
   </tbody>
 </table></div>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/composition.rs:298">src/iron_document/src/composition.rs</a><span class="range">lines 298–351</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:37;--len:8"></span><pre class="gutter" aria-hidden="true">298
-299
-300
-301
-302
-303
-304
-305
-306
-307
-308
-309
-310
-311
-312
-313
-314
-315
-316
-317
-318
-319
-320
-321
-322
-323
-324
-325
-326
-327
-328
-329
-330
-331
-332
-333
-334
-335
-336
-337
-338
-339
-340
-341
-342
-343
-344
-345
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/composition.rs:345">src/iron_document/src/composition.rs</a><span class="range">lines 345–376</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">345
 346
 347
 348
 349
 350
-351</pre><pre class="src"><code class="language-rust">/// The composition an embed shows, if it names a live one.
-pub fn embedded(doc: &amp;Document, embed: NodeId) -&gt; Option&lt;NodeId&gt; {
-    match doc.get::&lt;crate::component::Embed&gt;(embed)?.source.constant()? {
-        crate::value::Value::Ref(c) if composition_of(doc, *c) == Some(*c) =&gt; Some(*c),
-        _ =&gt; None,
-    }
-}
-
-/// The camera an embed looks through, if it names one.
-pub fn embed_camera(doc: &amp;Document, embed: NodeId) -&gt; Option&lt;NodeId&gt; {
-    match doc.get::&lt;crate::component::EmbedCamera&gt;(embed)?.camera.constant()? {
-        crate::value::Value::Ref(c) if doc.is_live(*c) =&gt; Some(*c),
-        _ =&gt; None,
-    }
-}
-
-/// Every live embed inside `composition`, in preorder.
-pub fn embeds_in(doc: &amp;Document, composition: NodeId) -&gt; Vec&lt;NodeId&gt; {
-    let embed = TypeId::lookup(&quot;embed&quot;).expect(&quot;registered&quot;);
-    doc.descendants(composition).into_iter().filter(|&amp;n| doc.live(n).is_some_and(|x| x.ty == embed)).collect()
-}
-
-/// An embed must sit inside a composition, name a live composition, and not
+351
+352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376</pre><pre class="src"><code class="language-rust">/// An embed must sit inside a composition, name a live composition, and not
 /// close a loop: the composition it shows must not, through its own embeds,
 /// show the one the embed is in. A named camera must be a camera of the
 /// embedded composition.
@@ -503,8 +449,91 @@ composition &quot;assembly&quot; (3d)
 <p>So "everything in one view" and "each composition in its own tab" are the same document seen two ways. The pendulum and the level slider got compositions of their own when the tabs arrived (Part 8); <code>main</code> embeds them where they used to sit, so it looks as it always did.</p>
 
 <h3 id="walk">Drawing and picking walk through embeds</h3>
-<p>The 2D layer draws a composition's nodes in painter order. At each embed it recurses into the embedded composition through the embed's placement, clipped to its region; a 3D embed draws its camera's texture (Part 6) in the same painter order:</p>
-<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/render.rs:164">src/document_bridge/render.rs</a><span class="range">lines 164–193</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:4"></span><span class="band" style="--from:11;--len:9"></span><pre class="gutter" aria-hidden="true">164
+<p>The 2D layer draws a composition's nodes in painter order (the visible ones, from the spatial scene; Part 10). At each embed it recurses into the embedded composition through the embed's placement, clipped to its region; a 3D embed draws its camera's texture (Part 6) in the same painter order:</p>
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/render.rs:208">src/document_bridge/render.rs</a><span class="range">lines 208–237</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:6;--len:5"></span><span class="band" style="--from:11;--len:14"></span><pre class="gutter" aria-hidden="true">208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237</pre><pre class="src"><code class="language-rust">fn content(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, id: NodeId, base: kurbo::Affine, clip: kurbo::Rect, key: &amp;str, depth: u32, allowed: &amp;std::collections::BTreeSet&lt;NodeId&gt;) {
+        if nest::is_embed(self.doc, id) {
+            if depth &gt;= nest::MAX_DEPTH {
+                return;
+            }
+            let key = format!(&quot;{key}/{id}&quot;);
+            if let Some(e) = nest::embed_2d(self.store, self.spatial, id) {
+                let inner = base * e.placement;
+                let kids: Vec&lt;NodeId&gt; = self.doc.children(e.source).to_vec();
+                let inner_clip = clip.intersect(inner.transform_rect_bbox(e.region));
+                b.clipped(inner, e.region, |b| self.walk(b, &amp;kids, inner, inner_clip, &amp;key, depth + 1));
+            } else if let Some((_, _, w, h)) = nest::embed_3d(self.store, id) {
+                // The 3D view: its camera&#x27;s texture (`EmbedImages`), drawn
+                // in painter order under the embed&#x27;s whole transform, so
+                // it rotates, scales and clips like the 2D around it.
+                let placement = self.world(id);
+                if let Some(img) = self.embed_images.0.get(&amp;key) {
+                    let to_embed = kurbo::Affine::scale_non_uniform(w / img.size.x.max(1) as f64, h / img.size.y.max(1) as f64);
+                    b.texture(base * placement * to_embed, img.image.clone(), img.size, img.version);
+                }
+                let frame = kurbo::Rect::new(0.0, 0.0, w, h);
+                let lit = self.lit(id).is_some();
+                let c = if lit { [0.1, 0.4, 1.0, 1.0] } else { [0.55, 0.57, 0.62, 1.0] };
+                b.stroke(base * placement, kurbo::Stroke::new(1.0), peniko::Color::new(c), frame);
+            }
+            return;
+        }
+        self.node(b, id, base);
+        self.branches(b, self.doc.children(id), base, clip, key, depth, allowed);
+}</code></pre></div></div></figure>
+<p>Picking mirrors drawing. It asks the spatial scene for candidates at the point, which already come with their chain inside the composition (<code>Scene::chain</code>); the pointer is mapped through each embed's inverse placement, and every hit records its <em>chain</em>: the nodes from the panel's top level down through every group and embed to the hit node. Part 7's selection rules are all about choosing a node along that chain.</p>
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/picking.rs:141">src/bevy_app/picking.rs</a><span class="range">lines 141–185</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:18;--len:10"></span><span class="band" style="--from:28;--len:3"></span><pre class="gutter" aria-hidden="true">141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
 165
 166
 167
@@ -525,139 +554,56 @@ composition &quot;assembly&quot; (3d)
 182
 183
 184
-185
-186
-187
-188
-189
-190
-191
-192
-193</pre><pre class="src"><code class="language-rust">fn walk(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, roots: &amp;[NodeId], base: kurbo::Affine, key: &amp;str, depth: u32) {
-    for id in nest::preorder(self.doc, roots) {
+185</pre><pre class="src"><code class="language-rust">pub fn walk(&amp;mut self, roots: &amp;[NodeId], prefix: &amp;[NodeId], p: kurbo::Point, space: kurbo::Affine, key: &amp;str, depth: u32) {
+    let indexed = self.spatial.enabled;
+    let candidates = if indexed {
+        self.spatial.candidates(roots, Some(p), kurbo::Rect::ZERO)
+    } else { roots.to_vec() };
+    self.examined += candidates.len() as u32;
+    crate::perf::set_pick_candidates(self.examined);
+    for id in candidates {
+        if !iron_document::appearance::inside_clips(self.store, id, [p.x, p.y]) { continue; }
+        self.z += 1;
+        let mut chain = prefix.to_vec();
+        if indexed { chain.extend_from_slice(self.spatial.chain(id)); }
+        else { chain.push(id); }
         if nest::is_embed(self.doc, id) {
             if depth &gt;= nest::MAX_DEPTH {
                 continue;
             }
             let key = format!(&quot;{key}/{id}&quot;);
-            if let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id) {
-                let inner = base * e.placement;
-                let kids: Vec&lt;NodeId&gt; = self.doc.children(e.source).to_vec();
-                b.clipped(inner, e.region, |b| self.walk(b, &amp;kids, inner, &amp;key, depth + 1));
-            } else if let Some((_, _, w, h)) = nest::embed_3d(self.store, id) {
-                // The 3D view: its camera&#x27;s texture (`EmbedImages`), drawn
-                // in painter order under the embed&#x27;s whole transform, so
-                // it rotates, scales and clips like the 2D around it.
-                let placement = self.map.entity(id).and_then(|e| self.globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
-                if let Some(img) = self.embed_images.0.get(&amp;key) {
-                    let to_embed = kurbo::Affine::scale_non_uniform(w / img.size.x.max(1) as f64, h / img.size.y.max(1) as f64);
-                    b.texture(base * placement * to_embed, img.image.clone(), img.size, img.version);
+            if let Some(e) = nest::embed_2d(self.store, self.spatial, id) {
+                let inv = e.placement.inverse();
+                let q = inv * p;
+                if e.region.contains(q) {
+                    // The embed&#x27;s own area is a hit below its content:
+                    // what a press on its background selects.
+                    self.out.push(crate::Hit2D { chain: chain.clone(), background: true, z: self.z as f32, space, through: None });
+                    let kids: Vec&lt;NodeId&gt; = self.doc.children(e.source).to_vec();
+                    self.walk(&amp;kids, &amp;chain, q, inv * space, &amp;key, depth + 1);
                 }
-                let frame = kurbo::Rect::new(0.0, 0.0, w, h);
-                let lit = self.highlights.selected.contains(&amp;id) || self.highlights.hovered.contains(&amp;id);
-                let c = if lit { [0.1, 0.4, 1.0, 1.0] } else { [0.55, 0.57, 0.62, 1.0] };
-                b.stroke(base * placement, kurbo::Stroke::new(1.0), peniko::Color::new(c), frame);
+            } else if self.embeds.0.iter().any(|v| v.key == key &amp;&amp; v.texture_point(self.screen).is_some()) {
+                self.embed = Some((key, self.z as f32, chain));
             }
             continue;
         }
-        self.node(b, id, base);
-    }
-}</code></pre></div></div></figure>
-<p>Picking mirrors drawing exactly. The pointer is mapped through each embed's inverse placement, and every hit records its <em>chain</em>: the nodes from the panel's top level down through every group and embed to the hit node. Part 7's selection rules are all about choosing a node along that chain.</p>
-<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/picking.rs:110">src/bevy_app/picking.rs</a><span class="range">lines 110–153</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:14;--len:12"></span><span class="band" style="--from:26;--len:2"></span><pre class="gutter" aria-hidden="true">110
-111
-112
-113
-114
-115
-116
-117
-118
-119
-120
-121
-122
-123
-124
-125
-126
-127
-128
-129
-130
-131
-132
-133
-134
-135
-136
-137
-138
-139
-140
-141
-142
-143
-144
-145
-146
-147
-148
-149
-150
-151
-152
-153</pre><pre class="src"><code class="language-rust">impl Pick&lt;&#x27;_, &#x27;_, &#x27;_&gt; {
-    /// `p` is in the current composition&#x27;s space; `space` maps the panel&#x27;s
-    /// document space into it; `prefix` is the chain down to (and including)
-    /// the enclosing embed. Painter order: each node, then its children.
-    pub fn walk(&amp;mut self, roots: &amp;[NodeId], prefix: &amp;[NodeId], p: kurbo::Point, space: kurbo::Affine, key: &amp;str, depth: u32) {
-        for &amp;id in roots {
-            self.z += 1;
-            let mut chain = prefix.to_vec();
-            chain.push(id);
-            if nest::is_embed(self.doc, id) {
-                if depth &gt;= nest::MAX_DEPTH {
-                    continue;
-                }
-                let key = format!(&quot;{key}/{id}&quot;);
-                if let Some(e) = nest::embed_2d(self.doc, self.map, self.globals, self.nodes, id) {
-                    let inv = e.placement.inverse();
-                    let q = inv * p;
-                    if e.region.contains(q) {
-                        // The embed&#x27;s own area is a hit below its content:
-                        // what a press on its background selects.
-                        if let Some(entity) = self.map.entity(id) {
-                            self.out.push(crate::Hit2D { entity, chain: chain.clone(), background: true, z: self.z as f32, space, through: None });
-                        }
-                        let kids: Vec&lt;NodeId&gt; = self.doc.children(e.source).to_vec();
-                        self.walk(&amp;kids, &amp;chain, q, inv * space, &amp;key, depth + 1);
-                    }
-                } else if self.embeds.0.iter().any(|v| v.key == key &amp;&amp; v.texture_point(self.screen).is_some()) {
-                    self.embed = Some((key, self.z as f32, chain));
-                }
-                continue;
+        if let Some(d) = self.drawables.0.get(&amp;id) {
+            let local = nest::world_2d(self.store, self.spatial, id).inverse() * p;
+            if d.shape.contains_local(Vec2::new(local.x as f32, local.y as f32)) {
+                self.out.push(crate::Hit2D { chain: chain.clone(), background: false, z: self.z as f32, space, through: None });
             }
-            if let Some(entity) = self.map.entity(id)
-                &amp;&amp; let Ok((d, global)) = self.nodes.get(entity)
-            {
-                let local = global.affine().inverse().transform_point3(Vec3::new(p.x as f32, p.y as f32, 0.0));
-                if d.shape.contains_local(local.truncate()) {
-                    self.out.push(crate::Hit2D { entity, chain: chain.clone(), background: false, z: self.z as f32, space, through: None });
-                }
-            }
+        }
+        if !indexed {
             let kids: Vec&lt;NodeId&gt; = self.doc.children(id).to_vec();
             self.walk(&amp;kids, &amp;chain, p, space, key, depth);
         }
     }
 }</code></pre></div></div></figure>
-<p>Note line 131: an embed's own area is a hit too, marked <code>background</code>. It ranks below every shape hit, wherever the shape is. That ordering mattered when the pendulum moved into its own embed: the pendulum embed's region covers most of the scene, and without the rule, clicking a scene rect selected the transparent pendulum embed on top of it.</p>
+<p>Note line 165: an embed's own area is a hit too, marked <code>background</code>. It ranks below every shape hit, wherever the shape is. That ordering mattered when the pendulum moved into its own embed: the pendulum embed's region covers most of the scene, and without the rule, clicking a scene rect selected the transparent pendulum embed on top of it.</p>
 
 <h3 id="cams">3D embeds: a camera per view</h3>
 <p>Every visible 3D embed becomes an <code>EmbedView</code> with a stable key (the panel id plus the chain of embeds that reach it), so its Bevy camera survives from frame to frame. The texture is sized to the embed's on-screen size, so it stays sharp at any zoom:</p>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/nest.rs:219">src/document_bridge/nest.rs</a><span class="range">lines 219–258</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:26;--len:11"></span><pre class="gutter" aria-hidden="true">219
-220
-221
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/nest.rs:221">src/document_bridge/nest.rs</a><span class="range">lines 221–258</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:27;--len:9"></span><pre class="gutter" aria-hidden="true">221
 222
 223
 224
@@ -694,11 +640,10 @@ composition &quot;assembly&quot; (3d)
 255
 256
 257
-258</pre><pre class="src"><code class="language-rust">fn collect(
+258</pre><pre class="src"><code class="language-rust">#[allow(clippy::too_many_arguments)]
+fn collect(
     store: &amp;iron_document::Store,
-    map: &amp;NodeMap,
-    nodes: &amp;Query&lt;(&amp;&#x27;static Doc2d, &amp;&#x27;static GlobalTransform)&gt;,
-    globals: &amp;Query&lt;&amp;&#x27;static GlobalTransform&gt;,
+    spatial: &amp;super::SpatialScene,
     layers: &amp;mut super::CompositionLayers,
     view: &amp;PanelView,
     roots: &amp;[NodeId],
@@ -713,13 +658,13 @@ composition &quot;assembly&quot; (3d)
         if !is_embed(doc, id) || depth &gt;= MAX_DEPTH {
             continue;
         }
-        let placement = map.entity(id).and_then(|e| globals.get(e).ok()).map(affine_of).unwrap_or(kurbo::Affine::IDENTITY);
+        let placement = world_2d(store, spatial, id);
         let key = format!(&quot;{key}/{id}&quot;);
-        if let Some(e) = embed_2d(doc, map, globals, nodes, id) {
+        if let Some(e) = embed_2d(store, spatial, id) {
             let inner = base * e.placement;
             let clip = clip.intersect(inner.transform_rect_bbox(e.region));
             let kids: Vec&lt;NodeId&gt; = doc.children(e.source).to_vec();
-            collect(store, map, nodes, globals, layers, view, &amp;kids, inner, clip, &amp;key, depth + 1, found);
+            collect(store, spatial, layers, view, &amp;kids, inner, clip, &amp;key, depth + 1, found);
         } else if let Some((source, camera, w, h)) = embed_3d(store, id) {
             let to_window = base * placement;
             let visible = to_window.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w, h)).intersect(clip);
@@ -732,10 +677,11 @@ composition &quot;assembly&quot; (3d)
             let size = UVec2::new(((w * s).ceil() as u32).clamp(1, 4096), ((h * s).ceil() as u32).clamp(1, 4096));
             let to_texture = kurbo::Affine::scale_non_uniform(size.x as f64 / w, size.y as f64 / h) * to_window.inverse();
             found.push(EmbedView { key, panel: view.panel.clone(), size, to_texture, clip: visible, source, camera, layer: layers.of(Some(source)) });
-        }
-    }</code></pre></div></div></figure>
+        }</code></pre></div></div></figure>
 <p>Without a named camera node, the view frames everything in the composition from a fixed direction, and only re-frames when content leaves the framed sphere, so dragging the torus doesn't make the camera chase it:</p>
-<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/scene3d.rs:369">src/bevy_app/scene3d.rs</a><span class="range">lines 369–404</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">369
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/scene3d.rs:367">src/bevy_app/scene3d.rs</a><span class="range">lines 367–402</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">367
+368
+369
 370
 371
 372
@@ -768,9 +714,7 @@ composition &quot;assembly&quot; (3d)
 399
 400
 401
-402
-403
-404</pre><pre class="src"><code class="language-rust">// The derived default view: frame every mesh of the composition
+402</pre><pre class="src"><code class="language-rust">// The derived default view: frame every mesh of the composition
 // from a fixed direction, re-framing only when the content
 // leaves what was framed.
 None =&gt; {
@@ -806,7 +750,7 @@ None =&gt; {
             p.fov = DEFAULT_FOV;
         }
     }</code></pre></div></div></figure>
-<p>A 2D composition embedded in 3D is materialised as a plane mesh (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:212" title="src/document_bridge/materialize.rs:212"><code>materialize.rs:212</code></a>), 100 document px per world unit, whose texture is the 2D content rendered off-screen (Part 6). Clicking on the plane intersects the camera ray with it and hands the 2D picker a point in the card's own space, so the card's shapes can be selected and dragged in 3D.</p>
+<p>A 2D composition embedded in 3D is materialised as a plane mesh (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:433" title="src/document_bridge/materialize.rs:433"><code>materialize.rs:433</code></a>), 100 document px per world unit, whose texture is the 2D content rendered off-screen (Part 6). Clicking on the plane intersects the camera ray with it and hands the 2D picker a point in the card's own space, so the card's shapes can be selected and dragged in 3D.</p>
 
 <div class="box edge"><span class="tab">Rough edge</span>
 <p>An embed without a <code>frame</code> takes its content's bounds, which shift as content moves, and its transparent background then covers whatever is beneath it in the parent. The background-ranks-last rule makes clicks behave, but the embed's region is still invisible to the user until hovered. A drawn frame (like Figma's frame labels) or a required <code>frame</code> on top-level embeds would make it explicit.</p>

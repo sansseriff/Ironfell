@@ -1,7 +1,8 @@
 <script lang="ts">
   // The tools, Figma's way: a toolbar floating at the bottom of a 2D
   // composition view. Select (V); the shapes, rectangle (R) and ellipse (O),
-  // behind one button that remembers the last one used; the pen (P). The
+  // behind one button that remembers the last one used; the pen (P); text
+  // (T). The
   // engine reports which tool is active. A 3D composition has no toolbar.
   import { DropdownMenu } from "bits-ui";
   import Check from "@lucide/svelte/icons/check";
@@ -10,6 +11,7 @@
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
   import PenTool from "@lucide/svelte/icons/pen-tool";
   import Square from "@lucide/svelte/icons/square";
+  import Type from "@lucide/svelte/icons/type";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { Tool } from "../../runtime/document_client.svelte";
   import type { ViewSpec } from "../views";
@@ -78,6 +80,9 @@
     </div>
     <button class="tool" class:active={doc.tool === "pen"} title="Pen (P)" aria-label="Pen" onclick={() => pick("pen")}>
       <PenTool size={18} strokeWidth={1.6} />
+    </button>
+    <button class="tool" class:active={doc.tool === "text"} title="Text (T)" aria-label="Text" onclick={() => pick("text")}>
+      <Type size={18} strokeWidth={1.6} />
     </button>
   </div>
 {/if}

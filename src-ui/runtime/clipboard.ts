@@ -93,5 +93,7 @@ export function pastedFragment(e: ClipboardEvent): string | null {
     const text = e.clipboardData?.getData('text/plain') || e.clipboardData?.getData('image/svg+xml') || '';
     if (isFragment(text) || isSvg(text)) return text;
     if (lastWriteFailed && lastText) return lastText;
+    // Plain words become a text node on the canvas (plans/specs/text.md §7).
+    if (text.trim()) return text;
     return null;
 }

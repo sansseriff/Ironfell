@@ -8,6 +8,8 @@ description = "SVG export and import for 2D compositions (plans/specs/svg-import
 # natively, like the store (`cargo test -p iron_svg --target aarch64-apple-darwin`).
 [dependencies]
 iron_document = { path = "../iron_document" }
+# Text export reads the same layout the canvas draws (plans/specs/text.md).
+iron_text = { path = "../iron_text" }
 # Same version as the store's and the app's, so outlines share one type.
 kurbo = "0.13.1"
 # No text (no fontdb, no shaping): text is reported as a cut, not imported.

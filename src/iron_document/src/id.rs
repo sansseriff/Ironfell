@@ -16,6 +16,20 @@ const ALPHABET: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn
 /// the ids of content, and nothing at or above it is ever saved.
 pub const SESSION_BASE: u64 = 1 << 40;
 
+/// Expanded nodes (component-model.md §6): the nodes an instance derives
+/// from its definition. Their id is a pure function of the instance (the
+/// entity or `use` that owns them) and the definition-local id of the node
+/// they copy, so it is stable across re-expansion and reloads and needs no
+/// table: `EXPANDED | owner << LOCAL_BITS | local`, rendered `#owner/local`.
+/// They are never saved and never in undo; references to them are, by id.
+pub const EXPANDED: u64 = 1 << 63;
+const LOCAL_BITS: u32 = 32;
+const OWNER_BITS: u32 = 31;
+
+fn expanded_parts(raw: u64) -> Option<(u64, u64)> {
+    (raw & EXPANDED != 0).then(|| ((raw & !EXPANDED) >> LOCAL_BITS, raw & ((1 << LOCAL_BITS) - 1)))
+}
+
 pub(crate) fn base62(mut n: u64) -> String {
     if n == 0 {
         return "0".to_owned();
@@ -66,13 +80,16 @@ macro_rules! id_type {
             }
             /// In the session tier: never saved, never in undo.
             pub fn is_session(self) -> bool {
-                self.0 >= SESSION_BASE
+                self.0 >= SESSION_BASE && self.0 & EXPANDED == 0
             }
         }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "{}{}", $prefix, base62(self.0))
+                match expanded_parts(self.0) {
+                    Some((owner, local)) => write!(f, "{}{}/{}", $prefix, base62(owner), base62(local)),
+                    None => write!(f, "{}{}", $prefix, base62(self.0)),
+                }
             }
         }
 
@@ -86,9 +103,14 @@ macro_rules! id_type {
             type Err = IdParseError;
             fn from_str(s: &str) -> Result<Self, Self::Err> {
                 let body = s.strip_prefix($prefix).unwrap_or(s);
-                parse_base62(body)
-                    .map(Self)
-                    .ok_or_else(|| IdParseError(s.to_owned()))
+                let raw = match body.split_once('/') {
+                    Some((owner, local)) => parse_base62(owner)
+                        .zip(parse_base62(local))
+                        .filter(|&(o, l)| o < 1 << OWNER_BITS && l < 1 << LOCAL_BITS)
+                        .map(|(o, l)| EXPANDED | o << LOCAL_BITS | l),
+                    None => parse_base62(body),
+                };
+                raw.map(Self).ok_or_else(|| IdParseError(s.to_owned()))
             }
         }
 
@@ -112,6 +134,27 @@ id_type!(
     NodeId,
     "#"
 );
+impl NodeId {
+    /// The expanded node `owner` (an instance) derives from the definition
+    /// node `local`. `None` when either id does not fit the encoding, or is
+    /// itself expanded or in the session tier.
+    pub fn expanded(owner: NodeId, local: NodeId) -> Option<NodeId> {
+        let (o, l) = (owner.0, local.0);
+        (o < 1 << OWNER_BITS && l < 1 << LOCAL_BITS).then_some(NodeId(EXPANDED | o << LOCAL_BITS | l))
+    }
+
+    /// Derived from a definition for one instance: never saved, never in
+    /// undo, never edited directly (component-model.md §6).
+    pub fn is_expanded(self) -> bool {
+        self.0 & EXPANDED != 0
+    }
+
+    /// An expanded node's instance and the definition node it copies.
+    pub fn expanded_parts(self) -> Option<(NodeId, NodeId)> {
+        expanded_parts(self.0).map(|(o, l)| (NodeId(o), NodeId(l)))
+    }
+}
+
 id_type!(
     /// Identity of a relation (a non-containment edge). Rendered as `r<base62>`.
     RelationId,
@@ -149,6 +192,13 @@ mod tests {
         assert_eq!("100".parse::<NodeId>().unwrap(), id);
         assert!("#".parse::<NodeId>().is_err());
         assert!("#-1".parse::<NodeId>().is_err());
+        // An expanded id names its instance and the definition node it copies.
+        let e = NodeId::expanded(NodeId::from_raw(100), NodeId::from_raw(7)).unwrap();
+        assert_eq!(e.to_string(), "#1c/7");
+        assert_eq!("#1c/7".parse::<NodeId>().unwrap(), e);
+        assert_eq!(e.expanded_parts(), Some((NodeId::from_raw(100), NodeId::from_raw(7))));
+        assert!(e.is_expanded() && !e.is_session() && !NodeId::from_raw(100).is_expanded());
+        assert!(NodeId::expanded(e, NodeId::from_raw(1)).is_none());
         let r = RelationId::from_raw(7);
         assert_eq!(r.to_string(), "r7");
         assert_eq!("r7".parse::<RelationId>().unwrap(), r);

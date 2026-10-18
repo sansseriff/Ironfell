@@ -240,12 +240,12 @@ fn the_model_and_composition_views_match_their_golden_files() {
     let tx = t.store.link(t.boxed, t.torus, None, Actor::Human).unwrap();
     t.store.apply(tx).unwrap();
     let (_, entity) = composition::figure_of(t.store.document(), t.boxed).unwrap();
-    let q = |relation| ViewQuery { relation, scope: None, fidelity: Fidelity::Full, depth: None };
+    let q = |relation| ViewQuery { expand: Vec::new(), relation, scope: None, fidelity: Fidelity::Full, depth: None };
 
     // The model view lists the entity with both figures (the phase 2 exit's
     // last clause) and where each is drawn.
     let model = t.store.view(&q(ViewRelation::Model)).unwrap();
-    assert!(model.contains(&format!(r#"<entity id="{entity}" name="box" def="{}" definition="thing">"#, t.thing)), "{model}");
+    assert!(model.contains(&format!(r#"<entity id="{entity}" name="box" def="{}" mode="linked" definition="thing">"#, t.thing)), "{model}");
     assert!(model.contains(&format!(r#"<figure id="{}" type="rect" name="box" in="{}" composition="cartoon"/>"#, t.boxed, t.cartoon)), "{model}");
     assert!(model.contains(&format!(r#"<figure id="{}" type="mesh" name="torus" in="{}" composition="assembly"/>"#, t.torus, t.assembly)), "{model}");
     golden("model-view.xml", &model);

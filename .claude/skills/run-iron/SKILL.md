@@ -160,9 +160,9 @@ redraw (document): 2 of 39 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.14…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#3A"}}
+{"ok":true,"version":9,"aliases":{"$n":"#3Q"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#3A\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#3Q\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -182,19 +182,19 @@ true
 ["#l","#Q"]
 clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#3C\" name=\"box\" def=\"#3B\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3C\">"
+"<entity id=\"#3S\" name=\"box\" def=\"#3R\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3S\">"
 clicked Show in assembly
 clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3E\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3E\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
-[true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":47189}
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3U\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3U\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+[true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
+{"roundtrip_equal":true,"bytes":50892}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (240 ops, System) -> v1
+applied "open demo scene" (269 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -229,7 +229,7 @@ applied "link" (4 ops, Model) -> v23
 "link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (198 live nodes)
+loaded document v25 (250 live nodes)
 (no page errors)
 undefined
 ["#M"]
@@ -251,10 +251,10 @@ tab Controls
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
-["#3A"]
-"<point id=\"#3E\" x=\"130\" y=\"220\""
+["#3Q"]
+"<point id=\"#3U\" x=\"130\" y=\"220\""
 "pen-add"
-[4,"<point id=\"#3F\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
+[4,"<point id=\"#3V\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
 3
 "bend"
 " ox=\"0.0\" oy=\"-57.0\""
@@ -270,9 +270,9 @@ tab Optics
 undefined
 undefined
 [190.6,71.5]
-["power=\"10 mW\"","signal=\"7.94… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>"]]
+["power=\"10 mW\"","signal=\"7.94… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>","<connection a=\"source.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
 [75.9,28.5]
-["power=\"15.78… mW\"","signal=\"4.99… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>"]]
+["power=\"15.78… mW\"","signal=\"4.99… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>","<connection a=\"source.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
 "<edit-failed applied=\"none\" version=\"27\">\n  <error op=\"2\" kind=\"bad_connection\">#…: cannot connect rf_voltage (#…) to optical_power (#…); a connection joins ports of one kind</error>\n</edit-failed>"
 tab Thermal
 undefined
@@ -282,33 +282,33 @@ tab Controls
 undefined
 clicked .toolbar button[aria-label="Rectangle"]
 "Rectangle (R)"
-["<rect id=\"#3G\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
-"<ellipse id=\"#3H\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
-"<ellipse id=\"#3H\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+["<rect id=\"#3W\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
+"<ellipse id=\"#3X\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
+"<ellipse id=\"#3X\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 4
-"<ellipse id=\"#3H\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+"<ellipse id=\"#3X\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 tab Main
 {"cuts":["its h is bound to #11.port.signal * 300; the path keeps the current value"],"ok":false}
 ["its h is bound to #11.port.signal * 300; the path keeps the current value"]
 clicked Cancel
 null
 tab Controls
-"<rect id=\"#3G\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"28.20…\" tr=\"28.20…\" br=\"28.20…\" bl=\"28.20…\""
+"<rect id=\"#3W\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"28.20…\" tr=\"28.20…\" br=\"28.20…\" bl=\"28.20…\""
 clicked Add effect
 clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
-"<ellipse id=\"#3H\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
+"<ellipse id=\"#3X\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
 tab Optics
 undefined
 undefined
-[2,2,4,[2,2]]
+[2,2,6,[2,2]]
 true
 undefined
-[3,4,[2,2,2]]
-[3,4,[2,2]]
+[3,6,[2,2,2]]
+[3,6,[2,2]]
 undefined
-[3,4,[2,2,2]]
-[1,4,[2]]
+[3,6,[2,2,2]]
+[1,6,[2]]
 tab Optics
 undefined
 true
@@ -334,17 +334,29 @@ undefined
 4
 {"cuts":["filters are not imported"],"nodes":7,"ok":true}
 [8,4]
-["<rect id=\"#3d\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#3e\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#3f\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#3j\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
-["<point id=\"#3h\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#3i\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
+["<rect id=\"#3t\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#3u\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#3v\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#3z\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
+["<point id=\"#3x\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#3y\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
 [true,4]
 4
 undefined
 8
 4
-{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#3r #3s #3t #3x\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
+{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#47 #48 #49 #4D\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
 8
 4
-applied "open demo scene" (240 ops, System) -> v1
+tab Components
+undefined
+["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
+undefined
+["#…/1M","7.94… mW"]
+{"derivedNodesSaved":0,"connectionsToPorts":4}
+[0,3]
+["#…/1M","15.88… mW"]
+["lasersource",["power"]]
+clicked button[aria-label="Detach instance"]
+["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser detached","short fiber linked","long fiber linked"]
+["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
+applied "open demo scene" (269 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -405,8 +417,22 @@ applied "import SVG" (7 ops, Human) -> v58
 applied "undo: import SVG" (7 ops, System) -> v59
 applied "import SVG" (7 ops, Model) -> v60
 applied "undo: import SVG" (7 ops, System) -> v61
+applied "set slider" (1 ops, Human) -> v62
+applied "detach instance" (5 ops, Human) -> v63
+applied "undo: detach instance" (5 ops, System) -> v64
 (no page errors)
 ```
+
+The Components section (component-model.md phase 2) lists every entity with
+its `mode`: the optics tab's are `detached` (static instances, copies), the
+Components tab's `linked`. The meter's `in` port has a derived id
+(`#<instance>/<local>`, shown as `#…/1M`); the saved file holds no derived
+node but four connection ends that name derived ports; the tree view of the
+composition shows no `derived="true"` node until the meter's `use` is
+expanded (3). Dragging the slider to its end doubles the source's power, so
+the meter reads 15.88… mW; clicking the laser's body selects its `use` and the
+inspector's Component section reads `laser` / `source` with one input,
+`power`; Detach makes the spare laser `detached` and undo links it again.
 
 Solved values carry solver noise in their last digits (shown as `…`
 above); everything else is exact. The square's drag logs one or two `redraw

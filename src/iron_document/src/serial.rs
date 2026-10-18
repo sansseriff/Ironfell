@@ -21,9 +21,11 @@ use std::fmt;
 /// `contour` children, so a path can have holes, and to 6 when a
 /// definition's parameters became `in` ports and an entity's `params` its
 /// `args` (component-model.md §4), and the facet table's key became
-/// `facets`. Older files still load (`renamed`, `migrate_radius`,
-/// `migrate_contours`, `migrate_inputs`).
-pub const SCHEMA: u64 = 6;
+/// `facets`, and to 7 when instances became linked by default (an entity's
+/// `instance.mode`; component-model.md §5.2). Older files still load
+/// (`renamed`, `migrate_radius`, `migrate_contours`, `migrate_inputs`,
+/// `migrate_detached`).
+pub const SCHEMA: u64 = 7;
 const OLDEST_READABLE: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,8 +63,9 @@ pub fn save(doc: &Document) -> String {
 
     out.push_str(" \"nodes\": {");
     let mut first = true;
-    // The session tier (selection and the like) is never saved.
-    for (id, n) in doc.raw_nodes().iter().filter(|(id, _)| !id.is_session()) {
+    // The session tier (selection and the like) is never saved, nor are
+    // instances' expanded nodes: they are derived on load.
+    for (id, n) in doc.raw_nodes().iter().filter(|(id, _)| !id.is_session() && !id.is_expanded()) {
         out.push_str(if first { "\n" } else { ",\n" });
         first = false;
         out.push_str(&format!("  \"{id}\": {}", n_compact(&node_json(n))));
@@ -72,14 +75,14 @@ pub fn save(doc: &Document) -> String {
     out.push_str(" \"facets\": {");
     let mut first_kind = true;
     for (kind, table) in doc.raw_facets() {
-        if table.keys().all(|id| id.is_session()) {
+        if table.keys().all(|id| id.is_session() || id.is_expanded()) {
             continue;
         }
         out.push_str(if first_kind { "\n" } else { ",\n" });
         first_kind = false;
         out.push_str(&format!("  \"{}\": {{", kind.name()));
         let mut first = true;
-        for (id, c) in table.iter().filter(|(id, _)| !id.is_session()) {
+        for (id, c) in table.iter().filter(|(id, _)| !id.is_session() && !id.is_expanded()) {
             out.push_str(if first { "\n" } else { ",\n" });
             first = false;
             out.push_str(&format!("   \"{id}\": {}", n_compact(&c.to_json())));
@@ -90,7 +93,9 @@ pub fn save(doc: &Document) -> String {
 
     out.push_str(" \"relations\": [");
     let mut first = true;
-    for r in doc.relations().filter(|r| !r.id.is_session() && !r.from.is_session() && !r.to.is_session()) {
+    // A relation to an expanded node (a connection to an instance's port)
+    // is saved by its id, which the instance re-derives on load.
+    for r in doc.relations().filter(|r| !r.id.is_session() && !r.from.is_session() && !r.to.is_session() && !r.from.is_expanded()) {
         out.push_str(if first { "\n" } else { ",\n" });
         first = false;
         out.push_str(&format!(
@@ -268,6 +273,20 @@ fn migrate_inputs(root: &mut J) -> Result<(), LoadError> {
     Ok(())
 }
 
+/// Before schema 7 every instance was a copy of its definition: its ports
+/// and pictures are authored nodes. It loads `detached`, so nothing is
+/// derived over them.
+fn migrate_detached(root: &mut J) {
+    let key = if root.get("components").is_some() { "components" } else { "facets" };
+    if let Some(J::Object(table)) = root.get_mut(key).and_then(|f| f.get_mut("instance")) {
+        for v in table.values_mut() {
+            if let Some(o) = v.as_object_mut() {
+                o.insert("mode".into(), json!({"enum": "detached"}));
+            }
+        }
+    }
+}
+
 /// Every string's references to a parameter, rewritten for schema 6.
 fn rename_refs(v: &J) -> J {
     match v {
@@ -309,6 +328,9 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
     }
     if root.get("schema").and_then(J::as_u64).is_some_and(|s| s < 6) {
         migrate_inputs(&mut root)?;
+    }
+    if root.get("schema").and_then(J::as_u64).is_some_and(|s| s < 7) {
+        migrate_detached(&mut root);
     }
     let obj = root
         .as_object()
@@ -482,7 +504,9 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
         }
         let r: Relation =
             serde_json::from_value(v).map_err(|e| LoadError(e.to_string()))?;
-        if !nodes.contains_key(&r.from) || !nodes.contains_key(&r.to) {
+        // An expanded endpoint exists once its instance is expanded.
+        let known = |id: NodeId| nodes.contains_key(&id) || id.expanded_parts().is_some_and(|(owner, _)| nodes.contains_key(&owner));
+        if !known(r.from) || !known(r.to) {
             return Err(LoadError(format!(
                 "relation {} references an unknown node",
                 r.id

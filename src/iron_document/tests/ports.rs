@@ -170,12 +170,15 @@ fn power_flows_down_the_chain_and_follows_every_parameter() {
     // Longer fiber, less power, in the same transaction's resolve.
     lab.store.apply(tx("longer", vec![Op::Set { id: lab.fiber, path: path("args.length_km"), slot: Slot::Const(Value::Number(10.0)) }])).unwrap();
     assert!((watts(&lab.signal(lab.meter, "in")) - 0.010 * 10f64.powf(-0.5)).abs() < 1e-12);
-    // The meter's figure reads its port: width = reading / 1 mW · 20.
-    let bar = lab.store.document().children(lab.store.document().roots()[1]).iter().copied().find(|&n| composition::figured_by(lab.store.document(), n) == Some(lab.meter)).unwrap();
+    // The meter's figure (a `use`, its rect expanded from the template)
+    // reads its port: width = reading / 1 mW · 20.
+    let u = lab.store.document().children(lab.store.document().roots()[1]).iter().copied().find(|&n| composition::figured_by(lab.store.document(), n) == Some(lab.meter)).unwrap();
+    let bar = lab.store.document().children(u)[0];
+    assert!(bar.is_expanded());
     let w = lab.store.resolved(bar, path("size.w")).unwrap().as_f64().unwrap();
     assert!((w - 0.010 * 10f64.powf(-0.5) / 0.001 * 20.0).abs() < 1e-9, "{w}");
     // The model view shows the chain.
-    let view = lab.store.view(&ViewQuery { scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
+    let view = lab.store.view(&ViewQuery { expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
     assert!(view.contains(r#"a="laser.out" b="fiber.in" kind="optical_power""#), "{view}");
     assert!(view.contains(r#"<port"#) && view.contains("signal="), "{view}");
 }
@@ -299,7 +302,7 @@ fn a_heater_settles_through_its_thermal_link() {
     // A solved value is not edited directly.
     assert!(lab.store.handle(h, path("port.across")).is_locked());
     // The model view shows the pair.
-    let view = lab.store.view(&ViewQuery { scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
+    let view = lab.store.view(&ViewQuery { expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
     assert!(view.contains(r#"kind="heat_flow""#) && view.contains("across=") && view.contains("through="), "{view}");
 }
 
@@ -389,4 +392,44 @@ fn pasting_after_a_cut_relinks_the_figure_to_its_entity() {
     let doc = lab.store.document();
     assert_eq!(composition::figured_by(doc, pasted.roots[0]), Some(lab.fiber));
     assert_eq!(doc.nodes_of_type(ty("entity")).count(), 3);
+}
+
+/// Detaching a linked instance (component-model.md §5.2): its ports and
+/// picture become authored copies, the connection into it follows its port,
+/// the reading is unchanged, and editing the definition no longer reaches
+/// it. Undo links it again.
+#[test]
+fn a_detached_meter_keeps_its_wiring_and_stops_following_its_definition() {
+    let mut lab = lab();
+    let doc = lab.store.document();
+    let meter_in = lab.port(lab.meter, "in");
+    assert!(meter_in.is_expanded());
+    let reading = watts(&lab.signal(lab.meter, "in"));
+    let u = doc.relations_to(lab.meter).find(|r| r.rel == RelKind::Figures).unwrap().from;
+    let bar = doc.children(u)[0];
+    let (_, template_bar) = bar.expanded_parts().unwrap();
+    let ops = definition::detach_ops(lab.store.document(), lab.meter).unwrap();
+    lab.store.apply(tx("detach meter", ops)).unwrap();
+    let doc = lab.store.document();
+    // Authored now: a port and a picture with fresh ids.
+    let port = lab.port(lab.meter, "in");
+    assert!(!port.is_expanded() && port != meter_in);
+    let copy = doc.children(u)[0];
+    assert!(!copy.is_expanded());
+    assert!(doc.live(meter_in).is_none() && doc.live(bar).is_none());
+    // The connection feeds the copy; the reading and the picture's width hold.
+    assert!(doc.relations_to(port).any(|r| r.rel == RelKind::Connects));
+    assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15);
+    let w = lab.store.resolved(copy, path("size.w")).unwrap().as_f64().unwrap();
+    assert!((w - reading / 0.001 * 20.0).abs() < 1e-9, "{w}");
+    // Editing the definition's picture no longer reaches it.
+    lab.store.apply(tx("taller", vec![Op::Set { id: template_bar, path: path("size.h"), slot: Slot::Const(Value::Number(99.0)) }])).unwrap();
+    assert_ne!(lab.store.resolved(copy, path("size.h")), Some(Value::Number(99.0)));
+    // Undo (twice: the edit, then the detach) links it again.
+    lab.store.undo(1).unwrap().unwrap();
+    lab.store.undo(2).unwrap().unwrap();
+    let doc = lab.store.document();
+    assert!(doc.live(meter_in).is_some() && doc.live(port).is_none());
+    assert!(doc.relations_to(meter_in).any(|r| r.rel == RelKind::Connects));
+    assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15);
 }

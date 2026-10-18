@@ -14,24 +14,23 @@
 //! `port.signal`; `out` ports, whose `port.signal` is the behaviour, a
 //! binding; and across/through pairs. An `entity` instantiates a definition:
 //! its `instance.def` names it and its `args` holds one slot per `in` port,
-//! each bindable. Instantiation copies every `port_spec` onto the entity as
-//! a `port`, an `in` port reading its argument (`#entity.args.level`)
-//! unless a connection feeds it, and places a figure by copying the
-//! template subtree into the composition as ordinary authored nodes,
-//! rewriting every reference to a spec into a reference to the entity's
-//! port. Each copied root is linked to the entity with a `figures`
-//! relation. So a template is itself a live, evaluable subtree (it shows the
-//! defaults), and an instance is plain nodes and plain bindings.
-//! (component-model.md replaces the copying with derived expansion.)
+//! each bindable. A *linked* instance (`instantiate`, the default) stores
+//! only that entity and a `use` per picture; its ports and pictures are
+//! expanded from the definition (`expand.rs`), an `in` port reading its
+//! argument (`#entity.args.level`) unless a connection feeds it. A *static*
+//! instance (`instantiate_static`, and `detach_ops` for a linked one) copies
+//! them in as ordinary authored nodes instead, with every reference to a spec
+//! rewritten to the entity's copy. Either way a template is itself a live,
+//! evaluable subtree (it shows the defaults).
 //!
 //! Validation (`validate_entity`) runs at apply time whenever an entity's
 //! instance or args change: the definition must exist, the argument names
 //! must match its `in` ports exactly, and a constant value must have the
 //! default's kind (and, for a quantity, its dimension).
 
-use crate::facet::{Args, Facet, FacetKind, Template, Instance, LeafPath, LeafStruct, Name, Port};
-use crate::document::{Document, RelKind, Relation};
+use crate::facet::{Args, Facet, FacetKind, Template, Instance, LeafPath, LeafStruct, Name, Port, Use};
 use crate::expr::{Expr, Leaf};
+use crate::document::{Document, RelKind, Relation};
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::order::OrderKey;
@@ -132,9 +131,9 @@ pub fn template_of(doc: &Document, def: NodeId, notation: &str) -> Option<NodeId
     })
 }
 
-/// Where an instance goes: the entity under `entity_parent`, the copied
-/// template roots under `figure_parent`, each placed after the given
-/// key (or first, for `None`).
+/// Where an instance goes: the entity under `entity_parent`, its `use`
+/// under `figure_parent`, each placed after the given key (or first, for
+/// `None`).
 pub struct Placement {
     pub entity_parent: Option<NodeId>,
     pub entity_after: Option<OrderKey>,
@@ -142,13 +141,86 @@ pub struct Placement {
     pub figure_after: Option<OrderKey>,
 }
 
-/// Ops that instantiate `def`: an entity named `name` with every argument
-/// at its default, one `port` per `port_spec` with its behaviour binding
-/// rewritten onto the entity (ECM §6.1), a copy of the `notation` template
-/// with its bindings rewritten the same way, and a `figures` relation from
-/// each copied root to the entity. Ids and relation ids are taken from
+/// Ops that instantiate `def` as a linked instance (component-model.md
+/// §5): an entity named `name` with every argument at its default, and a
+/// `use` of it in `notation` under `place.figure_parent`. Nothing is
+/// copied: the entity's ports and the use's picture are expanded from the
+/// definition when the ops apply. Ids and relation ids are taken from
 /// `doc`, so these ops must be applied before anything else allocates.
 pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
+    let specs = inputs_of(doc, def)?;
+    template_of(doc, def, notation).ok_or_else(|| format!("{def} has no template for notation {notation:?}"))?;
+    let ids = doc.next_ids(2);
+    let (entity, u) = (ids[0], ids[1]);
+    let mut instance = Instance::default();
+    instance.def = Slot::Const(Value::Ref(def));
+    let mut args = Args::default();
+    for s in &specs {
+        args.insert(s.name, Slot::Const(s.default.clone()));
+    }
+    let mut entity_name = Name::default();
+    entity_name.text = Slot::Const(Value::Str(name.to_owned()));
+    let mut ops = vec![Op::Create {
+        id: entity,
+        ty: ty("entity"),
+        parent: place.entity_parent,
+        order: match &place.entity_after {
+            Some(k) => OrderKey::after(k),
+            None => OrderKey::first(),
+        },
+        facets: vec![instance.wrap(), args.wrap(), entity_name.wrap()],
+    }];
+    ops.extend(use_ops(doc, u, doc.next_relation_id(), entity, notation, name, place.figure_parent, place.figure_after.clone()));
+    Ok((entity, ops))
+}
+
+/// Ops that draw an existing entity in another notation: a `use` of it
+/// under `parent` (after `after`), whose picture is expanded from its
+/// definition's `notation` template (ECM §5: one entity, many figures).
+pub fn place_figures(doc: &Document, entity: NodeId, notation: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Result<Vec<Op>, String> {
+    let def = doc
+        .get::<Instance>(entity)
+        .and_then(|i| i.def.constant())
+        .and_then(|v| v.as_ref())
+        .ok_or_else(|| format!("{entity} is not an entity with a definition"))?;
+    template_of(doc, def, notation).ok_or_else(|| format!("{def} has no template for notation {notation:?}"))?;
+    let name = name_of(doc, entity).unwrap_or_default();
+    Ok(use_ops(doc, doc.next_id(), doc.next_relation_id(), entity, notation, &name, parent, after))
+}
+
+/// A `use` node figuring `entity` in `notation`, at the origin.
+#[allow(clippy::too_many_arguments)]
+fn use_ops(doc: &Document, u: NodeId, rel: crate::id::RelationId, entity: NodeId, notation: &str, name: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Vec<Op> {
+    let _ = doc;
+    let mut placed = Use::default();
+    placed.notation = Slot::Const(Value::Str(notation.to_owned()));
+    let mut use_name = Name::default();
+    use_name.text = Slot::Const(Value::Str(name.to_owned()));
+    vec![
+        Op::Create {
+            id: u,
+            ty: ty("use"),
+            parent,
+            order: match &after {
+                Some(k) => OrderKey::after(k),
+                None => OrderKey::first(),
+            },
+            facets: vec![placed.wrap(), crate::facet::Transform2d::default().wrap(), use_name.wrap()],
+        },
+        Op::Link { rel: Relation { id: rel, from: u, to: entity, rel: RelKind::Figures, data: BTreeMap::new() } },
+    ]
+}
+
+/// Ops that instantiate `def` as a static instance (component-model.md
+/// §5.2, "load as static asset"): a `detached` entity named `name` with
+/// every argument at its default, one `port` per `port_spec` with its
+/// behaviour binding rewritten onto the entity (ECM §6.1), a copy of the
+/// `notation` template with its bindings rewritten the same way, and a
+/// `figures` relation from each copied root to the entity. Everything is
+/// authored: editing the definition later changes nothing here. Ids and
+/// relation ids are taken from `doc`, so these ops must be applied before
+/// anything else allocates.
+pub fn instantiate_static(doc: &Document, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
     let specs = inputs_of(doc, def)?;
     // Ports and behaviour equations are copied onto the entity.
     let port_specs: Vec<NodeId> = doc.children(def).iter().copied().filter(|&c| doc.live(c).is_some_and(|n| n.ty == ty("port_spec") || n.ty == ty("equation"))).collect();
@@ -163,6 +235,7 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
     let mut ops = Vec::new();
     let mut instance = Instance::default();
     instance.def = Slot::Const(Value::Ref(def));
+    instance.mode = Slot::Const(Value::Enum("detached".into()));
     let mut args = Args::default();
     for s in &specs {
         args.insert(s.name, Slot::Const(s.default.clone()));
@@ -199,11 +272,11 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
     Ok((entity, ops))
 }
 
-/// Ops that draw an existing entity in another notation: a copy of its
-/// definition's `notation` template under `parent` (after `after`), its
-/// bindings reading the entity's parameters and ports, each root a figure
-/// of the entity (ECM §5: one entity, many figures).
-pub fn place_figures(doc: &Document, entity: NodeId, notation: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Result<Vec<Op>, String> {
+/// Ops that draw an existing static entity in another notation: a copy of
+/// its definition's `notation` template under `parent` (after `after`), its
+/// bindings reading the entity's ports, each root a figure of the entity
+/// (ECM §5: one entity, many figures).
+pub fn place_static_figures(doc: &Document, entity: NodeId, notation: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Result<Vec<Op>, String> {
     let def = doc
         .get::<Instance>(entity)
         .and_then(|i| i.def.constant())
@@ -288,4 +361,60 @@ fn copy_template(
         });
     }
     ops
+}
+
+/// Ops that detach a linked instance (component-model.md §5.2): what it
+/// derives becomes authored nodes with fresh ids, and it stops following its
+/// definition. Its entity keeps `instance.def` (where it came from) with
+/// `instance.mode = detached`; each `use` keeps figuring it and gains the
+/// copied picture as authored children. Relations to the derived nodes (a
+/// connection to a port, an annotation's target) and bindings that read
+/// them (a readout of a port's signal) are re-pointed at the copies, so
+/// nothing outside the instance notices. One transaction; undo restores the
+/// link.
+pub fn detach_ops(doc: &Document, entity: NodeId) -> Result<Vec<Op>, String> {
+    if crate::expand::linked_definition(doc, entity).is_none() {
+        return Err(format!("{entity} is not a linked instance"));
+    }
+    // What it derives, parents first: its ports and equations, then each
+    // use's picture.
+    let mut derived: Vec<NodeId> = doc.children(entity).iter().copied().filter(|c| c.is_expanded()).collect();
+    let uses: Vec<NodeId> = doc.relations_to(entity).filter(|r| r.rel == RelKind::Figures && doc.is_live(r.from) && doc.live(r.from).is_some_and(|n| n.ty == ty("use"))).map(|r| r.from).collect();
+    for &u in &uses {
+        derived.extend(doc.descendants(u).into_iter().filter(|d| d.is_expanded()));
+    }
+    let fresh = doc.next_ids(derived.len());
+    let map: BTreeMap<NodeId, NodeId> = derived.iter().copied().zip(fresh.iter().copied()).collect();
+    let follow = |l: Leaf| -> Leaf { map.get(&l.node).map_or(l, |&n| Leaf { node: n, path: l.path }) };
+    let rewrite = |f: &Facet| -> Facet {
+        let mut f = f.clone();
+        for field in f.field_names() {
+            if let Some(expr) = f.get(field).and_then(|s| s.expr()) {
+                let e = expr.map_refs(&follow);
+                f.set(field, Slot::Bound(e)).expect("field exists");
+            }
+        }
+        f
+    };
+    let mut ops = vec![Op::Set { id: entity, path: "instance.mode".parse().expect("declared leaf"), slot: Slot::Const(Value::Enum("detached".into())) }];
+    for &old in &derived {
+        let node = doc.live(old).expect("derived node is live");
+        let parent = node.parent.map(|p| map.get(&p).copied().unwrap_or(p));
+        ops.push(Op::Create { id: map[&old], ty: node.ty, parent, order: node.order.clone(), facets: doc.facets_of(old).map(&rewrite).collect() });
+    }
+    // Relations into the instance follow the copies.
+    let into: Vec<&Relation> = derived.iter().flat_map(|&d| doc.relations_to(d)).filter(|r| !r.from.is_expanded() && !r.id.is_session()).collect();
+    let rel_ids = doc.next_relation_ids(into.len());
+    for (r, id) in into.into_iter().zip(rel_ids) {
+        ops.push(Op::Unlink { id: r.id });
+        ops.push(Op::Link { rel: Relation { id, from: r.from, to: map[&r.to], rel: r.rel, data: r.data.clone() } });
+    }
+    // So do bindings outside it that read it.
+    for (leaf, expr) in doc.bound_slots() {
+        if leaf.node.is_expanded() || !expr.deps().iter().any(|d| map.contains_key(&d.node)) {
+            continue;
+        }
+        ops.push(Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Bound(expr.map_refs(&follow)) });
+    }
+    Ok(ops)
 }

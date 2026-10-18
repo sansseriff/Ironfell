@@ -102,6 +102,7 @@ fn place(scene: NodeId) -> Placement {
 #[test]
 fn a_definition_instantiates_into_an_entity_and_a_figure() {
     let Lib { mut store, scene, def, level, .. } = library();
+    let _ = level;
     let specs = definition::inputs_of(store.document(), def).unwrap();
     assert_eq!(specs.iter().map(|s| s.name).collect::<Vec<_>>(), vec!["level", "power"]);
     assert_eq!(specs[0].kind, ValueKind::Number);
@@ -117,46 +118,72 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     assert_eq!((e.ty.name(), e.parent), ("entity", Some(scene)));
     assert_eq!(resolved(&store, entity, "args.level"), Value::Number(0.4));
     assert_eq!(resolved(&store, entity, "args.power"), Value::parse_quantity("1 mW").unwrap());
-    // Each input became a port on the entity that reads its argument.
-    let level_port = port_named(&store, entity, "level");
+    // The instance is linked (component-model.md §5): its ports and its
+    // picture are expanded from the definition, with ids naming the
+    // instance and the definition node they copy.
+    let level_port = NodeId::expanded(entity, level).unwrap();
+    assert_eq!(port_named(&store, entity, "level"), level_port);
     let signal = store.document().leaf(level_port, path("port.signal")).unwrap().expr().unwrap().to_string();
     assert_eq!(signal, format!("{entity}.args.level"));
     assert_eq!(resolved(&store, level_port, "port.signal"), Value::Number(0.4));
-    // The copy is a plain rect under the scene whose bindings read the
-    // entity's port, with a figures relation back to it.
-    let copy = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "rect").unwrap();
-    assert_ne!(copy, template_rect);
+    // The picture is a `use` under the scene, figuring the entity; its
+    // child is the template's rect, expanded, its bindings reading the
+    // entity's port.
+    let u = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "use").unwrap();
+    let copy = NodeId::expanded(u, template_rect).unwrap();
+    assert_eq!(store.document().children(u), &[copy]);
+    assert_eq!(copy.to_string(), format!("{u}/{}", &template_rect.to_string()[1..]));
     let h = store.document().leaf(copy, path("size.h")).unwrap().expr().unwrap().to_string();
     assert_eq!(h, format!("{level_port}.port.signal * 300"));
-    assert!(!h.contains(&level.to_string()));
     assert_eq!(resolved(&store, copy, "size.h"), Value::Number(120.0));
     assert_eq!(resolved(&store, copy, "transform2d.y"), Value::Number(520.0));
     let rels: Vec<_> = store.document().relations_to(entity).collect();
     assert_eq!(rels.len(), 1);
-    assert_eq!((rels[0].from, rels[0].rel), (copy, RelKind::Figures));
+    assert_eq!((rels[0].from, rels[0].rel), (u, RelKind::Figures));
+    // The model view shows one element for the entity, with its port; the
+    // tree view shows the `use` without its derived insides unless asked.
+    let tree = |expand: Vec<NodeId>| store.view(&ViewQuery { expand, relation: Default::default(), scope: Some(scene), fidelity: Fidelity::Full, depth: None }).unwrap();
+    assert!(!tree(vec![]).contains(&copy.to_string()), "{}", tree(vec![]));
+    assert!(tree(vec![u]).contains(&format!(r#"<rect id="{copy}" derived="true""#)) || tree(vec![u]).contains(&format!(r#"id="{copy}""#)), "{}", tree(vec![u]));
+    // Editing the definition reaches the instance in the same transaction.
+    store.apply(tx("wider", vec![Op::Set { id: template_rect, path: path("size.w"), slot: num(80.0) }])).unwrap();
+    assert_eq!(resolved(&store, copy, "size.w"), Value::Number(80.0));
+    // An authored edit to an expanded node is refused, naming its instance.
+    let errs = store.apply(tx("poke", vec![Op::Set { id: copy, path: path("size.w"), slot: num(5.0) }])).unwrap_err();
+    assert!(errs[0].message.contains(&format!("part of instance {u}")), "{}", errs[0].message);
+    // The file holds the instance, not what it derives; loading derives it.
+    let text = store.save();
+    assert!(!text.contains(&format!("\"{copy}\"")) && !text.contains(&format!("\"{level_port}\"")), "{text}");
+    let loaded = Store::load(&text).unwrap();
+    assert_eq!(resolved(&loaded, copy, "size.w"), Value::Number(80.0));
+    assert_eq!(resolved(&loaded, copy, "size.h"), Value::Number(120.0));
+    assert_eq!(loaded.save(), text);
     // A schema-2 file spelled the template `depiction` and the relation
     // `depicts`; it loads under the new names.
-    let text = store.save();
     let old = text
         .replacen(&format!("\"schema\": {}", iron_document::serial::SCHEMA), "\"schema\": 2", 1)
         .replace("\"template\"", "\"depiction\"")
         .replace("\"figures\"", "\"depicts\"");
     assert!(old.contains("\"depicts\"") && old.contains("\"depiction\""));
-    assert_eq!(Store::load(&old).unwrap().save(), text);
+    let old = Store::load(&old).unwrap();
+    assert_eq!(resolved(&old, entity, "args.power"), Value::parse_quantity("1 mW").unwrap());
+    // Before schema 7 every instance was a copy: it loads detached, and
+    // derives nothing.
+    assert_eq!(old.document().leaf(entity, path("instance.mode")).unwrap().constant(), Some(&Value::Enum("detached".into())));
+    assert!(old.document().live(copy).is_none());
     // A schema-5 file declared parameters (`param_spec`) and held `params`;
     // they load as in ports and arguments.
     let v5 = text
         .replacen(&format!("\"schema\": {}", iron_document::serial::SCHEMA), "\"schema\": 5", 1)
         .replace("\"facets\": {", "\"components\": {")
-        .replace(&format!(".port.signal"), ".param_spec.default")
-        .replace(&format!("{entity}.param_spec.default"), &format!("{entity}.args.level"))
+        .replace(".port.signal", ".param_spec.default")
         .replace("\"args\":", "\"params\":");
     let migrated = Store::load(&v5).unwrap();
-    assert_eq!(resolved(&migrated, copy, "size.h"), Value::Number(120.0));
     assert_eq!(resolved(&migrated, entity, "args.power"), Value::parse_quantity("1 mW").unwrap());
-    // Undo removes the whole instance; redo restores it.
+    // Undo removes the whole instance and what it derived; redo restores it.
     store.undo(1).unwrap().unwrap();
-    assert!(store.document().live(entity).is_none() && store.document().live(copy).is_none());
+    store.undo(1).unwrap().unwrap();
+    assert!(store.document().live(entity).is_none() && store.document().live(copy).is_none() && store.document().live(level_port).is_none());
     store.redo(2).unwrap().unwrap();
     assert_eq!(resolved(&store, copy, "size.h"), Value::Number(120.0));
 }
@@ -169,7 +196,8 @@ fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
     store
         .apply(tx("bind level", vec![Op::Set { id: entity, path: path("args.level"), slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).unwrap()) }]))
         .unwrap();
-    let copy = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "rect").unwrap();
+    let u = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "use").unwrap();
+    let copy = store.document().children(u)[0];
     store.drain_changes();
     store.preview(slider, path("slider.value"), Value::Number(0.9));
     assert_eq!(resolved(&store, entity, "args.level"), Value::Number(0.9));
@@ -180,12 +208,12 @@ fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
     assert!(matches!(store.handle(copy, path("transform2d.y")), Handle::Linear { source, .. } if source == Leaf { node: slider, path: path("slider.value") }));
     store.commit_gesture("set slider", Actor::Human, 1).unwrap().unwrap();
     // The view names the definition and shows the argument and its binding.
-    let v = store.view(&ViewQuery { relation: Default::default(), scope: Some(entity), fidelity: Fidelity::Full, depth: None }).unwrap();
-    assert!(v.contains(&format!(r#"<entity id="{entity}" name="bar" def="{def}" level="0.9" level.bind="{slider}.slider.value" power="1 mW""#)), "{v}");
-    assert!(v.contains(&format!(r#"<driven-by ref="{copy}" rel="figures"/>"#)), "{v}");
+    let v = store.view(&ViewQuery { expand: Vec::new(), relation: Default::default(), scope: Some(entity), fidelity: Fidelity::Full, depth: None }).unwrap();
+    assert!(v.contains(&format!(r#"<entity id="{entity}" name="bar" def="{def}" mode="linked" level="0.9" level.bind="{slider}.slider.value" power="1 mW""#)), "{v}");
+    assert!(v.contains(&format!(r#"<driven-by ref="{u}" rel="figures"/>"#)), "{v}");
     // Everything round-trips through the file.
     let text = store.save();
-    assert!(text.contains(r#""schema": 6"#), "{text}");
+    assert!(text.contains(&format!(r#""schema": {}"#, iron_document::serial::SCHEMA)), "{text}");
     let loaded = Store::load(&text).unwrap();
     assert_eq!(loaded.save(), text);
     assert_eq!(resolved(&loaded, copy, "size.h"), Value::Number(270.0));

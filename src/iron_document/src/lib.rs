@@ -23,6 +23,7 @@ pub mod contour;
 pub mod copy;
 pub mod definition;
 pub mod document;
+pub mod expand;
 pub mod expr;
 pub mod geom;
 pub mod gesture;
@@ -169,6 +170,8 @@ pub struct Store {
     /// the document's version alone.
     session_version: u64,
     physics_error: Option<String>,
+    /// What the last expansion could not derive (component-model.md §3).
+    expansion_problems: Vec<String>,
     /// The gesture whose previews are in the overlay (`gesture`).
     gesture: Option<gesture::ActiveGesture>,
     /// How the last gesture ended, for its tool to find out.
@@ -216,6 +219,7 @@ impl Store {
             fingers: Vec::new(),
             session_version: 0,
             physics_error: None,
+            expansion_problems: Vec::new(),
             gesture: None,
             ended: None,
             next_gesture: 1,
@@ -224,6 +228,9 @@ impl Store {
             signal_stamp: 0,
             text_generation: iron_text::engine().generation(),
         };
+        // A loaded document holds only authored nodes: derive its instances.
+        let stamp = store.doc.version();
+        store.expansion_problems = expand::expand(&mut store.doc, stamp).1;
         store.geometry.note_structure();
         store.reactive.rebuild(&store.doc);
         store.resample();
@@ -667,7 +674,7 @@ impl Store {
         ops.extend(b.ops);
         let mut inverse = a.inverse;
         inverse.extend(b.inverse);
-        self.history.past.push(Transaction { version: b.version, label: label.into(), actor: b.actor, ts: b.ts, idempotency_key: None, ops, derived_ops: b.derived_ops, inverse, solver: b.solver });
+        self.history.past.push(Transaction { version: b.version, label: label.into(), actor: b.actor, ts: b.ts, idempotency_key: None, ops, derived_ops: b.derived_ops, inverse, expanded: b.expanded, solver: b.solver });
         true
     }
 
@@ -872,6 +879,11 @@ impl Store {
     }
 
     /// Why the across/through network kept its last solution, if it did.
+    /// What the last expansion could not derive, if anything.
+    pub fn expansion_problems(&self) -> &[String] {
+        &self.expansion_problems
+    }
+
     pub fn physics_error(&self) -> Option<&str> {
         self.physics_error.as_deref()
     }
@@ -925,8 +937,8 @@ impl Store {
 
     /// Keep the graph in step with a transaction that just applied.
     fn after_transaction(&mut self, tx: &Transaction) {
-        self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()));
-        let structural = tx.ops.iter().chain(tx.inverse.iter()).any(|op| match op {
+        self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(tx.expanded.iter()));
+        let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(tx.expanded.iter()).any(|op| match op {
             // A link can be a connection's end, which derives a signal.
             Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
             Op::Set { slot, .. } => slot.expr().is_some(),
@@ -1229,10 +1241,22 @@ impl Store {
         let mut inverse = Vec::new();
         let mut errors = Vec::new();
         for (i, op) in input.ops.iter().enumerate() {
+            if let Some(reason) = expand::refuse(op) {
+                errors.push(ApplyError { op: i, kind: ErrorKind::BadId, message: reason });
+                continue;
+            }
             match op::apply_op(&mut work, i, op, stamp) {
                 Ok(inv) => inverse.extend(inv),
                 Err(e) => errors.push(e),
             }
+        }
+        // Instances re-derive what their definitions say, before the checks
+        // that read them (a connection to an expanded port).
+        let mut expanded = Vec::new();
+        if errors.is_empty() && expand::affected_by(&work, &input.ops) {
+            let (ops, problems) = expand::expand(&mut work, stamp);
+            expanded = ops;
+            self.expansion_problems = problems;
         }
         if errors.is_empty() {
             // A connection is reported once, however many of its links the
@@ -1264,6 +1288,7 @@ impl Store {
                 ops: input.ops,
                 derived_ops: Vec::new(),
                 inverse,
+                expanded,
                 solver: None,
             },
             work,

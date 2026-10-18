@@ -146,10 +146,13 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
     }
 
     let mut set: BTreeSet<NodeId> = BTreeSet::new();
+    // An instance's expanded nodes are not copied: the copy re-derives
+    // them, and a reference to one follows its instance (`within`, `paste`).
     let subtree = |id: NodeId, set: &mut BTreeSet<NodeId>| {
         set.insert(id);
-        set.extend(doc.descendants(id));
+        set.extend(doc.descendants(id).into_iter().filter(|d| !d.is_expanded()));
     };
+    let within = |set: &BTreeSet<NodeId>, n: NodeId| set.contains(&n) || n.expanded_parts().is_some_and(|(owner, _)| set.contains(&owner));
     for &r in &roots {
         subtree(r, &mut set);
     }
@@ -172,7 +175,7 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
     for (kind, rel) in [("connection", RelKind::Connects), ("constraint", RelKind::Constrains), ("clip", RelKind::Animates)] {
         for c in doc.nodes_of_type(ty(kind)).collect::<Vec<_>>() {
             let ends = ends_of(c, rel);
-            let inside = ends.iter().filter(|e| set.contains(e)).count();
+            let inside = ends.iter().filter(|e| within(&set, **e)).count();
             if ends.is_empty() || inside == 0 {
                 continue;
             }
@@ -185,7 +188,7 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
                 if set.remove(&c) {
                     roots.retain(|&r| r != c);
                 }
-                let outside: Vec<String> = ends.iter().filter(|e| !set.contains(e)).map(|e| e.to_string()).collect();
+                let outside: Vec<String> = ends.iter().filter(|e| !within(&set, **e)).map(|e| e.to_string()).collect();
                 dropped.push(format!("{kind} {c} not copied: {} outside the copy", outside.join(", ")));
             }
         }
@@ -204,7 +207,7 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
             for field in c.field_names() {
                 if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
                     for dep in expr.deps() {
-                        if !set.contains(&dep.node)
+                        if !within(&set, dep.node)
                             && let Some(v) = store.resolved(dep.node, dep.path)
                         {
                             externals.insert(dep, v);
@@ -215,7 +218,7 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
             facets.entry(c.kind()).or_default().insert(id, c.clone());
         }
         for r in doc.relations_from(id) {
-            if r.rel != RelKind::Selects && set.contains(&r.to) && !r.id.is_session() {
+            if r.rel != RelKind::Selects && within(&set, r.to) && !r.id.is_session() {
                 relations.insert(r.id, r.clone());
             }
         }
@@ -324,13 +327,15 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
     }
     let ids = doc.next_ids(create.len());
     let map: BTreeMap<NodeId, NodeId> = create.iter().copied().zip(ids.iter().copied()).collect();
+    // A copied node, or an expanded node of a copied instance: the paste's.
+    let follow = |n: NodeId| -> Option<NodeId> { map.get(&n).copied().or_else(|| n.expanded_parts().and_then(|(owner, local)| map.get(&owner).and_then(|&o| NodeId::expanded(o, local)))) };
 
     // A reference into the fragment follows the copy; one out of it is kept
     // while it means the same thing here.
     let keep = |n: NodeId| same && doc.is_live(n);
     let leaf_for = |l: Leaf| -> Option<Leaf> {
-        match map.get(&l.node) {
-            Some(&n) => Some(Leaf { node: n, path: l.path }),
+        match follow(l.node) {
+            Some(n) => Some(Leaf { node: n, path: l.path }),
             None if keep(l.node) => Some(l),
             None => None,
         }
@@ -403,7 +408,7 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
                         }
                         Slot::Bound(rewritten)
                     }
-                    Slot::Const(Value::Ref(r)) => Slot::Const(Value::Ref(map.get(&r).copied().unwrap_or(r))),
+                    Slot::Const(Value::Ref(r)) => Slot::Const(Value::Ref(follow(r).unwrap_or(r))),
                     other => other,
                 };
                 let _ = c.set(field, new);
@@ -423,7 +428,7 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
     // relation to one keeps its original end.
     let rels: Vec<&Relation> = frag.doc.relations().collect();
     let rel_ids = doc.next_relation_ids(rels.len());
-    let end = |n: NodeId| map.get(&n).copied().or_else(|| shared.contains(&n).then_some(n));
+    let end = |n: NodeId| follow(n).or_else(|| (shared.contains(&n) || n.expanded_parts().is_some_and(|(o, _)| shared.contains(&o))).then_some(n));
     let mut used = 0;
     for r in rels {
         let (Some(from), Some(to)) = (end(r.from), end(r.to)) else { continue };

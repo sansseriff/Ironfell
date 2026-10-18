@@ -89,7 +89,7 @@ fn a_composition_embeds_others_by_reference() {
     assert!(doc.roots().contains(&t.scene));
     add_embed(&mut t.store, t.main, t.scene, vec![]).unwrap();
     // The view shows the reference and the camera.
-    let v = t.store.view(&ViewQuery { relation: ViewRelation::Composition(t.main), scope: None, fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = t.store.view(&ViewQuery { expand: Vec::new(), relation: ViewRelation::Composition(t.main), scope: None, fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!(r#"source="{}" camera="{}"/>"#, t.assembly, t.camera)), "{v}");
     // Round trip.
     let text = t.store.save();

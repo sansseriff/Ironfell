@@ -482,7 +482,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         .expect("demo scene applies");
     let last_in_scene = scratch.document().children(scene).last().and_then(|&c| scratch.document().live(c)).map(|n| n.order.clone());
     let place = Placement { entity_parent: Some(model), entity_after: None, figure_parent: Some(scene), figure_after: last_in_scene.map(|k| OrderKey::after(&k)) };
-    let (entity, inst) = definition::instantiate(scratch.document(), def, "free", "bar", &place).expect("bar instantiates");
+    let (entity, inst) = definition::instantiate_static(scratch.document(), def, "free", "bar", &place).expect("bar instantiates");
     scratch
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: inst.clone(), exact: false })
         .expect("instantiation applies");
@@ -526,6 +526,9 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     // Vision 10 phase 4: a gas in a cylinder, simulated by Bevy, read by
     // the document through a runtime signal.
     ops.extend(piston(store, &ops, library));
+    // The component model (plans/specs/component-model.md): the optics
+    // definitions placed again as linked instances, in a `components` tab.
+    ops.extend(components(store, &ops, model));
 
     iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false }
 }
@@ -847,10 +850,10 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
             figure_parent: Some(cartoon),
             figure_after: doc.children(cartoon).last().and_then(|&c| doc.live(c)).map(|c| c.order.clone()),
         };
-        let (e, ops) = definition::instantiate(scratch.document(), def, "cartoon", name, &place).expect("optics instantiates");
+        let (e, ops) = definition::instantiate_static(scratch.document(), def, "cartoon", name, &place).expect("optics instantiates");
         phase(&mut scratch, ops);
         let after = scratch.document().children(schematic).last().and_then(|&c| scratch.document().live(c)).map(|c| c.order.clone());
-        let ops = definition::place_figures(scratch.document(), e, "schematic", Some(schematic), after).expect("schematic figures");
+        let ops = definition::place_static_figures(scratch.document(), e, "schematic", Some(schematic), after).expect("schematic figures");
         phase(&mut scratch, ops);
         entities.push(e);
     }
@@ -1026,7 +1029,7 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
     let mut entities = Vec::new();
     for (def, name) in [(heater, "heater"), (link, "thermal link"), (ambient, "ambient")] {
         let place = Placement { entity_parent: Some(model), entity_after: after(&scratch, Some(model)), figure_parent: Some(comp), figure_after: after(&scratch, Some(comp)) };
-        let (e, ops) = definition::instantiate(scratch.document(), def, "cartoon", name, &place).expect("thermal instantiates");
+        let (e, ops) = definition::instantiate_static(scratch.document(), def, "cartoon", name, &place).expect("thermal instantiates");
         phase(&mut scratch, ops);
         entities.push(e);
     }
@@ -1073,3 +1076,118 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
     out
 }
 
+/// The component model's first example (plans/specs/component-model.md,
+/// phase 2): the optics definitions placed as *linked* instances in a
+/// `components` composition. A source laser, a fiber and a meter, wired
+/// port to port, the laser's power following a slider; and a spare laser and
+/// two loose fibers. In the model view each is one element with its ports;
+/// their pictures and ports are expanded from the definitions, never stored.
+fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<Op> {
+    use iron_document::facet::{Connection, Name};
+    let ty = |s: &str| TypeId::lookup(s).expect("registered type");
+    let mut scratch = iron_document::Store::with_document(base.document().clone());
+    scratch
+        .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: before.to_vec(), exact: false })
+        .expect("demo scene applies");
+    let mut out: Vec<Op> = Vec::new();
+    let mut phase = |scratch: &mut iron_document::Store, ops: Vec<Op>| {
+        scratch
+            .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
+            .expect("components demo applies");
+        out.extend(ops);
+    };
+    let name_of = |s: &iron_document::Store, id: NodeId| s.document().get::<Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+    let last = |s: &iron_document::Store, parent: Option<NodeId>| {
+        let doc = s.document();
+        let kids = match parent {
+            Some(p) => doc.children(p).to_vec(),
+            None => doc.roots().to_vec(),
+        };
+        kids.last().and_then(|&k| doc.live(k)).map(|n| n.order.clone())
+    };
+    let definition = |s: &iron_document::Store, name: &str| {
+        s.document().nodes_of_type(ty("definition")).find(|&d| s.document().is_live(d) && name_of(s, d).as_deref() == Some(name)).expect("optics definition")
+    };
+    let (laser, fiber, meter) = (definition(&scratch, "laser"), definition(&scratch, "fiber"), definition(&scratch, "meter"));
+    let spec = |s: &iron_document::Store, def: NodeId, port: &str| {
+        s.document().children(def).iter().copied().find(|&c| name_of(s, c).as_deref() == Some(port)).expect("port_spec")
+    };
+
+    let comp = scratch.document().next_id();
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("components".into()));
+    let k = last(&scratch, None).map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+    phase(&mut scratch, vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: k, facets: vec![name.wrap(), {
+        let mut c = Composition::default();
+        c.dims = Slot::Const(Value::Enum("2d".into()));
+        c.wrap()
+    }] }]);
+
+    // Each instance: an entity and a `use`, moved by `(dx, dy)`.
+    let mut place = |scratch: &mut iron_document::Store, def: NodeId, name: &str, dx: f64, dy: f64| -> NodeId {
+        let doc = scratch.document();
+        let at = Placement { entity_parent: Some(model), entity_after: last(scratch, Some(model)), figure_parent: Some(comp), figure_after: last(scratch, Some(comp)) };
+        let (e, mut ops) = definition::instantiate(doc, def, "cartoon", name, &at).expect("components instantiate");
+        if let Some(Op::Create { facets, .. }) = ops.iter_mut().find(|op| matches!(op, Op::Create { ty, .. } if ty.name() == "use")) {
+            for f in facets.iter_mut() {
+                if let iron_document::Facet::Transform2d(t) = f {
+                    t.x = n(dx);
+                    t.y = n(dy);
+                }
+            }
+        }
+        phase(scratch, ops);
+        e
+    };
+    let source = place(&mut scratch, laser, "source", 0.0, 0.0);
+    let line = place(&mut scratch, fiber, "fiber", 0.0, 0.0);
+    let gauge = place(&mut scratch, meter, "meter", 0.0, 0.0);
+    let spare = place(&mut scratch, laser, "spare laser", 0.0, 300.0);
+    let short = place(&mut scratch, fiber, "short fiber", 300.0, 300.0);
+    let long = place(&mut scratch, fiber, "long fiber", 300.0, 420.0);
+
+    // Wired port to port: the expanded ports' ids name the instance and the
+    // definition's port_spec, so they are known before the ports exist.
+    for (i, (from, fd, to, td)) in [(source, laser, line, fiber), (line, fiber, gauge, meter)].into_iter().enumerate() {
+        let a = NodeId::expanded(from, spec(&scratch, fd, "out")).expect("expanded id");
+        let b = NodeId::expanded(to, spec(&scratch, td, "in")).expect("expanded id");
+        let id = scratch.document().next_id();
+        let rels = scratch.document().next_relation_ids(2);
+        let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
+        let mut c = Connection::default();
+        c.domain = Slot::Const(Value::Str("optical".into()));
+        let _ = i;
+        let k = last(&scratch, Some(model)).map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+        phase(&mut scratch, vec![
+            Op::Create { id, ty: ty("connection"), parent: Some(model), order: k, facets: vec![c.wrap()] },
+            Op::Link { rel: Relation { id: rels[0], from: id, to: a, rel: RelKind::Connects, data: end("a") } },
+            Op::Link { rel: Relation { id: rels[1], from: id, to: b, rel: RelKind::Connects, data: end("b") } },
+        ]);
+    }
+
+    // The source's power (0–20 mW) follows a slider; the loose fibers are
+    // set to other lengths.
+    let slider = scratch.document().next_id();
+    let mut sl = Slider::default();
+    sl.min = n(0.0);
+    sl.max = n(20.0);
+    sl.step = n(0.1);
+    sl.value = n(10.0);
+    let mut t = Transform2d::default();
+    t.x = n(60.0);
+    t.y = n(340.0);
+    let mut sz = Size::default();
+    sz.w = n(300.0);
+    sz.h = n(24.0);
+    let mut name = DocName::default();
+    name.text = Slot::Const(Value::Str("source power".into()));
+    let k = last(&scratch, Some(comp)).map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+    phase(&mut scratch, vec![Op::Create { id: slider, ty: ty("slider"), parent: Some(comp), order: k, facets: vec![t.wrap(), sz.wrap(), sl.wrap(), name.wrap()] }]);
+    phase(&mut scratch, vec![
+        Op::Set { id: source, path: "args.power".parse().expect("argument"), slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value * 1 mW")).expect("demo binding")) },
+        Op::Set { id: short, path: "args.length_km".parse().expect("argument"), slot: Slot::Const(Value::Number(0.5)) },
+        Op::Set { id: long, path: "args.length_km".parse().expect("argument"), slot: Slot::Const(Value::Number(10.0)) },
+    ]);
+    let _ = spare;
+    out
+}

@@ -633,6 +633,36 @@ eval controlsCount()
 key Meta+z
 sleep 600
 eval controlsCount()
+# Component model phase 2 (plans/specs/component-model.md): the Components
+# tab places the optics definitions as linked instances. Each is one model
+# element whose ports have derived ids (`#instance/local`); the picture is
+# derived too: absent from the saved file, and from the tree view unless the
+# instance is expanded. Slider → source → fiber → meter carries power.
+tab Components
+sleep 600
+eval window.comps = async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [...v.matchAll(/<entity id="[^"]+" name="(source|fiber|meter|spare laser|short fiber|long fiber)"[^>]*mode="([^"]+)"/g)].map(m => `${m[1]} ${m[2]}`); }
+eval comps()
+eval window.meterIn = async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); const m = v.match(/<entity[^>]*name="meter"[^>]*mode="linked"[\s\S]*?<port id="([^"]+)" name="in"[^>]*signal="([^"]+)"/); return [m[1].replace(/^#[^/]+\//, '#…/'), m[2]]; }
+eval meterIn()
+eval (async () => { const s = await __iron.save(); return { derivedNodesSaved: (s.match(/"#[0-9A-Za-z]+\/[0-9A-Za-z]+": \{/g) || []).length, connectionsToPorts: (s.match(/"to":"#[0-9A-Za-z]+\/[0-9A-Za-z]+"/g) || []).length }; })()
+eval (async () => { const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const plain = await __iron.view({fidelity:'skeleton', scope: c}); const u = plain.match(/<use id="([^"]+)" name="meter"/)[1]; const open = await __iron.view({fidelity:'skeleton', scope: c, expand: [u]}); return [(plain.match(/derived="true"/g) || []).length, (open.match(/derived="true"/g) || []).length]; })()
+ddrag 210 352 360 352 12
+sleep 600
+eval meterIn()
+# Clicking a picture selects its instance; the inspector lists its inputs.
+dclick 125 175
+sleep 600
+eval [document.querySelector('[data-section="component"] .component')?.textContent, [...document.querySelectorAll('[data-section="component"] .label')].map(e => e.textContent)]
+# Detach the spare laser from the inspector: it stops being linked; undo
+# links it again.
+dclick 125 475
+sleep 600
+clickel button[aria-label="Detach instance"]
+sleep 600
+eval comps()
+key Meta+z
+sleep 600
+eval comps()
 logs applied|rejected|panicked
 errors
 quit

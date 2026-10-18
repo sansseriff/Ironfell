@@ -49,6 +49,11 @@ pub struct ViewQuery {
     /// Levels below the scope to descend. `None` is unlimited.
     #[serde(default)]
     pub depth: Option<u32>,
+    /// Instances whose expanded insides to show, marked `derived`
+    /// (component-model.md §9). Otherwise only an instance's ports, its
+    /// interface, are shown of what it derives.
+    #[serde(default)]
+    pub expand: Vec<NodeId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,7 +134,21 @@ fn node(
         attrs.push(("of".into(), entity.to_string()));
     }
 
-    let kids = doc.children(id);
+    // An instance's insides are derived: shown only when asked for, except
+    // its ports, which are its interface.
+    let kids_all = doc.children(id);
+    let kids_vec: Vec<NodeId> = kids_all
+        .iter()
+        .copied()
+        .filter(|k| match k.expanded_parts() {
+            None => true,
+            Some((owner, _)) => q.expand.contains(&owner) || doc.live(*k).is_some_and(|n| n.ty.name() == "port"),
+        })
+        .collect();
+    let kids = kids_vec.as_slice();
+    if id.is_expanded() {
+        attrs.push(("derived".into(), "true".into()));
+    }
     let rels: Vec<_> = doc.relations_from(id).filter(|r| !(as_of && r.rel == crate::document::RelKind::Figures)).collect();
     // The reverse direction: what drives this node (doc 05 §5.3). Bindings
     // already show as `<attr>.bind`; relations arrive from elsewhere.

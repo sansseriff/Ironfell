@@ -1,6 +1,6 @@
 # The component model
 
-**Status:** Approved 2026-10-18. Phases 0 and 1 done 2026-10-18; phase 2 next.
+**Status:** Approved 2026-10-18. Phases 0–2 done 2026-10-18; phase 3 next.
 **Scope:** Reusable components: what a component is, what the document stores for a
 placed one, how its insides are derived, its interface, overrides, scope, libraries,
 the views a model reads, and the render analysis the component boundary makes possible.
@@ -552,6 +552,38 @@ relation endpoints as paths, `expand` in views, `detach`. The demos become linke
 the same transaction; the model view shows each as one element; saving writes no
 expanded node; undo of a placement removes its expansion; the optics chain's meter
 reading is unchanged.
+*Done 2026-10-18, with these deviations from §6:*
+- **Expanded ids are computed, not tabled.** `NodeId::expanded(owner, local)` packs the
+  instance and the definition node into one u64 (top bit set; 31 + 32 bits), shown and
+  parsed as `#owner/local` (`#3B/1A`), and accepted in expressions. So ids are stable
+  across re-expansion *and reloads*, saved relations and bindings simply name them, and
+  no path table or save-time translation exists. Names in displayed ids, and nesting
+  deeper than one level (an expanded id cannot be an owner), are left for phase 4.
+- **Expansion** (`expand.rs`) computes every linked instance's wanted nodes and
+  reconciles the document through the op applier inside `Store::run`, after the
+  authored ops and before the end-of-transaction checks; it runs when a transaction is
+  structural or touches an instance, a `use` or a library node. Its ops travel in
+  `Transaction::expanded` (followed by the bridge and geometry revisions, never undone
+  or replayed). Load expands in `Store::with_document`. Authored ops on expanded nodes
+  are refused, naming the instance, until phase 3 translates them; a link *to* one
+  needs only its instance to be live.
+- **`instance.mode`** (`linked` | `detached`) says whether an entity derives; schema 7
+  makes every older entity `detached`. `definition::instantiate` makes linked
+  instances (an entity plus a `use`); `instantiate_static` / `place_static_figures`
+  keep the copying path as "load as static asset". `detach_ops` (inspector button,
+  `document_detach`) turns a linked instance static, re-pointing relations and
+  bindings that named its derived nodes.
+- **Copy and paste** leave derived nodes out of a fragment and map a reference to one
+  through its instance, so a copied chain keeps its connections.
+- **The existing demo scenes stay static** for now: the smoke script exercises binding
+  inversion, Link, shape conversion and gesture ownership on nodes inside them, which
+  needs phase 3's edit translation once they are linked. The new **Components** tab
+  places the optics definitions as linked instances (source, fiber, meter wired port
+  to port, a power slider, a spare laser and two loose fibers), checked by the smoke
+  script's Components section.
+- Not done: sharing one expression per definition across instances (§3, "Behaviour is
+  shared"); each expanded node still holds its own rewritten copy. Model-view noise: an
+  `in` port that a connection feeds still shows its inert argument (`in="0 W"`).
 
 **Phase 3 — Overrides, edit translation and scope.** `override`, stale overrides, §7's
 translation in `run` and `preview`, §8's validation.

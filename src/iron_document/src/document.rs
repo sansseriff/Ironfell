@@ -191,6 +191,23 @@ impl Document {
         out
     }
 
+    /// Every expanded node's id, live or tombstoned (component-model.md §6).
+    /// Expanded ids sort after every other id, so this is a range read.
+    pub fn expanded_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.nodes.range(NodeId::from_raw(crate::id::EXPANDED)..).map(|(id, _)| *id)
+    }
+
+    /// How many ancestors a node has.
+    pub fn depth(&self, id: NodeId) -> usize {
+        let mut d = 0;
+        let mut cur = self.nodes.get(&id).and_then(|n| n.parent);
+        while let Some(p) = cur {
+            d += 1;
+            cur = self.nodes.get(&p).and_then(|n| n.parent);
+        }
+        d
+    }
+
     /// Whether `a` is a strict ancestor of `of`.
     pub fn is_ancestor(&self, a: NodeId, of: NodeId) -> bool {
         let mut cur = self.nodes.get(&of).and_then(|n| n.parent);
@@ -297,7 +314,9 @@ impl Document {
     }
 
     pub(crate) fn advance_next_id(&mut self, past: NodeId) {
-        if past.is_session() {
+        if past.is_expanded() {
+            // Derived ids are computed, never allocated.
+        } else if past.is_session() {
             self.next_session_id = self.next_session_id.max(past.raw() + 1);
         } else {
             self.next_id = self.next_id.max(past.raw() + 1);

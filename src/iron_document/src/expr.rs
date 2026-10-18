@@ -775,11 +775,17 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                 i += 1;
             }
             b'#' => {
-                // #<id>.<facet>.<field>
+                // #<id>.<facet>.<field>; an expanded id is `#<owner>/<local>`.
                 let start = i + 1;
                 i += 1;
                 while i < b.len() && b[i].is_ascii_alphanumeric() {
                     i += 1;
+                }
+                if i + 1 < b.len() && b[i] == b'/' && b[i + 1].is_ascii_alphanumeric() {
+                    i += 1;
+                    while i < b.len() && b[i].is_ascii_alphanumeric() {
+                        i += 1;
+                    }
                 }
                 let node: NodeId =
                     text[start..i].parse().map_err(|_| ParseError(format!("bad node id at {start}")))?;

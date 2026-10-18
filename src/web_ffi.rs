@@ -378,6 +378,12 @@ pub fn document_link(ptr: u64, a: String, b: String, keep: String, actor: String
 }
 
 #[wasm_bindgen]
+pub fn document_detach(ptr: u64, entity: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_detach(app, entity)
+}
+
+#[wasm_bindgen]
 pub fn document_counterparts(ptr: u64, node: String) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_counterparts(app, node)

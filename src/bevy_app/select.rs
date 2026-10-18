@@ -258,8 +258,8 @@ impl SelectionGeometryCache {
                 }
                 for chain in occurrences(doc, view, embeds, id) {
                     let shape = match geo.ty(id) {
-                        "group" | "embed" if boxed.contains(&chain) => None,
-                        "group" | "embed" => geo.frame(&chain).map(LitShape::Frame),
+                        "group" | "use" | "embed" if boxed.contains(&chain) => None,
+                        "group" | "use" | "embed" => geo.frame(&chain).map(LitShape::Frame),
                         _ => geo.drawables.0.get(&id).and_then(|d| {
                             Some(LitShape::Outline(geo.space(&chain)? * geo.world(id), nest::shape_path(&d.shape)))
                         }),
@@ -622,7 +622,7 @@ impl Geo<'_> {
                 let r = outline.control_box();
                 (r.width() > 0.0 || r.height() > 0.0 || outline.elements().len() > 0).then_some((r, Kind::Points))
             }
-            "group" => {
+            "group" | "use" => {
                 let inv = self.world(id).inverse();
                 let r = doc
                     .children(id)
@@ -710,7 +710,7 @@ impl Geo<'_> {
     /// collecting path points. Detailed Parts are built only on a press.
     fn resize_capabilities(&self, chain: &[NodeId], out: &mut Vec<bool>) {
         let Some(&id) = chain.last() else { return };
-        if self.ty(id) == "group" {
+        if matches!(self.ty(id), "group" | "use") {
             for &c in self.doc().children(id) {
                 let mut sub = chain.to_vec();
                 sub.push(c);
@@ -1215,7 +1215,7 @@ fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
     let id = r.node();
     let kids = if nest::is_embed(doc, id) { composition::embedded(doc, id).map(|s| doc.children(s).to_vec()).unwrap_or_default() } else { doc.children(id).to_vec() };
     kids.into_iter()
-        .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "embed" | "mesh")))
+        .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "embed" | "mesh")))
         .map(|k| {
             let mut chain = r.chain.clone();
             chain.push(k);
@@ -1406,7 +1406,7 @@ pub fn select_tool_system(
                 };
                 let all = roots
                     .into_iter()
-                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "embed")))
+                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "embed")))
                     .map(|n| {
                         let mut chain = prefix.clone();
                         chain.push(n);
@@ -2079,7 +2079,7 @@ pub fn select_tool_system(
                 tool.marquee = Some((view.panel.clone(), rect));
                 let mut list = base.clone();
                 for &n in roots.iter() {
-                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "embed")) {
+                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "embed")) {
                         continue;
                     }
                     let mut chain = prefix.clone();
@@ -2392,7 +2392,7 @@ pub fn draw_select_overlay(
             })
             .collect();
         let hover_frame = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
-            .filter(|h| matches!(geo.ty(h.node()), "group" | "embed"))
+            .filter(|h| matches!(geo.ty(h.node()), "group" | "use" | "embed"))
             .and_then(|h| geometry_cache.hover(&geo, h, stamp));
         let mine = movers(&reaches, &o.panel);
         let cached = geometry_cache.selection(&geo, &o.panel, &mine, stamp, true);

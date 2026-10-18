@@ -338,8 +338,19 @@ facets! {
         enabled: Bool = Value::Bool(true),
     }
 
-    /// Which definition an `entity` instantiates (ECM §4.3).
-    Instance / "instance" => Instance { def: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
+    /// Which definition an `entity` instantiates (ECM §4.3), and how
+    /// (component-model.md §5.2): `linked`, its ports and pictures expanded
+    /// from the definition and never stored; or `detached`, plain authored
+    /// nodes that only remember where they came from.
+    Instance / "instance" => Instance {
+        def: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
+        mode: Enum = Value::Enum("linked".to_owned()),
+    }
+
+    /// A placed picture of a component in one composition
+    /// (component-model.md §5.1): a `use` node figures its entity, and its
+    /// children are the definition's template for `notation`, expanded.
+    Use / "use" => Use { notation: Str = Value::Str("free".to_owned()) }
 
     /// A definition's template for one notation (ECM §4.2). Its children are
     /// the subtree an instance copies; their bindings may read the

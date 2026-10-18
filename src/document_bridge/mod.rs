@@ -406,7 +406,7 @@ pub(crate) fn sync_document(
                 }
             );
         }
-        for op in tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()) {
+        for op in tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(tx.expanded.iter()) {
             structure |= collect_ids(op, &mut affected);
         }
     }

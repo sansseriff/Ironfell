@@ -402,6 +402,23 @@ pub fn document_timings(_app: &mut WorkerApp, reset: bool) -> String {
     crate::perf::report(reset).to_string()
 }
 
+/// Detach a linked instance (component-model.md §5.2): what it derives
+/// becomes authored, one transaction.
+pub fn document_detach(app: &mut WorkerApp, entity: String) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        let id = entity.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let ops = iron_document::definition::detach_ops(store.0.document(), id)?;
+        let applied = store.0
+            .apply(iron_document::TransactionInput { label: "detach instance".into(), actor: iron_document::Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
+            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
 pub fn document_link(app: &mut WorkerApp, a: String, b: String, keep: String, actor: String) -> String {
     use iron_document::composition::{self, LinkError};
     use iron_document::NodeId;
@@ -704,7 +721,8 @@ fn inspect_component(store: &iron_document::Store, id: iron_document::NodeId) ->
             }))
         })
         .collect();
-    serde_json::json!({"entity": entity.to_string(), "name": name_of(entity), "def": name_of(def), "inputs": fields})
+    let linked = iron_document::expand::linked_definition(doc, entity).is_some();
+    serde_json::json!({"entity": entity.to_string(), "name": name_of(entity), "def": name_of(def), "linked": linked, "inputs": fields})
 }
 
 pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: bool) -> String {

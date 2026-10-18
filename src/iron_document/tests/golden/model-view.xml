@@ -1,5 +1,5 @@
 <model-view version="2">
-  <entity id="#9" name="box" def="#8" definition="thing">
+  <entity id="#9" name="box" def="#8" mode="linked" definition="thing">
     <figure id="#3" type="rect" name="box" in="#1" composition="cartoon"/>
     <figure id="#5" type="mesh" name="torus" in="#4" composition="assembly"/>
   </entity>

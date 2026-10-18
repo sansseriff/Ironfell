@@ -31,6 +31,7 @@ function defaultLayout(api: DockviewApi) {
     ['schematic', 'Schematic'],
     ['thermal', 'Thermal'],
     ['piston', 'Piston'],
+    ['components', 'Components'],
   ]) {
     view(id, title, { source: id, notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' }, { inactive: true });
   }

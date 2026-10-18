@@ -36,6 +36,8 @@ export interface ViewQuery {
   scope?: string | null;
   fidelity: Fidelity;
   depth?: number | null;
+  /** Instances whose derived insides to show (component-model.md §9). */
+  expand?: string[];
 }
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };

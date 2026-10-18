@@ -266,6 +266,14 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // A placed picture of a component (component-model.md §5.1): a group
+    // whose children are its definition's template, expanded, never stored.
+    TypeSpec {
+        name: "use",
+        facets: &[(K::Use, true), (K::Transform2d, true), (K::Name, false), (K::Appearance, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Any,
+    },
     // An instance of a definition; its figures point at it with
     // `figures` relations. Its ports are children; `args` holds a value
     // per `in` port (component-model.md §4).

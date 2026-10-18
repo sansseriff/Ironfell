@@ -15,6 +15,7 @@
   import Minus from "@lucide/svelte/icons/minus";
   import Square from "@lucide/svelte/icons/square";
   import X from "@lucide/svelte/icons/x";
+  import Unlink from "@lucide/svelte/icons/unlink";
   import type { ViewSpec } from "../views";
 
   let { spec }: { spec: ViewSpec } = $props();
@@ -41,7 +42,7 @@
   // the first selected node's fields, each edited through its handle, so a
   // linearly bound value edits its source and a locked one says why.
   type Field = Property;
-  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; inputs: Field[] } | null };
+  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null };
   let inspected: Inspected | null = $state(null);
   let setError = $state("");
   let generation = 0;
@@ -100,6 +101,16 @@
     } catch (e) { setError = String(e); }
   }
   function set(f: Field, text: string) { return patch({ [f.leaf]: text }, [], `set ${f.leaf}`); }
+  // Detach a linked instance: its picture and ports become authored.
+  async function detach() {
+    if (!inspected?.component) return;
+    setError = "";
+    try {
+      const r = await doc.call("detach", [inspected.component.entity]);
+      if (!r.ok) setError = r.error;
+      await refresh();
+    } catch (e) { setError = String(e); }
+  }
   // A component input edits the instance's argument (component-model.md §4).
   function setInput(f: Field, text: string) { return inspected?.component ? patch({ [f.leaf]: text }, [], `set ${f.field}`, inspected.component.entity) : undefined; }
   function setCorners(_f: Field, text: string) { return patch(Object.fromEntries(cornerLeaves.map(k => [k, text])), [], "round corners"); }
@@ -148,9 +159,9 @@
       <div class="title"><strong>{inspected.name ?? inspected.type}</strong> <span class="mono">{inspected.type} {inspected.node}</span></div>
       {#if setError}<p class="error">{setError}</p>{/if}
       {#if doc.selection.length > 1}<p class="selection-note">{doc.selection.length} selected · editing the first item</p>{/if}
-      {#if inspected.component?.inputs.length}
+      {#if inspected.component}
         <div class="property-section" data-section="component">
-          <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}</span></div>
+          <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<button class="property-icon" aria-label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach}><Unlink size={14} strokeWidth={1.5} /></button>{/if}</div>
           <div class="field-grid">{#each inspected.component.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
         </div>
       {/if}

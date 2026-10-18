@@ -181,6 +181,11 @@ definition "fiber"
 
 ### 4.3 Instantiation
 
+> **Amended by [`component-model.md`](component-model.md) (proposed 2026-10-18).** The code
+> copies templates *and* behaviour into each instance (`definition.rs`), which departs
+> from this section and from vision 02 §5.3. The component model replaces copying with
+> derived expansion, and parameters with `in` ports.
+
 Placing a definition creates an `entity` node referencing it, with:
 
 - a `params` component holding one slot per `param_spec`, each bindable;
@@ -420,6 +425,9 @@ view, and "realise the open items in the table assembly" becomes a task it can d
 ---
 
 ## 9. Encapsulation
+
+> **Amended by [`component-model.md`](component-model.md) §4.1, §5.5 (proposed 2026-10-18):**
+> encapsulation becomes "make component", and inside connections replace `exposes`.
 
 `Store::encapsulate(selection: &[NodeId], name) -> TransactionInput` builds one
 transaction:

@@ -528,8 +528,9 @@ impl Reader<'_> {
     fn doc2d(&self, ty: &str) -> Doc2d {
         let (store, id, r) = (self.store, self.id, self);
         {
-            // An empty draws as an editor marker: a small box with a cross,
-            // a hairline in a quiet colour, so it can be seen and picked.
+            // An empty is a box with a cross for picking, drawn by nothing
+            // here: the select tool's overlay shows the marker near the
+            // pointer, in scope (component-model.md §4.2).
             if ty == "empty" {
                 let h = EMPTY_HALF;
                 let mut marker = kurbo::BezPath::new();
@@ -543,7 +544,7 @@ impl Reader<'_> {
                 marker.move_to((0.0, -h));
                 marker.line_to((0.0, h));
                 let shape = Shape2d::Path { outline: std::sync::Arc::new(marker), fill: None, even_odd: false };
-                return Doc2d { shape, fill: None, stroke: Some(([0.45, 0.55, 0.75, 0.9], kurbo::Stroke::new(1.0))), shadow: None };
+                return Doc2d { shape, fill: None, stroke: None, shadow: None };
             }
             let shape = match ty {
                 "ellipse" => {

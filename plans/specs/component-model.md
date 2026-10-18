@@ -221,9 +221,13 @@ dragged node's own container, and a leaf of the same kind as the dragged one).
 
 **Empties are also pivots.** The dial meter's needle hangs off an empty at the dial's
 centre whose rotation is bound to the reading, rather than giving shapes movable
-origins. An empty draws as an editor marker, a small box with a cross (hairline, a
-quiet blue; `EMPTY_HALF` = 6 units), which a bare empty is hovered and picked by; an
-empty with children is a container whose box includes its marker. Changing how an
+origins. An empty is an editor marker, a small box with a cross (hairline, a quiet
+blue; `EMPTY_HALF` = 6 units), which a bare empty is hovered and picked by; an empty
+with children is a container whose box includes its marker. The marker is not
+document content: the select tool's overlay draws it only for empties a click could
+reach in the current scope (never inside a closed instance, whose ports show their
+own ring instead, §4.3), and only within 30 px of the pointer, fading with distance;
+a selected empty always shows it. Changing how an
 empty looks is not built. Anchors exist only in 2D.
 
 ### 4.3 Plugging and mates (2026-10-18)

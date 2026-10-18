@@ -1137,9 +1137,12 @@ impl Store {
             self.reactive.rebuild(&self.doc);
             self.resample();
         } else {
+            // What re-expansion wrote counts too: an override updated in
+            // place changes its derived node's leaf, and whatever reads it.
             let changed: Vec<Leaf> = tx
                 .ops
                 .iter()
+                .chain(tx.expanded.iter())
                 .filter_map(|op| match op {
                     Op::Set { id, path, .. } => Some(Leaf {
                         node: *id,

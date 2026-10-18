@@ -267,3 +267,41 @@ fn plugging_two_rigid_ports_mates_their_parts() {
     assert_eq!(world(&store, socket_anchor), (400.0, 5.0));
     assert!(store.clusters().containing(socket_use).is_none());
 }
+
+#[test]
+fn pulling_a_part_off_a_loose_end_leaves_the_end_where_it_was() {
+    let Bench { mut store, jack_use, lead_anchor, .. } = bench();
+    let jack_anchor = store.port_anchors().into_iter().find(|a| a.body == jack_use).unwrap().anchor;
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0));
+    let p = store.begin_plug(jack_anchor, jack_use).unwrap();
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0), "unplugged");
+    store.plug_drag(&p, [400.0, 400.0], None);
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0), "dragging");
+    store.finish_plug(p, None).unwrap();
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0), "released");
+}
+
+#[test]
+fn a_loose_end_dropped_once_and_plugged_again_stays_put_when_its_part_leaves() {
+    let Bench { mut store, jack_use, lead_anchor, .. } = bench();
+    let lead_use = lead_anchor.expanded_root().unwrap();
+    let jack_anchor = store.port_anchors().into_iter().find(|a| a.body == jack_use).unwrap().anchor;
+    // Dropped far away: its place is now an override.
+    let p = store.begin_plug(lead_anchor, lead_use).unwrap();
+    store.plug_drag(&p, [900.0, 700.0], None);
+    store.finish_plug(p, None).unwrap();
+    assert!(close(world(&store, lead_anchor), (900.0, 700.0)));
+    // Plugged back into the jack.
+    let p = store.begin_plug(lead_anchor, lead_use).unwrap();
+    let t = store.plug_targets(&p).into_iter().find(|t| t.anchor == jack_anchor).unwrap();
+    store.plug_drag(&p, t.world, Some(&t));
+    store.finish_plug(p, Some(t)).unwrap();
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0));
+    // The jack pulled off by its port: the end stays where the jack was.
+    let p = store.begin_plug(jack_anchor, jack_use).unwrap();
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0), "unplugged");
+    store.plug_drag(&p, [400.0, 400.0], None);
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0), "dragging");
+    store.finish_plug(p, None).unwrap();
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0), "released");
+}

@@ -118,6 +118,9 @@ const POINT: f64 = 7.0;
 const HANDLE_END: f64 = 7.0;
 /// How near (CSS px) a press must land to a path's point or handle end.
 const POINT_HIT: f64 = 7.0;
+/// CSS px from an empty within which its marker shows, fading out.
+const EMPTY_NEAR: f64 = 30.0;
+
 /// CSS px from a port's anchor within which it is hot, and within which a
 /// dragged port snaps onto another (component-model.md §4.3).
 const PORT_HIT: f64 = 9.0;
@@ -338,6 +341,8 @@ pub struct SelectTool {
     /// The hot port under the pointer: its panel, anchor, and where it is
     /// in the panel's document px.
     port_hover: Option<(String, NodeId, Point)>,
+    /// The pointer's panel and window px, for the empties' markers.
+    pointer_at: Option<(String, Point)>,
 }
 
 impl SelectTool {
@@ -1660,6 +1665,10 @@ pub fn select_tool_system(
 
     let now = time.elapsed_secs_f64();
     let screen = Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
+    let pointer_at = hits.panel.clone().map(|p| (p, screen));
+    if tool.pointer_at != pointer_at {
+        tool.pointer_at = pointer_at;
+    }
     let doc_point = |v: &PanelView| v.affine().inverse() * screen;
 
     // ---- The 3D gizmo ----
@@ -2670,6 +2679,55 @@ pub fn draw_select_overlay(
                     && panel == o.panel
                 {
                     b.stroke(Affine::IDENTITY, thin.clone(), blue, (to_screen * to_comp.inverse()) * r.to_path(0.1));
+                }
+                // Empties: a box with a cross, for the ones a click here could
+                // reach (not inside a closed instance), near the pointer and
+                // fading with distance; a selected one always.
+                if let Some(comp) = view.composition {
+                    let doc = geo.doc();
+                    let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == o.panel).collect();
+                    let near = tool.pointer_at.as_ref().filter(|(p, _)| p == &o.panel).map(|(_, at)| *at);
+                    let h = crate::document_bridge::EMPTY_HALF;
+                    let mut marker = kurbo::BezPath::new();
+                    marker.move_to((-h, -h));
+                    marker.line_to((h, -h));
+                    marker.line_to((h, h));
+                    marker.line_to((-h, h));
+                    marker.close_path();
+                    marker.move_to((-h, 0.0));
+                    marker.line_to((h, 0.0));
+                    marker.move_to((0.0, -h));
+                    marker.line_to((0.0, h));
+                    for e in doc.nodes_of_type(iron_document::TypeId::lookup("empty").expect("registered")) {
+                        let selected = sel.selected.contains(&e);
+                        let at = to_screen * geo.world(e) * Point::ORIGIN;
+                        let fade = match near {
+                            _ if selected => 1.0,
+                            Some(p) => 1.0 - (p.distance(at) / (EMPTY_NEAR * k)).min(1.0),
+                            None => 0.0,
+                        };
+                        if fade <= 0.0 || !doc.is_live(e) {
+                            continue;
+                        }
+                        let mut chain = vec![e];
+                        let mut up = e;
+                        while let Some(p) = doc.live(up).and_then(|n| n.parent) {
+                            if p == comp {
+                                break;
+                            }
+                            chain.push(p);
+                            up = p;
+                        }
+                        if doc.live(up).and_then(|n| n.parent) != Some(comp) {
+                            continue;
+                        }
+                        chain.reverse();
+                        if !selected && target_index(doc, &chain, &here, false) + 1 != chain.len() {
+                            continue;
+                        }
+                        let c = peniko::Color::new([0.45, 0.55, 0.75, 0.9 * fade as f32]);
+                        b.stroke(Affine::IDENTITY, thin.clone(), c, (to_screen * geo.world(e)) * marker.clone());
+                    }
                 }
                 // Ports: the hot one under the pointer; while one is
                 // dragged, every port it could plug into, the one it snaps

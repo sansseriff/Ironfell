@@ -88,11 +88,36 @@ fn follows(doc: &Document, anchor: NodeId) -> bool {
     doc.get::<Anchor>(anchor).and_then(|a| a.follow.constant()).and_then(|v| v.as_bool()) == Some(true)
 }
 
-/// The port at the other end of `port`'s connection, if it has one.
+/// The port at the other end of `port`'s connection. A port inside a
+/// component has none of its own when the component exposes it: its partner
+/// is the exposing port's (component-model.md §5.5).
 fn partner(doc: &Document, port: NodeId) -> Option<NodeId> {
-    let connection = doc.relations_to(port).find(|r| r.rel == RelKind::Connects && doc.is_live(r.from))?.from;
-    let (a, b) = crate::port::ends(doc, connection)?;
-    Some(if a == port { b } else { a })
+    for _ in 0..16 {
+        if let Some(connection) = doc.relations_to(port).find(|r| r.rel == RelKind::Connects && doc.is_live(r.from)).map(|r| r.from) {
+            let (a, b) = crate::port::ends(doc, connection)?;
+            return Some(if a == port { b } else { a });
+        }
+        let outer = doc.relations_to(port).find(|r| r.rel == RelKind::Exposes && doc.is_live(r.from))?.from;
+        return partner(doc, outer);
+    }
+    None
+}
+
+/// The ports whose anchors stand for `port`: itself, and, when it is a
+/// component's port, the inner port it exposes (whose picture is drawn).
+fn standing_for(doc: &Document, port: NodeId) -> Vec<NodeId> {
+    let mut out = vec![port];
+    let mut at = port;
+    for _ in 0..16 {
+        match doc.relations_from(at).find(|r| r.rel == RelKind::Exposes) {
+            Some(r) => {
+                out.push(r.to);
+                at = r.to;
+            }
+            None => break,
+        }
+    }
+    out
 }
 
 /// Every derived anchor binding: positions, and followers' placements.
@@ -107,7 +132,8 @@ pub fn derived(doc: &Document) -> Vec<(Leaf, Expr)> {
     for &a in anchors.iter().filter(|&&a| follows(doc, a)) {
         let Some(other) = port_of(doc, a).and_then(|p| partner(doc, p)) else { continue };
         let here = composition::composition_of(doc, a);
-        let Some(target) = anchors.iter().copied().find(|&b| b != a && !follows(doc, b) && port_of(doc, b) == Some(other) && composition::composition_of(doc, b) == here) else { continue };
+        let ports = standing_for(doc, other);
+        let Some(target) = anchors.iter().copied().find(|&b| b != a && !follows(doc, b) && port_of(doc, b).is_some_and(|p| ports.contains(&p)) && composition::composition_of(doc, b) == here) else { continue };
         let (x, y) = inward(doc, a, leaf(target, FacetKind::Anchor, "wx"), leaf(target, FacetKind::Anchor, "wy"));
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Transform2d, "x").expect("declared") }, x));
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Transform2d, "y").expect("declared") }, y));

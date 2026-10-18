@@ -95,7 +95,7 @@ pub fn save(doc: &Document) -> String {
     let mut first = true;
     // A relation to an expanded node (a connection to an instance's port)
     // is saved by its id, which the instance re-derives on load.
-    for r in doc.relations().filter(|r| !r.id.is_session() && !r.from.is_session() && !r.to.is_session() && !r.from.is_expanded()) {
+    for r in doc.relations().filter(|r| !r.id.is_session() && !r.from.is_session() && !r.to.is_session() && !r.from.is_expanded() && !r.id.is_expanded()) {
         out.push_str(if first { "\n" } else { ",\n" });
         first = false;
         out.push_str(&format!(

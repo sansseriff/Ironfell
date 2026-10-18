@@ -221,6 +221,37 @@ impl NodeId {
     pub fn expanded_root(self) -> Option<NodeId> {
         expanded_path(self.0).and_then(|p| p.first().copied()).map(NodeId)
     }
+
+    /// The node's path: `[self]` for an authored node, the instance and
+    /// each level's definition-local id for an expanded one.
+    pub fn path(self) -> Vec<NodeId> {
+        expanded_path(self.0).map_or_else(|| vec![self], |p| p.into_iter().map(NodeId).collect())
+    }
+
+    /// The node a path names: the path's one node, or the expanded node it
+    /// names. `None` for an empty path or one through a non-authored id.
+    pub fn from_path(path: &[NodeId]) -> Option<NodeId> {
+        match path {
+            [] => None,
+            [one] => Some(*one),
+            _ => path.iter().all(|n| n.0 & EXPANDED == 0 && n.0 < SESSION_BASE).then(|| NodeId(expanded_raw(&path.iter().map(|n| n.0).collect::<Vec<_>>()))),
+        }
+    }
+}
+
+impl RelationId {
+    /// The relation `owner` (an instance) derives from the definition's
+    /// relation `local`, named by the owner's path and the relation's id.
+    pub fn expanded(owner: NodeId, local: RelationId) -> RelationId {
+        let mut path: Vec<u64> = owner.path().iter().map(|n| n.0).collect();
+        path.push(local.0);
+        RelationId(expanded_raw(&path))
+    }
+
+    /// Derived from a definition: never saved, never in undo.
+    pub fn is_expanded(self) -> bool {
+        self.0 & EXPANDED != 0
+    }
 }
 
 id_type!(

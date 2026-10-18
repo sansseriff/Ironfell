@@ -1,6 +1,6 @@
 # The component model
 
-**Status:** Approved 2026-10-18. Phases 0–3 done 2026-10-18; phase 4 next.
+**Status:** Approved 2026-10-18. Phases 0–4 done 2026-10-18 (with anchors, §4.2); phases 5–6 open.
 **Scope:** Reusable components: what a component is, what the document stores for a
 placed one, how its insides are derived, its interface, overrides, scope, libraries,
 the views a model reads, and the render analysis the component boundary makes possible.
@@ -639,6 +639,25 @@ stale ones.
 **Phase 4 — Make component.** §5.5, replacing ECM phase 4's `encapsulate`.
 *Exit:* ECM §9's three law tests pass, with the laser and fiber made into a "source"
 component and the meter reading unchanged.
+*Done 2026-10-18.* `make::make` / `Store::make_component` (a Make component button in the
+inspector; `document_make_component`). The new definition holds the selected instances
+as inner entities, still linked to their own definitions, their pictures as template
+`use`s, and connections wholly inside; a crossing connection gets a port (`out`: its
+signal reads the inner port; `in`: the inner argument reads it; a pair: a connection
+inside), an argument bound outside becomes an `in` port whose binding the outer
+instance takes, and every new port has an **`exposes`** relation to the inner port, so
+anchors follow through component boundaries. Fresh ids are renumbered in creation
+order. Expansion recurses (§6 ids are now registry paths, so they nest): an instance
+derives its definition's inner entities (`#S/E`), their ports (`#S/E/out`), inner
+connections and `exposes` as derived relations (`RelationId::expanded`), and nested
+pictures; a transaction's inverse leaves derived nodes and relations to re-expansion.
+The model view lists authored instances only (not a definition's inner entities, nor
+derived ones unless expanded). Tested natively (`tests/ports.rs`: black-boxing, the
+slider still driving through `power`, an edit to the laser definition reaching the
+laser inside the source, save/load with the same nested ids, undo) and by the smoke
+script's example 2. The associativity law test is not written. Not yet: overriding a
+part of an instance nested inside a component (refused with a message; open question
+6), detaching a nested component (refused), and make component from plain shapes.
 
 **Phase 5 — Libraries.** §10. Waits on the project container.
 *Exit:* a project opens offline with an imported component; updating its pin is one

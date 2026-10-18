@@ -24,6 +24,7 @@ pub mod copy;
 pub mod definition;
 pub mod document;
 pub mod expand;
+pub mod make;
 pub mod expr;
 pub mod geom;
 pub mod gesture;
@@ -880,6 +881,15 @@ impl Store {
     }
 
     /// Why the across/through network kept its last solution, if it did.
+    /// The transaction that makes a component named `name` from the
+    /// selected pictures (component-model.md §5.5, `make`).
+    pub fn make_component(&self, selection: &[NodeId], name: &str, actor: Actor) -> Result<(make::Made, TransactionInput), String> {
+        let read = |l: Leaf| self.resolved(l.node, l.path);
+        let made = make::make(&self.doc, &read, selection, name)?;
+        let tx = TransactionInput { label: format!("make component {name}"), actor, ts: 0, idempotency_key: None, ops: made.ops.clone(), exact: false };
+        Ok((made, tx))
+    }
+
     /// Overrides that apply nothing, and why (component-model.md §5.3).
     pub fn stale_overrides(&self) -> Vec<(NodeId, String)> {
         expand::stale_overrides(&self.doc)
@@ -1291,6 +1301,14 @@ impl Store {
             return Err(errors);
         }
         work.set_version(stamp);
+        // Derived nodes and relations come back by re-expansion, never by
+        // undo: a deleted instance's expanded children are not restored by
+        // its inverse (the guard would refuse them anyway).
+        inverse.retain(|op| match op {
+            Op::Create { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => !id.is_expanded(),
+            Op::Link { rel } => !rel.id.is_expanded(),
+            Op::Unlink { id } => !id.is_expanded(),
+        });
         Ok((
             Transaction {
                 version: stamp,

@@ -690,6 +690,28 @@ sleep 300
 key Meta+z
 sleep 300
 eval ends()
+# Phase 4, make component (example 2): the source laser and the fiber,
+# shift-picked, become one component. It has a `power` input that takes the
+# slider's binding and an `out` port the meter now connects to; the meter
+# reads what it read. The fiber, nested inside, still follows the meter
+# through the component's port (`exposes`). Undo restores the two.
+dclick 125 175
+keydown Shift
+dclick 390 175
+keyup Shift
+sleep 400
+clickel button[title^="Make the selected"]
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); const e = v.match(/<entity[^>]*name="component"[\s\S]*?<\/entity>/)[0]; return [[...e.matchAll(/<port id="[^"]+" name="([^"]+)" kind="([^"]+)" dir="([^"]+)"/g)].map(m => m.slice(1).join(' ')), e.match(/power\.bind="([^"]+)"/)[1].replace(/#[0-9A-Za-z]+/, '#…'), await comps()]; })()
+eval meterIn()
+eval window.nestedEnd = async () => { const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; let u = (await __iron.view({fidelity:'skeleton', scope: c})).match(/<use id="([^"]+)" name="component"/)[1]; const inner = [...(await __iron.view({fidelity:'skeleton', scope: u, expand: [u]})).matchAll(/<use id="([^"]+)"/g)].map(m => m[1]).filter(id => id !== u); const open = await __iron.view({fidelity:'full', scope: u, expand: [u, ...inner]}); return [inner.length, open.match(/<empty id="[^"]+" name="out"[^>]*wx="(-?[\d.]+)" wy="(-?[\d.]+)"/g).map(m => m.match(/wx="(-?[\d.]+)" wy="(-?[\d.]+)"/).slice(1).map(Number).map(Math.round))]; }
+eval nestedEnd()
+eval (async () => { const [u] = await inside('meter', 'dial'); await __iron.edit(`<edit><set id="${u}" x="120" y="260"/></edit>`); return nestedEnd(); })()
+key Meta+z
+sleep 300
+key Meta+z
+sleep 600
+eval comps()
 # Scope (§8): outside may read an instance's ports, not its insides.
 eval (async () => { const [, m] = await inside('meter', 'needle'); const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const r = await __iron.edit(`<edit><create id="$t" type="text" parent="${c}" content="{= str(#${m[1].slice(1)}.transform2d.rot)}"/></edit>`); return r.failure?.match(/kind="[a-z_]+"/)?.[0]; })()
 logs applied|rejected|panicked

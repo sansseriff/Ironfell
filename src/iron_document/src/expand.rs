@@ -23,10 +23,10 @@
 //! not history: undo and redo re-expand from the authored state.
 
 use crate::definition;
-use crate::document::{Document, RelKind};
+use crate::document::{Document, RelKind, Relation};
 use crate::expr::{Expr, Leaf};
 use crate::facet::{Facet, FacetKind, Instance, LeafPath, LeafStruct, Override, Use};
-use crate::id::{NodeId, Version};
+use crate::id::{NodeId, RelationId, Version};
 use crate::op::{self, Op};
 use crate::order::OrderKey;
 use crate::registry::TypeId;
@@ -57,84 +57,188 @@ pub fn use_entity(doc: &Document, u: NodeId) -> Option<NodeId> {
     doc.relations_from(u).find(|r| r.rel == RelKind::Figures && doc.is_live(r.to)).map(|r| r.to)
 }
 
-/// Every expanded node a document should have, parents before children.
-fn wanted(doc: &Document) -> Vec<Want> {
-    let mut out = Vec::new();
+/// One relation an instance should have: a derived connection's ends, a
+/// derived picture's `figures`.
+struct RelWant {
+    rel: Relation,
+}
+
+/// What every instance derives, nodes parents first, then relations.
+#[derive(Default)]
+struct Wanted {
+    nodes: Vec<Want>,
+    rels: Vec<RelWant>,
+}
+
+/// Instances nest at most this deep; deeper is a definition containing
+/// itself, which `check_nesting` refuses, so this only guards expansion.
+const MAX_DEPTH: usize = 16;
+
+/// `n`, a node of a definition's content, as instance `owner` derives it:
+/// `owner`'s path followed by `n`'s.
+fn relocate(owner: NodeId, n: NodeId) -> Option<NodeId> {
+    let mut path = owner.path();
+    path.extend(n.path());
+    NodeId::from_path(&path)
+}
+
+/// A definition's own content an entity derives: its port_specs,
+/// equations, inner entities and connections.
+fn is_body(doc: &Document, def: NodeId, node: NodeId) -> bool {
+    doc.node(node).is_some_and(|n| n.parent == Some(def) && matches!(n.ty.name(), "port_spec" | "equation" | "entity" | "connection"))
+}
+
+/// The definition an entity instantiates and is linked to, read from an
+/// authored or derived entity's facets.
+fn linked_def_of(doc: &Document, facets: &[Facet]) -> Option<NodeId> {
+    facets.iter().find_map(|f| match f {
+        Facet::Instance(inst) if inst.mode.constant().and_then(|v| v.as_str()) == Some("linked") => inst.def.constant()?.as_ref(),
+        _ => None,
+    }).filter(|&d| doc.live(d).is_some_and(|n| n.ty.name() == "definition"))
+}
+
+/// Every expanded node and relation a document should have.
+fn wanted(doc: &Document) -> Wanted {
+    let mut out = Wanted::default();
     let entity_ty = TypeId::lookup("entity").expect("registered");
-    for entity in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e)).collect::<Vec<_>>() {
-        let Some(def) = linked_definition(doc, entity) else { continue };
-        let inputs = definition::inputs_of(doc, def).unwrap_or_default();
-        // Interface and behaviour, under the entity.
-        let follow = |leaf: Leaf| -> Leaf {
-            match NodeId::expanded(entity, leaf.node) {
-                Some(n) if is_interface(doc, def, leaf.node) => Leaf { node: n, path: leaf.path },
-                _ => leaf,
-            }
-        };
-        for &spec in doc.children(def) {
-            let Some(node) = doc.live(spec) else { continue };
-            let ty = match node.ty.name() {
-                "port_spec" => TypeId::lookup("port").expect("registered"),
-                "equation" => node.ty,
-                _ => continue,
-            };
-            let Some(id) = NodeId::expanded(entity, spec) else { continue };
-            let mut facets = rewritten(doc, spec, &follow);
-            if let Some(input) = inputs.iter().find(|i| i.spec == spec) {
-                let arg = Leaf { node: entity, path: LeafPath::new(FacetKind::Args, input.name).expect("argument path") };
-                for f in &mut facets {
-                    if let Facet::Port(p) = f {
-                        p.signal = Slot::Bound(Expr::Ref(arg));
-                    }
-                }
-            }
-            apply_overrides(doc, entity, spec, ty, &mut facets);
-            out.push(Want { id, ty, parent: entity, order: node.order.clone(), facets });
+    for entity in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e) && !e.is_expanded()).collect::<Vec<_>>() {
+        if let Some(def) = linked_definition(doc, entity) {
+            want_entity(doc, entity, def, 0, &mut out);
         }
     }
     let use_ty = TypeId::lookup("use").expect("registered");
-    for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u)).collect::<Vec<_>>() {
+    for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && !u.is_expanded()).collect::<Vec<_>>() {
         let Some(entity) = use_entity(doc, u) else { continue };
         let Some(def) = linked_definition(doc, entity) else { continue };
-        let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()) else { continue };
-        let Some(template) = definition::template_of(doc, def, notation) else { continue };
-        let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().collect();
-        let follow = |leaf: Leaf| -> Leaf {
-            let owner = if inside.contains(&leaf.node) {
-                u
-            } else if is_interface(doc, def, leaf.node) {
-                entity
-            } else {
-                return leaf;
-            };
-            match NodeId::expanded(owner, leaf.node) {
-                Some(n) => Leaf { node: n, path: leaf.path },
-                None => leaf,
-            }
-        };
-        // Preorder, so every parent is wanted before its children.
-        let mut stack: Vec<NodeId> = doc.children(template).iter().rev().copied().collect();
-        while let Some(local) = stack.pop() {
-            let Some(node) = doc.live(local) else { continue };
-            let parent = match node.parent {
-                Some(p) if p == template => Some(u),
-                Some(p) => NodeId::expanded(u, p),
-                None => None,
-            };
-            if let (Some(id), Some(parent)) = (NodeId::expanded(u, local), parent) {
-                let mut facets = rewritten(doc, local, &follow);
-                apply_overrides(doc, u, local, node.ty, &mut facets);
-                out.push(Want { id, ty: node.ty, parent, order: node.order.clone(), facets });
-            }
-            stack.extend(doc.children(local).iter().rev().copied());
-        }
+        let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned) else { continue };
+        want_use(doc, u, entity, def, &notation, 0, &mut out);
     }
     out
+}
+
+/// What entity `entity` (authored, or derived for an outer instance)
+/// derives from `def`: its ports and equations, and its inner entities and
+/// connections, each inner entity in turn deriving its own.
+fn want_entity(doc: &Document, entity: NodeId, def: NodeId, depth: usize, out: &mut Wanted) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let inputs = definition::inputs_of(doc, def).unwrap_or_default();
+    let follow = |leaf: Leaf| -> Leaf {
+        match leaf.node.path().first().copied().filter(|&root| is_body(doc, def, root)).and_then(|_| relocate(entity, leaf.node)) {
+            Some(n) => Leaf { node: n, path: leaf.path },
+            None => leaf,
+        }
+    };
+    for &child in doc.children(def) {
+        let Some(node) = doc.live(child) else { continue };
+        let ty = match node.ty.name() {
+            "port_spec" => TypeId::lookup("port").expect("registered"),
+            "equation" | "entity" | "connection" => node.ty,
+            _ => continue,
+        };
+        let Some(id) = NodeId::expanded(entity, child) else { continue };
+        let mut facets = rewritten(doc, child, &follow);
+        if let Some(input) = inputs.iter().find(|i| i.spec == child) {
+            let arg = Leaf { node: entity, path: LeafPath::new(FacetKind::Args, input.name).expect("argument path") };
+            for f in &mut facets {
+                if let Facet::Port(p) = f {
+                    p.signal = Slot::Bound(Expr::Ref(arg));
+                }
+            }
+        }
+        apply_overrides(doc, entity, child, ty, &mut facets);
+        let inner_def = (node.ty.name() == "entity").then(|| linked_def_of(doc, &facets)).flatten();
+        out.nodes.push(Want { id, ty, parent: entity, order: node.order.clone(), facets });
+        // A connection's ends, a port's `exposes`: re-pointed for this entity.
+        if matches!(node.ty.name(), "connection" | "port_spec") {
+            for r in doc.relations_from(child) {
+                let to = follow(Leaf { node: r.to, path: LeafPath::new(FacetKind::Name, "text").expect("declared") }).node;
+                out.rels.push(RelWant { rel: Relation { id: RelationId::expanded(entity, r.id), from: id, to, rel: r.rel, data: r.data.clone() } });
+            }
+        }
+        if let Some(inner) = inner_def {
+            want_entity(doc, id, inner, depth + 1, out);
+        }
+    }
+}
+
+/// What `use` `u`, figuring `entity` (an instance of `def`), derives: the
+/// definition's template for `notation`, as its children. A `use` inside
+/// the template pictures one of the definition's inner entities, so its
+/// copy figures that entity's copy and derives that entity's picture.
+fn want_use(doc: &Document, u: NodeId, entity: NodeId, def: NodeId, notation: &str, depth: usize, out: &mut Wanted) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let Some(template) = definition::template_of(doc, def, notation) else { return };
+    let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
+    let follow = |leaf: Leaf| -> Leaf {
+        let root = leaf.node.path()[0];
+        let owner = if inside.contains(&root) {
+            u
+        } else if is_body(doc, def, root) {
+            entity
+        } else {
+            return leaf;
+        };
+        match relocate(owner, leaf.node) {
+            Some(n) => Leaf { node: n, path: leaf.path },
+            None => leaf,
+        }
+    };
+    // Preorder, so every parent is wanted before its children. A template's
+    // own derived children (its uses' previews) and overrides are not copied.
+    let copied = |n: NodeId| !n.is_expanded() && doc.live(n).is_some_and(|x| x.ty.name() != "override");
+    let mut stack: Vec<NodeId> = doc.children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
+    while let Some(local) = stack.pop() {
+        let Some(node) = doc.live(local) else { continue };
+        let parent = match node.parent {
+            Some(p) if p == template => Some(u),
+            Some(p) => NodeId::expanded(u, p),
+            None => None,
+        };
+        let (Some(id), Some(parent)) = (NodeId::expanded(u, local), parent) else { continue };
+        let mut facets = rewritten(doc, local, &follow);
+        apply_overrides(doc, u, local, node.ty, &mut facets);
+        out.nodes.push(Want { id, ty: node.ty, parent, order: node.order.clone(), facets: facets.clone() });
+        if node.ty.name() == "use" {
+            // An inner picture: it figures the inner entity's copy, and
+            // derives that entity's picture in turn.
+            if let Some(r) = doc.relations_from(local).find(|r| r.rel == RelKind::Figures) {
+                let inner_entity = follow(Leaf { node: r.to, path: LeafPath::new(FacetKind::Name, "text").expect("declared") }).node;
+                out.rels.push(RelWant { rel: Relation { id: RelationId::expanded(u, r.id), from: id, to: inner_entity, rel: RelKind::Figures, data: r.data.clone() } });
+                let inner_notation = facets.iter().find_map(|f| match f {
+                    Facet::Use(x) => x.notation.constant().and_then(|v| v.as_str()).map(str::to_owned),
+                    _ => None,
+                });
+                let inner_def = doc.node(r.to).and_then(|_| doc.get::<Instance>(r.to)).and_then(|i| {
+                    (i.mode.constant().and_then(|v| v.as_str()) == Some("linked")).then(|| i.def.constant().and_then(|v| v.as_ref())).flatten()
+                });
+                if let (Some(n), Some(d)) = (inner_notation, inner_def) {
+                    want_use(doc, id, inner_entity, d, &n, depth + 1, out);
+                }
+            }
+            continue;
+        }
+        stack.extend(doc.children(local).iter().rev().copied().filter(|&c| copied(c)));
+    }
 }
 
 /// The live `override` children of an instance, as (node, target, leaf,
 /// value); one whose leaf does not parse is left out (it is stale).
 fn overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
+    // A derived instance (an inner entity or picture of a nested component)
+    // carries the overrides its definition put on the node it copies.
+    let mut out = match owner.expanded_parts() {
+        Some((_, local)) => overrides(doc, local),
+        None => Vec::new(),
+    };
+    out.extend(own_overrides(doc, owner));
+    out
+}
+
+fn own_overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
     doc.children(owner)
         .iter()
         .copied()
@@ -198,11 +302,6 @@ pub fn stale_overrides(doc: &Document) -> Vec<(NodeId, String)> {
     out
 }
 
-/// A definition's `port_spec`s and equations: what its entity copies.
-fn is_interface(doc: &Document, def: NodeId, node: NodeId) -> bool {
-    doc.live(node).is_some_and(|n| n.parent == Some(def) && matches!(n.ty.name(), "port_spec" | "equation"))
-}
-
 /// `node`'s facets with every reference passed through `follow`: those in
 /// bindings, and node references held as constants (an anchor's `port`).
 fn rewritten(doc: &Document, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<Facet> {
@@ -233,7 +332,7 @@ fn rewritten(doc: &Document, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec
 /// met (a template node the registry no longer admits, say), which leave
 /// that node out rather than failing the transaction.
 pub fn expand(doc: &mut Document, stamp: Version) -> (Vec<Op>, Vec<String>) {
-    let want = wanted(doc);
+    let Wanted { nodes: want, rels: want_rels } = wanted(doc);
     let wanted_ids: BTreeSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
     let mut problems = Vec::new();
@@ -288,6 +387,19 @@ pub fn expand(doc: &mut Document, stamp: Version) -> (Vec<Op>, Vec<String>) {
         }
         for kind in have.keys().filter(|k| !kept.contains(k)) {
             run(doc, Op::RemoveFacet { id: w.id, kind: *kind }, &mut ops);
+        }
+    }
+    // Relations: stale ones unlinked, changed ones relinked, new ones linked.
+    let wanted_rels: BTreeMap<RelationId, Relation> = want_rels.into_iter().map(|w| (w.rel.id, w.rel)).collect();
+    let have_rels: Vec<Relation> = doc.relations().filter(|r| r.id.is_expanded()).cloned().collect();
+    for r in &have_rels {
+        if wanted_rels.get(&r.id) != Some(r) {
+            run(doc, Op::Unlink { id: r.id }, &mut ops);
+        }
+    }
+    for (id, rel) in wanted_rels {
+        if doc.relation(id) != Some(&rel) && doc.is_live(rel.from) {
+            run(doc, Op::Link { rel }, &mut ops);
         }
     }
     (ops, problems)
@@ -365,7 +477,10 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
     // An override of `path` on `owner`'s copy of `local`: the one already
     // there (or created earlier in this transaction) updated, else a new one.
     let mut made: Vec<(NodeId, NodeId, LeafPath, NodeId)> = Vec::new();
-    let mut override_op = |owner: NodeId, local: NodeId, path: LeafPath, value: Value, out: &mut Vec<Op>| {
+    let mut override_op = |owner: NodeId, local: NodeId, path: LeafPath, value: Value, out: &mut Vec<Op>| -> Result<(), String> {
+        if owner.is_expanded() {
+            return Err(format!("{owner} is an instance nested inside a component: overriding its parts is not supported yet; edit its definition, or the component's"));
+        }
         let existing = overrides(doc, owner).into_iter().find(|(_, t, l, _)| *t == local && *l == path).map(|(o, ..)| o).or_else(|| made.iter().find(|m| m.0 == owner && m.1 == local && m.2 == path).map(|m| m.3));
         match existing {
             Some(o) => out.push(Op::Set { id: o, path: "override.value".parse().expect("declared leaf"), slot: Slot::Const(value) }),
@@ -385,6 +500,7 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
                 out.push(Op::Create { id: o, ty: TypeId::lookup("override").expect("registered"), parent: Some(owner), order, facets: vec![f.wrap()] });
             }
         }
+        Ok(())
     };
     for (i, op) in ops.into_iter().enumerate() {
         // A facet added to what an instance derives (an ellipse gaining an
@@ -394,7 +510,7 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
         {
             for field in facet.field_names() {
                 if let Some(v) = facet.get(field).and_then(|s| s.constant()) {
-                    override_op(owner, local, LeafPath::new(facet.kind(), field).expect("own field"), v.clone(), &mut out);
+                    override_op(owner, local, LeafPath::new(facet.kind(), field).expect("own field"), v.clone(), &mut out).map_err(|m| ApplyError { op: i, kind: ErrorKind::BadId, message: m })?;
                 }
             }
             continue;
@@ -422,7 +538,7 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
                 }
                 out.push(Op::Set { id: source.node, path: source.path, slot: Slot::Const(v) });
             }
-            crate::handle::Handle::Direct => override_op(owner, local, *path, value, &mut out),
+            crate::handle::Handle::Direct => override_op(owner, local, *path, value, &mut out).map_err(err)?,
         }
     }
     Ok(out)

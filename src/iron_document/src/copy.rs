@@ -218,7 +218,7 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
             facets.entry(c.kind()).or_default().insert(id, c.clone());
         }
         for r in doc.relations_from(id) {
-            if r.rel != RelKind::Selects && within(&set, r.to) && !r.id.is_session() {
+            if r.rel != RelKind::Selects && within(&set, r.to) && !r.id.is_session() && !r.id.is_expanded() {
                 relations.insert(r.id, r.clone());
             }
         }

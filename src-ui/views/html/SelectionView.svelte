@@ -36,6 +36,16 @@
       linkError = String(e);
     }
   }
+  // Make a component of the picked pictures (component-model.md §5.5): one
+  // linked instance of a new definition takes their place.
+  let makeError = $state("");
+  async function makeComponent() {
+    makeError = "";
+    try {
+      const r = await doc.call("make_component", [JSON.stringify(doc.selection), "component"]);
+      if (!r.ok) makeError = r.error;
+    } catch (e) { makeError = String(e); }
+  }
   const showIn = $derived(doc.counterparts.figures.filter((f) => f.node !== doc.selection[0] && f.composition !== null));
 
   // The inspector (a first, HTML version; plans/specs/panels-and-session.md):
@@ -133,11 +143,13 @@
 
   <div class="row">
     <button onclick={() => link()} disabled={doc.selection.length !== 2}>Link</button>
+    <button onclick={makeComponent} disabled={doc.selection.length === 0} title="Make the selected instances one component: a new definition holding them, placed in their stead">Make component</button>
     {#each showIn as f (f.node)}
       <button onclick={() => doc.call("focus", [f.node])}>Show in {f.name ?? f.composition} ▸</button>
     {/each}
   </div>
   {#if linkError}<p class="error">{linkError}</p>{/if}
+  {#if makeError}<p class="error">{makeError}</p>{/if}
   {#if doc.question}
     <div class="question" role="dialog" aria-label="Merge entities">
       <p>Both pictures already stand for an entity. Which one should remain?</p>

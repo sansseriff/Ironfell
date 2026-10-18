@@ -173,7 +173,7 @@ static TYPES: &[TypeSpec] = &[
         name: "definition",
         facets: &[(K::Name, true)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port_spec", "equation", "template"]),
+        children: ChildPolicy::Only(&["port_spec", "equation", "template", "entity", "connection"]),
     },
     // A template: its subtree is what an instance copies.
     TypeSpec {
@@ -297,7 +297,7 @@ static TYPES: &[TypeSpec] = &[
         name: "entity",
         facets: &[(K::Instance, true), (K::Args, true), (K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port", "equation", "override"]),
+        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection"]),
     },
     // A relationship between operand nodes, solved in whatever direction a
     // drag chooses (constraint-system.md §4). Never materialised as content;

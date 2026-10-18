@@ -402,6 +402,24 @@ pub fn document_timings(_app: &mut WorkerApp, reset: bool) -> String {
     crate::perf::report(reset).to_string()
 }
 
+/// Make a component of the selected pictures (component-model.md §5.5):
+/// `ids` is a JSON array of node ids. One transaction.
+pub fn document_make_component(app: &mut WorkerApp, ids: String, name: String) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        let ids: Vec<String> = serde_json::from_str(&ids).map_err(|e| e.to_string())?;
+        let ids = ids.iter().map(|s| s.parse::<iron_document::NodeId>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let name = if name.trim().is_empty() { "component".to_owned() } else { name };
+        let (made, mut input) = store.0.make_component(&ids, &name, iron_document::Actor::Human)?;
+        input.ts = crate::host_services::unix_millis();
+        let applied = store.0.apply(input).map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "entity": made.entity.to_string(), "picture": made.picture.to_string(), "definition": made.definition.to_string()}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
 /// Detach a linked instance (component-model.md §5.2): what it derives
 /// becomes authored, one transaction.
 pub fn document_detach(app: &mut WorkerApp, entity: String) -> String {

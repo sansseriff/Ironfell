@@ -367,6 +367,13 @@ undefined
 [true,[[665,435],[665,435]]]
 [true,[[645,435],[645,435]]]
 [[545,175],[545,175]]
+clicked button[title^="Make the selected"]
+[["power value in","out optical_power out"],"#….slider.value * 0.00… W",["fiber detached","meter detached","meter linked","spare laser linked","short fiber linked","long fiber linked"]]
+["#…/3U","15.88… mW"]
+undefined
+[2,[[240,175],[545,175]]]
+[2,[[240,175],[665,435]]]
+["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
 "kind=\"out_of_scope\""
 applied "open demo scene" (297 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
@@ -440,6 +447,10 @@ applied "model edit" (2 ops, Model) -> v69
 applied "model edit" (1 ops, Model) -> v70
 applied "undo: model edit" (1 ops, System) -> v71
 applied "undo: model edit" (2 ops, System) -> v72
+applied "make component component" (24 ops, Human) -> v73
+applied "model edit" (2 ops, Model) -> v74
+applied "undo: model edit" (2 ops, System) -> v75
+applied "undo: make component component" (24 ops, System) -> v76
 (no page errors)
 ```
 
@@ -460,7 +471,15 @@ children of its `use` (undo removes them); a text bound to the needle's
 rotation from outside is refused `out_of_scope`. Anchors: the fiber's `out`
 end and the meter's `in` port both sit at (545, 175); moving the meter to
 (120, 260) carries both to (665, 435); setting the fiber end's x to 645
-inverts onto the meter, so both read (645, 435); two undos put them back. The first `redraw (document)`
+inverts onto the meter, so both read (645, 435); two undos put them back. Make
+component (phase 4): shift-picking the source laser and the fiber and pressing
+Make component gives one `component` entity with ports `power value in` (its
+binding the slider's, `#….slider.value * 0.001 W`) and `out optical_power out`;
+the source and fiber entities leave the model view; the meter still reads
+15.88… mW; the component's picture holds 2 inner pictures, whose `out` anchors
+sit at (240, 175) (the laser's) and (545, 175) (the fiber's end), and moving the
+meter carries the nested fiber end to (665, 435); two undos restore the
+source and fiber. The first `redraw (document)`
 line, listing the dial meter's readout (`#3b`, its template's text, and
 `#3i/3b`, the instance's), is the default font arriving: whether it lands
 before the square's drag, and so appears, depends on the font fetch.

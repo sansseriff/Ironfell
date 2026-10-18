@@ -20,6 +20,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "signals" => { arity(args,0)?; crate::engine_api::document_signals(app) },
         "producer" => { arity(args,2)?; crate::engine_api::document_producer(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "timings" => { arity(args,1)?; crate::engine_api::document_timings(app,argument::<bool>(args,0)?) },
+        "make_component" => { arity(args,2)?; crate::engine_api::document_make_component(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "detach" => { arity(args,1)?; crate::engine_api::document_detach(app,argument::<String>(args,0)?) },
         "link" => { arity(args,4)?; crate::engine_api::document_link(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },
         "counterparts" => { arity(args,1)?; crate::engine_api::document_counterparts(app,argument::<String>(args,0)?) },

@@ -433,3 +433,72 @@ fn a_detached_meter_keeps_its_wiring_and_stops_following_its_definition() {
     assert!(doc.relations_to(meter_in).any(|r| r.rel == RelKind::Connects));
     assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15);
 }
+
+/// Make component (component-model.md §5.5; ECM §9's black-boxing law): the
+/// laser and the fiber, the laser's power bound to a slider outside, become a
+/// "source" component. The meter's reading is unchanged; the slider still
+/// drives it, through the source's new `power` port; the fiber's light leaves
+/// through its `out` port. The inner laser and fiber stay linked to their own
+/// definitions, so editing the laser's picture reaches the laser inside every
+/// source. Undo restores the selection.
+#[test]
+fn making_a_component_keeps_every_signal_and_nests_live_instances() {
+    let mut lab = lab();
+    let cartoon = lab.store.document().roots()[1];
+    let picture_of = |s: &Store, e: NodeId| s.document().relations_to(e).find(|r| r.rel == RelKind::Figures).unwrap().from;
+    let (laser_use, fiber_use) = (picture_of(&lab.store, lab.laser), picture_of(&lab.store, lab.fiber));
+    // A slider outside drives the laser's power.
+    let slider = lab.store.document().next_id();
+    let mut sl = iron_document::facet::Slider::default();
+    sl.value = Slot::Const(Value::Number(0.01));
+    let key = OrderKey::after(&lab.store.document().live(*lab.store.document().children(cartoon).last().unwrap()).unwrap().order);
+    lab.store.apply(tx("slider", vec![
+        Op::Create { id: slider, ty: ty("slider"), parent: Some(cartoon), order: key, facets: vec![Transform2d::default().wrap(), sl.wrap()] },
+        Op::Set { id: lab.laser, path: path("args.power"), slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value * 1 W")).unwrap()) },
+    ])).unwrap();
+    let reading = watts(&lab.signal(lab.meter, "in"));
+    assert!((reading - 0.010 * 10f64.powf(-0.1)).abs() < 1e-12);
+
+    let (made, input) = lab.store.make_component(&[laser_use, fiber_use], "source", Actor::Human).unwrap();
+    lab.store.apply(input).unwrap();
+    let doc = lab.store.document();
+    assert!(doc.live(lab.laser).is_none() && doc.live(lab.fiber).is_none() && doc.live(laser_use).is_none());
+    // Black-boxing: the meter reads what it read.
+    assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15, "{}", watts(&lab.signal(lab.meter, "in")));
+    // The source has a power input bound to the slider and a light output.
+    let port = |name: &str| lab.port(made.entity, name);
+    assert_eq!(lab.store.document().leaf(made.entity, path("args.power")).unwrap().expr().unwrap().to_string(), format!("{slider}.slider.value * 1 W"));
+    assert!((watts(&lab.signal(made.entity, "out")) - reading).abs() < 1e-15);
+    assert!(port("power").is_expanded());
+    // The model view lists the source, not its insides.
+    let view = lab.store.view(&ViewQuery { expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
+    assert!(view.contains(r#"name="source""#), "{view}");
+    assert!(!view.contains(r#"name="laser""#), "{view}");
+    // The slider still drives the meter, through the source.
+    lab.store.apply(tx("brighter", vec![Op::Set { id: slider, path: path("slider.value"), slot: Slot::Const(Value::Number(0.02)) }])).unwrap();
+    assert!((watts(&lab.signal(lab.meter, "in")) - 2.0 * reading).abs() < 1e-15);
+    // Nested and live: the source's picture holds the laser's picture, and
+    // editing the laser definition's box reaches it.
+    let laser_def = made.definition;
+    let _ = laser_def;
+    let source_picture = made.picture;
+    let inner_pictures: Vec<NodeId> = lab.store.document().children(source_picture).to_vec();
+    assert_eq!(inner_pictures.len(), 2, "{inner_pictures:?}");
+    let laser_box = lab.store.document().children(inner_pictures[0])[0];
+    assert_eq!(laser_box.path().len(), 3, "{laser_box}");
+    let (_, template_box) = laser_box.expanded_parts().unwrap();
+    lab.store.apply(tx("taller laser", vec![Op::Set { id: template_box, path: path("size.h"), slot: Slot::Const(Value::Number(77.0)) }])).unwrap();
+    assert_eq!(lab.store.resolved(laser_box, path("size.h")), Some(Value::Number(77.0)));
+    // Saved and loaded, the nesting re-derives with the same ids.
+    let text = lab.store.save();
+    let loaded = Store::load(&text).unwrap();
+    assert_eq!(loaded.resolved(laser_box, path("size.h")), Some(Value::Number(77.0)));
+    assert_eq!(loaded.save(), text);
+    // Undo (the edit, the slider move, then the make) restores the selection.
+    lab.store.undo(1).unwrap().unwrap();
+    lab.store.undo(1).unwrap().unwrap();
+    lab.store.undo(1).unwrap().unwrap();
+    let doc = lab.store.document();
+    assert!(doc.live(lab.laser).is_some() && doc.live(made.entity).is_none());
+    assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15);
+}

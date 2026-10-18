@@ -565,10 +565,12 @@ fn remove_comp(
 fn link(doc: &mut Document, cx: &Ctx, rel: &Relation) -> Result<Vec<Op>, ApplyError> {
     live(doc, cx, rel.from)?;
     // An instance's expanded node appears when the transaction's expansion
-    // runs, so a link to one needs only its instance to be live here; the
-    // checks after expansion (a connection's) see the node itself.
-    match rel.to.expanded_parts() {
-        Some((owner, _)) => live(doc, cx, owner).map(|_| ())?,
+    // runs, so a link to one needs only its instance to exist here (an undo
+    // may relink before it restores the instance); the checks after
+    // expansion (a connection's) see the node itself.
+    match rel.to.expanded_root() {
+        Some(root) if doc.node(root).is_some() => {}
+        Some(root) => return Err(cx.err(ErrorKind::UnknownNode, format!("no node {root}"))),
         None => live(doc, cx, rel.to).map(|_| ())?,
     }
     // Any unused id is accepted, not only ids past the counter: the inverse of

@@ -219,7 +219,19 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
     let name_of = |n: NodeId| {
         doc.get::<crate::facet::Name>(n).and_then(|c| c.text.constant()).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_owned)
     };
-    for id in doc.nodes_of_type(entity).filter(|&e| doc.is_live(e)) {
+    // Authored instances; a nested component's inner ones are derived, shown
+    // only when its instance is expanded.
+    // A definition's own inner entities are library content, not the model.
+    let in_definition = |mut n: NodeId| {
+        while let Some(p) = doc.live(n).and_then(|x| x.parent) {
+            if doc.live(p).is_some_and(|x| x.ty.name() == "definition") {
+                return true;
+            }
+            n = p;
+        }
+        false
+    };
+    for id in doc.nodes_of_type(entity).filter(|&e| doc.is_live(e) && !in_definition(e) && e.expanded_root().is_none_or(|r| q.expand.contains(&r))) {
         if q.scope.is_some_and(|s| s != id) {
             continue;
         }

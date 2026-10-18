@@ -63,6 +63,10 @@ pub enum RelKind {
     /// A session's `selection` node to a selected node (session tier, never
     /// saved): `data.panel` and `data.chain` say how it was reached.
     Selects,
+    /// A component's port to the inner port it exposes (component-model.md
+    /// §4.1, §5.5): signals cross by bindings; this says where the inner end
+    /// is, so an anchor following one finds the other.
+    Exposes,
 }
 
 impl RelKind {
@@ -77,6 +81,7 @@ impl RelKind {
             RelKind::Constrains => "constrains",
             RelKind::Connects => "connects",
             RelKind::Selects => "selects",
+            RelKind::Exposes => "exposes",
         }
     }
 }

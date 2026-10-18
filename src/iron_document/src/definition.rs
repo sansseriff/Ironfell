@@ -373,8 +373,11 @@ fn copy_template(
 /// nothing outside the instance notices. One transaction; undo restores the
 /// link.
 pub fn detach_ops(doc: &Document, entity: NodeId) -> Result<Vec<Op>, String> {
-    if crate::expand::linked_definition(doc, entity).is_none() {
+    let Some(def) = crate::expand::linked_definition(doc, entity) else {
         return Err(format!("{entity} is not a linked instance"));
+    };
+    if doc.children(def).iter().any(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "entity")) {
+        return Err(format!("{entity} nests other instances; detaching a nested component is not supported yet"));
     }
     // What it derives, parents first: its ports and equations, then each
     // use's picture.

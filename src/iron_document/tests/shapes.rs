@@ -2,7 +2,7 @@
 //! replaced the circle, schema 3 files with circles, and turning a rect or
 //! an ellipse into a path.
 
-use iron_document::component::{Fill, Radius, Size, Slider, Transform2d};
+use iron_document::facet::{Fill, Radius, Size, Slider, Transform2d};
 use iron_document::*;
 
 fn ty(name: &str) -> TypeId {
@@ -25,7 +25,7 @@ fn resolved(store: &Store, id: NodeId, p: &str) -> f64 {
     store.resolved(id, path(p)).and_then(|v| v.as_f64()).unwrap_or_else(|| panic!("{id}.{p} unresolved"))
 }
 
-fn at(x: f64, y: f64) -> Component {
+fn at(x: f64, y: f64) -> Facet {
     let mut t = Transform2d::default();
     t.x = num(x);
     t.y = num(y);
@@ -67,16 +67,16 @@ fn a_rect_becomes_a_path_with_the_same_id_and_undo_brings_it_back() {
     let mut s = Size::default();
     s.w = num(40.0);
     s.h = num(20.0);
-    store.apply(tx("draw", vec![Op::Create { id, ty: ty("rect"), parent: None, order: OrderKey::first(), components: vec![at(10.0, 10.0), s.wrap(), Fill::default().wrap()] }])).unwrap();
-    let components = |s: &Store| s.document().components_of(id).cloned().collect::<Vec<_>>();
-    let before = components(&store);
+    store.apply(tx("draw", vec![Op::Create { id, ty: ty("rect"), parent: None, order: OrderKey::first(), facets: vec![at(10.0, 10.0), s.wrap(), Fill::default().wrap()] }])).unwrap();
+    let facets = |s: &Store| s.document().facets_of(id).cloned().collect::<Vec<_>>();
+    let before = facets(&store);
 
     let c = shape::to_path(&store, id).unwrap();
     assert!(c.cuts.is_empty(), "nothing reads or drives it: {:?}", c.cuts);
     store.apply(tx("convert to path", c.ops)).unwrap();
     let doc = store.document();
     assert_eq!(doc.live(id).unwrap().ty.name(), "path");
-    assert!(doc.component(id, ComponentKind::Fill).is_some(), "paint carries over");
+    assert!(doc.facet(id, FacetKind::Fill).is_some(), "paint carries over");
     assert_eq!(resolved(&store, id, "transform2d.x"), 10.0);
     let [contour] = doc.children(id)[..] else { panic!("one contour") };
     let pts: Vec<(f64, f64)> = doc.children(contour).iter().map(|&p| (resolved(&store, p, "transform2d.x"), resolved(&store, p, "transform2d.y"))).collect();
@@ -85,7 +85,7 @@ fn a_rect_becomes_a_path_with_the_same_id_and_undo_brings_it_back() {
 
     store.undo(0).unwrap().unwrap();
     assert_eq!(store.document().live(id).unwrap().ty.name(), "rect");
-    assert_eq!(components(&store), before);
+    assert_eq!(facets(&store), before);
     assert!(store.document().children(id).iter().all(|&p| store.document().live(p).is_none()), "its points went with the undo");
     store.redo(0).unwrap().unwrap();
     assert_eq!(store.document().live(id).unwrap().ty.name(), "path");
@@ -107,9 +107,9 @@ fn converting_an_ellipse_reports_and_bakes_what_reads_or_drives_its_radii() {
         .apply(tx(
             "scene",
             vec![
-                Op::Create { id: slider, ty: ty("slider"), parent: None, order: OrderKey::first(), components: vec![at(0.0, 0.0), sl.wrap()] },
-                Op::Create { id: ellipse, ty: ty("ellipse"), parent: None, order: OrderKey::after(&OrderKey::first()), components: vec![at(100.0, 100.0), r.wrap()] },
-                Op::Create { id: reader, ty: ty("rect"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), components: vec![at(0.0, 0.0), s.wrap()] },
+                Op::Create { id: slider, ty: ty("slider"), parent: None, order: OrderKey::first(), facets: vec![at(0.0, 0.0), sl.wrap()] },
+                Op::Create { id: ellipse, ty: ty("ellipse"), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![at(100.0, 100.0), r.wrap()] },
+                Op::Create { id: reader, ty: ty("rect"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![at(0.0, 0.0), s.wrap()] },
             ],
         ))
         .unwrap();
@@ -132,19 +132,19 @@ fn converting_an_ellipse_reports_and_bakes_what_reads_or_drives_its_radii() {
 fn only_rects_and_ellipses_convert() {
     let mut store = Store::new();
     let id = store.document().next_ids(1)[0];
-    store.apply(tx("group", vec![Op::Create { id, ty: ty("group"), parent: None, order: OrderKey::first(), components: vec![] }])).unwrap();
+    store.apply(tx("group", vec![Op::Create { id, ty: ty("group"), parent: None, order: OrderKey::first(), facets: vec![] }])).unwrap();
     assert!(!shape::convertible(&store, id));
     assert!(shape::to_path(&store, id).is_err());
 }
 
-fn rect_at(store: &mut Store, w: f64, h: f64, extra: Vec<Component>) -> NodeId {
+fn rect_at(store: &mut Store, w: f64, h: f64, extra: Vec<Facet>) -> NodeId {
     let id = store.document().next_ids(1)[0];
     let mut s = Size::default();
     s.w = num(w);
     s.h = num(h);
-    let mut components = vec![at(0.0, 0.0), s.wrap()];
-    components.extend(extra);
-    store.apply(tx("draw", vec![Op::Create { id, ty: ty("rect"), parent: None, order: OrderKey::first(), components }])).unwrap();
+    let mut facets = vec![at(0.0, 0.0), s.wrap()];
+    facets.extend(extra);
+    store.apply(tx("draw", vec![Op::Create { id, ty: ty("rect"), parent: None, order: OrderKey::first(), facets }])).unwrap();
     id
 }
 
@@ -162,7 +162,7 @@ fn corner_radii_round_a_rect_and_are_clamped_to_half_the_shorter_side() {
 
 #[test]
 fn a_rounded_rect_converts_to_its_eight_point_outline() {
-    use iron_document::component::Corners;
+    use iron_document::facet::Corners;
     let mut store = Store::new();
     let mut c = Corners::default();
     for slot in [&mut c.tl, &mut c.tr, &mut c.br, &mut c.bl] {
@@ -174,7 +174,7 @@ fn a_rounded_rect_converts_to_its_eight_point_outline() {
     let doc = store.document();
     let contour = doc.children(id)[0];
     assert_eq!(doc.children(contour).len(), 8);
-    assert!(doc.component(id, ComponentKind::Corners).is_none(), "corners are a rect's parameter, not a path's");
+    assert!(doc.facet(id, FacetKind::Corners).is_none(), "corners are a rect's parameter, not a path's");
     let second = doc.children(contour)[1];
     assert_eq!((resolved(&store, second, "transform2d.x"), resolved(&store, second, "handles.ix")), (5.0, -5.0 * 0.552_284_749_830_793_4));
 }
@@ -197,9 +197,9 @@ fn an_arc_is_a_pie_a_ring_segment_or_a_ring() {
     assert_eq!(ellipse_outline(10.0, 10.0, Some([0.0, TAU, 0.5])).len(), 2);
     let mut store = Store::new();
     let id = store.document().next_ids(1)[0];
-    let mut arc = iron_document::component::Arc::default();
+    let mut arc = iron_document::facet::Arc::default();
     arc.inner = num(0.5);
-    store.apply(tx("ring", vec![Op::Create { id, ty: ty("ellipse"), parent: None, order: OrderKey::first(), components: vec![at(0.0, 0.0), Radius::default().wrap(), arc.wrap()] }])).unwrap();
+    store.apply(tx("ring", vec![Op::Create { id, ty: ty("ellipse"), parent: None, order: OrderKey::first(), facets: vec![at(0.0, 0.0), Radius::default().wrap(), arc.wrap()] }])).unwrap();
     let conv = shape::to_path(&store, id).unwrap();
     store.apply(tx("convert to path", conv.ops)).unwrap();
     let contours = contour::contours(&store, id);
@@ -239,7 +239,7 @@ fn a_schema_4_path_gets_one_contour_holding_its_points() {
 }
 
 #[test]
-fn a_gesture_on_a_missing_component_adds_it_in_one_undoable_step() {
+fn a_gesture_on_a_missing_facet_adds_it_in_one_undoable_step() {
     let mut store = Store::new();
     let id = rect_at(&mut store, 40.0, 20.0, vec![]);
     assert!(matches!(store.handle(id, path("corners.tl")), handle::Handle::Direct));
@@ -252,5 +252,5 @@ fn a_gesture_on_a_missing_component_adds_it_in_one_undoable_step() {
     let _ = applied;
     assert_eq!(store.document().leaf(id, path("corners.tl")), Some(&num(6.0)));
     store.undo(2).unwrap().unwrap();
-    assert!(store.document().component(id, ComponentKind::Corners).is_none());
+    assert!(store.document().facet(id, FacetKind::Corners).is_none());
 }

@@ -1,7 +1,7 @@
 //! Quantities in the store (roadmap stage B, ECM §3): the file form, views,
 //! bindings over them, and clips interpolating them.
 
-use iron_document::component::{Clip, Timing};
+use iron_document::facet::{Clip, Timing};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -32,8 +32,8 @@ fn scene() -> (Store, NodeId) {
         .apply(tx(
             "build",
             vec![
-                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::first(), components: vec![] },
-                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), components: vec![Timing::default().wrap(), c.wrap()] },
+                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::first(), facets: vec![] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), facets: vec![Timing::default().wrap(), c.wrap()] },
             ],
         ))
         .unwrap();
@@ -99,9 +99,9 @@ fn clips_interpolate_quantities() {
         .apply(tx(
             "build",
             vec![
-                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::first(), components: vec![] },
-                Op::Create { id: driver, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), components: vec![dt.wrap(), dc.wrap()] },
-                Op::Create { id: target, ty: ty("clip"), parent: Some(timeline), order: OrderKey::after(&OrderKey::first()), components: vec![Timing::default().wrap(), tc.wrap()] },
+                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::first(), facets: vec![] },
+                Op::Create { id: driver, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), facets: vec![dt.wrap(), dc.wrap()] },
+                Op::Create { id: target, ty: ty("clip"), parent: Some(timeline), order: OrderKey::after(&OrderKey::first()), facets: vec![Timing::default().wrap(), tc.wrap()] },
                 Op::Link { rel: Relation { id: rel, from: driver, to: target, rel: RelKind::Animates, data: BTreeMap::new() } },
             ],
         ))

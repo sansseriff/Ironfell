@@ -4,7 +4,7 @@
 //! an op computes its inverse while the pre-state is in hand, so undo is
 //! ordinary application of ops and needs no special casing downstream.
 
-use crate::component::{Component, ComponentKind, LeafPath};
+use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::document::{Document, Node, Relation};
 use crate::id::{NodeId, RelationId, Version};
 use crate::order::OrderKey;
@@ -18,15 +18,15 @@ use std::fmt;
 pub enum Op {
     /// Mint a node. `id` must be at or past the document's allocation counter
     /// (reserve with [`Document::next_ids`]), or name a tombstoned node, in
-    /// which case this is a restore and the given placement and components
+    /// which case this is a restore and the given placement and facets
     /// replace the old ones.
     Create {
         id: NodeId,
         ty: TypeId,
         parent: Option<NodeId>,
         order: OrderKey,
-        #[serde(default)]
-        components: Vec<Component>,
+        #[serde(default, rename = "components")]
+        facets: Vec<Facet>,
     },
     /// Tombstone a node and its live descendants.
     Delete {
@@ -47,13 +47,15 @@ pub enum Op {
         path: LeafPath,
         slot: Slot,
     },
-    AddComp {
+    #[serde(rename = "add_comp")]
+    AddFacet {
         id: NodeId,
-        comp: Component,
+        comp: Facet,
     },
-    RemoveComp {
+    #[serde(rename = "remove_comp")]
+    RemoveFacet {
         id: NodeId,
-        kind: ComponentKind,
+        kind: FacetKind,
     },
     /// `rel.id` must not be in use; take fresh ids from `next_relation_id`.
     Link {
@@ -134,10 +136,14 @@ pub enum ErrorKind {
     BadParent,
     Cycle,
     ChildNotAdmitted,
-    ComponentNotAllowed,
-    ComponentRequired,
-    ComponentPresent,
-    ComponentAbsent,
+    #[serde(rename = "component_not_allowed")]
+    FacetNotAllowed,
+    #[serde(rename = "component_required")]
+    FacetRequired,
+    #[serde(rename = "component_present")]
+    FacetPresent,
+    #[serde(rename = "component_absent")]
+    FacetAbsent,
     UnknownPath,
     TypeMismatch,
     UnknownRelation,
@@ -200,8 +206,8 @@ pub(crate) fn apply_op(
             ty,
             parent,
             order,
-            components,
-        } => create(doc, &cx, *id, *ty, *parent, order, components),
+            facets,
+        } => create(doc, &cx, *id, *ty, *parent, order, facets),
         Op::Delete { id } => delete(doc, &cx, *id),
         Op::Reparent { id, parent, order } => reparent(doc, &cx, *id, *parent, order),
         Op::Reorder { id, order } => {
@@ -214,8 +220,8 @@ pub(crate) fn apply_op(
             }])
         }
         Op::Set { id, path, slot } => set(doc, &cx, *id, *path, slot),
-        Op::AddComp { id, comp } => add_comp(doc, &cx, *id, comp),
-        Op::RemoveComp { id, kind } => remove_comp(doc, &cx, *id, *kind),
+        Op::AddFacet { id, comp } => add_comp(doc, &cx, *id, comp),
+        Op::RemoveFacet { id, kind } => remove_comp(doc, &cx, *id, *kind),
         Op::Link { rel } => link(doc, &cx, rel),
         Op::Unlink { id } => {
             let r = doc
@@ -257,19 +263,19 @@ fn check_parent(
     Ok(())
 }
 
-fn check_components(cx: &Ctx, ty: TypeId, comps: &[Component]) -> Result<(), ApplyError> {
+fn check_facets(cx: &Ctx, ty: TypeId, comps: &[Facet]) -> Result<(), ApplyError> {
     let spec = ty.spec();
     for (i, c) in comps.iter().enumerate() {
         let k = c.kind();
         if !spec.allows(k) {
             return Err(cx.err(
-                ErrorKind::ComponentNotAllowed,
+                ErrorKind::FacetNotAllowed,
                 format!("{} does not allow {}", ty, k.name()),
             ));
         }
         if comps[..i].iter().any(|o| o.kind() == k) {
             return Err(cx.err(
-                ErrorKind::ComponentPresent,
+                ErrorKind::FacetPresent,
                 format!("{} given twice", k.name()),
             ));
         }
@@ -277,7 +283,7 @@ fn check_components(cx: &Ctx, ty: TypeId, comps: &[Component]) -> Result<(), App
     for req in spec.required() {
         if !comps.iter().any(|c| c.kind() == req) {
             return Err(cx.err(
-                ErrorKind::ComponentRequired,
+                ErrorKind::FacetRequired,
                 format!("{} requires {}", ty, req.name()),
             ));
         }
@@ -292,7 +298,7 @@ fn create(
     ty: TypeId,
     parent: Option<NodeId>,
     order: &OrderKey,
-    comps: &[Component],
+    comps: &[Facet],
 ) -> Result<Vec<Op>, ApplyError> {
     let restoring = match doc.node(id) {
         Some(n) if n.is_live() => {
@@ -314,7 +320,7 @@ fn create(
         return Err(cx.err(ErrorKind::Cycle, format!("{id} cannot be its own parent")));
     }
     check_parent(doc, cx, parent, ty)?;
-    check_components(cx, ty, comps)?;
+    check_facets(cx, ty, comps)?;
     if restoring {
         doc.restore_node(id, ty, parent, order.clone(), comps.to_vec());
     } else {
@@ -354,8 +360,8 @@ pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Versio
     if doc.live(*id).is_none() {
         return Ok(());
     }
-    let comps: Vec<Component> = doc.components_of(*id).cloned().collect();
-    check_component_bindings(doc, &cx, *id, &comps)?;
+    let comps: Vec<Facet> = doc.facets_of(*id).cloned().collect();
+    check_facet_bindings(doc, &cx, *id, &comps)?;
     check_entity(doc, &cx, *id)
 }
 
@@ -391,13 +397,13 @@ fn delete(doc: &mut Document, cx: &Ctx, id: NodeId) -> Result<Vec<Op>, ApplyErro
     let mut inverse = Vec::with_capacity(order.len());
     for &n in order.iter().rev() {
         let node = doc.node(n).expect("descendant exists").clone();
-        let comps: Vec<Component> = doc.components_of(n).cloned().collect();
+        let comps: Vec<Facet> = doc.facets_of(n).cloned().collect();
         inverse.push(Op::Create {
             id: n,
             ty: node.ty,
             parent: node.parent,
             order: node.order,
-            components: comps,
+            facets: comps,
         });
         doc.tombstone(n, cx.stamp);
     }
@@ -440,13 +446,13 @@ fn check_binding(
 ) -> Result<(), ApplyError> {
     for dep in expr.deps() {
         live(doc, cx, dep.node).map_err(|e| cx.err(e.kind, format!("binding reads {dep}: {}", e.message)))?;
-        let Some(comp) = doc.component(dep.node, dep.path.component) else {
+        let Some(comp) = doc.facet(dep.node, dep.path.facet) else {
             return Err(cx.err(
                 ErrorKind::UnknownPath,
                 format!(
                     "binding reads {dep}, but {} has no {} component",
                     dep.node,
-                    dep.path.component.name()
+                    dep.path.facet.name()
                 ),
             ));
         };
@@ -461,9 +467,9 @@ fn check_binding(
 }
 
 /// Validate every bound slot in `comps` as if it were being set on `id`.
-/// Runs after the components are in place so a node may bind its own leaves;
+/// Runs after the facets are in place so a node may bind its own leaves;
 /// on failure the transaction's working copy is discarded anyway.
-fn check_component_bindings(doc: &Document, cx: &Ctx, id: NodeId, comps: &[Component]) -> Result<(), ApplyError> {
+fn check_facet_bindings(doc: &Document, cx: &Ctx, id: NodeId, comps: &[Facet]) -> Result<(), ApplyError> {
     for c in comps {
         for field in c.field_names() {
             if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
@@ -486,16 +492,16 @@ fn set(
     if let Some(expr) = slot.expr() {
         check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
     }
-    let comp = doc.component_mut(id, path.component).ok_or_else(|| {
+    let comp = doc.facet_mut(id, path.facet).ok_or_else(|| {
         cx.err(
             ErrorKind::UnknownPath,
-            format!("{id} has no {} component", path.component.name()),
+            format!("{id} has no {} component", path.facet.name()),
         )
     })?;
     let old = comp
         .set(path.field, slot.clone())
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
-    if matches!(path.component, ComponentKind::Params | ComponentKind::Instance | ComponentKind::Embed | ComponentKind::EmbedCamera) {
+    if matches!(path.facet, FacetKind::Params | FacetKind::Instance | FacetKind::Embed | FacetKind::EmbedCamera) {
         check_entity(doc, cx, id)?;
     }
     Ok(vec![Op::Set {
@@ -509,48 +515,48 @@ fn add_comp(
     doc: &mut Document,
     cx: &Ctx,
     id: NodeId,
-    comp: &Component,
+    comp: &Facet,
 ) -> Result<Vec<Op>, ApplyError> {
     let n = live(doc, cx, id)?;
     let kind = comp.kind();
     if !n.ty.spec().allows(kind) {
         return Err(cx.err(
-            ErrorKind::ComponentNotAllowed,
+            ErrorKind::FacetNotAllowed,
             format!("{} does not allow {}", n.ty, kind.name()),
         ));
     }
-    if doc.component(id, kind).is_some() {
+    if doc.facet(id, kind).is_some() {
         return Err(cx.err(
-            ErrorKind::ComponentPresent,
+            ErrorKind::FacetPresent,
             format!("{id} already has {}", kind.name()),
         ));
     }
-    doc.insert_component(id, comp.clone());
-    check_component_bindings(doc, cx, id, std::slice::from_ref(comp))?;
+    doc.insert_facet(id, comp.clone());
+    check_facet_bindings(doc, cx, id, std::slice::from_ref(comp))?;
     check_entity(doc, cx, id)?;
-    Ok(vec![Op::RemoveComp { id, kind }])
+    Ok(vec![Op::RemoveFacet { id, kind }])
 }
 
 fn remove_comp(
     doc: &mut Document,
     cx: &Ctx,
     id: NodeId,
-    kind: ComponentKind,
+    kind: FacetKind,
 ) -> Result<Vec<Op>, ApplyError> {
     let n = live(doc, cx, id)?;
     if n.ty.spec().requires(kind) {
         return Err(cx.err(
-            ErrorKind::ComponentRequired,
+            ErrorKind::FacetRequired,
             format!("{} requires {}", n.ty, kind.name()),
         ));
     }
-    let comp = doc.remove_component(id, kind).ok_or_else(|| {
+    let comp = doc.remove_facet(id, kind).ok_or_else(|| {
         cx.err(
-            ErrorKind::ComponentAbsent,
+            ErrorKind::FacetAbsent,
             format!("{id} has no {}", kind.name()),
         )
     })?;
-    Ok(vec![Op::AddComp { id, comp }])
+    Ok(vec![Op::AddFacet { id, comp }])
 }
 
 fn link(doc: &mut Document, cx: &Ctx, rel: &Relation) -> Result<Vec<Op>, ApplyError> {

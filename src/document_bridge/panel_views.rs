@@ -16,7 +16,7 @@ use super::DocumentStore;
 use crate::panels::{COMPOSITION_PANEL, PanelRect, Panels, VIEWER_PANEL};
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
-use iron_document::component::Name as DocName;
+use iron_document::facet::Name as DocName;
 use iron_document::{Document, NodeId};
 use std::collections::BTreeMap;
 

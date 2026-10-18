@@ -4,8 +4,8 @@
 
 use super::PendingTransactions;
 use bevy::prelude::*;
-use iron_document::component::{Composition, Constraint, Embed, Template, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
-use iron_document::component::{Clip, Slider, Timing};
+use iron_document::facet::{Composition, Constraint, Embed, Template, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
+use iron_document::facet::{Clip, Slider, Timing};
 use iron_document::definition::{self, Placement};
 use iron_document::{Actor, Expr, LeafPath, LeafStruct, NodeId, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
 use std::collections::BTreeMap;
@@ -41,7 +41,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let scene = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("scene".into()));
-    ops.push(Op::Create { id: scene, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    ops.push(Op::Create { id: scene, ty: ty("composition"), parent: None, order: order(), facets: vec![name.wrap(), composition("2d")] });
 
     // A field of small rects, deterministic positions.
     let mut seed: u32 = 0x91E2_33AB;
@@ -66,7 +66,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
             ty: ty("rect"),
             parent: Some(scene),
             order: order(),
-            components: vec![t.wrap(), s.wrap(), f.wrap()],
+            facets: vec![t.wrap(), s.wrap(), f.wrap()],
         });
     }
 
@@ -87,7 +87,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         ty: ty("rect"),
         parent: Some(scene),
         order: order(),
-        components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
+        facets: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
     });
 
     // A circle with a stroke.
@@ -107,7 +107,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         ty: ty("ellipse"),
         parent: Some(scene),
         order: order(),
-        components: vec![t.wrap(), r.wrap(), f.wrap(), st.wrap()],
+        facets: vec![t.wrap(), r.wrap(), f.wrap(), st.wrap()],
     });
 
     // A slider; the bar that follows it is an instance of a definition,
@@ -128,13 +128,13 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         ty: ty("slider"),
         parent: Some(scene),
         order: order(),
-        components: vec![t.wrap(), s.wrap(), sl.wrap(), name.wrap()],
+        facets: vec![t.wrap(), s.wrap(), sl.wrap(), name.wrap()],
     });
     // The torus, in a 3D composition of its own: the second panel.
     let assembly = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("assembly".into()));
-    ops.push(Op::Create { id: assembly, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("3d")] });
+    ops.push(Op::Create { id: assembly, ty: ty("composition"), parent: None, order: order(), facets: vec![name.wrap(), composition("3d")] });
     let torus = next();
     let mut t = Transform3d::default();
     t.pos = Slot::Const(Value::Vec3([0.0, 1.5, 0.0]));
@@ -145,7 +145,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         ty: ty("mesh"),
         parent: Some(assembly),
         order: order(),
-        components: vec![t.wrap(), Mesh::default().wrap(), name.wrap()],
+        facets: vec![t.wrap(), Mesh::default().wrap(), name.wrap()],
     });
 
     // A timeline with two clips (doc 05: scripted time). The clip names its
@@ -153,7 +153,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let timeline = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("main".into()));
-    ops.push(Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: order(), components: vec![name.wrap()] });
+    ops.push(Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: order(), facets: vec![name.wrap()] });
     let mut clip_order = OrderKey::first();
     let mut clip = |id, label: &str, start: f64, dur: f64, easing: &str, prop: &str, from: Value, to: Value| {
         let mut timing = Timing::default();
@@ -171,7 +171,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
             ty: ty("clip"),
             parent: Some(timeline),
             order: clip_order.clone(),
-            components: vec![timing.wrap(), c.wrap(), name.wrap()],
+            facets: vec![timing.wrap(), c.wrap(), name.wrap()],
         };
         clip_order = OrderKey::after(&clip_order);
         op
@@ -202,7 +202,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         ty: ty("rect"),
         parent: Some(scene),
         order: order(),
-        components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
+        facets: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
     });
 
     // The inverse-kinematics pendulum (constraint-system.md §14 phase 3): a
@@ -223,7 +223,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let links = [next(), next(), next()];
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("pendulum".into()));
-    ops.push(Op::Create { id: pendulum, ty: ty("group"), parent: None, order: order(), components: vec![name.wrap(), Transform2d::default().wrap()] });
+    ops.push(Op::Create { id: pendulum, ty: ty("group"), parent: None, order: order(), facets: vec![name.wrap(), Transform2d::default().wrap()] });
     let mut porder = OrderKey::first();
     let mut porder_next = move || {
         let k = porder.clone();
@@ -250,7 +250,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut s = Size::default();
     s.w = n(160.0);
     s.h = n(20.0);
-    ops.push(Op::Create { id: platform, ty: ty("rect"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), s.wrap(), color([0.25, 0.25, 0.28, 1.0]).wrap(), named("platform").wrap()] });
+    ops.push(Op::Create { id: platform, ty: ty("rect"), parent: Some(pendulum), order: porder_next(), facets: vec![t.wrap(), s.wrap(), color([0.25, 0.25, 0.28, 1.0]).wrap(), named("platform").wrap()] });
     let chain = [joints[0], joints[1], joints[2], ball];
     for (i, (x, y)) in [(320.0, 60.0), (320.0, 160.0), (320.0, 260.0)].into_iter().enumerate() {
         let mut t = Transform2d::default();
@@ -260,7 +260,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         let radius = n(5.0);
         r.rx = radius.clone();
         r.ry = radius;
-        ops.push(Op::Create { id: joints[i], ty: ty("ellipse"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), r.wrap(), color([0.15, 0.15, 0.18, 1.0]).wrap(), named(&format!("j{i}")).wrap()] });
+        ops.push(Op::Create { id: joints[i], ty: ty("ellipse"), parent: Some(pendulum), order: porder_next(), facets: vec![t.wrap(), r.wrap(), color([0.15, 0.15, 0.18, 1.0]).wrap(), named(&format!("j{i}")).wrap()] });
     }
     let mut t = Transform2d::default();
     t.x = n(320.0);
@@ -269,7 +269,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let radius = n(14.0);
     r.rx = radius.clone();
     r.ry = radius;
-    ops.push(Op::Create { id: ball, ty: ty("ellipse"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), r.wrap(), color([0.9, 0.35, 0.15, 1.0]).wrap(), named("ball").wrap()] });
+    ops.push(Op::Create { id: ball, ty: ty("ellipse"), parent: Some(pendulum), order: porder_next(), facets: vec![t.wrap(), r.wrap(), color([0.9, 0.35, 0.15, 1.0]).wrap(), named("ball").wrap()] });
     for i in 0..3 {
         let (a, b) = (chain[i], chain[i + 1]);
         let mut t = Transform2d::default();
@@ -279,7 +279,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         let mut s = Size::default();
         s.w = n(10.0);
         s.h = Slot::Bound(Expr::parse(&format!("hypot({b}.transform2d.x - {a}.transform2d.x, {b}.transform2d.y - {a}.transform2d.y)")).expect("demo binding"));
-        ops.push(Op::Create { id: arms[i], ty: ty("rect"), parent: Some(pendulum), order: arm_keys[i].clone(), components: vec![t.wrap(), s.wrap(), color([0.35, 0.5, 0.7, 1.0]).wrap(), named(&format!("arm{}", i + 1)).wrap()] });
+        ops.push(Op::Create { id: arms[i], ty: ty("rect"), parent: Some(pendulum), order: arm_keys[i].clone(), facets: vec![t.wrap(), s.wrap(), color([0.35, 0.5, 0.7, 1.0]).wrap(), named(&format!("arm{}", i + 1)).wrap()] });
     }
     // A bar whose height is bound to the ball's y.
     let mut t = Transform2d::default();
@@ -288,7 +288,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut s = Size::default();
     s.w = n(24.0);
     s.h = Slot::Bound(Expr::parse(&format!("{ball}.transform2d.y - 60")).expect("demo binding"));
-    ops.push(Op::Create { id: height_bar, ty: ty("rect"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), s.wrap(), color([0.3, 0.65, 0.4, 1.0]).wrap(), named("height").wrap()] });
+    ops.push(Op::Create { id: height_bar, ty: ty("rect"), parent: Some(pendulum), order: porder_next(), facets: vec![t.wrap(), s.wrap(), color([0.3, 0.65, 0.4, 1.0]).wrap(), named("height").wrap()] });
     // The length slider: 0.5 to 1.5 times 100 px per link.
     let mut t = Transform2d::default();
     t.x = n(100.0);
@@ -300,7 +300,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     sl.min = n(0.5);
     sl.max = n(1.5);
     sl.value = n(1.0);
-    ops.push(Op::Create { id: length, ty: ty("slider"), parent: Some(pendulum), order: porder_next(), components: vec![t.wrap(), s.wrap(), sl.wrap(), named("length").wrap()] });
+    ops.push(Op::Create { id: length, ty: ty("slider"), parent: Some(pendulum), order: porder_next(), facets: vec![t.wrap(), s.wrap(), sl.wrap(), named("length").wrap()] });
     // Constraints: the platform is fixed, its hinge coincides with the
     // first joint, and each link keeps its distance, driven by the slider.
     let constraint = |kind: &str, name: &str| {
@@ -314,17 +314,17 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         data.insert("anchor".to_owned(), Value::Vec2(anchor));
         Op::Link { rel: Relation { id: rel, from, to, rel: RelKind::Constrains, data } }
     };
-    ops.push(Op::Create { id: fix, ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), components: constraint("fix", "fixed platform") });
+    ops.push(Op::Create { id: fix, ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), facets: constraint("fix", "fixed platform") });
     ops.push(constrains(rel_ids[2], fix, platform, "a", [0.0, 0.0]));
-    ops.push(Op::Create { id: hinge, ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), components: constraint("coincident", "hinge") });
+    ops.push(Op::Create { id: hinge, ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), facets: constraint("coincident", "hinge") });
     ops.push(constrains(rel_ids[3], hinge, platform, "a", [80.0, 20.0]));
     ops.push(constrains(rel_ids[4], hinge, joints[0], "b", [0.0, 0.0]));
     for i in 0..3 {
         let mut comps = constraint("distance", &format!("link{}", i + 1));
-        if let iron_document::Component::Constraint(c) = &mut comps[0] {
+        if let iron_document::Facet::Constraint(c) = &mut comps[0] {
             c.value = Slot::Bound(Expr::parse(&format!("{length}.slider.value * 100")).expect("demo binding"));
         }
-        ops.push(Op::Create { id: links[i], ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), components: comps });
+        ops.push(Op::Create { id: links[i], ty: ty("constraint"), parent: Some(pendulum), order: porder_next(), facets: comps });
         ops.push(constrains(rel_ids[5 + 2 * i], links[i], chain[i], "a", [0.0, 0.0]));
         ops.push(constrains(rel_ids[6 + 2 * i], links[i], chain[i + 1], "b", [0.0, 0.0]));
     }
@@ -344,11 +344,11 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     st.width = n(2.0);
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("box".into()));
-    ops.push(Op::Create { id: cartoon_box, ty: ty("rect"), parent: Some(scene), order: order(), components: vec![t.wrap(), s.wrap(), f.wrap(), st.wrap(), name.wrap()] });
+    ops.push(Op::Create { id: cartoon_box, ty: ty("rect"), parent: Some(scene), order: order(), facets: vec![t.wrap(), s.wrap(), f.wrap(), st.wrap(), name.wrap()] });
     let model = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("model".into()));
-    ops.push(Op::Create { id: model, ty: ty("model"), parent: None, order: order(), components: vec![name.wrap()] });
+    ops.push(Op::Create { id: model, ty: ty("model"), parent: None, order: order(), facets: vec![name.wrap()] });
 
     // The layout the viewer shows (ECM §7.4): `main` embeds the 2D scene
     // where it sits (so document coordinates read the same in the viewer)
@@ -357,7 +357,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let main = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("main".into()));
-    ops.push(Op::Create { id: main, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    ops.push(Op::Create { id: main, ty: ty("composition"), parent: None, order: order(), facets: vec![name.wrap(), composition("2d")] });
     let embed = |source: NodeId| {
         let mut e = Embed::default();
         e.source = Slot::Const(Value::Ref(source));
@@ -366,7 +366,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let scene_embed = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("scene view".into()));
-    ops.push(Op::Create { id: scene_embed, ty: ty("embed"), parent: Some(main), order: OrderKey::first(), components: vec![embed(scene), Transform2d::default().wrap(), name.wrap()] });
+    ops.push(Op::Create { id: scene_embed, ty: ty("embed"), parent: Some(main), order: OrderKey::first(), facets: vec![embed(scene), Transform2d::default().wrap(), name.wrap()] });
     let assembly_embed = next();
     let mut t = Transform2d::default();
     t.x = n(815.0);
@@ -376,14 +376,14 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     s.h = n(350.0);
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("assembly view".into()));
-    ops.push(Op::Create { id: assembly_embed, ty: ty("embed"), parent: Some(main), order: OrderKey::after(&OrderKey::first()), components: vec![embed(assembly), t.wrap(), s.wrap(), name.wrap()] });
+    ops.push(Op::Create { id: assembly_embed, ty: ty("embed"), parent: Some(main), order: OrderKey::after(&OrderKey::first()), facets: vec![embed(assembly), t.wrap(), s.wrap(), name.wrap()] });
 
     // A 2D composition shown in the 3D assembly as a plane (ECM §7.4): a
     // small card beside the torus, 160×100 px, so 1.6×1 world units.
     let card = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("card".into()));
-    ops.push(Op::Create { id: card, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    ops.push(Op::Create { id: card, ty: ty("composition"), parent: None, order: order(), facets: vec![name.wrap(), composition("2d")] });
     let card_shape = |id, ty_name: &str, x: f64, y: f64, w: f64, h: f64, c: [f32; 4], label: &str, key: OrderKey| {
         let mut t = Transform2d::default();
         t.x = n(x);
@@ -404,7 +404,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
             sz.h = n(h);
             sz.wrap()
         };
-        Op::Create { id, ty: ty(ty_name), parent: Some(card), order: key, components: vec![t.wrap(), geometry, f.wrap(), name.wrap()] }
+        Op::Create { id, ty: ty(ty_name), parent: Some(card), order: key, facets: vec![t.wrap(), geometry, f.wrap(), name.wrap()] }
     };
     let k0 = OrderKey::first();
     let k1 = OrderKey::after(&k0);
@@ -418,7 +418,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     t.rot = Slot::Const(Value::Vec3([0.0, -0.5, 0.0]));
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("card plane".into()));
-    ops.push(Op::Create { id: card_plane, ty: ty("embed"), parent: Some(assembly), order: order(), components: vec![embed(card), t.wrap(), name.wrap()] });
+    ops.push(Op::Create { id: card_plane, ty: ty("embed"), parent: Some(assembly), order: order(), facets: vec![embed(card), t.wrap(), name.wrap()] });
 
     // The library: a `bar` definition with one parameter, `level`, and a
     // "free" template whose rect binds its top and height to the
@@ -430,22 +430,22 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let template_rect = next();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("library".into()));
-    ops.push(Op::Create { id: library, ty: ty("library"), parent: None, order: order(), components: vec![name.wrap()] });
+    ops.push(Op::Create { id: library, ty: ty("library"), parent: None, order: order(), facets: vec![name.wrap()] });
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("bar".into()));
-    ops.push(Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: OrderKey::first(), components: vec![name.wrap()] });
+    ops.push(Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: OrderKey::first(), facets: vec![name.wrap()] });
     let mut spec = ParamSpec::default();
     spec.kind = Slot::Const(Value::Enum("number".into()));
     spec.default = n(0.4);
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("level".into()));
-    ops.push(Op::Create { id: level, ty: ty("param_spec"), parent: Some(def), order: OrderKey::first(), components: vec![spec.wrap(), name.wrap()] });
+    ops.push(Op::Create { id: level, ty: ty("param_spec"), parent: Some(def), order: OrderKey::first(), facets: vec![spec.wrap(), name.wrap()] });
     ops.push(Op::Create {
         id: template,
         ty: ty("template"),
         parent: Some(def),
         order: OrderKey::after(&OrderKey::first()),
-        components: vec![Template::default().wrap()],
+        facets: vec![Template::default().wrap()],
     });
     let mut t = Transform2d::default();
     t.x = n(780.0);
@@ -462,7 +462,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
         ty: ty("rect"),
         parent: Some(template),
         order: OrderKey::first(),
-        components: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
+        facets: vec![t.wrap(), s.wrap(), f.wrap(), name.wrap()],
     });
 
     // Instantiate it into the scene. The ops so far are applied to a scratch
@@ -489,10 +489,10 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let (pendulum_comp, controls_comp, pendulum_embed, controls_embed) = (late[0], late[1], late[2], late[3]);
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("pendulum".into()));
-    ops.push(Op::Create { id: pendulum_comp, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    ops.push(Op::Create { id: pendulum_comp, ty: ty("composition"), parent: None, order: order(), facets: vec![name.wrap(), composition("2d")] });
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("controls".into()));
-    ops.push(Op::Create { id: controls_comp, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), composition("2d")] });
+    ops.push(Op::Create { id: controls_comp, ty: ty("composition"), parent: None, order: order(), facets: vec![name.wrap(), composition("2d")] });
     ops.push(Op::Reparent { id: pendulum, parent: Some(pendulum_comp), order: OrderKey::first() });
     ops.push(Op::Reparent { id: slider, parent: Some(controls_comp), order: OrderKey::first() });
     let k_assembly = OrderKey::after(&OrderKey::first());
@@ -500,10 +500,10 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let k_controls = OrderKey::after(&k_pendulum);
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("pendulum view".into()));
-    ops.push(Op::Create { id: pendulum_embed, ty: ty("embed"), parent: Some(main), order: k_pendulum, components: vec![embed(pendulum_comp), Transform2d::default().wrap(), name.wrap()] });
+    ops.push(Op::Create { id: pendulum_embed, ty: ty("embed"), parent: Some(main), order: k_pendulum, facets: vec![embed(pendulum_comp), Transform2d::default().wrap(), name.wrap()] });
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("controls view".into()));
-    ops.push(Op::Create { id: controls_embed, ty: ty("embed"), parent: Some(main), order: k_controls, components: vec![embed(controls_comp), Transform2d::default().wrap(), name.wrap()] });
+    ops.push(Op::Create { id: controls_embed, ty: ty("embed"), parent: Some(main), order: k_controls, facets: vec![embed(controls_comp), Transform2d::default().wrap(), name.wrap()] });
     // The entity's parameter follows the slider: the exit of ECM phase 1.
     let level_path: LeafPath = "params.level".parse().expect("parameter path");
     ops.push(Op::Set { id: entity, path: level_path, slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).expect("demo binding")) });
@@ -572,15 +572,15 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     let mut spec = ParamSpec::default();
     spec.kind = Slot::Const(Value::Enum("number".into()));
     spec.default = n(0.0);
-    ops.push(Op::Create { id: gas_def, ty: ty("definition"), parent: Some(library), order: next_key(after(&scratch, Some(library))), components: vec![named("gas")] });
-    ops.push(Op::Create { id: pressure, ty: ty("param_spec"), parent: Some(gas_def), order: OrderKey::first(), components: vec![spec.wrap(), named("pressure")] });
+    ops.push(Op::Create { id: gas_def, ty: ty("definition"), parent: Some(library), order: next_key(after(&scratch, Some(library))), facets: vec![named("gas")] });
+    ops.push(Op::Create { id: pressure, ty: ty("param_spec"), parent: Some(gas_def), order: OrderKey::first(), facets: vec![spec.wrap(), named("pressure")] });
 
     // The 3D composition.
     let root0 = next_key(after(&scratch, None));
     let root1 = OrderKey::after(&root0);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("3d".into()));
-    ops.push(Op::Create { id: cylinder, ty: ty("composition"), parent: None, order: root0, components: vec![named("cylinder"), c.wrap()] });
+    ops.push(Op::Create { id: cylinder, ty: ty("composition"), parent: None, order: root0, facets: vec![named("cylinder"), c.wrap()] });
     let mesh = |asset: &str| {
         let mut m = Mesh::default();
         m.asset = Slot::Const(Value::Str(asset.into()));
@@ -596,23 +596,23 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     t.pos = v3([0.0, 1.2, 0.0]);
     t.rot = v3([0.0, 0.0, -std::f64::consts::FRAC_PI_2]);
     t.scale = v3([1.2, 3.0, 1.2]);
-    ops.push(Op::Create { id: chamber, ty: ty("mesh"), parent: Some(cylinder), order: k0, components: vec![t.wrap(), mesh("cylinder"), fill([0.55, 0.7, 0.9, 0.3]), named("chamber")] });
+    ops.push(Op::Create { id: chamber, ty: ty("mesh"), parent: Some(cylinder), order: k0, facets: vec![t.wrap(), mesh("cylinder"), fill([0.55, 0.7, 0.9, 0.3]), named("chamber")] });
     // The piston: a disc at x = 1.3 − 2.2·stroke, so the gas fills the
     // chamber at stroke 0 and is compressed five-fold at stroke 1.
     let mut t = Transform3d::default();
     t.pos = bound(format!("[1, 0, 0] * (1.3 - {stroke}.slider.value * 2.2) + [0, 1.2, 0]"));
     t.rot = v3([0.0, 0.0, -std::f64::consts::FRAC_PI_2]);
     t.scale = v3([1.16, 0.12, 1.16]);
-    ops.push(Op::Create { id: piston, ty: ty("mesh"), parent: Some(cylinder), order: k1, components: vec![t.wrap(), mesh("cylinder"), fill([0.75, 0.45, 0.2, 1.0]), named("piston")] });
+    ops.push(Op::Create { id: piston, ty: ty("mesh"), parent: Some(cylinder), order: k1, facets: vec![t.wrap(), mesh("cylinder"), fill([0.75, 0.45, 0.2, 1.0]), named("piston")] });
     let mut t = Transform3d::default();
     t.pos = bound(format!("{piston}.transform3d.pos + [0.9, 0, 0]"));
     t.scale = v3([1.7, 0.12, 0.12]);
-    ops.push(Op::Create { id: rod, ty: ty("mesh"), parent: Some(cylinder), order: k2, components: vec![t.wrap(), mesh("cube"), fill([0.5, 0.5, 0.55, 1.0]), named("rod")] });
+    ops.push(Op::Create { id: rod, ty: ty("mesh"), parent: Some(cylinder), order: k2, facets: vec![t.wrap(), mesh("cube"), fill([0.5, 0.5, 0.55, 1.0]), named("rod")] });
 
     // The 2D composition: the view, the stroke slider and the gauges.
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
-    ops.push(Op::Create { id: comp, ty: ty("composition"), parent: None, order: root1, components: vec![named("piston"), c.wrap()] });
+    ops.push(Op::Create { id: comp, ty: ty("composition"), parent: None, order: root1, facets: vec![named("piston"), c.wrap()] });
     let mut e = Embed::default();
     e.source = Slot::Const(Value::Ref(cylinder));
     let mut t = Transform2d::default();
@@ -627,7 +627,7 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
         key = OrderKey::after(&key);
         k
     };
-    ops.push(Op::Create { id: view, ty: ty("embed"), parent: Some(comp), order: order(), components: vec![e.wrap(), t.wrap(), s.wrap(), named("cylinder view")] });
+    ops.push(Op::Create { id: view, ty: ty("embed"), parent: Some(comp), order: order(), facets: vec![e.wrap(), t.wrap(), s.wrap(), named("cylinder view")] });
     let mut sl = Slider::default();
     sl.value = n(0.2);
     let mut t = Transform2d::default();
@@ -636,7 +636,7 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     let mut s = Size::default();
     s.w = n(300.0);
     s.h = n(24.0);
-    ops.push(Op::Create { id: stroke, ty: ty("slider"), parent: Some(comp), order: order(), components: vec![t.wrap(), s.wrap(), sl.wrap(), named("stroke")] });
+    ops.push(Op::Create { id: stroke, ty: ty("slider"), parent: Some(comp), order: order(), facets: vec![t.wrap(), s.wrap(), sl.wrap(), named("stroke")] });
     let rect = |id: NodeId, order: OrderKey, y: f64, w: Slot, c: [f32; 4], name: &str| {
         let mut t = Transform2d::default();
         t.x = n(20.0);
@@ -644,7 +644,7 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
         let mut s = Size::default();
         s.w = w;
         s.h = n(20.0);
-        Op::Create { id, ty: ty("rect"), parent: Some(comp), order, components: vec![t.wrap(), s.wrap(), fill(c), named(name)] }
+        Op::Create { id, ty: ty("rect"), parent: Some(comp), order, facets: vec![t.wrap(), s.wrap(), fill(c), named(name)] }
     };
     // Pressure relative to the gas filling the whole chamber: 50 px per unit.
     ops.push(rect(p_frame, order(), 420.0, n(300.0), [0.9, 0.9, 0.92, 1.0], "pressure scale"));
@@ -663,7 +663,7 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
 /// the meter's gauge in both compositions reads its in-port, and dragging a
 /// gauge's edge sets the power slider back through the chain.
 fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: NodeId) -> Vec<Op> {
-    use iron_document::component::{Connection, Contour, Handles, PathShape, Port};
+    use iron_document::facet::{Connection, Contour, Handles, PathShape, Port};
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
     let mut scratch = iron_document::Store::with_document(base.document().clone());
     scratch
@@ -735,7 +735,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         c.wrap()
     };
     let key = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
-    let rect_op = |id: NodeId, parent: NodeId, order: OrderKey, comps: Vec<iron_document::Component>| Op::Create { id, ty: ty("rect"), parent: Some(parent), order, components: comps };
+    let rect_op = |id: NodeId, parent: NodeId, order: OrderKey, comps: Vec<iron_document::Facet>| Op::Create { id, ty: ty("rect"), parent: Some(parent), order, facets: comps };
 
     // The two compositions.
     let ids = scratch.document().next_ids(2);
@@ -743,8 +743,8 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     let k0 = last(&scratch, None);
     let k1 = OrderKey::after(&k0);
     phase(&mut scratch, vec![
-        Op::Create { id: cartoon, ty: ty("composition"), parent: None, order: k0, components: vec![named("optics"), composition("2d")] },
-        Op::Create { id: schematic, ty: ty("composition"), parent: None, order: k1, components: vec![named("schematic"), composition("2d")] },
+        Op::Create { id: cartoon, ty: ty("composition"), parent: None, order: k0, facets: vec![named("optics"), composition("2d")] },
+        Op::Create { id: schematic, ty: ty("composition"), parent: None, order: k1, facets: vec![named("schematic"), composition("2d")] },
     ]);
 
     // Definitions. Each template draws its part of the picture where it sits
@@ -771,31 +771,31 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         let mut p = ParamSpec::default();
         p.kind = Slot::Const(Value::Enum(if matches!(default, Value::Quantity { .. }) { "quantity".into() } else { "number".into() }));
         p.default = Slot::Const(default);
-        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, components: vec![p.wrap(), named(name)] }
+        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
     };
     let mut ops = vec![
-        Op::Create { id: laser, ty: ty("definition"), parent: Some(library), order: def_key.clone(), components: vec![named("laser")] },
+        Op::Create { id: laser, ty: ty("definition"), parent: Some(library), order: def_key.clone(), facets: vec![named("laser")] },
         spec(power, laser, key(0), "power", Value::parse_quantity("10 mW").expect("quantity")),
-        Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser), order: key(1), components: vec![named("out"), port("optical_power", "out", Some(format!("{power}.param_spec.default")))] },
-        Op::Create { id: laser_cartoon, ty: ty("template"), parent: Some(laser), order: key(2), components: vec![template("cartoon")] },
-        Op::Create { id: laser_schematic, ty: ty("template"), parent: Some(laser), order: key(3), components: vec![template("schematic")] },
-        Op::Create { id: fiber, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&def_key), components: vec![named("fiber")] },
+        Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser), order: key(1), facets: vec![named("out"), port("optical_power", "out", Some(format!("{power}.param_spec.default")))] },
+        Op::Create { id: laser_cartoon, ty: ty("template"), parent: Some(laser), order: key(2), facets: vec![template("cartoon")] },
+        Op::Create { id: laser_schematic, ty: ty("template"), parent: Some(laser), order: key(3), facets: vec![template("schematic")] },
+        Op::Create { id: fiber, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&def_key), facets: vec![named("fiber")] },
         spec(loss, fiber, key(0), "loss_db_per_km", Value::Number(0.5)),
         spec(length, fiber, key(1), "length_km", Value::Number(2.0)),
-        Op::Create { id: fiber_in, ty: ty("port_spec"), parent: Some(fiber), order: key(2), components: vec![named("in"), port("optical_power", "in", None)] },
+        Op::Create { id: fiber_in, ty: ty("port_spec"), parent: Some(fiber), order: key(2), facets: vec![named("in"), port("optical_power", "in", None)] },
         Op::Create {
             id: fiber_out,
             ty: ty("port_spec"),
             parent: Some(fiber),
             order: key(3),
-            components: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.param_spec.default * {length}.param_spec.default / 10)")))],
+            facets: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.param_spec.default * {length}.param_spec.default / 10)")))],
         },
-        Op::Create { id: fiber_cartoon, ty: ty("template"), parent: Some(fiber), order: key(4), components: vec![template("cartoon")] },
-        Op::Create { id: fiber_schematic, ty: ty("template"), parent: Some(fiber), order: key(5), components: vec![template("schematic")] },
-        Op::Create { id: meter, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&OrderKey::after(&def_key)), components: vec![named("meter")] },
-        Op::Create { id: meter_in, ty: ty("port_spec"), parent: Some(meter), order: key(0), components: vec![named("in"), port("optical_power", "in", None)] },
-        Op::Create { id: meter_cartoon, ty: ty("template"), parent: Some(meter), order: key(1), components: vec![template("cartoon")] },
-        Op::Create { id: meter_schematic, ty: ty("template"), parent: Some(meter), order: key(2), components: vec![template("schematic")] },
+        Op::Create { id: fiber_cartoon, ty: ty("template"), parent: Some(fiber), order: key(4), facets: vec![template("cartoon")] },
+        Op::Create { id: fiber_schematic, ty: ty("template"), parent: Some(fiber), order: key(5), facets: vec![template("schematic")] },
+        Op::Create { id: meter, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&OrderKey::after(&def_key)), facets: vec![named("meter")] },
+        Op::Create { id: meter_in, ty: ty("port_spec"), parent: Some(meter), order: key(0), facets: vec![named("in"), port("optical_power", "in", None)] },
+        Op::Create { id: meter_cartoon, ty: ty("template"), parent: Some(meter), order: key(1), facets: vec![template("cartoon")] },
+        Op::Create { id: meter_schematic, ty: ty("template"), parent: Some(meter), order: key(2), facets: vec![template("schematic")] },
     ];
     // Cartoon: the laser's body and a beam whose opacity follows the power.
     ops.push(rect_op(laser_body, laser_cartoon, key(0), vec![at(60.0, 140.0), size(130.0, 70.0), fill([0.18, 0.2, 0.26, 1.0]), named("body")]));
@@ -804,15 +804,15 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     beam.opacity = Slot::Bound(Expr::parse(&format!("clamp({power}.param_spec.default / 20 mW, 0.15, 1)")).expect("demo binding"));
     ops.push(rect_op(laser_beam, laser_cartoon, key(1), vec![at(190.0, 168.0), size(50.0, 14.0), beam.wrap(), named("beam")]));
     // The fiber: a curve from the laser to the meter.
-    ops.push(Op::Create { id: fiber_path, ty: ty("path"), parent: Some(fiber_cartoon), order: key(0), components: vec![at(240.0, 175.0), PathShape::default().wrap(), stroke([0.96, 0.7, 0.15, 1.0], 6.0), named("fiber")] });
-    ops.push(Op::Create { id: fiber_contour, ty: ty("contour"), parent: Some(fiber_path), order: key(0), components: vec![Contour::default().wrap()] });
+    ops.push(Op::Create { id: fiber_path, ty: ty("path"), parent: Some(fiber_cartoon), order: key(0), facets: vec![at(240.0, 175.0), PathShape::default().wrap(), stroke([0.96, 0.7, 0.15, 1.0], 6.0), named("fiber")] });
+    ops.push(Op::Create { id: fiber_contour, ty: ty("contour"), parent: Some(fiber_path), order: key(0), facets: vec![Contour::default().wrap()] });
     let point = |id: NodeId, order: OrderKey, x: f64, y: f64, ox: f64, oy: f64| {
         let mut h = Handles::default();
         h.ix = n(-ox);
         h.iy = n(-oy);
         h.ox = n(ox);
         h.oy = n(oy);
-        Op::Create { id, ty: ty("point"), parent: Some(fiber_contour), order, components: vec![at(x, y), h.wrap()] }
+        Op::Create { id, ty: ty("point"), parent: Some(fiber_contour), order, facets: vec![at(x, y), h.wrap()] }
     };
     ops.push(point(fiber_a, key(0), 0.0, 0.0, 90.0, 120.0));
     ops.push(point(fiber_b, key(1), 270.0, 0.0, 90.0, -120.0));
@@ -821,7 +821,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     let radius = n(55.0);
     dial_r.rx = radius.clone();
     dial_r.ry = radius;
-    ops.push(Op::Create { id: dial, ty: ty("ellipse"), parent: Some(meter_cartoon), order: key(0), components: vec![at(600.0, 175.0), dial_r.wrap(), fill([0.88, 0.9, 0.94, 1.0]), stroke([0.3, 0.32, 0.38, 1.0], 3.0), named("dial")] });
+    ops.push(Op::Create { id: dial, ty: ty("ellipse"), parent: Some(meter_cartoon), order: key(0), facets: vec![at(600.0, 175.0), dial_r.wrap(), fill([0.88, 0.9, 0.94, 1.0]), stroke([0.3, 0.32, 0.38, 1.0], 3.0), named("dial")] });
     ops.push(rect_op(track, meter_cartoon, key(1), vec![at(540.0, 260.0), size(240.0, 14.0), fill([0.85, 0.86, 0.9, 1.0]), named("track")]));
     ops.push(gauge(reading, meter_cartoon, key(2), meter_in, 540.0, 260.0, 24.0, [0.15, 0.7, 0.35, 1.0]));
     // Schematic: blocks, and the meter's reading as a bar under its block.
@@ -868,17 +868,17 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         let mut c = Connection::default();
         c.domain = Slot::Const(Value::Str("optical".into()));
         phase(&mut scratch, vec![
-            Op::Create { id: id[0], ty: ty("connection"), parent: Some(model), order: model_key, components: vec![c.wrap()] },
+            Op::Create { id: id[0], ty: ty("connection"), parent: Some(model), order: model_key, facets: vec![c.wrap()] },
             Op::Link { rel: Relation { id: rels[0], from: id[0], to: a, rel: RelKind::Connects, data: end("a") } },
             Op::Link { rel: Relation { id: rels[1], from: id[0], to: b, rel: RelKind::Connects, data: end("b") } },
-            Op::Create { id: id[1], ty: ty("path"), parent: Some(schematic), order: wire_key, components: vec![at(x0, 125.0), shape.wrap(), stroke([0.1, 0.1, 0.12, 1.0], 2.0), named("wire")] },
+            Op::Create { id: id[1], ty: ty("path"), parent: Some(schematic), order: wire_key, facets: vec![at(x0, 125.0), shape.wrap(), stroke([0.1, 0.1, 0.12, 1.0], 2.0), named("wire")] },
             Op::Link { rel: Relation { id: rels[2], from: id[1], to: id[0], rel: RelKind::Figures, data: BTreeMap::new() } },
         ]);
         let pts = scratch.document().next_ids(3);
         phase(&mut scratch, vec![
-            Op::Create { id: pts[0], ty: ty("contour"), parent: Some(id[1]), order: key(0), components: vec![Contour::default().wrap()] },
-            Op::Create { id: pts[1], ty: ty("point"), parent: Some(pts[0]), order: key(0), components: vec![at(0.0, 0.0), Handles::default().wrap()] },
-            Op::Create { id: pts[2], ty: ty("point"), parent: Some(pts[0]), order: key(1), components: vec![at(x1 - x0, 0.0), Handles::default().wrap()] },
+            Op::Create { id: pts[0], ty: ty("contour"), parent: Some(id[1]), order: key(0), facets: vec![Contour::default().wrap()] },
+            Op::Create { id: pts[1], ty: ty("point"), parent: Some(pts[0]), order: key(0), facets: vec![at(0.0, 0.0), Handles::default().wrap()] },
+            Op::Create { id: pts[2], ty: ty("point"), parent: Some(pts[0]), order: key(1), facets: vec![at(x1 - x0, 0.0), Handles::default().wrap()] },
         ]);
     }
 
@@ -891,7 +891,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         sl.max = n(20.0);
         sl.step = n(0.1);
         sl.value = n(value);
-        Op::Create { id, ty: ty("slider"), parent: Some(cartoon), order, components: vec![at(60.0, y), size(300.0, 24.0), sl.wrap(), named(name)] }
+        Op::Create { id, ty: ty("slider"), parent: Some(cartoon), order, facets: vec![at(60.0, y), size(300.0, 24.0), sl.wrap(), named(name)] }
     };
     let k = last(&scratch, Some(cartoon));
     phase(&mut scratch, vec![slider_op(ids[0], 340.0, 10.0, "laser power", k.clone()), slider_op(ids[1], 390.0, 2.0, "fiber length", OrderKey::after(&k))]);
@@ -908,7 +908,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
 /// solved together. Sliders set the heater's power and the link's
 /// resistance; gauges show the heater's temperature rise and the heat flow.
 fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: NodeId) -> Vec<Op> {
-    use iron_document::component::{Equation, Port};
+    use iron_document::facet::{Equation, Port};
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
     let mut scratch = iron_document::Store::with_document(base.document().clone());
     scratch
@@ -945,7 +945,7 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         sz.h = n(h);
         let mut f = Fill::default();
         f.color = Slot::Const(Value::Color(c));
-        Op::Create { id, ty: ty("rect"), parent: Some(parent), order, components: vec![t.wrap(), sz.wrap(), f.wrap(), named(name)] }
+        Op::Create { id, ty: ty("rect"), parent: Some(parent), order, facets: vec![t.wrap(), sz.wrap(), f.wrap(), named(name)] }
     };
     let bound = |e: String| Slot::Bound(Expr::parse(&e).expect("demo binding"));
     let port = |name: &str| {
@@ -968,12 +968,12 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         let mut p = ParamSpec::default();
         p.kind = Slot::Const(Value::Enum("quantity".into()));
         p.default = Slot::Const(Value::parse_quantity(default).expect("quantity"));
-        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, components: vec![p.wrap(), named(name)] }
+        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
     };
     let template = |id: NodeId, parent: NodeId, order: OrderKey| {
         let mut t = Template::default();
         t.notation = Slot::Const(Value::Str("cartoon".into()));
-        Op::Create { id, ty: ty("template"), parent: Some(parent), order, components: vec![t.wrap()] }
+        Op::Create { id, ty: ty("template"), parent: Some(parent), order, facets: vec![t.wrap()] }
     };
 
     // The composition.
@@ -981,7 +981,7 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let root_key = next_key(after(&scratch, None));
-    phase(&mut scratch, vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: root_key, components: vec![named("thermal"), c.wrap()] }]);
+    phase(&mut scratch, vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: root_key, facets: vec![named("thermal"), c.wrap()] }]);
 
     // Definitions, in creation order (ids ascend).
     let ids = scratch.document().next_ids(23);
@@ -994,10 +994,10 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
     let k1 = OrderKey::after(&k0);
     let k2 = OrderKey::after(&k1);
     phase(&mut scratch, vec![
-        Op::Create { id: heater, ty: ty("definition"), parent: Some(library), order: k0, components: vec![named("heater")] },
+        Op::Create { id: heater, ty: ty("definition"), parent: Some(library), order: k0, facets: vec![named("heater")] },
         spec(power, heater, key(0), "power", "5 W"),
-        Op::Create { id: h_out, ty: ty("port_spec"), parent: Some(heater), order: key(1), components: port("out") },
-        Op::Create { id: h_eq, ty: ty("equation"), parent: Some(heater), order: key(2), components: vec![equation(format!("{h_out}.port.through"), format!("-{power}.param_spec.default"))] },
+        Op::Create { id: h_out, ty: ty("port_spec"), parent: Some(heater), order: key(1), facets: port("out") },
+        Op::Create { id: h_eq, ty: ty("equation"), parent: Some(heater), order: key(2), facets: vec![equation(format!("{h_out}.port.through"), format!("-{power}.param_spec.default"))] },
         template(h_t, heater, key(3)),
         rect(h_body, h_t, key(0), 60.0, 110.0, n(120.0), 90.0, [0.86, 0.3, 0.15, 1.0], "heater"),
         rect(h_track, h_t, key(1), 60.0, 240.0, n(300.0), 14.0, [0.85, 0.86, 0.9, 1.0], "track"),
@@ -1005,18 +1005,18 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         rect(h_rise, h_t, key(2), 60.0, 240.0, bound(format!("clamp(({h_out}.port.across - 293.15 K) / 1 K * 6, 0, 300)")), 14.0, [0.9, 0.2, 0.1, 1.0], "temperature"),
         // The heat leaving the heater: 12 px per watt.
         rect(h_flow, h_t, key(3), 60.0, 266.0, bound(format!("clamp(-{h_out}.port.through / 1 W * 12, 0, 300)")), 10.0, [0.95, 0.65, 0.15, 1.0], "heat flow"),
-        Op::Create { id: link, ty: ty("definition"), parent: Some(library), order: k1, components: vec![named("thermal link")] },
+        Op::Create { id: link, ty: ty("definition"), parent: Some(library), order: k1, facets: vec![named("thermal link")] },
         spec(r, link, key(0), "r", "2 K/W"),
-        Op::Create { id: l_a, ty: ty("port_spec"), parent: Some(link), order: key(1), components: port("a") },
-        Op::Create { id: l_b, ty: ty("port_spec"), parent: Some(link), order: key(2), components: port("b") },
-        Op::Create { id: l_eq1, ty: ty("equation"), parent: Some(link), order: key(3), components: vec![equation(format!("{l_a}.port.through + {l_b}.port.through"), "0 W".into())] },
-        Op::Create { id: l_eq2, ty: ty("equation"), parent: Some(link), order: key(4), components: vec![equation(format!("{l_a}.port.across - {l_b}.port.across"), format!("{r}.param_spec.default * {l_a}.port.through"))] },
+        Op::Create { id: l_a, ty: ty("port_spec"), parent: Some(link), order: key(1), facets: port("a") },
+        Op::Create { id: l_b, ty: ty("port_spec"), parent: Some(link), order: key(2), facets: port("b") },
+        Op::Create { id: l_eq1, ty: ty("equation"), parent: Some(link), order: key(3), facets: vec![equation(format!("{l_a}.port.through + {l_b}.port.through"), "0 W".into())] },
+        Op::Create { id: l_eq2, ty: ty("equation"), parent: Some(link), order: key(4), facets: vec![equation(format!("{l_a}.port.across - {l_b}.port.across"), format!("{r}.param_spec.default * {l_a}.port.through"))] },
         template(l_t, link, key(5)),
         rect(l_body, l_t, key(0), 180.0, 140.0, n(150.0), 30.0, [0.55, 0.57, 0.62, 1.0], "link"),
-        Op::Create { id: ambient, ty: ty("definition"), parent: Some(library), order: k2, components: vec![named("ambient")] },
+        Op::Create { id: ambient, ty: ty("definition"), parent: Some(library), order: k2, facets: vec![named("ambient")] },
         spec(t, ambient, key(0), "t", "293.15 K"),
-        Op::Create { id: a_p, ty: ty("port_spec"), parent: Some(ambient), order: key(1), components: port("p") },
-        Op::Create { id: a_eq, ty: ty("equation"), parent: Some(ambient), order: key(2), components: vec![equation(format!("{a_p}.port.across"), format!("{t}.param_spec.default"))] },
+        Op::Create { id: a_p, ty: ty("port_spec"), parent: Some(ambient), order: key(1), facets: port("p") },
+        Op::Create { id: a_eq, ty: ty("equation"), parent: Some(ambient), order: key(2), facets: vec![equation(format!("{a_p}.port.across"), format!("{t}.param_spec.default"))] },
         template(a_t, ambient, key(3)),
         rect(a_body, a_t, key(0), 330.0, 95.0, n(140.0), 120.0, [0.55, 0.75, 0.95, 1.0], "sink"),
     ]);
@@ -1038,10 +1038,10 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         let rels = scratch.document().next_relation_ids(2);
         let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
         let order = next_key(after(&scratch, Some(model)));
-        let mut c = iron_document::component::Connection::default();
+        let mut c = iron_document::facet::Connection::default();
         c.domain = Slot::Const(Value::Str("thermal".into()));
         phase(&mut scratch, vec![
-            Op::Create { id, ty: ty("connection"), parent: Some(model), order, components: vec![c.wrap()] },
+            Op::Create { id, ty: ty("connection"), parent: Some(model), order, facets: vec![c.wrap()] },
             Op::Link { rel: Relation { id: rels[0], from: id, to: a, rel: RelKind::Connects, data: end("a") } },
             Op::Link { rel: Relation { id: rels[1], from: id, to: b, rel: RelKind::Connects, data: end("b") } },
         ]);
@@ -1060,7 +1060,7 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         let mut sz = Size::default();
         sz.w = n(300.0);
         sz.h = n(24.0);
-        Op::Create { id, ty: ty("slider"), parent: Some(comp), order, components: vec![tr.wrap(), sz.wrap(), sl.wrap(), named(name)] }
+        Op::Create { id, ty: ty("slider"), parent: Some(comp), order, facets: vec![tr.wrap(), sz.wrap(), sl.wrap(), named(name)] }
     };
     let k = next_key(after(&scratch, Some(comp)));
     phase(&mut scratch, vec![slider(ids[0], 320.0, 0.0, 20.0, 5.0, "heater power", k.clone()), slider(ids[1], 370.0, 0.5, 5.0, 2.0, "link resistance", OrderKey::after(&k))]);

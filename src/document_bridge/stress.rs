@@ -13,7 +13,7 @@
 //! place, (50, 90) to (70, 110) in the composition, for a benchmark to
 //! Cmd-drag: an edit inside a group, which is what invalidates a cached group.
 
-use iron_document::component::{Composition, Contour, Fill, Handles, Name, PathShape, Radius, Size, Slider, Stroke, Transform2d};
+use iron_document::facet::{Composition, Contour, Fill, Handles, Name, PathShape, Radius, Size, Slider, Stroke, Transform2d};
 use iron_document::{Actor, Expr, LeafStruct, NodeId, Op, OrderKey, Slot, Store, TransactionInput, TypeId, Value};
 
 /// Shapes per cell group.
@@ -39,13 +39,13 @@ fn n(v: f64) -> Slot {
     Slot::Const(Value::Number(v))
 }
 
-fn named(s: &str) -> iron_document::Component {
+fn named(s: &str) -> iron_document::Facet {
     let mut c = Name::default();
     c.text = Slot::Const(Value::Str(s.into()));
     c.wrap()
 }
 
-fn at(x: f64, y: f64, rot: f64) -> iron_document::Component {
+fn at(x: f64, y: f64, rot: f64) -> iron_document::Facet {
     let mut t = Transform2d::default();
     t.x = n(x);
     t.y = n(y);
@@ -53,13 +53,13 @@ fn at(x: f64, y: f64, rot: f64) -> iron_document::Component {
     t.wrap()
 }
 
-fn fill(c: [f32; 4]) -> iron_document::Component {
+fn fill(c: [f32; 4]) -> iron_document::Facet {
     let mut f = Fill::default();
     f.color = Slot::Const(Value::Color(c));
     f.wrap()
 }
 
-fn stroke(c: [f32; 4], w: f64) -> iron_document::Component {
+fn stroke(c: [f32; 4], w: f64) -> iron_document::Facet {
     let mut s = Stroke::default();
     s.color = Slot::Const(Value::Color(c));
     s.width = n(w);
@@ -138,7 +138,7 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
     let composition = next();
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
-    ops.push(Op::Create { id: composition, ty: ty("composition"), parent: None, order: root_order, components: vec![named("stress"), c.wrap()] });
+    ops.push(Op::Create { id: composition, ty: ty("composition"), parent: None, order: root_order, facets: vec![named("stress"), c.wrap()] });
 
     // The field draws first and the slider last, on top, so their ids come
     // in that order (a create's id must not be below the counter). The
@@ -164,8 +164,8 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
     field_at.x = n(40.0 + width / 2.0);
     field_at.y = n(80.0 + height / 2.0);
     field_at.rot = Slot::Bound(Expr::parse(&format!("{slider}.slider.value * 6.2832")).expect("stress binding"));
-    ops.push(Op::Create { id: field, ty: ty("group"), parent: Some(composition), order: order(), components: vec![named("field"), field_at.wrap()] });
-    ops.push(Op::Create { id: slider, ty: ty("slider"), parent: Some(composition), order: order(), components: vec![named("spin"), at(40.0, 30.0, 0.0), sl.wrap(), sz.wrap()] });
+    ops.push(Op::Create { id: field, ty: ty("group"), parent: Some(composition), order: order(), facets: vec![named("field"), field_at.wrap()] });
+    ops.push(Op::Create { id: slider, ty: ty("slider"), parent: Some(composition), order: order(), facets: vec![named("spin"), at(40.0, 30.0, 0.0), sl.wrap(), sz.wrap()] });
 
     let mut sample = None;
     let mut kinds = kinds.into_iter();
@@ -173,7 +173,7 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
     for cell_index in 0..cells {
         let cell = next();
         let (cx, cy) = ((cell_index % cols) as f64 * CELL_SIZE - width / 2.0, (cell_index / cols) as f64 * CELL_SIZE - height / 2.0);
-        ops.push(Op::Create { id: cell, ty: ty("group"), parent: Some(field), order: cell_key.clone(), components: vec![named(&format!("cell {cell_index}")), at(cx, cy, 0.0)] });
+        ops.push(Op::Create { id: cell, ty: ty("group"), parent: Some(field), order: cell_key.clone(), facets: vec![named(&format!("cell {cell_index}")), at(cx, cy, 0.0)] });
         cell_key = OrderKey::after(&cell_key);
         let mut shape_key = OrderKey::first();
         for _ in 0..CELL {
@@ -192,21 +192,21 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
                     if stroked {
                         comps.push(stroke([0.1, 0.1, 0.12, 1.0], 1.5));
                     }
-                    ops.push(Op::Create { id, ty: ty("rect"), parent: Some(cell), order, components: comps });
+                    ops.push(Op::Create { id, ty: ty("rect"), parent: Some(cell), order, facets: comps });
                 }
                 Kind::Circle => {
                     let mut r = Radius::default();
                     let radius = n(4.0 + rand() * 10.0);
                     r.rx = radius.clone();
                     r.ry = radius;
-                    ops.push(Op::Create { id, ty: ty("ellipse"), parent: Some(cell), order, components: vec![at(x, y, 0.0), r.wrap(), fill(colour)] });
+                    ops.push(Op::Create { id, ty: ty("ellipse"), parent: Some(cell), order, facets: vec![at(x, y, 0.0), r.wrap(), fill(colour)] });
                 }
                 Kind::Path => {
-                    ops.push(Op::Create { id, ty: ty("path"), parent: Some(cell), order, components: vec![at(x, y, 0.0), PathShape::default().wrap(), fill(colour), stroke([0.1, 0.1, 0.12, 1.0], 1.0)] });
+                    ops.push(Op::Create { id, ty: ty("path"), parent: Some(cell), order, facets: vec![at(x, y, 0.0), PathShape::default().wrap(), fill(colour), stroke([0.1, 0.1, 0.12, 1.0], 1.0)] });
                     let mut closed = Contour::default();
                     closed.closed = Slot::Const(Value::Bool(true));
                     let contour = next();
-                    ops.push(Op::Create { id: contour, ty: ty("contour"), parent: Some(id), order: OrderKey::first(), components: vec![closed.wrap()] });
+                    ops.push(Op::Create { id: contour, ty: ty("contour"), parent: Some(id), order: OrderKey::first(), facets: vec![closed.wrap()] });
                     let id = contour;
                     let mut point_key = OrderKey::first();
                     for (px, py) in [(0.0, 0.0), (24.0 + rand() * 10.0, 4.0), (10.0, 20.0 + rand() * 10.0)] {
@@ -215,7 +215,7 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
                         h.oy = n(-4.0);
                         h.ix = n(-6.0);
                         h.iy = n(4.0);
-                        ops.push(Op::Create { id: next(), ty: ty("point"), parent: Some(id), order: point_key.clone(), components: vec![at(px, py, 0.0), h.wrap()] });
+                        ops.push(Op::Create { id: next(), ty: ty("point"), parent: Some(id), order: point_key.clone(), facets: vec![at(px, py, 0.0), h.wrap()] });
                         point_key = OrderKey::after(&point_key);
                     }
                 }
@@ -228,7 +228,7 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
             let mut s = Size::default();
             s.w = n(20.0);
             s.h = n(20.0);
-            ops.push(Op::Create { id, ty: ty("rect"), parent: Some(cell), order: shape_key.clone(), components: vec![named("sample"), at(10.0, 10.0, 0.0), s.wrap(), fill([0.1, 0.1, 0.12, 1.0])] });
+            ops.push(Op::Create { id, ty: ty("rect"), parent: Some(cell), order: shape_key.clone(), facets: vec![named("sample"), at(10.0, 10.0, 0.0), s.wrap(), fill([0.1, 0.1, 0.12, 1.0])] });
         }
     }
     let input = TransactionInput { label: format!("stress scene ({shapes} shapes)"), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false };

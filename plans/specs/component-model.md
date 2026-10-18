@@ -1,6 +1,6 @@
 # The component model
 
-**Status:** Proposed 2026-10-18, pending user review. No implementation.
+**Status:** Approved 2026-10-18. Phase 0 done 2026-10-18; phase 1 next.
 **Scope:** Reusable components: what a component is, what the document stores for a
 placed one, how its insides are derived, its interface, overrides, scope, libraries,
 the views a model reads, and the render analysis the component boundary makes possible.
@@ -515,6 +515,10 @@ Not part of this spec's phases.
 
 **Phase 0 — Rename `Component` to `Facet`.** Mechanical, its own commit.
 *Exit:* tests and the smoke script pass unchanged.
+*Done 2026-10-18.* Rust names only: serde renames keep `components`, `add_comp`,
+`remove_comp` and the `component_*` error kinds on the wire and in the file, and string
+literals (messages) are unchanged. Those move to the new names with schema 6 (phase 1),
+when the model surface's manifest changes anyway.
 
 **Phase 1 — One interface.** `in` ports with defaults replace parameters; `args`;
 schema 6 migration; the inspector shows unwired inputs as fields.

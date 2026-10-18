@@ -16,7 +16,7 @@
 //! change, not ten thousand bounds. Structure (create, delete, reparent,
 //! reorder) is a third, global, revision.
 
-use crate::component::{ComponentKind, LeafPath};
+use crate::facet::{FacetKind, LeafPath};
 use crate::document::Document;
 use crate::expr::Leaf;
 use crate::id::NodeId;
@@ -94,13 +94,13 @@ impl Affine2 {
 }
 
 /// A node's own transform, read through `read`. A node without a
-/// `transform2d` component is the identity, as in the bridge.
+/// `transform2d` facet is the identity, as in the bridge.
 pub fn local_affine(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine2 {
-    if doc.component(id, ComponentKind::Transform2d).is_none() {
+    if doc.facet(id, FacetKind::Transform2d).is_none() {
         return Affine2::IDENTITY;
     }
     let num = |field: &str, default: f64| {
-        let path = LeafPath::new(ComponentKind::Transform2d, field).expect("declared field");
+        let path = LeafPath::new(FacetKind::Transform2d, field).expect("declared field");
         read(Leaf { node: id, path }).and_then(|v| v.as_f64()).unwrap_or(default)
     };
     Affine2::from_trs(num("x", 0.0), num("y", 0.0), num("rot", 0.0), num("sx", 1.0), num("sy", 1.0))
@@ -189,11 +189,11 @@ impl Affine3 {
 
 /// A node's own 3D transform. A node without `transform3d` is the identity.
 pub fn local_affine3(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine3 {
-    if doc.component(id, ComponentKind::Transform3d).is_none() {
+    if doc.facet(id, FacetKind::Transform3d).is_none() {
         return Affine3::IDENTITY;
     }
     let vec = |field: &str, default: [f64; 3]| {
-        let path = LeafPath::new(ComponentKind::Transform3d, field).expect("declared field");
+        let path = LeafPath::new(FacetKind::Transform3d, field).expect("declared field");
         read(Leaf { node: id, path }).and_then(|v| v.as_vec3()).unwrap_or(default)
     };
     Affine3::from_trs(vec("pos", [0.0; 3]), vec("rot", [0.0; 3]), vec("scale", [1.0; 3]))
@@ -303,16 +303,16 @@ fn enclosing_path(doc: &Document, id: NodeId) -> Option<NodeId> {
 pub fn effect_of(doc: &Document, leaf: Leaf) -> GeometryEffect {
     let Some(node) = doc.live(leaf.node) else { return GeometryEffect::None };
     let ty = node.ty.name();
-    match leaf.path.component {
-        ComponentKind::Transform2d if matches!(ty, "point" | "contour") => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
-        ComponentKind::Transform2d => GeometryEffect::Placement(leaf.node),
-        ComponentKind::Handles | ComponentKind::Contour => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
-        ComponentKind::Size | ComponentKind::Text | ComponentKind::Font | ComponentKind::Radius | ComponentKind::Arc | ComponentKind::Stroke | ComponentKind::Shadow | ComponentKind::Frame | ComponentKind::Embed | ComponentKind::EmbedCamera => {
+    match leaf.path.facet {
+        FacetKind::Transform2d if matches!(ty, "point" | "contour") => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
+        FacetKind::Transform2d => GeometryEffect::Placement(leaf.node),
+        FacetKind::Handles | FacetKind::Contour => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
+        FacetKind::Size | FacetKind::Text | FacetKind::Font | FacetKind::Radius | FacetKind::Arc | FacetKind::Stroke | FacetKind::Shadow | FacetKind::Frame | FacetKind::Embed | FacetKind::EmbedCamera => {
             GeometryEffect::Local(leaf.node)
         }
         // A camera's aspect shapes every embed that looks through it; rare,
         // and structure-free, so the embeds are found by the scene on demand.
-        ComponentKind::Camera => GeometryEffect::Local(leaf.node),
+        FacetKind::Camera => GeometryEffect::Local(leaf.node),
         _ => GeometryEffect::None,
     }
 }
@@ -381,7 +381,7 @@ impl Revisions {
                 Op::Set { id, path, .. } => {
                     self.pending_leaves.insert(Leaf { node: *id, path: *path });
                 }
-                Op::Create { .. } | Op::Delete { .. } | Op::Reparent { .. } | Op::Reorder { .. } | Op::AddComp { .. } | Op::RemoveComp { .. } => self.pending_structure = true,
+                Op::Create { .. } | Op::Delete { .. } | Op::Reparent { .. } | Op::Reorder { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } => self.pending_structure = true,
                 _ => {}
             }
         }
@@ -423,7 +423,7 @@ impl Revisions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::component::{LeafStruct, Transform2d};
+    use crate::facet::{LeafStruct, Transform2d};
     use crate::op::{Actor, Op, TransactionInput};
     use crate::order::OrderKey;
     use crate::registry::TypeId;
@@ -489,7 +489,7 @@ mod tests {
                     ty: TypeId::lookup("group").unwrap(),
                     parent: (i > 0).then(|| ids[i - 1]),
                     order: OrderKey::first(),
-                    components: vec![t.wrap()],
+                    facets: vec![t.wrap()],
                 });
             }
             store
@@ -557,7 +557,7 @@ mod tests {
 
     /// A rect under a group under a root group; returns (root, group, rect).
     fn nested(store: &mut Store) -> [NodeId; 3] {
-        use crate::component::Size;
+        use crate::facet::Size;
         let ids = store.document().next_ids(3);
         let mut t = Transform2d::default();
         t.x = Slot::Const(Value::Number(10.0));
@@ -571,9 +571,9 @@ mod tests {
                 ts: 0,
                 idempotency_key: None,
                 ops: vec![
-                    Op::Create { id: ids[0], ty: TypeId::lookup("group").unwrap(), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap()] },
-                    Op::Create { id: ids[1], ty: TypeId::lookup("group").unwrap(), parent: Some(ids[0]), order: OrderKey::first(), components: vec![t.wrap()] },
-                    Op::Create { id: ids[2], ty: TypeId::lookup("rect").unwrap(), parent: Some(ids[1]), order: OrderKey::first(), components: vec![Transform2d::default().wrap(), size.wrap()] },
+                    Op::Create { id: ids[0], ty: TypeId::lookup("group").unwrap(), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap()] },
+                    Op::Create { id: ids[1], ty: TypeId::lookup("group").unwrap(), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![t.wrap()] },
+                    Op::Create { id: ids[2], ty: TypeId::lookup("rect").unwrap(), parent: Some(ids[1]), order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), size.wrap()] },
                 ],
                 exact: false,
             })
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn a_points_move_is_its_paths_local_change() {
-        use crate::component::PathShape;
+        use crate::facet::PathShape;
         let mut store = Store::new();
         let ids = store.document().next_ids(4);
         let [path, contour, point, other] = [ids[0], ids[1], ids[2], ids[3]];
@@ -642,10 +642,10 @@ mod tests {
                 ts: 0,
                 idempotency_key: None,
                 ops: vec![
-                    Op::Create { id: path, ty: TypeId::lookup("path").unwrap(), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), PathShape::default().wrap()] },
-                    Op::Create { id: contour, ty: TypeId::lookup("contour").unwrap(), parent: Some(path), order: OrderKey::first(), components: vec![crate::component::Contour::default().wrap()] },
-                    Op::Create { id: point, ty: TypeId::lookup("point").unwrap(), parent: Some(contour), order: OrderKey::first(), components: vec![at.clone().wrap(), crate::component::Handles::default().wrap()] },
-                    Op::Create { id: other, ty: TypeId::lookup("point").unwrap(), parent: Some(contour), order: OrderKey::after(&OrderKey::first()), components: vec![at.wrap(), crate::component::Handles::default().wrap()] },
+                    Op::Create { id: path, ty: TypeId::lookup("path").unwrap(), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), PathShape::default().wrap()] },
+                    Op::Create { id: contour, ty: TypeId::lookup("contour").unwrap(), parent: Some(path), order: OrderKey::first(), facets: vec![crate::facet::Contour::default().wrap()] },
+                    Op::Create { id: point, ty: TypeId::lookup("point").unwrap(), parent: Some(contour), order: OrderKey::first(), facets: vec![at.clone().wrap(), crate::facet::Handles::default().wrap()] },
+                    Op::Create { id: other, ty: TypeId::lookup("point").unwrap(), parent: Some(contour), order: OrderKey::after(&OrderKey::first()), facets: vec![at.wrap(), crate::facet::Handles::default().wrap()] },
                 ],
                 exact: false,
             })
@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn local_bounds_follow_shape_type_and_paint() {
-        use crate::component::{Radius, Shadow, Stroke};
+        use crate::facet::{Radius, Shadow, Stroke};
         let mut store = Store::new();
         let ids = store.document().next_ids(2);
         let mut r = Radius::default();
@@ -681,8 +681,8 @@ mod tests {
                 ts: 0,
                 idempotency_key: None,
                 ops: vec![
-                    Op::Create { id: ids[0], ty: TypeId::lookup("ellipse").unwrap(), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), r.wrap(), stroke.wrap()] },
-                    Op::Create { id: ids[1], ty: TypeId::lookup("rect").unwrap(), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), crate::component::Size::default().wrap(), shadow.wrap()] },
+                    Op::Create { id: ids[0], ty: TypeId::lookup("ellipse").unwrap(), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), r.wrap(), stroke.wrap()] },
+                    Op::Create { id: ids[1], ty: TypeId::lookup("rect").unwrap(), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), crate::facet::Size::default().wrap(), shadow.wrap()] },
                 ],
                 exact: false,
             })
@@ -710,13 +710,13 @@ mod tests {
                 idempotency_key: None,
                 ops: vec![
                     // A group without transform2d is the identity.
-                    Op::Create { id: ids[0], ty: TypeId::lookup("group").unwrap(), parent: None, order: OrderKey::first(), components: vec![] },
+                    Op::Create { id: ids[0], ty: TypeId::lookup("group").unwrap(), parent: None, order: OrderKey::first(), facets: vec![] },
                     Op::Create {
                         id: ids[1],
                         ty: TypeId::lookup("group").unwrap(),
                         parent: Some(ids[0]),
                         order: OrderKey::first(),
-                        components: vec![t.wrap()],
+                        facets: vec![t.wrap()],
                     },
                 ],
                 exact: false,

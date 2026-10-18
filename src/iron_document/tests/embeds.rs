@@ -1,7 +1,7 @@
 //! Embedded compositions (ECM §7.4): one composition shown inside another,
 //! by live reference; loops refused however they would form.
 
-use iron_document::component::{Camera, Composition, Embed, EmbedCamera, Name, Size, Transform2d, Transform3d};
+use iron_document::facet::{Camera, Composition, Embed, EmbedCamera, Name, Size, Transform2d, Transform3d};
 use iron_document::composition;
 use iron_document::*;
 
@@ -13,19 +13,19 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
     TransactionInput { label: label.into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }
 }
 
-fn named(text: &str) -> Component {
+fn named(text: &str) -> Facet {
     let mut n = Name::default();
     n.text = Slot::Const(Value::Str(text.into()));
     n.wrap()
 }
 
-fn comp(name: &str, dims: &str) -> Vec<Component> {
+fn comp(name: &str, dims: &str) -> Vec<Facet> {
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum(dims.into()));
     vec![named(name), c.wrap()]
 }
 
-fn embed_of(c: NodeId) -> Component {
+fn embed_of(c: NodeId) -> Facet {
     let mut e = Embed::default();
     e.source = Slot::Const(Value::Ref(c));
     e.wrap()
@@ -51,23 +51,23 @@ fn three() -> Three {
         .apply(tx(
             "setup",
             vec![
-                Op::Create { id: main, ty: ty("composition"), parent: None, order: k.clone(), components: comp("main", "2d") },
-                Op::Create { id: scene, ty: ty("composition"), parent: None, order: k1.clone(), components: comp("scene", "2d") },
-                Op::Create { id: rect, ty: ty("rect"), parent: Some(scene), order: k.clone(), components: vec![Transform2d::default().wrap(), Size::default().wrap()] },
-                Op::Create { id: assembly, ty: ty("composition"), parent: None, order: k2, components: comp("assembly", "3d") },
-                Op::Create { id: camera, ty: ty("camera"), parent: Some(assembly), order: k, components: vec![Transform3d::default().wrap(), Camera::default().wrap()] },
+                Op::Create { id: main, ty: ty("composition"), parent: None, order: k.clone(), facets: comp("main", "2d") },
+                Op::Create { id: scene, ty: ty("composition"), parent: None, order: k1.clone(), facets: comp("scene", "2d") },
+                Op::Create { id: rect, ty: ty("rect"), parent: Some(scene), order: k.clone(), facets: vec![Transform2d::default().wrap(), Size::default().wrap()] },
+                Op::Create { id: assembly, ty: ty("composition"), parent: None, order: k2, facets: comp("assembly", "3d") },
+                Op::Create { id: camera, ty: ty("camera"), parent: Some(assembly), order: k, facets: vec![Transform3d::default().wrap(), Camera::default().wrap()] },
             ],
         ))
         .unwrap();
     Three { store, main, scene, assembly, camera }
 }
 
-fn add_embed(store: &mut Store, parent: NodeId, of: NodeId, extra: Vec<Component>) -> Result<NodeId, Vec<ApplyError>> {
+fn add_embed(store: &mut Store, parent: NodeId, of: NodeId, extra: Vec<Facet>) -> Result<NodeId, Vec<ApplyError>> {
     let id = store.document().next_id();
     let order = store.document().children(parent).last().map(|&c| OrderKey::after(&store.document().live(c).unwrap().order)).unwrap_or_else(OrderKey::first);
     let mut comps = vec![embed_of(of), Transform2d::default().wrap()];
     comps.extend(extra);
-    store.apply(tx("embed", vec![Op::Create { id, ty: ty("embed"), parent: Some(parent), order, components: comps }]))?;
+    store.apply(tx("embed", vec![Op::Create { id, ty: ty("embed"), parent: Some(parent), order, facets: comps }]))?;
     Ok(id)
 }
 
@@ -114,7 +114,7 @@ fn loops_are_refused_however_they_would_form() {
     // By a move: an embed of main, built in a composition nothing shows,
     // then moved into scene (which main shows).
     let spare = t.store.document().next_id();
-    t.store.apply(tx("spare", vec![Op::Create { id: spare, ty: ty("composition"), parent: None, order: OrderKey::after(&t.store.document().live(t.assembly).unwrap().order), components: comp("spare", "2d") }])).unwrap();
+    t.store.apply(tx("spare", vec![Op::Create { id: spare, ty: ty("composition"), parent: None, order: OrderKey::after(&t.store.document().live(t.assembly).unwrap().order), facets: comp("spare", "2d") }])).unwrap();
     let em = add_embed(&mut t.store, spare, t.main, vec![]).unwrap();
     let err = t.store.apply(tx("move", vec![Op::Reparent { id: em, parent: Some(t.scene), order: OrderKey::first() }])).unwrap_err();
     assert_eq!(err[0].kind, ErrorKind::Cycle);

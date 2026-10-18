@@ -2,7 +2,7 @@
 //! power meter. Signals ride the reactive graph; an in-port's is derived
 //! from its connection; a reading inverts back to its source.
 
-use iron_document::component::{Composition, Connection, Name, ParamSpec, Port, Size, Template, Transform2d};
+use iron_document::facet::{Composition, Connection, Name, ParamSpec, Port, Size, Template, Transform2d};
 use iron_document::definition::{self, Placement};
 use iron_document::*;
 use std::collections::BTreeMap;
@@ -15,13 +15,13 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
     TransactionInput { label: label.into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }
 }
 
-fn named(s: &str) -> Component {
+fn named(s: &str) -> Facet {
     let mut n = Name::default();
     n.text = Slot::Const(Value::Str(s.into()));
     n.wrap()
 }
 
-fn port(kind: &str, dir: &str, signal: Option<String>) -> Component {
+fn port(kind: &str, dir: &str, signal: Option<String>) -> Facet {
     let mut p = Port::default();
     p.kind = Slot::Const(Value::Str(kind.into()));
     p.dir = Slot::Const(Value::Enum(dir.into()));
@@ -59,7 +59,7 @@ impl Lab {
         self.store.apply(tx(
             "connect",
             vec![
-                Op::Create { id, ty: ty("connection"), parent: Some(self.model), order: key, components: vec![Connection::default().wrap()] },
+                Op::Create { id, ty: ty("connection"), parent: Some(self.model), order: key, facets: vec![Connection::default().wrap()] },
                 Op::Link { rel: Relation { id: rels[0], from: id, to: from, rel: RelKind::Connects, data: end("a") } },
                 Op::Link { rel: Relation { id: rels[1], from: id, to, rel: RelKind::Connects, data: end("b") } },
             ],
@@ -98,32 +98,32 @@ fn lab() -> Lab {
     let mut comp = Composition::default();
     comp.dims = Slot::Const(Value::Enum("2d".into()));
     let mut ops = vec![
-        Op::Create { id: library, ty: ty("library"), parent: None, order: k(0), components: vec![named("library")] },
-        Op::Create { id: cartoon, ty: ty("composition"), parent: None, order: k(1), components: vec![named("cartoon"), comp.wrap()] },
-        Op::Create { id: model, ty: ty("model"), parent: None, order: k(2), components: vec![named("model")] },
-        Op::Create { id: laser_def, ty: ty("definition"), parent: Some(library), order: k(0), components: vec![named("laser")] },
+        Op::Create { id: library, ty: ty("library"), parent: None, order: k(0), facets: vec![named("library")] },
+        Op::Create { id: cartoon, ty: ty("composition"), parent: None, order: k(1), facets: vec![named("cartoon"), comp.wrap()] },
+        Op::Create { id: model, ty: ty("model"), parent: None, order: k(2), facets: vec![named("model")] },
+        Op::Create { id: laser_def, ty: ty("definition"), parent: Some(library), order: k(0), facets: vec![named("laser")] },
     ];
     let (pid, pc) = param(power, "power", Value::parse_quantity("10 mW").unwrap());
-    ops.push(Op::Create { id: pid, ty: ty("param_spec"), parent: Some(laser_def), order: k(0), components: pc });
-    ops.push(Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser_def), order: k(1), components: vec![named("out"), port("optical_power", "out", Some(format!("{power}.param_spec.default")))] });
-    ops.push(Op::Create { id: laser_t, ty: ty("template"), parent: Some(laser_def), order: k(2), components: vec![template("cartoon")] });
-    ops.push(Op::Create { id: laser_box, ty: ty("rect"), parent: Some(laser_t), order: k(0), components: vec![Transform2d::default().wrap(), Size::default().wrap()] });
-    ops.push(Op::Create { id: fiber_def, ty: ty("definition"), parent: Some(library), order: k(1), components: vec![named("fiber")] });
+    ops.push(Op::Create { id: pid, ty: ty("param_spec"), parent: Some(laser_def), order: k(0), facets: pc });
+    ops.push(Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser_def), order: k(1), facets: vec![named("out"), port("optical_power", "out", Some(format!("{power}.param_spec.default")))] });
+    ops.push(Op::Create { id: laser_t, ty: ty("template"), parent: Some(laser_def), order: k(2), facets: vec![template("cartoon")] });
+    ops.push(Op::Create { id: laser_box, ty: ty("rect"), parent: Some(laser_t), order: k(0), facets: vec![Transform2d::default().wrap(), Size::default().wrap()] });
+    ops.push(Op::Create { id: fiber_def, ty: ty("definition"), parent: Some(library), order: k(1), facets: vec![named("fiber")] });
     let (lid, lc) = param(loss, "loss_db_per_km", Value::Number(0.5));
-    ops.push(Op::Create { id: lid, ty: ty("param_spec"), parent: Some(fiber_def), order: k(0), components: lc });
+    ops.push(Op::Create { id: lid, ty: ty("param_spec"), parent: Some(fiber_def), order: k(0), facets: lc });
     let (nid, nc) = param(length, "length_km", Value::Number(2.0));
-    ops.push(Op::Create { id: nid, ty: ty("param_spec"), parent: Some(fiber_def), order: k(1), components: nc });
-    ops.push(Op::Create { id: fiber_in, ty: ty("port_spec"), parent: Some(fiber_def), order: k(2), components: vec![named("in"), port("optical_power", "in", None)] });
+    ops.push(Op::Create { id: nid, ty: ty("param_spec"), parent: Some(fiber_def), order: k(1), facets: nc });
+    ops.push(Op::Create { id: fiber_in, ty: ty("port_spec"), parent: Some(fiber_def), order: k(2), facets: vec![named("in"), port("optical_power", "in", None)] });
     ops.push(Op::Create {
         id: fiber_out,
         ty: ty("port_spec"),
         parent: Some(fiber_def),
         order: k(3),
-        components: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.param_spec.default * {length}.param_spec.default / 10)")))],
+        facets: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.param_spec.default * {length}.param_spec.default / 10)")))],
     });
-    ops.push(Op::Create { id: meter_def, ty: ty("definition"), parent: Some(library), order: k(2), components: vec![named("meter")] });
-    ops.push(Op::Create { id: meter_in, ty: ty("port_spec"), parent: Some(meter_def), order: k(0), components: vec![named("in"), port("optical_power", "in", None)] });
-    ops.push(Op::Create { id: meter_t, ty: ty("template"), parent: Some(meter_def), order: k(1), components: vec![template("cartoon")] });
+    ops.push(Op::Create { id: meter_def, ty: ty("definition"), parent: Some(library), order: k(2), facets: vec![named("meter")] });
+    ops.push(Op::Create { id: meter_in, ty: ty("port_spec"), parent: Some(meter_def), order: k(0), facets: vec![named("in"), port("optical_power", "in", None)] });
+    ops.push(Op::Create { id: meter_t, ty: ty("template"), parent: Some(meter_def), order: k(1), facets: vec![template("cartoon")] });
     store.apply(tx("library", ops)).unwrap();
     // The fiber and meter templates draw one bar each; the meter's width
     // reads its in-port.
@@ -135,8 +135,8 @@ fn lab() -> Lab {
         .apply(tx(
             "templates",
             vec![
-                Op::Create { id: fiber_t, ty: ty("template"), parent: Some(fiber_def), order: k(4), components: vec![template("cartoon")] },
-                Op::Create { id: more[1], ty: ty("rect"), parent: Some(meter_t), order: k(0), components: vec![Transform2d::default().wrap(), s.wrap()] },
+                Op::Create { id: fiber_t, ty: ty("template"), parent: Some(fiber_def), order: k(4), facets: vec![template("cartoon")] },
+                Op::Create { id: more[1], ty: ty("rect"), parent: Some(meter_t), order: k(0), facets: vec![Transform2d::default().wrap(), s.wrap()] },
             ],
         ))
         .unwrap();
@@ -212,10 +212,10 @@ fn connections_must_join_one_kind_one_way_once() {
     // An rf_voltage output cannot drive an optical input.
     let rf = lab.store.document().next_ids(1)[0];
     let key = OrderKey::after(&lab.store.document().live(laser_out).unwrap().order);
-    lab.store.apply(tx("rf port", vec![Op::Create { id: rf, ty: ty("port"), parent: Some(lab.laser), order: key, components: vec![named("rf"), port("rf_voltage", "out", None)] }])).unwrap();
+    lab.store.apply(tx("rf port", vec![Op::Create { id: rf, ty: ty("port"), parent: Some(lab.laser), order: key, facets: vec![named("rf"), port("rf_voltage", "out", None)] }])).unwrap();
     let spare = lab.store.document().next_ids(1)[0];
     let key = OrderKey::after(&lab.store.document().live(meter_in).unwrap().order);
-    lab.store.apply(tx("spare in", vec![Op::Create { id: spare, ty: ty("port"), parent: Some(lab.meter), order: key, components: vec![named("in2"), port("optical_power", "in", None)] }])).unwrap();
+    lab.store.apply(tx("spare in", vec![Op::Create { id: spare, ty: ty("port"), parent: Some(lab.meter), order: key, facets: vec![named("in2"), port("optical_power", "in", None)] }])).unwrap();
     let err = lab.connect(rf, spare).unwrap_err();
     assert!(err[0].message.contains("cannot connect rf_voltage"), "{err:?}");
 }
@@ -226,7 +226,7 @@ fn connections_must_join_one_kind_one_way_once() {
 /// are solved together: the heater sits at 303.15 K and 5 W flows.
 #[test]
 fn a_heater_settles_through_its_thermal_link() {
-    use iron_document::component::Equation;
+    use iron_document::facet::Equation;
     let mut store = Store::new();
     let q = |s: &str| Value::parse_quantity(s).unwrap();
     let k = |n: u32| (0..n).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
@@ -236,27 +236,27 @@ fn a_heater_settles_through_its_thermal_link() {
         let mut p = ParamSpec::default();
         p.kind = Slot::Const(Value::Enum("quantity".into()));
         p.default = Slot::Const(v);
-        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, components: vec![p.wrap(), named(name)] }
+        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
     };
-    let pspec = |id, parent, order, name: &str| Op::Create { id, ty: ty("port_spec"), parent: Some(parent), order, components: vec![named(name), port("heat_flow", "in", None)] };
+    let pspec = |id, parent, order, name: &str| Op::Create { id, ty: ty("port_spec"), parent: Some(parent), order, facets: vec![named(name), port("heat_flow", "in", None)] };
     let eq = |id, parent, order, lhs: String, rhs: String| {
         let mut e = Equation::default();
         e.lhs = Slot::Bound(Expr::parse(&lhs).unwrap());
         e.rhs = Slot::Bound(Expr::parse(&rhs).unwrap());
-        Op::Create { id, ty: ty("equation"), parent: Some(parent), order, components: vec![e.wrap()] }
+        Op::Create { id, ty: ty("equation"), parent: Some(parent), order, facets: vec![e.wrap()] }
     };
     let template = |id, parent, order| {
         let mut t = Template::default();
         t.notation = Slot::Const(Value::Str("cartoon".into()));
-        Op::Create { id, ty: ty("template"), parent: Some(parent), order, components: vec![t.wrap()] }
+        Op::Create { id, ty: ty("template"), parent: Some(parent), order, facets: vec![t.wrap()] }
     };
-    let def = |id, name: &str, order| Op::Create { id, ty: ty("definition"), parent: Some(library), order, components: vec![named(name)] };
+    let def = |id, name: &str, order| Op::Create { id, ty: ty("definition"), parent: Some(library), order, facets: vec![named(name)] };
     store
         .apply(tx(
             "thermal library",
             vec![
-                Op::Create { id: library, ty: ty("library"), parent: None, order: k(0), components: vec![named("library")] },
-                Op::Create { id: model, ty: ty("model"), parent: None, order: k(1), components: vec![named("model")] },
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k(0), facets: vec![named("library")] },
+                Op::Create { id: model, ty: ty("model"), parent: None, order: k(1), facets: vec![named("model")] },
                 def(heater, "heater", k(0)),
                 param(power, heater, k(0), "power", q("5 W")),
                 pspec(h_out, heater, k(1), "out"),
@@ -319,7 +319,7 @@ fn figure_of_entity(store: &mut Store, entity: NodeId) -> NodeId {
         .apply(tx(
             "figure",
             vec![
-                Op::Create { id, ty: ty("rect"), parent: Some(cartoon), order, components: vec![Transform2d::default().wrap(), Size::default().wrap()] },
+                Op::Create { id, ty: ty("rect"), parent: Some(cartoon), order, facets: vec![Transform2d::default().wrap(), Size::default().wrap()] },
                 Op::Link { rel: Relation { id: rel, from: id, to: entity, rel: RelKind::Figures, data: BTreeMap::new() } },
             ],
         ))
@@ -368,7 +368,7 @@ fn copying_a_whole_chain_keeps_its_connections() {
     let doc = lab.store.document();
     assert_eq!(doc.nodes_of_type(ty("connection")).count(), connections * 2);
     // The copied meter reads the copied laser: raise it, only its meter moves.
-    let def = |e: NodeId| doc.get::<iron_document::component::Instance>(e).unwrap().def.constant().cloned();
+    let def = |e: NodeId| doc.get::<iron_document::facet::Instance>(e).unwrap().def.constant().cloned();
     let copy_of = |original: NodeId| pasted.roots.iter().map(|&r| composition::figured_by(doc, r).unwrap()).find(|&e| def(e) == def(original)).unwrap();
     let (laser, meter) = (copy_of(lab.laser), copy_of(lab.meter));
     assert!(laser != lab.laser && meter != lab.meter);

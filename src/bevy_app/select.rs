@@ -560,8 +560,8 @@ impl Geo<'_> {
         nest::world_2d(self.store, self.spatial, id)
     }
 
-    fn has(&self, id: NodeId, kind: iron_document::ComponentKind) -> bool {
-        self.doc().component(id, kind).is_some()
+    fn has(&self, id: NodeId, kind: iron_document::FacetKind) -> bool {
+        self.doc().facet(id, kind).is_some()
     }
 
     /// Panel document px ← the space the chain's node is placed in (its
@@ -587,7 +587,7 @@ impl Geo<'_> {
 
     /// The node's box in its own space and what resizing it writes.
     fn local_box(&self, id: NodeId) -> Option<(Rect, Kind)> {
-        use iron_document::ComponentKind as K;
+        use iron_document::FacetKind as K;
         let doc = self.doc();
         match self.ty(id) {
             "rect" => Some((Rect::new(0.0, 0.0, self.num(id, "size.w")?, self.num(id, "size.h")?), Kind::Sized { aspect: false })),
@@ -1163,7 +1163,7 @@ fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, rea
     // An embed never goes inside the composition it shows (a cycle the
     // store refuses): from an artboard of that composition, paste beside it.
     let shows_target = |root: &NodeId| {
-        let source = frag.doc.get::<iron_document::component::Embed>(*root).and_then(|e| e.source.constant()).and_then(|v| v.as_ref());
+        let source = frag.doc.get::<iron_document::facet::Embed>(*root).and_then(|e| e.source.constant()).and_then(|v| v.as_ref());
         source.is_some() && source == parent.and_then(|p| composition::composition_of(doc, p))
     };
     let (parent, to_comp) = if frag.roots.iter().any(shows_target) { (view.composition, Affine::IDENTITY) } else { (parent, to_comp) };
@@ -1175,7 +1175,7 @@ fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, rea
         .roots
         .iter()
         .filter_map(|&root| {
-            let t = frag.doc.component(root, iron_document::ComponentKind::Transform2d)?;
+            let t = frag.doc.facet(root, iron_document::FacetKind::Transform2d)?;
             let n = |f: &str| t.get(f).and_then(|s| s.constant()).and_then(|v| v.as_f64());
             let p = frag.parent_world.get(&root).copied().unwrap_or(iron_document::Affine2::IDENTITY).apply([n("x")?, n("y")?]);
             Some(Point::new(p[0], p[1]))

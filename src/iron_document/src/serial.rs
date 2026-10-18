@@ -5,7 +5,7 @@
 //! separate from location (plans/specs/document-spine.md §7). The layout is chosen
 //! so that a git diff of a saved file reads as an op log.
 
-use crate::component::{Component, ComponentKind};
+use crate::facet::{Facet, FacetKind};
 use crate::document::{Document, Node, Relation};
 use crate::id::{NodeId, RelationId, Version};
 use crate::order::OrderKey;
@@ -68,7 +68,7 @@ pub fn save(doc: &Document) -> String {
 
     out.push_str(" \"components\": {");
     let mut first_kind = true;
-    for (kind, table) in doc.raw_components() {
+    for (kind, table) in doc.raw_facets() {
         if table.keys().all(|id| id.is_session()) {
             continue;
         }
@@ -104,9 +104,9 @@ fn n_compact(v: &J) -> String {
     serde_json::to_string(v).expect("json serialises")
 }
 
-/// A type, component or relation name as this build spells it, for a file
+/// A type, facet or relation name as this build spells it, for a file
 /// written under `schema`. Schema 3 renamed `depiction` (the definition's
-/// template holder and its component) to `template`, and the `depicts`
+/// template holder and its facet) to `template`, and the `depicts`
 /// relation to `figures`.
 fn renamed(schema: u64, name: &str) -> &str {
     match (schema < 3, schema < 4, name) {
@@ -120,7 +120,7 @@ fn renamed(schema: u64, name: &str) -> &str {
 /// Before schema 4 a circle had one radius, `radius.r`. Its value becomes
 /// both of the ellipse's radii, and every binding or clip that read
 /// `radius.r` reads `radius.rx`.
-fn migrate_radius(schema: u64, kind: ComponentKind, v: &J) -> J {
+fn migrate_radius(schema: u64, kind: FacetKind, v: &J) -> J {
     if schema >= 4 {
         return v.clone();
     }
@@ -133,7 +133,7 @@ fn migrate_radius(schema: u64, kind: ComponentKind, v: &J) -> J {
         }
     }
     let mut out = rewrite(v);
-    if kind == ComponentKind::Radius
+    if kind == FacetKind::Radius
         && let Some(o) = out.as_object_mut()
         && let Some(r) = o.remove("r")
     {
@@ -351,12 +351,12 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
         }
     }
 
-    let mut components: BTreeMap<ComponentKind, BTreeMap<NodeId, Component>> = BTreeMap::new();
+    let mut facets: BTreeMap<FacetKind, BTreeMap<NodeId, Facet>> = BTreeMap::new();
     let raw_comps = field("components")?
         .as_object()
         .ok_or_else(|| LoadError("components must be an object".into()))?;
     for (kname, table) in raw_comps {
-        let kind = ComponentKind::from_name(renamed(schema, kname))
+        let kind = FacetKind::from_name(renamed(schema, kname))
             .ok_or_else(|| LoadError(format!("unknown component {kname:?}")))?;
         let table = table
             .as_object()
@@ -374,13 +374,13 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
                     id, node.ty
                 )));
             }
-            let c = Component::from_json(kind, &migrate_radius(schema, kind, v)).map_err(|e| LoadError(format!("{id}: {e}")))?;
-            components.entry(kind).or_default().insert(id, c);
+            let c = Facet::from_json(kind, &migrate_radius(schema, kind, v)).map_err(|e| LoadError(format!("{id}: {e}")))?;
+            facets.entry(kind).or_default().insert(id, c);
         }
     }
     for n in nodes.values().filter(|n| n.is_live()) {
         for req in n.ty.spec().required() {
-            if !components.get(&req).is_some_and(|t| t.contains_key(&n.id)) {
+            if !facets.get(&req).is_some_and(|t| t.contains_key(&n.id)) {
                 return Err(LoadError(format!(
                     "{} ({}) is missing required {}",
                     n.id,
@@ -419,7 +419,7 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
         }
     }
 
-    let doc = Document::from_parts(nodes, components, relations, next_id, next_rel, version);
+    let doc = Document::from_parts(nodes, facets, relations, next_id, next_rel, version);
     doc.check_invariants().map_err(LoadError)?;
     Ok(doc)
 }

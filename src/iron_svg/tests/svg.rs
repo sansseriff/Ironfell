@@ -5,7 +5,7 @@
 //! `UPDATE_GOLDEN=1 cargo test -p iron_svg --target aarch64-apple-darwin`
 //! rewrites the golden files.
 
-use iron_document::component::*;
+use iron_document::facet::*;
 use iron_document::copy::{self, Placement};
 use iron_document::*;
 use iron_svg::{export, import, is_svg_text, Scope};
@@ -42,7 +42,7 @@ impl Build {
         Build { ids: store.document().next_ids(400), used: 0, keys: BTreeMap::new(), ops: Vec::new() }
     }
 
-    fn add(&mut self, t: &str, parent: Option<NodeId>, components: Vec<Component>) -> NodeId {
+    fn add(&mut self, t: &str, parent: Option<NodeId>, facets: Vec<Facet>) -> NodeId {
         let id = self.ids[self.used];
         self.used += 1;
         let order = match self.keys.get(&parent) {
@@ -50,7 +50,7 @@ impl Build {
             None => OrderKey::first(),
         };
         self.keys.insert(parent, order.clone());
-        self.ops.push(Op::Create { id, ty: ty(t), parent, order, components });
+        self.ops.push(Op::Create { id, ty: ty(t), parent, order, facets });
         id
     }
 
@@ -59,65 +59,65 @@ impl Build {
     }
 }
 
-fn trs(x: f64, y: f64, rot: f64, sx: f64, sy: f64) -> Component {
+fn trs(x: f64, y: f64, rot: f64, sx: f64, sy: f64) -> Facet {
     let mut t = Transform2d::default();
     (t.x, t.y, t.rot, t.sx, t.sy) = (num(x), num(y), num(rot), num(sx), num(sy));
     t.wrap()
 }
 
-fn at(x: f64, y: f64) -> Component {
+fn at(x: f64, y: f64) -> Facet {
     trs(x, y, 0.0, 1.0, 1.0)
 }
 
-fn named(s: &str) -> Component {
+fn named(s: &str) -> Facet {
     let mut n = Name::default();
     n.text = Slot::Const(Value::Str(s.into()));
     n.wrap()
 }
 
-fn size(w: f64, h: f64) -> Component {
+fn size(w: f64, h: f64) -> Facet {
     let mut s = Size::default();
     (s.w, s.h) = (num(w), num(h));
     s.wrap()
 }
 
-fn corners(r: [f64; 4]) -> Component {
+fn corners(r: [f64; 4]) -> Facet {
     let mut c = Corners::default();
     (c.tl, c.tr, c.br, c.bl) = (num(r[0]), num(r[1]), num(r[2]), num(r[3]));
     c.wrap()
 }
 
-fn radius(rx: f64, ry: f64) -> Component {
+fn radius(rx: f64, ry: f64) -> Facet {
     let mut r = Radius::default();
     (r.rx, r.ry) = (num(rx), num(ry));
     r.wrap()
 }
 
-fn arc(start: f64, sweep: f64, inner: f64) -> Component {
+fn arc(start: f64, sweep: f64, inner: f64) -> Facet {
     let mut a = Arc::default();
     (a.start, a.sweep, a.inner) = (num(start), num(sweep), num(inner));
     a.wrap()
 }
 
-fn fill(c: [f32; 4], opacity: f64) -> Component {
+fn fill(c: [f32; 4], opacity: f64) -> Facet {
     let mut f = Fill::default();
     (f.color, f.opacity) = (color(c), num(opacity));
     f.wrap()
 }
 
-fn stroke(c: [f32; 4], w: f64) -> Component {
+fn stroke(c: [f32; 4], w: f64) -> Facet {
     let mut s = Stroke::default();
     (s.color, s.width) = (color(c), num(w));
     s.wrap()
 }
 
-fn shadow(c: [f32; 4], dx: f64, dy: f64, blur: f64) -> Component {
+fn shadow(c: [f32; 4], dx: f64, dy: f64, blur: f64) -> Facet {
     let mut s = Shadow::default();
     (s.color, s.dx, s.dy, s.blur) = (color(c), num(dx), num(dy), num(blur));
     s.wrap()
 }
 
-fn composition(name: &str, dims: &str) -> Vec<Component> {
+fn composition(name: &str, dims: &str) -> Vec<Facet> {
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum(dims.into()));
     vec![named(name), c.wrap()]
@@ -135,13 +135,13 @@ fn contour(b: &mut Build, path: NodeId, closed: bool, pts: &[(f64, f64, f64, f64
     }
 }
 
-fn path_shape(rule: &str) -> Component {
+fn path_shape(rule: &str) -> Facet {
     let mut p = PathShape::default();
     p.fill_rule = Slot::Const(Value::Enum(rule.into()));
     p.wrap()
 }
 
-fn dashed(c: [f32; 4], w: f64, dash: &str, join: &str, cap: &str) -> Component {
+fn dashed(c: [f32; 4], w: f64, dash: &str, join: &str, cap: &str) -> Facet {
     let mut s = Stroke::default();
     (s.color, s.width) = (color(c), num(w));
     s.dash = Slot::Const(Value::Str(dash.into()));
@@ -377,7 +377,7 @@ fn figma_copy_as_svg_imports_editable() {
     assert_eq!(f(&store, line, "stroke.width"), 2.0);
     assert_eq!(kids_of(&store, kids_of(&store, line)[0]).len(), 2);
     assert_eq!(store.resolved(line, "stroke.cap".parse().unwrap()), Some(Value::Enum("butt".into())));
-    // A sharp-cornered square has no corners component.
+    // A sharp-cornered square has no corners facet.
     assert!(store.resolved(roots[3], "corners.tl".parse().unwrap()).is_none());
     assert_eq!((f(&store, roots[3], "size.w"), f(&store, roots[3], "size.h")), (40.0, 40.0));
     // Figma's drop shadow is a filter Iron does not read back.
@@ -547,7 +547,7 @@ fn automatic_embed_frame_includes_transformed_stroke_and_shadow() {
 /// Iron's own layout (plans/specs/text.md §9).
 #[test]
 fn text_exports_as_tspans() {
-    use iron_document::component::{Font, Text};
+    use iron_document::facet::{Font, Text};
     static FONTS: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     FONTS.get_or_init(|| {
         iron_text::engine().register(std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../public/fonts/Inter.ttf")).unwrap());

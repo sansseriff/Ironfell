@@ -7,7 +7,7 @@
 //! domain things such as a bar chart, a laser or a fiber are definitions in
 //! the document's library, built from these primitives.
 
-use crate::component::ComponentKind;
+use crate::facet::FacetKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
@@ -39,24 +39,24 @@ pub enum ChildPolicy {
 
 pub struct TypeSpec {
     pub name: &'static str,
-    /// Allowed components, with whether each is required on create.
-    pub components: &'static [(ComponentKind, bool)],
+    /// Allowed facets, with whether each is required on create.
+    pub facets: &'static [(FacetKind, bool)],
     pub default_host: Host,
     pub children: ChildPolicy,
 }
 
-use ComponentKind as K;
+use FacetKind as K;
 
 static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "group",
-        components: &[(K::Name, false), (K::Transform2d, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false)],
+        facets: &[(K::Name, false), (K::Transform2d, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
     TypeSpec {
         name: "rect",
-        components: &[
+        facets: &[
             (K::Transform2d, true),
             (K::Size, true),
             (K::Corners, false),
@@ -75,7 +75,7 @@ static TYPES: &[TypeSpec] = &[
     // Figma (the type was `circle`, with one radius, before schema 4).
     TypeSpec {
         name: "ellipse",
-        components: &[
+        facets: &[
             (K::Transform2d, true),
             (K::Radius, true),
             (K::Arc, false),
@@ -94,7 +94,7 @@ static TYPES: &[TypeSpec] = &[
     // rect. `size` matters only when `text.sizing` is not `auto_width`.
     TypeSpec {
         name: "text",
-        components: &[
+        facets: &[
             (K::Transform2d, true),
             (K::Text, true),
             (K::Font, true),
@@ -114,7 +114,7 @@ static TYPES: &[TypeSpec] = &[
     // can have holes (schema 5; before, its points were its children).
     TypeSpec {
         name: "path",
-        components: &[
+        facets: &[
             (K::Transform2d, true),
             (K::PathShape, true),
             (K::Fill, false),
@@ -132,26 +132,26 @@ static TYPES: &[TypeSpec] = &[
     // are in the path's space.
     TypeSpec {
         name: "contour",
-        components: &[(K::Contour, true), (K::Name, false)],
+        facets: &[(K::Contour, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["point"]),
     },
     // One anchor of a contour, in the path's space, with its handles.
     TypeSpec {
         name: "point",
-        components: &[(K::Transform2d, true), (K::Handles, false), (K::Name, false)],
+        facets: &[(K::Transform2d, true), (K::Handles, false), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
     TypeSpec {
         name: "mesh",
-        components: &[(K::Transform3d, true), (K::Mesh, true), (K::Fill, false), (K::Name, false)],
+        facets: &[(K::Transform3d, true), (K::Mesh, true), (K::Fill, false), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
     TypeSpec {
         name: "slider",
-        components: &[
+        facets: &[
             (K::Transform2d, true),
             (K::Slider, true),
             (K::Size, false),
@@ -165,33 +165,33 @@ static TYPES: &[TypeSpec] = &[
     // types a library is made of. None of them is drawn.
     TypeSpec {
         name: "library",
-        components: &[(K::Name, false)],
+        facets: &[(K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["definition"]),
     },
     TypeSpec {
         name: "definition",
-        components: &[(K::Name, true)],
+        facets: &[(K::Name, true)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["param_spec", "port_spec", "equation", "template"]),
     },
     TypeSpec {
         name: "param_spec",
-        components: &[(K::Name, true), (K::ParamSpec, true)],
+        facets: &[(K::Name, true), (K::ParamSpec, true)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
     // A template: its subtree is what an instance copies.
     TypeSpec {
         name: "template",
-        components: &[(K::Template, true), (K::Name, false)],
+        facets: &[(K::Template, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
     // The model tree (ECM §5): what things are, never drawn. A root.
     TypeSpec {
         name: "model",
-        components: &[(K::Name, false)],
+        facets: &[(K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["entity", "connection"]),
     },
@@ -199,27 +199,27 @@ static TYPES: &[TypeSpec] = &[
     // entity as a `port`, its behaviour binding rewritten.
     TypeSpec {
         name: "port_spec",
-        components: &[(K::Name, true), (K::Port, true)],
+        facets: &[(K::Name, true), (K::Port, true)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
     TypeSpec {
         name: "port",
-        components: &[(K::Name, true), (K::Port, true)],
+        facets: &[(K::Name, true), (K::Port, true)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
     // A behaviour equation over ports and parameters (ECM §6.1).
     TypeSpec {
         name: "equation",
-        components: &[(K::Equation, true), (K::Name, false)],
+        facets: &[(K::Equation, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
     // Two ports joined: two `connects` relations, ends `a` and `b`.
     TypeSpec {
         name: "connection",
-        components: &[(K::Connection, true), (K::Name, false)],
+        facets: &[(K::Connection, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
@@ -228,7 +228,7 @@ static TYPES: &[TypeSpec] = &[
     // never in undo, and views of the document leave it out.
     TypeSpec {
         name: "session",
-        components: &[(K::Name, false)],
+        facets: &[(K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["selection"]),
     },
@@ -236,14 +236,14 @@ static TYPES: &[TypeSpec] = &[
     // in pick order.
     TypeSpec {
         name: "selection",
-        components: &[(K::Name, false)],
+        facets: &[(K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
     // One diagram (ECM §5, §7): a root whose subtree one panel shows.
     TypeSpec {
         name: "composition",
-        components: &[(K::Name, true), (K::Composition, true)],
+        facets: &[(K::Name, true), (K::Composition, true)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -251,7 +251,7 @@ static TYPES: &[TypeSpec] = &[
     // transform matches the parent composition's dimensions.
     TypeSpec {
         name: "embed",
-        components: &[
+        facets: &[
             // Placement first: a bare x, y, w or h on an embed means where
             // it sits, not its frame (`frame.x`), which is the less common.
             (K::Embed, true),
@@ -268,7 +268,7 @@ static TYPES: &[TypeSpec] = &[
     // A view into a 3D composition, for embeds that name it.
     TypeSpec {
         name: "camera",
-        components: &[(K::Transform3d, true), (K::Camera, true), (K::Name, false)],
+        facets: &[(K::Transform3d, true), (K::Camera, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
@@ -276,7 +276,7 @@ static TYPES: &[TypeSpec] = &[
     // `figures` relations. Ports arrive as children in a later phase.
     TypeSpec {
         name: "entity",
-        components: &[(K::Instance, true), (K::Params, true), (K::Name, false)],
+        facets: &[(K::Instance, true), (K::Params, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["port", "equation"]),
     },
@@ -285,19 +285,19 @@ static TYPES: &[TypeSpec] = &[
     // by convention a child of the group that owns the mechanism.
     TypeSpec {
         name: "constraint",
-        components: &[(K::Constraint, true), (K::Name, false)],
+        facets: &[(K::Constraint, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
     TypeSpec {
         name: "timeline",
-        components: &[(K::Name, false)],
+        facets: &[(K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["clip"]),
     },
     TypeSpec {
         name: "clip",
-        components: &[(K::Timing, true), (K::Clip, true), (K::Name, false)],
+        facets: &[(K::Timing, true), (K::Clip, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
@@ -325,16 +325,16 @@ impl TypeId {
 }
 
 impl TypeSpec {
-    pub fn allows(&self, kind: ComponentKind) -> bool {
-        self.components.iter().any(|(k, _)| *k == kind)
+    pub fn allows(&self, kind: FacetKind) -> bool {
+        self.facets.iter().any(|(k, _)| *k == kind)
     }
 
-    pub fn requires(&self, kind: ComponentKind) -> bool {
-        self.components.iter().any(|(k, req)| *k == kind && *req)
+    pub fn requires(&self, kind: FacetKind) -> bool {
+        self.facets.iter().any(|(k, req)| *k == kind && *req)
     }
 
-    pub fn required(&self) -> impl Iterator<Item = ComponentKind> + '_ {
-        self.components.iter().filter(|(_, r)| *r).map(|(k, _)| *k)
+    pub fn required(&self) -> impl Iterator<Item = FacetKind> + '_ {
+        self.facets.iter().filter(|(_, r)| *r).map(|(k, _)| *k)
     }
 
     /// Types that only exist as roots: the model tree and compositions.
@@ -354,12 +354,12 @@ impl TypeSpec {
     }
 }
 
-/// A JSON description of every type and component: the single source for the
+/// A JSON description of every type and facet: the single source for the
 /// model's manifest, its tool schemas, and the DOM host's registry.
 pub fn schema_json() -> serde_json::Value {
     use serde_json::{Map, Value, json};
-    let mut components = Map::new();
-    for kind in ComponentKind::ALL {
+    let mut facets = Map::new();
+    for kind in FacetKind::ALL {
         let mut fields: Map<String, Value> = kind
             .fields()
             .iter()
@@ -370,7 +370,7 @@ pub fn schema_json() -> serde_json::Value {
             // to accept any name at kind `any`.
             fields.insert("*".to_owned(), json!("any"));
         }
-        components.insert(kind.name().to_owned(), Value::Object(fields));
+        facets.insert(kind.name().to_owned(), Value::Object(fields));
     }
     let mut types = Map::new();
     for ty in TypeId::all() {
@@ -383,14 +383,14 @@ pub fn schema_json() -> serde_json::Value {
         types.insert(
             spec.name.to_owned(),
             json!({
-                "components": spec.components.iter().map(|(k, req)| json!({"kind": k.name(), "required": req})).collect::<Vec<_>>(),
+                "components": spec.facets.iter().map(|(k, req)| json!({"kind": k.name(), "required": req})).collect::<Vec<_>>(),
                 "default_host": spec.default_host.name(),
                 "root_only": spec.root_only(),
                 "children": children,
             }),
         );
     }
-    json!({ "components": components, "types": types })
+    json!({ "components": facets, "types": types })
 }
 
 impl fmt::Display for TypeId {

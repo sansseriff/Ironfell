@@ -2,7 +2,7 @@
 //! beneath bindings and above constants, conflicts are reported, and a
 //! freeze commits what was published.
 
-use iron_document::component::{Clip, Fill, Size, Slider, Timing, Transform2d};
+use iron_document::facet::{Clip, Fill, Size, Slider, Timing, Transform2d};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -67,11 +67,11 @@ fn scene() -> Scene {
         .apply(tx(
             "build",
             vec![
-                Op::Create { id: gauge, ty: ty("slider"), parent: None, order: next(), components: vec![Transform2d::default().wrap(), Size::default().wrap(), sl.wrap()] },
-                Op::Create { id: bar, ty: ty("rect"), parent: None, order: next(), components: vec![Transform2d::default().wrap(), s.wrap(), Fill::default().wrap()] },
-                Op::Create { id: rect, ty: ty("rect"), parent: None, order: next(), components: vec![t.wrap(), Size::default().wrap()] },
-                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: next(), components: vec![] },
-                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), components: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: gauge, ty: ty("slider"), parent: None, order: next(), facets: vec![Transform2d::default().wrap(), Size::default().wrap(), sl.wrap()] },
+                Op::Create { id: bar, ty: ty("rect"), parent: None, order: next(), facets: vec![Transform2d::default().wrap(), s.wrap(), Fill::default().wrap()] },
+                Op::Create { id: rect, ty: ty("rect"), parent: None, order: next(), facets: vec![t.wrap(), Size::default().wrap()] },
+                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: next(), facets: vec![] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), facets: vec![timing.wrap(), c.wrap()] },
                 Op::Link { rel: Relation { id: rel, from: clip, to: rect, rel: RelKind::Animates, data: BTreeMap::new() } },
             ],
         ))

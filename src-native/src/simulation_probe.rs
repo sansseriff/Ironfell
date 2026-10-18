@@ -4,7 +4,7 @@ use bevy::{
     prelude::*,
     render::{Render, RenderApp, RenderSystems},
 };
-use iron_document::{ComponentKind, LeafPath, Value};
+use iron_document::{FacetKind, LeafPath, Value};
 use ironfell::document_bridge::DocumentStore;
 use serde::Serialize;
 use serde_json::json;
@@ -81,8 +81,8 @@ impl Trace {
     }
 }
 fn speed(store: Res<DocumentStore>, mut speed: ResMut<Speed>, trace: Res<Trace>) {
-    let name = LeafPath::new(ComponentKind::Name, "text").unwrap();
-    let x = LeafPath::new(ComponentKind::Transform2d, "x").unwrap();
+    let name = LeafPath::new(FacetKind::Name, "text").unwrap();
+    let x = LeafPath::new(FacetKind::Transform2d, "x").unwrap();
     let source =
         store.0.document().live_nodes().find(
             |n| matches!(store.0.resolved(n.id,name),Some(Value::Str(s)) if s=="native test"),

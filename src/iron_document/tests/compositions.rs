@@ -2,7 +2,7 @@
 //! composition roots in 2D and 3D, the `model` root holding entities, and
 //! figures lifted to the entity they picture.
 
-use iron_document::component::{Composition, Instance, Mesh, Name, Params, Size, Transform2d, Transform3d};
+use iron_document::facet::{Composition, Instance, Mesh, Name, Params, Size, Transform2d, Transform3d};
 use iron_document::composition::{self, Dims};
 use iron_document::*;
 use std::collections::BTreeMap;
@@ -53,14 +53,14 @@ fn two_compositions() -> Two {
         .apply(tx(
             "setup",
             vec![
-                Op::Create { id: cartoon, ty: ty("composition"), parent: None, order: k.clone(), components: vec![named("cartoon").wrap(), comp("cartoon", "2d").wrap()] },
-                Op::Create { id: group, ty: ty("group"), parent: Some(cartoon), order: k.clone(), components: vec![] },
-                Op::Create { id: boxed, ty: ty("rect"), parent: Some(group), order: k.clone(), components: vec![Transform2d::default().wrap(), Size::default().wrap(), named("box").wrap()] },
-                Op::Create { id: assembly, ty: ty("composition"), parent: None, order: k1.clone(), components: vec![named("assembly").wrap(), comp("cad", "3d").wrap()] },
-                Op::Create { id: torus, ty: ty("mesh"), parent: Some(assembly), order: k.clone(), components: vec![Transform3d::default().wrap(), Mesh::default().wrap(), named("torus").wrap()] },
-                Op::Create { id: model, ty: ty("model"), parent: None, order: k2, components: vec![] },
-                Op::Create { id: library, ty: ty("library"), parent: None, order: k3, components: vec![] },
-                Op::Create { id: thing, ty: ty("definition"), parent: Some(library), order: k, components: vec![named("thing").wrap()] },
+                Op::Create { id: cartoon, ty: ty("composition"), parent: None, order: k.clone(), facets: vec![named("cartoon").wrap(), comp("cartoon", "2d").wrap()] },
+                Op::Create { id: group, ty: ty("group"), parent: Some(cartoon), order: k.clone(), facets: vec![] },
+                Op::Create { id: boxed, ty: ty("rect"), parent: Some(group), order: k.clone(), facets: vec![Transform2d::default().wrap(), Size::default().wrap(), named("box").wrap()] },
+                Op::Create { id: assembly, ty: ty("composition"), parent: None, order: k1.clone(), facets: vec![named("assembly").wrap(), comp("cad", "3d").wrap()] },
+                Op::Create { id: torus, ty: ty("mesh"), parent: Some(assembly), order: k.clone(), facets: vec![Transform3d::default().wrap(), Mesh::default().wrap(), named("torus").wrap()] },
+                Op::Create { id: model, ty: ty("model"), parent: None, order: k2, facets: vec![] },
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k3, facets: vec![] },
+                Op::Create { id: thing, ty: ty("definition"), parent: Some(library), order: k, facets: vec![named("thing").wrap()] },
             ],
         ))
         .unwrap();
@@ -70,7 +70,7 @@ fn two_compositions() -> Two {
 fn entity_ops(t: &Two, id: NodeId, figures: &[(RelationId, NodeId)]) -> Vec<Op> {
     let mut instance = Instance::default();
     instance.def = Slot::Const(Value::Ref(t.thing));
-    let mut ops = vec![Op::Create { id, ty: ty("entity"), parent: Some(t.model), order: OrderKey::first(), components: vec![instance.wrap(), Params::default().wrap()] }];
+    let mut ops = vec![Op::Create { id, ty: ty("entity"), parent: Some(t.model), order: OrderKey::first(), facets: vec![instance.wrap(), Params::default().wrap()] }];
     for &(rel, from) in figures {
         ops.push(Op::Link { rel: Relation { id: rel, from, to: id, rel: RelKind::Figures, data: BTreeMap::new() } });
     }
@@ -102,7 +102,7 @@ fn compositions_and_the_model_only_live_at_the_root() {
         ("model", t.cartoon, vec![]),
         ("rect", t.model, vec![Transform2d::default().wrap(), Size::default().wrap()]),
     ] {
-        let err = t.store.apply(tx("bad", vec![Op::Create { id, ty: ty(ty_name), parent: Some(parent), order: OrderKey::first(), components: comps }])).unwrap_err();
+        let err = t.store.apply(tx("bad", vec![Op::Create { id, ty: ty(ty_name), parent: Some(parent), order: OrderKey::first(), facets: comps }])).unwrap_err();
         assert_eq!(err[0].kind, ErrorKind::ChildNotAdmitted, "{ty_name} under {parent}: {err:?}");
     }
     // Moving a composition under another node is refused the same way.
@@ -172,9 +172,9 @@ fn linking_creates_the_model_library_and_thing_when_missing() {
         .apply(tx(
             "setup",
             vec![
-                Op::Create { id: ids[0], ty: ty("composition"), parent: None, order: k.clone(), components: vec![named("c").wrap(), comp("free", "2d").wrap()] },
-                Op::Create { id: ids[1], ty: ty("rect"), parent: Some(ids[0]), order: k.clone(), components: vec![Transform2d::default().wrap(), Size::default().wrap()] },
-                Op::Create { id: ids[2], ty: ty("rect"), parent: Some(ids[0]), order: OrderKey::after(&k), components: vec![Transform2d::default().wrap(), Size::default().wrap()] },
+                Op::Create { id: ids[0], ty: ty("composition"), parent: None, order: k.clone(), facets: vec![named("c").wrap(), comp("free", "2d").wrap()] },
+                Op::Create { id: ids[1], ty: ty("rect"), parent: Some(ids[0]), order: k.clone(), facets: vec![Transform2d::default().wrap(), Size::default().wrap()] },
+                Op::Create { id: ids[2], ty: ty("rect"), parent: Some(ids[0]), order: OrderKey::after(&k), facets: vec![Transform2d::default().wrap(), Size::default().wrap()] },
             ],
         ))
         .unwrap();

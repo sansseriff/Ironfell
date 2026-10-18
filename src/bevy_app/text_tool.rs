@@ -25,7 +25,7 @@
 //! words come from elsewhere, and the inspector shows where.
 
 use bevy::prelude::*;
-use iron_document::component::{Fill, Font, Name as DocName, Size, Text, Transform2d};
+use iron_document::facet::{Fill, Font, Name as DocName, Size, Text, Transform2d};
 use iron_document::composition::Dims;
 use iron_document::{Actor, LeafPath, LeafStruct, NodeId, Op, Slot, TransactionInput, TypeId, Value, Version};
 use iron_text::Motion;
@@ -472,7 +472,7 @@ fn arm(
         ty: TypeId::lookup("text").expect("registered"),
         parent: Some(press.container),
         order: after_last(doc, Some(press.container)),
-        components: vec![t.wrap(), body.wrap(), Font::default().wrap(), size.wrap(), fill.wrap(), name.wrap()],
+        facets: vec![t.wrap(), body.wrap(), Font::default().wrap(), size.wrap(), fill.wrap(), name.wrap()],
     };
     pending.0.push(TransactionInput { label: "add text".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![op], exact: false });
     text.made = Some((id, press.panel.clone(), view.affine() * press.to_comp.inverse()));

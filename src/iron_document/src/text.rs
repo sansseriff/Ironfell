@@ -110,7 +110,7 @@ pub fn measure_with(store: &Store, id: NodeId, text: &str, runs: &[StyleRun]) ->
 /// one `auto_width` text node in the default style and black, its box
 /// centred on `centre`, for the paste path to place like any other.
 pub fn fragment(text: &str, centre: [f64; 2]) -> Result<crate::copy::Fragment, String> {
-    use crate::component::{Fill, Font, Name, Text, Transform2d};
+    use crate::facet::{Fill, Font, Name, Text, Transform2d};
     use crate::{Actor, Affine2, LeafStruct, Op, OrderKey, Slot, TransactionInput, TypeId};
     use std::collections::BTreeMap;
     // Line endings as the editor keeps them; trailing ones dropped.
@@ -129,7 +129,7 @@ pub fn fragment(text: &str, centre: [f64; 2]) -> Result<crate::copy::Fragment, S
     let mut name = Name::default();
     let first_line: String = text.lines().next().unwrap_or("").chars().take(40).collect();
     name.text = Slot::Const(Value::Str(if first_line.is_empty() { "Text".into() } else { first_line }));
-    let ops = vec![Op::Create { id, ty: TypeId::lookup("text").expect("registered"), parent: None, order: OrderKey::first(), components: vec![t.wrap(), body.wrap(), Font::default().wrap(), fill.wrap(), name.wrap()] }];
+    let ops = vec![Op::Create { id, ty: TypeId::lookup("text").expect("registered"), parent: None, order: OrderKey::first(), facets: vec![t.wrap(), body.wrap(), Font::default().wrap(), fill.wrap(), name.wrap()] }];
     store
         .apply(TransactionInput { label: "paste text".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false })
         .map_err(|e| format!("the text did not apply: {e:?}"))?;

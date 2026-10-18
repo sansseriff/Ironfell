@@ -3,7 +3,7 @@
 //! joints and a ball chained by distance constraints, arms drawn by bindings
 //! that read the solved joints, and a bar whose height is bound to the ball.
 
-use iron_document::component::{Constraint, Fill, Name, Radius, Size, Transform2d};
+use iron_document::facet::{Constraint, Fill, Name, Radius, Size, Transform2d};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -86,7 +86,7 @@ fn pendulum() -> Pendulum {
         k
     };
     let mut ops = Vec::new();
-    ops.push(Op::Create { id: group, ty: ty("group"), parent: None, order: order(), components: vec![named("pendulum").wrap(), Transform2d::default().wrap()] });
+    ops.push(Op::Create { id: group, ty: ty("group"), parent: None, order: order(), facets: vec![named("pendulum").wrap(), Transform2d::default().wrap()] });
     let rect = |x: f64, y: f64, w: f64, h: f64, name: &str| {
         let mut t = Transform2d::default();
         t.x = num(x);
@@ -105,11 +105,11 @@ fn pendulum() -> Pendulum {
         rad.ry = num(r);
         vec![t.wrap(), rad.wrap(), Fill::default().wrap(), named(name).wrap()]
     };
-    ops.push(Op::Create { id: platform, ty: ty("rect"), parent: Some(group), order: order(), components: rect(240.0, 40.0, 160.0, 20.0, "platform") });
+    ops.push(Op::Create { id: platform, ty: ty("rect"), parent: Some(group), order: order(), facets: rect(240.0, 40.0, 160.0, 20.0, "platform") });
     for (i, (x, y)) in [(300.0, 100.0), (300.0, 150.0), (310.0, 230.0)].into_iter().enumerate() {
-        ops.push(Op::Create { id: joints[i], ty: ty("ellipse"), parent: Some(group), order: order(), components: circle(x, y, 6.0, &format!("j{i}")) });
+        ops.push(Op::Create { id: joints[i], ty: ty("ellipse"), parent: Some(group), order: order(), facets: circle(x, y, 6.0, &format!("j{i}")) });
     }
-    ops.push(Op::Create { id: ball, ty: ty("ellipse"), parent: Some(group), order: order(), components: circle(320.0, 300.0, 14.0, "ball") });
+    ops.push(Op::Create { id: ball, ty: ty("ellipse"), parent: Some(group), order: order(), facets: circle(320.0, 300.0, 14.0, "ball") });
     // Arms: drawn from joint a to joint b by bindings over the solved joints.
     let chain = [joints[0], joints[1], joints[2], ball];
     for i in 0..3 {
@@ -121,7 +121,7 @@ fn pendulum() -> Pendulum {
         let mut s = Size::default();
         s.w = num(12.0);
         s.h = bind(&format!("hypot({b}.transform2d.x - {a}.transform2d.x, {b}.transform2d.y - {a}.transform2d.y)"));
-        ops.push(Op::Create { id: arms[i], ty: ty("rect"), parent: Some(group), order: order(), components: vec![t.wrap(), s.wrap(), Fill::default().wrap(), named(&format!("arm{}", i + 1)).wrap()] });
+        ops.push(Op::Create { id: arms[i], ty: ty("rect"), parent: Some(group), order: order(), facets: vec![t.wrap(), s.wrap(), Fill::default().wrap(), named(&format!("arm{}", i + 1)).wrap()] });
     }
     let mut t = Transform2d::default();
     t.x = num(720.0);
@@ -129,7 +129,7 @@ fn pendulum() -> Pendulum {
     let mut s = Size::default();
     s.w = num(30.0);
     s.h = bind(&format!("{ball}.transform2d.y - 60"));
-    ops.push(Op::Create { id: bar, ty: ty("rect"), parent: Some(group), order: order(), components: vec![t.wrap(), s.wrap(), Fill::default().wrap(), named("height").wrap()] });
+    ops.push(Op::Create { id: bar, ty: ty("rect"), parent: Some(group), order: order(), facets: vec![t.wrap(), s.wrap(), Fill::default().wrap(), named("height").wrap()] });
 
     // Constraints, as children of the group.
     let constraint = |kind: &str, value: f64, name: &str| {
@@ -144,16 +144,16 @@ fn pendulum() -> Pendulum {
         data.insert("anchor".to_owned(), Value::Vec2(anchor));
         Op::Link { rel: Relation { id: rel, from, to, rel: RelKind::Constrains, data } }
     };
-    ops.push(Op::Create { id: fix, ty: ty("constraint"), parent: Some(group), order: order(), components: constraint("fix", 0.0, "fixed platform") });
+    ops.push(Op::Create { id: fix, ty: ty("constraint"), parent: Some(group), order: order(), facets: constraint("fix", 0.0, "fixed platform") });
     ops.push(link(rels[0], fix, platform, "a", [0.0, 0.0]));
-    ops.push(Op::Create { id: hinge, ty: ty("constraint"), parent: Some(group), order: order(), components: constraint("coincident", 0.0, "hinge") });
+    ops.push(Op::Create { id: hinge, ty: ty("constraint"), parent: Some(group), order: order(), facets: constraint("coincident", 0.0, "hinge") });
     ops.push(link(rels[1], hinge, platform, "a", [80.0, 20.0]));
     ops.push(link(rels[2], hinge, joints[0], "b", [0.0, 0.0]));
     let third = store.document().next_ids(15)[14];
     let link_ids = [links[0], links[1], third];
     for i in 0..3 {
         let id = link_ids[i];
-        ops.push(Op::Create { id, ty: ty("constraint"), parent: Some(group), order: order(), components: constraint("distance", LINK, &format!("link{}", i + 1)) });
+        ops.push(Op::Create { id, ty: ty("constraint"), parent: Some(group), order: order(), facets: constraint("distance", LINK, &format!("link{}", i + 1)) });
         ops.push(link(rels[3 + 2 * i], id, chain[i], "a", [0.0, 0.0]));
         ops.push(link(rels[4 + 2 * i], id, chain[i + 1], "b", [0.0, 0.0]));
     }
@@ -260,7 +260,7 @@ fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
         .apply(tx(
             "weld",
             vec![
-                Op::Create { id, ty: ty("constraint"), parent: Some(p.group), order: OrderKey::first(), components: vec![c.wrap()] },
+                Op::Create { id, ty: ty("constraint"), parent: Some(p.group), order: OrderKey::first(), facets: vec![c.wrap()] },
                 link(rels[0], p.joints[1], "a"),
                 link(rels[1], p.joints[2], "b"),
             ],
@@ -279,7 +279,7 @@ fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
     // kind, a duplicate.
     let errs = p
         .store
-        .apply(tx("half", vec![Op::Create { id, ty: ty("constraint"), parent: Some(p.group), order: OrderKey::first(), components: vec![Constraint::default().wrap()] }]))
+        .apply(tx("half", vec![Op::Create { id, ty: ty("constraint"), parent: Some(p.group), order: OrderKey::first(), facets: vec![Constraint::default().wrap()] }]))
         .unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::BadConstraint);
     assert!(errs[0].message.contains("missing operand"), "{}", errs[0].message);
@@ -291,7 +291,7 @@ fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
         .apply(tx(
             "dup",
             vec![
-                Op::Create { id, ty: ty("constraint"), parent: Some(p.group), order: OrderKey::first(), components: vec![dup.wrap()] },
+                Op::Create { id, ty: ty("constraint"), parent: Some(p.group), order: OrderKey::first(), facets: vec![dup.wrap()] },
                 link(rels[0], p.joints[0], "a"),
                 link(rels[1], p.joints[1], "b"),
             ],
@@ -312,13 +312,13 @@ fn a_binding_that_reads_and_feeds_a_cluster_is_a_cycle() {
     assert!(errs[0].message.contains(&p.group.to_string()), "{}", errs[0].message);
     // A value bound to something outside the cluster is a driving dimension.
     let slider = p.store.document().next_id();
-    let mut sl = iron_document::component::Slider::default();
+    let mut sl = iron_document::facet::Slider::default();
     sl.value = num(0.5);
     p.store
         .apply(tx(
             "slider",
             vec![
-                Op::Create { id: slider, ty: ty("slider"), parent: None, order: OrderKey::after(&OrderKey::first()), components: vec![Transform2d::default().wrap(), sl.wrap()] },
+                Op::Create { id: slider, ty: ty("slider"), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![Transform2d::default().wrap(), sl.wrap()] },
                 Op::Set { id: p.links[2], path: path("constraint.value"), slot: bind(&format!("{slider}.slider.value * 200")) },
             ],
         ))

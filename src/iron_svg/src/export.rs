@@ -9,7 +9,7 @@ use crate::{exact, num, Cut, Cuts};
 use iron_document::composition::{self, Dims};
 use iron_document::contour;
 use iron_document::shape;
-use iron_document::{Affine2, ComponentKind, Document, NodeId, Store, Value};
+use iron_document::{Affine2, FacetKind, Document, NodeId, Store, Value};
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape as _, Vec2};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -239,16 +239,16 @@ impl Writer<'_> {
         }
         // Exact resolved optional paint survives an Iron SVG round trip;
         // ordinary SVG attributes beside it remain useful to other editors.
-        let kinds = [ComponentKind::Appearance, ComponentKind::Gradient, ComponentKind::GroupClip];
-        if kinds.iter().any(|k| self.doc.component(id, *k).is_some()) {
-            let components: Vec<_> = kinds.into_iter().chain([ComponentKind::Fill]).filter_map(|kind| {
-                let mut c = self.doc.component(id, kind)?.clone();
+        let kinds = [FacetKind::Appearance, FacetKind::Gradient, FacetKind::GroupClip];
+        if kinds.iter().any(|k| self.doc.facet(id, *k).is_some()) {
+            let facets: Vec<_> = kinds.into_iter().chain([FacetKind::Fill]).filter_map(|kind| {
+                let mut c = self.doc.facet(id, kind)?.clone();
                 for field in c.field_names() {
                     if let Some(v) = self.get(id, &format!("{}.{field}", kind.name())) { let _ = c.set(field, iron_document::Slot::Const(v)); }
                 }
                 Some(c)
             }).collect();
-            a.push(("data-iron-appearance", serde_json::to_string(&components).expect("components serialize")));
+            a.push(("data-iron-appearance", serde_json::to_string(&facets).expect("components serialize")));
         }
         let opacity = self.f(id, "appearance.opacity", 1.0).clamp(0.0, 1.0);
         if opacity != 1.0 { a.push(("opacity", num(opacity))); }
@@ -256,7 +256,7 @@ impl Writer<'_> {
     }
 
     fn trs(&self, id: NodeId) -> Option<[f64; 5]> {
-        self.doc.component(id, ComponentKind::Transform2d)?;
+        self.doc.facet(id, FacetKind::Transform2d)?;
         Some([self.f(id, "transform2d.x", 0.0), self.f(id, "transform2d.y", 0.0), self.f(id, "transform2d.rot", 0.0), self.f(id, "transform2d.sx", 1.0), self.f(id, "transform2d.sy", 1.0)])
     }
 
@@ -287,7 +287,7 @@ impl Writer<'_> {
     /// Note what a node loses besides its geometry: bindings flattened,
     /// clips, figures of entities, and links.
     fn note_losses(&mut self, id: NodeId) {
-        let bound = self.doc.components_of(id).map(|c| c.field_names().iter().filter(|f| c.get(f).is_some_and(|s| s.expr().is_some())).count()).sum::<usize>();
+        let bound = self.doc.facets_of(id).map(|c| c.field_names().iter().filter(|f| c.get(f).is_some_and(|s| s.expr().is_some())).count()).sum::<usize>();
         for _ in 0..bound {
             self.cuts.add("a bound value is exported at its current value");
         }
@@ -365,7 +365,7 @@ impl Writer<'_> {
             }
             "ellipse" => {
                 let (rx, ry) = (self.f(id, "radius.rx", 50.0), self.f(id, "radius.ry", 50.0));
-                let arc = self.doc.component(id, ComponentKind::Arc).map(|_| [self.f(id, "arc.start", 0.0), self.f(id, "arc.sweep", std::f64::consts::TAU), self.f(id, "arc.inner", 0.0)]);
+                let arc = self.doc.facet(id, FacetKind::Arc).map(|_| [self.f(id, "arc.start", 0.0), self.f(id, "arc.sweep", std::f64::consts::TAU), self.f(id, "arc.inner", 0.0)]);
                 let outline = shape::to_bez(&shape::ellipse_outline(rx, ry, arc));
                 match arc {
                     None if rx >= 0.0 && ry >= 0.0 => {
@@ -404,7 +404,7 @@ impl Writer<'_> {
         let mut head = self.head(id, ty);
         head.append(&mut attrs);
         let mut attrs = head;
-        // Paint, as `materialize` reads it: no fill component, no fill; an
+        // Paint, as `materialize` reads it: no fill facet, no fill; an
         // open contour has no inside to fill, though SVG fills it as if
         // closed.
         let open = fill_outline.as_ref().is_some_and(|f| f.elements().is_empty());
@@ -704,7 +704,7 @@ impl Writer<'_> {
             self.cuts.add(format!("embed {label} is nested too deep and is left out"));
             return;
         }
-        let region = match self.doc.component(id, ComponentKind::Frame) {
+        let region = match self.doc.facet(id, FacetKind::Frame) {
             Some(_) => Some(Rect::new(self.f(id, "frame.x0", 0.0), self.f(id, "frame.y0", 0.0), self.f(id, "frame.x1", 400.0), self.f(id, "frame.y1", 300.0))),
             None => self.content_bounds(source),
         };

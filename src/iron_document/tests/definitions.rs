@@ -3,7 +3,7 @@
 //! entity plus a figure whose bindings read the entity's params; the
 //! parameter bound to a slider; validation against the definition.
 
-use iron_document::component::{Template, Fill, Name, ParamSpec, Size, Slider, Transform2d};
+use iron_document::facet::{Template, Fill, Name, ParamSpec, Size, Slider, Transform2d};
 use iron_document::definition::{self, Placement};
 use iron_document::*;
 
@@ -70,14 +70,14 @@ fn library() -> Lib {
         .apply(tx(
             "library",
             vec![
-                Op::Create { id: scene, ty: ty("group"), parent: None, order: k0.clone(), components: vec![named("scene").wrap()] },
-                Op::Create { id: slider, ty: ty("slider"), parent: Some(scene), order: k0.clone(), components: vec![Transform2d::default().wrap(), sl.wrap(), named("level").wrap()] },
-                Op::Create { id: library, ty: ty("library"), parent: None, order: k1.clone(), components: vec![] },
-                Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: k0.clone(), components: vec![named("bar").wrap()] },
-                Op::Create { id: level, ty: ty("param_spec"), parent: Some(def), order: k0.clone(), components: vec![level_spec.wrap(), named("level").wrap()] },
-                Op::Create { id: power, ty: ty("param_spec"), parent: Some(def), order: k1.clone(), components: vec![power_spec.wrap(), named("power").wrap()] },
-                Op::Create { id: template, ty: ty("template"), parent: Some(def), order: k2, components: vec![Template::default().wrap()] },
-                Op::Create { id: bar, ty: ty("rect"), parent: Some(template), order: k0, components: vec![t.wrap(), s.wrap(), Fill::default().wrap(), named("bar").wrap()] },
+                Op::Create { id: scene, ty: ty("group"), parent: None, order: k0.clone(), facets: vec![named("scene").wrap()] },
+                Op::Create { id: slider, ty: ty("slider"), parent: Some(scene), order: k0.clone(), facets: vec![Transform2d::default().wrap(), sl.wrap(), named("level").wrap()] },
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k1.clone(), facets: vec![] },
+                Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: k0.clone(), facets: vec![named("bar").wrap()] },
+                Op::Create { id: level, ty: ty("param_spec"), parent: Some(def), order: k0.clone(), facets: vec![level_spec.wrap(), named("level").wrap()] },
+                Op::Create { id: power, ty: ty("param_spec"), parent: Some(def), order: k1.clone(), facets: vec![power_spec.wrap(), named("power").wrap()] },
+                Op::Create { id: template, ty: ty("template"), parent: Some(def), order: k2, facets: vec![Template::default().wrap()] },
+                Op::Create { id: bar, ty: ty("rect"), parent: Some(template), order: k0, facets: vec![t.wrap(), s.wrap(), Fill::default().wrap(), named("bar").wrap()] },
             ],
         ))
         .unwrap();
@@ -181,20 +181,20 @@ fn entities_are_validated_against_their_definition() {
     assert!(m.contains("expects W"), "{m}");
     store.apply(tx("ok", vec![Op::Set { id: entity, path: path("params.power"), slot: Slot::Const(Value::parse_quantity("2 W").unwrap()) }])).unwrap();
     // An unknown parameter is not a field at all (Set), and a params
-    // component with an extra or missing parameter is rejected (Create).
+    // facet with an extra or missing parameter is rejected (Create).
     let errs = store.apply(tx("unknown", vec![Op::Set { id: entity, path: path("params.gain"), slot: num(1.0) }])).unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::TypeMismatch, "{}", errs[0].message);
     assert!(errs[0].message.contains("no parameter"), "{}", errs[0].message);
     let id = store.document().next_id();
-    let mut inst = iron_document::component::Instance::default();
+    let mut inst = iron_document::facet::Instance::default();
     inst.def = Slot::Const(Value::Ref(def));
-    let mut params = iron_document::component::Params::default();
+    let mut params = iron_document::facet::Params::default();
     params.insert("level", num(1.0));
-    let m = bad(&mut store, "missing", vec![Op::Create { id, ty: ty("entity"), parent: Some(scene), order: OrderKey::first(), components: vec![inst.clone().wrap(), params.clone().wrap()] }]);
+    let m = bad(&mut store, "missing", vec![Op::Create { id, ty: ty("entity"), parent: Some(scene), order: OrderKey::first(), facets: vec![inst.clone().wrap(), params.clone().wrap()] }]);
     assert!(m.contains("missing parameter \"power\""), "{m}");
     params.insert("power", Slot::Const(Value::parse_quantity("1 W").unwrap()));
     params.insert("gain", num(2.0));
-    let m = bad(&mut store, "extra", vec![Op::Create { id, ty: ty("entity"), parent: Some(scene), order: OrderKey::first(), components: vec![inst.clone().wrap(), params.clone().wrap()] }]);
+    let m = bad(&mut store, "extra", vec![Op::Create { id, ty: ty("entity"), parent: Some(scene), order: OrderKey::first(), facets: vec![inst.clone().wrap(), params.clone().wrap()] }]);
     assert!(m.contains("declares no parameter \"gain\""), "{m}");
     // The instance must name a definition.
     let m = bad(&mut store, "not a def", vec![Op::Set { id: entity, path: path("instance.def"), slot: Slot::Const(Value::Ref(slider)) }]);

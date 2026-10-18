@@ -1,11 +1,11 @@
-//! The authored store: nodes, components, relations, and the derived indexes
+//! The authored store: nodes, facets, relations, and the derived indexes
 //! over them.
 //!
 //! Every mutating method is `pub(crate)` and reachable only from the op
 //! applier. That is the structural form of the rule in
 //! plans/specs/document-spine.md §6.1: no code path mutates the store directly.
 
-use crate::component::{Component, ComponentKind, LeafPath, LeafStruct};
+use crate::facet::{Facet, FacetKind, LeafPath, LeafStruct};
 use crate::expr::{Expr, Leaf};
 use crate::id::{NodeId, RelationId, Version};
 use crate::order::OrderKey;
@@ -21,7 +21,7 @@ pub struct Node {
     pub parent: Option<NodeId>,
     pub order: OrderKey,
     /// The version at which this node was deleted. Tombstoned nodes keep their
-    /// record and components so that references fail loudly and undo restores
+    /// record and facets so that references fail loudly and undo restores
     /// the same id (doc 04 §2.4).
     pub tombstoned: Option<Version>,
 }
@@ -84,7 +84,7 @@ impl RelKind {
 #[derive(Clone, Debug, Default)]
 pub struct Document {
     nodes: BTreeMap<NodeId, Node>,
-    components: BTreeMap<ComponentKind, BTreeMap<NodeId, Component>>,
+    facets: BTreeMap<FacetKind, BTreeMap<NodeId, Facet>>,
     relations: BTreeMap<RelationId, Relation>,
     next_id: u64,
     next_rel: u64,
@@ -98,7 +98,7 @@ pub struct Document {
     children: BTreeMap<NodeId, Vec<NodeId>>,
     roots: Vec<NodeId>,
     by_type: BTreeMap<TypeId, BTreeSet<NodeId>>,
-    by_component: BTreeMap<ComponentKind, BTreeSet<NodeId>>,
+    by_facet: BTreeMap<FacetKind, BTreeSet<NodeId>>,
     by_source: BTreeMap<NodeId, BTreeSet<RelationId>>,
     by_target: BTreeMap<NodeId, BTreeSet<RelationId>>,
 }
@@ -207,30 +207,30 @@ impl Document {
         self.by_type.get(&ty).into_iter().flatten().copied()
     }
 
-    pub fn nodes_with(&self, kind: ComponentKind) -> impl Iterator<Item = NodeId> + '_ {
-        self.by_component.get(&kind).into_iter().flatten().copied()
+    pub fn nodes_with(&self, kind: FacetKind) -> impl Iterator<Item = NodeId> + '_ {
+        self.by_facet.get(&kind).into_iter().flatten().copied()
     }
 
-    pub fn component(&self, id: NodeId, kind: ComponentKind) -> Option<&Component> {
-        self.components.get(&kind)?.get(&id)
+    pub fn facet(&self, id: NodeId, kind: FacetKind) -> Option<&Facet> {
+        self.facets.get(&kind)?.get(&id)
     }
 
     pub fn get<T: LeafStruct>(&self, id: NodeId) -> Option<&T> {
-        self.component(id, T::KIND).and_then(T::unwrap_ref)
+        self.facet(id, T::KIND).and_then(T::unwrap_ref)
     }
 
-    /// All components of a node, in kind order.
-    pub fn components_of(&self, id: NodeId) -> impl Iterator<Item = &Component> {
-        self.components.values().filter_map(move |m| m.get(&id))
+    /// All facets of a node, in kind order.
+    pub fn facets_of(&self, id: NodeId) -> impl Iterator<Item = &Facet> {
+        self.facets.values().filter_map(move |m| m.get(&id))
     }
 
     pub fn leaf(&self, id: NodeId, path: LeafPath) -> Option<&Slot> {
-        self.component(id, path.component)?.get(path.field)
+        self.facet(id, path.facet)?.get(path.field)
     }
 
     /// Every bound slot on a live node, with its expression.
     pub fn bound_slots(&self) -> impl Iterator<Item = (Leaf, &Expr)> {
-        self.components.iter().flat_map(move |(kind, table)| {
+        self.facets.iter().flat_map(move |(kind, table)| {
             table
                 .iter()
                 .filter(move |(id, _)| self.is_live(**id))
@@ -312,19 +312,19 @@ impl Document {
         }
     }
 
-    pub(crate) fn insert_node(&mut self, node: Node, comps: Vec<Component>) {
+    pub(crate) fn insert_node(&mut self, node: Node, comps: Vec<Facet>) {
         let id = node.id;
         debug_assert!(node.is_live());
         self.by_type.entry(node.ty).or_default().insert(id);
         self.nodes.insert(id, node);
         self.children.entry(id).or_default();
         for c in comps {
-            self.insert_component(id, c);
+            self.insert_facet(id, c);
         }
         self.place(id);
     }
 
-    /// Bring a tombstoned node back, replacing its placement and components
+    /// Bring a tombstoned node back, replacing its placement and facets
     /// with the given ones.
     pub(crate) fn restore_node(
         &mut self,
@@ -332,10 +332,10 @@ impl Document {
         ty: TypeId,
         parent: Option<NodeId>,
         order: OrderKey,
-        comps: Vec<Component>,
+        comps: Vec<Facet>,
     ) {
-        for kind in ComponentKind::ALL {
-            if let Some(m) = self.components.get_mut(kind) {
+        for kind in FacetKind::ALL {
+            if let Some(m) = self.facets.get_mut(kind) {
                 m.remove(&id);
             }
         }
@@ -349,7 +349,7 @@ impl Document {
         self.by_type.entry(ty).or_default().insert(id);
         self.children.entry(id).or_default();
         for c in comps {
-            self.insert_component(id, c);
+            self.insert_facet(id, c);
         }
         self.place(id);
     }
@@ -364,9 +364,9 @@ impl Document {
         if let Some(s) = self.by_type.get_mut(&ty) {
             s.remove(&id);
         }
-        for (kind, m) in &self.components {
+        for (kind, m) in &self.facets {
             if m.contains_key(&id)
-                && let Some(s) = self.by_component.get_mut(kind)
+                && let Some(s) = self.by_facet.get_mut(kind)
             {
                 s.remove(&id);
             }
@@ -387,32 +387,32 @@ impl Document {
         self.place(id);
     }
 
-    pub(crate) fn insert_component(&mut self, id: NodeId, c: Component) {
+    pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
         let kind = c.kind();
-        self.components.entry(kind).or_default().insert(id, c);
+        self.facets.entry(kind).or_default().insert(id, c);
         if self.is_live(id) {
-            self.by_component.entry(kind).or_default().insert(id);
+            self.by_facet.entry(kind).or_default().insert(id);
         }
     }
 
-    pub(crate) fn remove_component(
+    pub(crate) fn remove_facet(
         &mut self,
         id: NodeId,
-        kind: ComponentKind,
-    ) -> Option<Component> {
-        let c = self.components.get_mut(&kind)?.remove(&id)?;
-        if let Some(s) = self.by_component.get_mut(&kind) {
+        kind: FacetKind,
+    ) -> Option<Facet> {
+        let c = self.facets.get_mut(&kind)?.remove(&id)?;
+        if let Some(s) = self.by_facet.get_mut(&kind) {
             s.remove(&id);
         }
         Some(c)
     }
 
-    pub(crate) fn component_mut(
+    pub(crate) fn facet_mut(
         &mut self,
         id: NodeId,
-        kind: ComponentKind,
-    ) -> Option<&mut Component> {
-        self.components.get_mut(&kind)?.get_mut(&id)
+        kind: FacetKind,
+    ) -> Option<&mut Facet> {
+        self.facets.get_mut(&kind)?.get_mut(&id)
     }
 
     pub(crate) fn insert_relation(&mut self, r: Relation) {
@@ -471,7 +471,7 @@ impl Document {
     /// Used by deserialisation; ops never go through here.
     pub(crate) fn from_parts(
         nodes: BTreeMap<NodeId, Node>,
-        components: BTreeMap<ComponentKind, BTreeMap<NodeId, Component>>,
+        facets: BTreeMap<FacetKind, BTreeMap<NodeId, Facet>>,
         relations: BTreeMap<RelationId, Relation>,
         next_id: u64,
         next_rel: u64,
@@ -479,7 +479,7 @@ impl Document {
     ) -> Document {
         let mut d = Document {
             nodes,
-            components,
+            facets,
             relations,
             next_id,
             next_rel,
@@ -494,8 +494,8 @@ impl Document {
         &self.nodes
     }
 
-    pub(crate) fn raw_components(&self) -> &BTreeMap<ComponentKind, BTreeMap<NodeId, Component>> {
-        &self.components
+    pub(crate) fn raw_facets(&self) -> &BTreeMap<FacetKind, BTreeMap<NodeId, Facet>> {
+        &self.facets
     }
 
     pub(crate) fn raw_next(&self) -> (u64, u64) {
@@ -506,7 +506,7 @@ impl Document {
         self.children.clear();
         self.roots.clear();
         self.by_type.clear();
-        self.by_component.clear();
+        self.by_facet.clear();
         self.by_source.clear();
         self.by_target.clear();
         let live: Vec<NodeId> = self
@@ -525,10 +525,10 @@ impl Document {
         for &id in &live {
             self.place(id);
         }
-        for (kind, m) in &self.components {
+        for (kind, m) in &self.facets {
             for id in m.keys() {
                 if self.nodes.get(id).is_some_and(|n| n.is_live()) {
-                    self.by_component.entry(*kind).or_default().insert(*id);
+                    self.by_facet.entry(*kind).or_default().insert(*id);
                 }
             }
         }
@@ -589,12 +589,12 @@ impl Document {
                 prev = Some((&kn.order, k));
             }
         }
-        for (kind, set) in &self.by_component {
+        for (kind, set) in &self.by_facet {
             for id in set {
                 if !self.is_live(*id) {
                     return Err(format!("by_component[{}] holds non-live {id}", kind.name()));
                 }
-                if self.component(*id, *kind).is_none() {
+                if self.facet(*id, *kind).is_none() {
                     return Err(format!(
                         "by_component[{}] holds {id} without the component",
                         kind.name()
@@ -602,7 +602,7 @@ impl Document {
                 }
             }
         }
-        for (kind, m) in &self.components {
+        for (kind, m) in &self.facets {
             for id in m.keys() {
                 if !self.nodes.contains_key(id) {
                     return Err(format!("component {} on unknown node {id}", kind.name()));

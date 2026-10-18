@@ -1,6 +1,6 @@
 //! Scripted time: clips sampled at the playhead through relations.
 
-use iron_document::component::{Clip, Fill, Size, Timing, Transform2d};
+use iron_document::facet::{Clip, Fill, Size, Timing, Transform2d};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -56,16 +56,16 @@ fn scene(easing: &str) -> Scene {
         .apply(tx(
             "build",
             vec![
-                Op::Create { id: rect, ty: ty("rect"), parent: None, order: k0.clone(), components: vec![t.wrap(), Size::default().wrap()] },
+                Op::Create { id: rect, ty: ty("rect"), parent: None, order: k0.clone(), facets: vec![t.wrap(), Size::default().wrap()] },
                 Op::Create {
                     id: bar,
                     ty: ty("rect"),
                     parent: None,
                     order: OrderKey::after(&k0),
-                    components: vec![Transform2d::default().wrap(), s.wrap(), Fill::default().wrap()],
+                    facets: vec![Transform2d::default().wrap(), s.wrap(), Fill::default().wrap()],
                 },
-                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::after(&OrderKey::after(&k0)), components: vec![] },
-                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: k0, components: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::after(&OrderKey::after(&k0)), facets: vec![] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: k0, facets: vec![timing.wrap(), c.wrap()] },
                 Op::Link { rel: Relation { id: rel, from: clip, to: rect, rel: RelKind::Animates, data: BTreeMap::new() } },
             ],
         ))

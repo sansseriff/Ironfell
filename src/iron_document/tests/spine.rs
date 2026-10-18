@@ -1,7 +1,7 @@
 //! The tests plans/specs/document-spine.md §14 asks for: inverses restore, replay
 //! equals snapshot, atomicity, structural validation, and view elision.
 
-use iron_document::component::{Fill, Name, Size, Timing, Transform2d, Transform3d};
+use iron_document::facet::{Fill, Name, Size, Timing, Transform2d, Transform3d};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -37,7 +37,7 @@ fn content(store: &Store) -> String {
 }
 
 /// Only what a reader can see: live nodes in tree order with their
-/// components, plus relations. Tombstones are excluded, which is what makes
+/// facets, plus relations. Tombstones are excluded, which is what makes
 /// this the right comparison for undoing a create.
 fn live_content(store: &Store) -> String {
     let doc = store.document();
@@ -46,7 +46,7 @@ fn live_content(store: &Store) -> String {
     while let Some(id) = stack.pop() {
         let n = doc.live(id).unwrap();
         out.push_str(&format!("{id} {} {:?} {}", n.ty, n.parent, n.order));
-        for c in doc.components_of(id) {
+        for c in doc.facets_of(id) {
             out.push_str(&format!(" {}", serde_json::to_string(c).unwrap()));
         }
         out.push('\n');
@@ -90,14 +90,14 @@ fn scene() -> Scene {
                     ty: ty("group"),
                     parent: None,
                     order: k0.clone(),
-                    components: vec![name.wrap()],
+                    facets: vec![name.wrap()],
                 },
                 Op::Create {
                     id: rect,
                     ty: ty("rect"),
                     parent: Some(group),
                     order: k0.clone(),
-                    components: vec![
+                    facets: vec![
                         Transform2d::default().wrap(),
                         Size::default().wrap(),
                         Fill::default().wrap(),
@@ -108,9 +108,9 @@ fn scene() -> Scene {
                     ty: ty("ellipse"),
                     parent: Some(group),
                     order: k1.clone(),
-                    components: vec![
+                    facets: vec![
                         Transform2d::default().wrap(),
-                        component::Radius::default().wrap(),
+                        facet::Radius::default().wrap(),
                     ],
                 },
                 Op::Create {
@@ -118,16 +118,16 @@ fn scene() -> Scene {
                     ty: ty("group"),
                     parent: Some(group),
                     order: k2,
-                    components: vec![],
+                    facets: vec![],
                 },
                 Op::Create {
                     id: mesh,
                     ty: ty("mesh"),
                     parent: Some(inner),
                     order: k0,
-                    components: vec![
+                    facets: vec![
                         Transform3d::default().wrap(),
-                        component::Mesh::default().wrap(),
+                        facet::Mesh::default().wrap(),
                     ],
                 },
             ],
@@ -180,7 +180,7 @@ fn every_op_kind_inverts_exactly() {
                 ty: ty("clip"),
                 parent: None,
                 order: OrderKey::first(),
-                components: vec![timing.wrap(), component::Clip::default().wrap()],
+                facets: vec![timing.wrap(), facet::Clip::default().wrap()],
             }],
         ))
         .unwrap();
@@ -199,7 +199,7 @@ fn every_op_kind_inverts_exactly() {
                 ty: ty("rect"),
                 parent: Some(group),
                 order: OrderKey::first(),
-                components: vec![Transform2d::default().wrap(), Size::default().wrap()],
+                facets: vec![Transform2d::default().wrap(), Size::default().wrap()],
             }],
         ),
         ("delete leaf", vec![Op::Delete { id: rect }]),
@@ -238,16 +238,16 @@ fn every_op_kind_inverts_exactly() {
         ),
         (
             "add comp",
-            vec![Op::AddComp {
+            vec![Op::AddFacet {
                 id: circle,
                 comp: Fill::default().wrap(),
             }],
         ),
         (
             "remove comp",
-            vec![Op::RemoveComp {
+            vec![Op::RemoveFacet {
                 id: rect,
-                kind: ComponentKind::Fill,
+                kind: FacetKind::Fill,
             }],
         ),
         ("unlink", vec![Op::Unlink { id: rel.id }]),
@@ -345,9 +345,9 @@ fn replay_of_log_equals_snapshot_and_load_roundtrips() {
                 ty: ty("ellipse"),
                 parent: Some(group),
                 order: OrderKey::first(),
-                components: vec![
+                facets: vec![
                     Transform2d::default().wrap(),
-                    component::Radius::default().wrap(),
+                    facet::Radius::default().wrap(),
                 ],
             }],
         ))
@@ -393,7 +393,7 @@ fn replay_of_log_equals_snapshot_and_load_roundtrips() {
                 ty: ty("group"),
                 parent: None,
                 order: OrderKey::first(),
-                components: vec![],
+                facets: vec![],
             }],
         ))
         .unwrap();
@@ -434,7 +434,7 @@ fn a_bad_op_rejects_the_whole_batch_and_reports_every_error() {
                     id: circle,
                     path: path("size.w"),
                     slot: num(1.0),
-                }, // no such component
+                }, // no such facet
             ],
         ))
         .unwrap_err();
@@ -508,13 +508,13 @@ fn structural_rules() {
                 ty: ty("group"),
                 parent: None,
                 order: OrderKey::first(),
-                components: vec![],
+                facets: vec![],
             }],
         ))
         .unwrap_err();
     assert_eq!(e[0].kind, ErrorKind::BadId);
 
-    // Required components are enforced on create and on remove.
+    // Required facets are enforced on create and on remove.
     let id = store.document().next_id();
     let e = store
         .apply(tx(
@@ -524,21 +524,21 @@ fn structural_rules() {
                 ty: ty("rect"),
                 parent: Some(group),
                 order: OrderKey::first(),
-                components: vec![],
+                facets: vec![],
             }],
         ))
         .unwrap_err();
-    assert_eq!(e[0].kind, ErrorKind::ComponentRequired);
+    assert_eq!(e[0].kind, ErrorKind::FacetRequired);
     let e = store
         .apply(tx(
             "strip",
-            vec![Op::RemoveComp {
+            vec![Op::RemoveFacet {
                 id: rect,
-                kind: ComponentKind::Size,
+                kind: FacetKind::Size,
             }],
         ))
         .unwrap_err();
-    assert_eq!(e[0].kind, ErrorKind::ComponentRequired);
+    assert_eq!(e[0].kind, ErrorKind::FacetRequired);
 
     // Unknown paths do not parse, and a known path on the wrong node is an error.
     assert!("transform2d.zz".parse::<LeafPath>().is_err());
@@ -595,7 +595,7 @@ fn sibling_order_survives_many_inserts_between_the_same_pair() {
                     ty: ty("rect"),
                     parent: Some(group),
                     order: key.clone(),
-                    components: vec![Transform2d::default().wrap(), Size::default().wrap()],
+                    facets: vec![Transform2d::default().wrap(), Size::default().wrap()],
                 }],
             ))
             .unwrap();
@@ -671,7 +671,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
             ty: ty("rect"),
             parent: Some(inner),
             order: OrderKey::first(),
-            components: vec![Transform2d::default().wrap(), Size::default().wrap()],
+            facets: vec![Transform2d::default().wrap(), Size::default().wrap()],
         });
     }
     store.apply(tx("fill inner", ops)).unwrap();
@@ -720,7 +720,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
                 ty: ty("clip"),
                 parent: None,
                 order: OrderKey::after(&OrderKey::first()),
-                components: vec![Timing::default().wrap(), component::Clip::default().wrap()],
+                facets: vec![Timing::default().wrap(), facet::Clip::default().wrap()],
             }],
         ))
         .unwrap();
@@ -816,9 +816,9 @@ fn deleting_a_subtree_with_sibling_bindings_undoes() {
         .apply(tx(
             "scene",
             vec![
-                Op::Create { id: g, ty: ty("group"), parent: None, order: k0.clone(), components: vec![Transform2d::default().wrap()] },
-                Op::Create { id: b, ty: ty("rect"), parent: Some(g), order: k1.clone(), components: rect(Transform2d::default()) },
-                Op::Create { id: a, ty: ty("rect"), parent: Some(g), order: k0.clone(), components: rect(ta) },
+                Op::Create { id: g, ty: ty("group"), parent: None, order: k0.clone(), facets: vec![Transform2d::default().wrap()] },
+                Op::Create { id: b, ty: ty("rect"), parent: Some(g), order: k1.clone(), facets: rect(Transform2d::default()) },
+                Op::Create { id: a, ty: ty("rect"), parent: Some(g), order: k0.clone(), facets: rect(ta) },
             ],
         ))
         .unwrap();

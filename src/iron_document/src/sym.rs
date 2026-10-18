@@ -1,7 +1,7 @@
 //! Interned field names (entity-composition-model.md §4.1).
 //!
 //! `LeafPath` is `Copy` and names its field with a `&'static str`, which is
-//! right for the compile-time components. Fields of a `params` component
+//! right for the compile-time facets. Fields of a `params` facet
 //! are known only at run time, from a definition in the document. Rather
 //! than a second field representation (`Field::Sym`), run-time names are
 //! interned to a deduplicated `&'static str`: the same `LeafPath` shape, the

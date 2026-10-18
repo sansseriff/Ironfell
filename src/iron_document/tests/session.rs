@@ -2,7 +2,7 @@
 //! `selection` node with `selects` relations, in its own id range, never
 //! saved, never in undo, leaving the document's version and ids alone.
 
-use iron_document::component::{Size, Transform2d};
+use iron_document::facet::{Size, Transform2d};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -16,7 +16,7 @@ fn rect(store: &Store, n: usize) -> (Vec<NodeId>, Vec<Op>) {
     let ops = ids
         .iter()
         .map(|&id| {
-            let op = Op::Create { id, ty: TypeId::lookup("rect").unwrap(), parent: None, order: key.clone(), components: vec![Transform2d::default().wrap(), Size::default().wrap()] };
+            let op = Op::Create { id, ty: TypeId::lookup("rect").unwrap(), parent: None, order: key.clone(), facets: vec![Transform2d::default().wrap(), Size::default().wrap()] };
             key = OrderKey::after(&key);
             op
         })

@@ -1,6 +1,6 @@
 //! Constraints in the document (constraint-system.md §4).
 //!
-//! A constraint is a `constraint` node with a `constraint` component (kind,
+//! A constraint is a `constraint` node with a `constraint` facet (kind,
 //! value, enabled) and one `constrains` relation per operand, whose `data`
 //! carries the operand's `role` (`a`, `b`) and `anchor` (a point in the
 //! operand's local space; `[0, 0]` by default). A `pin` carries its world
@@ -10,7 +10,7 @@
 //! The kind vocabulary is code, like the node types; [`KINDS`] is the one
 //! table validation, views and the solver read.
 
-use crate::component::{Constraint, LeafPath};
+use crate::facet::{Constraint, LeafPath};
 use crate::document::{Document, RelKind};
 use crate::expr::Leaf;
 use crate::id::NodeId;
@@ -80,7 +80,7 @@ pub fn constraint_type() -> TypeId {
 
 /// The value leaf of a constraint node.
 pub fn value_leaf(id: NodeId) -> Leaf {
-    Leaf { node: id, path: LeafPath::new(crate::component::ComponentKind::Constraint, "value").expect("declared") }
+    Leaf { node: id, path: LeafPath::new(crate::facet::FacetKind::Constraint, "value").expect("declared") }
 }
 
 fn vec2(v: Option<&Value>) -> Option<[f64; 2]> {
@@ -126,7 +126,7 @@ pub fn read(doc: &Document, read_value: &dyn Fn(Leaf) -> Option<Value>, id: Node
             None => None,
             Some(v) => Some(v.as_vec2().ok_or_else(|| format!("{id}: at must be a vec2"))?),
         };
-        if doc.component(r.to, crate::component::ComponentKind::Transform2d).is_none() {
+        if doc.facet(r.to, crate::facet::FacetKind::Transform2d).is_none() {
             return Err(format!("{id} ({kind}): operand {} has no transform2d", r.to));
         }
         operands.push(Operand { role, node: r.to, anchor, at });

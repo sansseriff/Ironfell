@@ -1,6 +1,6 @@
 //! Style runs: styling part of a text (plans/specs/text.md §2.1).
 //!
-//! A text node has one style (its `font` component) and, over it, a list of
+//! A text node has one style (its `font` facet) and, over it, a list of
 //! runs, each a byte range of the content with the properties it overrides.
 //! The list is stored in one leaf (`text.runs`) as JSON, so an edit to the
 //! words and their styling is one `Set` each, and a whole-node style change

@@ -1,6 +1,6 @@
 //! Bindings, the reactive graph, and gestures (plans/specs/document-spine.md step 5).
 
-use iron_document::component::{Fill, Size, Slider, Transform2d};
+use iron_document::facet::{Fill, Size, Slider, Transform2d};
 use iron_document::*;
 
 fn ty(name: &str) -> TypeId {
@@ -55,14 +55,14 @@ fn scene() -> Scene {
                     ty: ty("slider"),
                     parent: None,
                     order: OrderKey::first(),
-                    components: vec![Transform2d::default().wrap(), sl.wrap()],
+                    facets: vec![Transform2d::default().wrap(), sl.wrap()],
                 },
                 Op::Create {
                     id: bar,
                     ty: ty("rect"),
                     parent: None,
                     order: OrderKey::after(&OrderKey::first()),
-                    components: vec![t.wrap(), s.wrap(), Fill::default().wrap()],
+                    facets: vec![t.wrap(), s.wrap(), Fill::default().wrap()],
                 },
             ],
         ))
@@ -152,7 +152,7 @@ fn diamond_is_glitch_free_and_cutoff_stops_propagation() {
                     ty: ty("rect"),
                     parent: None,
                     order: OrderKey::first(),
-                    components: vec![t.wrap(), Size::default().wrap(), f.wrap()],
+                    facets: vec![t.wrap(), Size::default().wrap(), f.wrap()],
                 },
             ],
         ))
@@ -187,7 +187,7 @@ fn invalid_bindings_are_rejected() {
         .apply(tx("dangling", vec![Op::Set { id: bar, path: path("size.w"), slot: bind("#zz.size.w") }]))
         .unwrap_err();
     assert_eq!(e[0].kind, ErrorKind::UnknownNode);
-    // Reference to a component the node does not have.
+    // Reference to a facet the node does not have.
     let e = store
         .apply(tx("no comp", vec![Op::Set { id: bar, path: path("size.w"), slot: bind(&format!("{slider}.size.w")) }]))
         .unwrap_err();
@@ -204,7 +204,7 @@ fn invalid_bindings_are_rejected() {
                 ty: ty("rect"),
                 parent: None,
                 order: OrderKey::first(),
-                components: vec![Transform2d::default().wrap(), s.wrap()],
+                facets: vec![Transform2d::default().wrap(), s.wrap()],
             }],
         ))
         .unwrap_err();

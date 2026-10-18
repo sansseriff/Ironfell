@@ -13,7 +13,7 @@
 //! is drawn in, which entity a node pictures, and every picture of an
 //! entity. Nothing is stored that these functions can compute.
 
-use crate::component::{Composition, LeafStruct};
+use crate::facet::{Composition, LeafStruct};
 use crate::document::{Document, RelKind, Relation};
 use crate::id::{NodeId, RelationId};
 use crate::op::Op;
@@ -148,12 +148,12 @@ impl std::fmt::Display for LinkError {
 }
 
 fn name_of(doc: &Document, id: NodeId) -> Option<String> {
-    let n = doc.get::<crate::component::Name>(id)?.text.constant()?.as_str()?.to_owned();
+    let n = doc.get::<crate::facet::Name>(id)?.text.constant()?.as_str()?.to_owned();
     (!n.is_empty()).then_some(n)
 }
 
 pub fn summarize(doc: &Document, entity: NodeId) -> EntitySummary {
-    use crate::component::{Instance, Params};
+    use crate::facet::{Instance, Params};
     let def = doc.get::<Instance>(entity).and_then(|i| i.def.constant()).and_then(|v| match v {
         crate::value::Value::Ref(d) => Some(name_of(doc, *d).unwrap_or_else(|| d.to_string())),
         _ => None,
@@ -235,7 +235,7 @@ pub fn link_ops(doc: &Document, a: NodeId, b: NodeId, keep: Option<NodeId>) -> R
 /// A `thing` entity for two pictures, creating whatever structure is
 /// missing. Ids are minted in creation order (ascending, as apply requires).
 fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
-    use crate::component::{Instance, Name, Params};
+    use crate::facet::{Instance, Name, Params};
     use crate::value::{Slot, Value};
     let ty = |s: &str| TypeId::lookup(s).expect("registered");
     let named = |s: &str| {
@@ -258,19 +258,19 @@ fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
         let id = ids.next().expect("reserved");
         let order = after(root_key.take());
         root_key = Some(order.clone());
-        ops.push(Op::Create { id, ty: ty("model"), parent: None, order, components: vec![named("model")] });
+        ops.push(Op::Create { id, ty: ty("model"), parent: None, order, facets: vec![named("model")] });
         id
     });
     let library = library.unwrap_or_else(|| {
         let id = ids.next().expect("reserved");
         let order = after(root_key.take());
-        ops.push(Op::Create { id, ty: ty("library"), parent: None, order, components: vec![named("library")] });
+        ops.push(Op::Create { id, ty: ty("library"), parent: None, order, facets: vec![named("library")] });
         id
     });
     let thing = thing.unwrap_or_else(|| {
         let id = ids.next().expect("reserved");
         let last = doc.children(library).last().and_then(|&c| doc.live(c)).map(|n| n.order.clone());
-        ops.push(Op::Create { id, ty: ty("definition"), parent: Some(library), order: after(last), components: vec![named("thing")] });
+        ops.push(Op::Create { id, ty: ty("definition"), parent: Some(library), order: after(last), facets: vec![named("thing")] });
         id
     });
     let entity = ids.next().expect("reserved");
@@ -283,7 +283,7 @@ fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
         ty: ty("entity"),
         parent: Some(model),
         order: after(last),
-        components: vec![instance.wrap(), Params::default().wrap(), named(&name)],
+        facets: vec![instance.wrap(), Params::default().wrap(), named(&name)],
     });
     let rels = doc.next_relation_ids(2);
     for (from, id) in [a, b].into_iter().zip(rels) {
@@ -297,7 +297,7 @@ fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
 
 /// The composition an embed shows, if it names a live one.
 pub fn embedded(doc: &Document, embed: NodeId) -> Option<NodeId> {
-    match doc.get::<crate::component::Embed>(embed)?.source.constant()? {
+    match doc.get::<crate::facet::Embed>(embed)?.source.constant()? {
         crate::value::Value::Ref(c) if composition_of(doc, *c) == Some(*c) => Some(*c),
         _ => None,
     }
@@ -305,7 +305,7 @@ pub fn embedded(doc: &Document, embed: NodeId) -> Option<NodeId> {
 
 /// The camera an embed looks through, if it names one.
 pub fn embed_camera(doc: &Document, embed: NodeId) -> Option<NodeId> {
-    match doc.get::<crate::component::EmbedCamera>(embed)?.camera.constant()? {
+    match doc.get::<crate::facet::EmbedCamera>(embed)?.camera.constant()? {
         crate::value::Value::Ref(c) if doc.is_live(*c) => Some(*c),
         _ => None,
     }
@@ -326,7 +326,7 @@ pub fn embed_3d_extent(store: &crate::Store, embed: NodeId) -> Option<(NodeId, O
         return None;
     }
     let num = |id: NodeId, leaf: &str| leaf.parse().ok().and_then(|p| store.resolved(id, p)).and_then(|v| v.as_f64());
-    let has_size = doc.component(embed, crate::component::ComponentKind::Size).is_some();
+    let has_size = doc.facet(embed, crate::facet::FacetKind::Size).is_some();
     let w = if has_size { num(embed, "size.w").unwrap_or(EMBED_3D_SIZE.0) } else { EMBED_3D_SIZE.0 };
     let mut h = if has_size { num(embed, "size.h").unwrap_or(EMBED_3D_SIZE.1) } else { EMBED_3D_SIZE.1 };
     let camera = embed_camera(doc, embed);
@@ -348,7 +348,7 @@ pub fn embeds_in(doc: &Document, composition: NodeId) -> Vec<NodeId> {
 /// embedded composition.
 pub fn validate_embed(doc: &Document, embed: NodeId) -> Result<(), String> {
     let home = composition_of(doc, embed).ok_or_else(|| format!("embed {embed} is not inside a composition"))?;
-    let of = match doc.get::<crate::component::Embed>(embed).and_then(|e| e.source.constant()) {
+    let of = match doc.get::<crate::facet::Embed>(embed).and_then(|e| e.source.constant()) {
         Some(crate::value::Value::Ref(c)) => *c,
         _ => return Err(format!("embed {embed}: embed.source must name a composition")),
     };
@@ -366,7 +366,7 @@ pub fn validate_embed(doc: &Document, embed: NodeId) -> Result<(), String> {
             stack.extend(embeds_in(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
         }
     }
-    if let Some(cam) = doc.get::<crate::component::EmbedCamera>(embed).and_then(|e| e.camera.constant()) {
+    if let Some(cam) = doc.get::<crate::facet::EmbedCamera>(embed).and_then(|e| e.camera.constant()) {
         let ok = matches!(cam, crate::value::Value::Ref(c) if doc.live(*c).is_some_and(|n| n.ty.name() == "camera") && composition_of(doc, *c) == Some(of));
         if !ok {
             return Err(format!("embed {embed}: embed_camera.camera must name a camera inside {of}"));

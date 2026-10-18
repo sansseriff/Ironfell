@@ -484,7 +484,7 @@ fn collect_ids(op: &Op, out: &mut BTreeSet<NodeId>) -> bool {
             out.insert(*id);
             true
         }
-        Op::Set { id, .. } | Op::AddComp { id, .. } | Op::RemoveComp { id, .. } => {
+        Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
             out.insert(*id);
             false
         }

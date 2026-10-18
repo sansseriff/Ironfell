@@ -454,7 +454,7 @@ pub fn document_counterparts(app: &mut WorkerApp, node: String) -> String {
         .map(|f| {
             let c = composition::composition_of(doc, f);
             let name = c
-                .and_then(|c| doc.get::<iron_document::component::Name>(c))
+                .and_then(|c| doc.get::<iron_document::facet::Name>(c))
                 .and_then(|n| n.text.constant())
                 .and_then(|v| v.as_str())
                 .map(str::to_owned);
@@ -495,7 +495,7 @@ pub fn document_export_svg(app: &mut WorkerApp, scope: String) -> String {
         return serde_json::json!({"ok": false, "error": "no document"}).to_string();
     };
     let doc = store.0.document();
-    let name_of = |c: iron_document::NodeId| doc.get::<iron_document::component::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
     let scope = if scope == "selection" {
         iron_svg::Scope::Nodes(store.0.selection().into_iter().map(|(id, _)| id).collect())
     } else if scope.starts_with('#')
@@ -598,7 +598,7 @@ pub fn document_selection(app: &mut WorkerApp) -> String {
         .selection()
         .into_iter()
         .map(|(id, data)| {
-            let name = doc.get::<iron_document::component::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+            let name = doc.get::<iron_document::facet::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
             let s = |k: &str| data.get(k).and_then(|v| v.as_str()).map(str::to_owned);
             serde_json::json!({
                 "node": id.to_string(),
@@ -620,9 +620,9 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return "null".into() };
     let doc = store.0.document();
     let Some(n) = doc.live(id) else { return "null".into() };
-    let name = doc.get::<iron_document::component::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    let name = doc.get::<iron_document::facet::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
     let components: Vec<serde_json::Value> = doc
-        .components_of(id)
+        .facets_of(id)
         .filter(|c| c.kind().name() != "name")
         .map(|c| {
             let kind = c.kind();
@@ -654,17 +654,17 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
         })
         .collect();
     // Optional components a person adds and removes from the inspector.
-    let optional = |k: iron_document::ComponentKind| n.ty.spec().allows(k) && !n.ty.spec().requires(k) && INSPECTOR_OPTIONAL.contains(&k.name());
-    let addable: Vec<&str> = iron_document::ComponentKind::ALL.iter().copied().filter(|&k| optional(k) && doc.component(id, k).is_none()).map(|k| k.name()).collect();
-    let removable: Vec<&str> = doc.components_of(id).map(|c| c.kind()).filter(|&k| optional(k)).map(|k| k.name()).collect();
+    let optional = |k: iron_document::FacetKind| n.ty.spec().allows(k) && !n.ty.spec().requires(k) && INSPECTOR_OPTIONAL.contains(&k.name());
+    let addable: Vec<&str> = iron_document::FacetKind::ALL.iter().copied().filter(|&k| optional(k) && doc.facet(id, k).is_none()).map(|k| k.name()).collect();
+    let removable: Vec<&str> = doc.facets_of(id).map(|c| c.kind()).filter(|&k| optional(k)).map(|k| k.name()).collect();
     serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable}).to_string()
 }
 
 pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: bool) -> String {
     let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return fail(format!("bad id {node:?}")) };
-    let Some(k) = iron_document::ComponentKind::from_name(&kind).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())) else { return fail(format!("no optional component {kind:?}")) };
-    let op = if add { iron_document::Op::AddComp { id, comp: k.default_component() } } else { iron_document::Op::RemoveComp { id, kind: k } };
+    let Some(k) = iron_document::FacetKind::from_name(&kind).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())) else { return fail(format!("no optional component {kind:?}")) };
+    let op = if add { iron_document::Op::AddFacet { id, comp: k.default_facet() } } else { iron_document::Op::RemoveFacet { id, kind: k } };
     let label = format!("{} {kind}", if add { "add" } else { "remove" });
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
     let result = store.0.apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: 0, idempotency_key: None, ops: vec![op], exact: false });
@@ -680,8 +680,8 @@ pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: 
 fn inspector_current(store: &iron_document::Store, id: iron_document::NodeId, path: iron_document::LeafPath) -> Option<iron_document::Value> {
     store.resolved(id, path).or_else(|| {
         let node = store.document().live(id)?;
-        if !node.ty.spec().allows(path.component) || !INSPECTOR_OPTIONAL.contains(&path.component.name()) { return None; }
-        path.component.default_component().get(path.field).and_then(|s| s.constant()).cloned()
+        if !node.ty.spec().allows(path.facet) || !INSPECTOR_OPTIONAL.contains(&path.facet.name()) { return None; }
+        path.facet.default_facet().get(path.field).and_then(|s| s.constant()).cloned()
     })
 }
 
@@ -714,7 +714,7 @@ fn inspector_value(current: &iron_document::Value, text: &str) -> Result<iron_do
 }
 
 pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) -> String {
-    use iron_document::{Actor, ComponentKind, Leaf, LeafPath, NodeId, Op, Slot, Value};
+    use iron_document::{Actor, FacetKind, Leaf, LeafPath, NodeId, Op, Slot, Value};
     use std::collections::BTreeMap;
     let mut run = || -> Result<serde_json::Value, String> {
         let id = node.parse::<NodeId>().map_err(|e| e.to_string())?;
@@ -735,19 +735,19 @@ pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) 
         let mut adds = BTreeMap::new();
         let mut ops = Vec::new();
         for (target, value) in writes {
-            if store.0.document().component(target.node, target.path.component).is_none() {
-                let comp = adds.entry((target.node, target.path.component)).or_insert_with(|| target.path.component.default_component());
+            if store.0.document().facet(target.node, target.path.facet).is_none() {
+                let comp = adds.entry((target.node, target.path.facet)).or_insert_with(|| target.path.facet.default_facet());
                 comp.set(target.path.field, Slot::Const(value)).map_err(|e| e.to_string())?;
             } else if store.0.document().leaf(target.node, target.path).and_then(|s| s.constant()) != Some(&value) {
                 ops.push(Op::Set { id: target.node, path: target.path, slot: Slot::Const(value) });
             }
         }
-        let mut added: Vec<_> = adds.into_iter().map(|((id, _), comp)| Op::AddComp { id, comp }).collect();
+        let mut added: Vec<_> = adds.into_iter().map(|((id, _), comp)| Op::AddFacet { id, comp }).collect();
         added.append(&mut ops);
         if let Some(remove) = patch.get("remove").and_then(|v| v.as_array()) {
             for kind in remove {
-                let kind = kind.as_str().and_then(ComponentKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
-                if store.0.document().component(id, kind).is_some() { added.push(Op::RemoveComp { id, kind }); }
+                let kind = kind.as_str().and_then(FacetKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
+                if store.0.document().facet(id, kind).is_some() { added.push(Op::RemoveFacet { id, kind }); }
             }
         }
         if added.is_empty() { return Ok(serde_json::json!({"ok": true})); }
@@ -838,7 +838,7 @@ pub fn document_compositions(app: &mut WorkerApp) -> String {
     let list: Vec<serde_json::Value> = composition::compositions(doc)
         .into_iter()
         .map(|c| {
-            let name = doc.get::<iron_document::component::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+            let name = doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
             let dims = match composition::dims(doc, c) {
                 Some(Dims::Three) => "3d",
                 _ => "2d",
@@ -1097,8 +1097,8 @@ pub fn document_inspect_bind(app: &mut WorkerApp, node: String, leaf: String, ex
 /// does, in one transaction, and its runs lose the properties it sets, as
 /// in Figma.
 pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> String {
-    use iron_document::component::Fill;
-    use iron_document::{Actor, ComponentKind, LeafStruct, NodeId, Op, Slot, TransactionInput, Value};
+    use iron_document::facet::Fill;
+    use iron_document::{Actor, FacetKind, LeafStruct, NodeId, Op, Slot, TransactionInput, Value};
     let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
     let Ok(id) = node.parse::<NodeId>() else { return fail(format!("bad id {node:?}")) };
     let patch: iron_text::RunStyle = match serde_json::from_str(&patch) {
@@ -1129,12 +1129,12 @@ pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> 
     if let Some(v) = patch.underline { set("font.underline", Value::Bool(v)); }
     if let Some(v) = patch.strike { set("font.strike", Value::Bool(v)); }
     if let Some(c) = patch.color {
-        if store.0.document().component(id, ComponentKind::Fill).is_some() {
+        if store.0.document().facet(id, FacetKind::Fill).is_some() {
             set("fill.color", Value::Color(c));
         } else {
             let mut fill = Fill::default();
             fill.color = Slot::Const(Value::Color(c));
-            ops.push(Op::AddComp { id, comp: fill.wrap() });
+            ops.push(Op::AddFacet { id, comp: fill.wrap() });
         }
     }
     let text = iron_document::text::content(&store.0, id);

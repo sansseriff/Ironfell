@@ -7,7 +7,7 @@
 //! nesting is the data. Elision is always marked: a reader must be able to
 //! tell "empty" from "not shown".
 
-use crate::component::{Component, ComponentKind};
+use crate::facet::{Facet, FacetKind};
 use crate::document::Document;
 use crate::id::NodeId;
 use serde::{Deserialize, Serialize};
@@ -164,7 +164,7 @@ fn node(
     }
     for r in drivers {
         write!(out, "{indent}  <driven-by ref=\"{}\" rel=\"{}\"", r.from, r.rel.name()).expect("string write");
-        if let Some(prop) = doc.get::<crate::component::Clip>(r.from).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()) {
+        if let Some(prop) = doc.get::<crate::facet::Clip>(r.from).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()) {
             write!(out, " prop=\"{}\"", escape(prop)).expect("string write");
         }
         for (k, v) in &r.data {
@@ -198,14 +198,14 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
     writeln!(out, "<model-view version=\"{}\">", doc.version().0).expect("string write");
     let entity = crate::registry::TypeId::lookup("entity").expect("registered");
     let name_of = |n: NodeId| {
-        doc.get::<crate::component::Name>(n).and_then(|c| c.text.constant()).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_owned)
+        doc.get::<crate::facet::Name>(n).and_then(|c| c.text.constant()).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_owned)
     };
     for id in doc.nodes_of_type(entity).filter(|&e| doc.is_live(e)) {
         if q.scope.is_some_and(|s| s != id) {
             continue;
         }
         let mut attrs = leaf_attrs(doc, reactive, by, q.fidelity, id);
-        let def = doc.get::<crate::component::Instance>(id).and_then(|i| i.def.constant()).and_then(|v| match v {
+        let def = doc.get::<crate::facet::Instance>(id).and_then(|i| i.def.constant()).and_then(|v| match v {
             crate::value::Value::Ref(d) => Some(*d),
             _ => None,
         });
@@ -224,7 +224,7 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
         // Ports with their live values (ECM §6.1): a one-way kind shows its
         // signal, a pair its across and through.
         for p in ports {
-            let port = doc.get::<crate::component::Port>(p);
+            let port = doc.get::<crate::facet::Port>(p);
             let text = |slot: Option<&crate::value::Slot>| slot.and_then(|s| s.constant()).and_then(|v| v.as_str()).unwrap_or("").to_owned();
             let kind = text(port.map(|c| &c.kind));
             let mut pa: Vec<(String, String)> = vec![("id".into(), p.to_string())];
@@ -233,7 +233,7 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
             }
             pa.push(("kind".into(), kind.clone()));
             pa.push(("dir".into(), text(port.map(|c| &c.dir))));
-            let read = |f: &str| f.parse::<crate::component::LeafPath>().ok().and_then(|path| reactive.read(doc, crate::expr::Leaf { node: p, path })).map(|v| v.to_string());
+            let read = |f: &str| f.parse::<crate::facet::LeafPath>().ok().and_then(|path| reactive.read(doc, crate::expr::Leaf { node: p, path })).map(|v| v.to_string());
             let pair = crate::port::kind(&kind).is_some_and(|k| k.flow == crate::port::Flow::Pair);
             for f in if pair { &["across", "through"][..] } else { &["signal"][..] } {
                 if let Some(v) = read(&format!("port.{f}")) {
@@ -269,7 +269,7 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
     for c in doc.nodes_of_type(connection).filter(|&c| doc.is_live(c)) {
         let Some((a, b)) = crate::port::ends(doc, c) else { continue };
         let mut ca: Vec<(String, String)> = vec![("id".into(), c.to_string()), ("a".into(), end_name(a)), ("b".into(), end_name(b))];
-        if let Some(k) = doc.get::<crate::component::Port>(a).and_then(|p| p.kind.constant()).and_then(|v| v.as_str()) {
+        if let Some(k) = doc.get::<crate::facet::Port>(a).and_then(|p| p.kind.constant()).and_then(|v| v.as_str()) {
             ca.push(("kind".into(), k.to_owned()));
         }
         write_open(&mut out, "  ", "connection", &ca);
@@ -285,8 +285,8 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
 fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fidelity: Fidelity, id: NodeId) -> Vec<(String, String)> {
     let mut attrs: Vec<(String, String)> = vec![("id".into(), id.to_string())];
 
-    let comps: Vec<&Component> = doc.components_of(id).collect();
-    if let Some(name) = comps.iter().find(|c| c.kind() == ComponentKind::Name) {
+    let comps: Vec<&Facet> = doc.facets_of(id).collect();
+    if let Some(name) = comps.iter().find(|c| c.kind() == FacetKind::Name) {
         if let Some(text) = name
             .get("text")
             .and_then(|s| s.constant())
@@ -297,7 +297,7 @@ fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fideli
         }
     }
     if fidelity != Fidelity::Skeleton {
-        // Attribute names are bare field names unless two components on this
+        // Attribute names are bare field names unless two facets on this
         // node share one, in which case both get the full `kind.field` path.
         let mut seen: Vec<&str> = Vec::new();
         let mut dup: Vec<&str> = Vec::new();
@@ -311,7 +311,7 @@ fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fideli
             }
         }
         for c in &comps {
-            if c.kind() == ComponentKind::Name {
+            if c.kind() == FacetKind::Name {
                 continue;
             }
             for f in c.field_names() {
@@ -321,7 +321,7 @@ fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fideli
                 // value is and why.
                 let leaf = crate::expr::Leaf {
                     node: id,
-                    path: crate::component::LeafPath::new(c.kind(), f).expect("declared"),
+                    path: crate::facet::LeafPath::new(c.kind(), f).expect("declared"),
                 };
                 let value = reactive
                     .read(doc, leaf)

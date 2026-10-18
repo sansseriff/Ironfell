@@ -11,7 +11,7 @@
 
 use super::{Doc2d, PanelView, Shape2d};
 use bevy::prelude::*;
-use iron_document::component::Frame;
+use iron_document::facet::Frame;
 use iron_document::composition::{self, Dims};
 use iron_document::{Document, NodeId, TypeId};
 

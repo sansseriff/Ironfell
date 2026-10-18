@@ -14,10 +14,10 @@
 //! group with an `id`, or with several children, becomes a `group`.
 
 use crate::{round4, Cut, Cuts};
-use iron_document::component::{Appearance, Arc, Contour, Corners, Fill, Handles, Name, PathShape, Radius, Shadow, Size, Stroke, Transform2d};
+use iron_document::facet::{Appearance, Arc, Contour, Corners, Fill, Handles, Name, PathShape, Radius, Shadow, Size, Stroke, Transform2d};
 use iron_document::copy::Fragment;
 use iron_document::shape::{self, Anchor};
-use iron_document::{Actor, Affine2, Component, LeafStruct, NodeId, Op, OrderKey, Slot, Store, TransactionInput, TypeId, Value};
+use iron_document::{Actor, Affine2, Facet, LeafStruct, NodeId, Op, OrderKey, Slot, Store, TransactionInput, TypeId, Value};
 use kurbo::{Affine, Point, Vec2};
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
@@ -42,7 +42,7 @@ pub fn is_svg_text(text: &str) -> bool {
 /// A node to create, before it has an id.
 struct INode {
     ty: &'static str,
-    comps: Vec<Component>,
+    comps: Vec<Facet>,
     kids: Vec<INode>,
 }
 
@@ -112,7 +112,7 @@ fn fragment(nodes: Vec<INode>, count: usize) -> Result<Fragment, String> {
     fn create(n: INode, parent: Option<NodeId>, order: OrderKey, ids: &mut impl Iterator<Item = NodeId>, ops: &mut Vec<Op>) -> NodeId {
         let id = ids.next().expect("counted");
         let ty = TypeId::lookup(n.ty).expect("registered type");
-        ops.push(Op::Create { id, ty, parent, order, components: n.comps });
+        ops.push(Op::Create { id, ty, parent, order, facets: n.comps });
         let mut k = OrderKey::first();
         for kid in n.kids {
             create(kid, Some(id), k.clone(), ids, ops);
@@ -212,13 +212,13 @@ fn n(v: f64) -> Slot {
     Slot::Const(Value::Number(v))
 }
 
-fn transform2d([x, y, rot, sx, sy]: [f64; 5]) -> Component {
+fn transform2d([x, y, rot, sx, sy]: [f64; 5]) -> Facet {
     let mut t = Transform2d::default();
     (t.x, t.y, t.rot, t.sx, t.sy) = (n(x), n(y), n(rot), n(sx), n(sy));
     t.wrap()
 }
 
-fn name(text: &str) -> Component {
+fn name(text: &str) -> Facet {
     let mut c = Name::default();
     c.text = Slot::Const(Value::Str(text.to_owned()));
     c.wrap()
@@ -433,7 +433,7 @@ impl<'a, 'input> Ctx<'a, 'input> {
         };
         comps.extend(label.as_deref().map(name));
         let extras = self.appearance(el);
-        if !extras.iter().any(|c| c.kind() == iron_document::ComponentKind::Appearance) && opacity != 1.0 {
+        if !extras.iter().any(|c| c.kind() == iron_document::FacetKind::Appearance) && opacity != 1.0 {
             let mut appearance = Appearance::default();
             appearance.opacity = n(opacity);
             comps.push(appearance.wrap());
@@ -444,16 +444,16 @@ impl<'a, 'input> Ctx<'a, 'input> {
         out.push(INode { ty: "group", comps, kids });
     }
 
-    fn appearance(&mut self, el: Option<roxmltree::Node<'_, '_>>) -> Vec<Component> {
+    fn appearance(&mut self, el: Option<roxmltree::Node<'_, '_>>) -> Vec<Facet> {
         let Some(raw) = el.and_then(|el| el.attribute("data-iron-appearance")) else { return Vec::new(); };
-        match serde_json::from_str::<Vec<Component>>(raw) {
-            Ok(cs) => cs.into_iter().filter(|c| matches!(c.kind(), iron_document::ComponentKind::Appearance | iron_document::ComponentKind::Gradient | iron_document::ComponentKind::GroupClip | iron_document::ComponentKind::Fill)).collect(),
+        match serde_json::from_str::<Vec<Facet>>(raw) {
+            Ok(cs) => cs.into_iter().filter(|c| matches!(c.kind(), iron_document::FacetKind::Appearance | iron_document::FacetKind::Gradient | iron_document::FacetKind::GroupClip | iron_document::FacetKind::Fill)).collect(),
             Err(_) => { self.cuts.add("invalid Iron appearance metadata was ignored"); Vec::new() }
         }
     }
 
-    /// Fill and stroke components, and whether the fill is even-odd.
-    fn paint(&mut self, p: &usvg::Path, opacity: f64, exact_gradient: bool) -> (Option<Component>, Option<Component>, bool) {
+    /// Fill and stroke facets, and whether the fill is even-odd.
+    fn paint(&mut self, p: &usvg::Path, opacity: f64, exact_gradient: bool) -> (Option<Facet>, Option<Facet>, bool) {
         let solid = |paint: &usvg::Paint, cuts: &mut Cuts| -> Option<(usvg::Color, f64)> {
             match paint {
                 usvg::Paint::Color(c) => Some((*c, 1.0)),
@@ -520,12 +520,12 @@ impl<'a, 'input> Ctx<'a, 'input> {
         // Layer opacity is separate from paint alpha. Anonymous wrappers
         // can fold into a single shape without changing isolation.
         let mut extra = self.appearance(el);
-        let own_paint = extra.iter().find(|c| c.kind() == iron_document::ComponentKind::Fill).cloned();
-        extra.retain(|c| c.kind() != iron_document::ComponentKind::Fill);
-        let gradient = extra.iter().any(|c| c.kind() == iron_document::ComponentKind::Gradient);
+        let own_paint = extra.iter().find(|c| c.kind() == iron_document::FacetKind::Fill).cloned();
+        extra.retain(|c| c.kind() != iron_document::FacetKind::Fill);
+        let gradient = extra.iter().any(|c| c.kind() == iron_document::FacetKind::Gradient);
         let (mut fill, stroke, evenodd) = self.paint(p, 1.0, gradient);
         if gradient || own_paint.is_some() { fill = own_paint; }
-        if !extra.iter().any(|c| c.kind() == iron_document::ComponentKind::Appearance) && opacity != 1.0 {
+        if !extra.iter().any(|c| c.kind() == iron_document::FacetKind::Appearance) && opacity != 1.0 {
             let mut appearance = Appearance::default();
             appearance.opacity = n(opacity);
             extra.push(appearance.wrap());
@@ -549,7 +549,7 @@ impl<'a, 'input> Ctx<'a, 'input> {
         };
         extra.extend(label.as_deref().map(name));
         let (t, rest) = self.placement(accum, el);
-        let paint: Vec<Component> = fill.iter().chain(stroke.iter()).cloned().collect();
+        let paint: Vec<Facet> = fill.iter().chain(stroke.iter()).cloned().collect();
 
         // Iron's rects and ellipses come back as themselves.
         if rest == Affine::IDENTITY
@@ -694,7 +694,7 @@ fn near_all(a: &kurbo::BezPath, b: &kurbo::BezPath, tol: f64) -> bool {
 /// its origin goes in the outline's space (a rect's top-left corner, an
 /// ellipse's centre), and its parameters. Each guess is drawn with Iron's own
 /// outline and kept only if the two coincide, so a near miss stays a path.
-fn recognize(run: &[Anchor]) -> Option<(&'static str, Point, Vec<Component>)> {
+fn recognize(run: &[Anchor]) -> Option<(&'static str, Point, Vec<Facet>)> {
     use kurbo::Shape as _;
     let given = shape::to_bez(&[run.to_vec()]);
     let bb = given.bounding_box();

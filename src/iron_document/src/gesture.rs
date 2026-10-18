@@ -24,7 +24,7 @@
 //! sliders and drags through a plane: the tools differ only in how a pointer
 //! becomes leaf values.
 
-use crate::component::ComponentKind;
+use crate::facet::FacetKind;
 use crate::document::{Document, RelKind};
 use crate::expr::Leaf;
 use crate::id::NodeId;
@@ -67,22 +67,22 @@ pub(crate) struct Suspended {
     pub fingers: Vec<crate::solve::Finger>,
 }
 
-/// Components that place or shape a node: what a gesture reads to turn the
+/// Facets that place or shape a node: what a gesture reads to turn the
 /// pointer into values. A change to one of these under a gesture is a
 /// conflict; a colour or a name is not.
-const GEOMETRY: &[ComponentKind] = &[
-    ComponentKind::Transform2d,
-    ComponentKind::Transform3d,
-    ComponentKind::Size,
-    ComponentKind::Radius,
-    ComponentKind::Corners,
-    ComponentKind::Arc,
-    ComponentKind::Handles,
-    ComponentKind::PathShape,
-    ComponentKind::Contour,
-    ComponentKind::Frame,
-    ComponentKind::GroupClip,
-    ComponentKind::Slider,
+const GEOMETRY: &[FacetKind] = &[
+    FacetKind::Transform2d,
+    FacetKind::Transform3d,
+    FacetKind::Size,
+    FacetKind::Radius,
+    FacetKind::Corners,
+    FacetKind::Arc,
+    FacetKind::Handles,
+    FacetKind::PathShape,
+    FacetKind::Contour,
+    FacetKind::Frame,
+    FacetKind::GroupClip,
+    FacetKind::Slider,
 ];
 
 fn watched(doc: &Document, g: &ActiveGesture, n: NodeId) -> bool {
@@ -98,9 +98,9 @@ pub(crate) fn conflict(doc: &Document, ops: &[Op], g: &ActiveGesture, drivers: &
             Op::Reparent { id, .. } if watched(doc, g, *id) => format!("{id} moved to another parent"),
             Op::Create { id, .. } if g.nodes.contains(id) => format!("{id} was replaced"),
             Op::Set { id, path, .. } if drivers.contains(&Leaf { node: *id, path: *path }) => format!("{id}.{path}, which the gesture drives, was set"),
-            Op::Set { id, path, slot } if watched(doc, g, *id) && (GEOMETRY.contains(&path.component) || slot.expr().is_some()) => format!("{id}.{path} was set"),
-            Op::AddComp { id, comp } if watched(doc, g, *id) && GEOMETRY.contains(&comp.kind()) => format!("{id} gained {}", comp.kind().name()),
-            Op::RemoveComp { id, kind } if watched(doc, g, *id) && GEOMETRY.contains(kind) => format!("{id} lost {}", kind.name()),
+            Op::Set { id, path, slot } if watched(doc, g, *id) && (GEOMETRY.contains(&path.facet) || slot.expr().is_some()) => format!("{id}.{path} was set"),
+            Op::AddFacet { id, comp } if watched(doc, g, *id) && GEOMETRY.contains(&comp.kind()) => format!("{id} gained {}", comp.kind().name()),
+            Op::RemoveFacet { id, kind } if watched(doc, g, *id) && GEOMETRY.contains(kind) => format!("{id} lost {}", kind.name()),
             Op::Link { rel } if matches!(rel.rel, RelKind::Constrains | RelKind::Animates) && g.nodes.contains(&rel.to) => {
                 format!("{} now {} {}", rel.from, rel.rel.name(), rel.to)
             }

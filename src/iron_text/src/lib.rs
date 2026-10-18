@@ -84,7 +84,7 @@ impl VAlign {
     }
 }
 
-/// One style for a whole text node: the `font` component's resolved leaves.
+/// One style for a whole text node: the `font` facet's resolved leaves.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextStyle {
     pub family: String,

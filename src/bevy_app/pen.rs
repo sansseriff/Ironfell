@@ -18,7 +18,7 @@
 //! click removes that point and the path stays joined across the gap.
 
 use bevy::prelude::*;
-use iron_document::component::{Contour, Name as DocName, PathShape, Stroke, Transform2d};
+use iron_document::facet::{Contour, Name as DocName, PathShape, Stroke, Transform2d};
 use iron_document::composition::{self, Dims};
 use iron_document::{Actor, LeafStruct, NodeId, Op, OrderKey, Slot, TransactionInput, TypeId, Value};
 use kurbo::{Affine, Point};
@@ -324,9 +324,9 @@ pub fn pen_tool_system(
             ty: TypeId::lookup("path").expect("registered"),
             parent: Some(container),
             order: after_last(doc, Some(container)),
-            components: vec![t.wrap(), PathShape::default().wrap(), stroke.wrap(), name.wrap()],
+            facets: vec![t.wrap(), PathShape::default().wrap(), stroke.wrap(), name.wrap()],
         },
-        Op::Create { id: ids[1], ty: TypeId::lookup("contour").expect("registered"), parent: Some(ids[0]), order: OrderKey::first(), components: vec![Contour::default().wrap()] },
+        Op::Create { id: ids[1], ty: TypeId::lookup("contour").expect("registered"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![Contour::default().wrap()] },
         point_op(ids[2], ids[1], OrderKey::first(), Point::ZERO, -out, out),
     ];
     pending.0.push(transaction("draw path", ops));

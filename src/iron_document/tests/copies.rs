@@ -3,7 +3,7 @@
 //! entities and connections are in `ports.rs`, of constraints in
 //! `constraints.rs`.
 
-use iron_document::component::{Clip, Composition, Fill, Name, Size, Slider, Timing, Transform2d};
+use iron_document::facet::{Clip, Composition, Fill, Name, Size, Slider, Timing, Transform2d};
 use iron_document::copy::{self, Fragment, Placement};
 use iron_document::*;
 
@@ -27,7 +27,7 @@ fn get(store: &Store, id: NodeId, p: &str) -> f64 {
     store.resolved(id, path(p)).and_then(|v| v.as_f64()).unwrap()
 }
 
-fn rect(x: f64, y: f64, w: Slot) -> Vec<Component> {
+fn rect(x: f64, y: f64, w: Slot) -> Vec<Facet> {
     let mut t = Transform2d::default();
     t.x = num(x);
     t.y = num(y);
@@ -81,14 +81,14 @@ fn scene() -> Scene {
         .apply(tx(
             "scene",
             vec![
-                Op::Create { id: comp, ty: ty("composition"), parent: None, order: order(), components: vec![name.wrap(), c.wrap()] },
-                Op::Create { id: slider, ty: ty("slider"), parent: Some(comp), order: order(), components: vec![Transform2d::default().wrap(), s.wrap()] },
-                Op::Create { id: a, ty: ty("rect"), parent: Some(comp), order: order(), components: rect(10.0, 20.0, Slot::Bound(Expr::parse(&format!("{slider}.slider.value * 100")).unwrap())) },
-                Op::Create { id: b, ty: ty("rect"), parent: Some(comp), order: order(), components: rect(30.0, 40.0, Slot::Bound(Expr::parse(&format!("{a}.size.w + 1")).unwrap())) },
-                Op::Create { id: group, ty: ty("group"), parent: Some(comp), order: order(), components: vec![g.wrap()] },
-                Op::Create { id: inner, ty: ty("rect"), parent: Some(group), order: order(), components: rect(5.0, 0.0, num(10.0)) },
-                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: order(), components: vec![] },
-                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: order(), components: vec![timing.wrap(), cl.wrap()] },
+                Op::Create { id: comp, ty: ty("composition"), parent: None, order: order(), facets: vec![name.wrap(), c.wrap()] },
+                Op::Create { id: slider, ty: ty("slider"), parent: Some(comp), order: order(), facets: vec![Transform2d::default().wrap(), s.wrap()] },
+                Op::Create { id: a, ty: ty("rect"), parent: Some(comp), order: order(), facets: rect(10.0, 20.0, Slot::Bound(Expr::parse(&format!("{slider}.slider.value * 100")).unwrap())) },
+                Op::Create { id: b, ty: ty("rect"), parent: Some(comp), order: order(), facets: rect(30.0, 40.0, Slot::Bound(Expr::parse(&format!("{a}.size.w + 1")).unwrap())) },
+                Op::Create { id: group, ty: ty("group"), parent: Some(comp), order: order(), facets: vec![g.wrap()] },
+                Op::Create { id: inner, ty: ty("rect"), parent: Some(group), order: order(), facets: rect(5.0, 0.0, num(10.0)) },
+                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: order(), facets: vec![] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: order(), facets: vec![timing.wrap(), cl.wrap()] },
                 Op::Link { rel: Relation { id: rel, from: clip, to: b, rel: RelKind::Animates, data: Default::default() } },
             ],
         ))

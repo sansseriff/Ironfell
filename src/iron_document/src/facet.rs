@@ -1,15 +1,15 @@
-//! Typed authored components and leaf paths.
+//! Typed authored facets and leaf paths.
 //!
-//! Components are Rust structs, not JSON bags, because the reconciler, the
+//! Facets are Rust structs, not JSON bags, because the reconciler, the
 //! floor and the layout solver all need typed access. Every field is a
 //! [`Slot`], so any field can later become bound or animated without changing
-//! its address. A leaf is addressed as `component.field`, e.g. `transform2d.x`
+//! its address. A leaf is addressed as `facet.field`, e.g. `transform2d.x`
 //! (plans/specs/document-spine.md §5.3).
 //!
-//! The file format stays generic JSON regardless: each component serialises as
+//! The file format stays generic JSON regardless: each facet serialises as
 //! an object of its fields.
 //!
-//! One component, `params`, has fields known only at run time: the parameters
+//! One facet, `params`, has fields known only at run time: the parameters
 //! a definition declares (entity-composition-model.md §4). Its field names
 //! are interned (`sym.rs`) so a `LeafPath` into it is as `Copy` as any other.
 
@@ -20,18 +20,18 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
 
-/// Implemented by every component struct. `KIND` and `FIELDS` are what the
+/// Implemented by every facet struct. `KIND` and `FIELDS` are what the
 /// registry, the validator and the view renderer read.
 pub trait LeafStruct: Sized + Default + Clone {
-    const KIND: ComponentKind;
+    const KIND: FacetKind;
     const FIELDS: &'static [(&'static str, ValueKind)];
     fn get(&self, field: &str) -> Option<&Slot>;
     fn get_mut(&mut self, field: &str) -> Option<&mut Slot>;
-    fn wrap(self) -> Component;
-    fn unwrap_ref(c: &Component) -> Option<&Self>;
+    fn wrap(self) -> Facet;
+    fn unwrap_ref(c: &Facet) -> Option<&Self>;
 }
 
-macro_rules! components {
+macro_rules! facets {
     ( $( $(#[$m:meta])* $variant:ident / $json:literal => $name:ident {
           $( $field:ident : $vk:ident = $default:expr ),* $(,)?
       } )*
@@ -49,7 +49,7 @@ macro_rules! components {
             }
 
             impl LeafStruct for $name {
-                const KIND: ComponentKind = ComponentKind::$variant;
+                const KIND: FacetKind = FacetKind::$variant;
                 const FIELDS: &'static [(&'static str, ValueKind)] =
                     &[ $( (stringify!($field), ValueKind::$vk), )* ];
                 fn get(&self, field: &str) -> Option<&Slot> {
@@ -58,78 +58,78 @@ macro_rules! components {
                 fn get_mut(&mut self, field: &str) -> Option<&mut Slot> {
                     match field { $( stringify!($field) => Some(&mut self.$field), )* _ => None }
                 }
-                fn wrap(self) -> Component { Component::$variant(self) }
-                fn unwrap_ref(c: &Component) -> Option<&Self> {
-                    match c { Component::$variant(v) => Some(v), _ => None }
+                fn wrap(self) -> Facet { Facet::$variant(self) }
+                fn unwrap_ref(c: &Facet) -> Option<&Self> {
+                    match c { Facet::$variant(v) => Some(v), _ => None }
                 }
             }
         )*
 
-        /// The kind of a component, i.e. which struct it is.
+        /// The kind of a facet, i.e. which struct it is.
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        pub enum ComponentKind { $( $variant, )* $( $dvariant, )* }
+        pub enum FacetKind { $( $variant, )* $( $dvariant, )* }
 
-        impl ComponentKind {
-            pub const ALL: &'static [ComponentKind] = &[ $( ComponentKind::$variant, )* $( ComponentKind::$dvariant, )* ];
+        impl FacetKind {
+            pub const ALL: &'static [FacetKind] = &[ $( FacetKind::$variant, )* $( FacetKind::$dvariant, )* ];
 
             pub fn name(self) -> &'static str {
-                match self { $( ComponentKind::$variant => $json, )* $( ComponentKind::$dvariant => $djson, )* }
+                match self { $( FacetKind::$variant => $json, )* $( FacetKind::$dvariant => $djson, )* }
             }
 
-            pub fn from_name(s: &str) -> Option<ComponentKind> {
-                match s { $( $json => Some(ComponentKind::$variant), )* $( $djson => Some(ComponentKind::$dvariant), )* _ => None }
+            pub fn from_name(s: &str) -> Option<FacetKind> {
+                match s { $( $json => Some(FacetKind::$variant), )* $( $djson => Some(FacetKind::$dvariant), )* _ => None }
             }
 
-            /// The compile-time fields. Empty for a dynamic component, whose
-            /// fields are per instance: see [`Component::field_names`].
+            /// The compile-time fields. Empty for a dynamic facet, whose
+            /// fields are per instance: see [`Facet::field_names`].
             pub fn fields(self) -> &'static [(&'static str, ValueKind)] {
-                match self { $( ComponentKind::$variant => <$name as LeafStruct>::FIELDS, )* $( ComponentKind::$dvariant => &[], )* }
+                match self { $( FacetKind::$variant => <$name as LeafStruct>::FIELDS, )* $( FacetKind::$dvariant => &[], )* }
             }
 
-            /// Whether this component's fields come from the document rather
+            /// Whether this facet's fields come from the document rather
             /// than from this table.
             pub fn is_dynamic(self) -> bool {
-                match self { $( ComponentKind::$variant => false, )* $( ComponentKind::$dvariant => true, )* }
+                match self { $( FacetKind::$variant => false, )* $( FacetKind::$dvariant => true, )* }
             }
 
-            pub fn default_component(self) -> Component {
+            pub fn default_facet(self) -> Facet {
                 match self {
-                    $( ComponentKind::$variant => Component::$variant($name::default()), )*
-                    $( ComponentKind::$dvariant => Component::$dvariant($dname::default()), )*
+                    $( FacetKind::$variant => Facet::$variant($name::default()), )*
+                    $( FacetKind::$dvariant => Facet::$dvariant($dname::default()), )*
                 }
             }
         }
 
-        /// One authored component of a node.
+        /// One authored facet of a node.
         #[derive(Clone, Debug, PartialEq)]
-        pub enum Component { $( $variant($name), )* $( $dvariant($dname), )* }
+        pub enum Facet { $( $variant($name), )* $( $dvariant($dname), )* }
 
-        impl Component {
-            pub fn kind(&self) -> ComponentKind {
-                match self { $( Component::$variant(_) => ComponentKind::$variant, )* $( Component::$dvariant(_) => ComponentKind::$dvariant, )* }
+        impl Facet {
+            pub fn kind(&self) -> FacetKind {
+                match self { $( Facet::$variant(_) => FacetKind::$variant, )* $( Facet::$dvariant(_) => FacetKind::$dvariant, )* }
             }
 
             pub fn get(&self, field: &str) -> Option<&Slot> {
-                match self { $( Component::$variant(v) => v.get(field), )* $( Component::$dvariant(v) => v.get(field), )* }
+                match self { $( Facet::$variant(v) => v.get(field), )* $( Facet::$dvariant(v) => v.get(field), )* }
             }
 
             fn get_mut(&mut self, field: &str) -> Option<&mut Slot> {
-                match self { $( Component::$variant(v) => v.get_mut(field), )* $( Component::$dvariant(v) => v.get_mut(field), )* }
+                match self { $( Facet::$variant(v) => v.get_mut(field), )* $( Facet::$dvariant(v) => v.get_mut(field), )* }
             }
 
-            /// This component's fields, in declaration (or, for a dynamic
-            /// component, name) order.
+            /// This facet's fields, in declaration (or, for a dynamic
+            /// facet, name) order.
             pub fn field_names(&self) -> Vec<&'static str> {
                 match self {
-                    $( Component::$variant(_) => <$name as LeafStruct>::FIELDS.iter().map(|(n, _)| *n).collect(), )*
-                    $( Component::$dvariant(v) => v.field_names(), )*
+                    $( Facet::$variant(_) => <$name as LeafStruct>::FIELDS.iter().map(|(n, _)| *n).collect(), )*
+                    $( Facet::$dvariant(v) => v.field_names(), )*
                 }
             }
         }
     };
 }
 
-components! {
+facets! {
     /// A human-readable name. Rendered as the `name` attribute in views.
     Name / "name" => Name { text: Str = Value::Str(String::new()) }
 
@@ -226,7 +226,7 @@ components! {
 
     /// Initial two-stop fill. Coordinates are fractions of the local bounds;
     /// radial uses (x0,y0) as centre and the distance to (x1,y1) as radius.
-    /// The solid fill remains the fallback when this component is removed.
+    /// The solid fill remains the fallback when this facet is removed.
     Gradient / "gradient" => Gradient {
         kind: Enum = Value::Enum("linear".to_owned()),
         start: Color = Value::Color([0.35, 0.3, 0.95, 1.0]),
@@ -365,7 +365,7 @@ components! {
     EmbedCamera / "embed_camera" => EmbedCamera { camera: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
 
     /// A manual bounding box for an embed, in the embedded composition's own
-    /// space, as corners (names no other component uses, so a bare `x` on
+    /// space, as corners (names no other facet uses, so a bare `x` on
     /// an embed still means its position). Absent: the bounds of everything
     /// inside.
     Frame / "frame" => Frame {
@@ -426,7 +426,7 @@ components! {
     }
 }
 
-/// The run-time component: a map from interned parameter name to slot.
+/// The run-time facet: a map from interned parameter name to slot.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Params {
     pub slots: BTreeMap<&'static str, Slot>,
@@ -444,7 +444,7 @@ impl Params {
 }
 
 impl LeafStruct for Params {
-    const KIND: ComponentKind = ComponentKind::Params;
+    const KIND: FacetKind = FacetKind::Params;
     const FIELDS: &'static [(&'static str, ValueKind)] = &[];
     fn get(&self, field: &str) -> Option<&Slot> {
         self.slots.get(field)
@@ -452,12 +452,12 @@ impl LeafStruct for Params {
     fn get_mut(&mut self, field: &str) -> Option<&mut Slot> {
         self.slots.get_mut(field)
     }
-    fn wrap(self) -> Component {
-        Component::Params(self)
+    fn wrap(self) -> Facet {
+        Facet::Params(self)
     }
-    fn unwrap_ref(c: &Component) -> Option<&Self> {
+    fn unwrap_ref(c: &Facet) -> Option<&Self> {
         match c {
-            Component::Params(v) => Some(v),
+            Facet::Params(v) => Some(v),
             _ => None,
         }
     }
@@ -465,9 +465,9 @@ impl LeafStruct for Params {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LeafError {
-    UnknownComponent(String),
+    UnknownFacet(String),
     UnknownField {
-        component: ComponentKind,
+        facet: FacetKind,
         field: String,
     },
     TypeMismatch {
@@ -480,16 +480,16 @@ pub enum LeafError {
 impl fmt::Display for LeafError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LeafError::UnknownComponent(c) => write!(f, "unknown component {c:?}"),
-            LeafError::UnknownField { component, field } => {
-                if component.is_dynamic() {
-                    return write!(f, "{} has no parameter {:?} (parameters come from the definition)", component.name(), field);
+            LeafError::UnknownFacet(c) => write!(f, "unknown component {c:?}"),
+            LeafError::UnknownField { facet, field } => {
+                if facet.is_dynamic() {
+                    return write!(f, "{} has no parameter {:?} (parameters come from the definition)", facet.name(), field);
                 }
-                let available: Vec<&str> = component.fields().iter().map(|(n, _)| *n).collect();
+                let available: Vec<&str> = facet.fields().iter().map(|(n, _)| *n).collect();
                 write!(
                     f,
                     "component {:?} has no field {:?}; available: {}",
-                    component.name(),
+                    facet.name(),
                     field,
                     available.join(", ")
                 )
@@ -511,15 +511,15 @@ impl fmt::Display for LeafError {
 }
 impl std::error::Error for LeafError {}
 
-impl Component {
+impl Facet {
     /// The compile-time fields; empty for `params`. Prefer
-    /// [`Component::field_names`] to enumerate an instance's leaves.
+    /// [`Facet::field_names`] to enumerate an instance's leaves.
     pub fn fields(&self) -> &'static [(&'static str, ValueKind)] {
         self.kind().fields()
     }
 
     /// The declared kind of a field this instance has: the table's for a
-    /// static component, `Any` for a parameter (the definition decides).
+    /// static facet, `Any` for a parameter (the definition decides).
     pub fn field_kind(&self, field: &str) -> Option<ValueKind> {
         if self.kind().is_dynamic() {
             return self.get(field).map(|_| ValueKind::Any);
@@ -529,13 +529,13 @@ impl Component {
 
     /// Replace one field's slot, checking the value kind. Returns the previous
     /// slot, which is what an inverse op needs. A parameter must already
-    /// exist: parameters are created with the component (so an inverse is
+    /// exist: parameters are created with the facet (so an inverse is
     /// always a `Set` back), and validated against the definition by the
     /// applier.
     pub fn set(&mut self, field: &str, slot: Slot) -> Result<Slot, LeafError> {
         let kind = self.kind();
         let expected = self.field_kind(field).ok_or_else(|| LeafError::UnknownField {
-            component: kind,
+            facet: kind,
             field: field.to_owned(),
         })?;
         // A binding's kind is only known when it is evaluated; the graph
@@ -565,20 +565,20 @@ impl Component {
         serde_json::Value::Object(m)
     }
 
-    /// Inverse of [`Component::to_json`]. Missing fields take defaults;
+    /// Inverse of [`Facet::to_json`]. Missing fields take defaults;
     /// unknown fields are an error rather than silently dropped. A `params`
     /// object defines its fields.
-    pub fn from_json(kind: ComponentKind, v: &serde_json::Value) -> Result<Component, String> {
+    pub fn from_json(kind: FacetKind, v: &serde_json::Value) -> Result<Facet, String> {
         let obj = v
             .as_object()
             .ok_or_else(|| format!("component {:?} must be an object", kind.name()))?;
-        let mut c = kind.default_component();
+        let mut c = kind.default_facet();
         for (field, raw) in obj {
             // Through `Slot`, not `Value`, so `{"bind": …}` becomes a binding.
             let slot: Slot = serde_json::from_value(raw.clone())
                 .map_err(|e| format!("{}.{field}: {e}", kind.name()))?;
             match &mut c {
-                Component::Params(p) => p.insert(field, slot),
+                Facet::Params(p) => p.insert(field, slot),
                 _ => {
                     c.set(field, slot).map_err(|e| e.to_string())?;
                 }
@@ -588,22 +588,22 @@ impl Component {
     }
 }
 
-impl Serialize for ComponentKind {
+impl Serialize for FacetKind {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(self.name())
     }
 }
 
-impl<'de> Deserialize<'de> for ComponentKind {
+impl<'de> Deserialize<'de> for FacetKind {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
-        ComponentKind::from_name(&s)
+        FacetKind::from_name(&s)
             .ok_or_else(|| serde::de::Error::custom(format!("unknown component kind {s:?}")))
     }
 }
 
-/// A component in an op serialises as `{"<kind>": {fields}}`.
-impl Serialize for Component {
+/// A facet in an op serialises as `{"<kind>": {fields}}`.
+impl Serialize for Facet {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let mut m = s.serialize_map(Some(1))?;
@@ -612,7 +612,7 @@ impl Serialize for Component {
     }
 }
 
-impl<'de> Deserialize<'de> for Component {
+impl<'de> Deserialize<'de> for Facet {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = serde_json::Value::deserialize(d)?;
         let obj = raw
@@ -620,49 +620,49 @@ impl<'de> Deserialize<'de> for Component {
             .filter(|o| o.len() == 1)
             .ok_or_else(|| serde::de::Error::custom("component must be a single-key object"))?;
         let (k, v) = obj.iter().next().expect("len 1");
-        let kind = ComponentKind::from_name(k)
+        let kind = FacetKind::from_name(k)
             .ok_or_else(|| serde::de::Error::custom(format!("unknown component kind {k:?}")))?;
-        Component::from_json(kind, v).map_err(serde::de::Error::custom)
+        Facet::from_json(kind, v).map_err(serde::de::Error::custom)
     }
 }
 
-/// `component.field`, the address of one editable value.
+/// `facet.field`, the address of one editable value.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LeafPath {
-    pub component: ComponentKind,
+    pub facet: FacetKind,
     pub field: &'static str,
 }
 
 impl LeafPath {
     /// A path into a declared field, or into any parameter of a dynamic
-    /// component (whether a node has that parameter is checked at use).
-    pub fn new(component: ComponentKind, field: &str) -> Result<LeafPath, LeafError> {
-        if component.is_dynamic() {
+    /// facet (whether a node has that parameter is checked at use).
+    pub fn new(facet: FacetKind, field: &str) -> Result<LeafPath, LeafError> {
+        if facet.is_dynamic() {
             if field.is_empty() {
-                return Err(LeafError::UnknownField { component, field: field.to_owned() });
+                return Err(LeafError::UnknownField { facet, field: field.to_owned() });
             }
-            return Ok(LeafPath { component, field: intern(field) });
+            return Ok(LeafPath { facet, field: intern(field) });
         }
-        component
+        facet
             .fields()
             .iter()
             .find(|(n, _)| *n == field)
             .map(|(n, _)| LeafPath {
-                component,
+                facet,
                 field: n,
             })
             .ok_or_else(|| LeafError::UnknownField {
-                component,
+                facet,
                 field: field.to_owned(),
             })
     }
 
     /// The declared kind; `Any` for a parameter.
     pub fn kind(&self) -> ValueKind {
-        if self.component.is_dynamic() {
+        if self.facet.is_dynamic() {
             return ValueKind::Any;
         }
-        self.component
+        self.facet
             .fields()
             .iter()
             .find(|(n, _)| *n == self.field)
@@ -676,16 +676,16 @@ impl FromStr for LeafPath {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (c, f) = s
             .split_once('.')
-            .ok_or_else(|| LeafError::UnknownComponent(s.to_owned()))?;
-        let component =
-            ComponentKind::from_name(c).ok_or_else(|| LeafError::UnknownComponent(c.to_owned()))?;
-        LeafPath::new(component, f)
+            .ok_or_else(|| LeafError::UnknownFacet(s.to_owned()))?;
+        let facet =
+            FacetKind::from_name(c).ok_or_else(|| LeafError::UnknownFacet(c.to_owned()))?;
+        LeafPath::new(facet, f)
     }
 }
 
 impl fmt::Display for LeafPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}", self.component.name(), self.field)
+        write!(f, "{}.{}", self.facet.name(), self.field)
     }
 }
 
@@ -735,17 +735,17 @@ mod tests {
             j,
             r#"{"fill":{"color":{"rgba":[0.5,0.5,0.5,1.0]},"opacity":0.25}}"#
         );
-        let back: Component = serde_json::from_str(&j).unwrap();
+        let back: Facet = serde_json::from_str(&j).unwrap();
         assert_eq!(back, f);
         assert!(
-            Component::from_json(ComponentKind::Fill, &serde_json::json!({"nope": 1})).is_err()
+            Facet::from_json(FacetKind::Fill, &serde_json::json!({"nope": 1})).is_err()
         );
     }
 
     #[test]
     fn leaf_path_parses() {
         let p: LeafPath = "transform2d.x".parse().unwrap();
-        assert_eq!(p.component, ComponentKind::Transform2d);
+        assert_eq!(p.facet, FacetKind::Transform2d);
         assert_eq!(p.kind(), ValueKind::Number);
         assert_eq!(p.to_string(), "transform2d.x");
         assert!("transform2d.q".parse::<LeafPath>().is_err());
@@ -753,13 +753,13 @@ mod tests {
         assert!("x".parse::<LeafPath>().is_err());
         // Parameters are run-time fields: any name is a path, kind Any.
         let p: LeafPath = "params.waist".parse().unwrap();
-        assert_eq!((p.component, p.field, p.kind()), (ComponentKind::Params, "waist", ValueKind::Any));
-        assert_eq!(p, LeafPath::new(ComponentKind::Params, &String::from("waist")).unwrap());
+        assert_eq!((p.facet, p.field, p.kind()), (FacetKind::Params, "waist", ValueKind::Any));
+        assert_eq!(p, LeafPath::new(FacetKind::Params, &String::from("waist")).unwrap());
         assert!("params.".parse::<LeafPath>().is_err());
     }
 
     #[test]
-    fn params_are_a_dynamic_component() {
+    fn params_are_a_dynamic_facet() {
         let mut p = Params::default();
         p.insert("level", Slot::Const(Value::Number(0.4)));
         p.insert("power", Slot::Const(Value::parse_quantity("9.58 mW").unwrap()));
@@ -770,13 +770,13 @@ mod tests {
         // Set replaces an existing parameter, any kind, and returns the old slot.
         let old = c.set("level", Slot::Const(Value::Number(0.9))).unwrap();
         assert_eq!(old, Slot::Const(Value::Number(0.4)));
-        // Set on a parameter the component lacks is an error, not a create.
+        // Set on a parameter the facet lacks is an error, not a create.
         assert!(matches!(c.set("nope", Slot::Const(Value::Number(1.0))), Err(LeafError::UnknownField { .. })));
         let j = serde_json::to_string(&c).unwrap();
         assert_eq!(j, r#"{"params":{"level":0.9,"power":{"q":[0.00958,"W"]}}}"#);
-        let back: Component = serde_json::from_str(&j).unwrap();
+        let back: Facet = serde_json::from_str(&j).unwrap();
         assert_eq!(back, c);
-        assert_eq!(ComponentKind::Params.fields(), &[]);
-        assert!(ComponentKind::Params.is_dynamic() && !ComponentKind::Size.is_dynamic());
+        assert_eq!(FacetKind::Params.fields(), &[]);
+        assert!(FacetKind::Params.is_dynamic() && !FacetKind::Size.is_dynamic());
     }
 }

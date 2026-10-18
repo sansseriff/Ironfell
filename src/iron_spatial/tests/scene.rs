@@ -2,7 +2,7 @@
 //! agree with "transform every leaf by its world affine and test", and a
 //! group's motion must touch a bounded number of entries.
 
-use iron_document::component::{Composition, Embed, Frame, LeafStruct, Name, Size, Transform2d};
+use iron_document::facet::{Composition, Embed, Frame, LeafStruct, Name, Size, Transform2d};
 use iron_document::*;
 use iron_spatial::Scene;
 use kurbo::{Affine, Point, Rect};
@@ -20,7 +20,7 @@ fn n(v: f64) -> Slot {
     Slot::Const(Value::Number(v))
 }
 
-fn at(x: f64, y: f64, rot: f64) -> Component {
+fn at(x: f64, y: f64, rot: f64) -> Facet {
     let mut t = Transform2d::default();
     t.x = n(x);
     t.y = n(y);
@@ -28,20 +28,20 @@ fn at(x: f64, y: f64, rot: f64) -> Component {
     t.wrap()
 }
 
-fn size(w: f64, h: f64) -> Component {
+fn size(w: f64, h: f64) -> Facet {
     let mut s = Size::default();
     s.w = n(w);
     s.h = n(h);
     s.wrap()
 }
 
-fn comp2d() -> Component {
+fn comp2d() -> Facet {
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     c.wrap()
 }
 
-fn named(text: &str) -> Component {
+fn named(text: &str) -> Facet {
     let mut c = Name::default();
     c.text = Slot::Const(Value::Str(text.into()));
     c.wrap()
@@ -67,9 +67,9 @@ fn fixture(cells: usize, per: usize) -> Fixture {
     let ids = store.document().next_ids(3 + cells + cells * per);
     let (composition, field, loose) = (ids[0], ids[1], ids[2]);
     let mut ops = vec![
-        Op::Create { id: composition, ty: ty("composition"), parent: None, order: OrderKey::first(), components: vec![comp2d(), named("scene")] },
-        Op::Create { id: field, ty: ty("group"), parent: Some(composition), order: OrderKey::first(), components: vec![at(100.0, 100.0, 0.0)] },
-        Op::Create { id: loose, ty: ty("rect"), parent: None, order: OrderKey::after(&OrderKey::first()), components: vec![at(-50.0, -50.0, 0.0), size(10.0, 10.0)] },
+        Op::Create { id: composition, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![comp2d(), named("scene")] },
+        Op::Create { id: field, ty: ty("group"), parent: Some(composition), order: OrderKey::first(), facets: vec![at(100.0, 100.0, 0.0)] },
+        Op::Create { id: loose, ty: ty("rect"), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![at(-50.0, -50.0, 0.0), size(10.0, 10.0)] },
     ];
     let mut cell_ids = Vec::new();
     let mut rect_ids = Vec::new();
@@ -79,14 +79,14 @@ fn fixture(cells: usize, per: usize) -> Fixture {
         let cell = ids[next];
         next += 1;
         cell_ids.push(cell);
-        ops.push(Op::Create { id: cell, ty: ty("group"), parent: Some(field), order: key.clone(), components: vec![at(c as f64 * 200.0, 0.0, 0.0)] });
+        ops.push(Op::Create { id: cell, ty: ty("group"), parent: Some(field), order: key.clone(), facets: vec![at(c as f64 * 200.0, 0.0, 0.0)] });
         key = OrderKey::after(&key);
         let mut rkey = OrderKey::first();
         for r in 0..per {
             let rect = ids[next];
             next += 1;
             rect_ids.push(rect);
-            ops.push(Op::Create { id: rect, ty: ty("rect"), parent: Some(cell), order: rkey.clone(), components: vec![at(r as f64 * 20.0, (r % 3) as f64 * 20.0, 0.0), size(10.0, 10.0)] });
+            ops.push(Op::Create { id: rect, ty: ty("rect"), parent: Some(cell), order: rkey.clone(), facets: vec![at(r as f64 * 20.0, (r % 3) as f64 * 20.0, 0.0), size(10.0, 10.0)] });
             rkey = OrderKey::after(&rkey);
         }
     }
@@ -290,8 +290,8 @@ fn an_embeds_region_follows_its_sources_content() {
         .apply(tx(
             "embed",
             vec![
-                Op::Create { id: other, ty: ty("composition"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), components: vec![comp2d(), named("other")] },
-                Op::Create { id: embed, ty: ty("embed"), parent: Some(other), order: OrderKey::first(), components: vec![at(1000.0, 0.0, 0.0), e.wrap()] },
+                Op::Create { id: other, ty: ty("composition"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![comp2d(), named("other")] },
+                Op::Create { id: embed, ty: ty("embed"), parent: Some(other), order: OrderKey::first(), facets: vec![at(1000.0, 0.0, 0.0), e.wrap()] },
             ],
         ))
         .unwrap();
@@ -311,7 +311,7 @@ fn an_embeds_region_follows_its_sources_content() {
     let mut frame = Frame::default();
     frame.x1 = n(50.0);
     frame.y1 = n(50.0);
-    f.store.apply(tx("frame", vec![Op::AddComp { id: embed, comp: frame.wrap() }])).unwrap();
+    f.store.apply(tx("frame", vec![Op::AddFacet { id: embed, comp: frame.wrap() }])).unwrap();
     scene.update(&mut f.store);
     let framed = scene.painted(embed).unwrap();
     assert!((framed.width() - 54.0).abs() < 1e-9, "{framed:?}");

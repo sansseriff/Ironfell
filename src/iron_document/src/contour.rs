@@ -6,7 +6,7 @@
 //! enclosed areas are inside. Reading and building them lives here, so the
 //! renderer, the editors, shape conversion and SVG agree.
 
-use crate::component::{Contour as ContourShape, Handles, LeafStruct, Transform2d};
+use crate::facet::{Contour as ContourShape, Handles, LeafStruct, Transform2d};
 use crate::document::Document;
 use crate::id::NodeId;
 use crate::op::Op;
@@ -123,7 +123,7 @@ pub fn contour_ops(path: NodeId, order: OrderKey, points: &[Anchor], closed: boo
     let id = ids.next().expect("an id for the contour");
     let mut c = ContourShape::default();
     c.closed = Slot::Const(Value::Bool(closed));
-    let mut ops = vec![Op::Create { id, ty: TypeId::lookup("contour").expect("registered"), parent: Some(path), order, components: vec![c.wrap()] }];
+    let mut ops = vec![Op::Create { id, ty: TypeId::lookup("contour").expect("registered"), parent: Some(path), order, facets: vec![c.wrap()] }];
     let mut key = OrderKey::first();
     for a in points {
         ops.push(point_op(ids.next().expect("an id per point"), id, key.clone(), a));
@@ -139,7 +139,7 @@ pub fn point_op(id: NodeId, contour: NodeId, order: OrderKey, a: &Anchor) -> Op 
     (t.x, t.y) = (n(a.at.x), n(a.at.y));
     let mut h = Handles::default();
     (h.ix, h.iy, h.ox, h.oy) = (n(a.inn.x), n(a.inn.y), n(a.out.x), n(a.out.y));
-    Op::Create { id, ty: TypeId::lookup("point").expect("registered"), parent: Some(contour), order, components: vec![t.wrap(), h.wrap()] }
+    Op::Create { id, ty: TypeId::lookup("point").expect("registered"), parent: Some(contour), order, facets: vec![t.wrap(), h.wrap()] }
 }
 
 /// The ops that give `path` these contours, each `(points, closed)`, with

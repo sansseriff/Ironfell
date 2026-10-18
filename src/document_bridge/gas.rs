@@ -15,7 +15,7 @@
 use super::{CompositionLayers, DocumentStore, EmbedViews, MeshAssets, PanelViews};
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use iron_document::component::Name as DocName;
+use iron_document::facet::Name as DocName;
 use iron_document::composition::{self, Dims};
 use iron_document::{Leaf, NodeId, ProducerId, Store, TypeId, Value, Version};
 use std::collections::BTreeMap;

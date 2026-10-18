@@ -11,7 +11,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use iron_document::{ComponentKind, LeafPath, NodeId, Store, TypeId, Value};
+use iron_document::{FacetKind, LeafPath, NodeId, Store, TypeId, Value};
 use std::collections::BTreeSet;
 use bevy::platform::collections::HashMap;
 
@@ -340,7 +340,7 @@ pub(super) fn reconcile(
     modes: &Modes,
 ) {
     let doc = store.document();
-    let _ = ComponentKind::ALL; // keep the import meaningful for readers
+    let _ = FacetKind::ALL; // keep the import meaningful for readers
     // A contour or a point has no entity of its own: its path is redrawn
     // instead. Tombstoned nodes still name their parent, so a deleted point
     // finds its path.

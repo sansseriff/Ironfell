@@ -2,7 +2,7 @@
 //! sizings, content bound to values through `fmt`, a runtime signal
 //! driving content, and re-measuring when a font arrives.
 
-use iron_document::component::{Font, Size, Slider, Text, Transform2d};
+use iron_document::facet::{Font, Size, Slider, Text, Transform2d};
 use iron_document::*;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -36,7 +36,7 @@ fn text(store: &mut Store, content: Slot, sizing: &str) -> NodeId {
     s.w = Slot::Const(Value::Number(120.0));
     s.h = Slot::Const(Value::Number(200.0));
     store
-        .apply(tx("text", vec![Op::Create { id, ty: ty("text"), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), t.wrap(), Font::default().wrap(), s.wrap()] }]))
+        .apply(tx("text", vec![Op::Create { id, ty: ty("text"), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), t.wrap(), Font::default().wrap(), s.wrap()] }]))
         .unwrap();
     id
 }
@@ -77,7 +77,7 @@ fn content_binds_through_fmt() {
     let gauge = store.document().next_ids(1)[0];
     let mut sl = Slider::default();
     sl.value = Slot::Const(Value::Number(0.123456));
-    store.apply(tx("gauge", vec![Op::Create { id: gauge, ty: ty("slider"), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), sl.wrap()] }])).unwrap();
+    store.apply(tx("gauge", vec![Op::Create { id: gauge, ty: ty("slider"), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), sl.wrap()] }])).unwrap();
     let readout = text(&mut store, Slot::Bound(Expr::parse(&format!("\"v = \" + fmt({gauge}.slider.value, 2)")).unwrap()), "auto_width");
     assert_eq!(iron_document::text::content(&store, readout), "v = 0.12");
     store.apply(tx("set", vec![Op::Set { id: gauge, path: path("slider.value"), slot: Slot::Const(Value::Number(0.987)) }])).unwrap();

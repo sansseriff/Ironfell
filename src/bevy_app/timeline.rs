@@ -5,7 +5,7 @@ use peniko;
 use crate::document_bridge::{DocumentStore, sync_document};
 use crate::panels::{Panels, TIMELINE_PANEL};
 use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, order};
-use iron_document::component::Timing;
+use iron_document::facet::Timing;
 use iron_document::TypeId;
 
 /// Timeline plugin: draws the timeline into its panel rect (screen space, clipped).

@@ -1,7 +1,7 @@
 //! Prints the canonical file and the full view for a small scene, so the two
 //! formats can be read side by side. `cargo run -p iron_document --example dump`.
 
-use iron_document::component::{Fill, Name, Radius, Size, Transform2d};
+use iron_document::facet::{Fill, Name, Radius, Size, Transform2d};
 use iron_document::*;
 
 fn main() {
@@ -26,21 +26,21 @@ fn main() {
                     ty: TypeId::lookup("group").unwrap(),
                     parent: None,
                     order: k0.clone(),
-                    components: vec![name.wrap()],
+                    facets: vec![name.wrap()],
                 },
                 Op::Create {
                     id: ids[1],
                     ty: TypeId::lookup("rect").unwrap(),
                     parent: Some(ids[0]),
                     order: k0.clone(),
-                    components: vec![t.wrap(), Size::default().wrap(), Fill::default().wrap()],
+                    facets: vec![t.wrap(), Size::default().wrap(), Fill::default().wrap()],
                 },
                 Op::Create {
                     id: ids[2],
                     ty: TypeId::lookup("ellipse").unwrap(),
                     parent: Some(ids[0]),
                     order: k1,
-                    components: vec![Transform2d::default().wrap(), Radius::default().wrap()],
+                    facets: vec![Transform2d::default().wrap(), Radius::default().wrap()],
                 },
             ],
             exact: false,

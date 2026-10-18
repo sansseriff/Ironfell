@@ -1,7 +1,7 @@
 //! Linear binding inversion (roadmap stage A): dragging a leaf bound to an
 //! expression linear in one constant leaf sets that leaf.
 
-use iron_document::component::{Clip, Fill, Size, Slider, Timing, Transform2d};
+use iron_document::facet::{Clip, Fill, Size, Slider, Timing, Transform2d};
 use iron_document::handle::Handle;
 use iron_document::*;
 use std::collections::BTreeMap;
@@ -66,10 +66,10 @@ fn scene() -> Scene {
         .apply(tx(
             "build",
             vec![
-                Op::Create { id: slider, ty: ty("slider"), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), sl.wrap()] },
-                Op::Create { id: bar, ty: ty("rect"), parent: None, order: OrderKey::first(), components: vec![bt.wrap(), bs.wrap(), Fill::default().wrap()] },
-                Op::Create { id: v, ty: ty("slider"), parent: None, order: OrderKey::first(), components: vec![Transform2d::default().wrap(), vs.wrap()] },
-                Op::Create { id: rect, ty: ty("rect"), parent: None, order: OrderKey::first(), components: vec![rt.wrap(), Size::default().wrap()] },
+                Op::Create { id: slider, ty: ty("slider"), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), sl.wrap()] },
+                Op::Create { id: bar, ty: ty("rect"), parent: None, order: OrderKey::first(), facets: vec![bt.wrap(), bs.wrap(), Fill::default().wrap()] },
+                Op::Create { id: v, ty: ty("slider"), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), vs.wrap()] },
+                Op::Create { id: rect, ty: ty("rect"), parent: None, order: OrderKey::first(), facets: vec![rt.wrap(), Size::default().wrap()] },
             ],
         ))
         .unwrap();
@@ -220,8 +220,8 @@ fn clip_driven_leaves_lock_the_target_and_the_source() {
         .apply(tx(
             "animate v",
             vec![
-                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::first(), components: vec![] },
-                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), components: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::first(), facets: vec![] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), facets: vec![timing.wrap(), c.wrap()] },
                 Op::Link { rel: Relation { id: rel, from: clip, to: v, rel: RelKind::Animates, data: BTreeMap::new() } },
             ],
         ))

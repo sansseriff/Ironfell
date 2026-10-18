@@ -9,7 +9,7 @@
 //! Drivers (a transaction's explicit `Set`, or a finger during a drag) are
 //! strong terms; the implicit least-change rows keep the rest still.
 
-use crate::component::{ComponentKind, LeafPath};
+use crate::facet::{FacetKind, LeafPath};
 use crate::constraint::{self, ConstraintInfo};
 use crate::document::Document;
 use crate::expr::Leaf;
@@ -107,7 +107,7 @@ pub struct ClusterResult {
 const TRANSFORM_LEAVES: [&str; 3] = ["x", "y", "rot"];
 
 fn t2(field: &str) -> LeafPath {
-    LeafPath::new(ComponentKind::Transform2d, field).expect("declared")
+    LeafPath::new(FacetKind::Transform2d, field).expect("declared")
 }
 
 fn num(read: &dyn Fn(Leaf) -> Option<Value>, node: NodeId, path: LeafPath, default: f64) -> f64 {
@@ -182,7 +182,7 @@ pub fn clusters(doc: &Document, reactive: &crate::graph::Reactive) -> Result<Clu
             }
             let mut cur = doc.live(n).and_then(|x| x.parent);
             while let Some(p) = cur {
-                if doc.component(p, ComponentKind::Transform2d).is_some() {
+                if doc.facet(p, FacetKind::Transform2d).is_some() {
                     for f in ["x", "y", "rot", "sx", "sy"] {
                         inputs.insert(Leaf { node: p, path: t2(f) });
                     }
@@ -327,12 +327,12 @@ fn wrap_angle(a: f64) -> f64 {
 
 /// Half the diagonal of a node's shape, for a rotation's scale.
 fn half_diagonal(read: &dyn Fn(Leaf) -> Option<Value>, node: NodeId) -> f64 {
-    let size = |c: ComponentKind, f: &str| read(Leaf { node, path: LeafPath::new(c, f).expect("declared") }).and_then(|v| v.as_f64());
-    if let Some(rx) = size(ComponentKind::Radius, "rx") {
-        return rx.max(size(ComponentKind::Radius, "ry").unwrap_or(rx)).max(1.0);
+    let size = |c: FacetKind, f: &str| read(Leaf { node, path: LeafPath::new(c, f).expect("declared") }).and_then(|v| v.as_f64());
+    if let Some(rx) = size(FacetKind::Radius, "rx") {
+        return rx.max(size(FacetKind::Radius, "ry").unwrap_or(rx)).max(1.0);
     }
-    let w = size(ComponentKind::Size, "w").unwrap_or(100.0);
-    let h = size(ComponentKind::Size, "h").unwrap_or(100.0);
+    let w = size(FacetKind::Size, "w").unwrap_or(100.0);
+    let h = size(FacetKind::Size, "h").unwrap_or(100.0);
     (w.hypot(h) * 0.5).max(1.0)
 }
 

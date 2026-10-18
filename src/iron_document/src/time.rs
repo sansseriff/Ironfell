@@ -11,7 +11,7 @@
 //! ends it holds `to`. Targets must be constants: a bound leaf has no slot
 //! for a sampled value, and the conflict is reported rather than resolved.
 
-use crate::component::{Clip, LeafPath, Timing};
+use crate::facet::{Clip, LeafPath, Timing};
 use crate::document::{Document, RelKind};
 use crate::expr::Leaf;
 use crate::id::NodeId;

@@ -27,7 +27,7 @@
 //! paste metadata, so a fragment survives the system clipboard and old
 //! fragments migrate like old files.
 
-use crate::component::{Component, ComponentKind, LeafPath};
+use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::composition;
 use crate::document::{Document, Node, RelKind, Relation};
 use crate::expr::{Expr, Leaf};
@@ -57,7 +57,7 @@ fn copyable(ty: &str) -> bool {
 /// them back.
 #[derive(Clone, Debug)]
 pub struct Fragment {
-    /// The copied nodes, components and inside relations. Roots and extras
+    /// The copied nodes, facets and inside relations. Roots and extras
     /// have no parent here.
     pub doc: Document,
     /// What was asked for, outermost only, in painter order.
@@ -193,14 +193,14 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
 
     // The fragment's tables.
     let mut nodes: BTreeMap<NodeId, Node> = BTreeMap::new();
-    let mut components: BTreeMap<ComponentKind, BTreeMap<NodeId, Component>> = BTreeMap::new();
+    let mut facets: BTreeMap<FacetKind, BTreeMap<NodeId, Facet>> = BTreeMap::new();
     let mut relations: BTreeMap<RelationId, Relation> = BTreeMap::new();
     let mut externals: BTreeMap<Leaf, Value> = BTreeMap::new();
     for &id in &set {
         let n = doc.live(id).expect("closure is live");
         let parent = n.parent.filter(|p| set.contains(p));
         nodes.insert(id, Node { id, ty: n.ty, parent, order: n.order.clone(), tombstoned: None });
-        for c in doc.components_of(id) {
+        for c in doc.facets_of(id) {
             for field in c.field_names() {
                 if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
                     for dep in expr.deps() {
@@ -212,7 +212,7 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
                     }
                 }
             }
-            components.entry(c.kind()).or_default().insert(id, c.clone());
+            facets.entry(c.kind()).or_default().insert(id, c.clone());
         }
         for r in doc.relations_from(id) {
             if r.rel != RelKind::Selects && set.contains(&r.to) && !r.id.is_session() {
@@ -222,7 +222,7 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
     }
     let next_id = set.iter().map(|n| n.raw() + 1).max().unwrap_or(1);
     let next_rel = relations.keys().map(|r| r.raw() + 1).max().unwrap_or(1);
-    let fragment_doc = Document::from_parts(nodes, components, relations, next_id, next_rel, doc.version());
+    let fragment_doc = Document::from_parts(nodes, facets, relations, next_id, next_rel, doc.version());
 
     let mut homes = BTreeMap::new();
     let mut parent_world = BTreeMap::new();
@@ -257,13 +257,13 @@ fn key_last(doc: &Document, parent: Option<NodeId>) -> OrderKey {
     siblings.last().and_then(|&s| doc.live(s)).map_or_else(OrderKey::first, |s| OrderKey::after(&s.order))
 }
 
-fn num(c: &Component, field: &str) -> Option<f64> {
+fn num(c: &Facet, field: &str) -> Option<f64> {
     c.get(field)?.constant()?.as_f64()
 }
 
 /// Move a root's `transform2d` by `m` (its new parent space ← its old one).
 /// A bound position stays where its binding puts it.
-fn place_transform(c: &mut Component, m: Affine2, notes: &mut Vec<String>, id: NodeId) {
+fn place_transform(c: &mut Facet, m: Affine2, notes: &mut Vec<String>, id: NodeId) {
     if m.max_diff(&Affine2::IDENTITY) < 1e-12 {
         return;
     }
@@ -273,7 +273,7 @@ fn place_transform(c: &mut Component, m: Affine2, notes: &mut Vec<String>, id: N
     };
     let [a, b, cc, d, _, _] = m.0;
     let linear = (a - 1.0).abs() < 1e-12 && b.abs() < 1e-12 && cc.abs() < 1e-12 && (d - 1.0).abs() < 1e-12;
-    let set = |c: &mut Component, f: &str, v: f64| {
+    let set = |c: &mut Facet, f: &str, v: f64| {
         let _ = c.set(f, Slot::Const(Value::Number(v)));
     };
     if linear {
@@ -383,8 +383,8 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
             (node.parent.map(|p| map[&p]), node.order.clone())
         };
 
-        let mut comps: Vec<Component> = Vec::new();
-        for c in frag.doc.components_of(old) {
+        let mut comps: Vec<Facet> = Vec::new();
+        for c in frag.doc.facets_of(old) {
             let mut c = c.clone();
             for field in c.field_names() {
                 let Some(slot) = c.get(field).cloned() else { continue };
@@ -408,7 +408,7 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
                 };
                 let _ = c.set(field, new);
             }
-            if is_root && c.kind() == ComponentKind::Transform2d {
+            if is_root && c.kind() == FacetKind::Transform2d {
                 let src = frag.parent_world.get(&old).copied().unwrap_or(Affine2::IDENTITY);
                 let dst = parent.map_or(Affine2::IDENTITY, |p| store.world_affine(p));
                 let m = dst.inverse().unwrap_or(Affine2::IDENTITY).then(offset).then(src);
@@ -416,7 +416,7 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
             }
             comps.push(c);
         }
-        ops.push(Op::Create { id: map[&old], ty: node.ty, parent, order, components: comps });
+        ops.push(Op::Create { id: map[&old], ty: node.ty, parent, order, facets: comps });
     }
 
     // Relations inside the fragment, re-pointed; with shared entities, a

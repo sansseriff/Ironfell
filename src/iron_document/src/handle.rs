@@ -38,10 +38,10 @@ impl Handle {
 /// authored constant.
 pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
     let Some(slot) = doc.leaf(leaf.node, leaf.path) else {
-        // A leaf of a component the node may have but lacks (a rect's
+        // A leaf of a facet the node may have but lacks (a rect's
         // `corners`): a gesture drives it directly and its commit adds the
-        // component (`Store::commit_gesture`).
-        if doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.component)) && doc.component(leaf.node, leaf.path.component).is_none() {
+        // facet (`Store::commit_gesture`).
+        if doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.facet)) && doc.facet(leaf.node, leaf.path.facet).is_none() {
             return Handle::Direct;
         }
         return Handle::Locked(format!("{leaf} does not exist"));

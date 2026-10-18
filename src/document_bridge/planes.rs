@@ -203,7 +203,7 @@ pub(super) fn sync_planes(
             continue;
         }
         let Some(source) = composition::embedded(doc, id).filter(|&s| composition::dims(doc, s) == Some(Dims::Two)) else { continue };
-        let region = match doc.get::<iron_document::component::Frame>(id) {
+        let region = match doc.get::<iron_document::facet::Frame>(id) {
             Some(f) => {
                 let n = |s: &iron_document::Slot| s.constant().and_then(|v| v.as_f64()).unwrap_or(0.0);
                 kurbo::Rect::new(n(&f.x0), n(&f.y0), n(&f.x1), n(&f.y1))

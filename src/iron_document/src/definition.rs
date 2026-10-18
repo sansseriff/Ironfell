@@ -24,7 +24,7 @@
 //! names must match the specs exactly, and a constant value must have the
 //! spec's kind (and, for a quantity, the default's dimension).
 
-use crate::component::{Component, ComponentKind, Template, Instance, LeafPath, LeafStruct, Name, ParamSpec, Params};
+use crate::facet::{Facet, FacetKind, Template, Instance, LeafPath, LeafStruct, Name, ParamSpec, Params};
 use crate::document::{Document, RelKind, Relation};
 use crate::expr::Leaf;
 use crate::id::NodeId;
@@ -168,12 +168,12 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
             Some(k) => OrderKey::after(k),
             None => OrderKey::first(),
         },
-        components: vec![instance.wrap(), params.wrap(), entity_name.wrap()],
+        facets: vec![instance.wrap(), params.wrap(), entity_name.wrap()],
     });
     for &spec in &port_specs {
         let node = doc.live(spec).expect("live port_spec");
         let copied_ty = if node.ty == ty("port_spec") { ty("port") } else { node.ty };
-        ops.push(Op::Create { id: new_id[&spec], ty: copied_ty, parent: Some(entity), order: node.order.clone(), components: rewritten(doc, spec, &specs, entity, &new_id) });
+        ops.push(Op::Create { id: new_id[&spec], ty: copied_ty, parent: Some(entity), order: node.order.clone(), facets: rewritten(doc, spec, &specs, entity, &new_id) });
     }
     ops.extend(copy_template(doc, &specs, entity, &new_id, &roots, &copied, place.figure_parent, place.figure_after.clone(), &rel_ids));
     Ok((entity, ops))
@@ -214,22 +214,22 @@ fn template_nodes(doc: &Document, template: NodeId) -> (Vec<NodeId>, Vec<NodeId>
     (roots, copied)
 }
 
-/// A node's components with every binding rewritten: a spec's default
+/// A node's facets with every binding rewritten: a spec's default
 /// becomes the entity's parameter; a reference to a copied node (or a
 /// port_spec) follows it.
-fn rewritten(doc: &Document, old: NodeId, specs: &[ParamInfo], entity: NodeId, new_id: &BTreeMap<NodeId, NodeId>) -> Vec<Component> {
+fn rewritten(doc: &Document, old: NodeId, specs: &[ParamInfo], entity: NodeId, new_id: &BTreeMap<NodeId, NodeId>) -> Vec<Facet> {
     let rewrite = |leaf: Leaf| -> Leaf {
-        if leaf.path.component == ComponentKind::ParamSpec
+        if leaf.path.facet == FacetKind::ParamSpec
             && let Some(spec) = specs.iter().find(|s| s.spec == leaf.node)
         {
-            return Leaf { node: entity, path: LeafPath::new(ComponentKind::Params, spec.name).expect("parameter path") };
+            return Leaf { node: entity, path: LeafPath::new(FacetKind::Params, spec.name).expect("parameter path") };
         }
         match new_id.get(&leaf.node) {
             Some(&n) => Leaf { node: n, path: leaf.path },
             None => leaf,
         }
     };
-    doc.components_of(old)
+    doc.facets_of(old)
         .map(|c| {
             let mut c = c.clone();
             for field in c.field_names() {
@@ -268,7 +268,7 @@ fn copy_template(
         } else {
             (node.parent.map(|p| new_id[&p]), node.order.clone())
         };
-        ops.push(Op::Create { id: new_id[&old], ty: node.ty, parent: p, order, components: rewritten(doc, old, specs, entity, new_id) });
+        ops.push(Op::Create { id: new_id[&old], ty: node.ty, parent: p, order, facets: rewritten(doc, old, specs, entity, new_id) });
     }
     for (i, &r) in roots.iter().enumerate() {
         ops.push(Op::Link {

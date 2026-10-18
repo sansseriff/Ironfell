@@ -2,7 +2,7 @@
 //!
 //! One identity-stable, renderer-neutral document holds all authored intent.
 //! Everything downstream is derived and rebuildable. This crate is that
-//! document: nodes with stable ids, typed components, first-class relations,
+//! document: nodes with stable ids, typed facets, first-class relations,
 //! an operation log with computed inverses, undo/redo, canonical JSON, and
 //! elided views. It depends on nothing renderer-shaped and tests natively.
 //!
@@ -16,7 +16,7 @@
 //!                                  └── save()/load(): canonical JSON
 //! ```
 
-pub mod component;
+pub mod facet;
 pub mod composition;
 pub mod constraint;
 pub mod contour;
@@ -44,7 +44,7 @@ pub mod units;
 pub mod value;
 pub mod view;
 
-pub use component::{Component, ComponentKind, LeafError, LeafPath, LeafStruct};
+pub use facet::{Facet, FacetKind, LeafError, LeafPath, LeafStruct};
 pub use document::{Document, Node, RelKind, Relation};
 pub use expr::{Expr, Leaf};
 pub use geom::{Affine2, Affine3};
@@ -282,7 +282,7 @@ impl Store {
     /// drag's mode from the roles at this moment.
     pub fn begin_drag(&mut self, id: NodeId, anchor: [f64; 2]) -> DragHandle {
         self.watch(id);
-        let t2 = |f: &str| LeafPath::new(ComponentKind::Transform2d, f).expect("declared");
+        let t2 = |f: &str| LeafPath::new(FacetKind::Transform2d, f).expect("declared");
         if let Some(cluster) = self.clusters.containing(id) {
             let free: Vec<Leaf> = cluster.vars.iter().copied().filter(|v| v.node == id).collect();
             if free.is_empty() {
@@ -324,7 +324,7 @@ impl Store {
             DragMode::Axes { free, .. } => {
                 // The origin that puts the anchor at `world`: undo the
                 // parent's transform, then the node's own rotation and scale.
-                let t2 = |f: &str| LeafPath::new(ComponentKind::Transform2d, f).expect("declared");
+                let t2 = |f: &str| LeafPath::new(FacetKind::Transform2d, f).expect("declared");
                 let num = |s: &Store, f: &str, d: f64| s.resolved(h.node, t2(f)).and_then(|v| v.as_f64()).unwrap_or(d);
                 let parent = match self.doc.live(h.node).and_then(|n| n.parent) {
                     Some(p) => self.world_affine(p),
@@ -707,17 +707,17 @@ impl Store {
             self.ended = Some((g.id, GestureStatus::Committed));
         }
         let mut ops = Vec::new();
-        // Leaves of components the node lacks but allows: the component is
+        // Leaves of facets the node lacks but allows: the facet is
         // added, defaults with the previewed fields set, before the `Set`s.
-        let mut added: BTreeMap<(NodeId, ComponentKind), Component> = BTreeMap::new();
+        let mut added: BTreeMap<(NodeId, FacetKind), Facet> = BTreeMap::new();
         for (leaf, value) in self.reactive.overlay() {
             if !self.drivers.contains(leaf) {
                 continue;
             }
             let Some(slot) = self.doc.leaf(leaf.node, leaf.path) else {
-                let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.component));
-                if allowed && self.doc.component(leaf.node, leaf.path.component).is_none() {
-                    let c = added.entry((leaf.node, leaf.path.component)).or_insert_with(|| leaf.path.component.default_component());
+                let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.facet));
+                if allowed && self.doc.facet(leaf.node, leaf.path.facet).is_none() {
+                    let c = added.entry((leaf.node, leaf.path.facet)).or_insert_with(|| leaf.path.facet.default_facet());
                     let _ = c.set(leaf.path.field, Slot::Const(value.clone()));
                 }
                 continue;
@@ -737,7 +737,7 @@ impl Store {
                 });
             }
         }
-        let adds = added.into_iter().map(|((id, _), comp)| Op::AddComp { id, comp });
+        let adds = added.into_iter().map(|((id, _), comp)| Op::AddFacet { id, comp });
         ops = adds.chain(ops).collect();
         if ops.is_empty() {
             self.cancel_gesture();
@@ -775,7 +775,7 @@ impl Store {
         for (i, op) in ops.iter().enumerate() {
             let in_session = match op {
                 Op::Create { id, parent, .. } => id.is_session() && parent.is_none_or(|p| p.is_session()),
-                Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddComp { id, .. } | Op::RemoveComp { id, .. } => id.is_session(),
+                Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => id.is_session(),
                 Op::Link { rel } => rel.id.is_session() && rel.from.is_session(),
                 Op::Unlink { id } => id.is_session(),
             };
@@ -909,8 +909,8 @@ impl Store {
             None => {
                 let ids = self.doc.next_session_ids(2);
                 let ty = |n: &str| TypeId::lookup(n).expect("registered");
-                ops.push(Op::Create { id: ids[0], ty: ty("session"), parent: None, order: OrderKey::first(), components: vec![] });
-                ops.push(Op::Create { id: ids[1], ty: ty("selection"), parent: Some(ids[0]), order: OrderKey::first(), components: vec![] });
+                ops.push(Op::Create { id: ids[0], ty: ty("session"), parent: None, order: OrderKey::first(), facets: vec![] });
+                ops.push(Op::Create { id: ids[1], ty: ty("selection"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![] });
                 ids[1]
             }
         };
@@ -928,7 +928,7 @@ impl Store {
         self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()));
         let structural = tx.ops.iter().chain(tx.inverse.iter()).any(|op| match op {
             // A link can be a connection's end, which derives a signal.
-            Op::Create { .. } | Op::Delete { .. } | Op::AddComp { .. } | Op::RemoveComp { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
+            Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
             Op::Set { slot, .. } => slot.expr().is_some(),
             _ => false,
         });

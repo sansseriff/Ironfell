@@ -1,5 +1,5 @@
 use iron_document::appearance::{inside_clips, ClipFrame};
-use iron_document::component::{Appearance, Fill, Gradient, GroupClip, Size, Transform2d};
+use iron_document::facet::{Appearance, Fill, Gradient, GroupClip, Size, Transform2d};
 use iron_document::*;
 
 fn tx(ops: Vec<Op>) -> TransactionInput {
@@ -14,8 +14,8 @@ fn fixture() -> (Store, NodeId, NodeId) {
     t.x = num(100.0); t.y = num(50.0); t.rot = num(std::f64::consts::FRAC_PI_2);
     let clip = GroupClip { w: num(120.0), h: num(80.0), radius: num(20.0), ..Default::default() };
     s.apply(tx(vec![
-        Op::Create { id: g, ty: TypeId::lookup("group").unwrap(), parent: None, order: OrderKey::first(), components: vec![t.wrap(), clip.wrap(), Appearance::default().wrap()] },
-        Op::Create { id: r, ty: TypeId::lookup("rect").unwrap(), parent: Some(g), order: OrderKey::first(), components: vec![Transform2d::default().wrap(), Size::default().wrap(), Fill::default().wrap(), Gradient::default().wrap()] },
+        Op::Create { id: g, ty: TypeId::lookup("group").unwrap(), parent: None, order: OrderKey::first(), facets: vec![t.wrap(), clip.wrap(), Appearance::default().wrap()] },
+        Op::Create { id: r, ty: TypeId::lookup("rect").unwrap(), parent: Some(g), order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), Size::default().wrap(), Fill::default().wrap(), Gradient::default().wrap()] },
     ])).unwrap();
     (s, g, r)
 }

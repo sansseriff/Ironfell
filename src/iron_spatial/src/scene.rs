@@ -355,7 +355,7 @@ impl Scene {
     /// A 2D embed's region: its frame, or the source's content bounds.
     fn embed_region(&self, store: &Store, embed: NodeId, source: NodeId) -> Option<(Rect, bool)> {
         let doc = store.document();
-        if let Some(f) = doc.get::<iron_document::component::Frame>(embed) {
+        if let Some(f) = doc.get::<iron_document::facet::Frame>(embed) {
             let n = |s: &iron_document::Slot| s.constant().and_then(|v| v.as_f64()).unwrap_or(0.0);
             return Some((Rect::new(n(&f.x0), n(&f.y0), n(&f.x1), n(&f.y1)), true));
         }
@@ -451,7 +451,7 @@ impl Scene {
             let kind = match composition::embedded(doc, id) {
                 Some(source) if composition::dims(doc, source) == Some(Dims::Two) => {
                     self.shown_by.entry(source).or_default().push(id);
-                    Some((Kind::Embed2d { source, framed: doc.get::<iron_document::component::Frame>(id).is_some() }, Bounds::transformed(Rect::ZERO, affine, EMBED_PAD, 0.0)))
+                    Some((Kind::Embed2d { source, framed: doc.get::<iron_document::facet::Frame>(id).is_some() }, Bounds::transformed(Rect::ZERO, affine, EMBED_PAD, 0.0)))
                 }
                 _ => store.local_bounds(id).map(|lb| {
                     if let Some(cam) = composition::embed_camera(doc, id) {

@@ -13,7 +13,7 @@
 //! solver equations; the format carries them now, the solving comes next
 //! (ECM §6.1, step 3).
 
-use crate::component::{ComponentKind, LeafPath, Port};
+use crate::facet::{FacetKind, LeafPath, Port};
 use crate::document::{Document, RelKind};
 use crate::expr::{Expr, Leaf};
 use crate::id::NodeId;
@@ -62,7 +62,7 @@ fn text(doc: &Document, port: NodeId, field: &str) -> Option<String> {
 }
 
 fn signal(port: NodeId) -> Leaf {
-    Leaf { node: port, path: LeafPath::new(ComponentKind::Port, "signal").expect("declared") }
+    Leaf { node: port, path: LeafPath::new(FacetKind::Port, "signal").expect("declared") }
 }
 
 /// A connection's two ends, `a` then `b`, if it has exactly those.
@@ -216,7 +216,7 @@ pub fn network(doc: &Document) -> Network {
     let mut index: BTreeMap<Leaf, usize> = BTreeMap::new();
     for &(p, k) in &pair_ports {
         for (field, unit) in [("across", k.unit), ("through", k.through)] {
-            let leaf = Leaf { node: p, path: LeafPath::new(ComponentKind::Port, field).expect("declared") };
+            let leaf = Leaf { node: p, path: LeafPath::new(FacetKind::Port, field).expect("declared") };
             if doc.leaf(p, leaf.path).is_some_and(|s| s.expr().is_none()) {
                 index.insert(leaf, unknowns.len());
                 unknowns.push((leaf, dim_of(unit)));
@@ -250,7 +250,7 @@ pub fn network(doc: &Document) -> Network {
         let r = root(&mut parent, p);
         nets.entry(r).or_default().push(p);
     }
-    let leaf = |p: NodeId, f: &str| Leaf { node: p, path: LeafPath::new(ComponentKind::Port, f).expect("declared") };
+    let leaf = |p: NodeId, f: &str| Leaf { node: p, path: LeafPath::new(FacetKind::Port, f).expect("declared") };
     for ports in nets.values() {
         // Across values equal at the joint (bound ones are knowns: an
         // equation against a known is an Expr row).
@@ -273,7 +273,7 @@ pub fn network(doc: &Document) -> Network {
         if doc.live(e).and_then(|n| n.parent).and_then(|p| doc.live(p)).is_none_or(|n| n.ty.name() != "entity") {
             continue;
         }
-        let Some(eq) = doc.get::<crate::component::Equation>(e) else { continue };
+        let Some(eq) = doc.get::<crate::facet::Equation>(e) else { continue };
         let side = |s: &crate::value::Slot| s.expr().cloned().or_else(|| s.constant().map(|v| Expr::Lit(v.clone())));
         if let (Some(lhs), Some(rhs)) = (side(&eq.lhs), side(&eq.rhs)) {
             equations.push(Equation::Expr { node: e, lhs, rhs });

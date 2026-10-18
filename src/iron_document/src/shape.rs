@@ -19,7 +19,7 @@
 //! them are baked to their current value and such clips are deleted. A caller
 //! shows the cuts and asks first; with none, nothing is lost.
 
-use crate::component::{Component, ComponentKind, LeafPath, LeafStruct, PathShape};
+use crate::facet::{Facet, FacetKind, LeafPath, LeafStruct, PathShape};
 use crate::document::RelKind;
 use crate::expr::Leaf;
 use crate::id::NodeId;
@@ -180,7 +180,7 @@ pub fn outline(store: &Store, id: NodeId) -> Option<Vec<Vec<Anchor>>> {
             Some(vec![rect_outline(num("size.w", 100.0), num("size.h", 100.0), radii)])
         }
         "ellipse" => {
-            let arc = doc.component(id, ComponentKind::Arc).map(|_| [num("arc.start", 0.0), num("arc.sweep", TAU), num("arc.inner", 0.0)]);
+            let arc = doc.facet(id, FacetKind::Arc).map(|_| [num("arc.start", 0.0), num("arc.sweep", TAU), num("arc.inner", 0.0)]);
             Some(ellipse_outline(num("radius.rx", 50.0), num("radius.ry", 50.0), arc))
         }
         _ => None,
@@ -234,14 +234,14 @@ pub fn to_path(store: &Store, id: NodeId) -> Result<Conversion, String> {
     }
 
     // The node again, as a path: everything but the parameters carries over.
-    let carried: Vec<Component> = doc
-        .components_of(id)
-        .filter(|c| !matches!(c.kind(), ComponentKind::Size | ComponentKind::Radius | ComponentKind::Corners | ComponentKind::Arc))
+    let carried: Vec<Facet> = doc
+        .facets_of(id)
+        .filter(|c| !matches!(c.kind(), FacetKind::Size | FacetKind::Radius | FacetKind::Corners | FacetKind::Arc))
         .cloned()
         .chain(std::iter::once(PathShape::default().wrap()))
         .collect();
     ops.push(Op::Delete { id });
-    ops.push(Op::Create { id, ty: TypeId::lookup("path").expect("registered"), parent: node.parent, order: node.order.clone(), components: carried });
+    ops.push(Op::Create { id, ty: TypeId::lookup("path").expect("registered"), parent: node.parent, order: node.order.clone(), facets: carried });
     let runs: Vec<(Vec<Anchor>, bool)> = contours.into_iter().map(|c| (c, true)).collect();
     let mut ids = doc.next_ids(crate::contour::ids_needed(&runs)).into_iter();
     ops.extend(crate::contour::contours_ops(id, &runs, &mut ids));

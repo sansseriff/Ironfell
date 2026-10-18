@@ -9,7 +9,7 @@
 //! under it, otherwise into the view's own composition.
 
 use bevy::prelude::*;
-use iron_document::component::{Fill, Name as DocName, Radius, Size, Transform2d};
+use iron_document::facet::{Fill, Name as DocName, Radius, Size, Transform2d};
 use iron_document::composition::Dims;
 use iron_document::{Actor, LeafStruct, NodeId, Op, Slot, TransactionInput, TypeId, Value};
 use kurbo::{Affine, Point, Rect};
@@ -133,7 +133,7 @@ pub fn shape_tool_system(
         ty: TypeId::lookup(ty).expect("registered"),
         parent: Some(press.container),
         order: after_last(doc, Some(press.container)),
-        components: vec![t.wrap(), geometry, fill.wrap(), name.wrap()],
+        facets: vec![t.wrap(), geometry, fill.wrap(), name.wrap()],
     };
     let label = format!("draw {}", if ty == "rect" { "rectangle" } else { "ellipse" });
     pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![op], exact: false });

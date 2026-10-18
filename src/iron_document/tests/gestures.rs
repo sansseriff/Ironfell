@@ -1,7 +1,7 @@
 //! Gesture ownership (infinite-canvas-architecture-patterns.md §4, exit
 //! criteria): what a transaction arriving mid-gesture does to the gesture.
 
-use iron_document::component::{Constraint, Fill, Radius, Size, Slider, Transform2d};
+use iron_document::facet::{Constraint, Fill, Radius, Size, Slider, Transform2d};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -87,14 +87,14 @@ fn scene() -> Scene {
             "scene",
             Actor::System,
             vec![
-                Op::Create { id: group, ty: ty("group"), parent: None, order: order(), components: vec![Transform2d::default().wrap()] },
-                Op::Create { id: a, ty: ty("rect"), parent: Some(group), order: order(), components: vec![at(10.0, 20.0), size(), Fill::default().wrap()] },
-                Op::Create { id: other, ty: ty("rect"), parent: Some(group), order: order(), components: vec![at(300.0, 20.0), size(), Fill::default().wrap()] },
-                Op::Create { id: slider, ty: ty("slider"), parent: Some(group), order: order(), components: vec![at(0.0, 200.0), sl.wrap()] },
-                Op::Create { id: bar, ty: ty("rect"), parent: Some(group), order: order(), components: vec![bt.wrap(), size()] },
-                Op::Create { id: p, ty: ty("ellipse"), parent: Some(group), order: order(), components: vec![at(0.0, 400.0), circle()] },
-                Op::Create { id: q, ty: ty("ellipse"), parent: Some(group), order: order(), components: vec![at(100.0, 400.0), circle()] },
-                Op::Create { id: link, ty: ty("constraint"), parent: Some(group), order: order(), components: vec![c.wrap()] },
+                Op::Create { id: group, ty: ty("group"), parent: None, order: order(), facets: vec![Transform2d::default().wrap()] },
+                Op::Create { id: a, ty: ty("rect"), parent: Some(group), order: order(), facets: vec![at(10.0, 20.0), size(), Fill::default().wrap()] },
+                Op::Create { id: other, ty: ty("rect"), parent: Some(group), order: order(), facets: vec![at(300.0, 20.0), size(), Fill::default().wrap()] },
+                Op::Create { id: slider, ty: ty("slider"), parent: Some(group), order: order(), facets: vec![at(0.0, 200.0), sl.wrap()] },
+                Op::Create { id: bar, ty: ty("rect"), parent: Some(group), order: order(), facets: vec![bt.wrap(), size()] },
+                Op::Create { id: p, ty: ty("ellipse"), parent: Some(group), order: order(), facets: vec![at(0.0, 400.0), circle()] },
+                Op::Create { id: q, ty: ty("ellipse"), parent: Some(group), order: order(), facets: vec![at(100.0, 400.0), circle()] },
+                Op::Create { id: link, ty: ty("constraint"), parent: Some(group), order: order(), facets: vec![c.wrap()] },
                 Op::Link { rel: Relation { id: rels[0], from: link, to: p, rel: RelKind::Constrains, data: role("a") } },
                 Op::Link { rel: Relation { id: rels[1], from: link, to: q, rel: RelKind::Constrains, data: role("b") } },
             ],

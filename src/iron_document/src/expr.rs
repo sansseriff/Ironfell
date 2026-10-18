@@ -15,7 +15,7 @@
 //! Those arrive with the floor tranche that needs them and with the
 //! cost-tagged invocation node. `Get` (`beam.waist`) reads a record's field.
 
-use crate::component::LeafPath;
+use crate::facet::LeafPath;
 use crate::id::NodeId;
 use crate::value::Value;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -775,7 +775,7 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                 i += 1;
             }
             b'#' => {
-                // #<id>.<component>.<field>
+                // #<id>.<facet>.<field>
                 let start = i + 1;
                 i += 1;
                 while i < b.len() && b[i].is_ascii_alphanumeric() {

@@ -367,3 +367,78 @@ fn remap_op(op: Op, map: &BTreeMap<NodeId, NodeId>) -> Op {
         Op::Unlink { id } => Op::Unlink { id },
     }
 }
+
+/// Make component from plain shapes (component-authoring.md §2): the
+/// selected nodes move into a new definition's template, and a **main** of
+/// it takes their place, at `top_left` (the selection's top-left in their
+/// parent's space; the moved nodes shift by it so nothing moves on screen).
+/// `entity` in the result is the main itself: a main figures no entity.
+pub fn make_main(doc: &Document, selection: &[NodeId], top_left: [f64; 2], name: &str) -> Result<Made, String> {
+    let mut roots: Vec<NodeId> = Vec::new();
+    for &n in selection {
+        let node = doc.live(n).ok_or_else(|| format!("{n} is not a live node"))?;
+        if n.is_expanded() {
+            return Err(format!("{n} is part of an instance; select whole shapes"));
+        }
+        if node.ty.name() == "use" {
+            return Err(format!("{n} is a component already: select only shapes, or only instances"));
+        }
+        if !roots.contains(&n) {
+            roots.push(n);
+        }
+    }
+    // Only the outermost of nested picks.
+    let all = roots.clone();
+    roots.retain(|&r| !all.iter().any(|&o| o != r && doc.is_ancestor(o, r)));
+    if roots.is_empty() {
+        return Err("nothing selected to make a component of".into());
+    }
+    let parent = doc.live(roots[0]).and_then(|n| n.parent).ok_or("a component's shapes must sit in a composition")?;
+    if roots.iter().any(|&r| doc.live(r).and_then(|n| n.parent) != Some(parent)) {
+        return Err("the shapes are in different groups; pick shapes side by side".into());
+    }
+    let comp = composition::composition_of(doc, roots[0]).ok_or("the selection is not in a composition")?;
+    let notation = doc.get::<crate::facet::Composition>(comp).and_then(|c| c.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
+    roots.sort_by(|a, b| doc.live(*a).map(|n| n.order.clone()).cmp(&doc.live(*b).map(|n| n.order.clone())));
+
+    let mut ops = Vec::new();
+    let mut ids = doc.next_ids(4).into_iter();
+    let (def, template, main) = (ids.next().expect("id"), ids.next().expect("id"), ids.next().expect("id"));
+    let library = match doc.roots().iter().copied().find(|&r| doc.live(r).is_some_and(|n| n.ty.name() == "library")) {
+        Some(l) => l,
+        None => {
+            let l = ids.next().expect("id");
+            let after = doc.roots().iter().filter_map(|&r| doc.live(r)).map(|n| n.order.clone()).max();
+            ops.push(Op::Create { id: l, ty: ty("library"), parent: None, order: after.map_or_else(OrderKey::first, |k| OrderKey::after(&k)), facets: vec![] });
+            l
+        }
+    };
+    let last_def = doc.children(library).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max();
+    ops.push(Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: last_def.map_or_else(OrderKey::first, |k| OrderKey::after(&k)), facets: vec![named(name)] });
+    let mut t = Template::default();
+    t.notation = Slot::Const(Value::Str(notation.clone()));
+    ops.push(Op::Create { id: template, ty: ty("template"), parent: Some(def), order: OrderKey::first(), facets: vec![t.wrap()] });
+    let first_order = doc.live(roots[0]).expect("live").order.clone();
+    let mut key = OrderKey::first();
+    for &r in &roots {
+        ops.push(Op::Reparent { id: r, parent: Some(template), order: key.clone() });
+        key = OrderKey::after(&key);
+        // Keep it where it was on screen: the main sits at the top-left.
+        for (field, d) in [("x", top_left[0]), ("y", top_left[1])] {
+            let path = LeafPath::new(FacetKind::Transform2d, field).expect("declared");
+            if let Some(v) = doc.leaf(r, path).and_then(|s| s.constant()).and_then(|v| v.as_f64()) {
+                ops.push(Op::Set { id: r, path, slot: Slot::Const(Value::Number(v - d)) });
+            }
+        }
+    }
+    let mut u = Use::default();
+    u.notation = Slot::Const(Value::Str(notation));
+    let mut at = Transform2d::default();
+    at.x = Slot::Const(Value::Number(top_left[0]));
+    at.y = Slot::Const(Value::Number(top_left[1]));
+    let mut inst = Instance::default();
+    inst.def = Slot::Const(Value::Ref(def));
+    inst.mode = Slot::Const(Value::Enum("main".into()));
+    ops.push(Op::Create { id: main, ty: ty("use"), parent: Some(parent), order: first_order, facets: vec![u.wrap(), at.wrap(), inst.wrap(), named(name)] });
+    Ok(Made { definition: def, entity: main, picture: main, ops })
+}

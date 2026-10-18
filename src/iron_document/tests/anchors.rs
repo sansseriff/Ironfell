@@ -305,3 +305,80 @@ fn a_loose_end_dropped_once_and_plugged_again_stays_put_when_its_part_leaves() {
     store.finish_plug(p, None).unwrap();
     assert_eq!(world(&store, lead_anchor), (150.0, 210.0), "released");
 }
+
+/// A `tail`: one out port whose anchor is a loose end, placed at (600, 50).
+fn add_tail(store: &mut Store) -> (NodeId, NodeId, NodeId) {
+    let library = store.document().roots()[0];
+    let comp = store.document().roots()[1];
+    let model = store.document().roots()[2];
+    let ids = store.document().next_ids(4);
+    let [tail, tail_out, tail_t, tail_anchor] = ids.try_into().unwrap();
+    let mut t = Template::default();
+    t.notation = Slot::Const(Value::Str("c".into()));
+    store
+        .apply(tx("tail", vec![
+            Op::Create { id: tail, ty: ty("definition"), parent: Some(library), order: key(6), facets: vec![named("tail")] },
+            Op::Create { id: tail_out, ty: ty("port_spec"), parent: Some(tail), order: key(0), facets: vec![named("out"), port("out", Slot::Const(Value::Number(2.0)))] },
+            Op::Create { id: tail_t, ty: ty("template"), parent: Some(tail), order: key(1), facets: vec![t.wrap()] },
+            Op::Create { id: tail_anchor, ty: ty("empty"), parent: Some(tail_t), order: key(0), facets: vec![at(0.0, 0.0).wrap(), anchor(tail_out, true), named("out")] },
+        ]))
+        .unwrap();
+    let place = Placement {
+        entity_parent: Some(model),
+        entity_after: store.document().children(model).last().map(|&c| store.document().live(c).unwrap().order.clone()),
+        figure_parent: Some(comp),
+        figure_after: store.document().children(comp).last().map(|&c| store.document().live(c).unwrap().order.clone()),
+    };
+    let (entity, ops) = definition::instantiate(store.document(), tail, "c", "tail", &place).unwrap();
+    store.apply(tx("place tail", ops)).unwrap();
+    let tail_use = *store.document().children(comp).last().unwrap();
+    store.apply(tx("move tail", vec![
+        Op::Set { id: tail_use, path: path("transform2d.x"), slot: Slot::Const(Value::Number(600.0)) },
+        Op::Set { id: tail_use, path: path("transform2d.y"), slot: Slot::Const(Value::Number(50.0)) },
+    ])).unwrap();
+    (entity, tail_use, NodeId::expanded(tail_use, tail_anchor).unwrap())
+}
+
+#[test]
+fn two_loose_ends_join_and_the_one_landed_on_holds() {
+    let Bench { mut store, lead_anchor, .. } = bench();
+    let c = store.port_anchors().into_iter().find(|a| a.anchor == lead_anchor).unwrap().connection.unwrap();
+    store.unplug(c, "unplug", Actor::Human).unwrap();
+    let (tail, tail_use, tail_anchor) = add_tail(&mut store);
+    assert_eq!(world(&store, tail_anchor), (600.0, 50.0));
+    // The tail's end dropped on the lead's: it joins there.
+    let p = store.begin_plug(tail_anchor, tail_use).unwrap();
+    let t = store.plug_targets(&p).into_iter().find(|t| t.anchor == lead_anchor).expect("a loose end is a target");
+    store.plug_drag(&p, t.world, Some(&t));
+    store.finish_plug(p, Some(t)).unwrap();
+    assert_eq!(world(&store, tail_anchor), (150.0, 210.0));
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0));
+    // The lead's end holds the joint: dragging it carries the tail's end.
+    let lead_use = lead_anchor.expanded_root().unwrap();
+    let h = store.begin_drag(lead_anchor, [0.0, 0.0]);
+    store.drag_to(&h, [200.0, 260.0]);
+    store.commit_gesture("move joint", Actor::Human, 0).unwrap().unwrap();
+    assert!(close(world(&store, tail_anchor), (200.0, 260.0)), "{:?}", world(&store, tail_anchor));
+    let _ = lead_use;
+    // Gender: two male connectors do not mate.
+    store.undo(1).unwrap().unwrap();
+    store.undo(1).unwrap().unwrap();
+    let lead_port = store.port_anchors().into_iter().find(|a| a.anchor == lead_anchor).unwrap().outer;
+    let tail_port = store.port_anchors().into_iter().find(|a| a.anchor == tail_anchor).unwrap().outer;
+    let _ = tail;
+    let lead_entity = lead_port.expanded_root().unwrap();
+    let (_, lead_spec) = lead_port.expanded_parts().unwrap();
+    let (_, tail_spec) = tail_port.expanded_parts().unwrap();
+    let _ = lead_entity;
+    store.apply(tx("male", vec![
+        Op::Set { id: lead_spec, path: path("port.gender"), slot: Slot::Const(Value::Enum("male".into())) },
+        Op::Set { id: tail_spec, path: path("port.gender"), slot: Slot::Const(Value::Enum("male".into())) },
+    ])).unwrap();
+    let p = store.begin_plug(tail_anchor, tail_use).unwrap();
+    assert!(store.plug_targets(&p).iter().all(|t| t.anchor != lead_anchor));
+    store.cancel_plug(p);
+    store.apply(tx("female", vec![Op::Set { id: lead_spec, path: path("port.gender"), slot: Slot::Const(Value::Enum("female".into())) }])).unwrap();
+    let p = store.begin_plug(tail_anchor, tail_use).unwrap();
+    assert!(store.plug_targets(&p).iter().any(|t| t.anchor == lead_anchor));
+    store.cancel_plug(p);
+}

@@ -90,14 +90,14 @@ fn follows(doc: &Document, anchor: NodeId) -> bool {
     doc.get::<Anchor>(anchor).and_then(|a| a.follow.constant()).and_then(|v| v.as_bool()) == Some(true)
 }
 
-/// The port at the other end of `port`'s connection. A port inside a
-/// component has none of its own when the component exposes it: its partner
-/// is the exposing port's (component-model.md §5.5).
-fn partner(doc: &Document, port: NodeId) -> Option<NodeId> {
+/// The port at the other end of `port`'s connection, and the connection. A
+/// port inside a component has none of its own when the component exposes
+/// it: its partner is the exposing port's (component-model.md §5.5).
+fn partner(doc: &Document, port: NodeId) -> Option<(NodeId, NodeId)> {
     for _ in 0..16 {
         if let Some(connection) = doc.relations_to(port).find(|r| r.rel == RelKind::Connects && doc.is_live(r.from)).map(|r| r.from) {
             let (a, b) = crate::port::ends(doc, connection)?;
-            return Some(if a == port { b } else { a });
+            return Some((if a == port { b } else { a }, connection));
         }
         let outer = doc.relations_to(port).find(|r| r.rel == RelKind::Exposes && doc.is_live(r.from))?.from;
         return partner(doc, outer);
@@ -135,10 +135,14 @@ pub fn derived(doc: &Document) -> Vec<(Leaf, Expr)> {
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Anchor, "wrot").expect("declared") }, facing));
     }
     for &a in anchors.iter().filter(|&&a| follows(doc, a)) {
-        let Some(other) = port_of(doc, a).and_then(|p| partner(doc, p)) else { continue };
+        let Some((other, connection)) = port_of(doc, a).and_then(|p| partner(doc, p)) else { continue };
         let here = composition::composition_of(doc, a);
         let ports = standing_for(doc, other);
-        let Some(target) = anchors.iter().copied().find(|&b| b != a && !follows(doc, b) && port_of(doc, b).is_some_and(|p| ports.contains(&p)) && composition::composition_of(doc, b) == here) else { continue };
+        // A joint of two loose ends: the held one stays, the other follows
+        // it (component-authoring.md §5).
+        let held = crate::plug::held_end(doc, connection);
+        let holds = |b: NodeId| !follows(doc, b) || held.is_some_and(|h| standing_for(doc, h).contains(&port_of(doc, b).unwrap_or(b)));
+        let Some(target) = anchors.iter().copied().find(|&b| b != a && holds(b) && port_of(doc, b).is_some_and(|p| ports.contains(&p)) && composition::composition_of(doc, b) == here) else { continue };
         let (x, y) = inward(doc, a, leaf(target, FacetKind::Anchor, "wx"), leaf(target, FacetKind::Anchor, "wy"));
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Transform2d, "x").expect("declared") }, x));
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Transform2d, "y").expect("declared") }, y));

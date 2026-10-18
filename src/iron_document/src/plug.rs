@@ -35,6 +35,11 @@ pub struct PortAnchor {
     pub follow: bool,
     pub kind: String,
     pub dir: String,
+    /// Its connector type and gender ("" and `any` match anything).
+    pub connector: String,
+    pub gender: String,
+    /// The dimension of its value (a `value` port's power, voltage…).
+    pub dim: Option<crate::units::Dim>,
     /// The port's name, for labels.
     pub name: String,
     pub composition: Option<NodeId>,
@@ -55,10 +60,23 @@ fn anchor_leaf(id: NodeId, field: &str) -> Leaf {
 
 fn port_text(doc: &Document, port: NodeId, field: &str) -> String {
     doc.get::<Port>(port)
-        .and_then(|p| if field == "kind" { p.kind.constant() } else { p.dir.constant() })
+        .and_then(|p| match field {
+            "kind" => p.kind.constant(),
+            "connector" => p.connector.constant(),
+            "gender" => p.gender.constant(),
+            _ => p.dir.constant(),
+        })
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned()
+}
+
+/// The end of a connection that holds a joint of two loose ends: the port
+/// its relation marks `held` (component-authoring.md §5).
+pub fn held_end(doc: &Document, connection: NodeId) -> Option<NodeId> {
+    doc.relations_from(connection)
+        .find(|r| r.rel == RelKind::Connects && r.data.get("held").and_then(|v| v.as_bool()) == Some(true))
+        .map(|r| r.to)
 }
 
 /// The outermost port exposing `port`.
@@ -119,6 +137,9 @@ pub fn port_anchors(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>) -> Vec
             follow: facet.follow.constant().and_then(|v| v.as_bool()) == Some(true),
             kind: port_text(doc, outer, "kind"),
             dir: port_text(doc, outer, "dir"),
+            connector: port_text(doc, outer, "connector"),
+            gender: port_text(doc, outer, "gender"),
+            dim: read(Leaf { node: outer, path: LeafPath::new(FacetKind::Port, "signal").expect("declared") }).and_then(|v| v.as_quantity()).map(|(_, d)| d),
             name: doc.get::<Name>(outer).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("").to_owned(),
             composition,
             body: body_of(doc, a),
@@ -144,11 +165,25 @@ pub fn compatible(doc: &Document, grabbed: &PortAnchor, target: &PortAnchor) -> 
     if grabbed.composition != target.composition {
         return Err("the ports are in different compositions".into());
     }
-    if grabbed.follow && target.follow {
-        return Err("two loose ends: neither would hold the other".into());
-    }
     if grabbed.kind != target.kind {
         return Err(format!("{} carries {}, {} carries {}", grabbed.name, grabbed.kind, target.name, target.kind));
+    }
+    if grabbed.kind == "value"
+        && let (Some(a), Some(b)) = (grabbed.dim, target.dim)
+        && a != b
+    {
+        return Err(format!("{} is in {}, {} in {}", grabbed.name, a.canonical_unit(), target.name, b.canonical_unit()));
+    }
+    if !grabbed.connector.is_empty() && !target.connector.is_empty() && grabbed.connector != target.connector {
+        return Err(format!("{} is a {} connector, {} a {}", grabbed.name, grabbed.connector, target.name, target.connector));
+    }
+    let pairs = match (grabbed.gender.as_str(), target.gender.as_str()) {
+        ("any" | "", _) | (_, "any" | "") => true,
+        ("male", "female") | ("female", "male") | ("neutral", "neutral") => true,
+        _ => false,
+    };
+    if !pairs {
+        return Err(format!("{} ({}) does not mate with {} ({})", grabbed.name, grabbed.gender, target.name, target.gender));
     }
     let flow = crate::port::kind(&grabbed.kind).map(|k| k.flow);
     if flow == Some(crate::port::Flow::Signal) {
@@ -167,17 +202,24 @@ pub fn compatible(doc: &Document, grabbed: &PortAnchor, target: &PortAnchor) -> 
 }
 
 /// The ops connecting `a` to `b` (outer ports): a `connection` beside the
-/// entity of `a`, with its two ends. `id` and `rels` are fresh.
-pub fn plug_ops(doc: &Document, a: NodeId, b: NodeId, id: NodeId, rels: [crate::id::RelationId; 2]) -> Result<Vec<Op>, String> {
+/// entity of `a`, with its two ends; `held`, when both are loose ends, is
+/// the one that keeps its place. `id` and `rels` are fresh.
+pub fn plug_ops(doc: &Document, a: NodeId, b: NodeId, held: Option<NodeId>, id: NodeId, rels: [crate::id::RelationId; 2]) -> Result<Vec<Op>, String> {
     let entity = a.expanded_root().unwrap_or(a);
     let parent = doc.live(entity).and_then(|n| n.parent).ok_or_else(|| format!("{a} belongs to no placed entity"))?;
     let order = doc.children(parent).iter().rev().find(|c| !c.is_expanded()).and_then(|&c| doc.live(c)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
-    let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
+    let end = |e: &str, port: NodeId| {
+        let mut data = BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
+        if held == Some(port) {
+            data.insert("held".to_owned(), Value::Bool(true));
+        }
+        data
+    };
     let ty = TypeId::lookup("connection").expect("registered");
     Ok(vec![
         Op::Create { id, ty, parent: Some(parent), order, facets: vec![Connection::default().wrap()] },
-        Op::Link { rel: Relation { id: rels[0], from: id, to: a, rel: RelKind::Connects, data: end("a") } },
-        Op::Link { rel: Relation { id: rels[1], from: id, to: b, rel: RelKind::Connects, data: end("b") } },
+        Op::Link { rel: Relation { id: rels[0], from: id, to: a, rel: RelKind::Connects, data: end("a", a) } },
+        Op::Link { rel: Relation { id: rels[1], from: id, to: b, rel: RelKind::Connects, data: end("b", b) } },
     ])
 }
 

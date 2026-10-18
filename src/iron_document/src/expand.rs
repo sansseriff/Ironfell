@@ -52,6 +52,25 @@ pub fn linked_definition(doc: &Document, entity: NodeId) -> Option<NodeId> {
     doc.live(def).filter(|n| n.ty.name() == "definition").map(|_| def)
 }
 
+/// The definition a `use` is the main of (component-authoring.md §1): its
+/// `instance` facet says `main`. A main figures no entity; edits inside it
+/// are edits to the definition.
+pub fn main_definition(doc: &Document, u: NodeId) -> Option<NodeId> {
+    let inst = doc.get::<Instance>(u)?;
+    if inst.mode.constant().and_then(|v| v.as_str()) != Some("main") {
+        return None;
+    }
+    let def = inst.def.constant()?.as_ref()?;
+    doc.live(def).filter(|n| n.ty.name() == "definition").map(|_| def)
+}
+
+/// The template a main shows, for its notation.
+pub fn main_template(doc: &Document, u: NodeId) -> Option<NodeId> {
+    let def = main_definition(doc, u)?;
+    let notation = doc.get::<Use>(u)?.notation.constant()?.as_str()?.to_owned();
+    definition::template_of(doc, def, &notation)
+}
+
 /// The entity a `use` figures.
 pub fn use_entity(doc: &Document, u: NodeId) -> Option<NodeId> {
     doc.relations_from(u).find(|r| r.rel == RelKind::Figures && doc.is_live(r.to)).map(|r| r.to)
@@ -108,10 +127,16 @@ fn wanted(doc: &Document) -> Wanted {
     }
     let use_ty = TypeId::lookup("use").expect("registered");
     for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && !u.is_expanded()).collect::<Vec<_>>() {
+        if let Some(def) = main_definition(doc, u) {
+            if let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned) {
+                want_use(doc, u, None, def, &notation, 0, &mut out);
+            }
+            continue;
+        }
         let Some(entity) = use_entity(doc, u) else { continue };
         let Some(def) = linked_definition(doc, entity) else { continue };
         let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned) else { continue };
-        want_use(doc, u, entity, def, &notation, 0, &mut out);
+        want_use(doc, u, Some(entity), def, &notation, 0, &mut out);
     }
     out
 }
@@ -166,8 +191,9 @@ fn want_entity(doc: &Document, entity: NodeId, def: NodeId, depth: usize, out: &
 /// What `use` `u`, figuring `entity` (an instance of `def`), derives: the
 /// definition's template for `notation`, as its children. A `use` inside
 /// the template pictures one of the definition's inner entities, so its
-/// copy figures that entity's copy and derives that entity's picture.
-fn want_use(doc: &Document, u: NodeId, entity: NodeId, def: NodeId, notation: &str, depth: usize, out: &mut Wanted) {
+/// copy figures that entity's copy and derives that entity's picture. A
+/// main has no entity: references to the definition's body stay on it.
+fn want_use(doc: &Document, u: NodeId, entity: Option<NodeId>, def: NodeId, notation: &str, depth: usize, out: &mut Wanted) {
     if depth > MAX_DEPTH {
         return;
     }
@@ -178,7 +204,10 @@ fn want_use(doc: &Document, u: NodeId, entity: NodeId, def: NodeId, notation: &s
         let owner = if inside.contains(&root) {
             u
         } else if is_body(doc, def, root) {
-            entity
+            match entity {
+                Some(e) => e,
+                None => return leaf,
+            }
         } else {
             return leaf;
         };
@@ -216,7 +245,7 @@ fn want_use(doc: &Document, u: NodeId, entity: NodeId, def: NodeId, notation: &s
                     (i.mode.constant().and_then(|v| v.as_str()) == Some("linked")).then(|| i.def.constant().and_then(|v| v.as_ref())).flatten()
                 });
                 if let (Some(n), Some(d)) = (inner_notation, inner_def) {
-                    want_use(doc, id, inner_entity, d, &n, depth + 1, out);
+                    want_use(doc, id, Some(inner_entity), d, &n, depth + 1, out);
                 }
             }
             continue;
@@ -489,7 +518,15 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
     let mut override_op = |owner: NodeId, local: NodeId, path: LeafPath, value: Value, out: &mut Vec<Op>| -> Result<(), String> {
         // A part of a nested instance is overridden from the outermost one,
         // its target the path down to the part (§5.3, "Nested targets").
+        // Inside a main, the outermost is the definition's own node: the
+        // override is the definition's (component-authoring.md §1).
         let mut steps = owner.path();
+        if main_definition(doc, steps[0]).is_some() {
+            steps.remove(0);
+        }
+        if steps.is_empty() {
+            return Err(format!("{owner}: nothing to override"));
+        }
         let owner = steps.remove(0);
         steps.push(local);
         let local = NodeId::from_path(&steps).ok_or_else(|| format!("{owner}: no path to {local}"))?;
@@ -514,7 +551,29 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
         }
         Ok(())
     };
+    // Inside a main, a derived node one step down stands for its template
+    // node, and the main for the template itself.
+    let in_main = |id: NodeId| -> Option<NodeId> {
+        let path = id.path();
+        (path.len() == 2 && main_definition(doc, path[0]).is_some()).then(|| path[1])
+    };
+    let container = |p: NodeId| -> NodeId {
+        if main_definition(doc, p).is_some() {
+            return main_template(doc, p).unwrap_or(p);
+        }
+        in_main(p).unwrap_or(p)
+    };
     for (i, op) in ops.into_iter().enumerate() {
+        // Edits inside a main are edits to its definition.
+        let op = match op {
+            Op::Create { id, ty, parent, order, facets } => Op::Create { id, ty, parent: parent.map(container), order, facets },
+            Op::Reparent { id, parent, order } => Op::Reparent { id: in_main(id).unwrap_or(id), parent: parent.map(container), order },
+            Op::Delete { id } if in_main(id).is_some() => Op::Delete { id: in_main(id).unwrap_or(id) },
+            Op::Reorder { id, order } if in_main(id).is_some() => Op::Reorder { id: in_main(id).unwrap_or(id), order },
+            Op::AddFacet { id, facet } if in_main(id).is_some() => Op::AddFacet { id: in_main(id).unwrap_or(id), facet },
+            Op::RemoveFacet { id, kind } if in_main(id).is_some() => Op::RemoveFacet { id: in_main(id).unwrap_or(id), kind },
+            other => other,
+        };
         // A facet added to what an instance derives (an ellipse gaining an
         // arc) is an override of each of its fields.
         if let Op::AddFacet { id, facet } = &op
@@ -536,6 +595,14 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
             continue;
         };
         let err = |m: String| ApplyError { op: i, kind: ErrorKind::BadId, message: m };
+        // A binding set inside a main is the definition's own (a link from
+        // its input to a part, component-authoring.md §3).
+        if let Some(part) = in_main(*id)
+            && slot.expr().is_some()
+        {
+            out.push(Op::Set { id: part, path: *path, slot: slot.clone() });
+            continue;
+        }
         let value = match slot {
             Slot::Const(v) => v.clone(),
             _ => return Err(err(format!("{id} is inside instance {owner}: a binding from outside cannot reach it; give its definition an `in` port and bind that"))),
@@ -550,7 +617,10 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
                 }
                 out.push(Op::Set { id: source.node, path: source.path, slot: Slot::Const(v) });
             }
-            crate::handle::Handle::Direct => override_op(owner, local, *path, value, &mut out).map_err(err)?,
+            crate::handle::Handle::Direct => match in_main(*id) {
+                Some(part) => out.push(Op::Set { id: part, path: *path, slot: Slot::Const(value) }),
+                None => override_op(owner, local, *path, value, &mut out).map_err(err)?,
+            },
         }
     }
     Ok(out)

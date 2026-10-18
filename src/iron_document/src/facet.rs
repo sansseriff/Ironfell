@@ -424,6 +424,10 @@ facets! {
         signal: Any = Value::Number(0.0),
         across: Any = Value::Number(0.0),
         through: Any = Value::Number(0.0),
+        // What plugs into it (component-authoring.md §4): a connector type
+        // ("" matches any) and a gender (`any`, `male`, `female`, `neutral`).
+        connector: Str = Value::Str(String::new()),
+        gender: Enum = Value::Enum("any".to_owned()),
     }
 
     /// A behaviour equation of a definition or entity (ECM §6.1): `lhs` and

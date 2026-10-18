@@ -528,16 +528,29 @@ fn add_comp(
             format!("{} does not allow {}", n.ty, kind.name()),
         ));
     }
-    if doc.facet(id, kind).is_some() {
-        return Err(cx.err(
-            ErrorKind::FacetPresent,
-            format!("{id} already has {}", kind.name()),
-        ));
+    // A dynamic facet (an instance's `args`) is replaced whole: its fields
+    // are the definition's inputs, which can gain, lose or rename one at
+    // once (component-authoring.md §2).
+    let replaced = match doc.facet(id, kind) {
+        Some(old) if kind.is_dynamic() => Some(old.clone()),
+        Some(_) => {
+            return Err(cx.err(
+                ErrorKind::FacetPresent,
+                format!("{id} already has {}", kind.name()),
+            ));
+        }
+        None => None,
+    };
+    if replaced.is_some() {
+        doc.remove_facet(id, kind);
     }
     doc.insert_facet(id, comp.clone());
     check_facet_bindings(doc, cx, id, std::slice::from_ref(comp))?;
     check_entity(doc, cx, id)?;
-    Ok(vec![Op::RemoveFacet { id, kind }])
+    Ok(vec![match replaced {
+        Some(old) => Op::AddFacet { id, facet: old },
+        None => Op::RemoveFacet { id, kind },
+    }])
 }
 
 fn remove_comp(

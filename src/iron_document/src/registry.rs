@@ -278,7 +278,7 @@ static TYPES: &[TypeSpec] = &[
     // whose children are its definition's template, expanded, never stored.
     TypeSpec {
         name: "use",
-        facets: &[(K::Use, true), (K::Transform2d, true), (K::Name, false), (K::Appearance, false)],
+        facets: &[(K::Use, true), (K::Transform2d, true), (K::Name, false), (K::Appearance, false), (K::Instance, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },

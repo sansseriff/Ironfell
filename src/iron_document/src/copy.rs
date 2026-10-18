@@ -447,8 +447,73 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
         used += 1;
     }
 
+    mains_to_instances(doc, &mut ops);
     let (sources, roots) = frag.roots.iter().filter_map(|r| map.get(r).map(|n| (*r, *n))).unzip();
     Ok(Pasted { ops, roots, sources, notes })
+}
+
+/// A copy of a main is an instance of its definition (component-authoring.md
+/// §1, as Figma's copy of a main component): the copied `use` loses `main`
+/// and figures a new linked entity in the model.
+fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
+    use crate::facet::{Args, Instance, LeafStruct, Name};
+    let Some(model) = doc.roots().iter().copied().find(|&r| type_name(doc, r) == "model") else { return };
+    let mut next = ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Create { id, .. } if !id.is_session() && !id.is_expanded() => Some(id.raw() + 1),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .max(doc.next_id().raw());
+    let mut next_rel = ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Link { rel } if !rel.id.is_session() => Some(rel.id.raw() + 1),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .max(doc.next_relation_id().raw());
+    let mut entity_order = doc.children(model).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max();
+    let mut extra = Vec::new();
+    for op in ops.iter_mut() {
+        let Op::Create { id, ty, facets, .. } = op else { continue };
+        if ty.name() != "use" {
+            continue;
+        }
+        let def = facets.iter().find_map(|f| match f {
+            Facet::Instance(i) if i.mode.constant().and_then(|v| v.as_str()) == Some("main") => i.def.constant().and_then(|v| v.as_ref()),
+            _ => None,
+        });
+        let Some(def) = def else { continue };
+        facets.retain(|f| !matches!(f, Facet::Instance(_)));
+        let name = facets.iter().find_map(|f| match f {
+            Facet::Name(n) => n.text.constant().and_then(|v| v.as_str()).map(str::to_owned),
+            _ => None,
+        });
+        let entity = NodeId::from_raw(next);
+        next += 1;
+        let mut inst = Instance::default();
+        inst.def = Slot::Const(Value::Ref(def));
+        let mut args = Args::default();
+        for s in crate::definition::inputs_of(doc, def).unwrap_or_default() {
+            args.insert(s.name, Slot::Const(s.default.clone()));
+        }
+        let mut n = Name::default();
+        n.text = Slot::Const(Value::Str(name.unwrap_or_default()));
+        let order = entity_order.as_ref().map_or_else(OrderKey::first, OrderKey::after);
+        entity_order = Some(order.clone());
+        extra.push(Op::Create { id: entity, ty: TypeId::lookup("entity").expect("registered"), parent: Some(model), order, facets: vec![inst.wrap(), args.wrap(), n.wrap()] });
+        extra.push(Op::Link { rel: Relation { id: crate::id::RelationId::from_raw(next_rel), from: *id, to: entity, rel: RelKind::Figures, data: BTreeMap::new() } });
+        next_rel += 1;
+    }
+    // After the pasted nodes (ids are created in increasing order), entities
+    // before the `figures` links that need them.
+    let links: Vec<Op> = extra.iter().filter(|o| matches!(o, Op::Link { .. })).cloned().collect();
+    ops.extend(extra.into_iter().filter(|o| matches!(o, Op::Create { .. })));
+    ops.extend(links);
 }
 
 /// Duplicate `roots` in place, each right above its original: Cmd+D.

@@ -29,6 +29,7 @@ pub mod expr;
 pub mod geom;
 pub mod gesture;
 pub mod anchor;
+pub mod author;
 pub mod appearance;
 pub mod graph;
 pub mod handle;
@@ -508,7 +509,9 @@ impl Store {
         if let Some(t) = target {
             let id = self.doc.next_id();
             let rels = self.doc.next_relation_ids(2);
-            let ops = plug::plug_ops(&self.doc, p.from.outer, t.outer, id, [rels[0], rels[1]])?;
+            // Two loose ends: the one landed on holds the joint.
+            let held = (p.from.follow && t.follow).then_some(t.outer);
+            let ops = plug::plug_ops(&self.doc, p.from.outer, t.outer, held, id, [rels[0], rels[1]])?;
             let input = TransactionInput { label: label.clone(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false };
             let a = self.apply(input).map_err(|e| e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
             fold(self, &mut last, a.version);
@@ -658,6 +661,20 @@ impl Store {
     /// The node's own transform in its parent's space, from resolved values.
     pub fn local_affine(&self, id: NodeId) -> Affine2 {
         geom::local_affine(&self.doc, &|l| self.reactive.read(&self.doc, l), id)
+    }
+
+    /// A node's extent in its parent's space: its own bounds and its
+    /// children's, through its transform.
+    pub fn extent(&self, id: NodeId) -> Option<kurbo::Rect> {
+        let a = self.local_affine(id).0;
+        let to_parent = kurbo::Affine::new([a[0], a[1], a[2], a[3], a[4], a[5]]);
+        let own = self.local_bounds(id).map(|b| b.geometry);
+        let kids = self.doc.children(id).iter().filter(|c| !c.is_expanded() || id.is_expanded() || self.doc.live(id).is_some_and(|n| n.ty.name() == "use")).filter_map(|&c| self.extent(c)).reduce(|x, y| x.union(y));
+        let r = match (own, kids) {
+            (Some(a), Some(b)) => a.union(b),
+            (a, b) => a.or(b)?,
+        };
+        Some(to_parent.transform_rect_bbox(r))
     }
 
     /// A drawable node's extent in its own space (`geom::local_bounds`).
@@ -1058,7 +1075,22 @@ impl Store {
     /// selected pictures (component-model.md §5.5, `make`).
     pub fn make_component(&self, selection: &[NodeId], name: &str, actor: Actor) -> Result<(make::Made, TransactionInput), String> {
         let read = |l: Leaf| self.resolved(l.node, l.path);
-        let made = make::make(&self.doc, &read, selection, name)?;
+        let shapes = selection.iter().all(|&n| self.doc.live(n).is_some_and(|x| x.ty.name() != "use"));
+        let made = if shapes {
+            // Plain shapes: they become a definition shown by its main.
+            let mut top_left = [f64::INFINITY, f64::INFINITY];
+            for &n in selection {
+                if let Some(r) = self.extent(n) {
+                    top_left = [top_left[0].min(r.x0), top_left[1].min(r.y0)];
+                }
+            }
+            if !top_left[0].is_finite() {
+                top_left = [0.0, 0.0];
+            }
+            make::make_main(&self.doc, selection, top_left, name)?
+        } else {
+            make::make(&self.doc, &read, selection, name)?
+        };
         let tx = TransactionInput { label: format!("make component {name}"), actor, ts: 0, idempotency_key: None, ops: made.ops.clone(), exact: false };
         Ok((made, tx))
     }

@@ -173,13 +173,7 @@ static TYPES: &[TypeSpec] = &[
         name: "definition",
         facets: &[(K::Name, true)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["param_spec", "port_spec", "equation", "template"]),
-    },
-    TypeSpec {
-        name: "param_spec",
-        facets: &[(K::Name, true), (K::ParamSpec, true)],
-        default_host: Host::Canvas,
-        children: ChildPolicy::None,
+        children: ChildPolicy::Only(&["port_spec", "equation", "template"]),
     },
     // A template: its subtree is what an instance copies.
     TypeSpec {
@@ -273,10 +267,11 @@ static TYPES: &[TypeSpec] = &[
         children: ChildPolicy::None,
     },
     // An instance of a definition; its figures point at it with
-    // `figures` relations. Ports arrive as children in a later phase.
+    // `figures` relations. Its ports are children; `args` holds a value
+    // per `in` port (component-model.md §4).
     TypeSpec {
         name: "entity",
-        facets: &[(K::Instance, true), (K::Params, true), (K::Name, false)],
+        facets: &[(K::Instance, true), (K::Args, true), (K::Name, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["port", "equation"]),
     },

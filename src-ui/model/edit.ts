@@ -220,7 +220,7 @@ function resolveLeafAnyType(schema: Awaited<ReturnType<DocumentApi['schema']>>, 
     if (!kind) throw new Error(`unknown leaf "${attr}"`);
     return { component, field, kind };
   }
-  // Bare names never match a run-time field (`*`): parameters are written params.<name>.
+  // Bare names never match a run-time field (`*`): arguments are written args.<name>.
   const hits = Object.entries(schema.components).filter(([, fields]) => fields[attr] !== undefined && attr !== '*');
   if (hits.length === 1) return { component: hits[0][0], field: attr, kind: hits[0][1][attr] };
   if (hits.length === 0) throw new Error(`unknown leaf "${attr}"`);
@@ -265,7 +265,7 @@ async function linkFigures(api: DocumentApi, attrText: string): Promise<EditOutc
     const q = r.question;
     const entity = (e: typeof q.a) =>
       `    <entity id="${e.entity}"${e.name ? ` name="${escapeXml(e.name)}"` : ''}${e.def ? ` definition="${escapeXml(e.def)}"` : ''}` +
-      `${e.params.map(([k, v]) => ` ${k}="${escapeXml(v)}"`).join('')} figures="${e.figures.join(' ')}"` +
+      `${e.args.map(([k, v]) => ` ${k}="${escapeXml(v)}"`).join('')} figures="${e.figures.join(' ')}"` +
       `${e.ports.length ? ` ports="${e.ports.join(' ')}"` : ''}/>`;
     const collisions = q.port_collisions.length ? `\n    <port-collision names="${q.port_collisions.join(' ')}"/>` : '';
     return {

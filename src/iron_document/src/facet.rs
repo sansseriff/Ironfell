@@ -9,8 +9,8 @@
 //! The file format stays generic JSON regardless: each facet serialises as
 //! an object of its fields.
 //!
-//! One facet, `params`, has fields known only at run time: the parameters
-//! a definition declares (entity-composition-model.md §4). Its field names
+//! One facet, `args`, has fields known only at run time: the `in` ports a
+//! definition declares (component-model.md §4). Its field names
 //! are interned (`sym.rs`) so a `LeafPath` into it is as `Copy` as any other.
 
 use crate::sym::intern;
@@ -341,18 +341,10 @@ facets! {
     /// Which definition an `entity` instantiates (ECM §4.3).
     Instance / "instance" => Instance { def: Ref = Value::Ref(crate::id::NodeId::from_raw(0)) }
 
-    /// One parameter a definition declares (ECM §4.2): the kind its values
-    /// must have (a quantity's dimension comes from the default) and the
-    /// default an instance starts with.
-    ParamSpec / "param_spec" => ParamSpec {
-        kind: Enum = Value::Enum("number".to_owned()),
-        default: Any = Value::Number(0.0),
-    }
-
     /// A definition's template for one notation (ECM §4.2). Its children are
     /// the subtree an instance copies; their bindings may read the
-    /// definition's `param_spec.default` leaves, which instantiation rewrites
-    /// to the entity's `params`.
+    /// definition's `port_spec`s (`#spec.port.signal`), which instantiation
+    /// rewrites to the instance's ports.
     Template / "template" => Template { notation: Str = Value::Str("free".to_owned()) }
 
     /// A composition shown inside another (ECM §7.4): a live reference, not a
@@ -419,32 +411,34 @@ facets! {
     }
 
     @dynamic {
-        /// An entity's parameter values, one slot per `param_spec` of its
-        /// definition, each bindable. Fields are validated against the
+        /// An instance's arguments: one slot per `in` port its definition
+        /// declares (component-model.md §4), each a constant or a binding in
+        /// the parent scope. The instance's `in` port reads its argument
+        /// unless a connection feeds it. Fields are validated against the
         /// definition at apply time, not here.
-        Params / "params" => Params
+        Args / "args" => Args
     }
 }
 
-/// The run-time facet: a map from interned parameter name to slot.
+/// The run-time facet: a map from interned argument name to slot.
 #[derive(Clone, Debug, PartialEq, Default)]
-pub struct Params {
+pub struct Args {
     pub slots: BTreeMap<&'static str, Slot>,
 }
 
-impl Params {
+impl Args {
     pub fn field_names(&self) -> Vec<&'static str> {
         self.slots.keys().copied().collect()
     }
 
-    /// Add or replace a parameter.
+    /// Add or replace an argument.
     pub fn insert(&mut self, name: &str, slot: Slot) {
         self.slots.insert(intern(name), slot);
     }
 }
 
-impl LeafStruct for Params {
-    const KIND: FacetKind = FacetKind::Params;
+impl LeafStruct for Args {
+    const KIND: FacetKind = FacetKind::Args;
     const FIELDS: &'static [(&'static str, ValueKind)] = &[];
     fn get(&self, field: &str) -> Option<&Slot> {
         self.slots.get(field)
@@ -453,11 +447,11 @@ impl LeafStruct for Params {
         self.slots.get_mut(field)
     }
     fn wrap(self) -> Facet {
-        Facet::Params(self)
+        Facet::Args(self)
     }
     fn unwrap_ref(c: &Facet) -> Option<&Self> {
         match c {
-            Facet::Params(v) => Some(v),
+            Facet::Args(v) => Some(v),
             _ => None,
         }
     }
@@ -483,7 +477,7 @@ impl fmt::Display for LeafError {
             LeafError::UnknownFacet(c) => write!(f, "unknown component {c:?}"),
             LeafError::UnknownField { facet, field } => {
                 if facet.is_dynamic() {
-                    return write!(f, "{} has no parameter {:?} (parameters come from the definition)", facet.name(), field);
+                    return write!(f, "{} has no argument {:?} (arguments come from the definition's in ports)", facet.name(), field);
                 }
                 let available: Vec<&str> = facet.fields().iter().map(|(n, _)| *n).collect();
                 write!(
@@ -512,14 +506,14 @@ impl fmt::Display for LeafError {
 impl std::error::Error for LeafError {}
 
 impl Facet {
-    /// The compile-time fields; empty for `params`. Prefer
+    /// The compile-time fields; empty for `args`. Prefer
     /// [`Facet::field_names`] to enumerate an instance's leaves.
     pub fn fields(&self) -> &'static [(&'static str, ValueKind)] {
         self.kind().fields()
     }
 
     /// The declared kind of a field this instance has: the table's for a
-    /// static facet, `Any` for a parameter (the definition decides).
+    /// static facet, `Any` for an argument (the definition decides).
     pub fn field_kind(&self, field: &str) -> Option<ValueKind> {
         if self.kind().is_dynamic() {
             return self.get(field).map(|_| ValueKind::Any);
@@ -528,8 +522,8 @@ impl Facet {
     }
 
     /// Replace one field's slot, checking the value kind. Returns the previous
-    /// slot, which is what an inverse op needs. A parameter must already
-    /// exist: parameters are created with the facet (so an inverse is
+    /// slot, which is what an inverse op needs. An argument must already
+    /// exist: arguments are created with the facet (so an inverse is
     /// always a `Set` back), and validated against the definition by the
     /// applier.
     pub fn set(&mut self, field: &str, slot: Slot) -> Result<Slot, LeafError> {
@@ -566,7 +560,7 @@ impl Facet {
     }
 
     /// Inverse of [`Facet::to_json`]. Missing fields take defaults;
-    /// unknown fields are an error rather than silently dropped. A `params`
+    /// unknown fields are an error rather than silently dropped. An `args`
     /// object defines its fields.
     pub fn from_json(kind: FacetKind, v: &serde_json::Value) -> Result<Facet, String> {
         let obj = v
@@ -578,7 +572,7 @@ impl Facet {
             let slot: Slot = serde_json::from_value(raw.clone())
                 .map_err(|e| format!("{}.{field}: {e}", kind.name()))?;
             match &mut c {
-                Facet::Params(p) => p.insert(field, slot),
+                Facet::Args(p) => p.insert(field, slot),
                 _ => {
                     c.set(field, slot).map_err(|e| e.to_string())?;
                 }
@@ -634,7 +628,7 @@ pub struct LeafPath {
 }
 
 impl LeafPath {
-    /// A path into a declared field, or into any parameter of a dynamic
+    /// A path into a declared field, or into any argument of a dynamic
     /// facet (whether a node has that parameter is checked at use).
     pub fn new(facet: FacetKind, field: &str) -> Result<LeafPath, LeafError> {
         if facet.is_dynamic() {
@@ -751,32 +745,32 @@ mod tests {
         assert!("transform2d.q".parse::<LeafPath>().is_err());
         assert!("nope.x".parse::<LeafPath>().is_err());
         assert!("x".parse::<LeafPath>().is_err());
-        // Parameters are run-time fields: any name is a path, kind Any.
-        let p: LeafPath = "params.waist".parse().unwrap();
-        assert_eq!((p.facet, p.field, p.kind()), (FacetKind::Params, "waist", ValueKind::Any));
-        assert_eq!(p, LeafPath::new(FacetKind::Params, &String::from("waist")).unwrap());
-        assert!("params.".parse::<LeafPath>().is_err());
+        // Arguments are run-time fields: any name is a path, kind Any.
+        let p: LeafPath = "args.waist".parse().unwrap();
+        assert_eq!((p.facet, p.field, p.kind()), (FacetKind::Args, "waist", ValueKind::Any));
+        assert_eq!(p, LeafPath::new(FacetKind::Args, &String::from("waist")).unwrap());
+        assert!("args.".parse::<LeafPath>().is_err());
     }
 
     #[test]
-    fn params_are_a_dynamic_facet() {
-        let mut p = Params::default();
+    fn args_are_a_dynamic_facet() {
+        let mut p = Args::default();
         p.insert("level", Slot::Const(Value::Number(0.4)));
         p.insert("power", Slot::Const(Value::parse_quantity("9.58 mW").unwrap()));
         let mut c = p.wrap();
         assert_eq!(c.field_names(), vec!["level", "power"]);
         assert_eq!(c.field_kind("level"), Some(ValueKind::Any));
         assert_eq!(c.field_kind("nope"), None);
-        // Set replaces an existing parameter, any kind, and returns the old slot.
+        // Set replaces an existing argument, any kind, and returns the old slot.
         let old = c.set("level", Slot::Const(Value::Number(0.9))).unwrap();
         assert_eq!(old, Slot::Const(Value::Number(0.4)));
-        // Set on a parameter the facet lacks is an error, not a create.
+        // Set on an argument the facet lacks is an error, not a create.
         assert!(matches!(c.set("nope", Slot::Const(Value::Number(1.0))), Err(LeafError::UnknownField { .. })));
         let j = serde_json::to_string(&c).unwrap();
-        assert_eq!(j, r#"{"params":{"level":0.9,"power":{"q":[0.00958,"W"]}}}"#);
+        assert_eq!(j, r#"{"args":{"level":0.9,"power":{"q":[0.00958,"W"]}}}"#);
         let back: Facet = serde_json::from_str(&j).unwrap();
         assert_eq!(back, c);
-        assert_eq!(FacetKind::Params.fields(), &[]);
-        assert!(FacetKind::Params.is_dynamic() && !FacetKind::Size.is_dynamic());
+        assert_eq!(FacetKind::Args.fields(), &[]);
+        assert!(FacetKind::Args.is_dynamic() && !FacetKind::Size.is_dynamic());
     }
 }

@@ -1053,9 +1053,9 @@ mod tests {
             "-3 N",
             "3 kg/s3 / 2 s",
             "max(1 W, 2 W) > 0.5 W ? 1 : 0",
-            "#3.params.beam.waist * 2",
-            "-#3.params.beam.waist",
-            "#3.params.beam.m2 + 1",
+            "#3.args.beam.waist * 2",
+            "-#3.args.beam.waist",
+            "#3.args.beam.m2 + 1",
         ];
         for text in cases {
             let e = Expr::parse(text).unwrap_or_else(|err| panic!("{text}: {err}"));
@@ -1157,16 +1157,16 @@ mod tests {
     #[test]
     fn get_reads_record_fields() {
         let beam = Value::record("gaussian_beam", [("waist", Value::parse_quantity("30 um").unwrap()), ("m2", Value::Number(1.1))]);
-        let read = |l: Leaf| -> Option<Value> { (l == leaf(3, "params.beam")).then(|| beam.clone()) };
+        let read = |l: Leaf| -> Option<Value> { (l == leaf(3, "args.beam")).then(|| beam.clone()) };
         let ev = |t: &str| Expr::parse(t).unwrap().eval(&read);
-        assert_eq!(ev("#3.params.beam.waist * 2").unwrap(), Value::parse_quantity("60 um").unwrap());
-        assert_eq!(ev("#3.params.beam.m2").unwrap(), Value::Number(1.1));
-        let err = ev("#3.params.beam.power").unwrap_err().to_string();
+        assert_eq!(ev("#3.args.beam.waist * 2").unwrap(), Value::parse_quantity("60 um").unwrap());
+        assert_eq!(ev("#3.args.beam.m2").unwrap(), Value::Number(1.1));
+        let err = ev("#3.args.beam.power").unwrap_err().to_string();
         assert!(err.contains("no field") && err.contains("waist"), "{err}");
-        assert!(ev("#3.params.beam.waist.x").unwrap_err().to_string().contains("cannot read field"));
+        assert!(ev("#3.args.beam.waist.x").unwrap_err().to_string().contains("cannot read field"));
         // Dependencies are the record leaf, not the field.
-        let d = Expr::parse("#3.params.beam.waist").unwrap().deps();
-        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![leaf(3, "params.beam")]);
-        assert_eq!(Expr::parse("#3.params.beam.waist").unwrap(), Expr::Get(Box::new(Expr::Ref(leaf(3, "params.beam"))), "waist"));
+        let d = Expr::parse("#3.args.beam.waist").unwrap().deps();
+        assert_eq!(d.into_iter().collect::<Vec<_>>(), vec![leaf(3, "args.beam")]);
+        assert_eq!(Expr::parse("#3.args.beam.waist").unwrap(), Expr::Get(Box::new(Expr::Ref(leaf(3, "args.beam"))), "waist"));
     }
 }

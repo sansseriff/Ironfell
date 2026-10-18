@@ -202,8 +202,8 @@ eval (async () => { const v = await __iron.view({fidelity:'full', relation:'mode
 # The model surface links the same way; when both pictures already have
 # entities it is asked which survives, and answers with keep.
 eval (async () => { const r = await __iron.edit('<edit><link-figures a="#l" b="#Q"/></edit>'); return r.ok; })()
-eval (async () => { const r = await __iron.edit('<edit><link-figures a="#11" b="#Q"/></edit>'); return r.failure; })()
-eval (async () => { const r = await __iron.edit('<edit><link-figures a="#11" b="#Q" keep="#10"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#12" b="#Q"/></edit>'); return r.failure; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#12" b="#Q" keep="#10"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
 key Meta+z
 # Long enough for the undo to land before the load replaces the history
 # (a slow frame here once left "nothing to Undo" after the load).
@@ -424,7 +424,7 @@ key Meta+z
 sleep 500
 eval shapeView('ellipse')
 tab Main
-eval __iron.toPath('#11')
+eval __iron.toPath('#12')
 dclick 800 600
 sleep 400
 key Enter
@@ -497,7 +497,7 @@ eval (async () => [...await lasers(), await figured()])()
 # an edit to another node mid-drag leaves the drag running to its own commit.
 # Three undos put the body back.
 tab Optics
-eval window.body = async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect id="#1d"[^>]*>/)[0].match(/ x="[^"]*" y="[^"]*"/)[0]; }
+eval window.body = async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect id="#1f"[^>]*>/)[0].match(/ x="[^"]*" y="[^"]*"/)[0]; }
 dmove 120 170
 down
 sleep 300
@@ -505,7 +505,7 @@ dmove 140 180
 sleep 300
 dmove 180 200
 sleep 300
-eval __iron.edit('<edit><set id="#1d" x="80"/></edit>').then(r => r.ok)
+eval __iron.edit('<edit><set id="#1f" x="80"/></edit>').then(r => r.ok)
 sleep 300
 dmove 220 220
 sleep 300
@@ -519,7 +519,7 @@ dmove 140 180
 sleep 300
 dmove 180 200
 sleep 300
-eval __iron.edit('<edit><set id="#1q" radius.rx="60"/></edit>').then(r => r.ok)
+eval __iron.edit('<edit><set id="#1u" radius.rx="60"/></edit>').then(r => r.ok)
 sleep 300
 dmove 220 220
 sleep 300

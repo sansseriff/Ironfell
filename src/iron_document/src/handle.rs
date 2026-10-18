@@ -53,9 +53,10 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
             p => format!("{leaf} is published by producer {} at runtime; freeze it to edit", p.0),
         });
     }
-    // A connection's in-port has no binding of its own but resolves through
-    // its partner (`port::derived_signals`), so it inverts like one.
-    let Some(expr) = slot.expr().or_else(|| reactive.expr_of(leaf)) else {
+    // The graph's binding is the one in effect: a connected in-port resolves
+    // through its partner (`port::derived_signals`) in place of its stored
+    // binding to its argument, so it inverts through the connection.
+    let Some(expr) = reactive.expr_of(leaf).or_else(|| slot.expr()) else {
         return Handle::Direct;
     };
     let inlined = inline(doc, reactive, expr);
@@ -99,7 +100,7 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
 fn inline(doc: &Document, reactive: &Reactive, expr: &Expr) -> Expr {
     let i = |e: &Expr| Box::new(inline(doc, reactive, e));
     match expr {
-        Expr::Ref(l) => match doc.leaf(l.node, l.path).and_then(|s| s.expr()).or_else(|| reactive.expr_of(*l)) {
+        Expr::Ref(l) => match reactive.expr_of(*l).or_else(|| doc.leaf(l.node, l.path).and_then(|s| s.expr())) {
             Some(inner) => inline(doc, reactive, inner),
             None => expr.clone(),
         },

@@ -18,9 +18,12 @@ use std::fmt;
 /// (roadmap stage B), and to 3 when `depiction` became `template` and
 /// `depicts` became `figures`, and to 4 when `circle` (one radius `r`)
 /// became `ellipse` (`rx`, `ry`), and to 5 when a path's points moved under
-/// `contour` children, so a path can have holes. Older files still load
-/// (`renamed`, `migrate_radius`, `migrate_contours`).
-pub const SCHEMA: u64 = 5;
+/// `contour` children, so a path can have holes, and to 6 when a
+/// definition's parameters became `in` ports and an entity's `params` its
+/// `args` (component-model.md §4), and the facet table's key became
+/// `facets`. Older files still load (`renamed`, `migrate_radius`,
+/// `migrate_contours`, `migrate_inputs`).
+pub const SCHEMA: u64 = 6;
 const OLDEST_READABLE: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,7 +69,7 @@ pub fn save(doc: &Document) -> String {
     }
     out.push_str("\n },\n");
 
-    out.push_str(" \"components\": {");
+    out.push_str(" \"facets\": {");
     let mut first_kind = true;
     for (kind, table) in doc.raw_facets() {
         if table.keys().all(|id| id.is_session()) {
@@ -204,7 +207,8 @@ fn migrate_contours(root: &mut J) -> Result<(), LoadError> {
     for (id, node) in created {
         nodes.insert(id, node);
     }
-    let comps = root.get_mut("components").and_then(J::as_object_mut).ok_or_else(|| bad("missing components"))?;
+    let key = if root.get("components").is_some() { "components" } else { "facets" };
+    let comps = root.get_mut(key).and_then(J::as_object_mut).ok_or_else(|| bad("missing components"))?;
     let mut contours = Map::new();
     if let Some(J::Object(table)) = comps.get_mut("path") {
         for (path, contour) in &closed {
@@ -225,10 +229,86 @@ fn migrate_contours(root: &mut J) -> Result<(), LoadError> {
     Ok(())
 }
 
+/// Before schema 6 a definition declared `param_spec` children (`kind`,
+/// `default`) and an entity held `params`. A `param_spec` becomes an `in`
+/// `port_spec` of kind `value` whose `port.signal` is the default, `params`
+/// becomes `args`, and every reference follows: `#s.param_spec.default` →
+/// `#s.port.signal`, `#e.params.x` → `#e.args.x`. Entities made before then
+/// have no `in` port nodes; their arguments still drive their figures. The
+/// facet table's key `components` becomes `facets`.
+fn migrate_inputs(root: &mut J) -> Result<(), LoadError> {
+    let bad = |m: &str| LoadError(format!("migrating to inputs: {m}"));
+    let mut facets = match root.as_object_mut().and_then(|o| o.remove("components").or_else(|| o.remove("facets"))) {
+        Some(J::Object(m)) => m,
+        _ => return Err(bad("missing components")),
+    };
+    if let Some(J::Object(specs)) = facets.remove("param_spec") {
+        let ports = facets.entry("port").or_insert_with(|| J::Object(Map::new()));
+        let ports = ports.as_object_mut().ok_or_else(|| bad("port must be an object"))?;
+        for (id, spec) in specs {
+            let default = spec.get("default").cloned().unwrap_or(json!(0.0));
+            ports.insert(id, json!({"kind": "value", "dir": {"enum": "in"}, "signal": default}));
+        }
+    }
+    if let Some(args) = facets.remove("params") {
+        facets.insert("args".into(), args);
+    }
+    let facets = rename_refs(&J::Object(facets));
+    root["facets"] = facets;
+    if let Some(J::Object(nodes)) = root.get_mut("nodes") {
+        for n in nodes.values_mut() {
+            if n.get("ty").and_then(J::as_str) == Some("param_spec") {
+                n["ty"] = json!("port_spec");
+            }
+        }
+    }
+    if let Some(rels) = root.get("relations").cloned() {
+        root["relations"] = rename_refs(&rels);
+    }
+    Ok(())
+}
+
+/// Every string's references to a parameter, rewritten for schema 6.
+fn rename_refs(v: &J) -> J {
+    match v {
+        J::String(s) => J::String(rename_param_refs(s)),
+        J::Object(o) => J::Object(o.iter().map(|(k, x)| (k.clone(), rename_refs(x))).collect()),
+        J::Array(a) => J::Array(a.iter().map(rename_refs).collect()),
+        other => other.clone(),
+    }
+}
+
+/// `param_spec.default` → `port.signal` and `params.` → `args.`, each where
+/// it starts a leaf path (after a `.`, or at the start of a bare path).
+fn rename_param_refs(s: &str) -> String {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        let rest = &s[i..];
+        let starts = i == 0 || s[..i].ends_with('.') || !s[..i].ends_with(ident);
+        if starts && rest.starts_with("param_spec.default") && !rest["param_spec.default".len()..].starts_with(ident) {
+            out.push_str("port.signal");
+            i += "param_spec.default".len();
+        } else if starts && rest.starts_with("params.") && rest["params.".len()..].starts_with(ident) {
+            out.push_str("args.");
+            i += "params.".len();
+        } else {
+            let c = rest.chars().next().expect("in bounds");
+            out.push(c);
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
 pub fn load(text: &str) -> Result<Document, LoadError> {
     let mut root: J = serde_json::from_str(text).map_err(|e| LoadError(e.to_string()))?;
     if root.get("schema").and_then(J::as_u64).is_some_and(|s| s < 5) {
         migrate_contours(&mut root)?;
+    }
+    if root.get("schema").and_then(J::as_u64).is_some_and(|s| s < 6) {
+        migrate_inputs(&mut root)?;
     }
     let obj = root
         .as_object()
@@ -352,15 +432,15 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
     }
 
     let mut facets: BTreeMap<FacetKind, BTreeMap<NodeId, Facet>> = BTreeMap::new();
-    let raw_comps = field("components")?
+    let raw_comps = field("facets")?
         .as_object()
-        .ok_or_else(|| LoadError("components must be an object".into()))?;
+        .ok_or_else(|| LoadError("facets must be an object".into()))?;
     for (kname, table) in raw_comps {
         let kind = FacetKind::from_name(renamed(schema, kname))
             .ok_or_else(|| LoadError(format!("unknown component {kname:?}")))?;
         let table = table
             .as_object()
-            .ok_or_else(|| LoadError(format!("components.{kname} must be an object")))?;
+            .ok_or_else(|| LoadError(format!("facets.{kname} must be an object")))?;
         for (k, v) in table {
             let id: NodeId = k
                 .parse()

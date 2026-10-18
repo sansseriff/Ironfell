@@ -41,7 +41,7 @@
   // the first selected node's fields, each edited through its handle, so a
   // linearly bound value edits its source and a locked one says why.
   type Field = Property;
-  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[] };
+  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; inputs: Field[] } | null };
   let inspected: Inspected | null = $state(null);
   let setError = $state("");
   let generation = 0;
@@ -81,7 +81,7 @@
     return { ...corners[0], edit: locked ? "locked" : corners[0].edit, why: locked?.why ?? null, bind: corners.find(f => f.bind)?.bind ?? null };
   });
   const mixedCorners = $derived(["tr", "br", "bl"].some(k => field("corners", k).text !== field("corners", "tl").text));
-  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "shadow", "text", "font"].includes(c.kind)));
+  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "shadow", "text", "font", "args"].includes(c.kind)));
   // A text node's box is its words' unless it is fixed (or wraps): only
   // then are W and H its own (plans/specs/text.md §2).
   const textSizing = $derived(fields("text").length ? (field("text", "sizing", "auto_width", "enum").text ?? "auto_width") : null);
@@ -89,9 +89,9 @@
   // supported effect; future renderable effect components get entries here.
   const effectTypes = [{ kind: "shadow", label: "Drop shadow" }];
   const effects = $derived(effectTypes.filter(e => fields(e.kind).length));
-  async function patch(values: Record<string, string>, remove: string[] = [], label = "edit appearance") {
+  async function patch(values: Record<string, string>, remove: string[] = [], label = "edit appearance", target?: string) {
     if (!inspected) return;
-    const node = inspected.node;
+    const node = target ?? inspected.node;
     setError = "";
     try {
       const r = await doc.call("inspect_patch", [node, JSON.stringify({ values, remove, label })]);
@@ -100,6 +100,8 @@
     } catch (e) { setError = String(e); }
   }
   function set(f: Field, text: string) { return patch({ [f.leaf]: text }, [], `set ${f.leaf}`); }
+  // A component input edits the instance's argument (component-model.md §4).
+  function setInput(f: Field, text: string) { return inspected?.component ? patch({ [f.leaf]: text }, [], `set ${f.field}`, inspected.component.entity) : undefined; }
   function setCorners(_f: Field, text: string) { return patch(Object.fromEntries(cornerLeaves.map(k => [k, text])), [], "round corners"); }
   function paintMode(mode: string) { return mode === "solid" ? patch({}, ["gradient"], "solid fill") : patch({ "gradient.kind": mode }, [], `${mode} fill`); }
   // Optional components (fill, stroke, corners, arc, shadow): one
@@ -131,7 +133,7 @@
       {#each [doc.question.a, doc.question.b] as e (e.entity)}
         <div class="candidate">
           <strong>{e.name ?? e.entity}</strong> <span class="mono">{e.entity}</span> · {e.def ?? "no definition"}
-          <div class="mono">params: {e.params.length ? e.params.map((p: [string, string]) => `${p[0]}=${p[1]}`).join(", ") : "none"}</div>
+          <div class="mono">args: {e.args.length ? e.args.map((p: [string, string]) => `${p[0]}=${p[1]}`).join(", ") : "none"}</div>
           <div class="mono">figures: {e.figures.join(" ")}{e.ports.length ? ` · ports: ${e.ports.join(", ")}` : ""}</div>
           <button onclick={() => link(e.entity)}>Keep {e.name ?? e.entity}</button>
         </div>
@@ -146,6 +148,12 @@
       <div class="title"><strong>{inspected.name ?? inspected.type}</strong> <span class="mono">{inspected.type} {inspected.node}</span></div>
       {#if setError}<p class="error">{setError}</p>{/if}
       {#if doc.selection.length > 1}<p class="selection-note">{doc.selection.length} selected · editing the first item</p>{/if}
+      {#if inspected.component?.inputs.length}
+        <div class="property-section" data-section="component">
+          <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}</span></div>
+          <div class="field-grid">{#each inspected.component.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+        </div>
+      {/if}
       {#if fields("transform2d").length}
         <div class="property-section" data-section="position">
           <div class="component"><span>Position</span></div>

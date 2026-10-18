@@ -457,7 +457,7 @@ fn check_binding(
             ));
         };
         if comp.get(dep.path.field).is_none() {
-            return Err(cx.err(ErrorKind::UnknownPath, format!("binding reads {dep}, but {} has no such parameter", dep.node)));
+            return Err(cx.err(ErrorKind::UnknownPath, format!("binding reads {dep}, but {} has no such argument", dep.node)));
         }
     }
     if doc.binding_cycles(target, expr) {
@@ -501,7 +501,7 @@ fn set(
     let old = comp
         .set(path.field, slot.clone())
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
-    if matches!(path.facet, FacetKind::Params | FacetKind::Instance | FacetKind::Embed | FacetKind::EmbedCamera) {
+    if matches!(path.facet, FacetKind::Args | FacetKind::Instance | FacetKind::Embed | FacetKind::EmbedCamera) {
         check_entity(doc, cx, id)?;
     }
     Ok(vec![Op::Set {

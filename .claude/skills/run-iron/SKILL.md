@@ -156,13 +156,13 @@ composition's nodes). Expected output, minus screenshot lines,
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
 redraw (document): 2 of 39 nodes changed [#M #U]; damage 560,340–800,460
-"<rect id=\"#11\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #10.params.level * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#10.params.level * 300\" color=\"#3380e6ff\" opacity=\"1\">"
-"<rect id=\"#11\" name=\"bar\" x=\"730\" y=\"400\""
+"<rect id=\"#12\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #11.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#11.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
+"<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.14…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#33"}}
+{"ok":true,"version":9,"aliases":{"$n":"#3A"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#33\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#3A\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -182,19 +182,19 @@ true
 ["#l","#Q"]
 clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#35\" name=\"box\" def=\"#34\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#35\">"
+"<entity id=\"#3C\" name=\"box\" def=\"#3B\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3C\">"
 clicked Show in assembly
 clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#11\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#11\"/>\n    <entity id=\"#37\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#37\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
-[true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <figure id=\"#11\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":45629}
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3E\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3E\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+[true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
+{"roundtrip_equal":true,"bytes":47189}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (233 ops, System) -> v1
+applied "open demo scene" (240 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -229,7 +229,7 @@ applied "link" (4 ops, Model) -> v23
 "link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (191 live nodes)
+loaded document v25 (198 live nodes)
 (no page errors)
 undefined
 ["#M"]
@@ -239,10 +239,10 @@ undefined
 {"x":500,"y":420,"w":80,"h":80,"deg":0}
 ["#V"]
 ["#V"]
-["#14"]
+["#15"]
 []
 []
-["#o","#14","#15"]
+["#o","#15","#16"]
 {"x":501,"y":430,"w":80,"h":80,"deg":0}
 true
 true
@@ -251,10 +251,10 @@ tab Controls
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
-["#33"]
-"<point id=\"#37\" x=\"130\" y=\"220\""
+["#3A"]
+"<point id=\"#3E\" x=\"130\" y=\"220\""
 "pen-add"
-[4,"<point id=\"#38\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
+[4,"<point id=\"#3F\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
 3
 "bend"
 " ox=\"0.0\" oy=\"-57.0\""
@@ -282,22 +282,22 @@ tab Controls
 undefined
 clicked .toolbar button[aria-label="Rectangle"]
 "Rectangle (R)"
-["<rect id=\"#39\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
-"<ellipse id=\"#3A\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
-"<ellipse id=\"#3A\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+["<rect id=\"#3G\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
+"<ellipse id=\"#3H\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
+"<ellipse id=\"#3H\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 4
-"<ellipse id=\"#3A\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+"<ellipse id=\"#3H\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 tab Main
-{"cuts":["its h is bound to #10.params.level * 300; the path keeps the current value"],"ok":false}
-["its h is bound to #10.params.level * 300; the path keeps the current value"]
+{"cuts":["its h is bound to #11.port.signal * 300; the path keeps the current value"],"ok":false}
+["its h is bound to #11.port.signal * 300; the path keeps the current value"]
 clicked Cancel
 null
 tab Controls
-"<rect id=\"#39\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"28.20…\" tr=\"28.20…\" br=\"28.20…\" bl=\"28.20…\""
+"<rect id=\"#3G\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"28.20…\" tr=\"28.20…\" br=\"28.20…\" bl=\"28.20…\""
 clicked Add effect
 clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
-"<ellipse id=\"#3A\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
+"<ellipse id=\"#3H\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
 tab Optics
 undefined
 undefined
@@ -334,17 +334,17 @@ undefined
 4
 {"cuts":["filters are not imported"],"nodes":7,"ok":true}
 [8,4]
-["<rect id=\"#3T\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#3U\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#3V\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#3Z\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
-["<point id=\"#3X\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#3Y\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
+["<rect id=\"#3d\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#3e\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#3f\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#3j\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
+["<point id=\"#3h\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#3i\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
 [true,4]
 4
 undefined
 8
 4
-{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#3h #3i #3j #3n\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
+{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#3r #3s #3t #3x\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
 8
 4
-applied "open demo scene" (233 ops, System) -> v1
+applied "open demo scene" (240 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -380,23 +380,23 @@ applied "undo: convert ellipse to path" (7 ops, System) -> v33
 applied "round corners" (1 ops, Human) -> v34
 applied "add shadow" (1 ops, Human) -> v35
 applied "edit arc" (1 ops, Human) -> v36
-applied "duplicate 2 nodes" (6 ops, Human) -> v37
-applied "paste 2 nodes" (6 ops, Human) -> v38
+applied "duplicate 2 nodes" (7 ops, Human) -> v37
+applied "paste 2 nodes" (7 ops, Human) -> v38
 applied "cut 2 nodes" (2 ops, Human) -> v39
 applied "paste 2 nodes" (4 ops, Human) -> v40
 applied "undo: paste 2 nodes" (4 ops, System) -> v41
 applied "undo: cut 2 nodes" (2 ops, System) -> v42
-applied "undo: paste 2 nodes" (6 ops, System) -> v43
-applied "undo: duplicate 2 nodes" (6 ops, System) -> v44
+applied "undo: paste 2 nodes" (7 ops, System) -> v43
+applied "undo: duplicate 2 nodes" (7 ops, System) -> v44
 applied "model edit" (1 ops, Model) -> v45
 applied "model edit" (1 ops, Model) -> v46
 applied "move rect" (2 ops, Human) -> v47
 applied "undo: move rect" (2 ops, System) -> v48
 applied "undo: model edit" (1 ops, System) -> v49
 applied "undo: model edit" (1 ops, System) -> v50
-applied "duplicate rect" (4 ops, Human) -> v51
+applied "duplicate rect" (5 ops, Human) -> v51
 applied "duplicate rect" (2 ops, Human) -> v52
-applied "undo: duplicate rect" (6 ops, System) -> v53
+applied "undo: duplicate rect" (7 ops, System) -> v53
 applied "move mesh" (1 ops, Human) -> v54
 applied "undo: move mesh" (1 ops, System) -> v55
 applied "import SVG" (7 ops, Human) -> v56
@@ -524,9 +524,10 @@ covers (500,420)–(580,500); the orange ellipse (a circle, rx = ry) is centred 
 track runs (100,600)–(400,624) and scrubbing along it previews the value
 through the store; the bar at x=780 has its height and top bound to the
 slider through a definition: the library (a root) holds a `bar` definition
-with one parameter, `level`, and a template rect; the `model` root holds an
-entity instantiated from it (its `level` bound to the slider) and the scene
-holds the rect that figures it, whose y and h read the entity's params. The
+with one input (an `in` port), `level`, and a template rect; the `model` root
+holds an entity instantiated from it (its `args.level` bound to the slider, its
+`level` port reading that argument) and the scene holds the rect that figures
+it, whose y and h read the entity's port. The
 template itself is never drawn. `scene` (#1) is a 2D composition; the torus
 lives in a 3D composition, `assembly`, seen through `main`'s embed, near
 document (875,200), beside the `card` composition (a 2D card with a dot and
@@ -677,7 +678,7 @@ cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < piston.txt; cd
 ```
 
 Expected: `gas()` names `clips holds 0`, `network holds 8` (the thermal demo's
-ports) and `gas running holds 1`, one `gas -> #….param_spec.default = 1.x`
+ports) and `gas running holds 1`, one `gas -> #….port.signal = 1.x`
 signal among the network's, no errors; `bars()` reads pressure ≈ 55–75 and `pv`
 ≈ 90–115 at stroke 0.2; after the slider drag (to ≈ 0.83 here; the drag is
 driver-paced) pressure is ≈ 130–180 and `pv` still ≈ 80–115; the piston mesh prints

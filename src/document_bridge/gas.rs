@@ -40,7 +40,7 @@ struct Targets {
     composition: NodeId,
     chamber: NodeId,
     piston: NodeId,
-    /// The `param_spec` whose default the pressure is published onto.
+    /// The `in` port_spec whose default the pressure is published onto.
     gauge: NodeId,
 }
 
@@ -104,12 +104,12 @@ fn name_of(store: &Store, id: NodeId) -> Option<String> {
 }
 
 /// The piston demo's nodes: a 3D composition named `cylinder` holding
-/// meshes `chamber` and `piston`, and a `param_spec` named `pressure`.
+/// meshes `chamber` and `piston`, and a `port_spec` named `pressure`.
 fn find(store: &Store) -> Option<Targets> {
     let doc = store.document();
     let composition = doc.nodes_of_type(TypeId::lookup("composition")?).find(|&c| name_of(store, c).as_deref() == Some("cylinder") && composition::dims(doc, c) == Some(Dims::Three))?;
     let child = |name: &str| doc.children(composition).iter().copied().find(|&k| name_of(store, k).as_deref() == Some(name));
-    let gauge = doc.nodes_of_type(TypeId::lookup("param_spec")?).find(|&p| name_of(store, p).as_deref() == Some("pressure"))?;
+    let gauge = doc.nodes_of_type(TypeId::lookup("port_spec")?).find(|&p| name_of(store, p).as_deref() == Some("pressure"))?;
     Some(Targets { composition, chamber: child("chamber")?, piston: child("piston")?, gauge })
 }
 
@@ -245,7 +245,7 @@ pub(super) fn step_and_publish(
         sim.pressure += (raw / reference - sim.pressure) * k;
     }
     let producer = store.0.producer(PRODUCER).unwrap_or_else(|| store.0.register_producer(PRODUCER));
-    let leaf = Leaf { node: targets.gauge, path: "param_spec.default".parse().expect("declared leaf") };
+    let leaf = Leaf { node: targets.gauge, path: "port.signal".parse().expect("declared leaf") };
     // Publish at gauge precision, so a settled gas does not re-evaluate its
     // readers every frame.
     let value = (sim.pressure as f64 * 1000.0).round() / 1000.0;

@@ -104,8 +104,8 @@ pub struct EntitySummary {
     pub name: Option<String>,
     /// The definition's name, or its id when it has none.
     pub def: Option<String>,
-    /// Parameter name and value, in the file's text form.
-    pub params: Vec<(String, String)>,
+    /// Argument name and value, in the file's text form.
+    pub args: Vec<(String, String)>,
     pub figures: Vec<NodeId>,
     /// Port names. Ports arrive in ECM phase 3; empty until then, but part
     /// of the question so collisions are shown where they will matter.
@@ -153,13 +153,13 @@ fn name_of(doc: &Document, id: NodeId) -> Option<String> {
 }
 
 pub fn summarize(doc: &Document, entity: NodeId) -> EntitySummary {
-    use crate::facet::{Instance, Params};
+    use crate::facet::{Instance, Args};
     let def = doc.get::<Instance>(entity).and_then(|i| i.def.constant()).and_then(|v| match v {
         crate::value::Value::Ref(d) => Some(name_of(doc, *d).unwrap_or_else(|| d.to_string())),
         _ => None,
     });
-    let params = doc
-        .get::<Params>(entity)
+    let args = doc
+        .get::<Args>(entity)
         .map(|p| {
             p.field_names()
                 .into_iter()
@@ -176,7 +176,7 @@ pub fn summarize(doc: &Document, entity: NodeId) -> EntitySummary {
                 .collect()
         })
         .unwrap_or_default();
-    EntitySummary { entity, name: name_of(doc, entity), def, params, figures: figures_of(doc, entity), ports: Vec::new() }
+    EntitySummary { entity, name: name_of(doc, entity), def, args, figures: figures_of(doc, entity), ports: Vec::new() }
 }
 
 /// The ops that make `a` and `b` pictures of one entity, as one
@@ -235,7 +235,7 @@ pub fn link_ops(doc: &Document, a: NodeId, b: NodeId, keep: Option<NodeId>) -> R
 /// A `thing` entity for two pictures, creating whatever structure is
 /// missing. Ids are minted in creation order (ascending, as apply requires).
 fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
-    use crate::facet::{Instance, Name, Params};
+    use crate::facet::{Instance, Name, Args};
     use crate::value::{Slot, Value};
     let ty = |s: &str| TypeId::lookup(s).expect("registered");
     let named = |s: &str| {
@@ -283,7 +283,7 @@ fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
         ty: ty("entity"),
         parent: Some(model),
         order: after(last),
-        facets: vec![instance.wrap(), Params::default().wrap(), named(&name)],
+        facets: vec![instance.wrap(), Args::default().wrap(), named(&name)],
     });
     let rels = doc.next_relation_ids(2);
     for (from, id) in [a, b].into_iter().zip(rels) {

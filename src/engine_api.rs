@@ -657,7 +657,54 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     let optional = |k: iron_document::FacetKind| n.ty.spec().allows(k) && !n.ty.spec().requires(k) && INSPECTOR_OPTIONAL.contains(&k.name());
     let addable: Vec<&str> = iron_document::FacetKind::ALL.iter().copied().filter(|&k| optional(k) && doc.facet(id, k).is_none()).map(|k| k.name()).collect();
     let removable: Vec<&str> = doc.facets_of(id).map(|c| c.kind()).filter(|&k| optional(k)).map(|k| k.name()).collect();
-    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable}).to_string()
+    let component = inspect_component(&store.0, id);
+    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component}).to_string()
+}
+
+/// The component instance a node is (an entity) or pictures (a figure), with
+/// its inputs as inspector fields on the entity's `args`
+/// (component-model.md §4): an unwired input edits its argument; a wired one
+/// is locked and names its connection.
+fn inspect_component(store: &iron_document::Store, id: iron_document::NodeId) -> serde_json::Value {
+    use iron_document::{definition, Handle, LeafPath, FacetKind};
+    let doc = store.document();
+    let is_entity = doc.live(id).is_some_and(|n| n.ty.name() == "entity");
+    let Some(entity) = (if is_entity { Some(id) } else { iron_document::composition::figured_by(doc, id) }) else { return serde_json::Value::Null };
+    let name_of = |n: iron_document::NodeId| doc.get::<iron_document::facet::Name>(n).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    let Some(def) = doc.get::<iron_document::facet::Instance>(entity).and_then(|i| i.def.constant()).and_then(|v| v.as_ref()) else { return serde_json::Value::Null };
+    let Ok(inputs) = definition::inputs_of(doc, def) else { return serde_json::Value::Null };
+    let wired = |input: &str| -> Option<String> {
+        let port = doc.children(entity).iter().copied().find(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "port") && name_of(p).as_deref() == Some(input))?;
+        let leaf = iron_document::Leaf { node: port, path: "port.signal".parse().expect("declared leaf") };
+        let fed = store.reactive().expr_of(leaf).is_some_and(|e| doc.leaf(port, leaf.path).and_then(|s| s.expr()) != Some(e));
+        fed.then(|| store.reactive().expr_of(leaf).map(|e| e.to_string()).unwrap_or_default())
+    };
+    let fields: Vec<serde_json::Value> = inputs
+        .iter()
+        .filter_map(|input| {
+            let path = LeafPath::new(FacetKind::Args, input.name).ok()?;
+            let slot = doc.leaf(entity, path)?;
+            let value = store.resolved(entity, path);
+            let from = wired(input.name);
+            let (edit, via, why) = match (&from, store.handle(entity, path)) {
+                (Some(src), _) => ("locked", None, Some(format!("driven by its connection ({src})"))),
+                (None, Handle::Direct) => ("direct", None, None),
+                (None, Handle::Linear { source, .. }) => ("via", Some(source.to_string()), None),
+                (None, Handle::Locked(reason)) => ("locked", None, Some(reason)),
+            };
+            Some(serde_json::json!({
+                "leaf": format!("args.{}", input.name),
+                "field": input.name,
+                "kind": value.as_ref().map(|v| format!("{:?}", v.kind()).to_lowercase()),
+                "text": value.as_ref().map(|v| v.to_string()),
+                "bind": slot.expr().map(|e| e.to_string()),
+                "edit": edit,
+                "via": via,
+                "why": why,
+            }))
+        })
+        .collect();
+    serde_json::json!({"entity": entity.to_string(), "name": name_of(entity), "def": name_of(def), "inputs": fields})
 }
 
 pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: bool) -> String {

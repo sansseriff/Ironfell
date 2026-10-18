@@ -2,7 +2,7 @@
 //! composition roots in 2D and 3D, the `model` root holding entities, and
 //! figures lifted to the entity they picture.
 
-use iron_document::facet::{Composition, Instance, Mesh, Name, Params, Size, Transform2d, Transform3d};
+use iron_document::facet::{Composition, Instance, Mesh, Name, Args, Size, Transform2d, Transform3d};
 use iron_document::composition::{self, Dims};
 use iron_document::*;
 use std::collections::BTreeMap;
@@ -70,7 +70,7 @@ fn two_compositions() -> Two {
 fn entity_ops(t: &Two, id: NodeId, figures: &[(RelationId, NodeId)]) -> Vec<Op> {
     let mut instance = Instance::default();
     instance.def = Slot::Const(Value::Ref(t.thing));
-    let mut ops = vec![Op::Create { id, ty: ty("entity"), parent: Some(t.model), order: OrderKey::first(), facets: vec![instance.wrap(), Params::default().wrap()] }];
+    let mut ops = vec![Op::Create { id, ty: ty("entity"), parent: Some(t.model), order: OrderKey::first(), facets: vec![instance.wrap(), Args::default().wrap()] }];
     for &(rel, from) in figures {
         ops.push(Op::Link { rel: Relation { id: rel, from, to: id, rel: RelKind::Figures, data: BTreeMap::new() } });
     }

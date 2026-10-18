@@ -89,7 +89,7 @@ EXPRESSIONS (for {= …} bindings)
 
 MODEL AND COMPOSITIONS
   Two views come first. <model-view> lists entities: what things are, each with its
-  definition, its params, and a <figure> for every picture of it with the composition
+  definition, its arguments, and a <figure> for every picture of it with the composition
   it is drawn in. The <document> tree follows: a composition root (notation, dims 2d
   or 3d) is one diagram, shown in its own panel; its children are its layout. A node
   with a figures relation pictures an entity; pictures in different compositions of
@@ -103,20 +103,23 @@ MODEL AND COMPOSITIONS
   composition changes every embed of it. An embed may not loop back to itself.
 
 DEFINITIONS
-  A library root holds definition nodes. A definition's param_spec children declare
-  its parameters (name, kind, default); a template child's subtree is the template
-  for one notation, and may bind to a param_spec's default. An entity instantiates
-  a definition: instance.def names it and params.<name> holds one value per
-  parameter, each bindable (params.level="{= #O.slider.value}"). Its picture is an
-  ordinary node with a figures relation to the entity; its bindings read the
-  entity's params. Setting an unknown or wrongly typed parameter is rejected.
+  A library root holds definition nodes (components). A definition's interface is
+  its port_spec children: an in port (port.dir="in", port.kind="value" or a typed
+  kind) is an input whose port.signal is its default; out ports and across/through
+  pairs as below. A template child's subtree is the picture for one notation, and
+  may bind to a port_spec's port.signal. An entity instantiates a definition:
+  instance.def names it and args.<name> holds one value per in port, each bindable
+  (args.level="{= #O.slider.value}"). Instantiation gives the entity one port per
+  port_spec; an in port reads its argument unless a connection feeds it. Its
+  picture is an ordinary node with a figures relation to the entity; its bindings
+  read the entity's ports. Setting an unknown or wrongly typed argument is rejected.
 
 PORTS AND SIGNALS
   An entity has port children (name; port.kind, port.dir in|out, port.signal), one per
   port_spec of its definition. Kinds: optical_power (W), rf_voltage (V), value carry a
   one-way signal; electrical and heat_flow carry an across/through pair. An out port's
-  signal is the definition's behaviour (a binding over params and in-ports); an in
-  port's signal is whatever its connection's out port carries. To connect, create a
+  signal is the definition's behaviour (a binding over in ports); an in port's
+  signal is its argument, or whatever its connection's out port carries. To connect, create a
   connection under the model root with two links, ends a and b:
   <create id="$c" type="connection" parent="#model"/>
   <link from="$c" to="#laser_out" rel="connects" end="a"/>

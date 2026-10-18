@@ -59,7 +59,7 @@ export interface EntitySummary {
   entity: string;
   name: string | null;
   def: string | null;
-  params: [string, string][];
+  args: [string, string][];
   figures: string[];
   ports: string[];
 }

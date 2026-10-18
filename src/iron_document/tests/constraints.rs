@@ -513,7 +513,7 @@ fn duplicating_the_pendulum_copies_its_mechanism_and_undo_removes_it() {
         let v: serde_json::Value = serde_json::from_str(text).unwrap();
         let nodes = v["nodes"].as_object().unwrap();
         let live: Vec<&String> = nodes.iter().filter(|(_, n)| n.get("tombstoned").is_none()).map(|(k, _)| k).collect();
-        let comps: Vec<String> = v["components"].as_object().unwrap().iter().flat_map(|(kind, t)| t.as_object().unwrap().iter().filter(|(id, _)| live.contains(id)).map(move |(id, c)| format!("{kind} {id} {c}"))).collect();
+        let comps: Vec<String> = v["facets"].as_object().unwrap().iter().flat_map(|(kind, t)| t.as_object().unwrap().iter().filter(|(id, _)| live.contains(id)).map(move |(id, c)| format!("{kind} {id} {c}"))).collect();
         let rels: Vec<String> = v["relations"].as_array().unwrap().iter().map(|r| r.to_string()).collect();
         (live.into_iter().cloned().collect::<Vec<_>>(), comps, rels)
     };

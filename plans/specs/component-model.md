@@ -1,6 +1,6 @@
 # The component model
 
-**Status:** Approved 2026-10-18. Phase 0 done 2026-10-18; phase 1 next.
+**Status:** Approved 2026-10-18. Phases 0 and 1 done 2026-10-18; phase 2 next.
 **Scope:** Reusable components: what a component is, what the document stores for a
 placed one, how its insides are derived, its interface, overrides, scope, libraries,
 the views a model reads, and the render analysis the component boundary makes possible.
@@ -167,8 +167,10 @@ A definition's interface is its `port_spec`s. Each is one of:
   facet becomes `args`: one slot per `in` port, holding the instance's value, either a
   constant or a binding in the parent scope (`<voltmeter range={#knob.value * 2}>` in
   Svelte terms). A connection to an `in` port compiles to that same binding, as one-way
-  connections already do (`port::derived_signals`). An argument that is set and also
-  connected is refused at apply time.
+  connections already do (`port::derived_signals`), and takes the argument's place: the
+  argument stays, inert, and the inspector shows the input as driven by its connection.
+  (Built this way in phase 1: refusing a set argument would need "set" to differ from
+  "default", which a constant slot cannot say.)
 - **Outputs** are bindings in the definition over its inputs and internals, including an
   internal leaf (`out = #self/needle.rotation`).
 - **Terminals** keep ECM §6.1's equations. They have no default and no field.
@@ -524,6 +526,22 @@ when the model surface's manifest changes anyway.
 schema 6 migration; the inspector shows unwired inputs as fields.
 *Exit:* the demos run unchanged; the laser's power is an `in` port edited from its field
 and wireable from a slider; schema 5 files load.
+*Done 2026-10-18.* `param_spec` is gone: an input is a `port_spec` with `dir = in` of a
+one-way kind, its default in `port.signal` (`definition::inputs_of`). The entity's
+`params` facet is `args`. Instantiation still copies every port (phase 2 stops that); a
+copied `in` port's `port.signal` is bound to `#entity.args.<name>`, and a connection's
+derived binding replaces it in the graph. Handle inversion and inlining now read the
+graph's binding before the stored one, so a connected input inverts through its
+connection rather than its argument. Schema 6 (`serial::migrate_inputs`) turns
+`param_spec` into `in` port_specs, `params` into `args`, rewrites `.param_spec.default`
+and `.params.` references, and renames the file's `components` table to `facets`;
+entities from older files have no `in` port nodes and keep working through their
+arguments. The inspector's Component section (`inspect_component`) lists the inputs of
+the instance a selection is or pictures, edits unwired ones and locks wired ones with
+their source. The demo's ids after the bar shift (each instance mints its `in` ports);
+the smoke script's hard-coded ids follow. Still on the old names, for a follow-up
+commit: the op wire format (`add_comp`, `components` in `create`), the error kinds and
+the model surface's schema JSON.
 
 **Phase 2 — The expanded tier and linked instances.** `EXPANDED_BASE`, the path table,
 `use`, expansion in the transaction, behaviour evaluated from the definition, saved

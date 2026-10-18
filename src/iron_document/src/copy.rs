@@ -49,7 +49,7 @@ pub const FRAGMENT_FORMAT: u64 = 1;
 fn copyable(ty: &str) -> bool {
     !matches!(
         ty,
-        "composition" | "model" | "library" | "timeline" | "session" | "selection" | "definition" | "param_spec" | "port_spec" | "template" | "port" | "equation" | "contour" | "point"
+        "composition" | "model" | "library" | "timeline" | "session" | "selection" | "definition" | "port_spec" | "template" | "port" | "equation" | "contour" | "point"
     )
 }
 

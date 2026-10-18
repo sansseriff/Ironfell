@@ -57,7 +57,7 @@ fn a_schema_3_circle_loads_as_an_ellipse_and_its_readers_follow() {
     // It saves as the current schema and loads back unchanged.
     let again = Store::load(&store.save()).expect("reloads");
     assert_eq!(again.save(), store.save());
-    assert!(store.save().starts_with("{\"schema\": 5"));
+    assert!(store.save().starts_with(&format!("{{\"schema\": {}", iron_document::serial::SCHEMA)));
 }
 
 #[test]

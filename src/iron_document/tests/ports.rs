@@ -2,7 +2,7 @@
 //! power meter. Signals ride the reactive graph; an in-port's is derived
 //! from its connection; a reading inverts back to its source.
 
-use iron_document::facet::{Composition, Connection, Name, ParamSpec, Port, Size, Template, Transform2d};
+use iron_document::facet::{Composition, Connection, Name, Port, Size, Template, Transform2d};
 use iron_document::definition::{self, Placement};
 use iron_document::*;
 use std::collections::BTreeMap;
@@ -82,12 +82,10 @@ fn lab() -> Lab {
         key
     };
     let param = |id, name: &str, default: Value| {
-        let mut p = ParamSpec::default();
-        p.kind = Slot::Const(Value::Enum(match &default {
-            Value::Quantity { .. } => "quantity".into(),
-            _ => "number".into(),
-        }));
-        p.default = Slot::Const(default);
+        let mut p = Port::default();
+        p.kind = Slot::Const(Value::Str("value".into()));
+        p.dir = Slot::Const(Value::Enum("in".into()));
+        p.signal = Slot::Const(default);
         (id, vec![p.wrap(), named(name)])
     };
     let template = |notation: &str| {
@@ -104,22 +102,22 @@ fn lab() -> Lab {
         Op::Create { id: laser_def, ty: ty("definition"), parent: Some(library), order: k(0), facets: vec![named("laser")] },
     ];
     let (pid, pc) = param(power, "power", Value::parse_quantity("10 mW").unwrap());
-    ops.push(Op::Create { id: pid, ty: ty("param_spec"), parent: Some(laser_def), order: k(0), facets: pc });
-    ops.push(Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser_def), order: k(1), facets: vec![named("out"), port("optical_power", "out", Some(format!("{power}.param_spec.default")))] });
+    ops.push(Op::Create { id: pid, ty: ty("port_spec"), parent: Some(laser_def), order: k(0), facets: pc });
+    ops.push(Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser_def), order: k(1), facets: vec![named("out"), port("optical_power", "out", Some(format!("{power}.port.signal")))] });
     ops.push(Op::Create { id: laser_t, ty: ty("template"), parent: Some(laser_def), order: k(2), facets: vec![template("cartoon")] });
     ops.push(Op::Create { id: laser_box, ty: ty("rect"), parent: Some(laser_t), order: k(0), facets: vec![Transform2d::default().wrap(), Size::default().wrap()] });
     ops.push(Op::Create { id: fiber_def, ty: ty("definition"), parent: Some(library), order: k(1), facets: vec![named("fiber")] });
     let (lid, lc) = param(loss, "loss_db_per_km", Value::Number(0.5));
-    ops.push(Op::Create { id: lid, ty: ty("param_spec"), parent: Some(fiber_def), order: k(0), facets: lc });
+    ops.push(Op::Create { id: lid, ty: ty("port_spec"), parent: Some(fiber_def), order: k(0), facets: lc });
     let (nid, nc) = param(length, "length_km", Value::Number(2.0));
-    ops.push(Op::Create { id: nid, ty: ty("param_spec"), parent: Some(fiber_def), order: k(1), facets: nc });
+    ops.push(Op::Create { id: nid, ty: ty("port_spec"), parent: Some(fiber_def), order: k(1), facets: nc });
     ops.push(Op::Create { id: fiber_in, ty: ty("port_spec"), parent: Some(fiber_def), order: k(2), facets: vec![named("in"), port("optical_power", "in", None)] });
     ops.push(Op::Create {
         id: fiber_out,
         ty: ty("port_spec"),
         parent: Some(fiber_def),
         order: k(3),
-        facets: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.param_spec.default * {length}.param_spec.default / 10)")))],
+        facets: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.port.signal * {length}.port.signal / 10)")))],
     });
     ops.push(Op::Create { id: meter_def, ty: ty("definition"), parent: Some(library), order: k(2), facets: vec![named("meter")] });
     ops.push(Op::Create { id: meter_in, ty: ty("port_spec"), parent: Some(meter_def), order: k(0), facets: vec![named("in"), port("optical_power", "in", None)] });
@@ -170,7 +168,7 @@ fn power_flows_down_the_chain_and_follows_every_parameter() {
     let expected = 0.010 * 10f64.powf(-0.1);
     assert!((watts(&lab.signal(lab.meter, "in")) - expected).abs() < 1e-12);
     // Longer fiber, less power, in the same transaction's resolve.
-    lab.store.apply(tx("longer", vec![Op::Set { id: lab.fiber, path: path("params.length_km"), slot: Slot::Const(Value::Number(10.0)) }])).unwrap();
+    lab.store.apply(tx("longer", vec![Op::Set { id: lab.fiber, path: path("args.length_km"), slot: Slot::Const(Value::Number(10.0)) }])).unwrap();
     assert!((watts(&lab.signal(lab.meter, "in")) - 0.010 * 10f64.powf(-0.5)).abs() < 1e-12);
     // The meter's figure reads its port: width = reading / 1 mW · 20.
     let bar = lab.store.document().children(lab.store.document().roots()[1]).iter().copied().find(|&n| composition::figured_by(lab.store.document(), n) == Some(lab.meter)).unwrap();
@@ -187,13 +185,13 @@ fn the_meter_reading_inverts_to_the_laser_power() {
     let mut lab = lab();
     let reading = Leaf { node: lab.port(lab.meter, "in"), path: path("port.signal") };
     match lab.store.handle(reading.node, reading.path) {
-        Handle::Linear { source, .. } => assert_eq!(source, Leaf { node: lab.laser, path: path("params.power") }),
+        Handle::Linear { source, .. } => assert_eq!(source, Leaf { node: lab.laser, path: path("args.power") }),
         other => panic!("expected a linear handle, got {other:?}"),
     }
     // Ask for 5 mW at the meter: the laser is set to 5 mW / 10^-0.1.
     lab.store.preview_target(reading.node, reading.path, Value::parse_quantity("5 mW").unwrap()).unwrap();
     lab.store.commit_gesture("set reading", Actor::Human, 0).unwrap().unwrap();
-    assert!((watts(&lab.store.resolved(lab.laser, path("params.power")).unwrap()) - 0.005 / 10f64.powf(-0.1)).abs() < 1e-12);
+    assert!((watts(&lab.store.resolved(lab.laser, path("args.power")).unwrap()) - 0.005 / 10f64.powf(-0.1)).abs() < 1e-12);
     assert!((watts(&lab.signal(lab.meter, "in")) - 0.005).abs() < 1e-12);
 }
 
@@ -233,10 +231,11 @@ fn a_heater_settles_through_its_thermal_link() {
     let ids = store.document().next_ids(19);
     let [library, model, heater, power, h_out, h_eq, h_t, link, r, l_a, l_b, l_eq1, l_eq2, l_t, ambient, t, a_p, a_eq, a_t] = ids.try_into().unwrap();
     let param = |id, parent, order, name: &str, v: Value| {
-        let mut p = ParamSpec::default();
-        p.kind = Slot::Const(Value::Enum("quantity".into()));
-        p.default = Slot::Const(v);
-        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
+        let mut p = Port::default();
+        p.kind = Slot::Const(Value::Str("value".into()));
+        p.dir = Slot::Const(Value::Enum("in".into()));
+        p.signal = Slot::Const(v);
+        Op::Create { id, ty: ty("port_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
     };
     let pspec = |id, parent, order, name: &str| Op::Create { id, ty: ty("port_spec"), parent: Some(parent), order, facets: vec![named(name), port("heat_flow", "in", None)] };
     let eq = |id, parent, order, lhs: String, rhs: String| {
@@ -260,19 +259,19 @@ fn a_heater_settles_through_its_thermal_link() {
                 def(heater, "heater", k(0)),
                 param(power, heater, k(0), "power", q("5 W")),
                 pspec(h_out, heater, k(1), "out"),
-                eq(h_eq, heater, k(2), format!("{h_out}.port.through"), format!("-{power}.param_spec.default")),
+                eq(h_eq, heater, k(2), format!("{h_out}.port.through"), format!("-{power}.port.signal")),
                 template(h_t, heater, k(3)),
                 def(link, "link", k(1)),
                 param(r, link, k(0), "r", q("2 K/W")),
                 pspec(l_a, link, k(1), "a"),
                 pspec(l_b, link, k(2), "b"),
                 eq(l_eq1, link, k(3), format!("{l_a}.port.through + {l_b}.port.through"), "0 W".into()),
-                eq(l_eq2, link, k(4), format!("{l_a}.port.across - {l_b}.port.across"), format!("{r}.param_spec.default * {l_a}.port.through")),
+                eq(l_eq2, link, k(4), format!("{l_a}.port.across - {l_b}.port.across"), format!("{r}.port.signal * {l_a}.port.through")),
                 template(l_t, link, k(5)),
                 def(ambient, "ambient", k(2)),
                 param(t, ambient, k(0), "t", q("293.15 K")),
                 pspec(a_p, ambient, k(1), "p"),
-                eq(a_eq, ambient, k(2), format!("{a_p}.port.across"), format!("{t}.param_spec.default")),
+                eq(a_eq, ambient, k(2), format!("{a_p}.port.across"), format!("{t}.port.signal")),
                 template(a_t, ambient, k(3)),
             ],
         ))
@@ -295,7 +294,7 @@ fn a_heater_settles_through_its_thermal_link() {
     assert!((across(&lab.store, h) - 303.15).abs() < 1e-6, "{}", across(&lab.store, h));
     assert!((through(&lab.store, la) - 5.0).abs() < 1e-6, "{}", through(&lab.store, la));
     // More power, hotter heater, in the same transaction.
-    lab.store.apply(tx("10 W", vec![Op::Set { id: lab.laser, path: path("params.power"), slot: Slot::Const(q("10 W")) }])).unwrap();
+    lab.store.apply(tx("10 W", vec![Op::Set { id: lab.laser, path: path("args.power"), slot: Slot::Const(q("10 W")) }])).unwrap();
     assert!((across(&lab.store, h) - 313.15).abs() < 1e-6, "{}", across(&lab.store, h));
     // A solved value is not edited directly.
     assert!(lab.store.handle(h, path("port.across")).is_locked());
@@ -353,7 +352,7 @@ fn copying_a_figure_copies_its_entity_with_fresh_ports() {
     let expected = 0.010 * 10f64.powf(-0.1);
     assert!((watts(&lab.signal(lab.meter, "in")) - expected).abs() < 1e-12);
     // Its parameters are its own.
-    lab.store.apply(tx("longer", vec![Op::Set { id: entity, path: path("params.length_km"), slot: Slot::Const(Value::Number(10.0)) }])).unwrap();
+    lab.store.apply(tx("longer", vec![Op::Set { id: entity, path: path("args.length_km"), slot: Slot::Const(Value::Number(10.0)) }])).unwrap();
     assert!((watts(&lab.signal(lab.meter, "in")) - expected).abs() < 1e-12);
 }
 
@@ -372,7 +371,7 @@ fn copying_a_whole_chain_keeps_its_connections() {
     let copy_of = |original: NodeId| pasted.roots.iter().map(|&r| composition::figured_by(doc, r).unwrap()).find(|&e| def(e) == def(original)).unwrap();
     let (laser, meter) = (copy_of(lab.laser), copy_of(lab.meter));
     assert!(laser != lab.laser && meter != lab.meter);
-    lab.store.apply(tx("brighter", vec![Op::Set { id: laser, path: path("params.power"), slot: Slot::Const(Value::parse_quantity("20 mW").unwrap()) }])).unwrap();
+    lab.store.apply(tx("brighter", vec![Op::Set { id: laser, path: path("args.power"), slot: Slot::Const(Value::parse_quantity("20 mW").unwrap()) }])).unwrap();
     assert!((watts(&lab.signal(meter, "in")) - 0.020 * 10f64.powf(-0.1)).abs() < 1e-12);
     assert!((watts(&lab.signal(lab.meter, "in")) - 0.010 * 10f64.powf(-0.1)).abs() < 1e-12);
 }

@@ -4,7 +4,7 @@
 
 use super::PendingTransactions;
 use bevy::prelude::*;
-use iron_document::facet::{Composition, Constraint, Embed, Template, Fill, Mesh, Name as DocName, ParamSpec, Radius, Size, Stroke, Transform2d, Transform3d};
+use iron_document::facet::{Composition, Constraint, Embed, Template, Fill, Mesh, Name as DocName, Radius, Size, Stroke, Transform2d, Transform3d};
 use iron_document::facet::{Clip, Slider, Timing};
 use iron_document::definition::{self, Placement};
 use iron_document::{Actor, Expr, LeafPath, LeafStruct, NodeId, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
@@ -12,6 +12,16 @@ use std::collections::BTreeMap;
 
 pub(super) fn queue_demo_scene(store: Res<super::DocumentStore>, mut pending: ResMut<PendingTransactions>) {
     pending.0.push(demo_scene(&store.0));
+}
+
+/// An `in` port_spec's facet: a definition's input with its default
+/// (component-model.md §4).
+fn input_spec(default: Value) -> iron_document::facet::Port {
+    let mut p = iron_document::facet::Port::default();
+    p.kind = Slot::Const(Value::Str("value".into()));
+    p.dir = Slot::Const(Value::Enum("in".into()));
+    p.signal = Slot::Const(default);
+    p
 }
 
 fn n(v: f64) -> Slot {
@@ -420,9 +430,9 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     name.text = Slot::Const(Value::Str("card plane".into()));
     ops.push(Op::Create { id: card_plane, ty: ty("embed"), parent: Some(assembly), order: order(), facets: vec![embed(card), t.wrap(), name.wrap()] });
 
-    // The library: a `bar` definition with one parameter, `level`, and a
-    // "free" template whose rect binds its top and height to the
-    // parameter's default. `bar` is data, not a registry type (ECM §4.2).
+    // The library: a `bar` definition with one input, `level`, and a
+    // "free" template whose rect binds its top and height to that port.
+    // `bar` is data, not a registry type (ECM §4.2).
     let library = next();
     let def = next();
     let level = next();
@@ -434,12 +444,10 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("bar".into()));
     ops.push(Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: OrderKey::first(), facets: vec![name.wrap()] });
-    let mut spec = ParamSpec::default();
-    spec.kind = Slot::Const(Value::Enum("number".into()));
-    spec.default = n(0.4);
+    let spec = input_spec(Value::Number(0.4));
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("level".into()));
-    ops.push(Op::Create { id: level, ty: ty("param_spec"), parent: Some(def), order: OrderKey::first(), facets: vec![spec.wrap(), name.wrap()] });
+    ops.push(Op::Create { id: level, ty: ty("port_spec"), parent: Some(def), order: OrderKey::first(), facets: vec![spec.wrap(), name.wrap()] });
     ops.push(Op::Create {
         id: template,
         ty: ty("template"),
@@ -449,10 +457,10 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     });
     let mut t = Transform2d::default();
     t.x = n(780.0);
-    t.y = Slot::Bound(Expr::parse(&format!("640 - {level}.param_spec.default * 300")).expect("demo binding"));
+    t.y = Slot::Bound(Expr::parse(&format!("640 - {level}.port.signal * 300")).expect("demo binding"));
     let mut s = Size::default();
     s.w = n(60.0);
-    s.h = Slot::Bound(Expr::parse(&format!("{level}.param_spec.default * 300")).expect("demo binding"));
+    s.h = Slot::Bound(Expr::parse(&format!("{level}.port.signal * 300")).expect("demo binding"));
     let mut f = Fill::default();
     f.color = Slot::Const(Value::Color([0.2, 0.5, 0.9, 1.0]));
     let mut name = DocName::default();
@@ -504,8 +512,8 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("controls view".into()));
     ops.push(Op::Create { id: controls_embed, ty: ty("embed"), parent: Some(main), order: k_controls, facets: vec![embed(controls_comp), Transform2d::default().wrap(), name.wrap()] });
-    // The entity's parameter follows the slider: the exit of ECM phase 1.
-    let level_path: LeafPath = "params.level".parse().expect("parameter path");
+    // The entity's argument follows the slider: the exit of ECM phase 1.
+    let level_path: LeafPath = "args.level".parse().expect("argument path");
     ops.push(Op::Set { id: entity, path: level_path, slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).expect("demo binding")) });
 
     // Stage F: laser → fiber → power meter, each a definition with ports,
@@ -529,7 +537,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
 /// shows it through an embed, with the slider and two gauges. The gas is
 /// Bevy's (`document_bridge::gas`): particles with no document nodes,
 /// bouncing in the chamber; the pressure they put on the piston face is
-/// published onto the library's `pressure` parameter every frame, as a
+/// published onto the library's `pressure` input every frame, as a
 /// runtime signal. The `pressure` bar reads it; the `P·V` bar multiplies it
 /// by the gas length and stays put as the piston moves (the gas is
 /// isothermal), which is the physics check. Nothing enters the history
@@ -567,13 +575,11 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     let (comp, view, stroke, p_frame, p_bar, pv_frame, pv_bar) = (ids[6], ids[7], ids[8], ids[9], ids[10], ids[11], ids[12]);
     let mut ops = Vec::new();
 
-    // The signal's host: a parameter of a `gas` definition in the library.
+    // The signal's host: an input of a `gas` definition in the library.
     // Not drawn; bindings read it, the producer publishes onto it.
-    let mut spec = ParamSpec::default();
-    spec.kind = Slot::Const(Value::Enum("number".into()));
-    spec.default = n(0.0);
+    let spec = input_spec(Value::Number(0.0));
     ops.push(Op::Create { id: gas_def, ty: ty("definition"), parent: Some(library), order: next_key(after(&scratch, Some(library))), facets: vec![named("gas")] });
-    ops.push(Op::Create { id: pressure, ty: ty("param_spec"), parent: Some(gas_def), order: OrderKey::first(), facets: vec![spec.wrap(), named("pressure")] });
+    ops.push(Op::Create { id: pressure, ty: ty("port_spec"), parent: Some(gas_def), order: OrderKey::first(), facets: vec![spec.wrap(), named("pressure")] });
 
     // The 3D composition.
     let root0 = next_key(after(&scratch, None));
@@ -648,11 +654,11 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     };
     // Pressure relative to the gas filling the whole chamber: 50 px per unit.
     ops.push(rect(p_frame, order(), 420.0, n(300.0), [0.9, 0.9, 0.92, 1.0], "pressure scale"));
-    ops.push(rect(p_bar, order(), 420.0, bound(format!("clamp({pressure}.param_spec.default * 50, 0, 300)")), [0.9, 0.25, 0.15, 1.0], "pressure"));
+    ops.push(rect(p_bar, order(), 420.0, bound(format!("clamp({pressure}.port.signal * 50, 0, 300)")), [0.9, 0.25, 0.15, 1.0], "pressure"));
     // P·V: the pressure times the gas length (2.74 − 2.2·stroke, in world
     // units), scaled so the whole chamber reads 100 px.
     ops.push(rect(pv_frame, order(), 450.0, n(300.0), [0.9, 0.9, 0.92, 1.0], "P·V scale"));
-    ops.push(rect(pv_bar, order(), 450.0, bound(format!("clamp({pressure}.param_spec.default * (2.74 - 2.2 * {stroke}.slider.value) * 100 / 3, 0, 300)")), [0.2, 0.65, 0.3, 1.0], "P·V"));
+    ops.push(rect(pv_bar, order(), 450.0, bound(format!("clamp({pressure}.port.signal * (2.74 - 2.2 * {stroke}.slider.value) * 100 / 3, 0, 300)")), [0.2, 0.65, 0.3, 1.0], "P·V"));
     ops
 }
 
@@ -768,15 +774,13 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     let (laser_block, fiber_block, meter_block, schematic_reading) = (next(), next(), next(), next());
     let def_key = last(&scratch, Some(library));
     let spec = |id: NodeId, parent: NodeId, order: OrderKey, name: &str, default: Value| {
-        let mut p = ParamSpec::default();
-        p.kind = Slot::Const(Value::Enum(if matches!(default, Value::Quantity { .. }) { "quantity".into() } else { "number".into() }));
-        p.default = Slot::Const(default);
-        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
+        let p = input_spec(default);
+        Op::Create { id, ty: ty("port_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
     };
     let mut ops = vec![
         Op::Create { id: laser, ty: ty("definition"), parent: Some(library), order: def_key.clone(), facets: vec![named("laser")] },
         spec(power, laser, key(0), "power", Value::parse_quantity("10 mW").expect("quantity")),
-        Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser), order: key(1), facets: vec![named("out"), port("optical_power", "out", Some(format!("{power}.param_spec.default")))] },
+        Op::Create { id: laser_out, ty: ty("port_spec"), parent: Some(laser), order: key(1), facets: vec![named("out"), port("optical_power", "out", Some(format!("{power}.port.signal")))] },
         Op::Create { id: laser_cartoon, ty: ty("template"), parent: Some(laser), order: key(2), facets: vec![template("cartoon")] },
         Op::Create { id: laser_schematic, ty: ty("template"), parent: Some(laser), order: key(3), facets: vec![template("schematic")] },
         Op::Create { id: fiber, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&def_key), facets: vec![named("fiber")] },
@@ -788,7 +792,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
             ty: ty("port_spec"),
             parent: Some(fiber),
             order: key(3),
-            facets: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.param_spec.default * {length}.param_spec.default / 10)")))],
+            facets: vec![named("out"), port("optical_power", "out", Some(format!("{fiber_in}.port.signal * pow(10, -{loss}.port.signal * {length}.port.signal / 10)")))],
         },
         Op::Create { id: fiber_cartoon, ty: ty("template"), parent: Some(fiber), order: key(4), facets: vec![template("cartoon")] },
         Op::Create { id: fiber_schematic, ty: ty("template"), parent: Some(fiber), order: key(5), facets: vec![template("schematic")] },
@@ -801,7 +805,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     ops.push(rect_op(laser_body, laser_cartoon, key(0), vec![at(60.0, 140.0), size(130.0, 70.0), fill([0.18, 0.2, 0.26, 1.0]), named("body")]));
     let mut beam = Fill::default();
     beam.color = Slot::Const(Value::Color([0.95, 0.15, 0.1, 1.0]));
-    beam.opacity = Slot::Bound(Expr::parse(&format!("clamp({power}.param_spec.default / 20 mW, 0.15, 1)")).expect("demo binding"));
+    beam.opacity = Slot::Bound(Expr::parse(&format!("clamp({power}.port.signal / 20 mW, 0.15, 1)")).expect("demo binding"));
     ops.push(rect_op(laser_beam, laser_cartoon, key(1), vec![at(190.0, 168.0), size(50.0, 14.0), beam.wrap(), named("beam")]));
     // The fiber: a curve from the laser to the meter.
     ops.push(Op::Create { id: fiber_path, ty: ty("path"), parent: Some(fiber_cartoon), order: key(0), facets: vec![at(240.0, 175.0), PathShape::default().wrap(), stroke([0.96, 0.7, 0.15, 1.0], 6.0), named("fiber")] });
@@ -896,8 +900,8 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     let k = last(&scratch, Some(cartoon));
     phase(&mut scratch, vec![slider_op(ids[0], 340.0, 10.0, "laser power", k.clone()), slider_op(ids[1], 390.0, 2.0, "fiber length", OrderKey::after(&k))]);
     phase(&mut scratch, vec![
-        Op::Set { id: entities[0], path: "params.power".parse().expect("parameter"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 mW", ids[0])).expect("demo binding")) },
-        Op::Set { id: entities[1], path: "params.length_km".parse().expect("parameter"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value", ids[1])).expect("demo binding")) },
+        Op::Set { id: entities[0], path: "args.power".parse().expect("argument"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 mW", ids[0])).expect("demo binding")) },
+        Op::Set { id: entities[1], path: "args.length_km".parse().expect("argument"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value", ids[1])).expect("demo binding")) },
     ]);
     out
 }
@@ -965,10 +969,8 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         e.wrap()
     };
     let spec = |id: NodeId, parent: NodeId, order: OrderKey, name: &str, default: &str| {
-        let mut p = ParamSpec::default();
-        p.kind = Slot::Const(Value::Enum("quantity".into()));
-        p.default = Slot::Const(Value::parse_quantity(default).expect("quantity"));
-        Op::Create { id, ty: ty("param_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
+        let p = input_spec(Value::parse_quantity(default).expect("quantity"));
+        Op::Create { id, ty: ty("port_spec"), parent: Some(parent), order, facets: vec![p.wrap(), named(name)] }
     };
     let template = |id: NodeId, parent: NodeId, order: OrderKey| {
         let mut t = Template::default();
@@ -997,7 +999,7 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         Op::Create { id: heater, ty: ty("definition"), parent: Some(library), order: k0, facets: vec![named("heater")] },
         spec(power, heater, key(0), "power", "5 W"),
         Op::Create { id: h_out, ty: ty("port_spec"), parent: Some(heater), order: key(1), facets: port("out") },
-        Op::Create { id: h_eq, ty: ty("equation"), parent: Some(heater), order: key(2), facets: vec![equation(format!("{h_out}.port.through"), format!("-{power}.param_spec.default"))] },
+        Op::Create { id: h_eq, ty: ty("equation"), parent: Some(heater), order: key(2), facets: vec![equation(format!("{h_out}.port.through"), format!("-{power}.port.signal"))] },
         template(h_t, heater, key(3)),
         rect(h_body, h_t, key(0), 60.0, 110.0, n(120.0), 90.0, [0.86, 0.3, 0.15, 1.0], "heater"),
         rect(h_track, h_t, key(1), 60.0, 240.0, n(300.0), 14.0, [0.85, 0.86, 0.9, 1.0], "track"),
@@ -1010,13 +1012,13 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         Op::Create { id: l_a, ty: ty("port_spec"), parent: Some(link), order: key(1), facets: port("a") },
         Op::Create { id: l_b, ty: ty("port_spec"), parent: Some(link), order: key(2), facets: port("b") },
         Op::Create { id: l_eq1, ty: ty("equation"), parent: Some(link), order: key(3), facets: vec![equation(format!("{l_a}.port.through + {l_b}.port.through"), "0 W".into())] },
-        Op::Create { id: l_eq2, ty: ty("equation"), parent: Some(link), order: key(4), facets: vec![equation(format!("{l_a}.port.across - {l_b}.port.across"), format!("{r}.param_spec.default * {l_a}.port.through"))] },
+        Op::Create { id: l_eq2, ty: ty("equation"), parent: Some(link), order: key(4), facets: vec![equation(format!("{l_a}.port.across - {l_b}.port.across"), format!("{r}.port.signal * {l_a}.port.through"))] },
         template(l_t, link, key(5)),
         rect(l_body, l_t, key(0), 180.0, 140.0, n(150.0), 30.0, [0.55, 0.57, 0.62, 1.0], "link"),
         Op::Create { id: ambient, ty: ty("definition"), parent: Some(library), order: k2, facets: vec![named("ambient")] },
         spec(t, ambient, key(0), "t", "293.15 K"),
         Op::Create { id: a_p, ty: ty("port_spec"), parent: Some(ambient), order: key(1), facets: port("p") },
-        Op::Create { id: a_eq, ty: ty("equation"), parent: Some(ambient), order: key(2), facets: vec![equation(format!("{a_p}.port.across"), format!("{t}.param_spec.default"))] },
+        Op::Create { id: a_eq, ty: ty("equation"), parent: Some(ambient), order: key(2), facets: vec![equation(format!("{a_p}.port.across"), format!("{t}.port.signal"))] },
         template(a_t, ambient, key(3)),
         rect(a_body, a_t, key(0), 330.0, 95.0, n(140.0), 120.0, [0.55, 0.75, 0.95, 1.0], "sink"),
     ]);
@@ -1065,8 +1067,8 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
     let k = next_key(after(&scratch, Some(comp)));
     phase(&mut scratch, vec![slider(ids[0], 320.0, 0.0, 20.0, 5.0, "heater power", k.clone()), slider(ids[1], 370.0, 0.5, 5.0, 2.0, "link resistance", OrderKey::after(&k))]);
     phase(&mut scratch, vec![
-        Op::Set { id: entities[0], path: "params.power".parse().expect("parameter"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 W", ids[0])).expect("demo binding")) },
-        Op::Set { id: entities[1], path: "params.r".parse().expect("parameter"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 K/W", ids[1])).expect("demo binding")) },
+        Op::Set { id: entities[0], path: "args.power".parse().expect("argument"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 W", ids[0])).expect("demo binding")) },
+        Op::Set { id: entities[1], path: "args.r".parse().expect("argument"), slot: Slot::Bound(Expr::parse(&format!("{}.slider.value * 1 K/W", ids[1])).expect("demo binding")) },
     ]);
     out
 }

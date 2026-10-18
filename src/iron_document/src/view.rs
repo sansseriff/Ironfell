@@ -2,7 +2,7 @@
 //! (plans/specs/document-spine.md §8; doc 04 §6).
 //!
 //! Three relations (ECM §11): the raw tree; the model (entities, their
-//! definitions, parameters and figures); and one composition's layout, with
+//! definitions, arguments and figures); and one composition's layout, with
 //! each figure's entity as an `of` attribute. Output is XML-ish because
 //! nesting is the data. Elision is always marked: a reader must be able to
 //! tell "empty" from "not shown".
@@ -190,7 +190,7 @@ fn write_open(out: &mut String, indent: &str, tag: &str, attrs: &[(String, Strin
 }
 
 /// The model view (ECM §11): every live entity with its definition, its
-/// parameters (value, binding, solver marker as in the tree view) and each
+/// arguments (value, binding, solver marker as in the tree view) and each
 /// figure with the composition it is drawn in. Signals arrive with ports.
 fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &ViewQuery) -> String {
     use crate::composition;

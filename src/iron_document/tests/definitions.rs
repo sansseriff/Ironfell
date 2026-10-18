@@ -206,6 +206,12 @@ fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
     // Dragging the figure's y inverts through the port and the argument
     // onto the slider.
     assert!(matches!(store.handle(copy, path("transform2d.y")), Handle::Linear { source, .. } if source == Leaf { node: slider, path: path("slider.value") }));
+    // The slider is bounded (0–1): dragging the figure far past its top
+    // stops the slider at 1, and the figure with it.
+    store.preview_target(copy, path("transform2d.y"), Value::Number(-5000.0)).unwrap();
+    assert_eq!(resolved(&store, slider, "slider.value"), Value::Number(1.0));
+    assert_eq!(resolved(&store, copy, "transform2d.y"), Value::Number(340.0));
+    store.preview_target(copy, path("transform2d.y"), Value::Number(370.0)).unwrap();
     store.commit_gesture("set slider", Actor::Human, 1).unwrap().unwrap();
     // The view names the definition and shows the argument and its binding.
     let v = store.view(&ViewQuery { expand: Vec::new(), relation: Default::default(), scope: Some(entity), fidelity: Fidelity::Full, depth: None }).unwrap();

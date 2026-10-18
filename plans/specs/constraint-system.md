@@ -223,6 +223,22 @@ number bumps because old readers would reject the new kind names.
 
 ---
 
+### 4.7 Bounded leaves (amendment, 2026-10-18)
+
+Some leaves declare the range their value lies in. The first is a slider's
+`slider.value`, held between its `slider.min` and `slider.max`
+(`handle::bounds`). Every edit that lands on a bounded leaf is clamped to it: a direct
+drag or inspector edit, and a linear inversion that resolves onto it
+(`handle::resolve_target`). Dragging something bound to the slider past what the slider
+allows stops the slider at its end, and the dragged figure with it. This is what lets
+a component's reading be dragged back to a slider "between its two limits"
+(component-model.md, example 1).
+
+Not yet: the solver does not see bounds. A bounded leaf that a cluster moves (none today:
+the solver moves transforms) would need projection onto the box in `iron_solve`, which
+is the easiest kind of inequality for its projected steps. General inequality
+constraints across components (component-model.md §8.1) remain open.
+
 ## 5. The solver crate (`src/iron_solve`)
 
 A new workspace member with no dependency on Bevy or `iron_document`. It knows only

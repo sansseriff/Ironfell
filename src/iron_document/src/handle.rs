@@ -184,11 +184,16 @@ pub fn linear(expr: &Expr, var: Leaf, read: &dyn Fn(Leaf) -> Option<Value>) -> O
 /// `Direct` answers the leaf itself; `Linear` inverts; `Locked` is an error.
 pub fn resolve_target(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Value) -> Result<(Leaf, Value), String> {
     match handle(doc, reactive, leaf) {
-        Handle::Direct => Ok((leaf, value)),
+        Handle::Direct => Ok((leaf, clamp_to_bounds(doc, reactive, leaf, value))),
         Handle::Linear { source, a, b } => {
             let y = magnitude(&value).ok_or_else(|| format!("{leaf}: a linear handle takes a number or quantity, got {}", value.kind().name()))?;
             // The source keeps its own kind: a quantity stays one, in SI.
+            // Held to its bounds, so whatever reads it stops where it does.
             let x = (y - b) / a;
+            let x = match bounds(doc, reactive, source) {
+                Some((lo, hi)) => x.clamp(lo, hi),
+                None => x,
+            };
             let v = match doc.leaf(source.node, source.path).and_then(|s| s.constant()) {
                 Some(Value::Quantity { dim, .. }) => Value::Quantity { si: x, dim: *dim },
                 _ => Value::Number(x),
@@ -199,3 +204,22 @@ pub fn resolve_target(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Va
     }
 }
 
+/// The range a leaf's value is held to, if it declares one
+/// (constraint-system.md §4.7): a slider's value lies between its `min` and
+/// `max`. A drag or an edit that inverts onto a bounded leaf stops at the
+/// bound, and so does everything that reads it.
+pub fn bounds(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Option<(f64, f64)> {
+    if leaf.path.facet != crate::facet::FacetKind::Slider || leaf.path.field != "value" {
+        return None;
+    }
+    let read = |f: &str| reactive.read(doc, Leaf { node: leaf.node, path: crate::facet::LeafPath::new(crate::facet::FacetKind::Slider, f).ok()? }).as_ref().and_then(magnitude);
+    let (lo, hi) = (read("min")?, read("max")?);
+    Some(if lo <= hi { (lo, hi) } else { (hi, lo) })
+}
+
+fn clamp_to_bounds(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Value) -> Value {
+    match (bounds(doc, reactive, leaf), value) {
+        (Some((lo, hi)), Value::Number(n)) => Value::Number(n.clamp(lo, hi)),
+        (_, v) => v,
+    }
+}

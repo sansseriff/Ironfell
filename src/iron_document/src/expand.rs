@@ -361,8 +361,44 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
             .max()
             .unwrap_or(0),
     );
-    let mut out = Vec::with_capacity(ops.len());
+    let mut out: Vec<Op> = Vec::with_capacity(ops.len());
+    // An override of `path` on `owner`'s copy of `local`: the one already
+    // there (or created earlier in this transaction) updated, else a new one.
+    let mut made: Vec<(NodeId, NodeId, LeafPath, NodeId)> = Vec::new();
+    let mut override_op = |owner: NodeId, local: NodeId, path: LeafPath, value: Value, out: &mut Vec<Op>| {
+        let existing = overrides(doc, owner).into_iter().find(|(_, t, l, _)| *t == local && *l == path).map(|(o, ..)| o).or_else(|| made.iter().find(|m| m.0 == owner && m.1 == local && m.2 == path).map(|m| m.3));
+        match existing {
+            Some(o) => out.push(Op::Set { id: o, path: "override.value".parse().expect("declared leaf"), slot: Slot::Const(value) }),
+            None => {
+                let o = NodeId::from_raw(fresh);
+                fresh += 1;
+                let after = doc.children(owner).iter().rev().find(|c| !c.is_expanded()).and_then(|&c| doc.live(c)).map(|n| n.order.clone());
+                let mut order = after.map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+                for _ in made.iter().filter(|m| m.0 == owner) {
+                    order = OrderKey::after(&order);
+                }
+                let mut f = Override::default();
+                f.target = Slot::Const(Value::Ref(local));
+                f.leaf = Slot::Const(Value::Str(path.to_string()));
+                f.value = Slot::Const(value);
+                made.push((owner, local, path, o));
+                out.push(Op::Create { id: o, ty: TypeId::lookup("override").expect("registered"), parent: Some(owner), order, facets: vec![f.wrap()] });
+            }
+        }
+    };
     for (i, op) in ops.into_iter().enumerate() {
+        // A facet added to what an instance derives (an ellipse gaining an
+        // arc) is an override of each of its fields.
+        if let Op::AddFacet { id, facet } = &op
+            && let Some((owner, local)) = id.expanded_parts()
+        {
+            for field in facet.field_names() {
+                if let Some(v) = facet.get(field).and_then(|s| s.constant()) {
+                    override_op(owner, local, LeafPath::new(facet.kind(), field).expect("own field"), v.clone(), &mut out);
+                }
+            }
+            continue;
+        }
         let Op::Set { id, path, slot } = &op else {
             out.push(op);
             continue;
@@ -386,23 +422,7 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
                 }
                 out.push(Op::Set { id: source.node, path: source.path, slot: Slot::Const(v) });
             }
-            crate::handle::Handle::Direct => {
-                let existing = overrides(doc, owner).into_iter().find(|(_, t, l, _)| *t == local && l == path).map(|(o, ..)| o);
-                match existing {
-                    Some(o) => out.push(Op::Set { id: o, path: "override.value".parse().expect("declared leaf"), slot: Slot::Const(value) }),
-                    None => {
-                        let o = NodeId::from_raw(fresh);
-                        fresh += 1;
-                        let after = doc.children(owner).iter().rev().find(|c| !c.is_expanded()).and_then(|&c| doc.live(c)).map(|n| n.order.clone());
-                        let order = after.map_or_else(OrderKey::first, |k| OrderKey::after(&k));
-                        let mut f = Override::default();
-                        f.target = Slot::Const(Value::Ref(local));
-                        f.leaf = Slot::Const(Value::Str(path.to_string()));
-                        f.value = Slot::Const(value);
-                        out.push(Op::Create { id: o, ty: TypeId::lookup("override").expect("registered"), parent: Some(owner), order, facets: vec![f.wrap()] });
-                    }
-                }
-            }
+            crate::handle::Handle::Direct => override_op(owner, local, *path, value, &mut out),
         }
     }
     Ok(out)

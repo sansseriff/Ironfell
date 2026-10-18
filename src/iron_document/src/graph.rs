@@ -298,7 +298,11 @@ impl Reactive {
         let leaves: Vec<Leaf> = self.overlay.keys().copied().collect();
         self.overlay.clear();
         for &l in &leaves {
-            if let Some(v) = self.read(doc, l) {
+            // A leaf of a facet the node lacks (a gesture that would have
+            // added it) reads nothing now: report its default, so whatever
+            // drew the preview redraws without it.
+            let v = self.read(doc, l).or_else(|| l.path.facet.default_facet().get(l.path.field).and_then(|s| s.constant()).cloned());
+            if let Some(v) = v {
                 self.note(l, v);
             }
         }

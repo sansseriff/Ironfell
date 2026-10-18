@@ -328,3 +328,24 @@ fn an_override_outlives_its_target_as_a_stale_override() {
     assert!(store.stale_overrides().is_empty());
     assert_eq!(resolved(&store, copy, "fill.color"), Value::Color([1.0, 0.0, 0.0, 1.0]));
 }
+
+/// A gesture that gives a part inside an instance a facet it lacks (a
+/// rect's stroke, an ellipse's arc) commits as overrides of that facet's
+/// fields, one undo step; undo takes it off again.
+#[test]
+fn adding_a_facet_inside_an_instance_is_an_undoable_override() {
+    let Lib { mut store, scene, def, .. } = library();
+    let (_, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    store.apply(tx("instantiate bar", ops)).unwrap();
+    let u = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "use").unwrap();
+    let copy = store.document().children(u)[0];
+    assert!(store.document().facet(copy, FacetKind::Stroke).is_none());
+    store.begin_gesture(&[copy]);
+    store.preview(copy, path("stroke.width"), Value::Number(7.0));
+    store.commit_gesture("outline", Actor::Human, 1).unwrap().unwrap();
+    assert_eq!(resolved(&store, copy, "stroke.width"), Value::Number(7.0));
+    assert!(store.document().children(u).iter().any(|&c| store.document().live(c).unwrap().ty.name() == "override"));
+    store.undo(1).unwrap().unwrap();
+    assert!(store.document().facet(copy, FacetKind::Stroke).is_none());
+    assert!(!store.document().children(u).iter().any(|&c| store.document().live(c).unwrap().ty.name() == "override"));
+}

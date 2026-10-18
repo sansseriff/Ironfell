@@ -358,6 +358,19 @@ facets! {
         value: Any = Value::Number(0.0),
     }
 
+    /// Where a port sits on a picture (component-model.md, anchors): an
+    /// `empty` carrying this marks `port`. `wx`, `wy` are its position in its
+    /// composition, derived by the graph from its ancestors' transforms
+    /// (`anchor.rs`); readers bind to them. A `follow` anchor is placed at
+    /// the anchor of whatever its port is connected to, in the same
+    /// composition: a fiber's ends follow what they plug into.
+    Anchor / "anchor" => Anchor {
+        port: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
+        follow: Bool = Value::Bool(false),
+        wx: Number = Value::Number(0.0),
+        wy: Number = Value::Number(0.0),
+    }
+
     /// A placed picture of a component in one composition
     /// (component-model.md §5.1): a `use` node figures its entity, and its
     /// children are the definition's template for `notation`, expanded.

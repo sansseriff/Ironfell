@@ -304,7 +304,7 @@ impl Writer<'_> {
         let ty = n.ty.name();
         self.note_losses(id);
         match ty {
-            "group" | "use" => {
+            "group" | "use" | "empty" => {
                 let mut attrs = self.head(id, "group");
                 if let Some(frame) = iron_document::appearance::ClipFrame::read(self.store, id) {
                     self.clips += 1;

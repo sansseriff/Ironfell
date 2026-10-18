@@ -227,8 +227,10 @@ impl Reactive {
         self.nodes.clear();
         self.dependents.clear();
         // Stored bindings, then the signals connections derive (`port`):
-        // an in-port reads its partner, evaluated like any binding.
-        let derived = crate::port::derived_signals(doc);
+        // an in-port reads its partner, evaluated like any binding; then
+        // anchors' positions and followers' placements (`anchor`).
+        let mut derived = crate::port::derived_signals(doc);
+        derived.extend(crate::anchor::derived(doc));
         for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
             let deps = expr.deps();
             for d in &deps {

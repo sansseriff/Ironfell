@@ -266,6 +266,14 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // A transform with nothing to draw: a pivot children hang off, and,
+    // with an `anchor`, where a port sits on a picture.
+    TypeSpec {
+        name: "empty",
+        facets: &[(K::Transform2d, true), (K::Anchor, false), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Any,
+    },
     // A placed picture of a component (component-model.md §5.1): a group
     // whose children are its definition's template, expanded, never stored.
     TypeSpec {

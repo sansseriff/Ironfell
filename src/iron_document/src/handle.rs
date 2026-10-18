@@ -88,6 +88,21 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
             if let [(source, a, b)] = linear_in.as_slice() {
                 return Handle::Linear { source: *source, a: *a, b: *b };
             }
+            // Still several: prefer what a person placed over what an
+            // instance derives (an expanded node's template value), and over
+            // the dragged node's own containers, whose move cancels out (a
+            // fiber's end follows its plug; dragging it should move the plug,
+            // not the fiber).
+            let placed: Vec<&(Leaf, f64, f64)> = linear_in.iter().filter(|(s, ..)| !s.node.is_expanded() && s.node != leaf.node && !doc.is_ancestor(s.node, leaf.node)).collect();
+            if let [(source, a, b)] = placed.as_slice() {
+                return Handle::Linear { source: *source, a: *a, b: *b };
+            }
+            // And a leaf of the same kind as the dragged one: dragging an x
+            // moves an x, not a scale that happens to move it too.
+            let alike: Vec<&&(Leaf, f64, f64)> = placed.iter().filter(|(s, ..)| s.path == leaf.path).collect();
+            if let [(source, a, b)] = alike.as_slice() {
+                return Handle::Linear { source: *source, a: *a, b: *b };
+            }
             let names: Vec<String> = many.iter().map(|l| l.to_string()).collect();
             Handle::Locked(format!("{leaf} is bound to {} free leaves ({})", many.len(), names.join(", ")))
         }

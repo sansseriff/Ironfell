@@ -438,7 +438,7 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         // content the composition's cameras see; `planes` gives it its mesh
         // and texture.
         "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Visibility::default())),
-        "group" | "use" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
+        "group" | "use" | "empty" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
         "rect" | "ellipse" | "slider" | "path" | "text" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
@@ -490,7 +490,7 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut e
         "embed" if in_3d(store, id) => {
             ec.insert((r.pose_3d(), RenderLayers::layer(layers.of(composition))));
         }
-        "group" | "use" | "embed" => {}
+        "group" | "use" | "empty" | "embed" => {}
         "rect" | "ellipse" | "slider" | "path" | "text" => {
             let d = r.doc2d(node.ty.name());
             drawables.0.insert(id, d.clone());

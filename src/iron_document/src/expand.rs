@@ -203,15 +203,24 @@ fn is_interface(doc: &Document, def: NodeId, node: NodeId) -> bool {
     doc.live(node).is_some_and(|n| n.parent == Some(def) && matches!(n.ty.name(), "port_spec" | "equation"))
 }
 
-/// `node`'s facets with every binding's references passed through `follow`.
+/// `node`'s facets with every reference passed through `follow`: those in
+/// bindings, and node references held as constants (an anchor's `port`).
 fn rewritten(doc: &Document, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<Facet> {
     doc.facets_of(node)
         .map(|c| {
             let mut c = c.clone();
             for field in c.field_names() {
-                if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
-                    let e = expr.map_refs(follow);
-                    c.set(field, Slot::Bound(e)).expect("field exists");
+                match c.get(field) {
+                    Some(Slot::Bound(expr)) => {
+                        let e = expr.map_refs(follow);
+                        c.set(field, Slot::Bound(e)).expect("field exists");
+                    }
+                    Some(Slot::Const(Value::Ref(r))) => {
+                        let any = LeafPath::new(FacetKind::Name, "text").expect("declared");
+                        let to = follow(Leaf { node: *r, path: any }).node;
+                        c.set(field, Slot::Const(Value::Ref(to))).expect("field exists");
+                    }
+                    _ => {}
                 }
             }
             c

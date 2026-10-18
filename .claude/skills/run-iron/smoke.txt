@@ -668,7 +668,7 @@ eval comps()
 # feeds from the slider: setting it to full scale sets the slider, which is
 # bounded at 20, so the needle stops short of it.
 eval window.inside = async (name, part) => { const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const plain = await __iron.view({fidelity:'skeleton', scope: c}); const u = plain.match(new RegExp(`<use id="([^"]+)" name="${name}"`))[1]; const open = await __iron.view({fidelity:'full', scope: u, expand: [u]}); return [u, open.match(new RegExp(`<[a-z]+ id="([^"]+)" name="${part}"[^>]*>`))]; }
-eval (async () => { const [, m] = await inside('meter', 'needle'); const r = await __iron.edit(`<edit><set id="${m[1]}" transform2d.rot="0"/></edit>`); const [, after] = await inside('meter', 'needle'); return [r.ok === true, after[0].match(/ rot="(-?\d+\.\d\d)/)[1], (await __iron.view({fidelity:'full', relation:'model'})).match(/name="source"[^>]*power="([^"]+)"/)[1]]; })()
+eval (async () => { const [, m] = await inside('meter', 'pivot'); const r = await __iron.edit(`<edit><set id="${m[1]}" transform2d.rot="0"/></edit>`); const [, after] = await inside('meter', 'pivot'); return [r.ok === true, after[0].match(/ rot="(-?\d+\.\d\d)/)[1], (await __iron.view({fidelity:'full', relation:'model'})).match(/name="source"[^>]*power="([^"]+)"/)[1]]; })()
 key Meta+z
 sleep 400
 # A constant set inside an instance becomes an override on its `use`,
@@ -678,6 +678,18 @@ eval (async () => { const [, m] = await inside('meter', 'dial'); return m[0].mat
 key Meta+z
 sleep 400
 eval (async () => { const [u, m] = await inside('meter', 'dial'); const v = await __iron.view({fidelity:'full', scope: u}); return [m[0].match(/ x="[^"]+"/)[0], (v.match(/<override /g) || []).length]; })()
+# Anchors: the fiber's ends follow the ports they plug into. Moving the
+# meter carries the fiber's out end onto the meter's in anchor; moving that
+# end (it is bound) inverts onto the meter, which comes with it.
+eval window.ends = async () => { const at = async (u, p) => (await inside(u, p))[1][0].match(/ wx="(-?[\d.]+)" wy="(-?[\d.]+)"/).slice(1).map(Number).map(Math.round); return [await at('fiber', 'out'), await at('meter', 'in')]; }
+eval ends()
+eval (async () => { const [u] = await inside('meter', 'dial'); const r = await __iron.edit(`<edit><set id="${u}" x="120" y="260"/></edit>`); return [r.ok === true, await ends()]; })()
+eval (async () => { const [, m] = await inside('fiber', 'out'); const r = await __iron.edit(`<edit><set id="${m[1]}" transform2d.x="645"/></edit>`); return [r.ok === true, await ends()]; })()
+key Meta+z
+sleep 300
+key Meta+z
+sleep 300
+eval ends()
 # Scope (§8): outside may read an instance's ports, not its insides.
 eval (async () => { const [, m] = await inside('meter', 'needle'); const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const r = await __iron.edit(`<edit><create id="$t" type="text" parent="${c}" content="{= str(#${m[1].slice(1)}.transform2d.rot)}"/></edit>`); return r.failure?.match(/kind="[a-z_]+"/)?.[0]; })()
 logs applied|rejected|panicked

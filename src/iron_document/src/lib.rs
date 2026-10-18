@@ -27,6 +27,7 @@ pub mod expand;
 pub mod expr;
 pub mod geom;
 pub mod gesture;
+pub mod anchor;
 pub mod appearance;
 pub mod graph;
 pub mod handle;

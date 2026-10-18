@@ -196,6 +196,34 @@ encapsulation (§5.5) generates these inside connections.
 
 ---
 
+### 4.2 Anchors: where a port sits on a picture (built 2026-10-18)
+
+A port is semantic; where it *is* depends on the picture. A template marks it with an
+**`empty`** (a transform that draws nothing, which children can hang off) carrying an
+**`anchor`** facet: `port` names the port_spec, `follow` says whether this end is
+placed by what it connects to. Expansion carries the anchor's `port` over to the
+instance's port.
+
+The graph derives, beside connected ports' signals (`anchor.rs`):
+
+- every anchor's position in its composition, `anchor.wx` / `anchor.wy`: an expression
+  over its own and its ancestors' transform leaves (`translate · rotate · scale`, as
+  `geom::local_affine`), so a reader can bind to where a port is;
+- for a `follow` anchor whose port is connected, its `transform2d.x` / `y`: the
+  partner's anchor position in the same composition, taken back into the follower's
+  parent space. A follower whose partner also follows stays put, so anchors never loop.
+
+So a fiber's ends sit on the laser and meter it is plugged into, and its curve, bound to
+its two anchors, re-draws as either moves. These are ordinary bindings, so dragging a
+fiber's end inverts onto what placed its partner: it moves the meter (`handle` now
+prefers, among several linear sources, a placed node over a derived one, not the
+dragged node's own container, and a leaf of the same kind as the dragged one).
+
+**Empties are also pivots.** The dial meter's needle hangs off an empty at the dial's
+centre whose rotation is bound to the reading, rather than giving shapes movable
+origins. Not yet: the select tool cannot pick or show an empty on its own (it has no
+bounds without children), and anchors exist only in 2D.
+
 ## 5. Instances
 
 ### 5.1 What is stored

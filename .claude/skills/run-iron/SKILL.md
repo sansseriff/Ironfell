@@ -155,14 +155,15 @@ composition's nodes). Expected output, minus screenshot lines,
 
 ```
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
+redraw (document): 2 of 39 nodes changed [#3G #3N/3G]; damage 539,114–661,269
 redraw (document): 2 of 39 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #11.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#11.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.14…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#3Q"}}
+{"ok":true,"version":9,"aliases":{"$n":"#3X"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#3Q\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#3X\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -182,19 +183,19 @@ true
 ["#l","#Q"]
 clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#3S\" name=\"box\" def=\"#3R\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3S\">"
+"<entity id=\"#3Z\" name=\"box\" def=\"#3Y\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3Z\">"
 clicked Show in assembly
 clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3U\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3U\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3b\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3b\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":50892}
+{"roundtrip_equal":true,"bytes":52892}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (269 ops, System) -> v1
+applied "open demo scene" (276 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -229,7 +230,7 @@ applied "link" (4 ops, Model) -> v23
 "link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (250 live nodes)
+loaded document v25 (258 live nodes)
 (no page errors)
 undefined
 ["#M"]
@@ -251,10 +252,10 @@ tab Controls
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
-["#3Q"]
-"<point id=\"#3U\" x=\"130\" y=\"220\""
+["#3X"]
+"<point id=\"#3b\" x=\"130\" y=\"220\""
 "pen-add"
-[4,"<point id=\"#3V\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
+[4,"<point id=\"#3c\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
 3
 "bend"
 " ox=\"0.0\" oy=\"-57.0\""
@@ -282,22 +283,22 @@ tab Controls
 undefined
 clicked .toolbar button[aria-label="Rectangle"]
 "Rectangle (R)"
-["<rect id=\"#3W\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
-"<ellipse id=\"#3X\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
-"<ellipse id=\"#3X\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+["<rect id=\"#3d\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
+"<ellipse id=\"#3e\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
+"<ellipse id=\"#3e\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 4
-"<ellipse id=\"#3X\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+"<ellipse id=\"#3e\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 tab Main
 {"cuts":["its h is bound to #11.port.signal * 300; the path keeps the current value"],"ok":false}
 ["its h is bound to #11.port.signal * 300; the path keeps the current value"]
 clicked Cancel
 null
 tab Controls
-"<rect id=\"#3W\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"28.20…\" tr=\"28.20…\" br=\"28.20…\" bl=\"28.20…\""
+"<rect id=\"#3d\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"28.20…\" tr=\"28.20…\" br=\"28.20…\" bl=\"28.20…\""
 clicked Add effect
 clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
-"<ellipse id=\"#3X\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
+"<ellipse id=\"#3e\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
 tab Optics
 undefined
 undefined
@@ -334,29 +335,35 @@ undefined
 4
 {"cuts":["filters are not imported"],"nodes":7,"ok":true}
 [8,4]
-["<rect id=\"#3t\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#3u\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#3v\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#3z\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
-["<point id=\"#3x\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#3y\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
+["<rect id=\"#40\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#41\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#42\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#46\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
+["<point id=\"#44\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#45\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
 [true,4]
 4
 undefined
 8
 4
-{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#47 #48 #49 #4D\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
+{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#4E #4F #4G #4K\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
 8
 4
 tab Components
 undefined
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
 undefined
-["#…/1M","7.94… mW"]
+["#…/3B","7.94… mW"]
 {"derivedNodesSaved":0,"connectionsToPorts":4}
 [0,3]
-["#…/1M","15.88… mW"]
+["#…/3B","15.88… mW"]
 ["lasersource",["power"]]
 clicked button[aria-label="Detach instance"]
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser detached","short fiber linked","long fiber linked"]
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
-applied "open demo scene" (269 ops, System) -> v1
+undefined
+[true,"-0.64","20 mW"]
+[true,["<override leaf=\"transform2d.x\" value=\"620\"/>","<override leaf=\"fill.color\" value=\"#3366ccff\"/>"]]
+[" x=\"620\""," fill.color=\"#3366ccff\""]
+[" x=\"600\"",0]
+"kind=\"out_of_scope\""
+applied "open demo scene" (276 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -420,6 +427,10 @@ applied "undo: import SVG" (7 ops, System) -> v61
 applied "set slider" (1 ops, Human) -> v62
 applied "detach instance" (5 ops, Human) -> v63
 applied "undo: detach instance" (5 ops, System) -> v64
+applied "model edit" (1 ops, Model) -> v65
+applied "undo: model edit" (1 ops, System) -> v66
+applied "model edit" (2 ops, Model) -> v67
+applied "undo: model edit" (2 ops, System) -> v68
 (no page errors)
 ```
 
@@ -433,6 +444,14 @@ expanded (3). Dragging the slider to its end doubles the source's power, so
 the meter reads 15.88… mW; clicking the laser's body selects its `use` and the
 inspector's Component section reads `laser` / `source` with one input,
 `power`; Detach makes the spare laser `detached` and undo links it again.
+Phase 3: setting the dial meter's needle to full scale (rot 0) is translated to
+the slider, which stops at its bound, so the needle settles at −0.64 and the
+source reads 20 mW; setting the dial's x and fill colour makes two `override`
+children of its `use` (undo removes them); a text bound to the needle's
+rotation from outside is refused `out_of_scope`. The first `redraw (document)`
+line, listing the dial meter's readout (`#3G`, its template's text, and
+`#3N/3G`, the instance's), is the default font arriving: whether it lands
+before the square's drag, and so appears, depends on the font fetch.
 
 Solved values carry solver noise in their last digits (shown as `…`
 above); everything else is exact. The square's drag logs one or two `redraw

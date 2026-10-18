@@ -148,9 +148,42 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     // Editing the definition reaches the instance in the same transaction.
     store.apply(tx("wider", vec![Op::Set { id: template_rect, path: path("size.w"), slot: num(80.0) }])).unwrap();
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(80.0));
-    // An authored edit to an expanded node is refused, naming its instance.
-    let errs = store.apply(tx("poke", vec![Op::Set { id: copy, path: path("size.w"), slot: num(5.0) }])).unwrap_err();
-    assert!(errs[0].message.contains(&format!("part of instance {u}")), "{}", errs[0].message);
+    // Setting a constant on what the instance derives makes an override on
+    // the instance (component-model.md §5.3, §7); it survives later edits to
+    // the definition, and undo removes it.
+    store.apply(tx("narrow", vec![Op::Set { id: copy, path: path("size.w"), slot: num(5.0) }])).unwrap();
+    assert_eq!(resolved(&store, copy, "size.w"), Value::Number(5.0));
+    let o = store.document().children(u).iter().copied().find(|c| !c.is_expanded()).unwrap();
+    assert_eq!(store.document().live(o).unwrap().ty.name(), "override");
+    store.apply(tx("wider still", vec![Op::Set { id: template_rect, path: path("size.w"), slot: num(90.0) }])).unwrap();
+    assert_eq!(resolved(&store, copy, "size.w"), Value::Number(5.0));
+    // A second edit to the same leaf updates that override.
+    store.apply(tx("narrower", vec![Op::Set { id: copy, path: path("size.w"), slot: num(4.0) }])).unwrap();
+    assert_eq!(store.document().children(u).iter().filter(|c| !c.is_expanded()).count(), 1);
+    assert_eq!(resolved(&store, copy, "size.w"), Value::Number(4.0));
+    store.undo(1).unwrap().unwrap();
+    store.undo(1).unwrap().unwrap();
+    store.undo(1).unwrap().unwrap();
+    assert_eq!(resolved(&store, copy, "size.w"), Value::Number(80.0));
+    assert!(store.document().live(o).is_none());
+    // A bound leaf inverts onto what it reads: the picture's top is
+    // `640 - level · 300`, so setting it sets the argument.
+    store.apply(tx("raise", vec![Op::Set { id: copy, path: path("transform2d.y"), slot: num(490.0) }])).unwrap();
+    assert_eq!(resolved(&store, entity, "args.level"), Value::Number(0.5));
+    store.undo(1).unwrap().unwrap();
+    // A binding may not reach inside an instance, in either direction.
+    let errs = store.apply(tx("bind inside", vec![Op::Set { id: copy, path: path("size.w"), slot: Slot::Bound(Expr::parse("#2.slider.value").unwrap()) }])).unwrap_err();
+    assert!(errs[0].message.contains("cannot reach it"), "{}", errs[0].message);
+    let reader = store.document().next_id();
+    let mut t = Transform2d::default();
+    t.x = Slot::Bound(Expr::parse(&format!("{copy}.size.w")).unwrap());
+    let errs = store.apply(tx("read inside", vec![Op::Create { id: reader, ty: ty("rect"), parent: Some(scene), order: OrderKey::first(), facets: vec![t.clone().wrap(), Size::default().wrap()] }])).unwrap_err();
+    assert_eq!(errs[0].kind, ErrorKind::OutOfScope, "{}", errs[0].message);
+    // Reading its ports is how outside sees inside.
+    t.x = Slot::Bound(Expr::parse(&format!("{level_port}.port.signal * 100")).unwrap());
+    store.apply(tx("read port", vec![Op::Create { id: reader, ty: ty("rect"), parent: Some(scene), order: OrderKey::first(), facets: vec![t.wrap(), Size::default().wrap()] }])).unwrap();
+    assert_eq!(resolved(&store, reader, "transform2d.x"), Value::Number(40.0));
+    store.undo(1).unwrap().unwrap();
     // The file holds the instance, not what it derives; loading derives it.
     let text = store.save();
     assert!(!text.contains(&format!("\"{copy}\"")) && !text.contains(&format!("\"{level_port}\"")), "{text}");
@@ -263,8 +296,35 @@ fn entities_are_validated_against_their_definition() {
     assert!(m.contains("not a definition"), "{m}");
     // No template for a notation; a definition with a bad spec.
     assert!(definition::instantiate(store.document(), def, "schematic", "bar3", &place(scene)).unwrap_err().contains("no template"));
-    store.apply(tx("break spec", vec![Op::Set { id: power, path: path("port.signal"), slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).unwrap()) }])).unwrap();
+    // A definition reads only itself.
+    let errs = store.apply(tx("reach out", vec![Op::Set { id: power, path: path("port.signal"), slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).unwrap()) }])).unwrap_err();
+    assert_eq!(errs[0].kind, ErrorKind::OutOfScope, "{}", errs[0].message);
+    let level = store.document().children(def)[0];
+    store.apply(tx("break spec", vec![Op::Set { id: power, path: path("port.signal"), slot: Slot::Bound(Expr::parse(&format!("{level}.port.signal * 1 W")).unwrap()) }])).unwrap();
     let e = definition::instantiate(store.document(), def, "free", "bar2", &place(scene)).unwrap_err();
     assert!(e.contains("default must be a constant"), "{e}");
     store.document().check_invariants().unwrap();
+}
+
+/// An override whose target leaves the definition is kept, applies nothing,
+/// and is listed as stale (component-model.md §5.3); restoring the target
+/// makes it apply again.
+#[test]
+fn an_override_outlives_its_target_as_a_stale_override() {
+    let Lib { mut store, scene, def, .. } = library();
+    let (_, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    store.apply(tx("instantiate bar", ops)).unwrap();
+    let u = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "use").unwrap();
+    let copy = store.document().children(u)[0];
+    let (_, template_rect) = copy.expanded_parts().unwrap();
+    store.apply(tx("recolour", vec![Op::Set { id: copy, path: path("fill.color"), slot: Slot::Const(Value::Color([1.0, 0.0, 0.0, 1.0])) }])).unwrap();
+    assert!(store.stale_overrides().is_empty());
+    store.apply(tx("drop the bar", vec![Op::Delete { id: template_rect }])).unwrap();
+    assert!(store.document().live(copy).is_none());
+    let stale = store.stale_overrides();
+    assert_eq!(stale.len(), 1, "{stale:?}");
+    assert!(stale[0].1.contains(&format!("no {template_rect}")), "{stale:?}");
+    store.undo(1).unwrap().unwrap();
+    assert!(store.stale_overrides().is_empty());
+    assert_eq!(resolved(&store, copy, "fill.color"), Value::Color([1.0, 0.0, 0.0, 1.0]));
 }

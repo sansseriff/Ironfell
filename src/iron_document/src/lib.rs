@@ -879,6 +879,11 @@ impl Store {
     }
 
     /// Why the across/through network kept its last solution, if it did.
+    /// Overrides that apply nothing, and why (component-model.md §5.3).
+    pub fn stale_overrides(&self) -> Vec<(NodeId, String)> {
+        expand::stale_overrides(&self.doc)
+    }
+
     /// What the last expansion could not derive, if anything.
     pub fn expansion_problems(&self) -> &[String] {
         &self.expansion_problems
@@ -1236,6 +1241,10 @@ impl Store {
     /// If it ever shows up in a profile, the alternative is applying with
     /// rollback through the inverses.
     fn run(&mut self, input: TransactionInput) -> Result<(Transaction, Document), Vec<ApplyError>> {
+        // Edits aimed inside an instance become edits to what it derives from
+        // (component-model.md §7): an argument, a slider, an override.
+        let mut input = input;
+        input.ops = expand::translate(&self.doc, &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
         let mut work = self.doc.clone();
         let stamp = work.version().next();
         let mut inverse = Vec::new();
@@ -1271,6 +1280,9 @@ impl Store {
                 }
                 if let Err(e) = op::check_created(&work, i, op, stamp) {
                     errors.push(e);
+                }
+                if let Err(message) = expand::check_scope(&work, op) {
+                    errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });
                 }
             }
         }

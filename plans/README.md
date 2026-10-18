@@ -47,7 +47,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`view-textures.md`](specs/view-textures.md) | Every view renders to its own texture | Done except the custom final pass and §4 tiling |
 | [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phase 1 done (store ownership, one pointer state machine, the 3D gizmo); phase 2 a product candidate; 4–5 in the render handoff |
 | [`text.md`](specs/text.md) | Text nodes, fonts (catalog, on-demand loading, installed fonts natively), glyph rendering, editing, `fmt` readouts, the Text inspector | Scaffold done 2026-10-17; §9 lists what is open |
-| [`component-model.md`](specs/component-model.md) | Components: authored vs expanded instances, ports as the one interface, overrides, scope, libraries, render analysis; amends ECM §4, §6.1, §9 | Approved 2026-10-18; phases 0–2 done (the `Facet` rename; `in` ports replace parameters; linked instances in an expanded tier, schema 7) |
+| [`component-model.md`](specs/component-model.md) | Components: authored vs expanded instances, ports as the one interface, overrides, scope, libraries, render analysis; amends ECM §4, §6.1, §9 | Approved 2026-10-18; phases 0–3 done (the `Facet` rename; `in` ports replace parameters; linked instances in an expanded tier, schema 7; overrides, edit translation, scope) |
 | [`model-interop.md`](specs/model-interop.md) | External computational Models: jobs, live sessions, optional local acceleration; shared web/native data and lifecycle semantics | Proposal drafted 2026-10-16; pending user approval. No implementation; conditional work order in `handoff-product.md` §4.2 |
 
 ## 4. Rendering

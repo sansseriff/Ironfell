@@ -1108,7 +1108,68 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
     let definition = |s: &iron_document::Store, name: &str| {
         s.document().nodes_of_type(ty("definition")).find(|&d| s.document().is_live(d) && name_of(s, d).as_deref() == Some(name)).expect("optics definition")
     };
-    let (laser, fiber, meter) = (definition(&scratch, "laser"), definition(&scratch, "fiber"), definition(&scratch, "meter"));
+    let (laser, fiber) = (definition(&scratch, "laser"), definition(&scratch, "fiber"));
+    // A dial meter: the optics meter's reading as a needle on a dial, and as
+    // text. The needle's angle is linear in the reading, so dragging it
+    // inverts through the chain to whatever sets the power.
+    let meter = {
+        let library = scratch.document().roots().iter().copied().find(|&r| scratch.document().live(r).is_some_and(|n| n.ty.name() == "library")).expect("library");
+        let ids = scratch.document().next_ids(7);
+        let (def, input, range, template, dial, needle, readout) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6]);
+        let key = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+        let named = |t: &str| {
+            let mut n = DocName::default();
+            n.text = Slot::Const(Value::Str(t.into()));
+            n.wrap()
+        };
+        let port = |kind: &str, default: Value| {
+            let mut p = iron_document::facet::Port::default();
+            p.kind = Slot::Const(Value::Str(kind.into()));
+            p.dir = Slot::Const(Value::Enum("in".into()));
+            p.signal = Slot::Const(default);
+            p.wrap()
+        };
+        let at = |x: f64, y: f64| {
+            let mut t = Transform2d::default();
+            t.x = n(x);
+            t.y = n(y);
+            t
+        };
+        let mut template_facet = Template::default();
+        template_facet.notation = Slot::Const(Value::Str("cartoon".into()));
+        let mut r = Radius::default();
+        r.rx = n(55.0);
+        r.ry = n(55.0);
+        let mut face = Fill::default();
+        face.color = Slot::Const(Value::Color([0.95, 0.96, 0.98, 1.0]));
+        let mut rim = Stroke::default();
+        rim.color = Slot::Const(Value::Color([0.3, 0.32, 0.38, 1.0]));
+        rim.width = n(3.0);
+        let mut needle_at = at(600.0, 175.0);
+        needle_at.rot = Slot::Bound(Expr::parse(&format!("-3.14159 + {input}.port.signal / {range}.port.signal * 3.14159")).expect("demo binding"));
+        let mut needle_size = Size::default();
+        needle_size.w = n(50.0);
+        needle_size.h = n(4.0);
+        let mut ink = Fill::default();
+        ink.color = Slot::Const(Value::Color([0.85, 0.2, 0.15, 1.0]));
+        let mut words = iron_document::facet::Text::default();
+        words.content = Slot::Bound(Expr::parse(&format!("fmt({input}.port.signal, \"mW\", 2)")).expect("demo binding"));
+        let k = last(&scratch, Some(library)).map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+        phase(&mut scratch, vec![
+            Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: k, facets: vec![named("dial meter")] },
+            Op::Create { id: input, ty: ty("port_spec"), parent: Some(def), order: key(0), facets: vec![named("in"), port("optical_power", Value::parse_quantity("0 W").expect("quantity"))] },
+            Op::Create { id: range, ty: ty("port_spec"), parent: Some(def), order: key(1), facets: vec![named("range"), port("value", Value::parse_quantity("20 mW").expect("quantity"))] },
+            Op::Create { id: template, ty: ty("template"), parent: Some(def), order: key(2), facets: vec![template_facet.wrap()] },
+            Op::Create { id: dial, ty: ty("ellipse"), parent: Some(template), order: key(0), facets: vec![at(600.0, 175.0).wrap(), r.wrap(), face.wrap(), rim.wrap(), named("dial")] },
+            Op::Create { id: needle, ty: ty("rect"), parent: Some(template), order: key(1), facets: vec![needle_at.wrap(), needle_size.wrap(), ink.wrap(), named("needle")] },
+            Op::Create { id: readout, ty: ty("text"), parent: Some(template), order: key(2), facets: vec![at(560.0, 240.0).wrap(), words.wrap(), iron_document::facet::Font::default().wrap(), {
+                let mut f = Fill::default();
+                f.color = Slot::Const(Value::Color([0.1, 0.1, 0.12, 1.0]));
+                f.wrap()
+            }, named("readout")] },
+        ]);
+        def
+    };
     let spec = |s: &iron_document::Store, def: NodeId, port: &str| {
         s.document().children(def).iter().copied().find(|&c| name_of(s, c).as_deref() == Some(port)).expect("port_spec")
     };

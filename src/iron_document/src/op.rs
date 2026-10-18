@@ -154,6 +154,10 @@ pub enum ErrorKind {
     /// A connection joins ports that cannot be joined: two kinds, two
     /// inputs, an input already fed, or a signal loop (ECM §6.1).
     BadConnection,
+    /// A binding reaches across a component boundary it may not cross
+    /// (component-model.md §8): a definition reading outside itself, or
+    /// outside reading an instance's insides other than its ports.
+    OutOfScope,
     /// The required constraints cannot all hold after this transaction (or,
     /// with `exact`, a requested value could not be honoured).
     Unsatisfiable,

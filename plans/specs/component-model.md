@@ -1,6 +1,6 @@
 # The component model
 
-**Status:** Approved 2026-10-18. Phases 0–2 done 2026-10-18; phase 3 next.
+**Status:** Approved 2026-10-18. Phases 0–3 done 2026-10-18; phase 4 next.
 **Scope:** Reusable components: what a component is, what the document stores for a
 placed one, how its insides are derived, its interface, overrides, scope, libraries,
 the views a model reads, and the render analysis the component boundary makes possible.
@@ -591,6 +591,20 @@ translation in `run` and `preview`, §8's validation.
 needle survives an edit to the definition; deleting the needle from the definition
 leaves a stale override listed by `stale_overrides()`; binding a text to
 `#m/needle.rotation` is refused with a message naming the ports.
+*Done 2026-10-18.* `override` nodes (`target`, `leaf`, constant `value`) under an
+entity or `use`, applied by expansion, adding a facet the node type admits;
+`Store::stale_overrides()` lists inert ones with a reason. `expand::translate` runs in
+`Store::run` before any op applies, so gestures, the inspector and the model surface all
+get it: a constant set on a derived leaf that inverts (`handle`) becomes a set on its
+source (an argument, a slider, held to its bounds), a constant set on a leaf of its own
+becomes an override (created, or updated when one already targets that leaf), a
+binding set on one is refused. `expand::check_scope` adds `out_of_scope` errors for
+§8's rules 1 and 2. The exits run natively (`tests/definitions.rs`) and in the
+Components tab, where a `dial meter` definition (dial, needle, `fmt` readout) replaces
+the optics meter: setting its needle to full scale drives the chain back to the
+slider, which stops at 20 mW. Not done: structural edits inside an instance stay
+refused (detach first); the inspector does not yet list an instance's overrides or
+stale ones.
 
 **Phase 4 — Make component.** §5.5, replacing ECM phase 4's `encapsulate`.
 *Exit:* ECM §9's three law tests pass, with the laser and fiber made into a "source"

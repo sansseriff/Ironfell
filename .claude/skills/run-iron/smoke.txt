@@ -663,6 +663,23 @@ eval comps()
 key Meta+z
 sleep 600
 eval comps()
+# Phase 3: edits inside an instance are translated (component-model.md §7).
+# The dial meter's needle angle is linear in its reading, which the chain
+# feeds from the slider: setting it to full scale sets the slider, which is
+# bounded at 20, so the needle stops short of it.
+eval window.inside = async (name, part) => { const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const plain = await __iron.view({fidelity:'skeleton', scope: c}); const u = plain.match(new RegExp(`<use id="([^"]+)" name="${name}"`))[1]; const open = await __iron.view({fidelity:'full', scope: u, expand: [u]}); return [u, open.match(new RegExp(`<[a-z]+ id="([^"]+)" name="${part}"[^>]*>`))]; }
+eval (async () => { const [, m] = await inside('meter', 'needle'); const r = await __iron.edit(`<edit><set id="${m[1]}" transform2d.rot="0"/></edit>`); const [, after] = await inside('meter', 'needle'); return [r.ok === true, after[0].match(/ rot="(-?\d+\.\d\d)/)[1], (await __iron.view({fidelity:'full', relation:'model'})).match(/name="source"[^>]*power="([^"]+)"/)[1]]; })()
+key Meta+z
+sleep 400
+# A constant set inside an instance becomes an override on its `use`,
+# which the tree view lists; undo removes it.
+eval (async () => { const [u, m] = await inside('meter', 'dial'); const r = await __iron.edit(`<edit><set id="${m[1]}" x="620" fill.color="#3366ccff"/></edit>`); const v = await __iron.view({fidelity:'full', scope: u}); return [r.ok === true, (v.match(/<override [^>]*>/g) || []).map(o => o.replace(/ (id|target)="[^"]+"/g, ''))]; })()
+eval (async () => { const [, m] = await inside('meter', 'dial'); return m[0].match(/ x="[^"]+"| fill\.color="[^"]+"/g); })()
+key Meta+z
+sleep 400
+eval (async () => { const [u, m] = await inside('meter', 'dial'); const v = await __iron.view({fidelity:'full', scope: u}); return [m[0].match(/ x="[^"]+"/)[0], (v.match(/<override /g) || []).length]; })()
+# Scope (§8): outside may read an instance's ports, not its insides.
+eval (async () => { const [, m] = await inside('meter', 'needle'); const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const r = await __iron.edit(`<edit><create id="$t" type="text" parent="${c}" content="{= str(#${m[1].slice(1)}.transform2d.rot)}"/></edit>`); return r.failure?.match(/kind="[a-z_]+"/)?.[0]; })()
 logs applied|rejected|panicked
 errors
 quit

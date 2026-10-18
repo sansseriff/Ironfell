@@ -274,6 +274,14 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
+    // A per-instance change to what an instance derives
+    // (component-model.md §5.3), a child of its entity or `use`.
+    TypeSpec {
+        name: "override",
+        facets: &[(K::Override, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     // An instance of a definition; its figures point at it with
     // `figures` relations. Its ports are children; `args` holds a value
     // per `in` port (component-model.md §4).
@@ -281,7 +289,7 @@ static TYPES: &[TypeSpec] = &[
         name: "entity",
         facets: &[(K::Instance, true), (K::Args, true), (K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port", "equation"]),
+        children: ChildPolicy::Only(&["port", "equation", "override"]),
     },
     // A relationship between operand nodes, solved in whatever direction a
     // drag chooses (constraint-system.md §4). Never materialised as content;

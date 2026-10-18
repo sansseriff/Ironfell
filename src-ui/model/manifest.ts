@@ -111,8 +111,15 @@ DEFINITIONS
   instance.def names it and args.<name> holds one value per in port, each bindable
   (args.level="{= #O.slider.value}"). Instantiation gives the entity one port per
   port_spec; an in port reads its argument unless a connection feeds it. Its
-  picture is an ordinary node with a figures relation to the entity; its bindings
-  read the entity's ports. Setting an unknown or wrongly typed argument is rejected.
+  picture is a use node (type use, use.notation) with a figures relation to the
+  entity. A linked instance (instance.mode="linked") stores only the entity, its
+  args and its uses: its ports and each use's picture are derived from the
+  definition, with ids like #3B/1A (instance/definition node); the views show its
+  ports, and its picture only when asked. Setting a value inside one sets what it
+  is derived from when it can (an argument, a slider), else makes an override child
+  of the instance; a binding may not reach inside an instance (read its ports), and
+  a definition's bindings read only its own nodes. Setting an unknown or wrongly
+  typed argument is rejected.
 
 PORTS AND SIGNALS
   An entity has port children (name; port.kind, port.dir in|out, port.signal), one per

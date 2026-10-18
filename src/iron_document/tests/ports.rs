@@ -463,6 +463,9 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     lab.store.apply(input).unwrap();
     let doc = lab.store.document();
     assert!(doc.live(lab.laser).is_none() && doc.live(lab.fiber).is_none() && doc.live(laser_use).is_none());
+    // Derived relations (the inner connection, `exposes`) leave the
+    // allocator alone: a fresh relation is still an authored one.
+    assert!(!doc.next_relation_id().is_expanded());
     // Black-boxing: the meter reads what it read.
     assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15, "{}", watts(&lab.signal(lab.meter, "in")));
     // The source has a power input bound to the slider and a light output.
@@ -489,12 +492,27 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     let (_, template_box) = laser_box.expanded_parts().unwrap();
     lab.store.apply(tx("taller laser", vec![Op::Set { id: template_box, path: path("size.h"), slot: Slot::Const(Value::Number(77.0)) }])).unwrap();
     assert_eq!(lab.store.resolved(laser_box, path("size.h")), Some(Value::Number(77.0)));
+    // A part of the nested laser is overridden from the outermost instance,
+    // its target the path down to the part, and the override outlives an
+    // edit to the laser definition (§5.3, "Nested targets").
+    lab.store.apply(tx("wider laser here", vec![Op::Set { id: laser_box, path: path("size.w"), slot: Slot::Const(Value::Number(140.0)) }])).unwrap();
+    let doc = lab.store.document();
+    let o = doc.children(source_picture).iter().copied().find(|&c| doc.live(c).unwrap().ty.name() == "override").expect("override on the source's picture");
+    let target = doc.get::<iron_document::facet::Override>(o).unwrap().target.constant().unwrap().as_ref().unwrap();
+    assert_eq!(target.path(), laser_box.path()[1..].to_vec());
+    lab.store.apply(tx("wider lasers", vec![Op::Set { id: template_box, path: path("size.w"), slot: Slot::Const(Value::Number(90.0)) }])).unwrap();
+    assert_eq!(lab.store.resolved(laser_box, path("size.w")), Some(Value::Number(140.0)));
+    assert!(lab.store.stale_overrides().is_empty(), "{:?}", lab.store.stale_overrides());
     // Saved and loaded, the nesting re-derives with the same ids.
     let text = lab.store.save();
     let loaded = Store::load(&text).unwrap();
     assert_eq!(loaded.resolved(laser_box, path("size.h")), Some(Value::Number(77.0)));
+    assert_eq!(loaded.resolved(laser_box, path("size.w")), Some(Value::Number(140.0)));
     assert_eq!(loaded.save(), text);
-    // Undo (the edit, the slider move, then the make) restores the selection.
+    // Undo (two widths, the edit, the slider move, then the make) restores
+    // the selection.
+    lab.store.undo(1).unwrap().unwrap();
+    lab.store.undo(1).unwrap().unwrap();
     lab.store.undo(1).unwrap().unwrap();
     lab.store.undo(1).unwrap().unwrap();
     lab.store.undo(1).unwrap().unwrap();

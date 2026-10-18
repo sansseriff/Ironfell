@@ -225,16 +225,25 @@ fn want_use(doc: &Document, u: NodeId, entity: NodeId, def: NodeId, notation: &s
     }
 }
 
-/// The live `override` children of an instance, as (node, target, leaf,
-/// value); one whose leaf does not parse is left out (it is stale).
+/// The overrides that reach `owner`'s copies, as (node, target, leaf, value)
+/// with `target` the definition-local node copied, weakest first
+/// (§5.3, "Nested targets"). `owner`'s path runs from an authored node
+/// through the definition-local nodes each enclosing instance copies; each
+/// step's own overrides apply when their target path is the rest of the
+/// way down. So the innermost definition's opinion comes first and the
+/// outermost instance's last, and the last applied wins.
 fn overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
-    // A derived instance (an inner entity or picture of a nested component)
-    // carries the overrides its definition put on the node it copies.
-    let mut out = match owner.expanded_parts() {
-        Some((_, local)) => overrides(doc, local),
-        None => Vec::new(),
-    };
-    out.extend(own_overrides(doc, owner));
+    let path = owner.path();
+    let mut out = Vec::new();
+    for j in (0..path.len()).rev() {
+        let rest = &path[j + 1..];
+        for (o, target, leaf, value) in own_overrides(doc, path[j]) {
+            let steps = target.path();
+            if steps.len() == rest.len() + 1 && steps[..rest.len()] == *rest {
+                out.push((o, steps[rest.len()], leaf, value));
+            }
+        }
+    }
     out
 }
 
@@ -292,7 +301,7 @@ pub fn stale_overrides(doc: &Document) -> Vec<(NodeId, String)> {
             out.push((o, "its target or leaf is not well formed".into()));
             continue;
         };
-        let derived = NodeId::expanded(owner, target).filter(|&d| doc.is_live(d));
+        let derived = NodeId::from_path(&[owner.path(), target.path()].concat()).filter(|&d| doc.is_live(d));
         match derived {
             None => out.push((o, format!("{def} has no {target} for {owner} to derive"))),
             Some(d) if doc.leaf(d, leaf).is_none() => out.push((o, format!("{target} has no {leaf}"))),
@@ -478,10 +487,13 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
     // there (or created earlier in this transaction) updated, else a new one.
     let mut made: Vec<(NodeId, NodeId, LeafPath, NodeId)> = Vec::new();
     let mut override_op = |owner: NodeId, local: NodeId, path: LeafPath, value: Value, out: &mut Vec<Op>| -> Result<(), String> {
-        if owner.is_expanded() {
-            return Err(format!("{owner} is an instance nested inside a component: overriding its parts is not supported yet; edit its definition, or the component's"));
-        }
-        let existing = overrides(doc, owner).into_iter().find(|(_, t, l, _)| *t == local && *l == path).map(|(o, ..)| o).or_else(|| made.iter().find(|m| m.0 == owner && m.1 == local && m.2 == path).map(|m| m.3));
+        // A part of a nested instance is overridden from the outermost one,
+        // its target the path down to the part (§5.3, "Nested targets").
+        let mut steps = owner.path();
+        let owner = steps.remove(0);
+        steps.push(local);
+        let local = NodeId::from_path(&steps).ok_or_else(|| format!("{owner}: no path to {local}"))?;
+        let existing = own_overrides(doc, owner).into_iter().find(|(_, t, l, _)| *t == local && *l == path).map(|(o, ..)| o).or_else(|| made.iter().find(|m| m.0 == owner && m.1 == local && m.2 == path).map(|m| m.3));
         match existing {
             Some(o) => out.push(Op::Set { id: o, path: "override.value".parse().expect("declared leaf"), slot: Slot::Const(value) }),
             None => {

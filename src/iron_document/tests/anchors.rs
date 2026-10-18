@@ -156,3 +156,114 @@ fn a_following_anchor_sits_on_its_partner_and_follows_it() {
     assert_eq!(num(&store, jack_use, "transform2d.x"), 150.0);
     assert_eq!(world(&store), (200.0, 210.0));
 }
+
+fn world(store: &Store, anchor: NodeId) -> (f64, f64) {
+    (num(store, anchor, "anchor.wx"), num(store, anchor, "anchor.wy"))
+}
+fn close(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6
+}
+
+#[test]
+fn dragging_a_loose_end_off_unplugs_it_in_one_step() {
+    let Bench { mut store, jack_use, lead_anchor, .. } = bench();
+    let lead_use = lead_anchor.expanded_root().unwrap();
+    let connected = |s: &Store| s.port_anchors().iter().any(|a| a.anchor == lead_anchor && a.connection.is_some());
+    assert!(connected(&store));
+    let entries = store.history().past().len();
+    // Unplugged for the drag: the end stays where it was, the jack too.
+    let p = store.begin_plug(lead_anchor, lead_use).unwrap();
+    assert!(!connected(&store));
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0));
+    store.plug_drag(&p, [500.0, 480.0], None);
+    assert!(store.finish_plug(p, None).unwrap().is_some());
+    assert!(close(world(&store, lead_anchor), (500.0, 480.0)), "{:?}", world(&store, lead_anchor));
+    assert_eq!(num(&store, jack_use, "transform2d.x"), 100.0);
+    assert_eq!(store.history().past().len(), entries + 1);
+    // One undo plugs it back in.
+    store.undo(1).unwrap().unwrap();
+    assert!(connected(&store));
+    assert_eq!(world(&store, lead_anchor), (150.0, 210.0));
+    // Released back on the port it came from, nothing changes.
+    let p = store.begin_plug(lead_anchor, lead_use).unwrap();
+    let targets = store.plug_targets(&p);
+    assert_eq!(targets.len(), 1, "{targets:?}");
+    store.plug_drag(&p, [0.0, 0.0], Some(&targets[0]));
+    assert_eq!(store.finish_plug(p, Some(targets[0].clone())).unwrap(), None);
+    assert!(connected(&store));
+    assert_eq!(store.history().past().len(), entries);
+}
+
+#[test]
+fn plugging_two_rigid_ports_mates_their_parts() {
+    let Bench { mut store, jack_use, lead_anchor, .. } = bench();
+    // Free the jack's out: unplug the lead.
+    let c = store.port_anchors().into_iter().find(|a| a.anchor == lead_anchor).unwrap().connection.unwrap();
+    store.unplug(c, "unplug", Actor::Human).unwrap();
+    // A socket: an in port at (0, 5) facing down (+y), placed at (400, 0).
+    let library = store.document().roots()[0];
+    let comp = store.document().roots()[1];
+    let model = store.document().roots()[2];
+    let ids = store.document().next_ids(5);
+    let [socket, socket_in, socket_t, socket_body, socket_anchor] = ids.try_into().unwrap();
+    let mut facing = at(0.0, 5.0);
+    facing.rot = Slot::Const(Value::Number(std::f64::consts::FRAC_PI_2));
+    let mut t = Template::default();
+    t.notation = Slot::Const(Value::Str("c".into()));
+    store
+        .apply(tx("socket", vec![
+            Op::Create { id: socket, ty: ty("definition"), parent: Some(library), order: key(5), facets: vec![named("socket")] },
+            Op::Create { id: socket_in, ty: ty("port_spec"), parent: Some(socket), order: key(0), facets: vec![named("in"), port("in", Slot::Const(Value::Number(0.0)))] },
+            Op::Create { id: socket_t, ty: ty("template"), parent: Some(socket), order: key(1), facets: vec![t.wrap()] },
+            Op::Create { id: socket_body, ty: ty("rect"), parent: Some(socket_t), order: key(0), facets: vec![at(-10.0, 0.0).wrap(), Size::default().wrap()] },
+            Op::Create { id: socket_anchor, ty: ty("empty"), parent: Some(socket_t), order: key(1), facets: vec![facing.wrap(), anchor(socket_in, false), named("in")] },
+        ]))
+        .unwrap();
+    let place = Placement {
+        entity_parent: Some(model),
+        entity_after: store.document().children(model).last().map(|&c| store.document().live(c).unwrap().order.clone()),
+        figure_parent: Some(comp),
+        figure_after: store.document().children(comp).last().map(|&c| store.document().live(c).unwrap().order.clone()),
+    };
+    let (_, ops) = definition::instantiate(store.document(), socket, "c", "socket", &place).unwrap();
+    store.apply(tx("place socket", ops)).unwrap();
+    let socket_use = *store.document().children(comp).last().unwrap();
+    store.apply(tx("move socket", vec![Op::Set { id: socket_use, path: path("transform2d.x"), slot: Slot::Const(Value::Number(400.0)) }])).unwrap();
+    let socket_anchor = NodeId::expanded(socket_use, socket_anchor).unwrap();
+    let jack_anchor = store.port_anchors().into_iter().find(|a| a.body == jack_use).unwrap().anchor;
+    assert_eq!(world(&store, socket_anchor), (400.0, 5.0));
+
+    // Dragged by its port onto the jack's: it snaps there, turned to face it.
+    let p = store.begin_plug(socket_anchor, socket_use).unwrap();
+    let targets = store.plug_targets(&p);
+    assert_eq!(targets.iter().map(|t| t.anchor).collect::<Vec<_>>(), vec![jack_anchor]);
+    store.plug_drag(&p, [140.0, 215.0], Some(&targets[0]));
+    store.finish_plug(p, Some(targets[0].clone())).unwrap().unwrap();
+    assert!(close(world(&store, socket_anchor), (150.0, 210.0)), "{:?}", world(&store, socket_anchor));
+    let facing = num(&store, socket_anchor, "anchor.wrot");
+    assert!((facing.abs() - std::f64::consts::PI).abs() < 1e-6, "{facing}");
+    assert!(store.clusters().containing(socket_use).is_some(), "mated");
+
+    // Mated: dragging either part moves the other.
+    let h = store.begin_drag(jack_use, [0.0, 0.0]);
+    store.drag_to(&h, [130.0, 200.0]);
+    store.commit_gesture("move jack", Actor::Human, 0).unwrap().unwrap();
+    // The mate holds exactly; the drag's target within the solver's
+    // strong-over-weak weighting (a few thousandths of a unit here).
+    let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 0.05 && (a.1 - b.1).abs() < 0.05;
+    assert!(close(world(&store, socket_anchor), world(&store, jack_anchor)));
+    assert!(near(world(&store, socket_anchor), (180.0, 210.0)), "{:?}", world(&store, socket_anchor));
+    let h = store.begin_drag(socket_use, [0.0, 0.0]);
+    let [sx, sy] = [num(&store, socket_use, "transform2d.x"), num(&store, socket_use, "transform2d.y")];
+    store.drag_to(&h, [sx + 10.0, sy]);
+    store.commit_gesture("move socket", Actor::Human, 0).unwrap().unwrap();
+    assert!((num(&store, jack_use, "transform2d.x") - 140.0).abs() < 0.05, "{}", num(&store, jack_use, "transform2d.x"));
+    assert!(close(world(&store, socket_anchor), world(&store, jack_anchor)));
+
+    // Undo the two moves and the plug: apart again, where it was.
+    for _ in 0..3 {
+        store.undo(1).unwrap().unwrap();
+    }
+    assert_eq!(world(&store, socket_anchor), (400.0, 5.0));
+    assert!(store.clusters().containing(socket_use).is_none());
+}

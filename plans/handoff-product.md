@@ -72,7 +72,7 @@ silently. Each line names the spec that owns its detail and exit criteria.
 
 | Task | What | Spec |
 |---|---|---|
-| Component model | Phases 0–4 done 2026-10-18. Open: overriding parts of nested instances (spec §15 q6), detaching nested components, make component from plain shapes, the associativity law test, phase 5 (libraries, after the project container), the inspector listing overrides | [`specs/component-model.md`](specs/component-model.md) §14 |
+| Component model | Phases 0–4 done 2026-10-18, with plugging and mates (§4.3) and nested overrides (§5.3). Open: detaching nested components, connecting ports a component does not expose, 3D anchors and mate types, make component from plain shapes, the associativity law test, phase 5 (libraries, after the project container), the inspector listing overrides | [`specs/component-model.md`](specs/component-model.md) §14 |
 | ECM phase 5 | Time-domain signals and the modulator: the four-representation demo (cartoon, schematic, 3D, scope trace from one signal) | [`specs/entity-composition-model.md`](specs/entity-composition-model.md) §12 phase 5 |
 | ECM phase 4 | Obligations, ghost lines, the tray, `omits`, `Store::encapsulate`, drill-in and breadcrumbs, the law tests | ECM §8–9, §12 phase 4 |
 | Phase 3 follow-ups | Pins on solved values (drag a heater's temperature, solve for power), electrical parts, adapters between port kinds | ECM §12 phase 3, "Next for this phase's area" |

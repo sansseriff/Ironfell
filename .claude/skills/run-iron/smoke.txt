@@ -714,6 +714,33 @@ sleep 600
 eval comps()
 # Scope (§8): outside may read an instance's ports, not its insides.
 eval (async () => { const [, m] = await inside('meter', 'needle'); const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const r = await __iron.edit(`<edit><create id="$t" type="text" parent="${c}" content="{= str(#${m[1].slice(1)}.transform2d.rot)}"/></edit>`); return r.failure?.match(/kind="[a-z_]+"/)?.[0]; })()
+# Plugging (component-model.md §4.3): a drag that starts on a port connects
+# or disconnects it. The meter dragged by its `in` port onto the spare
+# laser's `out` snaps there and mates: it reads the spare's 10 mW, and the
+# fiber's end stays where it was. Dragging the laser carries the mated meter.
+# Two undos put both back. The short fiber's loose end dropped on the spare
+# laser plugs in; undo.
+eval window.at = async (u, p) => (await inside(u, p))[1][0].match(/ wx="(-?[\d.]+)" wy="(-?[\d.]+)"/).slice(1).map(Number).map(Math.round)
+eval window.reads = async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [...v.matchAll(/<entity[^>]*name="(meter|short fiber)"[^>]*mode="linked"[\s\S]*?<port id="[^"]+" name="in"[^>]*signal="([^"]+)"/g)].map(m => `${m[1]} ${m[2]}`); }
+dclick 800 700
+sleep 300
+ddrag 545 175 250 470 14
+sleep 600
+eval (async () => [await at('fiber','out'), await at('meter','in'), await reads()])()
+ddrag 125 475 225 475 10
+sleep 600
+eval (async () => [await at('spare laser','out'), await at('meter','in')])()
+key Meta+z
+sleep 400
+key Meta+z
+sleep 600
+eval (async () => [await at('fiber','out'), await at('meter','in'), await reads()])()
+ddrag 540 475 246 478 14
+sleep 600
+eval (async () => [await at('short fiber','in'), await reads()])()
+key Meta+z
+sleep 600
+eval reads()
 logs applied|rejected|panicked
 errors
 quit

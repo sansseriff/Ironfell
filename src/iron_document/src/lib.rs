@@ -39,6 +39,7 @@ pub mod port;
 pub mod registry;
 pub mod serial;
 pub mod shape;
+pub mod plug;
 pub mod solve;
 pub mod sym;
 pub mod text;
@@ -101,6 +102,23 @@ impl DragHandle {
     pub fn is_locked(&self) -> bool {
         matches!(self.mode, DragMode::Locked(_))
     }
+}
+
+/// A plug drag in progress (component-model.md §4.3), from
+/// `Store::begin_plug`: a port dragged to connect or disconnect it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plugging {
+    /// The port dragged from, as it was when the drag began.
+    pub from: plug::PortAnchor,
+    /// What follows the pointer: the loose end itself, or the instance a
+    /// rigid port belongs to.
+    pub moved: NodeId,
+    pub drag: DragHandle,
+    /// `moved`'s rotation when the drag began.
+    pub rot0: f64,
+    /// The port it was connected to, and the unplug applied for the drag.
+    pub was: Option<NodeId>,
+    unplugged: Option<Version>,
 }
 
 /// What one frame of a drag cost (CS phase 3 exit 9).
@@ -299,7 +317,9 @@ impl Store {
             }
             let cluster_id = cluster.id;
             let target = self.world_affine(id).apply(anchor);
-            self.fingers.push(Finger { node: id, anchor, target });
+            let mated = cluster.constraints.iter().any(|c| c.spec.kind == "mate" && c.nodes().any(|n| n == id));
+            let hold_rot = mated.then(|| self.resolved(id, t2("rot")).and_then(|v| v.as_f64()).unwrap_or(0.0));
+            self.fingers.push(Finger { node: id, anchor, target, hold_rot });
             self.drivers.extend(free);
             return DragHandle { node: id, anchor, mode: DragMode::Cluster(cluster_id) };
         }
@@ -350,6 +370,159 @@ impl Store {
                 }
                 SolveReport { converged: true, ..Default::default() }
             }
+        }
+    }
+
+    // ---- Plugging (component-model.md §4.3) --------------------------------
+
+    /// Every port anchor, with where it is and what it is connected to.
+    pub fn port_anchors(&self) -> Vec<plug::PortAnchor> {
+        let read = |l: Leaf| self.reactive.read(&self.doc, l);
+        plug::port_anchors(&self.doc, &read)
+    }
+
+    /// Remove a connection, as one transaction: the far ends that followed
+    /// it stay where they are (their positions set, as overrides inside an
+    /// instance) rather than return to their template positions.
+    pub fn unplug(&mut self, connection: NodeId, label: impl Into<String>, actor: Actor) -> Result<Version, String> {
+        let t2 = |f: &str| LeafPath::new(FacetKind::Transform2d, f).expect("declared");
+        let ends = port::ends(&self.doc, connection).ok_or_else(|| format!("{connection} is not a connection"))?;
+        let pins: Vec<(NodeId, f64, f64)> = self
+            .port_anchors()
+            .into_iter()
+            .filter(|a| a.follow && (a.outer == ends.0 || a.outer == ends.1 || a.port == ends.0 || a.port == ends.1))
+            .filter_map(|a| Some((a.anchor, self.resolved(a.anchor, t2("x"))?.as_f64()?, self.resolved(a.anchor, t2("y"))?.as_f64()?)))
+            .collect();
+        let mut ops: Vec<Op> = self.doc.relations_from(connection).map(|r| Op::Unlink { id: r.id }).collect();
+        ops.push(Op::Delete { id: connection });
+        let label = label.into();
+        let tx = |label: &str, ops| TransactionInput { label: label.to_owned(), actor, ts: 0, idempotency_key: None, ops, exact: false };
+        let first = self.apply(tx(&label, ops)).map_err(|e| e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?.version;
+        let sets: Vec<Op> = pins
+            .into_iter()
+            .flat_map(|(a, x, y)| [Op::Set { id: a, path: t2("x"), slot: Slot::Const(Value::Number(x)) }, Op::Set { id: a, path: t2("y"), slot: Slot::Const(Value::Number(y)) }])
+            .collect();
+        if sets.is_empty() {
+            return Ok(first);
+        }
+        match self.apply(tx(&label, sets)) {
+            Ok(a) => {
+                self.merge_with_previous(first, label);
+                Ok(a.version)
+            }
+            Err(e) => {
+                self.retract(first, 0);
+                Err(e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+            }
+        }
+    }
+
+    /// Start dragging the port at `anchor` to plug it somewhere: a loose
+    /// end moves itself, a rigid port moves `moved` (the instance it
+    /// belongs to, as the pointer reached it). A connected port is unplugged
+    /// at once, so the drag shows it free; `finish_plug` or `cancel_plug`
+    /// settles it.
+    pub fn begin_plug(&mut self, anchor: NodeId, moved: NodeId) -> Result<Plugging, String> {
+        let from = self.port_anchors().into_iter().find(|a| a.anchor == anchor).ok_or_else(|| format!("{anchor} is not a port's anchor"))?;
+        if from.sealed {
+            return Err(format!("{} is inside a component that does not expose it", from.port));
+        }
+        let unplugged = match from.connection {
+            Some(c) => Some(self.unplug(c, format!("disconnect {}", from.name), Actor::Human)?),
+            None => None,
+        };
+        let moved = if from.follow { anchor } else { moved };
+        self.begin_gesture(&[moved]);
+        let grab = if from.follow {
+            [0.0, 0.0]
+        } else {
+            let m = self.world_affine(moved).inverse().unwrap_or(Affine2::IDENTITY).then(self.world_affine(anchor));
+            m.apply([0.0, 0.0])
+        };
+        let drag = self.begin_drag(moved, grab);
+        let rot0 = self.resolved(moved, LeafPath::new(FacetKind::Transform2d, "rot").expect("declared")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        Ok(Plugging { was: from.partner, from, moved, drag, rot0, unplugged })
+    }
+
+    /// The ports the drag could plug into now.
+    pub fn plug_targets(&self, p: &Plugging) -> Vec<plug::PortAnchor> {
+        self.port_anchors().into_iter().filter(|t| plug::compatible(&self.doc, &p.from, t).is_ok()).collect()
+    }
+
+    /// Move the drag's port to `world` (its composition), or snap it onto
+    /// `target`: onto its anchor, and turned to face it when it is rigid.
+    pub fn plug_drag(&mut self, p: &Plugging, world: [f64; 2], target: Option<&plug::PortAnchor>) -> SolveReport {
+        let at = target.map_or(world, |t| t.world);
+        if !p.from.follow {
+            let rot = match target {
+                Some(t) if !t.follow => {
+                    let turn = t.facing + std::f64::consts::PI - p.from.facing;
+                    p.rot0 + (turn + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+                }
+                _ => p.rot0,
+            };
+            let path = LeafPath::new(FacetKind::Transform2d, "rot").expect("declared");
+            if self.resolved(p.moved, path).and_then(|v| v.as_f64()).is_none_or(|r| (r - rot).abs() > 1e-12) {
+                let _ = self.preview_target(p.moved, path, Value::Number(rot));
+            }
+        }
+        self.drag_to(&p.drag, at)
+    }
+
+    /// Release a plug drag: plugged into `target` when given, else left
+    /// where it was dropped. One history entry with the drag's unplug;
+    /// released back on the port it came from, nothing changes. Returns the
+    /// entry's version, `None` when nothing changed.
+    pub fn finish_plug(&mut self, p: Plugging, target: Option<plug::PortAnchor>) -> Result<Option<Version>, String> {
+        self.end_drag(&p.drag);
+        if p.was.is_some() && target.as_ref().map(|t| t.outer) == p.was {
+            self.cancel_gesture();
+            if let Some(v) = p.unplugged {
+                self.retract(v, 0);
+            }
+            return Ok(None);
+        }
+        let label = match &target {
+            Some(t) => format!("connect {} to {}", p.from.name, t.name),
+            None if p.was.is_some() => format!("disconnect {}", p.from.name),
+            None => format!("move {}", p.from.name),
+        };
+        let mut last = p.unplugged;
+        let fold = |s: &mut Store, last: &mut Option<Version>, now: Version| {
+            if let Some(v) = *last {
+                s.merge_with_previous(v, label.clone());
+            }
+            *last = Some(now);
+        };
+        if p.from.follow && target.is_some() {
+            // The end will sit on its partner; where the pointer left it
+            // is not kept.
+            self.cancel_gesture();
+        } else {
+            match self.commit_gesture(label.clone(), Actor::Human, 0) {
+                Some(Ok(a)) => fold(self, &mut last, a.version),
+                Some(Err(e)) => return Err(e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")),
+                None => {}
+            }
+        }
+        if let Some(t) = target {
+            let id = self.doc.next_id();
+            let rels = self.doc.next_relation_ids(2);
+            let ops = plug::plug_ops(&self.doc, p.from.outer, t.outer, id, [rels[0], rels[1]])?;
+            let input = TransactionInput { label: label.clone(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false };
+            let a = self.apply(input).map_err(|e| e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+            fold(self, &mut last, a.version);
+        }
+        Ok(last)
+    }
+
+    /// Abandon a plug drag (Esc): nothing moves, and the port is connected
+    /// as it was.
+    pub fn cancel_plug(&mut self, p: Plugging) {
+        self.end_drag(&p.drag);
+        self.cancel_gesture();
+        if let Some(v) = p.unplugged {
+            self.retract(v, 0);
         }
     }
 

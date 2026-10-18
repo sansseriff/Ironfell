@@ -181,9 +181,28 @@ pub(crate) struct World {
     pub press: Vec2,
 }
 
+/// A port dragged to plug or unplug it (component-model.md §4.3): its
+/// loose end, or the instance it belongs to by the port, follows the
+/// pointer and snaps onto a compatible port within `radius`.
+pub(crate) struct PlugDrag {
+    pub plugging: iron_document::Plugging,
+    pub view: PanelView,
+    /// The port's position less the pointer's at the press, in the
+    /// composition (the panel's document px).
+    pub offset: kurbo::Vec2,
+    /// The snap distance in composition units.
+    pub radius: f64,
+    /// The ports it could plug into, and the one it is snapped to.
+    pub targets: Vec<iron_document::plug::PortAnchor>,
+    pub target: Option<iron_document::plug::PortAnchor>,
+    /// Where the dragged port is now.
+    pub at: Point,
+}
+
 /// Every document edit a pointer can make.
 pub(crate) enum Manip {
     Drag(Drag),
+    Plug(PlugDrag),
     Transform(Transform2),
     /// A path point's Bézier handle, `out` or in, mirrored unless Alt;
     /// `to_local` maps window px into the path's space.
@@ -210,6 +229,7 @@ impl Manip {
     pub fn view_mut(&mut self) -> Option<&mut PanelView> {
         match self {
             Manip::Drag(d) => Some(&mut d.view),
+            Manip::Plug(d) => Some(&mut d.view),
             Manip::Transform(t) => Some(&mut t.view),
             _ => None,
         }
@@ -223,6 +243,7 @@ impl Manip {
                 Some(_) => format!("duplicate {}", d.label.trim_start_matches("move ")),
                 None => d.label.clone(),
             },
+            Manip::Plug(d) => format!("plug {}", d.plugging.from.name),
             Manip::Transform(t) => t.label.clone(),
             Manip::PathHandle { .. } => "move handle".into(),
             Manip::Bend { .. } => "bend segment".into(),
@@ -255,6 +276,7 @@ impl Manip {
                 }
             }
             Manip::Plane { handle, .. } => store.end_drag(handle),
+            Manip::Plug(d) => store.end_drag(&d.plugging.drag),
             _ => {}
         }
     }
@@ -286,6 +308,19 @@ impl Manip {
                         );
                     }
                 }
+            }
+            Manip::Plug(d) => {
+                let q = d.view.affine().inverse() * screen + d.offset;
+                d.targets = cx.store.plug_targets(&d.plugging);
+                d.target = d
+                    .targets
+                    .iter()
+                    .map(|t| (Point::new(t.world[0], t.world[1]).distance(q), t))
+                    .filter(|(dist, _)| *dist <= d.radius)
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, t)| t.clone());
+                d.at = d.target.as_ref().map_or(q, |t| Point::new(t.world[0], t.world[1]));
+                cx.store.plug_drag(&d.plugging, [q.x, q.y], d.target.as_ref());
             }
             Manip::Transform(t) => {
                 let p = t.view.affine().inverse() * screen;

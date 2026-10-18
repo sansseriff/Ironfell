@@ -37,6 +37,9 @@ pub const KINDS: &[ConstraintSpec] = &[
     ConstraintSpec { kind: "angle", roles: &["a", "b"], uses_value: true, equations: 1 },
     ConstraintSpec { kind: "horizontal", roles: &["a", "b"], uses_value: false, equations: 1 },
     ConstraintSpec { kind: "vertical", roles: &["a", "b"], uses_value: false, equations: 1 },
+    // Two frames held together, facing each other: a port plugged into a
+    // port (component-model.md §4.3). Connections imply them (`plug.rs`).
+    ConstraintSpec { kind: "mate", roles: &["a", "b"], uses_value: false, equations: 3 },
 ];
 
 pub fn spec(kind: &str) -> Option<&'static ConstraintSpec> {
@@ -50,6 +53,8 @@ pub struct Operand {
     pub anchor: [f64; 2],
     /// A `pin`'s world point.
     pub at: Option<[f64; 2]>,
+    /// A `mate`'s facing at the anchor, in the operand's space (radians).
+    pub turn: f64,
 }
 
 /// One constraint, read from the document and resolved values.
@@ -126,10 +131,14 @@ pub fn read(doc: &Document, read_value: &dyn Fn(Leaf) -> Option<Value>, id: Node
             None => None,
             Some(v) => Some(v.as_vec2().ok_or_else(|| format!("{id}: at must be a vec2"))?),
         };
+        let turn = match r.data.get("turn") {
+            None => 0.0,
+            Some(v) => v.as_f64().ok_or_else(|| format!("{id}: turn must be a number"))?,
+        };
         if doc.facet(r.to, crate::facet::FacetKind::Transform2d).is_none() {
             return Err(format!("{id} ({kind}): operand {} has no transform2d", r.to));
         }
-        operands.push(Operand { role, node: r.to, anchor, at });
+        operands.push(Operand { role, node: r.to, anchor, at, turn });
     }
     let _ = vec2;
     for role in spec.roles {

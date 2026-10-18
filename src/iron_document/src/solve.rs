@@ -63,6 +63,9 @@ pub struct Finger {
     pub node: NodeId,
     pub anchor: [f64; 2],
     pub target: [f64; 2],
+    /// Hold the node's rotation here too: a part mated to others is moved
+    /// whole, not swung about the grab (component-model.md §4.3).
+    pub hold_rot: Option<f64>,
 }
 
 /// A requested value the solver could not honour.
@@ -128,6 +131,7 @@ pub fn clusters(doc: &Document, reactive: &crate::graph::Reactive) -> Result<Clu
     let read = |l: Leaf| reactive.read(doc, l);
     let all: Vec<ConstraintInfo> = constraint::all(doc, &read)?
         .into_iter()
+        .chain(crate::plug::implied_mates(doc, &read))
         .filter(|c| c.enabled && c.nodes().all(|n| doc.is_live(n)))
         .collect();
     if all.is_empty() {
@@ -368,6 +372,7 @@ fn build_problem<'a>(
         // to a slider changes between solves.
         let value = read(constraint::value_leaf(c.id)).and_then(|v| v.as_f64()).unwrap_or(c.value);
         let at = c.operands[0].at;
+        let turns = [c.operands[0].turn, c.operands.get(1).map_or(0.0, |o| o.turn)];
         let term = match kind {
             "coincident" => Term::new(Tier::Required, locals, 2, move |v, r| {
                 let p = poses[0].0.point(v, poses[0].1);
@@ -390,6 +395,15 @@ fn build_problem<'a>(
             }
             "angle" => Term::new(Tier::Required, locals, 1, move |v, r| {
                 r[0] = wrap_angle(poses[1].0.rotation(v) - poses[0].0.rotation(v) - value);
+            }),
+            "mate" => Term::new(Tier::Required, locals, 3, move |v, r| {
+                let p = poses[0].0.point(v, poses[0].1);
+                let q = poses[1].0.point(v, poses[1].1);
+                r[0] = p[0] - q[0];
+                r[1] = p[1] - q[1];
+                // Facings opposed; a radian weighs like a unit here, as for
+                // `angle`.
+                r[2] = wrap_angle(poses[1].0.rotation(v) + turns[1] - poses[0].0.rotation(v) - turns[0] - std::f64::consts::PI);
             }),
             "horizontal" => Term::new(Tier::Required, locals, 1, move |v, r| {
                 r[0] = poses[0].0.point(v, poses[0].1)[1] - poses[1].0.point(v, poses[1].1)[1];
@@ -425,6 +439,12 @@ fn build_problem<'a>(
             r[1] = p[1] - target[1];
         }));
         tags.push(Tag::Finger(f.node));
+        if let Some(rot) = f.hold_rot
+            && let Some(&i) = b.var_index.get(&Leaf { node: f.node, path: t2("rot") })
+        {
+            problem.term(Term::new(Tier::Strong, vec![i], 1, move |v, r| r[0] = v[0] - rot));
+            tags.push(Tag::Finger(f.node));
+        }
     }
     (problem, tags)
 }

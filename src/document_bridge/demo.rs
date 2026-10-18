@@ -1243,7 +1243,13 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
             Op::Create { id: range, ty: ty("port_spec"), parent: Some(def), order: key(1), facets: vec![named("range"), port("value", "in", Slot::Const(Value::parse_quantity("20 mW").expect("quantity")))] },
             Op::Create { id: template, ty: ty("template"), parent: Some(def), order: key(2), facets: vec![cartoon()] },
             Op::Create { id: dial, ty: ty("ellipse"), parent: Some(template), order: key(0), facets: vec![at(600.0, 175.0).wrap(), r.wrap(), paint([0.95, 0.96, 0.98, 1.0]), rim.wrap(), named("dial")] },
-            Op::Create { id: in_at, ty: ty("empty"), parent: Some(template), order: key(1), facets: vec![at(545.0, 175.0).wrap(), anchor(input, false), named("in")] },
+            // Its port faces left (an anchor's +x is the way it faces), so
+            // plugged straight into a laser the meter sits upright.
+            Op::Create { id: in_at, ty: ty("empty"), parent: Some(template), order: key(1), facets: vec![{
+                let mut t = at(545.0, 175.0);
+                t.rot = n(std::f64::consts::PI);
+                t.wrap()
+            }, anchor(input, false), named("in")] },
             Op::Create { id: pivot, ty: ty("empty"), parent: Some(template), order: key(2), facets: vec![turn.wrap(), named("pivot")] },
             Op::Create { id: needle, ty: ty("rect"), parent: Some(pivot), order: key(0), facets: vec![at(0.0, -2.0).wrap(), size(50.0, 4.0), paint([0.85, 0.2, 0.15, 1.0]), named("needle")] },
             Op::Create { id: readout, ty: ty("text"), parent: Some(template), order: key(3), facets: vec![at(560.0, 240.0).wrap(), words.wrap(), iron_document::facet::Font::default().wrap(), paint([0.1, 0.1, 0.12, 1.0]), named("readout")] },

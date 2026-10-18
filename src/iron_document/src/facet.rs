@@ -369,6 +369,7 @@ facets! {
         follow: Bool = Value::Bool(false),
         wx: Number = Value::Number(0.0),
         wy: Number = Value::Number(0.0),
+        wrot: Number = Value::Number(0.0),
     }
 
     /// A placed picture of a component in one composition

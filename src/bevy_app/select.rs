@@ -118,6 +118,13 @@ const POINT: f64 = 7.0;
 const HANDLE_END: f64 = 7.0;
 /// How near (CSS px) a press must land to a path's point or handle end.
 const POINT_HIT: f64 = 7.0;
+/// CSS px from a port's anchor within which it is hot, and within which a
+/// dragged port snaps onto another (component-model.md §4.3).
+const PORT_HIT: f64 = 9.0;
+const PORT_SNAP: f64 = 24.0;
+/// A port's own highlight: a teal ring, apart from the selection's blue.
+const PORT_LIT: [f32; 4] = [0.05, 0.72, 0.58, 1.0];
+
 /// Rotation snap with Shift.
 const SNAP: f64 = std::f64::consts::PI / 12.0;
 
@@ -328,6 +335,9 @@ pub struct SelectTool {
     owned: Option<GestureId>,
     /// The 3D transform gizmo, while the selection is meshes in a 3D view.
     gizmo: Option<Gizmo3d>,
+    /// The hot port under the pointer: its panel, anchor, and where it is
+    /// in the panel's document px.
+    port_hover: Option<(String, NodeId, Point)>,
 }
 
 impl SelectTool {
@@ -384,6 +394,9 @@ enum AfterPress {
     Move { click: Click },
     /// A drag draws a marquee over `roots` (reached through `prefix`).
     Marquee { prefix: Vec<NodeId>, roots: Vec<NodeId>, click: Click },
+    /// A drag plugs or unplugs the port at `anchor`, moving `body` (or the
+    /// loose end itself).
+    Plug { anchor: NodeId, body: NodeId, click: Click },
 }
 
 /// What a press that did not become a drag does on release.
@@ -1353,14 +1366,17 @@ pub fn select_tool_system(
                 // Esc mid-gesture puts everything back, an Alt-drag's
                 // copies included.
                 tool.owned = None;
-                if let Gesture::Edit(m) = &tool.gesture {
-                    m.end(&mut store.0);
-                    store.0.cancel_gesture();
-                    if let Some(v) = m.duplicate() {
-                        store.0.retract(v, 0);
+                match std::mem::take(&mut tool.gesture) {
+                    Gesture::Edit(Manip::Plug(d)) => store.0.cancel_plug(d.plugging),
+                    Gesture::Edit(m) => {
+                        m.end(&mut store.0);
+                        store.0.cancel_gesture();
+                        if let Some(v) = m.duplicate() {
+                            store.0.retract(v, 0);
+                        }
                     }
+                    _ => {}
                 }
-                tool.gesture = Gesture::Idle;
                 tool.marquee = None;
             }
             // Esc leaves editing a path, keeping it selected.
@@ -1846,6 +1862,25 @@ pub fn select_tool_system(
                 }
             }
 
+            // A hot port: a drag plugs or unplugs it; a click selects the
+            // part it belongs to.
+            if *active == ActiveTool::Select
+                && view.dims == Dims::Two
+                && !mods(MOD_SHIFT)
+                && let Some((port, to_body)) = {
+                    let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
+                    hot_port(&geo, &view, screen, &here, mods(MOD_META), k)
+                }
+            {
+                let target = Reach { panel: view.panel.clone(), chain: to_body };
+                if !sel.selected.contains(&target.node()) {
+                    set_selection(&mut sel, tool, vec![target.clone()]);
+                }
+                tool.last_click = None;
+                tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Plug { anchor: port.anchor, body: target.node(), click: Click::Only(target) } };
+                break 'press;
+            }
+
             let top = top_hit(&hits);
             let shift = mods(MOD_SHIFT);
             let deep = mods(MOD_META);
@@ -2053,6 +2088,29 @@ pub fn select_tool_system(
                     let base = if matches!(click, Click::Keep) { reaches.clone() } else { Vec::new() };
                     tool.gesture = Gesture::Marquee { view, start: p0, prefix: prefix.clone(), roots: roots.clone(), base };
                 }
+                AfterPress::Plug { anchor, body, .. } => {
+                    let (anchor, body) = (*anchor, *body);
+                    match store.0.begin_plug(anchor, body) {
+                        Ok(plugging) => {
+                            let at = Point::new(plugging.from.world[0], plugging.from.world[1]);
+                            let [a, b, c, d, ..] = view.affine().as_coeffs();
+                            let zoom = (a * d - b * c).abs().sqrt().max(1e-9);
+                            tool.gesture = Gesture::Edit(Manip::Plug(manipulate::PlugDrag {
+                                offset: at - p0,
+                                radius: PORT_SNAP * k / zoom,
+                                targets: Vec::new(),
+                                target: None,
+                                at,
+                                view,
+                                plugging,
+                            }));
+                        }
+                        Err(why) => {
+                            info!("plug: {why}");
+                            tool.gesture = Gesture::Idle;
+                        }
+                    }
+                }
             }
         }
         // Alt during a move duplicates and drags the copies; Alt up takes
@@ -2119,7 +2177,7 @@ pub fn select_tool_system(
         match std::mem::take(&mut tool.gesture) {
             Gesture::Press { then, .. } => {
                 let click = match then {
-                    AfterPress::Move { click } | AfterPress::Marquee { click, .. } => click,
+                    AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } => click,
                 };
                 match click {
                     Click::Keep => {}
@@ -2129,6 +2187,11 @@ pub fn select_tool_system(
                         set_selection(&mut sel, tool, list);
                     }
                     Click::Clear => set_selection(&mut sel, tool, Vec::new()),
+                }
+            }
+            Gesture::Edit(Manip::Plug(d)) => {
+                if let Err(why) = store.0.finish_plug(d.plugging, d.target) {
+                    warn!("plug rejected: {why}");
                 }
             }
             Gesture::Edit(m) => {
@@ -2200,7 +2263,21 @@ pub fn select_tool_system(
                 }
             }
         }
+        // A hot port lights on its own; the part it belongs to does not.
+        let port = view
+            .filter(|v| v.dims == Dims::Two && *active == ActiveTool::Select && !space && !on_grip && !gizmo_hot && edit.reach.is_none())
+            .and_then(|v| {
+                let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == v.panel).collect();
+                hot_port(&geo, v, screen, &here, mods(MOD_META), k).map(|(a, _)| (v.panel.clone(), a.anchor, Point::new(a.world[0], a.world[1])))
+            });
+        if port.is_some() {
+            cursor = "grab".into();
+        }
+        if tool.port_hover != port {
+            tool.port_hover = port;
+        }
         let hover = match (view, top_hit(&hits)) {
+            (_, _) if tool.port_hover.is_some() => None,
             (Some(view), Some((chain, _))) if !on_grip && !gizmo_hot => {
                 let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
                 let k = target_index(geo.doc(), &chain, &here, mods(MOD_META));
@@ -2218,6 +2295,13 @@ pub fn select_tool_system(
     } else {
         if !matches!(tool.gesture, Gesture::Press { .. }) && tool.hover.is_some() {
             tool.hover = None;
+        }
+        if !matches!(tool.gesture, Gesture::Press { .. }) && tool.port_hover.is_some() {
+            tool.port_hover = None;
+        }
+        if matches!(tool.gesture, Gesture::Edit(Manip::Plug(_))) && tool.cursor != "grabbing" {
+            events.cursor("grabbing".into());
+            tool.cursor = "grabbing".into();
         }
         if matches!(tool.gesture, Gesture::Pan { .. }) && tool.cursor != "grabbing" {
             events.cursor("grabbing".into());
@@ -2335,6 +2419,49 @@ pub struct SelectOverlay {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The hot port nearest `screen` in `view` (component-model.md §4.3), with
+/// the chain down to the part it belongs to. A port is hot when its anchor
+/// is within `PORT_HIT`, nothing outside is sealed off from it, and the
+/// part it belongs to is what a click there would select: a top-level
+/// instance, not one whose inside is open. With `deep` (Cmd), any port.
+fn hot_port(geo: &Geo, view: &PanelView, screen: Point, here: &[&Reach], deep: bool, k: f64) -> Option<(iron_document::plug::PortAnchor, Vec<NodeId>)> {
+    let doc = geo.doc();
+    let comp = view.composition?;
+    let mut best: Option<(f64, iron_document::plug::PortAnchor, Vec<NodeId>)> = None;
+    for a in geo.store.port_anchors() {
+        if a.sealed || a.composition != Some(comp) {
+            continue;
+        }
+        // Two ports on one spot (a fiber's end on the meter it plugs
+        // into): the one drawn on top, as for picking.
+        let d = (view.affine() * Point::new(a.world[0], a.world[1])).distance(screen) - 1e-3 * doc.children(comp).iter().position(|&c| c == a.body).unwrap_or(0) as f64;
+        if d > PORT_HIT * k || best.as_ref().is_some_and(|b| b.0 <= d) {
+            continue;
+        }
+        // The chain from the composition's top level down to the anchor.
+        let mut chain = vec![a.anchor];
+        let mut at = a.anchor;
+        while let Some(p) = doc.live(at).and_then(|n| n.parent) {
+            if p == comp {
+                break;
+            }
+            chain.push(p);
+            at = p;
+        }
+        if doc.live(at).and_then(|n| n.parent) != Some(comp) {
+            continue;
+        }
+        chain.reverse();
+        let Some(b) = chain.iter().position(|&n| n == a.body) else { continue };
+        if !deep && target_index(doc, &chain, here, false) != b {
+            continue;
+        }
+        let to_body = chain[..=b].to_vec();
+        best = Some((d, a, to_body));
+    }
+    best.map(|(_, a, chain)| (a, chain))
+}
+
 pub fn draw_select_overlay(
     mut commands: Commands,
     panel_layers: Query<(&DocumentPanelLayer, &VectorView), Without<SelectOverlay>>,
@@ -2543,6 +2670,36 @@ pub fn draw_select_overlay(
                     && panel == o.panel
                 {
                     b.stroke(Affine::IDENTITY, thin.clone(), blue, (to_screen * to_comp.inverse()) * r.to_path(0.1));
+                }
+                // Ports: the hot one under the pointer; while one is
+                // dragged, every port it could plug into, the one it snaps
+                // to, and the dragged port itself.
+                let teal = |a: f32| peniko::Color::new([PORT_LIT[0], PORT_LIT[1], PORT_LIT[2], a]);
+                let ring = |b: &mut crate::vector::DisplayListBuilder<'_>, at: Point, r: f64, width: f64, halo: f32| {
+                    if halo > 0.0 {
+                        b.fill(Affine::IDENTITY, teal(halo), kurbo::Circle::new(at, (r + 5.0) * k));
+                    }
+                    let c = kurbo::Circle::new(at, r * k);
+                    b.fill(Affine::IDENTITY, white, c);
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(width * k), teal(1.0), c);
+                };
+                if let Some((_, _, at)) = tool.port_hover.as_ref().filter(|(p, ..)| p == &o.panel) {
+                    ring(b, to_screen * *at, 6.0, 2.0, 0.22);
+                    b.fill(Affine::IDENTITY, teal(1.0), kurbo::Circle::new(to_screen * *at, 2.5 * k));
+                }
+                if let Gesture::Edit(Manip::Plug(d)) = &tool.gesture
+                    && d.view.panel == o.panel
+                {
+                    for t in &d.targets {
+                        if d.target.as_ref().is_some_and(|s| s.anchor == t.anchor) {
+                            continue;
+                        }
+                        ring(b, to_screen * Point::new(t.world[0], t.world[1]), 4.5, 1.5, 0.0);
+                    }
+                    if let Some(t) = &d.target {
+                        ring(b, to_screen * Point::new(t.world[0], t.world[1]), 8.0, 2.5, 0.3);
+                    }
+                    b.fill(Affine::IDENTITY, teal(1.0), kurbo::Circle::new(to_screen * d.at, 3.5 * k));
                 }
                 if let Some((p, r)) = &tool.marquee
                     && p == &o.panel

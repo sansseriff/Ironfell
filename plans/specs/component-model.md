@@ -1,6 +1,6 @@
 # The component model
 
-**Status:** Approved 2026-10-18. Phases 0–4 done 2026-10-18 (with anchors, §4.2); phases 5–6 open.
+**Status:** Approved 2026-10-18. Phases 0–4 done 2026-10-18 (with anchors, §4.2; plugging and mates, §4.3; nested overrides, §5.3); phases 5–6 open.
 **Scope:** Reusable components: what a component is, what the document stores for a
 placed one, how its insides are derived, its interface, overrides, scope, libraries,
 the views a model reads, and the render analysis the component boundary makes possible.
@@ -226,6 +226,112 @@ quiet blue; `EMPTY_HALF` = 6 units), which a bare empty is hovered and picked by
 empty with children is a container whose box includes its marker. Changing how an
 empty looks is not built. Anchors exist only in 2D.
 
+### 4.3 Plugging and mates (2026-10-18)
+
+**Ports face a direction.** An anchor's own rotation is the direction the port faces:
+its local +x points out of the part, the way a mating connector arrives from. The graph
+derives `anchor.wrot` beside `wx`/`wy` (the facing in composition space). The laser's
+`out` faces +x; the meter's `in` faces −x (`rot = π`). In 3D an anchor becomes a full
+frame (position and orientation; +z out, as in CAD mate connectors).
+
+**What a connection means for geometry** depends on its two anchors, and nothing else is
+stored. The connection is the one authored fact; deleting it ends the signal and the
+geometry together:
+
+| Ends | Geometry |
+|---|---|
+| follow ↔ rigid | The follow end sits on the rigid one (§4.2): a fiber's end on a laser |
+| rigid ↔ rigid | A **mate**: the two bodies are held port to port, facing each other |
+| follow ↔ follow | None: the ends stay where they are |
+
+**A mate is a constraint the solver holds** (constraint-system.md), implied by the
+connection rather than stored as a `constraint` node. `solve::clusters` adds one `mate`
+term per such connection: the two anchor points coincide and their facings are opposed
+(3 equations in 2D). Its operands are the **bodies** the anchors are carried by: each
+anchor's outermost authored instance (`NodeId::expanded_root`), because derived nodes are
+never solver variables. Solving is flat and authoring is scoped (§8.1): a meter nested in
+a component and mated to a laser outside moves the whole component. A connection whose
+two anchors share a body (both inside one component) implies nothing; that body is rigid.
+With the mate, the bodies are one cluster, and a drag of either moves both (the drag's
+finger is strong, the mate required, least change keeps the assembly from turning).
+
+**Plugging is a gesture on the port.** Interaction follows the select tool's scopes:
+
+- A **port is hot** when the pointer is within `PORT_HIT` of its anchor and the anchor
+  is one instance level below what a click would select: the ports of top-level
+  instances, or of the instances inside an open one. With **Cmd** (the select tool's
+  deep-select key, as in Figma) ports at any depth are hot. A hot port lights up with its
+  own highlight, distinct from a node's hover outline.
+- A **drag that starts on a hot port** connects or disconnects. It never edits the port's
+  position inside its instance:
+  - From a **follow** end (a fiber's), the end follows the pointer. Released on a
+    compatible port it connects; released elsewhere it stays where it was dropped (an
+    override of the end's position).
+  - From a **rigid** port, the instance the port belongs to follows the pointer by its
+    port, keeping its rotation. Near a compatible port it **snaps**: port onto port,
+    turned to face it when the target is rigid. Released there it connects, which mates
+    when both are rigid.
+  - Starting on a connected port disconnects it for the drag. The far end, if it
+    follows, stays where it was rather than jumping back to its template position.
+    Released back on the same port, nothing changes.
+- **Inside the instance's scope** (something in it selected), a port's anchor is an
+  ordinary empty: dragging it moves the anchor, as an override.
+- A drag **anywhere else** on a mated assembly moves the whole assembly, through the
+  solver. Plain drags never make or break mates.
+- **Compatible**: the same port kind, opposite one-way directions (out to in) or both
+  `pair`, different bodies, and an `in` end not already fed by another connection.
+  Candidates are within `SNAP_PX` screen pixels of the dragged port; the nearest wins.
+  The rules live in the store (`plug.rs`), so the model surface and the UI share them.
+- The release is **one transaction**: the old connection removed (with any far follow
+  end pinned in place), the body's or end's new placement, and the new connection. One
+  undo step. During the drag, the moved body or end is previewed directly (the store's
+  overlay); the solver runs only on release, where it finds the snapped pose already
+  satisfies the new mate.
+
+**Toward 3D, and the constraint system.** Snapping and mating are separate on purpose:
+the snap is an interaction-time search for a pose (no solver), the mate is a relationship
+the solver holds afterwards. In 3D:
+
+- An anchor's frame gives the snapped pose directly: the rigid motion taking one frame
+  onto the other with the facing axis flipped. Discrete targets (breadboard holes,
+  threaded holes) are snap targets too (constraint-system.md §12, open question U8).
+- A port kind (or its anchor) declares its **mate type**, which says which degrees of
+  freedom the mate leaves: *fastened* (none; today's only kind), *revolute* (spin about
+  the facing axis: a screw in a hole, a rotation mount), *cylindrical* (spin and slide),
+  *slider*, *planar*. A mate type is a set of residual rows in the solver. The free
+  degrees stay solver variables, so they are dragged like the pendulum's arms. A screw's
+  snap keeps the spin angle nearest its current one.
+- Mates form a graph across the assembly. A chain is solved as one cluster, which is
+  fine at demo scale. A large assembly needs constraint-system.md §5.2's reduction:
+  fastened mates in a tree collapse into rigid groups before solving, so only the free
+  degrees of mechanisms reach `iron_solve`. A mate that closes a loop which cannot close
+  is refused with the solver's culprit message, like any unsatisfiable transaction.
+- A mechanism *inside* a component (a revolute joint in its definition) needs solver
+  variables on derived nodes. Its solved values then become overrides on the outer
+  instance, through §5.3's nested paths. Not built; the path addressing is ready for it.
+- Mate features detected on imported CAD (holes, faces, axes) become anchor candidates,
+  not ports (§8.1, vision 09 §6).
+
+*Built 2026-10-18,* with these choices:
+- **Cmd, not Alt, reaches deep ports.** Cmd is already the select tool's deep-select key
+  (Figma's too); Alt during a drag duplicates.
+- **Sealed ports are never hot.** Only ports reachable from outside can be connected:
+  a top-level instance's, or an inner one its component exposes (the anchor stands for
+  the exposing port, so a made component's `out` is hot at its inner fiber's end). An
+  inner port that is not exposed stays dark even with Cmd. Connecting to one would need
+  "expose this port", which is not built.
+- **Two ports on one spot** (a fiber's end on the meter it feeds): the part drawn on
+  top is grabbed, as for picking.
+- **The rigid drag moves the outermost part.** The part a port drag moves is the
+  anchor's outermost authored instance, the same body a mate holds.
+- **A mated part holds its rotation when dragged.** Without that, least change traded
+  a slight turn of the assembly against moving the far part; the drag's finger now
+  also holds the grabbed part's rotation when it is in a mate (`Finger::hold_rot`).
+  The committed pose meets the drag's target within the solver's strong-over-weak
+  weighting (thousandths of a unit), while the mate itself holds exactly.
+- **Not built:** a part with several ports snaps only by the port grabbed; 3D anchors
+  and mate types.
+
 ## 5. Instances
 
 ### 5.1 What is stored
@@ -284,6 +390,14 @@ An `override` is a child node of the instance:
 - Constant only in this spec. A bound override would be a binding from the parent
   scope into the inside of an instance, which §8 forbids; a need for one is a missing
   `in` port.
+- **Nested targets** (built 2026-10-18; open question 6). A part of an instance nested
+  inside a component, `#bench/m/needle`, is overridden from the outermost instance, as
+  USD writes an `over` at `/bench/m/needle`: the override sits on `#bench` with a
+  **path target** `m/needle` (`override.target` holds the path as an id, shown
+  `#m/needle`; its steps are definition-local ids, so renames break nothing). The
+  bench's definition may also override its inner `m` (an override inside the
+  definition, target `needle`). The strongest opinion wins: the outermost instance's,
+  then each enclosing definition's from outside in, then the definition's own value.
 
 ### 5.4 Nesting
 
@@ -655,9 +769,9 @@ The model view lists authored instances only (not a definition's inner entities,
 derived ones unless expanded). Tested natively (`tests/ports.rs`: black-boxing, the
 slider still driving through `power`, an edit to the laser definition reaching the
 laser inside the source, save/load with the same nested ids, undo) and by the smoke
-script's example 2. The associativity law test is not written. Not yet: overriding a
-part of an instance nested inside a component (refused with a message; open question
-6), detaching a nested component (refused), and make component from plain shapes.
+script's example 2. The associativity law test is not written. Not yet: detaching a nested component
+(refused) and make component from plain shapes. Overriding a part of a nested instance
+was refused here and is built since (§5.3, "Nested targets").
 
 **Phase 5 — Libraries.** §10. Waits on the project container.
 *Exit:* a project opens offline with an imported component; updating its pin is one
@@ -687,8 +801,8 @@ Phase 6 depends on phase 2 only, so it can run alongside 3–5.
 5. **Definition editing in place.** Editing a definition from one of its instances
    ("edit main component" in Figma) needs a UI and decides which instance is shown while
    editing.
-6. **Overrides on nested instances.** Whether `#bench/m/needle` may be overridden from
-   the bench's instance, or only from inside the bench's definition.
+6. ~~**Overrides on nested instances.**~~ Decided 2026-10-18: both, the outermost
+   instance's opinion strongest (§5.3, "Nested targets").
 7. **Anchors.** How a template declares exposed anchors (§8.1), and whether ports may
    imply anchors (ECM's "a port kind declares the mate it implies").
 8. **Inequality constraints and limits on signals** (§8.1): owned by

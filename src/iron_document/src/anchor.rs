@@ -8,6 +8,8 @@
 //!   as an expression over its own and its ancestors' transform leaves
 //!   (`translate · rotate · scale`, as `geom::local_affine`), so readers
 //!   bind to a port's position and it follows any move of what holds it;
+//!   and the direction it faces there, `anchor.wrot`: where its local +x
+//!   points (component-model.md §4.3);
 //! - for a `follow` anchor whose port is connected, its own
 //!   `transform2d.x`/`y`: the partner's anchor position, taken back into
 //!   the follower's parent space. A fiber's ends sit on what they plug into.
@@ -126,8 +128,11 @@ pub fn derived(doc: &Document) -> Vec<(Leaf, Expr)> {
     let mut out = Vec::new();
     for &a in &anchors {
         let (wx, wy) = outward(doc, a, true, num(0.0), num(0.0));
+        let (fx, fy) = outward(doc, a, true, num(1.0), num(0.0));
+        let facing = Expr::Call("atan2".to_owned(), vec![bin(BinOp::Sub, fy, wy.clone()), bin(BinOp::Sub, fx, wx.clone())]);
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Anchor, "wx").expect("declared") }, wx));
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Anchor, "wy").expect("declared") }, wy));
+        out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Anchor, "wrot").expect("declared") }, facing));
     }
     for &a in anchors.iter().filter(|&&a| follows(doc, a)) {
         let Some(other) = port_of(doc, a).and_then(|p| partner(doc, p)) else { continue };

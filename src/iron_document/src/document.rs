@@ -329,7 +329,9 @@ impl Document {
     }
 
     pub(crate) fn advance_next_relation_id(&mut self, past: RelationId) {
-        if past.is_session() {
+        if past.is_expanded() {
+            // Derived relations' ids are computed, never allocated.
+        } else if past.is_session() {
             self.next_session_rel = self.next_session_rel.max(past.raw() + 1);
         } else {
             self.next_rel = self.next_rel.max(past.raw() + 1);

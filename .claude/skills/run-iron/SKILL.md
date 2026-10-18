@@ -193,7 +193,7 @@ false
 true
 "<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3w\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3w\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":57112}
+{"roundtrip_equal":true,"bytes":57172}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
 applied "open demo scene" (297 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
@@ -375,6 +375,13 @@ undefined
 [2,[[240,175],[665,435]]]
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
 "kind=\"out_of_scope\""
+undefined
+undefined
+[[545,175],[240,475],["meter 10 mW","short fiber 0 W"]]
+[[340,475],[340,475]]
+[[545,175],[545,175],["meter 15.88… mW","short fiber 0 W"]]
+[[240,475],["meter 15.88… mW","short fiber 10 mW"]]
+["meter 15.88… mW","short fiber 0 W"]
 applied "open demo scene" (297 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
@@ -451,6 +458,15 @@ applied "make component component" (24 ops, Human) -> v73
 applied "model edit" (2 ops, Model) -> v74
 applied "undo: model edit" (2 ops, System) -> v75
 applied "undo: make component component" (24 ops, System) -> v76
+applied "disconnect in" (3 ops, Human) -> v77
+applied "disconnect in" (2 ops, Human) -> v78
+applied "connect in to out" (2 ops, Human) -> v79
+applied "connect in to out" (3 ops, Human) -> v80
+applied "move use" (3 ops, Human) -> v81
+applied "undo: move use" (6 ops, System) -> v82
+applied "undo: connect in to out" (10 ops, System) -> v83
+applied "connect in to out" (3 ops, Human) -> v84
+applied "undo: connect in to out" (3 ops, System) -> v85
 (no page errors)
 ```
 
@@ -479,7 +495,16 @@ the source and fiber entities leave the model view; the meter still reads
 15.88… mW; the component's picture holds 2 inner pictures, whose `out` anchors
 sit at (240, 175) (the laser's) and (545, 175) (the fiber's end), and moving the
 meter carries the nested fiber end to (665, 435); two undos restore the
-source and fiber. The first `redraw (document)`
+source and fiber. Plugging (component-model.md §4.3): the meter dragged by its
+`in` port onto the spare laser's `out` is unplugged from the fiber for the
+drag ("disconnect in", then the fiber end pinned where it was, both merged),
+snaps on, and connects ("connect in to out", the move and the connection
+merged into the same entry). It reads the spare's 10 mW, and the fiber's `out`
+end stays at (545, 175). Dragging the spare laser by its body moves the
+mated meter with it (both anchors at (340, 475), one "move use" with the
+solver's writes). Two undos restore the chain (15.88… mW). The short fiber's
+loose `in` end dropped on the spare laser plugs in (10 mW), and one undo
+unplugs it. The first `redraw (document)`
 line, listing the dial meter's readout (`#3b`, its template's text, and
 `#3i/3b`, the instance's), is the default font arriving: whether it lands
 before the square's drag, and so appears, depends on the font fetch.

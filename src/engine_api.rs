@@ -711,7 +711,7 @@ pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: 
     let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return fail(format!("bad id {node:?}")) };
     let Some(k) = iron_document::FacetKind::from_name(&kind).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())) else { return fail(format!("no optional component {kind:?}")) };
-    let op = if add { iron_document::Op::AddFacet { id, comp: k.default_facet() } } else { iron_document::Op::RemoveFacet { id, kind: k } };
+    let op = if add { iron_document::Op::AddFacet { id, facet: k.default_facet() } } else { iron_document::Op::RemoveFacet { id, kind: k } };
     let label = format!("{} {kind}", if add { "add" } else { "remove" });
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
     let result = store.0.apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: 0, idempotency_key: None, ops: vec![op], exact: false });
@@ -789,7 +789,7 @@ pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) 
                 ops.push(Op::Set { id: target.node, path: target.path, slot: Slot::Const(value) });
             }
         }
-        let mut added: Vec<_> = adds.into_iter().map(|((id, _), comp)| Op::AddFacet { id, comp }).collect();
+        let mut added: Vec<_> = adds.into_iter().map(|((id, _), comp)| Op::AddFacet { id, facet: comp }).collect();
         added.append(&mut ops);
         if let Some(remove) = patch.get("remove").and_then(|v| v.as_array()) {
             for kind in remove {
@@ -1181,7 +1181,7 @@ pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> 
         } else {
             let mut fill = Fill::default();
             fill.color = Slot::Const(Value::Color(c));
-            ops.push(Op::AddFacet { id, comp: fill.wrap() });
+            ops.push(Op::AddFacet { id, facet: fill.wrap() });
         }
     }
     let text = iron_document::text::content(&store.0, id);

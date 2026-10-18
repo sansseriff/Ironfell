@@ -311,7 +311,7 @@ fn an_embeds_region_follows_its_sources_content() {
     let mut frame = Frame::default();
     frame.x1 = n(50.0);
     frame.y1 = n(50.0);
-    f.store.apply(tx("frame", vec![Op::AddFacet { id: embed, comp: frame.wrap() }])).unwrap();
+    f.store.apply(tx("frame", vec![Op::AddFacet { id: embed, facet: frame.wrap() }])).unwrap();
     scene.update(&mut f.store);
     let framed = scene.painted(embed).unwrap();
     assert!((framed.width() - 54.0).abs() < 1e-9, "{framed:?}");

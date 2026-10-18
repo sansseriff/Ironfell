@@ -99,7 +99,7 @@ pub(crate) fn conflict(doc: &Document, ops: &[Op], g: &ActiveGesture, drivers: &
             Op::Create { id, .. } if g.nodes.contains(id) => format!("{id} was replaced"),
             Op::Set { id, path, .. } if drivers.contains(&Leaf { node: *id, path: *path }) => format!("{id}.{path}, which the gesture drives, was set"),
             Op::Set { id, path, slot } if watched(doc, g, *id) && (GEOMETRY.contains(&path.facet) || slot.expr().is_some()) => format!("{id}.{path} was set"),
-            Op::AddFacet { id, comp } if watched(doc, g, *id) && GEOMETRY.contains(&comp.kind()) => format!("{id} gained {}", comp.kind().name()),
+            Op::AddFacet { id, facet } if watched(doc, g, *id) && GEOMETRY.contains(&facet.kind()) => format!("{id} gained {}", facet.kind().name()),
             Op::RemoveFacet { id, kind } if watched(doc, g, *id) && GEOMETRY.contains(kind) => format!("{id} lost {}", kind.name()),
             Op::Link { rel } if matches!(rel.rel, RelKind::Constrains | RelKind::Animates) && g.nodes.contains(&rel.to) => {
                 format!("{} now {} {}", rel.from, rel.rel.name(), rel.to)

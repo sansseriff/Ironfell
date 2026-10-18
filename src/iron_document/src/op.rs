@@ -25,7 +25,7 @@ pub enum Op {
         ty: TypeId,
         parent: Option<NodeId>,
         order: OrderKey,
-        #[serde(default, rename = "components")]
+        #[serde(default)]
         facets: Vec<Facet>,
     },
     /// Tombstone a node and its live descendants.
@@ -47,12 +47,10 @@ pub enum Op {
         path: LeafPath,
         slot: Slot,
     },
-    #[serde(rename = "add_comp")]
     AddFacet {
         id: NodeId,
-        comp: Facet,
+        facet: Facet,
     },
-    #[serde(rename = "remove_comp")]
     RemoveFacet {
         id: NodeId,
         kind: FacetKind,
@@ -136,13 +134,9 @@ pub enum ErrorKind {
     BadParent,
     Cycle,
     ChildNotAdmitted,
-    #[serde(rename = "component_not_allowed")]
     FacetNotAllowed,
-    #[serde(rename = "component_required")]
     FacetRequired,
-    #[serde(rename = "component_present")]
     FacetPresent,
-    #[serde(rename = "component_absent")]
     FacetAbsent,
     UnknownPath,
     TypeMismatch,
@@ -220,7 +214,7 @@ pub(crate) fn apply_op(
             }])
         }
         Op::Set { id, path, slot } => set(doc, &cx, *id, *path, slot),
-        Op::AddFacet { id, comp } => add_comp(doc, &cx, *id, comp),
+        Op::AddFacet { id, facet } => add_comp(doc, &cx, *id, facet),
         Op::RemoveFacet { id, kind } => remove_comp(doc, &cx, *id, *kind),
         Op::Link { rel } => link(doc, &cx, rel),
         Op::Unlink { id } => {
@@ -556,7 +550,7 @@ fn remove_comp(
             format!("{id} has no {}", kind.name()),
         )
     })?;
-    Ok(vec![Op::AddFacet { id, comp }])
+    Ok(vec![Op::AddFacet { id, facet: comp }])
 }
 
 fn link(doc: &mut Document, cx: &Ctx, rel: &Relation) -> Result<Vec<Op>, ApplyError> {

@@ -5,11 +5,11 @@
 export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'enum' | 'ref' | 'quantity' | 'record' | 'any';
 
 export interface Schema {
-  components: Record<string, Record<string, Kind>>;
+  facets: Record<string, Record<string, Kind>>;
   types: Record<
     string,
     {
-      components: { kind: string; required: boolean }[];
+      facets: { kind: string; required: boolean }[];
       default_host: string;
       children: 'none' | 'any' | string[];
     }
@@ -17,27 +17,27 @@ export interface Schema {
 }
 
 /**
- * Resolve an attribute name on a node type to `component.field`. A bare
- * field name resolves to the first component, in the type's declared order,
+ * Resolve an attribute name on a node type to `facet.field`. A bare
+ * field name resolves to the first facet, in the type's declared order,
  * that has it (so `color` on a rect is `fill.color`, and `stroke.color` must
- * be written in full); `name` is the Name component's text.
+ * be written in full); `name` is the Name facet's text.
  */
-export function resolveLeaf(schema: Schema, type: string, attr: string): { component: string; field: string; kind: Kind } {
+export function resolveLeaf(schema: Schema, type: string, attr: string): { facet: string; field: string; kind: Kind } {
   if (attr.includes('.')) {
-    const [component, field] = attr.split('.', 2);
-    // A `*` entry means the component's fields are run-time (args).
-    const kind = schema.components[component]?.[field] ?? schema.components[component]?.['*'];
+    const [facet, field] = attr.split('.', 2);
+    // A `*` entry means the facet's fields are run-time (args).
+    const kind = schema.facets[facet]?.[field] ?? schema.facets[facet]?.['*'];
     if (!kind) throw new Error(`unknown leaf "${attr}"`);
-    return { component, field, kind };
+    return { facet, field, kind };
   }
-  if (attr === 'name') return { component: 'name', field: 'text', kind: 'string' };
+  if (attr === 'name') return { facet: 'name', field: 'text', kind: 'string' };
   const spec = schema.types[type];
   if (!spec) throw new Error(`unknown node type "${type}"`);
-  const hits = spec.components
+  const hits = spec.facets
     .map((c) => c.kind)
-    .filter((c) => schema.components[c]?.[attr] !== undefined);
-  if (hits.length >= 1) return { component: hits[0], field: attr, kind: schema.components[hits[0]][attr] };
-  const all = spec.components.flatMap((c) => Object.keys(schema.components[c.kind] ?? {}).map((f) => `${c.kind}.${f}`));
+    .filter((c) => schema.facets[c]?.[attr] !== undefined);
+  if (hits.length >= 1) return { facet: hits[0], field: attr, kind: schema.facets[hits[0]][attr] };
+  const all = spec.facets.flatMap((c) => Object.keys(schema.facets[c.kind] ?? {}).map((f) => `${c.kind}.${f}`));
   throw new Error(`"${attr}" is not a field of ${type}; available: ${all.join(', ')}`);
 }
 

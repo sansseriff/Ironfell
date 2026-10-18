@@ -146,14 +146,14 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
           let leaf;
           try {
             leaf = resolveLeaf(schema, type, k);
-            comps[leaf.component] ??= {};
-            comps[leaf.component][leaf.field] = coerce(leaf.kind, raw);
+            comps[leaf.facet] ??= {};
+            comps[leaf.facet][leaf.field] = coerce(leaf.kind, raw);
           } catch (e) {
             throw at(e instanceof Error ? e.message : String(e));
           }
         }
-        for (const c of schema.types[type].components) if (c.required) comps[c.kind] ??= {};
-        ops.push({ t: 'create', id, ty: type, parent, order, components: Object.entries(comps).map(([k, f]) => ({ [k]: f })) });
+        for (const c of schema.types[type].facets) if (c.required) comps[c.kind] ??= {};
+        ops.push({ t: 'create', id, ty: type, parent, order, facets: Object.entries(comps).map(([k, f]) => ({ [k]: f })) });
         break;
       }
       case 'set':
@@ -170,13 +170,13 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
           try {
             leaf = k.includes('.') || !type ? resolveLeafAnyType(schema, k) : resolveLeaf(schema, type, k);
             const slot = coerce(leaf.kind, raw);
-            if (v.verb === 'set') ops.push({ t: 'set', id, path: `${leaf.component}.${leaf.field}`, slot });
-            else (byComp[leaf.component] ??= {})[leaf.field] = slot;
+            if (v.verb === 'set') ops.push({ t: 'set', id, path: `${leaf.facet}.${leaf.field}`, slot });
+            else (byComp[leaf.facet] ??= {})[leaf.field] = slot;
           } catch (e) {
             throw at(e instanceof Error ? e.message : String(e));
           }
         }
-        for (const [comp, fields] of Object.entries(byComp)) ops.push({ t: 'add_comp', id, comp: { [comp]: fields } });
+        for (const [comp, fields] of Object.entries(byComp)) ops.push({ t: 'add_facet', id, facet: { [comp]: fields } });
         break;
       }
       case 'delete':
@@ -211,18 +211,18 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
   return { expectVersion, exact, ops, aliases };
 }
 
-/** A leaf written as `component.field`, or a bare field unique across all components. */
+/** A leaf written as `facet.field`, or a bare field unique across all facets. */
 function resolveLeafAnyType(schema: Awaited<ReturnType<DocumentApi['schema']>>, attr: string) {
-  if (attr === 'name') return { component: 'name', field: 'text', kind: 'string' as const };
+  if (attr === 'name') return { facet: 'name', field: 'text', kind: 'string' as const };
   if (attr.includes('.')) {
-    const [component, field] = attr.split('.', 2);
-    const kind = schema.components[component]?.[field] ?? schema.components[component]?.['*'];
+    const [facet, field] = attr.split('.', 2);
+    const kind = schema.facets[facet]?.[field] ?? schema.facets[facet]?.['*'];
     if (!kind) throw new Error(`unknown leaf "${attr}"`);
-    return { component, field, kind };
+    return { facet, field, kind };
   }
   // Bare names never match a run-time field (`*`): arguments are written args.<name>.
-  const hits = Object.entries(schema.components).filter(([, fields]) => fields[attr] !== undefined && attr !== '*');
-  if (hits.length === 1) return { component: hits[0][0], field: attr, kind: hits[0][1][attr] };
+  const hits = Object.entries(schema.facets).filter(([, fields]) => fields[attr] !== undefined && attr !== '*');
+  if (hits.length === 1) return { facet: hits[0][0], field: attr, kind: hits[0][1][attr] };
   if (hits.length === 0) throw new Error(`unknown leaf "${attr}"`);
   throw new Error(`"${attr}" is ambiguous; write one of ${hits.map(([c]) => `${c}.${attr}`).join(', ')}`);
 }

@@ -240,7 +240,7 @@ fn every_op_kind_inverts_exactly() {
             "add comp",
             vec![Op::AddFacet {
                 id: circle,
-                comp: Fill::default().wrap(),
+                facet: Fill::default().wrap(),
             }],
         ),
         (

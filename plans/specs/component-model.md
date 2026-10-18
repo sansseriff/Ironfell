@@ -539,9 +539,11 @@ entities from older files have no `in` port nodes and keep working through their
 arguments. The inspector's Component section (`inspect_component`) lists the inputs of
 the instance a selection is or pictures, edits unwired ones and locks wired ones with
 their source. The demo's ids after the bar shift (each instance mints its `in` ports);
-the smoke script's hard-coded ids follow. Still on the old names, for a follow-up
-commit: the op wire format (`add_comp`, `components` in `create`), the error kinds and
-the model surface's schema JSON.
+the smoke script's hard-coded ids follow. A follow-up commit moved the model-facing
+names too: ops are `add_facet { facet }`, `remove_facet` and `create { facets }`, error
+kinds `facet_*`, `document_schema()` returns `facets`, and the manifest says "facet", so
+to a model "component" now means only a definition. The inspector's internal JSON keeps
+its `components` key.
 
 **Phase 2 — The expanded tier and linked instances.** `EXPANDED_BASE`, the path table,
 `use`, expansion in the transaction, behaviour evaluated from the definition, saved

@@ -8,12 +8,12 @@ import type { Schema } from './schema';
 export function manifest(schema: Schema): string {
   const types = Object.entries(schema.types)
     .map(([name, t]) => {
-      const comps = t.components.map((c) => (c.required ? c.kind : `${c.kind}?`)).join(' ');
+      const comps = t.facets.map((c) => (c.required ? c.kind : `${c.kind}?`)).join(' ');
       const kids = t.children === 'none' ? '' : t.children === 'any' ? '  children: any' : `  children: ${t.children.join(', ')}`;
       return `  ${name.padEnd(9)} ${comps}${kids}`;
     })
     .join('\n');
-  const comps = Object.entries(schema.components)
+  const comps = Object.entries(schema.facets)
     .map(([name, fields]) => `  ${name.padEnd(12)} ${Object.entries(fields).map(([f, k]) => `${f}:${k}`).join(' ')}`)
     .join('\n');
   return `You edit a scene document for a scientific-visualisation tool. You are given the
@@ -29,10 +29,10 @@ VIEW
   <driven-by ref="#clip" prop="…"/> means a clip animates that leaf. A node with
   elided has children you were not shown; count="N" is the real count.
 
-NODE TYPES  (component? = optional)
+NODE TYPES  (facet? = optional)
 ${types}
 
-COMPONENTS AND FIELDS  (field:kind)
+FACETS AND FIELDS  (field:kind)
 ${comps}
 
 VERBS, inside <edit expect-version="N">  (N = the version you read)
@@ -40,11 +40,11 @@ VERBS, inside <edit expect-version="N">  (N = the version you read)
       $a is an alias you choose; later verbs in the same edit may use it.
       after="#id" or first="true" places it; default is last child. parent omitted = root.
   <set id="#P" x="12" size.h="{= #O.slider.value * 200}"/>
-      attributes are leaves: component.field, or a bare field name, which means the
-      first of the node's components (in the order listed above) that has that field:
+      attributes are leaves: facet.field, or a bare field name, which means the
+      first of the node's facets (in the order listed above) that has that field:
       on a rect, color is fill.color, so a stroke colour is written stroke.color.
       {= expr} binds the leaf to an expression instead of a value.
-  <add id="#N" stroke.width="2"/>            add an optional component with fields
+  <add id="#N" stroke.width="2"/>            add an optional facet with fields
   <delete id="#3"/>                          deletes the subtree
   <reparent id="#4" to="#1" after="#2"/>
   <link from="#clip" to="#node" rel="animates" offset="0.5"/>
@@ -81,7 +81,7 @@ VALUES
   when it runs the other way, or always under fill_rule evenodd.
 
 EXPRESSIONS (for {= …} bindings)
-  #id.component.field references a leaf; + - * / % < <= > >= == != && || !;
+  #id.facet.field references a leaf; + - * / % < <= > >= == != && || !;
   cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
   lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan atan2(y,x) sqrt pow(x,y) hypot(x,y);
   the constant pi; angles in radians; quantity literals 9.58 mW. A binding may not

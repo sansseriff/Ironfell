@@ -378,14 +378,14 @@ pub fn schema_json() -> serde_json::Value {
         types.insert(
             spec.name.to_owned(),
             json!({
-                "components": spec.facets.iter().map(|(k, req)| json!({"kind": k.name(), "required": req})).collect::<Vec<_>>(),
+                "facets": spec.facets.iter().map(|(k, req)| json!({"kind": k.name(), "required": req})).collect::<Vec<_>>(),
                 "default_host": spec.default_host.name(),
                 "root_only": spec.root_only(),
                 "children": children,
             }),
         );
     }
-    json!({ "components": facets, "types": types })
+    json!({ "facets": facets, "types": types })
 }
 
 impl fmt::Display for TypeId {
@@ -446,7 +446,7 @@ mod tests {
                 .admits_child(TypeId::lookup("rect").unwrap())
         );
         let schema = schema_json();
-        assert!(schema["types"]["rect"]["components"].is_array());
-        assert_eq!(schema["components"]["transform2d"]["x"], "number");
+        assert!(schema["types"]["rect"]["facets"].is_array());
+        assert_eq!(schema["facets"]["transform2d"]["x"], "number");
     }
 }

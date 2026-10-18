@@ -737,7 +737,7 @@ impl Store {
                 });
             }
         }
-        let adds = added.into_iter().map(|((id, _), comp)| Op::AddFacet { id, comp });
+        let adds = added.into_iter().map(|((id, _), comp)| Op::AddFacet { id, facet: comp });
         ops = adds.chain(ops).collect();
         if ops.is_empty() {
             self.cancel_gesture();

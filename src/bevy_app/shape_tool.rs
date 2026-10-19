@@ -79,7 +79,15 @@ pub fn shape_tool_system(
         && let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two)
     {
         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
-        shapes.press = drop_target(&geo, &hits, view).map(|(container, to_comp)| ShapePress { panel: view.panel.clone(), container, to_comp, start: screen, rect: None });
+        // Drawn on a component's main, a shape joins its definition
+        // (component-authoring.md §1).
+        let main = crate::bevy_app::select::top_hit(&hits)
+            .filter(|(chain, _)| !chain.iter().any(|&n| crate::document_bridge::nest::is_embed(doc, n)))
+            .and_then(|(chain, _)| chain.into_iter().find(|&n| iron_document::expand::main_definition(doc, n).is_some()));
+        shapes.press = match main {
+            Some(m) => Some(ShapePress { panel: view.panel.clone(), container: m, to_comp: geo.world(m).inverse(), start: screen, rect: None }),
+            None => drop_target(&geo, &hits, view).map(|(container, to_comp)| ShapePress { panel: view.panel.clone(), container, to_comp, start: screen, rect: None }),
+        };
     }
     let Some(press) = shapes.press.as_mut() else { return };
     let Some(view) = views.get(&press.panel) else {
@@ -137,6 +145,7 @@ pub fn shape_tool_system(
     };
     let label = format!("draw {}", if ty == "rect" { "rectangle" } else { "ellipse" });
     pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![op], exact: false });
-    shapes.select = Some(id);
+    // Inside a main, what is drawn is the main's copy of the new node.
+    shapes.select = if iron_document::expand::main_definition(doc, press.container).is_some() { NodeId::expanded(press.container, id) } else { Some(id) };
     *active = ActiveTool::Select;
 }

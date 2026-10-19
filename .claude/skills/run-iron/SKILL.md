@@ -367,7 +367,7 @@ undefined
 [true,[[665,435],[665,435]]]
 [true,[[645,435],[645,435]]]
 [[545,175],[545,175]]
-clicked button[title^="Make the selected"]
+clicked button[title^="Make a component"]
 [["power value in","out optical_power out"],"#….slider.value * 0.00… W",["fiber detached","meter detached","meter linked","spare laser linked","short fiber linked","long fiber linked"]]
 ["#…/3U","15.88… mW"]
 undefined

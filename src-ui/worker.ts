@@ -49,6 +49,7 @@ class IronWorker {
       send_document_changed_from_worker: (version: number) => self.postMessage({ ty: "documentChanged", version }),
       send_clipboard_from_worker: (text: string) => self.postMessage({ ty: "clipboard", text }),
       send_text_edit_from_worker: (state: string) => self.postMessage({ ty: "textEdit", ...JSON.parse(state) }),
+      send_event_from_worker: (event: string) => self.postMessage(JSON.parse(event)),
       send_fonts_from_worker: (fonts: string) => this.fonts.request(JSON.parse(fonts)),
     };
 

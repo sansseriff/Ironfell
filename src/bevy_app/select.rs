@@ -87,6 +87,9 @@ pub enum ActiveTool {
     Ellipse,
     /// Making text, or editing it (`text_tool`).
     Text,
+    /// Placing a port on a component's main, or an empty (`author_tool`).
+    Port,
+    Empty,
 }
 
 impl ActiveTool {
@@ -97,6 +100,8 @@ impl ActiveTool {
             ActiveTool::Rect => "rect",
             ActiveTool::Ellipse => "ellipse",
             ActiveTool::Text => "text",
+            ActiveTool::Port => "port",
+            ActiveTool::Empty => "empty",
         }
     }
 }
@@ -132,6 +137,72 @@ const PORT_LIT: [f32; 4] = [0.05, 0.72, 0.58, 1.0];
 const SNAP: f64 = std::f64::consts::PI / 12.0;
 
 const BLUE: [f32; 4] = [0.05, 0.6, 1.0, 1.0];
+/// A component's own frame (component-authoring.md §0): a main solid violet,
+/// an instance a lighter one; parts inside either keep the blue.
+const MAIN_VIOLET: [f32; 4] = [0.49, 0.30, 1.0, 1.0];
+const INSTANCE_VIOLET: [f32; 4] = [0.66, 0.55, 1.0, 1.0];
+
+/// Whether `id` is a component main (`Some(true)`) or an instance's picture
+/// (`Some(false)`), with the name its chip shows.
+fn component_of(doc: &iron_document::Document, id: NodeId) -> Option<(bool, String)> {
+    if doc.live(id).map(|n| n.ty.name()) != Some("use") {
+        return None;
+    }
+    let name = |n: NodeId| doc.get::<iron_document::facet::Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+    if let Some(def) = iron_document::expand::main_definition(doc, id) {
+        return Some((true, name(def).or_else(|| name(id)).unwrap_or_else(|| "component".into())));
+    }
+    let entity = iron_document::expand::use_entity(doc, id)?;
+    let def = iron_document::expand::linked_definition(doc, entity)?;
+    Some((false, name(def).unwrap_or_else(|| "component".into())))
+}
+
+fn component_tint(doc: &iron_document::Document, id: NodeId) -> Option<peniko::Color> {
+    component_of(doc, id).map(|(main, _)| peniko::Color::new(if main { MAIN_VIOLET } else { INSTANCE_VIOLET }))
+}
+
+/// A short label as a filled outline, `size` px high, and its width.
+fn label_outline(text: &str, size: f32) -> Option<(kurbo::BezPath, f64)> {
+    let style = iron_text::TextStyle { size, weight: 550.0, ..iron_text::TextStyle::default() };
+    let l = iron_text::engine().layout(text, &style, &[], None);
+    (!l.outline.elements().is_empty()).then(|| ((*l.outline).clone(), l.width))
+}
+
+/// A component's chip above its box (Figma's main and instance labels): a
+/// violet tab holding the main's four diamonds or the instance's hollow
+/// one, and the name. `at` is the box's top-left, window px.
+fn draw_chip(b: &mut crate::vector::DisplayListBuilder<'_>, at: Point, main: bool, name: &str, k: f64) {
+    let size = 11.0 * k;
+    let pad = 4.0 * k;
+    let icon = 9.0 * k;
+    let (text, w) = label_outline(name, size as f32).unwrap_or_default();
+    let h = size + 2.0 * pad;
+    let r = Rect::new(at.x, at.y - h - 2.0 * k, at.x + pad * 3.0 + icon + w, at.y - 2.0 * k);
+    let chip = kurbo::RoundedRect::from_rect(r, 3.0 * k);
+    let tint = peniko::Color::new(if main { MAIN_VIOLET } else { INSTANCE_VIOLET });
+    let white = peniko::Color::new([1.0, 1.0, 1.0, 1.0]);
+    b.fill(Affine::IDENTITY, tint, chip);
+    let c = Point::new(r.x0 + pad + icon * 0.5, r.y0 + h * 0.5);
+    let diamond = |c: Point, r: f64| {
+        let mut p = kurbo::BezPath::new();
+        p.move_to((c.x, c.y - r));
+        p.line_to((c.x + r, c.y));
+        p.line_to((c.x, c.y + r));
+        p.line_to((c.x - r, c.y));
+        p.close_path();
+        p
+    };
+    if main {
+        let r = icon * 0.22;
+        for (dx, dy) in [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)] {
+            b.fill(Affine::IDENTITY, white, diamond(Point::new(c.x + dx * r * 1.1, c.y + dy * r * 1.1), r));
+        }
+    } else {
+        b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.2 * k), white, diamond(c, icon * 0.45));
+    }
+    // The outline's origin is the text's top-left.
+    b.fill(Affine::translate((r.x0 + pad * 2.0 + icon, r.y0 + pad)), white, text);
+}
 /// A Bézier handle's arm, Figma's grey.
 const HANDLE_ARM: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
 /// The outline of a path being edited, Figma's grey.
@@ -371,6 +442,26 @@ enum Gesture {
     Marquee { view: PanelView, start: Point, prefix: Vec<NodeId>, roots: Vec<NodeId>, base: Vec<Reach> },
     /// Space-drag: the view's pan follows the pointer.
     Pan { panel: String, start: Vec2, pan: Vec2 },
+    /// A line drawn from a component's pin (component-authoring.md §3).
+    Link(LinkDrag),
+}
+
+/// A line being drawn from a pin: to another component's pin (a
+/// connection) or, from a main's pin, to one of its parts (a link).
+pub(crate) struct LinkDrag {
+    panel: String,
+    from: crate::bevy_app::links::Pin,
+    /// The pointer, window px.
+    at: Point,
+    target: Option<LinkTarget>,
+    /// Every pin a connection could land on, shown while drawing.
+    targets: Vec<crate::bevy_app::links::Pin>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum LinkTarget {
+    Pin(crate::bevy_app::links::Pin),
+    Part(Reach),
 }
 
 /// Figma's handles on a lone selected shape: a dot inside each of a rect's
@@ -402,6 +493,8 @@ enum AfterPress {
     /// A drag plugs or unplugs the port at `anchor`, moving `body` (or the
     /// loose end itself).
     Plug { anchor: NodeId, body: NodeId, click: Click },
+    /// A drag draws a line from a component's pin.
+    Link { pin: crate::bevy_app::links::Pin, click: Click },
 }
 
 /// What a press that did not become a drag does on release.
@@ -487,7 +580,7 @@ fn wrap(a: f64) -> f64 {
 }
 
 impl Geo<'_> {
-    fn doc(&self) -> &iron_document::Document {
+    pub(crate) fn doc(&self) -> &iron_document::Document {
         self.store.document()
     }
 
@@ -663,7 +756,7 @@ impl Geo<'_> {
     }
 
     /// The unit square onto the node's box, in panel document px.
-    fn frame(&self, chain: &[NodeId]) -> Option<Affine> {
+    pub(crate) fn frame(&self, chain: &[NodeId]) -> Option<Affine> {
         let id = *chain.last()?;
         let (b, _) = self.local_box(id)?;
         Some(self.space(chain)? * self.world(id) * unit(b))
@@ -1423,6 +1516,20 @@ pub fn select_tool_system(
                 chain.push(next);
                 set_selection(&mut sel, tool, vec![Reach { panel: r.panel.clone(), chain }]);
             }
+            // Wrap the selection in an empty (component-authoring.md §2).
+            "wrap" if !reaches.is_empty() => {
+                let ids: Vec<NodeId> = reaches.iter().map(|r| r.node()).collect();
+                let extent = |n: NodeId| store.0.extent(n);
+                match iron_document::author::wrap_in_empty(doc, &extent, &ids) {
+                    Ok((ops, empty)) => {
+                        let parent = doc.live(ids[0]).and_then(|n| n.parent);
+                        let main = parent.and_then(|p| p.path().first().copied()).filter(|&m| iron_document::expand::main_definition(doc, m).is_some());
+                        tool.select_when_live = vec![main.and_then(|m| NodeId::expanded(m, empty)).unwrap_or(empty)];
+                        pending.0.push(TransactionInput { label: "wrap in empty".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
+                    }
+                    Err(e) => info!("wrap in empty: {e}"),
+                }
+            }
             "a" if command => {
                 let (panel, prefix, roots) = match reaches.first() {
                     Some(r) => {
@@ -1715,6 +1822,16 @@ pub fn select_tool_system(
                 let targets = g.targets.clone();
                 store.0.begin_gesture(&targets);
                 tool.gesture = Gesture::Edit(Manip::Gizmo { targets, kind: None });
+                break 'press;
+            }
+            // A pin of the selected component: a drag draws a line from it,
+            // before the box's grips (a pin sits on the box's edge).
+            if *active == ActiveTool::Select
+                && view.dims == Dims::Two
+                && let [r] = movers(&reaches, &view.panel)[..]
+                && let Some(pin) = crate::bevy_app::links::pin_at(&crate::bevy_app::links::pins_of(&geo, &view, r, k), screen, k).cloned()
+            {
+                tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Link { pin, click: Click::Keep } };
                 break 'press;
             }
             // The path being edited: its points and shown handles come first.
@@ -2097,6 +2214,9 @@ pub fn select_tool_system(
                     let base = if matches!(click, Click::Keep) { reaches.clone() } else { Vec::new() };
                     tool.gesture = Gesture::Marquee { view, start: p0, prefix: prefix.clone(), roots: roots.clone(), base };
                 }
+                AfterPress::Link { pin, .. } => {
+                    tool.gesture = Gesture::Link(LinkDrag { panel: view.panel.clone(), from: pin.clone(), at: Point::new(pointer.screen.x as f64, pointer.screen.y as f64), target: None, targets: Vec::new() });
+                }
                 AfterPress::Plug { anchor, body, .. } => {
                     let (anchor, body) = (*anchor, *body);
                     match store.0.begin_plug(anchor, body) {
@@ -2144,6 +2264,32 @@ pub fn select_tool_system(
             Gesture::Pan { panel, start, pan } => {
                 view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
             }
+            Gesture::Link(l) => {
+                let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
+                l.at = screen;
+                l.target = None;
+                l.targets.clear();
+                if let Some(view) = views.get(&l.panel) {
+                    if l.from.main {
+                        // A main's pin links to a part of that main.
+                        if let Some((chain, _)) = top_hit(&hits)
+                            && let Some(i) = chain.iter().position(|&n| n == l.from.owner)
+                            && i + 1 < chain.len()
+                        {
+                            l.target = Some(LinkTarget::Part(Reach { panel: l.panel.clone(), chain: chain.clone() }));
+                        }
+                    } else {
+                        let want = if l.from.dir == "out" { "in" } else { "out" };
+                        l.targets = crate::bevy_app::links::components_in(geo.doc(), view)
+                            .iter()
+                            .filter(|r| r.node() != l.from.owner && iron_document::expand::main_definition(geo.doc(), r.node()).is_none())
+                            .flat_map(|r| crate::bevy_app::links::pins_of(&geo, view, r, k))
+                            .filter(|p| p.dir == want)
+                            .collect();
+                        l.target = l.targets.iter().filter(|p| p.at.distance(screen) <= crate::bevy_app::links::PIN_HIT * 2.5 * k).min_by(|a, b| a.at.distance(screen).total_cmp(&b.at.distance(screen))).cloned().map(LinkTarget::Pin);
+                    }
+                }
+            }
             Gesture::Edit(m) => {
                 let mut cx = manipulate::Cx { store: &mut store.0, pointer: &pointer, views: &views, drawables: &drawables, spatial: &spatial, cameras: &cameras, planes: &planes, gizmo: tool.gizmo.as_mut() };
                 m.update(&mut cx);
@@ -2186,7 +2332,7 @@ pub fn select_tool_system(
         match std::mem::take(&mut tool.gesture) {
             Gesture::Press { then, .. } => {
                 let click = match then {
-                    AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } => click,
+                    AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } | AfterPress::Link { click, .. } => click,
                 };
                 match click {
                     Click::Keep => {}
@@ -2203,6 +2349,21 @@ pub fn select_tool_system(
                     warn!("plug rejected: {why}");
                 }
             }
+            Gesture::Link(l) => match l.target {
+                // To a part of the main: the shell asks how (the mapping).
+                Some(LinkTarget::Part(part)) => {
+                    events.push(crate::host_events::EngineEvent::LinkDrop { spec: l.from.port.to_string(), node: part.node().to_string(), x: (l.at.x / k) as f32, y: (l.at.y / k) as f32 });
+                }
+                Some(LinkTarget::Pin(to)) => {
+                    let read = |leaf: iron_document::Leaf| store.0.resolved(leaf.node, leaf.path);
+                    let (a, b) = if l.from.dir == "out" { (l.from.port, to.port) } else { (to.port, l.from.port) };
+                    match iron_document::author::connect(store.0.document(), &read, a, b) {
+                        Ok(ops) => pending.0.push(TransactionInput { label: format!("connect {} to {}", l.from.name, to.name), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }),
+                        Err(e) => warn!("connect: {e}"),
+                    }
+                }
+                None => {}
+            },
             Gesture::Edit(m) => {
                 m.end(&mut store.0);
                 let label = m.label(&store.0);
@@ -2533,7 +2694,10 @@ pub fn draw_select_overlay(
                     let c = if m.selected { crate::document_bridge::LIT_SELECTED } else { crate::document_bridge::LIT_HOVERED };
                     Some((peniko::Color::new(c), 2.0 * k, (to_screen * *a) * path.clone()))
                 }
-                LitShape::Frame(f) => Some((blue, if m.selected { 1.0 } else { 1.5 } * k, (to_screen * *f) * square.clone())),
+                LitShape::Frame(f) => {
+                    let c = m.chain.last().and_then(|&n| component_tint(geo.doc(), n)).unwrap_or(blue);
+                    Some((c, if m.selected { 1.0 } else { 1.5 } * k, (to_screen * *f) * square.clone()))
+                }
             })
             .collect();
         let hover_frame = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
@@ -2541,6 +2705,37 @@ pub fn draw_select_overlay(
             .and_then(|h| geometry_cache.hover(&geo, h, stamp));
         let mine = movers(&reaches, &o.panel);
         let cached = geometry_cache.selection(&geo, &o.panel, &mine, stamp, true);
+        // A component's frames are violet, and it wears its chip, while it
+        // is selected or hovered.
+        let hover_tint = tool.hover.as_ref().and_then(|h| component_tint(geo.doc(), h.node())).unwrap_or(blue);
+        let box_tint = match &mine[..] {
+            [] => blue,
+            [first, rest @ ..] => match component_tint(geo.doc(), first.node()) {
+                Some(c) if rest.iter().all(|r| component_tint(geo.doc(), r.node()) == Some(c)) => c,
+                _ => blue,
+            },
+        };
+        let mut chips: Vec<(Point, bool, String)> = Vec::new();
+        for r in mine.iter().copied().chain(tool.hover.as_ref().filter(|h| h.panel == o.panel)) {
+            if let Some((main, name)) = component_of(geo.doc(), r.node())
+                && let Some(f) = geo.frame(&r.chain)
+                && !chips.iter().any(|c| c.2 == name && c.1 == main && (to_screen * f).transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)).origin() == c.0)
+            {
+                chips.push(((to_screen * f).transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)).origin(), main, name));
+            }
+        }
+        // Ports selected, or hot: a short arrow the way each faces.
+        let mut facing: Vec<(Point, kurbo::Vec2)> = Vec::new();
+        for &e in sel.selected.iter().chain(tool.port_hover.iter().filter(|h| h.0 == o.panel).map(|h| &h.1)) {
+            if geo.doc().facet(e, iron_document::FacetKind::Anchor).is_some() {
+                let w = to_screen * geo.world(e);
+                let at = w * Point::ORIGIN;
+                let d = (w * Point::new(1.0, 0.0)) - at;
+                if d.hypot() > 1e-9 {
+                    facing.push((at, d / d.hypot()));
+                }
+            }
+        }
         list.rebuild(|b| {
             b.clipped(Affine::IDENTITY, view.rect.to_kurbo(), |b| {
                 for (c, width, path) in lit {
@@ -2548,7 +2743,22 @@ pub fn draw_select_overlay(
                 }
                 // The hovered node's box, for what has no outline of its own.
                 if let Some(f) = hover_frame {
-                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), blue, (to_screen * f) * square.clone());
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), hover_tint, (to_screen * f) * square.clone());
+                }
+                for (at, main, name) in &chips {
+                    draw_chip(b, *at, *main, name, k);
+                }
+                for (at, d) in &facing {
+                    let tip = *at + *d * (22.0 * k);
+                    let teal = peniko::Color::new(PORT_LIT);
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), teal, kurbo::Line::new(*at, tip));
+                    let n = kurbo::Vec2::new(-d.y, d.x);
+                    let mut head = kurbo::BezPath::new();
+                    head.move_to(tip + *d * (5.0 * k));
+                    head.line_to(tip + n * (4.0 * k));
+                    head.line_to(tip - n * (4.0 * k));
+                    head.close_path();
+                    b.fill(Affine::IDENTITY, teal, head);
                 }
                 if mine.len() > 1 && editing.is_none() {
                     for &f in &cached.frames {
@@ -2559,7 +2769,7 @@ pub fn draw_select_overlay(
                     && let Some(frame) = cached.frame
                 {
                     let f = to_screen * frame;
-                    b.stroke(Affine::IDENTITY, thin.clone(), blue, f * square.clone());
+                    b.stroke(Affine::IDENTITY, thin.clone(), box_tint, f * square.clone());
                     let fill = if cached.resizable { peniko::Color::new([1.0, 1.0, 1.0, 1.0]) } else { peniko::Color::new([0.8, 0.82, 0.85, 1.0]) };
                     let [a, bb, ..] = f.as_coeffs();
                     let angle = bb.atan2(a);
@@ -2568,7 +2778,7 @@ pub fn draw_select_overlay(
                         let at = Affine::translate(c.to_vec2()) * Affine::rotate(angle);
                         let r = Rect::from_center_size(Point::ORIGIN, (HANDLE * k, HANDLE * k));
                         b.fill(at, fill, r);
-                        b.stroke(at, thin.clone(), blue, r);
+                        b.stroke(at, thin.clone(), box_tint, r);
                     }
                 }
                 // A path's points and handles, Figma's way: anchors are
@@ -2727,6 +2937,59 @@ pub fn draw_select_overlay(
                         }
                         let c = peniko::Color::new([0.45, 0.55, 0.75, 0.9 * fade as f32]);
                         b.stroke(Affine::IDENTITY, thin.clone(), c, (to_screen * geo.world(e)) * marker.clone());
+                    }
+                }
+                // Pins and lines of the selected component, and the line being
+                // drawn (component-authoring.md §3).
+                {
+                    let dashed = kurbo::Stroke::new(1.5 * k).with_dashes(0.0, [5.0 * k, 4.0 * k]);
+                    let teal = peniko::Color::new(PORT_LIT);
+                    let violet = peniko::Color::new(MAIN_VIOLET);
+                    let pin_dot = |b: &mut crate::vector::DisplayListBuilder<'_>, p: &crate::bevy_app::links::Pin, hot: bool| {
+                        let c = kurbo::Circle::new(p.at, if hot { 6.0 } else { 4.5 } * k);
+                        b.fill(Affine::IDENTITY, white, c);
+                        b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), if p.dir == "out" { violet } else { teal }, c);
+                    };
+                    let label = |b: &mut crate::vector::DisplayListBuilder<'_>, p: &crate::bevy_app::links::Pin| {
+                        if let Some((path, w)) = label_outline(&p.name, (10.0 * k) as f32) {
+                            let x = if p.dir == "out" { p.at.x + 8.0 * k } else { p.at.x - 8.0 * k - w };
+                            b.fill(Affine::translate((x, p.at.y - 6.0 * k)), peniko::Color::new([0.35, 0.35, 0.42, 1.0]), path);
+                        }
+                    };
+                    if let [r] = &mine[..]
+                        && !matches!(tool.gesture, Gesture::Edit(_))
+                    {
+                        for (a, bb, link) in crate::bevy_app::links::lines_of(&geo, view, r, k) {
+                            let line = crate::bevy_app::links::noodle(a, bb);
+                            if link { b.stroke(Affine::IDENTITY, dashed.clone(), violet, line) } else { b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), teal, line) }
+                        }
+                        for p in crate::bevy_app::links::pins_of(&geo, view, r, k) {
+                            pin_dot(b, &p, false);
+                            label(b, &p);
+                        }
+                    }
+                    if let Gesture::Link(l) = &tool.gesture
+                        && l.panel == o.panel
+                    {
+                        for p in &l.targets {
+                            pin_dot(b, p, false);
+                            label(b, p);
+                        }
+                        let end = match &l.target {
+                            Some(LinkTarget::Pin(p)) => {
+                                pin_dot(b, p, true);
+                                p.at
+                            }
+                            Some(LinkTarget::Part(part)) => {
+                                if let Some(f) = geo.frame(&part.chain) {
+                                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), violet, (to_screen * f) * square.clone());
+                                }
+                                l.at
+                            }
+                            None => l.at,
+                        };
+                        b.stroke(Affine::IDENTITY, if l.from.main { dashed.clone() } else { kurbo::Stroke::new(1.5 * k) }, if l.from.main { violet } else { teal }, crate::bevy_app::links::noodle(l.from.at, end));
+                        pin_dot(b, &l.from, true);
                     }
                 }
                 // Ports: the hot one under the pointer; while one is

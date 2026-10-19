@@ -3,6 +3,7 @@
   import Workspace from "./views/Workspace.svelte";
   import WebGL2Warning from "./lib/WebGL2Warning.svelte";
   import ConvertDialog from "./lib/ConvertDialog.svelte";
+  import LinkPopover from "./lib/LinkPopover.svelte";
   import { controllerManager } from "./controller-manager.svelte";
 
   let canvasEl: HTMLCanvasElement;
@@ -36,6 +37,7 @@
   </div>
 
   <ConvertDialog />
+  <LinkPopover />
 
   <WebGL2Warning
     show={controllerManager.showBackendWarning}

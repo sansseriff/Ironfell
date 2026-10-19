@@ -48,6 +48,7 @@ export class MainThreadAdapter {
       send_document_changed_from_worker: (version: number) => this.sendMessage({ ty: "documentChanged", version }),
       send_clipboard_from_worker: (text: string) => this.sendMessage({ ty: "clipboard", text }),
       send_text_edit_from_worker: (state: string) => this.sendMessage({ ty: "textEdit", ...JSON.parse(state) }),
+      send_event_from_worker: (event: string) => this.sendMessage(JSON.parse(event)),
       send_fonts_from_worker: (fonts: string) => this.fonts.request(JSON.parse(fonts)),
     };
 

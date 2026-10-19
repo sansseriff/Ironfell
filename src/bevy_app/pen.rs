@@ -162,7 +162,15 @@ pub fn pen_tool_system(
                 *active = ActiveTool::Ellipse;
                 pen.path = None;
             }
-            "escape" if matches!(*active, ActiveTool::Rect | ActiveTool::Ellipse) => *active = ActiveTool::Select,
+            "port" if m == 0 => {
+                *active = ActiveTool::Port;
+                pen.path = None;
+            }
+            "empty" if m == 0 => {
+                *active = ActiveTool::Empty;
+                pen.path = None;
+            }
+            "escape" if matches!(*active, ActiveTool::Rect | ActiveTool::Ellipse | ActiveTool::Port | ActiveTool::Empty) => *active = ActiveTool::Select,
             "v" if m == 0 => {
                 *active = ActiveTool::Select;
                 pen.path = None;

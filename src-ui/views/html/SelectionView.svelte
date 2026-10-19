@@ -52,7 +52,9 @@
   // the first selected node's fields, each edited through its handle, so a
   // linearly bound value edits its source and a locked one says why.
   type Field = Property;
-  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null };
+  type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean };
+  type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[] };
+  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null };
   let inspected: Inspected | null = $state(null);
   let setError = $state("");
   let generation = 0;
@@ -125,6 +127,21 @@
   function setInput(f: Field, text: string) { return inspected?.component ? patch({ [f.leaf]: text }, [], `set ${f.field}`, inspected.component.entity) : undefined; }
   function setCorners(_f: Field, text: string) { return patch(Object.fromEntries(cornerLeaves.map(k => [k, text])), [], "round corners"); }
   function paintMode(mode: string) { return mode === "solid" ? patch({}, ["gradient"], "solid fill") : patch({ "gradient.kind": mode }, [], `${mode} fill`); }
+  // Component authoring (component-authoring.md): ports, inputs, wrapping,
+  // renaming, each one transaction through `document_author`.
+  async function author(verb: string, args: Record<string, unknown>) {
+    setError = "";
+    try {
+      const r = await doc.call("author", [verb, JSON.stringify(args)]);
+      if (!r.ok) setError = r.error;
+      await refresh();
+      return r;
+    } catch (e) { setError = String(e); }
+  }
+  function editPort(spec: string, patch: Record<string, unknown>) { return author("edit_port", { spec, patch }); }
+  // The main's setting being edited, if any (a port with no anchor).
+  let openSpec: string | null = $state(null);
+  const GENDERS = ["any", "male", "female", "neutral"];
   // Optional components (fill, stroke, corners, arc, shadow): one
   // transaction each, "add shadow" or "remove corners".
   async function component(kind: string, add: boolean) {
@@ -143,7 +160,8 @@
 
   <div class="row">
     <button onclick={() => link()} disabled={doc.selection.length !== 2}>Link</button>
-    <button onclick={makeComponent} disabled={doc.selection.length === 0} title="Make the selected instances one component: a new definition holding them, placed in their stead">Make component</button>
+    <button onclick={makeComponent} disabled={doc.selection.length === 0} title="Make a component: shapes become a new definition shown by its main; instances become one component holding them">Make component</button>
+    <button onclick={() => author("wrap", { ids: doc.selection })} disabled={doc.selection.length === 0} title="Wrap the selection in an empty at its centre (⌘⌥G)">Wrap in empty</button>
     {#each showIn as f (f.node)}
       <button onclick={() => doc.call("focus", [f.node])}>Show in {f.name ?? f.composition} ▸</button>
     {/each}
@@ -171,6 +189,38 @@
       <div class="title"><strong>{inspected.name ?? inspected.type}</strong> <span class="mono">{inspected.type} {inspected.node}</span></div>
       {#if setError}<p class="error">{setError}</p>{/if}
       {#if doc.selection.length > 1}<p class="selection-note">{doc.selection.length} selected · editing the first item</p>{/if}
+      {#snippet portEditor(p: PortInfo, editable: boolean)}
+        <div class="port-grid" data-section="port-editor">
+          <label>Name<input value={p.name ?? ""} disabled={!editable} onchange={(e) => editPort(p.spec, { name: e.currentTarget.value })} /></label>
+          <label>Kind<select value={p.kind ?? "value"} disabled={!editable} onchange={(e) => editPort(p.spec, { kind: e.currentTarget.value })}>{#each p.kinds as k (k)}<option value={k}>{k}</option>{/each}</select></label>
+          <label>Direction<select value={p.dir ?? "in"} disabled={!editable} onchange={(e) => editPort(p.spec, { dir: e.currentTarget.value })}>{#each ["in", "out", "pair"] as d (d)}<option value={d}>{d}</option>{/each}</select></label>
+          {#if p.follow !== null}<label class="check">Loose end<input type="checkbox" checked={!!p.follow} disabled={!editable} onchange={(e) => editPort(p.spec, { follow: e.currentTarget.checked })} /></label>{/if}
+          <label>Connector<input value={p.connector ?? ""} placeholder="any" disabled={!editable} onchange={(e) => editPort(p.spec, { connector: e.currentTarget.value })} /></label>
+          <label>Gender<select value={p.gender ?? "any"} disabled={!editable} onchange={(e) => editPort(p.spec, { gender: e.currentTarget.value })}>{#each GENDERS as g (g)}<option value={g}>{g}</option>{/each}</select></label>
+          <label class="wide">{p.dir === "out" ? "Value" : "Default"}<input class="mono" value={p.bind ? `{= ${p.bind}}` : (p.signal ?? "")} disabled={!editable} title="A number or quantity (10 mW), or an expression in braces: {'{'}= #power.port.signal{'}'}" onchange={(e) => editPort(p.spec, { signal: e.currentTarget.value })} /></label>
+        </div>
+      {/snippet}
+      {#if inspected.main}
+        <div class="property-section" data-section="main">
+          <div class="component main-head"><span class="main-chip">◆◆ Main component</span><span class="mono">{inspected.main.instances} instance{inspected.main.instances === 1 ? "" : "s"}</span></div>
+          <label class="name-row">Name<input value={inspected.main.name ?? ""} onchange={(e) => author("rename", { node: inspected!.main!.def, name: e.currentTarget.value })} /></label>
+          <div class="ports" data-section="ports">
+            {#each inspected.main.ports as p (p.spec)}
+              <button class="port-row" class:open={openSpec === p.spec} onclick={() => (openSpec = openSpec === p.spec ? null : p.spec)} title={p.placed ? "A port placed on the picture" : "A setting: no place on the picture"}>
+                <span class="dir {p.dir}">{p.dir}</span><span>{p.name}</span><span class="mono">{p.port?.kind}</span>{#if !p.placed}<span class="setting">setting</span>{/if}
+              </button>
+              {#if openSpec === p.spec && p.port}{@render portEditor(p.port, true)}{/if}
+            {/each}
+          </div>
+          <div class="row"><button onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture">+ input</button><span class="hint">Ports: the port tool, on the main</span></div>
+        </div>
+      {/if}
+      {#if inspected.port}
+        <div class="property-section" data-section="port">
+          <div class="component"><span>Port</span><span class="mono">{inspected.port.editable ? "" : "edit on the main"}</span></div>
+          {@render portEditor(inspected.port, !!inspected.port.editable)}
+        </div>
+      {/if}
       {#if inspected.component}
         <div class="property-section" data-section="component">
           <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<button class="property-icon" aria-label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach}><Unlink size={14} strokeWidth={1.5} /></button>{/if}</div>
@@ -346,4 +396,18 @@
   .question { border: 1px solid var(--danger); padding: 10px; margin: 8px; border-radius: 6px; }
   .candidate { margin: 8px 0; }
   .error { padding: 0 16px; overflow-wrap: anywhere; }
+  /* Component authoring: a main's violet, ports' teal (component-authoring.md §0). */
+  .main-chip { color: #7d4dff; }
+  .name-row, .port-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--fg-muted); }
+  .name-row { margin-bottom: 12px; }
+  .name-row input, .port-grid input, .port-grid select { min-height: 28px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--bg); color: var(--fg); font-size: 12px; box-sizing: border-box; }
+  .port-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 8px; margin: 8px 0 12px; }
+  .port-grid .wide { grid-column: 1 / -1; }
+  .port-grid label.check { flex-direction: row; align-items: center; justify-content: space-between; }
+  .ports { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+  .port-row { display: flex; gap: 8px; align-items: center; padding: 5px 6px; border-radius: 4px; background: transparent; text-align: left; font-size: 12px; }
+  .port-row:hover, .port-row.open { background: var(--bg-sunken); }
+  .port-row .dir { width: 28px; font-size: 10px; color: #0ab894; font-weight: 600; text-transform: uppercase; }
+  .port-row .setting { margin-left: auto; font-size: 10px; color: var(--fg-faint); }
+  .hint { font-size: 10px; color: var(--fg-faint); align-self: center; }
 </style>

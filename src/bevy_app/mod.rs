@@ -9,6 +9,8 @@ mod pointer;
 pub(crate) mod select;
 mod pen;
 mod shape_tool;
+mod author_tool;
+pub(crate) mod links;
 pub(crate) mod text_tool;
 pub(crate) mod scene3d;
 mod timeline;
@@ -231,6 +233,7 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
             select::navigate_views.before(pen::pen_tool_system),
             pen::pen_tool_system.before(select::select_tool_system),
             shape_tool::shape_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
+            author_tool::author_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
             text_tool::text_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
             select::select_tool_system,
             select::sync_session_selection.after(select::select_tool_system),

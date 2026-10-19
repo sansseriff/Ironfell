@@ -21,6 +21,10 @@ pub enum EngineEvent {
     /// the caret's top-left and height in window px, where the textarea
     /// goes so an IME's candidates appear by the text.
     TextEdit { active: bool, node: String, text: String, anchor: u32, focus: u32, caret: [f32; 3] },
+    /// A link dropped from a main's port onto one of its parts
+    /// (component-authoring.md §3): the host asks which property, and how
+    /// the port's range maps onto it. `x`, `y` are CSS px in the window.
+    LinkDrop { spec: String, node: String, x: f32, y: f32 },
 }
 
 #[derive(Debug, Clone, Serialize)]

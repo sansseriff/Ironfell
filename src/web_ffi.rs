@@ -66,6 +66,9 @@ extern "C" {
     /// The text editor's state for the host's textarea, as JSON.
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_text_edit_from_worker(state: String);
+    /// Any other event, as its JSON (`ty` names it): the host posts it on.
+    #[wasm_bindgen(js_namespace = rustBridge)]
+    pub(crate) fn send_event_from_worker(event: String);
 }
 
 fn event_json(event: &crate::host_events::EngineEvent) -> serde_json::Value {
@@ -384,6 +387,12 @@ pub fn document_make_component(ptr: u64, ids: String, name: String) -> String {
 }
 
 #[wasm_bindgen]
+pub fn document_author(ptr: u64, verb: String, args: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_author(app, verb, args)
+}
+
+#[wasm_bindgen]
 pub fn document_detach(ptr: u64, entity: String) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_detach(app, entity)
@@ -612,6 +621,7 @@ fn flush_events(app: &mut WorkerApp) {
             EngineEvent::Clipboard { text } => send_clipboard_from_worker(text),
             EngineEvent::TextEdit { .. } => send_text_edit_from_worker(serde_json::to_string(&event_json(&event)).unwrap_or_default()),
             EngineEvent::Fonts { fonts } => send_fonts_from_worker(serde_json::to_string(&fonts).unwrap_or_default()),
+            EngineEvent::LinkDrop { .. } => send_event_from_worker(serde_json::to_string(&event_json(&event)).unwrap_or_default()),
         }
     }
 }

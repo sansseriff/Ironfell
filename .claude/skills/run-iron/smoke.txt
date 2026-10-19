@@ -700,7 +700,7 @@ keydown Shift
 dclick 390 175
 keyup Shift
 sleep 400
-clickel button[title^="Make the selected"]
+clickel button[title^="Make a component"]
 sleep 800
 eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); const e = v.match(/<entity[^>]*name="component"[\s\S]*?<\/entity>/)[0]; return [[...e.matchAll(/<port id="[^"]+" name="([^"]+)" kind="([^"]+)" dir="([^"]+)"/g)].map(m => m.slice(1).join(' ')), e.match(/power\.bind="([^"]+)"/)[1].replace(/#[0-9A-Za-z]+/, '#…'), await comps()]; })()
 eval meterIn()

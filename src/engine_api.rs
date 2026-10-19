@@ -413,7 +413,93 @@ pub fn document_make_component(app: &mut WorkerApp, ids: String, name: String) -
         let (made, mut input) = store.0.make_component(&ids, &name, iron_document::Actor::Human)?;
         input.ts = crate::host_services::unix_millis();
         let applied = store.0.apply(input).map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        // What was made is selected, in place of what went into it.
+        if let Some(mut sel) = app.world_mut().get_resource_mut::<crate::SelectionState>() {
+            sel.selected = vec![made.picture];
+        }
         Ok(serde_json::json!({"ok": true, "version": applied.version.0, "entity": made.entity.to_string(), "picture": made.picture.to_string(), "definition": made.definition.to_string()}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// Component authoring from the UI (component-authoring.md): one entry for
+/// its verbs, each one transaction. `args` is a JSON object:
+///
+/// - `add_port {main, x, y, dir?, follow?}`: a port on a main at (x, y) in
+///   the main's space;
+/// - `add_input {def, name, default?}`: a setting;
+/// - `edit_port {spec, patch}`: `author::PortPatch`;
+/// - `wrap {ids}`: wrap siblings in an empty;
+/// - `connect {a, b}`: two ports, by a line;
+/// - `add_empty {parent, x, y}`: an empty in `parent` (a main: its definition).
+pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        use iron_document::author;
+        let a: serde_json::Value = serde_json::from_str(&args).map_err(|e| e.to_string())?;
+        let id = |k: &str| -> Result<iron_document::NodeId, String> { a.get(k).and_then(|v| v.as_str()).ok_or_else(|| format!("{k} missing"))?.parse().map_err(|e| format!("{k}: {e}")) };
+        let num = |k: &str| a.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let doc = store.0.document();
+        let (label, ops, made): (String, Vec<iron_document::Op>, Option<iron_document::NodeId>) = match verb.as_str() {
+            "add_port" => {
+                let main = id("main")?;
+                let dir = a.get("dir").and_then(|v| v.as_str()).unwrap_or("in");
+                let follow = a.get("follow").and_then(|v| v.as_bool()).unwrap_or(false);
+                let (ops, _, anchor) = author::add_port(doc, main, [num("x"), num("y")], dir, follow)?;
+                ("add port".into(), ops, iron_document::NodeId::expanded(main, anchor))
+            }
+            "add_input" => {
+                let def = id("def")?;
+                let default = match a.get("default").and_then(|v| v.as_str()) {
+                    Some(t) => t.trim().parse::<f64>().map(iron_document::Value::Number).or_else(|_| iron_document::Value::parse_quantity(t)).map_err(|_| format!("{t:?} is not a number or quantity"))?,
+                    None => iron_document::Value::Number(0.0),
+                };
+                let (ops, spec) = author::add_input(doc, def, a.get("name").and_then(|v| v.as_str()).unwrap_or("input"), default)?;
+                ("add input".into(), ops, Some(spec))
+            }
+            "edit_port" => {
+                let patch: author::PortPatch = serde_json::from_value(a.get("patch").cloned().unwrap_or_default()).map_err(|e| e.to_string())?;
+                ("edit port".into(), author::edit_port(doc, id("spec")?, &patch)?, None)
+            }
+            "wrap" => {
+                let ids: Vec<iron_document::NodeId> = a.get("ids").and_then(|v| v.as_array()).ok_or("ids missing")?.iter().filter_map(|v| v.as_str()?.parse().ok()).collect();
+                let extent = |n: iron_document::NodeId| store.0.extent(n);
+                let (ops, empty) = author::wrap_in_empty(store.0.document(), &extent, &ids)?;
+                // Inside a main the empty lands in the definition: select its picture there.
+                let parent = ids.first().and_then(|&n| store.0.document().live(n)).and_then(|n| n.parent);
+                let shown = parent.and_then(|p| p.path().first().copied()).filter(|&m| iron_document::expand::main_definition(store.0.document(), m).is_some()).and_then(|m| iron_document::NodeId::expanded(m, empty));
+                ("wrap in empty".into(), ops, Some(shown.unwrap_or(empty)))
+            }
+            "rename" => {
+                let node = id("node")?;
+                let name = a.get("name").and_then(|v| v.as_str()).map(str::trim).filter(|n| !n.is_empty()).ok_or("a name is needed")?;
+                ("rename".into(), vec![iron_document::Op::Set { id: node, path: "name.text".parse().expect("declared leaf"), slot: iron_document::Slot::Const(iron_document::Value::Str(name.to_owned())) }], None)
+            }
+            "connect" => {
+                let read = |l: iron_document::Leaf| store.0.resolved(l.node, l.path);
+                ("connect".into(), author::connect(store.0.document(), &read, id("a")?, id("b")?)?, None)
+            }
+            "add_empty" => {
+                let parent = id("parent")?;
+                let e = doc.next_id();
+                let mut t = iron_document::facet::Transform2d::default();
+                t.x = iron_document::Slot::Const(iron_document::Value::Number(num("x")));
+                t.y = iron_document::Slot::Const(iron_document::Value::Number(num("y")));
+                let mut name = iron_document::facet::Name::default();
+                name.text = iron_document::Slot::Const(iron_document::Value::Str("empty".into()));
+                use iron_document::LeafStruct;
+                let order = doc.children(parent).iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(iron_document::OrderKey::first, |k| iron_document::OrderKey::after(&k));
+                let shown = if iron_document::expand::main_definition(doc, parent).is_some() { iron_document::NodeId::expanded(parent, e) } else { None };
+                ("add empty".into(), vec![iron_document::Op::Create { id: e, ty: iron_document::TypeId::lookup("empty").expect("registered"), parent: Some(parent), order, facets: vec![t.wrap(), name.wrap()] }], Some(shown.unwrap_or(e)))
+            }
+            other => return Err(format!("no authoring verb {other:?}")),
+        };
+        let applied = store.0
+            .apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
+            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "made": made.map(|m| m.to_string())}))
     };
     let result = run();
     if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
@@ -693,7 +779,59 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     let addable: Vec<&str> = iron_document::FacetKind::ALL.iter().copied().filter(|&k| optional(k) && doc.facet(id, k).is_none()).map(|k| k.name()).collect();
     let removable: Vec<&str> = doc.facets_of(id).map(|c| c.kind()).filter(|&k| optional(k)).map(|k| k.name()).collect();
     let component = inspect_component(&store.0, id);
-    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component}).to_string()
+    let main = inspect_main(&store.0, id);
+    let port = inspect_port(&store.0, id);
+    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component, "main": main, "port": port}).to_string()
+}
+
+/// A main (component-authoring.md §1): its definition and the definition's
+/// ports, for the inspector's Main section.
+fn inspect_main(store: &iron_document::Store, id: iron_document::NodeId) -> serde_json::Value {
+    let doc = store.document();
+    let Some(def) = iron_document::expand::main_definition(doc, id) else { return serde_json::Value::Null };
+    let name = doc.get::<iron_document::facet::Name>(def).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    let ports: Vec<serde_json::Value> = iron_document::author::ports_of(doc, def)
+        .into_iter()
+        .map(|(spec, name, dir, placed)| serde_json::json!({"spec": spec.to_string(), "name": name, "dir": dir, "placed": placed, "port": port_json(store, spec)}))
+        .collect();
+    let instances = iron_document::author::entities_of(doc, def).len();
+    serde_json::json!({"def": def.to_string(), "name": name, "ports": ports, "instances": instances})
+}
+
+fn port_json(store: &iron_document::Store, spec: iron_document::NodeId) -> serde_json::Value {
+    let doc = store.document();
+    let Some(p) = doc.get::<iron_document::facet::Port>(spec) else { return serde_json::Value::Null };
+    let text = |s: &iron_document::Slot| s.constant().and_then(|v| v.as_str()).map(str::to_owned);
+    let name = doc.get::<iron_document::facet::Name>(spec).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    let follow = doc.nodes_with(iron_document::FacetKind::Anchor).filter(|a| !a.is_expanded()).find(|&a| doc.get::<iron_document::facet::Anchor>(a).and_then(|x| x.port.constant()).and_then(|v| v.as_ref()) == Some(spec)).and_then(|a| doc.get::<iron_document::facet::Anchor>(a)).and_then(|x| x.follow.constant()).and_then(|v| v.as_bool());
+    serde_json::json!({
+        "spec": spec.to_string(),
+        "name": name,
+        "kind": text(&p.kind),
+        "dir": text(&p.dir),
+        "connector": text(&p.connector),
+        "gender": text(&p.gender),
+        "follow": follow,
+        "signal": p.signal.constant().map(|v| v.to_string()),
+        "bind": p.signal.expr().map(|e| e.to_string()),
+        "kinds": iron_document::port::KINDS.iter().map(|k| k.name).collect::<Vec<_>>(),
+    })
+}
+
+/// A port's anchor (an empty marking where a port sits), for the
+/// inspector's Port section: the spec it marks, editable when the anchor is
+/// in a main or a definition's own template.
+fn inspect_port(store: &iron_document::Store, id: iron_document::NodeId) -> serde_json::Value {
+    let doc = store.document();
+    let Some(a) = doc.get::<iron_document::facet::Anchor>(id) else { return serde_json::Value::Null };
+    let Some(port) = a.port.constant().and_then(|v| v.as_ref()) else { return serde_json::Value::Null };
+    let spec = if doc.live(port).is_some_and(|n| n.ty.name() == "port_spec") { port } else { port.expanded_parts().map(|(_, s)| s).unwrap_or(port) };
+    let editable = id.path().first().is_some_and(|&root| iron_document::expand::main_definition(doc, root).is_some()) || !id.is_expanded();
+    let mut j = port_json(store, spec);
+    if let Some(o) = j.as_object_mut() {
+        o.insert("editable".into(), serde_json::Value::Bool(editable));
+    }
+    j
 }
 
 /// The component instance a node is (an entity) or pictures (a figure), with

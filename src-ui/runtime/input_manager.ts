@@ -256,6 +256,17 @@ export class InputManager {
             beginCopy(() => this.post({ ty: 'toolKey', key, m: InputManager.mods(event) }));
             return;
         }
+        // Wrap in an empty (Cmd/Ctrl+Alt+G, Figma's "frame selection";
+        // component-authoring.md §2). By code: Alt changes the character.
+        if (command && event.altKey && !event.shiftKey && event.code === 'KeyG') {
+            const target = event.target as HTMLElement | null;
+            const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+            if (!editing) {
+                event.preventDefault();
+                if (!event.repeat) this.post({ ty: 'toolKey', key: 'wrap', m: 0 });
+                return;
+            }
+        }
         // Copy as SVG (Alt+Shift+C; Figma has no default). By key code: with
         // Alt held, macOS reports the character it types. Cmd+Shift+C and
         // Cmd+Alt+C belong to the browser's developer tools.

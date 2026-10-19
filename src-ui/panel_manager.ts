@@ -229,6 +229,9 @@ export class PanelManager {
       case 'convertQuestion':
         this.docClient.convertQuestion = data.question;
         break;
+      case 'linkDrop':
+        this.docClient.linkDrop = { spec: data.spec, node: data.node, x: data.x, y: data.y };
+        break;
       case 'cursor':
         if (this.canvas) applyCursor(this.canvas, data.cursor);
         break;

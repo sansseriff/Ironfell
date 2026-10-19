@@ -43,8 +43,8 @@ export interface ViewQuery {
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
 /** The pointer's tools and their keys (Figma's). */
-export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text';
-const TOOL_KEYS: Record<Tool, string> = { select: 'v', pen: 'p', rect: 'r', ellipse: 'o', text: 't' };
+export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text' | 'port' | 'empty';
+const TOOL_KEYS: Record<Tool, string> = { select: 'v', pen: 'p', rect: 'r', ellipse: 'o', text: 't', port: 'port', empty: 'empty' };
 
 export class DocumentClient {
   view = $state('');
@@ -77,6 +77,9 @@ export class DocumentClient {
   /** Editing a shape's points would cut bindings or clips: what they are,
    *  for the dialog. Answered with `toPath(node, true)` or dismissed. */
   convertQuestion: { node: string; type: string; cuts: string[] } | null = $state(null);
+  /** A link dropped on a main's part, waiting for its mapping
+   *  (component-authoring.md §3; `lib/LinkPopover.svelte`). */
+  linkDrop: { spec: string; node: string; x: number; y: number } | null = $state(null);
   /** A pending merge question from Link (ECM I5): the person picks the survivor. */
   question: any = $state(null);
 

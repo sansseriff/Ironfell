@@ -414,6 +414,8 @@ pub struct SelectTool {
     port_hover: Option<(String, NodeId, Point)>,
     /// The pointer's panel and window px, for the empties' markers.
     pointer_at: Option<(String, Point)>,
+    /// The joint under the pointer and the part of its handle hovered.
+    joint_hover: Option<(String, Joint, Option<JointPart>)>,
 }
 
 impl SelectTool {
@@ -444,6 +446,9 @@ enum Gesture {
     Pan { panel: String, start: Vec2, pan: Vec2 },
     /// A line drawn from a component's pin (component-authoring.md §3).
     Link(LinkDrag),
+    /// A standard component dragged out of the Library tab
+    /// (component-authoring.md §6): its key, and the pointer, window px.
+    Library { key: String, at: Point },
 }
 
 /// A line being drawn from a pin: to another component's pin (a
@@ -495,6 +500,10 @@ enum AfterPress {
     Plug { anchor: NodeId, body: NodeId, click: Click },
     /// A drag draws a line from a component's pin.
     Link { pin: crate::bevy_app::links::Pin, click: Click },
+    /// A drag moves a joint of two loose ends by its held end.
+    JointMove { anchor: NodeId, click: Click },
+    /// A drag takes a standard component out of the Library tab.
+    Library { key: String, click: Click },
 }
 
 /// What a press that did not become a drag does on release.
@@ -1824,6 +1833,16 @@ pub fn select_tool_system(
                 tool.gesture = Gesture::Edit(Manip::Gizmo { targets, kind: None });
                 break 'press;
             }
+            // The Library tab (a session composition): a press takes the
+            // entry under it; nothing there is edited.
+            if view.composition.is_some_and(|c| c.is_session()) {
+                if let Some((chain, _)) = top_hit(&hits)
+                    && let Some(key) = geo.doc().get::<iron_document::facet::Name>(chain[0]).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned)
+                {
+                    tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Library { key, click: Click::Keep } };
+                }
+                break 'press;
+            }
             // A pin of the selected component: a drag draws a line from it,
             // before the box's grips (a pin sits on the box's edge).
             if *active == ActiveTool::Select
@@ -1988,6 +2007,39 @@ pub fn select_tool_system(
                 }
             }
 
+            // A joint (two ports plugged together): a half pulls its part
+            // off, the centre moves the joint (component-authoring.md §5).
+            if *active == ActiveTool::Select
+                && view.dims == Dims::Two
+                && !mods(MOD_SHIFT)
+                && let Some((j, Some(part))) = {
+                    let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
+                    joint_at(&geo, &view, screen, &here, mods(MOD_META), k)
+                }
+            {
+                let side = |x: &iron_document::plug::PortAnchor, chain: &Vec<NodeId>| (x.anchor, Reach { panel: view.panel.clone(), chain: chain.clone() });
+                let then = match part {
+                    JointPart::A | JointPart::B => {
+                        let (anchor, target) = if part == JointPart::A { side(&j.a, &j.a_chain) } else { side(&j.b, &j.b_chain) };
+                        AfterPress::Plug { anchor, body: target.node(), click: Click::Only(target) }
+                    }
+                    JointPart::Centre if j.a.follow && j.b.follow => {
+                        // Two loose ends: the held one carries the joint.
+                        let held = j.a.connection.and_then(|c| iron_document::plug::held_end(geo.doc(), c));
+                        let anchor = if held == Some(j.b.outer) { j.b.anchor } else { j.a.anchor };
+                        AfterPress::JointMove { anchor, click: Click::Keep }
+                    }
+                    JointPart::Centre => {
+                        // A rigid part moves, and what is plugged into it follows.
+                        let (_, target) = if !j.a.follow { side(&j.a, &j.a_chain) } else { side(&j.b, &j.b_chain) };
+                        set_selection(&mut sel, tool, vec![target]);
+                        AfterPress::Move { click: Click::Keep }
+                    }
+                };
+                tool.last_click = None;
+                tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then };
+                break 'press;
+            }
             // A hot port: a drag plugs or unplugs it; a click selects the
             // part it belongs to.
             if *active == ActiveTool::Select
@@ -2062,6 +2114,25 @@ pub fn select_tool_system(
             let flat = drawables.0.contains_key(&id);
             let is_slider = drawables.0.get(&id).is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. }));
             let is_3d_target = matches!(source, Source::World(_)) && k + 1 == chain.len();
+            // A slider's knob inside a component scrubs it, as a control
+            // (the standard slider, component-authoring.md §6); its track
+            // still selects and moves the component.
+            let deepest = *chain.last().expect("a chain is never empty");
+            if !is_slider
+                && k + 1 < chain.len()
+                && view.dims == Dims::Two
+                && let Some(Shape2d::Slider { w, h, t }) = drawables.0.get(&deepest).map(|d| d.shape.clone())
+                && let Source::Overlay(i) = source
+            {
+                let p = hits.overlay[i].space * (view.affine().inverse() * screen);
+                let local = geo.world(deepest).inverse() * p;
+                if (local - Point::new((t * w) as f64, h as f64 * 0.5)).hypot() <= h as f64 * 0.75 {
+                    if let Some(m) = manipulate::hand_off(&mut store.0, deepest, view.panel.clone(), hits.overlay[i].space, None, None, true, &pointer, &spatial, &cameras, &views, &planes) {
+                        tool.gesture = Gesture::Edit(m);
+                    }
+                    break 'press;
+                }
+            }
             let legacy = view.dims == Dims::Three || through.is_some() || is_3d_target || (is_slider && k + 1 == chain.len());
             if legacy {
                 if !(shift && is_selected) {
@@ -2214,6 +2285,16 @@ pub fn select_tool_system(
                     let base = if matches!(click, Click::Keep) { reaches.clone() } else { Vec::new() };
                     tool.gesture = Gesture::Marquee { view, start: p0, prefix: prefix.clone(), roots: roots.clone(), base };
                 }
+                AfterPress::Library { key, .. } => {
+                    tool.gesture = Gesture::Library { key: key.clone(), at: Point::new(pointer.screen.x as f64, pointer.screen.y as f64) };
+                }
+                AfterPress::JointMove { anchor, .. } => {
+                    let anchor = *anchor;
+                    let grab = geo.world(anchor).inverse() * p0;
+                    store.0.begin_gesture(&[anchor]);
+                    let h = store.0.begin_drag(anchor, [grab.x, grab.y]);
+                    tool.gesture = Gesture::Edit(Manip::Drag(manipulate::Drag { label: "move joint".into(), view, start: p0, drags: vec![(h, Affine::IDENTITY)], duplicable: false, duplicate: None }));
+                }
                 AfterPress::Link { pin, .. } => {
                     tool.gesture = Gesture::Link(LinkDrag { panel: view.panel.clone(), from: pin.clone(), at: Point::new(pointer.screen.x as f64, pointer.screen.y as f64), target: None, targets: Vec::new() });
                 }
@@ -2264,6 +2345,7 @@ pub fn select_tool_system(
             Gesture::Pan { panel, start, pan } => {
                 view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
             }
+            Gesture::Library { at, .. } => *at = screen,
             Gesture::Link(l) => {
                 let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
                 l.at = screen;
@@ -2332,7 +2414,7 @@ pub fn select_tool_system(
         match std::mem::take(&mut tool.gesture) {
             Gesture::Press { then, .. } => {
                 let click = match then {
-                    AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } | AfterPress::Link { click, .. } => click,
+                    AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } | AfterPress::Link { click, .. } | AfterPress::JointMove { click, .. } | AfterPress::Library { click, .. } => click,
                 };
                 match click {
                     Click::Keep => {}
@@ -2347,6 +2429,18 @@ pub fn select_tool_system(
             Gesture::Edit(Manip::Plug(d)) => {
                 if let Err(why) = store.0.finish_plug(d.plugging, d.target) {
                     warn!("plug rejected: {why}");
+                }
+            }
+            Gesture::Library { key, .. } => {
+                // Dropped on a 2D composition (not the library): placed there.
+                if let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two)
+                    && let Some(comp) = view.composition.filter(|c| !c.is_session())
+                {
+                    let p = view.affine().inverse() * screen;
+                    match store.0.place_standard(&key, comp, [p.x, p.y], Actor::Human) {
+                        Ok(u) => set_selection(&mut sel, tool, vec![Reach { panel: view.panel.clone(), chain: vec![u] }]),
+                        Err(e) => warn!("library: {e}"),
+                    }
                 }
             }
             Gesture::Link(l) => match l.target {
@@ -2433,6 +2527,19 @@ pub fn select_tool_system(
                 }
             }
         }
+        // A joint shows its handle; a lone hot port its ring.
+        let joint = view
+            .filter(|v| v.dims == Dims::Two && *active == ActiveTool::Select && !space && !on_grip && !gizmo_hot && edit.reach.is_none())
+            .and_then(|v| {
+                let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == v.panel).collect();
+                joint_at(&geo, v, screen, &here, mods(MOD_META), k).map(|(j, part)| (v.panel.clone(), j, part))
+            });
+        if joint.as_ref().is_some_and(|(_, _, part)| part.is_some()) {
+            cursor = "grab".into();
+        }
+        if tool.joint_hover != joint {
+            tool.joint_hover = joint;
+        }
         // A hot port lights on its own; the part it belongs to does not.
         let port = view
             .filter(|v| v.dims == Dims::Two && *active == ActiveTool::Select && !space && !on_grip && !gizmo_hot && edit.reach.is_none())
@@ -2447,7 +2554,7 @@ pub fn select_tool_system(
             tool.port_hover = port;
         }
         let hover = match (view, top_hit(&hits)) {
-            (_, _) if tool.port_hover.is_some() => None,
+            (_, _) if tool.port_hover.is_some() || tool.joint_hover.as_ref().is_some_and(|j| j.2.is_some()) => None,
             (Some(view), Some((chain, _))) if !on_grip && !gizmo_hot => {
                 let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
                 let k = target_index(geo.doc(), &chain, &here, mods(MOD_META));
@@ -2469,7 +2576,10 @@ pub fn select_tool_system(
         if !matches!(tool.gesture, Gesture::Press { .. }) && tool.port_hover.is_some() {
             tool.port_hover = None;
         }
-        if matches!(tool.gesture, Gesture::Edit(Manip::Plug(_))) && tool.cursor != "grabbing" {
+        if !matches!(tool.gesture, Gesture::Press { .. }) && tool.joint_hover.is_some() {
+            tool.joint_hover = None;
+        }
+        if matches!(tool.gesture, Gesture::Edit(Manip::Plug(_)) | Gesture::Library { .. }) && tool.cursor != "grabbing" {
             events.cursor("grabbing".into());
             tool.cursor = "grabbing".into();
         }
@@ -2595,6 +2705,10 @@ pub struct SelectOverlay {
 /// part it belongs to is what a click there would select: a top-level
 /// instance, not one whose inside is open. With `deep` (Cmd), any port.
 fn hot_port(geo: &Geo, view: &PanelView, screen: Point, here: &[&Reach], deep: bool, k: f64) -> Option<(iron_document::plug::PortAnchor, Vec<NodeId>)> {
+    hot_port_within(geo, view, screen, here, deep, PORT_HIT * k)
+}
+
+fn hot_port_within(geo: &Geo, view: &PanelView, screen: Point, here: &[&Reach], deep: bool, radius: f64) -> Option<(iron_document::plug::PortAnchor, Vec<NodeId>)> {
     let doc = geo.doc();
     let comp = view.composition?;
     let mut best: Option<(f64, iron_document::plug::PortAnchor, Vec<NodeId>)> = None;
@@ -2605,7 +2719,7 @@ fn hot_port(geo: &Geo, view: &PanelView, screen: Point, here: &[&Reach], deep: b
         // Two ports on one spot (a fiber's end on the meter it plugs
         // into): the one drawn on top, as for picking.
         let d = (view.affine() * Point::new(a.world[0], a.world[1])).distance(screen) - 1e-3 * doc.children(comp).iter().position(|&c| c == a.body).unwrap_or(0) as f64;
-        if d > PORT_HIT * k || best.as_ref().is_some_and(|b| b.0 <= d) {
+        if d > radius || best.as_ref().is_some_and(|b| b.0 <= d) {
             continue;
         }
         // The chain from the composition's top level down to the anchor.
@@ -2630,6 +2744,106 @@ fn hot_port(geo: &Geo, view: &PanelView, screen: Point, here: &[&Reach], deep: b
         best = Some((d, a, to_body));
     }
     best.map(|(_, a, chain)| (a, chain))
+}
+
+/// Two connected ports on one spot, as the joint handle sees them
+/// (component-authoring.md §5): `a` the hot one, `b` its partner, each with
+/// the chain down to the part it belongs to; `axis` (document space, unit)
+/// points from `b`'s part's centre towards `a`'s.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Joint {
+    a: iron_document::plug::PortAnchor,
+    a_chain: Vec<NodeId>,
+    b: iron_document::plug::PortAnchor,
+    b_chain: Vec<NodeId>,
+    at: Point,
+    axis: kurbo::Vec2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum JointPart {
+    A,
+    B,
+    Centre,
+}
+
+/// CSS px: the joint handle's half length and half thickness, its centre's
+/// radius.
+const JOINT_HALF: f64 = 26.0;
+const JOINT_THICK: f64 = 10.0;
+const JOINT_CENTRE: f64 = 8.0;
+
+/// The joint under `screen`, if a hot port there is connected to a port
+/// drawn on the same spot.
+fn joint_at(geo: &Geo, view: &PanelView, screen: Point, here: &[&Reach], deep: bool, k: f64) -> Option<(Joint, Option<JointPart>)> {
+    let (a, a_chain) = hot_port_within(geo, view, screen, here, deep, JOINT_HALF * k)?;
+    let partner = a.partner?;
+    let comp = view.composition?;
+    let doc = geo.doc();
+    let b = geo.store.port_anchors().into_iter().find(|b| b.outer == partner && b.composition == a.composition && b.anchor != a.anchor)?;
+    let mut chain = vec![b.anchor];
+    let mut up = b.anchor;
+    while let Some(p) = doc.live(up).and_then(|n| n.parent) {
+        if p == comp {
+            break;
+        }
+        chain.push(p);
+        up = p;
+    }
+    chain.reverse();
+    let b_chain = chain[..=chain.iter().position(|&n| n == b.body)?].to_vec();
+    let centre = |x: &iron_document::plug::PortAnchor| geo.store.extent(x.body).map(|r| r.center());
+    let at = Point::new(a.world[0], a.world[1]);
+    let axis = match (centre(&a), centre(&b)) {
+        (Some(ca), Some(cb)) if (ca - cb).hypot() > 1e-6 => (ca - cb) / (ca - cb).hypot(),
+        _ => kurbo::Vec2::new(a.facing.cos(), a.facing.sin()),
+    };
+    let j = Joint { a, a_chain, b, b_chain, at, axis };
+    let part = joint_part(&j, view, screen, k);
+    Some((j, part))
+}
+
+/// Which part of the joint handle `screen` is over.
+fn joint_part(j: &Joint, view: &PanelView, screen: Point, k: f64) -> Option<JointPart> {
+    let c = view.affine() * j.at;
+    let ax = (view.affine() * (j.at + j.axis)) - c;
+    let ax = ax / ax.hypot().max(1e-9);
+    let d = screen - c;
+    let (t, n) = (d.dot(ax), d.cross(ax).abs());
+    if n > (JOINT_THICK + 2.0) * k || t.abs() > (JOINT_HALF + 2.0) * k {
+        return None;
+    }
+    Some(if t.abs() <= JOINT_CENTRE * k { JointPart::Centre } else if t > 0.0 { JointPart::A } else { JointPart::B })
+}
+
+/// The joint handle: a pill along the joint's axis, a half on each part's
+/// side with a grip of dots, and a circle in the middle.
+fn draw_joint(b: &mut crate::vector::DisplayListBuilder<'_>, view: &PanelView, j: &Joint, hot: Option<JointPart>, k: f64) {
+    let c = view.affine() * j.at;
+    let ax = (view.affine() * (j.at + j.axis)) - c;
+    let angle = ax.y.atan2(ax.x);
+    let at = Affine::translate(c.to_vec2()) * Affine::rotate(angle);
+    let (h, w) = (JOINT_HALF * k, JOINT_THICK * k);
+    let pill = kurbo::RoundedRect::new(-h, -w, h, w, w);
+    b.fill(at, peniko::Color::new([0.96, 0.96, 0.975, 0.97]), pill);
+    let lit = peniko::Color::new([PORT_LIT[0], PORT_LIT[1], PORT_LIT[2], 0.18]);
+    for (part, sign) in [(JointPart::A, 1.0), (JointPart::B, -1.0)] {
+        if hot == Some(part) {
+            let half = if sign > 0.0 { kurbo::RoundedRect::new(0.0, -w, h, w, kurbo::RoundedRectRadii::new(0.0, w, w, 0.0)) } else { kurbo::RoundedRect::new(-h, -w, 0.0, w, kurbo::RoundedRectRadii::new(w, 0.0, 0.0, w)) };
+            b.fill(at, lit, half);
+        }
+        for t in [12.0, 19.0] {
+            for n in [-5.0, 0.0, 5.0] {
+                b.fill(at, peniko::Color::new([0.72, 0.73, 0.78, 1.0]), kurbo::Circle::new((sign * t * k, n * k), 1.6 * k));
+            }
+        }
+    }
+    b.stroke(at, kurbo::Stroke::new(1.0 * k), peniko::Color::new([0.78, 0.79, 0.84, 1.0]), pill);
+    let teal = peniko::Color::new(PORT_LIT);
+    let r = if hot == Some(JointPart::Centre) { JOINT_CENTRE + 1.5 } else { JOINT_CENTRE };
+    b.fill(Affine::IDENTITY, teal, kurbo::Circle::new(c, r * k));
+    b.fill(Affine::IDENTITY, peniko::Color::new([1.0, 1.0, 1.0, 1.0]), kurbo::Circle::new(c, r * 0.62 * k));
+    b.fill(Affine::IDENTITY, teal, kurbo::Circle::new(c, r * 0.32 * k));
 }
 
 pub fn draw_select_overlay(
@@ -2893,7 +3107,7 @@ pub fn draw_select_overlay(
                 // Empties: a box with a cross, for the ones a click here could
                 // reach (not inside a closed instance), near the pointer and
                 // fading with distance; a selected one always.
-                if let Some(comp) = view.composition {
+                if let Some(comp) = view.composition.filter(|c| !c.is_session()) {
                     let doc = geo.doc();
                     let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == o.panel).collect();
                     let near = tool.pointer_at.as_ref().filter(|(p, _)| p == &o.panel).map(|(_, at)| *at);
@@ -2938,6 +3152,17 @@ pub fn draw_select_overlay(
                         let c = peniko::Color::new([0.45, 0.55, 0.75, 0.9 * fade as f32]);
                         b.stroke(Affine::IDENTITY, thin.clone(), c, (to_screen * geo.world(e)) * marker.clone());
                     }
+                }
+                // A standard component on its way out of the Library tab.
+                if let Gesture::Library { key, at } = &tool.gesture
+                    && tool.pointer_at.as_ref().is_some_and(|(p, _)| p == &o.panel)
+                    && view.composition.is_some_and(|c| !c.is_session())
+                {
+                    let ghost = Rect::from_origin_size(*at, (110.0 * k, 70.0 * k));
+                    b.fill(Affine::IDENTITY, peniko::Color::new([MAIN_VIOLET[0], MAIN_VIOLET[1], MAIN_VIOLET[2], 0.08]), ghost);
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k).with_dashes(0.0, [5.0 * k, 4.0 * k]), peniko::Color::new(INSTANCE_VIOLET), ghost);
+                    let name = iron_document::standard::ENTRIES.iter().find(|e| e.key == key).map_or(key.as_str(), |e| e.name);
+                    draw_chip(b, *at, false, name, k);
                 }
                 // Pins and lines of the selected component, and the line being
                 // drawn (component-authoring.md §3).
@@ -3004,7 +3229,10 @@ pub fn draw_select_overlay(
                     b.fill(Affine::IDENTITY, white, c);
                     b.stroke(Affine::IDENTITY, kurbo::Stroke::new(width * k), teal(1.0), c);
                 };
-                if let Some((_, _, at)) = tool.port_hover.as_ref().filter(|(p, ..)| p == &o.panel) {
+                let joint_shown = tool.joint_hover.as_ref().filter(|(p, ..)| p == &o.panel);
+                if let Some((_, j, part)) = joint_shown {
+                    draw_joint(b, view, j, *part, k);
+                } else if let Some((_, _, at)) = tool.port_hover.as_ref().filter(|(p, ..)| p == &o.panel) {
                     ring(b, to_screen * *at, 6.0, 2.0, 0.22);
                     b.fill(Affine::IDENTITY, teal(1.0), kurbo::Circle::new(to_screen * *at, 2.5 * k));
                 }

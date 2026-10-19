@@ -42,6 +42,7 @@ pub mod serial;
 pub mod shape;
 pub mod plug;
 pub mod solve;
+pub mod standard;
 pub mod sym;
 pub mod text;
 pub mod time;

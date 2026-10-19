@@ -715,7 +715,8 @@ eval comps()
 # Scope (§8): outside may read an instance's ports, not its insides.
 eval (async () => { const [, m] = await inside('meter', 'needle'); const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const r = await __iron.edit(`<edit><create id="$t" type="text" parent="${c}" content="{= str(#${m[1].slice(1)}.transform2d.rot)}"/></edit>`); return r.failure?.match(/kind="[a-z_]+"/)?.[0]; })()
 # Plugging (component-model.md §4.3): a drag that starts on a port connects
-# or disconnects it. The meter dragged by its `in` port onto the spare
+# or disconnects it. The meter's port is joined to the fiber's end, so it is
+# grabbed by the meter's half of the joint handle. The meter dragged by its `in` port onto the spare
 # laser's `out` snaps there and mates: it reads the spare's 10 mW, and the
 # fiber's end stays where it was. Dragging the laser carries the mated meter.
 # Two undos put both back. The short fiber's loose end dropped on the spare
@@ -724,7 +725,7 @@ eval window.at = async (u, p) => (await inside(u, p))[1][0].match(/ wx="(-?[\d.]
 eval window.reads = async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [...v.matchAll(/<entity[^>]*name="(meter|short fiber)"[^>]*mode="linked"[\s\S]*?<port id="[^"]+" name="in"[^>]*signal="([^"]+)"/g)].map(m => `${m[1]} ${m[2]}`); }
 dclick 800 700
 sleep 300
-ddrag 545 175 250 470 14
+ddrag 562 175 257 472 14
 sleep 600
 eval (async () => [await at('fiber','out'), await at('meter','in'), await reads()])()
 ddrag 125 475 225 475 10
@@ -741,6 +742,100 @@ eval (async () => [await at('short fiber','in'), await reads()])()
 key Meta+z
 sleep 600
 eval reads()
+# Component authoring (component-authoring.md). From shapes: an ellipse and
+# a needle, marquee-picked, become a component shown by its main; the port
+# tool places an `in` on the main; the needle, entered and wrapped in an
+# empty, is the pivot; a line from the main's `in` pin onto it opens the link
+# popover, whose Link binds the empty's rotation in the definition. Cmd+D on
+# the main makes an instance.
+key o
+ddrag 700 20 800 120 6
+sleep 300
+key r
+ddrag 750 66 795 74 6
+sleep 400
+dclick 860 300
+sleep 200
+ddrag 690 8 815 135 8
+sleep 300
+clickel button[title^="Make a component"]
+sleep 700
+eval document.querySelector('.inspector .title')?.textContent
+clickel button[title="Shape tools"]
+sleep 300
+clickel [role="menuitem"]:has-text("Port")
+sleep 300
+dclick 702 70
+sleep 600
+eval document.querySelector('[data-section="port-editor"] input')?.value
+dclick 785 70
+dclick 785 70
+sleep 400
+clickel button[title^="Wrap the selection"]
+sleep 600
+key Escape
+sleep 200
+key Escape
+sleep 200
+dclick 720 40
+sleep 400
+ddrag 702 70 785 70 10
+sleep 600
+eval JSON.stringify(document.querySelector('.link-popover .head')?.textContent)
+clickel .link-popover button.primary
+sleep 600
+eval document.querySelectorAll('[data-section="ports"] .port-row').length
+key Meta+d
+sleep 600
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return (v.match(/<entity[^>]*name="component"[^>]*>/g) || []).length; })()
+# The joint handle on the fiber's end at the meter: the meter's half pulls
+# the meter off, the fiber's half the fiber's end, the centre moves the meter
+# with the end still plugged in; each undone.
+dclick 860 300
+sleep 200
+ddrag 562 175 700 320 10
+sleep 500
+eval (async () => [await at('fiber','out'), await at('meter','in'), await reads()])()
+key Meta+z
+sleep 500
+ddrag 530 175 450 300 10
+sleep 500
+eval (async () => [await at('fiber','out'), await at('meter','in')])()
+key Meta+z
+sleep 500
+ddrag 545 175 600 300 10
+sleep 500
+eval (async () => [await at('fiber','out'), await at('meter','in'), await reads()])()
+key Meta+z
+sleep 500
+# The Library tab (a session composition): a slider and a laser dragged
+# out, the slider's `value` pin lined to the laser's `power`, the knob
+# scrubbed to 18: the laser reads 18 mW.
+tab Library
+sleep 1200
+move 100 110
+down
+move 300 300
+move 700 640
+move 760 660
+up
+sleep 600
+move 100 280
+down
+move 400 500
+move 1000 640
+move 1050 650
+up
+sleep 600
+move 785 676
+down
+up
+sleep 400
+drag 960 674 1050 664
+sleep 600
+drag 860 672 940 672
+sleep 600
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [...v.matchAll(/<entity[^>]*name="(slider|laser)"[^>]*mode="linked"[\s\S]*?<port id="[^"]+" name="(level|power)"[^>]*signal="([^"]+)"/g)].map(m => `${m[1]} ${m[2]} ${m[3]}`); })()
 logs applied|rejected|panicked
 errors
 quit

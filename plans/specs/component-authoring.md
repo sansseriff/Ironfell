@@ -120,3 +120,35 @@ Duplicating or copying a main makes a linked instance (an entity in the model an
   `add_input`, `edit_port` (each rewriting every instance's `args` in the same
   transaction; `AddFacet` now replaces a dynamic facet whole for this), `wrap_in_empty`,
   `connect`. Tests: `tests/authoring.rs`, `tests/anchors.rs` (joints, gender).
+- **Canvas, 2026-10-18.** Mains draw solid violet with a `◆◆ name` chip, instances
+  lighter violet with `◇ name`; parts inside keep the blue. Make component works on
+  shapes and selects what it made; rectangles and ellipses drawn on a main join its
+  definition. The shape menu has Port (a click on a main) and Empty; Cmd+Alt+G and the
+  inspector's Wrap in empty wrap the selection. The inspector's Main section (name,
+  ports, + input) and Port section (name, kind, direction, loose end, connector,
+  gender, value or default) go through one engine call, `document_author`. Selected
+  and hot ports show a facing arrow.
+- **Lines, 2026-10-18.** A selected component's settings are pins on its box (inputs
+  left, outputs right; a main's placed ports at their anchors). A line from an
+  instance's pin to another's connects (`author::connect`); from a main's pin onto one
+  of its parts it raises `LinkDrop`, and the shell's link popover writes
+  `scale(#port.port.signal, a, b, c, d)` on the chosen property through the
+  inspector's bind. Existing connections and links are drawn while an end is
+  selected. A generic engine event (`send_event_from_worker`) carries `LinkDrop`.
+- **Joint handle, 2026-10-18.** Hovering connected ports shows the pill along the line
+  between their parts' centres; a half is that part's plug drag, the centre moves a
+  rigid part (what is plugged in follows) or a joint's held end. It replaces the
+  topmost-wins rule for ports on one spot.
+- **Library, 2026-10-18.** `iron_document::standard`: slider (settings `level`, `min`,
+  `max`, `unit`; output `value` = level × unit), readout, laser, fiber, dial meter.
+  `Store::place_standard` copies a definition in on first use (`import.source =
+  std:<key>`) and places a linked instance, one history entry. The Library dock tab
+  shows the session composition `library` the bridge builds at startup (baked
+  previews, never saved). A drag out of it places the entry at the drop point. A press
+  on a slider's knob inside an instance scrubs it, writing through the slider's
+  binding to the instance's `level`. A plain-number input (the readout's) takes any
+  unit; an input with a unit takes only that unit.
+- **Not built:** pin hover cursor; links from an instance's pin to a main's part are
+  refused by design (a link lives in a definition); the Library is not searchable; the
+  standard definitions are not editable (no main); 3D.
+

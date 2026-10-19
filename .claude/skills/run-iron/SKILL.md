@@ -382,6 +382,21 @@ undefined
 [[545,175],[545,175],["meter 15.88… mW","short fiber 0 W"]]
 [[240,475],["meter 15.88… mW","short fiber 10 mW"]]
 ["meter 15.88… mW","short fiber 0 W"]
+clicked button[title^="Make a component"]
+"component use #56"
+clicked button[title="Shape tools"]
+clicked [role="menuitem"]:has-text("Port")
+"in"
+clicked button[title^="Wrap the selection"]
+"\"Link in\""
+clicked .link-popover button.primary
+1
+1
+[[545,175],[683,320],["meter 0 W","short fiber 0 W"]]
+[[465,300],[545,175]]
+[[600,300],[600,300],["meter 15.88… mW","short fiber 0 W"]]
+tab Library
+["slider level 18","laser power 18 mW"]
 applied "open demo scene" (297 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
@@ -467,6 +482,29 @@ applied "undo: move use" (6 ops, System) -> v82
 applied "undo: connect in to out" (10 ops, System) -> v83
 applied "connect in to out" (3 ops, Human) -> v84
 applied "undo: connect in to out" (3 ops, System) -> v85
+applied "draw ellipse" (1 ops, Human) -> v86
+applied "draw rectangle" (1 ops, Human) -> v87
+applied "make component component" (9 ops, Human) -> v88
+applied "add port" (2 ops, Human) -> v89
+applied "wrap in empty" (4 ops, Human) -> v90
+applied "bind transform2d.rot" (1 ops, Human) -> v91
+applied "duplicate use" (3 ops, Human) -> v92
+applied "disconnect in" (3 ops, Human) -> v93
+applied "disconnect in" (2 ops, Human) -> v94
+applied "disconnect in" (2 ops, Human) -> v95
+applied "undo: disconnect in" (7 ops, System) -> v96
+applied "disconnect out" (3 ops, Human) -> v97
+applied "disconnect out" (2 ops, Human) -> v98
+applied "disconnect out" (2 ops, Human) -> v99
+applied "undo: disconnect out" (7 ops, System) -> v100
+applied "move use" (2 ops, Human) -> v101
+applied "undo: move use" (2 ops, System) -> v102
+applied "add slider" (8 ops, Human) -> v103
+applied "add slider" (3 ops, Human) -> v104
+applied "add laser" (7 ops, Human) -> v105
+applied "add laser" (3 ops, Human) -> v106
+applied "connect value to power" (3 ops, Human) -> v107
+applied "set slider" (1 ops, Human) -> v108
 (no page errors)
 ```
 
@@ -504,7 +542,21 @@ end stays at (545, 175). Dragging the spare laser by its body moves the
 mated meter with it (both anchors at (340, 475), one "move use" with the
 solver's writes). Two undos restore the chain (15.88… mW). The short fiber's
 loose `in` end dropped on the spare laser plugs in (10 mW), and one undo
-unplugs it. The first `redraw (document)`
+unplugs it. The meter is grabbed by its half of the joint handle (its port
+is joined to the fiber's end). Component authoring (component-authoring.md):
+an ellipse and a needle drawn top right and marquee-picked become a
+`component` whose main is selected; the port tool on its left edge adds
+`in`; entering the main (two clicks on the needle) and Wrap in empty makes
+the needle's empty; a line from the main's `in` pin onto it opens the link
+popover ("Link in"), whose Link binds the empty's rotation ("bind
+transform2d.rot"); the main's Ports list has 1 row; Cmd+D on the main makes
+1 `component` entity. The joint handle on the meter: its half pulls the
+meter off (0 W, the fiber's end stays), the fiber's half pulls the end off
+(the meter stays), the centre moves the meter to (600, 300) with the end on
+it (15.88… mW); each undone. The Library tab: a slider and a laser dragged
+out (each "add …" twice: the definition copied in, then the instance, one
+history entry), the slider's `value` pin lined to the laser's `power`
+("connect value to power"), its knob scrubbed to 18: the laser reads 18 mW. The first `redraw (document)`
 line, listing the dial meter's readout (`#3b`, its template's text, and
 `#3i/3b`, the instance's), is the default font arriving: whether it lands
 before the square's drag, and so appears, depends on the font fetch.

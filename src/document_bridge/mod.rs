@@ -411,6 +411,29 @@ pub(crate) fn sync_document(
             structure |= collect_ids(op, &mut affected);
         }
     }
+    // The Library tab's composition (component-authoring.md §6): session
+    // state, built from the standard templates when missing (at start, and
+    // after a load replaces the store).
+    {
+        let doc = store.0.document();
+        let has = doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(iron_document::standard::LIBRARY));
+        if !has {
+            let first = doc.next_session_ids(1)[0];
+            let order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(iron_document::OrderKey::first, |n| iron_document::OrderKey::after(&n.order));
+            let ops = iron_document::standard::library_ops(first, order);
+            let ids: Vec<NodeId> = ops.iter().filter_map(|op| match op {
+                Op::Create { id, .. } => Some(*id),
+                _ => None,
+            }).collect();
+            match store.0.apply_session(ops) {
+                Ok(()) => {
+                    affected.extend(ids);
+                    structure = true;
+                }
+                Err(e) => warn!("library composition: {e}"),
+            }
+        }
+    }
     synced.0 = store.0.document().version();
     // Resolved values that moved: bindings re-evaluated, or a gesture
     // previewed. Their nodes are rewritten like any other change.

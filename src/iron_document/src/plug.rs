@@ -168,11 +168,16 @@ pub fn compatible(doc: &Document, grabbed: &PortAnchor, target: &PortAnchor) -> 
     if grabbed.kind != target.kind {
         return Err(format!("{} carries {}, {} carries {}", grabbed.name, grabbed.kind, target.name, target.kind));
     }
-    if grabbed.kind == "value"
-        && let (Some(a), Some(b)) = (grabbed.dim, target.dim)
-        && a != b
-    {
-        return Err(format!("{} is in {}, {} in {}", grabbed.name, a.canonical_unit(), target.name, b.canonical_unit()));
+    // A `value` input with a unit takes only that unit; a plain-number one
+    // (a readout's) takes any.
+    if grabbed.kind == "value" {
+        let (src, dst) = if grabbed.dir == "in" { (target, grabbed) } else { (grabbed, target) };
+        if let (Some(a), Some(b)) = (src.dim, dst.dim)
+            && !b.is_none()
+            && a != b
+        {
+            return Err(format!("{} is in {}, {} in {}", src.name, a.canonical_unit(), dst.name, b.canonical_unit()));
+        }
     }
     if !grabbed.connector.is_empty() && !target.connector.is_empty() && grabbed.connector != target.connector {
         return Err(format!("{} is a {} connector, {} a {}", grabbed.name, grabbed.connector, target.name, target.connector));

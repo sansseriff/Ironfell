@@ -409,7 +409,11 @@ impl Manip {
                 }
                 let value = value.clamp(min.min(max), max.max(min));
                 if num(cx.store, "slider.value", f64::NAN) != value {
-                    cx.store.preview(*id, leaf("slider.value"), Value::Number(value));
+                    // Through its handle: a slider inside an instance is
+                    // bound to the instance's argument, which takes the value.
+                    if cx.store.preview_target(*id, leaf("slider.value"), Value::Number(value)).is_err() {
+                        cx.store.preview(*id, leaf("slider.value"), Value::Number(value));
+                    }
                 }
             }
             Manip::Plane { handle, mapping, press, .. } => {

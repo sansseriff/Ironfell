@@ -171,7 +171,7 @@ static TYPES: &[TypeSpec] = &[
     },
     TypeSpec {
         name: "definition",
-        facets: &[(K::Name, true)],
+        facets: &[(K::Name, true), (K::Import, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["port_spec", "equation", "template", "entity", "connection"]),
     },

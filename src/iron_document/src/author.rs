@@ -291,11 +291,15 @@ pub fn connect(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, a: NodeId, 
     if ka != kb {
         return Err(format!("{a} carries {ka}, {b} carries {kb}"));
     }
+    // A plain-number input (a readout's) takes any unit; one with a unit,
+    // only that unit.
     let signal = |p: NodeId| read(Leaf { node: p, path: LeafPath::new(FacetKind::Port, "signal").expect("declared") }).and_then(|v| v.as_quantity()).map(|(_, d)| d);
-    if let (Some(da), Some(db)) = (signal(a), signal(b))
-        && da != db
+    let (src, dst) = if text(pa, "dir") == "in" { (b, a) } else { (a, b) };
+    if let (Some(ds), Some(dd)) = (signal(src), signal(dst))
+        && !dd.is_none()
+        && ds != dd
     {
-        return Err(format!("{a} is in {}, {b} in {}", da.canonical_unit(), db.canonical_unit()));
+        return Err(format!("{src} is in {}, {dst} in {}", ds.canonical_unit(), dd.canonical_unit()));
     }
     for p in [a, b] {
         if crate::plug::connection_of(doc, p).is_some() && text(port(p)?, "dir") == "in" {

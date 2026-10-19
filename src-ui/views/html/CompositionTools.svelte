@@ -32,7 +32,8 @@
       .call("compositions", [])
       .then((list: { id: string; name: string | null; dims: string }[]) => {
         const c = list.find((c) => c.id === source || c.name === source);
-        twoD = c?.dims === "2d";
+        // The Library tab is browsed, not drawn in.
+        twoD = c?.dims === "2d" && source !== "library";
       })
       .catch(() => (twoD = false));
   });

@@ -12,7 +12,7 @@ import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import type { ViewSpec } from './views';
 
-const STORAGE_KEY = 'iron.workspace.v4';
+const STORAGE_KEY = 'iron.workspace.v5';
 
 /** The layout to start from: the main viewer with each composition in a
  *  tab beside it, HTML views left and right, the timeline across the bottom.
@@ -42,6 +42,9 @@ function defaultLayout(api: DockviewApi) {
   view('timeline', 'Timeline', { source: 'timeline', notation: 'timeline' }, { direction: 'below' }, { initialHeight: 220 });
   view('document', 'Document', { source: 'document', notation: 'markup' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
   view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
+  // The standard components (component-authoring.md §6): a view onto the
+  // session's library composition; drag one onto a canvas to place it.
+  view('library', 'Library', { source: 'library', notation: 'composition' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
   view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 280 });
 }
 

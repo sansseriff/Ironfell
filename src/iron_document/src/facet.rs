@@ -383,6 +383,11 @@ facets! {
     /// rewrites to the instance's ports.
     Template / "template" => Template { notation: Str = Value::Str("free".to_owned()) }
 
+    /// Where a definition came from (component-model.md §10,
+    /// component-authoring.md §6): `std:<key>` for the app's standard
+    /// components, copied in on first use.
+    Import / "import" => Import { source: Str = Value::Str(String::new()), version: Str = Value::Str(String::new()) }
+
     /// A composition shown inside another (ECM §7.4): a live reference, not a
     /// copy. 2D in 2D or 3D in 3D places and clips it like a group; 3D in 2D
     /// is a camera view; 2D in 3D a plane.

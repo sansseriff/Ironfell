@@ -20,7 +20,7 @@ mod alpha_stress;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
-use crate::vector::{VectorCamera, VectorPlugin};
+use crate::vector::VectorPlugin;
 use crate::document_bridge::{DocumentPlugin, reconcile_gesture};
 
 /// The drag's preview, reconcile and command flush, in that order.
@@ -44,7 +44,6 @@ use crate::{
     WorkerApp,
     surface::announce_window,
     camera_controller::CameraControllerPlugin,
-    fps_overlay::FPSOverlayPlugin,
     // tracking_circle::TrackingCircle,
 };
 
@@ -156,7 +155,6 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
         // One renderer: the sparse-strips backend. A second one would be a
         // sibling of `vector::hybrid` on the same view-texture path.
         VectorPlugin::hybrid_only(),
-        FPSOverlayPlugin,
         FrameTimeDiagnosticsPlugin {
             max_history_length: MAX_HISTORY_LENGTH,
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
@@ -199,7 +197,6 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
     // PostStartup, not Startup: the backend spawns its camera with `Commands`, so
     // the resource naming it does not exist until those commands are applied at
     // the end of Startup.
-    app.add_systems(PostStartup, adopt_backend_camera_for_ui);
 
     // --- STEP 3: 3D scene + panel cameras ------------------------------------
     // Lights and ground; one viewport-scoped camera per 3D composition panel
@@ -259,6 +256,7 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
             // what they show, including the gizmo highlight state.
             sync_view_images
                 .after(sync_embed_cameras)
+                .after(crate::document_bridge::liveness::compute_liveness)
                 .after(TransformSystems::Propagate)
                 .after(selection_reflect_system)
                 // Before frusta and visibility: a camera woken this frame
@@ -324,20 +322,3 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<select::Clipboard>();
 }
 
-/// STEP 2 (ladder): let bevy_ui draw into the backend's compositing camera.
-///
-/// The camera itself belongs to the vector backend — it is where that backend's
-/// output lands — so the app only expresses the policy that UI shares it.
-fn adopt_backend_camera_for_ui(
-    mut commands: Commands,
-    camera: Option<Res<VectorCamera>>,
-) {
-    // Optional so that selecting a backend which does not provide this camera is
-    // a warning rather than a panic — but loud, because the symptom otherwise is
-    // "the FPS overlay silently vanished".
-    let Some(camera) = camera else {
-        warn!("no vector composite camera; bevy_ui has nothing to draw into");
-        return;
-    };
-    commands.entity(camera.0).insert(bevy::ui::IsDefaultUiCamera);
-}

@@ -57,17 +57,24 @@ cd .claude/skills/run-iron && bun install && cd -
 ## Build
 
 `bun run wasm` and `bun run wasm:fast` (repo root) run this script for dev-opt
-and wasm-bench. The app's bottom-right overlay names the running build: green for
-wasm-bench (opt 3, SIMD), red for dev-opt.
+and wasm-bench; `bun run wasm:smallfast` runs `build-wasm.sh` (the shipped
+build) for both backends. The Stats view, docked right of the timeline, names
+the running build (`Build dev-opt (opt 1, no SIMD) - SLOW` or `Build
+wasm-bench (opt 3, SIMD)`).
 
 ```bash
 .claude/skills/run-iron/build.sh
 ```
 
-Builds the `dev-opt` profile with the `webgl2` feature, binds it into
-`src-ui/wasm/webgl2/`, and stubs `src-ui/wasm/webgpu/` so Vite's import of
-both artifact URLs resolves. About 2.5 minutes cold, 15 seconds warm. The
-wasm is ~128 MB because the profile keeps debug info; that is expected.
+Builds the `dev-opt` profile twice, with the `webgpu` and the `webgl2`
+feature, and binds each into `src-ui/wasm/<backend>/`; the loader picks one per
+browser (`src-ui/runtime/backend_policy.ts`), so desktop Chromium on macOS gets
+the WebGPU build. About 2.5 minutes cold, 15 seconds warm, per backend.
+`BACKENDS=webgl2` builds only what the headless smoke runs; a backend that has
+never been built is then stubbed with a copy (marked `.stub`) so Vite's import
+of both artifact URLs resolves. The wasm is ~1.4 GB before binding and well over
+100 MB after because the profile keeps debug info; that is expected, and says
+nothing about the shipped size (`build-wasm.sh`, ~20 MB, ~4.6 MB brotli).
 
 **Performance comparisons require `PROFILE=wasm-bench`.** The default dev-opt
 artifact is level 1 and the helper does not enable SIMD for it; it can make the
@@ -154,13 +161,14 @@ composition's nodes). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines:
 
 ```
+{"enabled":false,"guides":[]}
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-redraw (document): 2 of 39 nodes changed [#3b #3i/3b]; damage 539,114–661,269
-redraw (document): 2 of 39 nodes changed [#M #U]; damage 560,340–800,460
+redraw (document): 2 of 44 nodes changed [#3b #3i/3b]; damage 539,114–661,269
+redraw (document): 2 of 44 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #11.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#11.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
-"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,3.14…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,5.34…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
 {"ok":true,"version":9,"aliases":{"$n":"#3s"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
 "<rect id=\"#3s\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
@@ -193,8 +201,8 @@ false
 true
 "<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3w\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3w\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":58694}
-"<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
+{"roundtrip_equal":true,"bytes":58959}
+"<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" run=\"auto\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
 applied "open demo scene" (297 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
@@ -232,23 +240,24 @@ applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
 loaded document v25 (289 live nodes)
 (no page errors)
+{"enabled":false,"guides":[]}
 undefined
 ["#M"]
 ["#M viewer [#o #M]"]
-{"x":500,"y":420,"w":116,"h":98,"deg":0}
-{"x":552,"y":393,"w":116,"h":98,"deg":45}
+{"x":500,"y":420,"w":120,"h":100,"deg":0}
+{"x":553,"y":392,"w":120,"h":100,"deg":45}
 {"x":500,"y":420,"w":80,"h":80,"deg":0}
 ["#V"]
+["#a"]
 ["#V"]
 ["#15"]
-[]
 []
 ["#o","#15","#16"]
 {"x":501,"y":430,"w":80,"h":80,"deg":0}
 true
 true
 tab Controls
-"Move (V)"
+"Pen (P)"
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
@@ -258,7 +267,7 @@ undefined
 [4,"<point id=\"#3x\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
 3
 "bend"
-" ox=\"0.0\" oy=\"-57.0\""
+" ox=\"0.0\" oy=\"-63.4\""
 2
 "pen-remove"
 2
@@ -294,7 +303,7 @@ tab Main
 clicked Cancel
 null
 tab Controls
-"<rect id=\"#3y\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"28.20…\" tr=\"28.20…\" br=\"28.20…\" bl=\"28.20…\""
+"<rect id=\"#3y\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
 clicked Add effect
 clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
@@ -330,7 +339,7 @@ tab Main
 [false,true]
 tab Controls
 undefined
-"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"28.2\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.0914 38.6599 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.57… 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
+"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"30\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.0914 38.6599 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.57… 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
 ["slider level is exported as a picture of itself; it imports as shapes"]
 4
 {"cuts":["filters are not imported"],"nodes":7,"ok":true}
@@ -507,6 +516,10 @@ applied "connect value to power" (3 ops, Human) -> v107
 applied "set slider" (1 ops, Human) -> v108
 (no page errors)
 ```
+
+Both halves of the smoke start with `__iron.snapping(false)` (the
+`{"enabled":false,…}` lines): their drags aim at exact points, and object snapping
+would pull them a few px onto nearby edges. `snapping.txt` tests snapping itself.
 
 The Components section (component-model.md phase 2) lists every entity with
 its `mode`: the optics tab's are `detached` (static instances, copies), the
@@ -797,7 +810,7 @@ same-version reload; raise them (`sed 's/^sleep 500$/sleep 2500/; s/^sleep 300$/
 modes, repeated/nested occurrences of hidden sources, clips, transformed paths,
 negative/nonuniform scales, deletion/history and 2D-on-3D plane hits. The four
 reference/indexed screenshot pairs must match across the complete canvas/editor
-(the comparison excludes the bottom 100 CSS pixels with the live FPS HUD).
+(the comparison excludes the bottom 100 CSS pixels and masks the Stats panel).
 
 `await __iron.spatial(false)` selects exhaustive reference walks; `true` restores
 indexed picking/culling. Bounds continue updating in both modes. The diagnostic
@@ -903,9 +916,9 @@ are not full-frame GPU latency or proof of every presented frame.
 bun run dev   # -> http://localhost:5173/Ironfell/ ; Ctrl-C to stop
 ```
 
-Opens the WebGPU build in a real browser when one exists; the human path
-needs `./build-wasm.sh` for the release artifacts, which this skill does not
-run.
+Opens the WebGPU build in desktop Chromium on macOS or Windows, the WebGL2
+build elsewhere; `build.sh` builds both. `./build-wasm.sh` makes the release
+artifacts, which this skill does not run.
 
 ## Test
 
@@ -1110,3 +1123,91 @@ export. Expected: the runs JSON holds `weight` 700 on 0–5 and `color` plus
 `underline` on 15–19; the paste makes a second text node ("paste text"); the
 export has three `<tspan>`s for the first text (bold "Party", plain emoji, red
 underlined "time") and one for the pasted text; no page errors.
+
+## Snapping (2026-10-20)
+
+`plans/specs/snapping.md`. `await __iron.snapping(enabled)` turns object snapping
+on or off for the next move and returns the current move's guides (`x=…` or
+`y=…`, with how many points each marks). After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < snapping.txt; cd -
+```
+
+The square dragged by (23, 3) keeps its right edge on rect #E's left (603) and
+snaps its centre to rect #6's (465); with Cmd held it lands unsnapped; an Alt-drag
+copy snaps its left edge to the original's right (580) and its bottom to an edge
+at 501; with snapping off the first drag lands unsnapped. Then, snapping
+on again: the square's bottom edge resized to 586 snaps to the small green
+rect's bottom (587; `h` carries the resize's own float noise, unsnapped too);
+the pen's second point, clicked 3 px low, lands level with the first; and in
+point editing the third point dragged to x 873 snaps plumb under the first.
+Inspect `screenshots/snapping-guides.png` (two red guides),
+`snapping-resize.png` (crosses alone) and `snapping-point.png`. Expected, minus
+screenshot, `nav` and `ready` lines:
+
+```
+{"enabled":true,"guides":["x=603 (4)","y=465 (2)"]}
+"<rect id=\"#M\" name=\"square\" x=\"523\" y=\"425\""
+{"enabled":true,"guides":[]}
+{"enabled":true,"guides":[]}
+"<rect id=\"#M\" name=\"square\" x=\"523\" y=\"423\""
+{"enabled":true,"guides":["x=580 (4)","y=501 (4)"]}
+["<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\"","<rect id=\"#3s\" name=\"square\" x=\"580\" y=\"421\""]
+{"enabled":false,"guides":[]}
+"<rect id=\"#M\" name=\"square\" x=\"523\" y=\"423\""
+{"enabled":true,"guides":[]}
+{"enabled":true,"guides":["y=587 (4)"]}
+"<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" h=\"167.00000000000003\""
+["<path id=\"#3u\" name=\"path\" x=\"870\" y=\"420\"","<point id=\"#3w\" x=\"0\" y=\"0\"","<point id=\"#3x\" x=\"120\" y=\"0\"","<point id=\"#3y\" x=\"66\" y=\"77\""]
+{"enabled":true,"guides":["x=870 (2)"]}
+["<point id=\"#3w\" x=\"0\" y=\"0\"","<point id=\"#3x\" x=\"120\" y=\"0\"","<point id=\"#3y\" x=\"0\" y=\"100\""]
+applied "open demo scene" (297 ops, System) -> v1
+applied "move rect" (2 ops, Human) -> v2
+applied "undo: move rect" (2 ops, System) -> v3
+applied "move rect" (2 ops, Human) -> v4
+applied "undo: move rect" (2 ops, System) -> v5
+applied "duplicate rect" (3 ops, Human) -> v6
+applied "duplicate rect" (2 ops, Human) -> v7
+applied "undo: duplicate rect" (5 ops, System) -> v8
+applied "move rect" (2 ops, Human) -> v9
+applied "undo: move rect" (2 ops, System) -> v10
+applied "resize rect" (1 ops, Human) -> v11
+applied "undo: resize rect" (1 ops, System) -> v12
+applied "draw path" (3 ops, Human) -> v13
+applied "add point" (1 ops, Human) -> v14
+applied "add point" (1 ops, Human) -> v15
+applied "move point" (2 ops, Human) -> v16
+(no page errors)
+```
+
+The snap core's native tests: `cargo test -p iron_spatial --target
+aarch64-apple-darwin --test snap` (9 tests).
+
+## Free running and the Stats view (2026-10-18)
+
+`plans/specs/free-running.md`. The Stats view right of the timeline is the
+session's `stats` composition: four Vello text lines the `stats` producer
+publishes (`FPS … avg … ema …`, `2D vello_gpu (sparse strips)`, the build,
+the canvas size). It is a live source, so while it shows, the window renders
+every frame. Each composition view has a settings button (top right,
+`aria-label="Composition settings"`) with Run: Auto / Always / On demand;
+`await __iron.runMode(source, mode)` and `await __iron.compositionInfo(source)`
+do the same from the console (`source` is an id or a name).
+
+Checked by hand: the Piston tab's gas moves with no input (two screenshots
+2.5 s apart differ inside the chamber), stops when Piston is set to On demand
+(identical) and moves again on Auto, each a "set run mode" transaction; the
+menu reads `Running: cylinder` (bubbled out of the embed). With Stats set to
+On demand and the pointer still, `__iron.timings` over 2 s shows only `frame`
+and `propagate`: nothing renders.
+
+The smoke's timeline scrub now ends later (the timeline is narrower beside
+Stats), hence the torus's `rot="0,5.34…,0"`. The expected block was brought
+up to date on 2026-10-20 with lines that had differed since at least
+2026-10-18 and are what the script intends: the select tool's resize lands on
+120×100 (553,392 rotated), the double-click enters the pendulum group (`["#a"]`,
+the ball) before Esc climbs out, the toolbar reads `"Pen (P)"` after P, the
+bend reads `oy="-63.4"`, and the rounded rectangle's corners read 30. The old
+values came from driver-paced drags that stopped short and a double-click
+that did not land.

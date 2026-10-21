@@ -1,12 +1,17 @@
 #!/bin/zsh
-# Build the WebGL2 dev-opt wasm and bind it where the Vite dev server expects it.
+# Build the WebGPU and WebGL2 dev wasm and bind each where the Vite dev server
+# expects it (src-ui/wasm/<backend>/).
 #
-# WebGL2, not WebGPU, because headless Chrome on SwiftShader has no WebGPU
-# adapter; `?gfx=webgl2` on the URL forces the loader to match.
-# dev-opt (opt-level 1, debug info) builds in ~2.5 min cold, ~15 s warm.
+# Both, because the loader picks one per browser at load time
+# (src-ui/runtime/backend_policy.ts): desktop Chromium on macOS/Windows gets
+# WebGPU, everything else WebGL2. The headless smoke runs on SwiftShader, which
+# has no WebGPU adapter, so it forces `?gfx=webgl2`; BACKENDS=webgl2 skips the
+# WebGPU build when only the smoke needs to run.
+# dev-opt (opt-level 1, debug info) builds in ~2.5 min cold, ~15 s warm, per backend.
 # PROFILE=wasm-bench builds at opt-level 3 for the render benchmark.
 set -e
 PROFILE=${PROFILE:-dev-opt}
+BACKENDS=(${=BACKENDS:-webgpu webgl2})
 cd "$(dirname "$0")/../../.."
 
 # The wasm-bindgen CLI must match the crate version pinned in Cargo.lock.
@@ -23,19 +28,30 @@ fi
 if [ "$PROFILE" = "wasm-bench" ]; then
   export RUSTFLAGS="${RUSTFLAGS:-} -Ctarget-feature=+simd128"
 fi
-cargo build --profile "$PROFILE" --no-default-features --features webgl2 --target wasm32-unknown-unknown
-mkdir -p src-ui/wasm/webgl2 src-ui/wasm/webgpu
-wasm-bindgen --out-dir src-ui/wasm/webgl2 --web "target/wasm32-unknown-unknown/$PROFILE/ironfell.wasm"
 
-# wasm_loader.ts imports both artifact URLs at build time, so Vite needs a
-# file at the WebGPU path even though only WebGL2 is fetched, and glue.ts
-# takes its TypeScript types from the WebGPU glue. Stub the directory with a
-# copy of the WebGL2 artifacts, and keep the stub current on every build so
-# the type declarations match the FFI; a real WebGPU build (no marker file)
-# is left alone.
-if [ ! -e src-ui/wasm/webgpu/ironfell_bg.wasm ] || [ -e src-ui/wasm/webgpu/.stub ]; then
-  cp src-ui/wasm/webgl2/ironfell_bg.wasm src-ui/wasm/webgl2/ironfell.js \
-     src-ui/wasm/webgl2/ironfell.d.ts src-ui/wasm/webgl2/ironfell_bg.wasm.d.ts src-ui/wasm/webgpu/
-  touch src-ui/wasm/webgpu/.stub
-fi
-ls -la src-ui/wasm/webgl2/ironfell_bg.wasm
+# Each backend is a different feature set, so cargo keeps both sets of
+# dependency builds and a warm rebuild of either stays warm. The final
+# ironfell.wasm path is shared, so each is bound before the next build.
+for backend in $BACKENDS; do
+  echo "building $backend ($PROFILE)"
+  cargo build --profile "$PROFILE" --no-default-features --features "$backend" --target wasm32-unknown-unknown
+  mkdir -p "src-ui/wasm/$backend"
+  rm -f "src-ui/wasm/$backend/.stub"   # left by older versions of this script
+  wasm-bindgen --out-dir "src-ui/wasm/$backend" --web "target/wasm32-unknown-unknown/$PROFILE/ironfell.wasm"
+done
+
+# wasm_loader.ts imports both artifact URLs at build time, so Vite needs a file
+# at each path. If a backend was skipped and has never been built, stub it with
+# a copy of one that was, marked so a later real build replaces it. A stub
+# serves the wrong backend's binary, so this only exists to keep Vite resolving.
+built=${BACKENDS[1]}
+for backend in webgpu webgl2; do
+  if [ ! -e "src-ui/wasm/$backend/ironfell_bg.wasm" ]; then
+    mkdir -p "src-ui/wasm/$backend"
+    cp src-ui/wasm/$built/ironfell_bg.wasm src-ui/wasm/$built/ironfell.js \
+       src-ui/wasm/$built/ironfell.d.ts src-ui/wasm/$built/ironfell_bg.wasm.d.ts "src-ui/wasm/$backend/"
+    touch "src-ui/wasm/$backend/.stub"
+    echo "warning: src-ui/wasm/$backend is a stub copy of $built" >&2
+  fi
+done
+ls -la src-ui/wasm/*/ironfell_bg.wasm

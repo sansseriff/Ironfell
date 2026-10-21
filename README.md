@@ -8,11 +8,12 @@ Technical and scientific communication in age of AI
 bun install
 bun run wasm:fast   # optimized build (opt 3, SIMD): use this to judge performance
 bun run wasm        # dev build (opt 1, debug info): faster to compile, ~3x slower to run
+bun run wasm:smallfast  # the shipped build (LTO, wasm-opt -Oz, SIMD), both backends: judge size with this
 bun run dev         # serves http://localhost:5173/Ironfell/
 ```
 
-`bun run dev` serves whichever wasm build ran last. The bottom-right overlay says
-which: `Build: wasm-bench (opt 3, SIMD)` in green, or a red `dev-opt … SLOW` line.
+`bun run dev` serves whichever wasm build ran last. The Stats view (right of the
+timeline) says which: `Build wasm-bench (opt 3, SIMD)`, or `Build dev-opt … SLOW`.
 After switching builds, hard-reload the page.
 
 **Settings:** the gear beside **+** in any tab bar. Render scale (canvas pixels per

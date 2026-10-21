@@ -316,8 +316,9 @@ target; this cache only removes repeated geometry preparation.
 
 ## Not yet
 
-- Snapping and smart guides, and the distance and size labels. The size label needs text
-  in the display list.
+- Snapping and smart guides: moving the selection snaps and shows guides (2026-10-20,
+  [`snapping.md`](snapping.md) phases 1–2); resize, the shape tools, the pen, equal
+  spacing and the distance and size labels are its later phases.
 - Group and ungroup (Cmd+G).
 - Reparenting by dragging into a group or frame.
 - The scale tool (K), which scales strokes and content.

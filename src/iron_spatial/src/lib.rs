@@ -7,6 +7,7 @@
 //! 10 §3.1; the render handoff's item 3).
 
 pub mod scene;
+pub mod snap;
 
 pub use scene::Scene;
 

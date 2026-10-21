@@ -351,6 +351,12 @@ pub fn document_stress(ptr: u64, shapes: u32) -> String {
 }
 
 #[wasm_bindgen]
+pub fn document_snapping(ptr: u64, enabled: bool) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_snapping(app, enabled)
+}
+
+#[wasm_bindgen]
 pub fn document_spatial(ptr: u64, enabled: bool) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_spatial(app, enabled)
@@ -474,6 +480,18 @@ pub fn document_inspect_set(ptr: u64, node: String, leaf: String, text: String) 
 pub fn document_compositions(ptr: u64) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_compositions(app)
+}
+
+#[wasm_bindgen]
+pub fn document_composition_info(ptr: u64, source: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_composition_info(app, source)
+}
+
+#[wasm_bindgen]
+pub fn document_set_run_mode(ptr: u64, source: String, mode: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_set_run_mode(app, source, mode)
 }
 
 #[wasm_bindgen]

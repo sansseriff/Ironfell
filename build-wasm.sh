@@ -22,22 +22,23 @@ if [ "${2:-}" = "classic" ]; then
   FEATURES="$TARGET,classic"
 fi
 
-# `-Zlocation-detail=none -Zfmt-debug=none` are applied to the WebGPU build only.
-# They break the WebGL2 build: with them the app acquires an adapter, initializes
-# and then fails every frame with wgpu errors that bevy's default
-# `RenderErrorPolicy` treats as fatal (`error_handler.rs:79`), so nothing renders.
+# `-Zlocation-detail=none` is applied to the WebGPU build only (~52 KB raw).
 #
-# Established by a controlled A/B — same commit, same machine, same profile, same
-# `wasm-opt -Oz`, built back to back with only these two flags differing. The
-# mechanism was not identified. `-Zfmt-debug=none` empties every derived `Debug`
-# across all crates (std, wgpu and naga included, via `build-std`), so anything
-# using `{:?}` to build a functional string silently gets "". naga's GLSL
-# identifier generation was the obvious suspect and does not use `Debug`.
+# `-Zfmt-debug=none` is not used on either build. It empties every derived
+# `Debug` across all crates (std, wgpu and naga included, via `build-std`), so
+# anything using `{:?}` to build a functional string silently gets "". It
+# first broke the WebGL2 build (2026-07: every frame failed with wgpu errors
+# that bevy treats as fatal, `error_handler.rs:79`). Since Bevy 0.20 replaced
+# naga_oil with WESL (2026-10-17) it breaks WebGPU too: shader modules come out
+# invalid ("mip generation pipeline … downsample_first"), and every log line
+# loses its message, since `tracing` records messages through `Debug`.
+# Measured 2026-10-18, same commit back to back: with it, errors every frame;
+# without it, none, for ~230 KB raw / ~45 KB brotli.
 #
-# The WebGPU build is unaffected because it never executes wgpu's GL backend.
-# Cost of omitting them for WebGL2 is ~326 KB (~1.8%).
+# The pair's WebGL2 failure is likely the same mechanism; location-detail alone
+# has not been tried there. Cost of omitting it for WebGL2 is small (~50 KB).
 if [ "$TARGET" = "webgpu" ]; then
-  TARGET_RUSTFLAGS="-Zlocation-detail=none -Zfmt-debug=none"
+  TARGET_RUSTFLAGS="-Zlocation-detail=none"
 else
   TARGET_RUSTFLAGS=""
 fi

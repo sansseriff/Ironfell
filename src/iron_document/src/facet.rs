@@ -450,9 +450,12 @@ facets! {
 
     /// A composition root (ECM §5): one diagram in one notation, 2D or 3D.
     /// Its subtree is layout, figures and composition-local geometry.
+    /// `run` is when its views render (free-running.md §2): `auto` (when
+    /// it or anything it shows is live), `always`, or `on_demand`.
     Composition / "composition" => Composition {
         notation: Str = Value::Str("free".to_owned()),
         dims: Enum = Value::Enum("2d".to_owned()),
+        run: Enum = Value::Enum("auto".to_owned()),
     }
 
     @dynamic {

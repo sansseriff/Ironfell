@@ -1,5 +1,5 @@
 <composition-view of="#1" version="2">
-  <composition id="#1" name="cartoon" notation="cartoon" dims="2d" count="1">
+  <composition id="#1" name="cartoon" notation="cartoon" dims="2d" run="auto" count="1">
     <group id="#2" count="1">
       <rect id="#3" name="box" x="0" y="0" rot="0" sx="1" sy="1" w="100" h="100" of="#9"/>
     </group>

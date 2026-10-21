@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-10-17 on `master`. Update this file whenever a plan is added,
+**Updated:** 2026-10-20 on `master`. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -45,10 +45,12 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`clipboard-and-assets.md`](specs/clipboard-and-assets.md) | Copy, paste, duplicate; the clipboard; assets and drag and drop | Phases 1–2 done (copy closure, Cmd+D, Cmd+C/X/V, Alt-drag); assets wait on the project container (§6) |
 | [`panels-and-session.md`](specs/panels-and-session.md) | Views, dock presenter, session tier, inspectors | Items 1–2 built; 3–5 open |
 | [`view-textures.md`](specs/view-textures.md) | Every view renders to its own texture | Done except the custom final pass and §4 tiling |
+| [`free-running.md`](specs/free-running.md) | When a view renders every frame: live sources, the run mode (auto / always / on demand), bubbling through embeds; the settings menu; the Stats composition that replaced the `bevy_ui` overlay | Approved and built 2026-10-18 |
 | [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phase 1 done (store ownership, one pointer state machine, the 3D gizmo); phase 2 a product candidate; 4–5 in the render handoff |
 | [`text.md`](specs/text.md) | Text nodes, fonts (catalog, on-demand loading, installed fonts natively), glyph rendering, editing, `fmt` readouts, the Text inspector | Scaffold done 2026-10-17; §9 lists what is open |
 | [`component-authoring.md`](specs/component-authoring.md) | Making components from the UI: mains, the port and empty tools, links and lines, the joint handle, the Library tab | Approved and built 2026-10-18 |
 | [`component-model.md`](specs/component-model.md) | Components: authored vs expanded instances, ports as the one interface, overrides, scope, libraries, render analysis; amends ECM §4, §6.1, §9 | Approved 2026-10-18; phases 0–4 done (the `Facet` rename; `in` ports replace parameters; linked instances, schema 7; overrides, edit translation, scope; anchors and empties; make component with nesting; plugging, mates and nested overrides). 5 waits on the project container, 6 is render-track work |
+| [`snapping.md`](specs/snapping.md) | Object snapping and smart guides in 2D compositions (Figma's edges and centres), the core in `iron_spatial::snap` | Phases 1–2 and most of 3 built 2026-10-20 (moving, resizing, path points, the pen); the shape tools, 4–5 open |
 | [`model-interop.md`](specs/model-interop.md) | External computational Models: jobs, live sessions, optional local acceleration; shared web/native data and lifecycle semantics | Proposal drafted 2026-10-16; pending user approval. No implementation; conditional work order in `handoff-product.md` §4.2 |
 
 ## 4. Rendering

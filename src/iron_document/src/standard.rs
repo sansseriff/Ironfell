@@ -314,6 +314,40 @@ impl crate::Store {
     }
 }
 
+/// The Stats composition's name (free-running.md §4).
+pub const STATS: &str = "stats";
+/// Its readout lines, top to bottom: the text nodes the `stats` producer
+/// publishes `text.content` onto, by name.
+pub const STATS_LINES: [&str; 4] = ["fps", "renderer", "build", "canvas"];
+
+/// The ops building the Stats composition: a session-tier 2D composition,
+/// never saved, with a dark card and one monospaced text line per entry of
+/// `STATS_LINES`. Its text is runtime signals; the authored content is a
+/// placeholder shown before the first publish.
+pub fn stats_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
+    let mut ids = Ids(first.raw());
+    let comp = ids.id();
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    let mut ops = vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order, facets: vec![named(STATS), c.wrap()] }];
+    let (line, pad, size_px) = (18.0, 10.0, 12.0);
+    let card = ids.id();
+    let mut key = OrderKey::first();
+    ops.push(Op::Create { id: card, ty: ty("rect"), parent: Some(comp), order: key.clone(), facets: vec![at(8.0, 8.0).wrap(), size(330.0, 2.0 * pad + line * STATS_LINES.len() as f64), paint([0.08, 0.08, 0.1, 0.9]), named("card")] });
+    for (i, name) in STATS_LINES.iter().enumerate() {
+        key = OrderKey::after(&key);
+        let mut body = Text::default();
+        body.content = Slot::Const(Value::Str("…".into()));
+        let mut font = Font::default();
+        font.family = Slot::Const(Value::Str("JetBrains Mono".into()));
+        font.size = n(size_px);
+        font.tabular = Slot::Const(Value::Bool(true));
+        let colour = if i == 0 { [0.35, 0.95, 0.95, 1.0] } else { [0.92, 0.92, 0.94, 1.0] };
+        ops.push(Op::Create { id: ids.id(), ty: ty("text"), parent: Some(comp), order: key.clone(), facets: vec![at(8.0 + pad, 8.0 + pad + line * i as f64).wrap(), body.wrap(), font.wrap(), paint(colour), named(name)] });
+    }
+    ops
+}
+
 /// The ops building the Library tab's session composition: a grid of
 /// cells, each an `empty` named for its entry's key holding a baked preview
 /// (scaled to fit) and a label. Ids from `first`, a session id. Previews are

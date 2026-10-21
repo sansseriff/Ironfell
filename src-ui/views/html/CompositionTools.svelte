@@ -18,6 +18,7 @@
   import { controllerManager } from "../../controller-manager.svelte";
   import type { Tool } from "../../runtime/document_client.svelte";
   import type { ViewSpec } from "../views";
+  import CompositionSettings from "./CompositionSettings.svelte";
 
   let { spec }: { spec: ViewSpec } = $props();
 
@@ -32,8 +33,8 @@
       .call("compositions", [])
       .then((list: { id: string; name: string | null; dims: string }[]) => {
         const c = list.find((c) => c.id === source || c.name === source);
-        // The Library tab is browsed, not drawn in.
-        twoD = c?.dims === "2d" && source !== "library";
+        // The Library tab is browsed and Stats is read, not drawn in.
+        twoD = c?.dims === "2d" && source !== "library" && source !== "stats";
       })
       .catch(() => (twoD = false));
   });
@@ -56,6 +57,8 @@
     doc.setTool(tool);
   }
 </script>
+
+<CompositionSettings {spec} />
 
 {#if twoD}
   <div class="toolbar canvas-ui" role="toolbar" aria-label="Tools">

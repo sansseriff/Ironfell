@@ -9,10 +9,14 @@
 //! like any leaf (the gauge bars); nothing enters the history until a
 //! freeze (`engine_api::document_producer`) commits the value.
 //!
-//! The producer runs only while something shows the chamber's composition,
-//! so a document with the demo in a hidden tab costs nothing per frame.
+//! The producer runs only while a view reaches the chamber's composition on
+//! an open path (free-running.md §2): a document with the demo in a hidden
+//! tab, or behind an `on_demand` composition, costs nothing per frame. While
+//! it runs it marks the composition a live source, so the views showing it
+//! render every frame.
 
-use super::{CompositionLayers, DocumentStore, EmbedViews, MeshAssets, PanelViews};
+use super::liveness::{LiveSources, Liveness};
+use super::{CompositionLayers, DocumentStore, MeshAssets};
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use iron_document::facet::Name as DocName;
@@ -75,6 +79,8 @@ pub struct GasSim {
     /// The smoothed relative pressure last published.
     pub pressure: f32,
     found: Option<(Version, Option<Targets>)>,
+    /// The targets last marked as a live source, to unmark when they change.
+    last_targets: Option<(Version, Option<Targets>)>,
     particles: Vec<Particle>,
     entities: Vec<Entity>,
     impulse: f32,
@@ -83,7 +89,7 @@ pub struct GasSim {
 
 impl Default for GasSim {
     fn default() -> Self {
-        GasSim { running: true, frames: 0, pressure: 0.0, found: None, particles: Vec::new(), entities: Vec::new(), impulse: 0.0, seed: 0x9E37_79B9 }
+        GasSim { running: true, frames: 0, pressure: 0.0, found: None, last_targets: None, particles: Vec::new(), entities: Vec::new(), impulse: 0.0, seed: 0x9E37_79B9 }
     }
 }
 
@@ -143,8 +149,8 @@ fn chamber(store: &Store, t: &Targets) -> Option<Chamber> {
 pub(super) fn step_and_publish(
     mut sim: ResMut<GasSim>,
     mut store: ResMut<DocumentStore>,
-    views: Res<PanelViews>,
-    embeds: Res<EmbedViews>,
+    liveness: Res<Liveness>,
+    mut sources: ResMut<LiveSources>,
     time: Res<Time>,
     assets: Option<Res<MeshAssets>>,
     mut layers: ResMut<CompositionLayers>,
@@ -156,6 +162,9 @@ pub(super) fn step_and_publish(
         sim.found = Some((version, find(&store.0)));
     }
     let Some((_, Some(targets))) = sim.found else {
+        if let Some((_, Some(t))) = std::mem::take(&mut sim.last_targets) {
+            sources.0.remove(&t.composition);
+        }
         if !sim.entities.is_empty() {
             for e in sim.entities.drain(..) {
                 commands.entity(e).try_despawn();
@@ -164,8 +173,19 @@ pub(super) fn step_and_publish(
         }
         return;
     };
-    let shown = views.0.iter().any(|v| v.composition == Some(targets.composition)) || embeds.0.iter().any(|e| e.source == targets.composition);
-    if !shown || !sim.running {
+    // A source while it runs, whether or not anything shows it yet: what
+    // shows it decides `liveness.running` from the sources.
+    if let Some((_, Some(t))) = sim.last_targets.replace((version, Some(targets)))
+        && t.composition != targets.composition
+    {
+        sources.0.remove(&t.composition);
+    }
+    if sim.running {
+        sources.0.insert(targets.composition);
+    } else {
+        sources.0.remove(&targets.composition);
+    }
+    if !liveness.running.contains(&targets.composition) || !sim.running {
         return;
     }
     let Some(ch) = chamber(&store.0, &targets) else { return };

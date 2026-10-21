@@ -1,0 +1,119 @@
+# Object snapping (plans/specs/snapping.md). Run at SIZE=1680x1000@1.
+# In the Main tab the square covers (500,420)-(580,500). Dragged by (23, 3),
+# its right edge (603) already meets rect #E's left and its centre (y 463)
+# snaps to rect #6's centre (465): x 523, y 425, two guides mid-drag.
+nav
+ready
+dmove 540 460
+down
+dmove 550 462
+dmove 560 463
+dmove 563 463
+sleep 800
+eval __iron.snapping(true)
+shot snapping-guides
+up
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect[^>]*name="square"[^>]*>/)[0].replace(/ rot=.*/, ''); })()
+eval __iron.snapping(true)
+key Meta+z
+sleep 500
+# Cmd held: no snapping, the drag lands where the pointer does.
+keydown Meta
+dmove 540 460
+down
+dmove 550 462
+dmove 560 463
+dmove 563 463
+sleep 800
+eval __iron.snapping(true)
+up
+keyup Meta
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect[^>]*name="square"[^>]*>/)[0].replace(/ rot=.*/, ''); })()
+key Meta+z
+sleep 500
+# Alt-drag: the copy snaps to the original it was made from.
+keydown Alt
+dmove 540 460
+down
+dmove 560 461
+dmove 600 462
+dmove 623 462
+sleep 800
+eval __iron.snapping(true)
+up
+keyup Alt
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return [...v.matchAll(/<rect[^>]*name="square"[^>]*>/g)].map(m => m[0].replace(/ rot=.*/, '')); })()
+key Meta+z
+sleep 500
+# Off: the same drag as the first lands unsnapped.
+eval __iron.snapping(false)
+dmove 540 460
+down
+dmove 550 462
+dmove 560 463
+dmove 563 463
+sleep 800
+up
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect[^>]*name="square"[^>]*>/)[0].replace(/ rot=.*/, ''); })()
+key Meta+z
+sleep 500
+# Resizing: the square's bottom edge, dragged to 586, snaps to the small
+# green rect's bottom (587), shown by crosses alone.
+eval __iron.snapping(true)
+dclick 540 460
+sleep 500
+dmove 540 500
+down
+dmove 540 540
+dmove 540 580
+dmove 540 586
+sleep 800
+eval __iron.snapping(true)
+shot snapping-resize
+up
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect[^>]*name="square"[^>]*>/)[0].replace(/ color=.*/, ''); })()
+key Meta+z
+sleep 500
+key Escape
+# The pen: a point placed 3 px below level with the first lands level.
+key p
+sleep 300
+dclick 870 420
+sleep 600
+dclick 990 423
+sleep 600
+dmove 936 497
+sleep 600
+shot snapping-pen
+dclick 936 497
+sleep 600
+key Enter
+sleep 600
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<path[^>]*name="path"[\s\S]*?<\/path>/); return m && m[0].match(/<path[^>]*>|<point[^>]*>/g).map(s => s.replace(/ rot=.*/, '')); })()
+# Editing the path: its third point, dragged to x 873, snaps plumb under
+# the first (870).
+key v
+sleep 300
+dclick 930 421
+sleep 700
+ddblclick 930 421
+sleep 900
+dmove 936 497
+down
+dmove 920 505
+dmove 890 515
+dmove 873 520
+sleep 800
+eval __iron.snapping(true)
+shot snapping-point
+up
+sleep 800
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<path[^>]*name="path"[\s\S]*?<\/path>/); return m && m[0].match(/<point[^>]*>/g).map(s => s.replace(/ rot=.*/, '')); })()
+logs applied
+errors
+quit

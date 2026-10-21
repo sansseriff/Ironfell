@@ -137,6 +137,8 @@ const PORT_LIT: [f32; 4] = [0.05, 0.72, 0.58, 1.0];
 const SNAP: f64 = std::f64::consts::PI / 12.0;
 
 const BLUE: [f32; 4] = [0.05, 0.6, 1.0, 1.0];
+/// Snap guides: Figma's red.
+const SNAP_RED: [f32; 4] = [0.95, 0.28, 0.13, 1.0];
 /// A component's own frame (component-authoring.md §0): a main solid violet,
 /// an instance a lighter one; parts inside either keep the blue.
 const MAIN_VIOLET: [f32; 4] = [0.49, 0.30, 1.0, 1.0];
@@ -416,11 +418,22 @@ pub struct SelectTool {
     pointer_at: Option<(String, Point)>,
     /// The joint under the pointer and the part of its handle hovered.
     joint_hover: Option<(String, Joint, Option<JointPart>)>,
+    /// Object snapping turned off (`__iron.snapping(false)`; the setting of
+    /// plans/specs/snapping.md phase 5 will own it).
+    pub snap_off: bool,
 }
 
 impl SelectTool {
     pub(crate) fn gizmo(&self) -> Option<&Gizmo3d> {
         self.gizmo.as_ref()
+    }
+
+    /// The guides the current move lines up along.
+    pub(crate) fn snap_guides(&self) -> &[iron_spatial::snap::Guide] {
+        match &self.gesture {
+            Gesture::Edit(m) => m.snap().map_or(&[], |s| &s.guides[..]),
+            _ => &[],
+        }
     }
 }
 
@@ -1229,6 +1242,88 @@ fn movers<'a>(reaches: &'a [Reach], panel: &str) -> Vec<&'a Reach> {
         .collect()
 }
 
+/// CSS px within which a moved box's edge or centre snaps.
+pub(crate) const SNAP_REACH: f64 = 5.0;
+
+/// A node's box for snapping, axis-aligned in panel document px: its
+/// frame's bounds, or a path's tight bounds (its frame is the control box,
+/// which overshoots a curve).
+fn snap_box(geo: &Geo, chain: &[NodeId]) -> Option<Rect> {
+    let id = *chain.last()?;
+    if geo.ty(id) == "path" {
+        let b = crate::document_bridge::path_outline(geo.store, id).bounding_box();
+        return Some((geo.space(chain)? * geo.world(id)).transform_rect_bbox(b));
+    }
+    Some(geo.frame(chain)?.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)))
+}
+
+/// Snapping for a move of `mine` (plans/specs/snapping.md): the movers'
+/// siblings on screen and the artboard each sits in, as Figma. A group
+/// around a mover is not a target, since its box follows the mover.
+fn snap_session(geo: &Geo, view: &PanelView, mine: &[&Reach], k: f64) -> Option<manipulate::SnapSession> {
+    let doc = geo.doc();
+    let own: Vec<Rect> = mine.iter().filter_map(|r| snap_box(geo, &r.chain)).collect();
+    let start = own.iter().copied().reduce(|a, b| a.union(b))?;
+    let visible = view.affine().inverse().transform_rect_bbox(view.rect.to_kurbo());
+    // Nothing a mover is, or lies inside, or whose place or size is bound
+    // to one (it moves with the drag, so its box at the press is stale).
+    let movers: std::collections::BTreeSet<NodeId> = mine.iter().map(|r| r.node()).collect();
+    let inside = |mut n: NodeId| loop {
+        if movers.contains(&n) {
+            break true;
+        }
+        match doc.live(n).and_then(|x| x.parent) {
+            Some(p) => n = p,
+            None => break false,
+        }
+    };
+    let follows = |n: NodeId| {
+        ["transform2d.x", "transform2d.y", "size.w", "size.h", "radius.rx", "radius.ry"]
+            .iter()
+            .any(|p| geo.store.reactive().transitive_deps(iron_document::Leaf { node: n, path: leaf(p) }).iter().any(|d| inside(d.node)))
+    };
+    let moving = |n: NodeId| mine.iter().any(|r| r.chain.contains(&n));
+    let mut seen = std::collections::BTreeSet::new();
+    let mut boxes = Vec::new();
+    for r in mine {
+        let prefix = &r.chain[..r.chain.len() - 1];
+        let roots = match prefix.last() {
+            None => nest::panel_roots(doc, view),
+            Some(&c) if nest::is_embed(doc, c) => {
+                if seen.insert(prefix.to_vec())
+                    && let Some(b) = snap_box(geo, prefix)
+                {
+                    boxes.push(b);
+                }
+                composition::embedded(doc, c).map(|s| doc.children(s).to_vec()).unwrap_or_default()
+            }
+            Some(&c) => doc.children(c).to_vec(),
+        };
+        let Some(space) = geo.space(&r.chain) else { continue };
+        for n in roots {
+            if moving(n) || !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "embed")) {
+                continue;
+            }
+            // Off screen: not a target (Figma's rule, and it keeps a large
+            // composition's press cheap).
+            if geo.spatial.bounds(n).is_some_and(|b| !space.transform_rect_bbox(b.geometry).overlaps(visible)) {
+                continue;
+            }
+            if follows(n) {
+                continue;
+            }
+            let mut chain = prefix.to_vec();
+            chain.push(n);
+            if seen.insert(chain.clone())
+                && let Some(b) = snap_box(geo, &chain)
+            {
+                boxes.push(b);
+            }
+        }
+    }
+    Some(manipulate::SnapSession::new(start, boxes, own, SNAP_REACH * k))
+}
+
 /// What the gizmo sits on: the selection's movers in its first panel, when
 /// they are all meshes seen through one 3D camera (a 3D panel's, or a 3D
 /// embed's in a 2D view); that camera, and where the gizmo may be hovered.
@@ -1893,16 +1988,23 @@ pub fn select_tool_system(
                         tool.gesture = Gesture::Edit(Manip::PathHandle { point, out, to_local: to_screen.inverse(), at });
                         break 'press;
                     }
-                    Some((point, _, None)) => {
+                    Some((point, at, None)) => {
                         let start = doc_point(&view);
                         let inv = space.inverse();
                         let anchor = geo.world(point).inverse() * (inv * start);
+                        // The point snaps level or plumb with the path's other
+                        // anchors (Figma's).
+                        let to_panel = space * geo.world(path);
+                        let snap = (!tool.snap_off).then(|| {
+                            let others = points.iter().filter(|q| q.0 != point).map(|q| Rect::from_points(to_panel * q.1, to_panel * q.1)).collect();
+                            manipulate::SnapSession::new(Rect::from_points(to_panel * at, to_panel * at), others, Vec::new(), SNAP_REACH * k)
+                        });
                         store.0.begin_gesture(&[point]);
                         let h = store.0.begin_drag(point, [anchor.x, anchor.y]);
                         tool.gesture = if h.is_locked() {
                             Gesture::Idle
                         } else {
-                            Gesture::Edit(Manip::Drag(manipulate::Drag { label: "move point".into(), view: view.clone(), start, drags: vec![(h, inv)], duplicable: false, duplicate: None }))
+                            Gesture::Edit(Manip::Drag(manipulate::Drag { label: "move point".into(), view: view.clone(), start, drags: vec![(h, inv)], duplicable: false, duplicate: None, snap }))
                         };
                         break 'press;
                     }
@@ -1982,6 +2084,11 @@ pub fn select_tool_system(
                         Some(Grip::Resize(u, v)) => {
                             let label = format!("resize {}", type_label(geo.doc(), &ids));
                             let nodes: Vec<NodeId> = resize_parts.iter().map(|p| p.id).collect();
+                            // A rotated box's edges are not on the axes: no snapping.
+                            let snap = (!tool.snap_off && manipulate::axis_aligned(frame)).then(|| snap_session(&geo, &view, &mine, k)).flatten().map(|mut s| {
+                                s.lines = false;
+                                s
+                            });
                             store.0.begin_gesture(&nodes);
                             tool.gesture = Gesture::Edit(Manip::Transform(manipulate::Transform2 {
                                 label,
@@ -1991,6 +2098,7 @@ pub fn select_tool_system(
                                 start,
                                 parts: resize_parts,
                                 rot0: None,
+                                snap,
                             }));
                             break 'press;
                         }
@@ -1999,7 +2107,7 @@ pub fn select_tool_system(
                             let label = format!("rotate {}", type_label(geo.doc(), &ids));
                             let nodes: Vec<NodeId> = rotate_parts.iter().map(|p| p.id).collect();
                             store.0.begin_gesture(&nodes);
-                            tool.gesture = Gesture::Edit(Manip::Transform(manipulate::Transform2 { label, view: view.clone(), kind: TransformKind::Rotate, frame, start, parts: rotate_parts, rot0 }));
+                            tool.gesture = Gesture::Edit(Manip::Transform(manipulate::Transform2 { label, view: view.clone(), kind: TransformKind::Rotate, frame, start, parts: rotate_parts, rot0, snap: None }));
                             break 'press;
                         }
                         _ => {}
@@ -2264,6 +2372,7 @@ pub fn select_tool_system(
                             Some((r.node(), inv, geo.world(r.node()).inverse() * (inv * p0)))
                         })
                         .collect();
+                    let snap = if tool.snap_off { None } else { snap_session(&geo, &view, &mine, k) };
                     store.0.begin_gesture(&ids);
                     for (id, inv, anchor) in grabs {
                         let h = store.0.begin_drag(id, [anchor.x, anchor.y]);
@@ -2279,7 +2388,10 @@ pub fn select_tool_system(
                             drags.push((h, inv));
                         }
                     }
-                    tool.gesture = Gesture::Edit(Manip::Drag(manipulate::Drag { label, view, start: p0, drags, duplicable: true, duplicate: None }));
+                    // A solved drag moves its cluster's other nodes and may not
+                    // land where it is asked: no snapping through the solver yet.
+                    let snap = snap.filter(|_| !drags.iter().any(|(h, _)| matches!(h.mode, DragMode::Cluster(_))));
+                    tool.gesture = Gesture::Edit(Manip::Drag(manipulate::Drag { label, view, start: p0, drags, duplicable: true, duplicate: None, snap }));
                 }
                 AfterPress::Marquee { prefix, roots, click } => {
                     let base = if matches!(click, Click::Keep) { reaches.clone() } else { Vec::new() };
@@ -2293,7 +2405,7 @@ pub fn select_tool_system(
                     let grab = geo.world(anchor).inverse() * p0;
                     store.0.begin_gesture(&[anchor]);
                     let h = store.0.begin_drag(anchor, [grab.x, grab.y]);
-                    tool.gesture = Gesture::Edit(Manip::Drag(manipulate::Drag { label: "move joint".into(), view, start: p0, drags: vec![(h, Affine::IDENTITY)], duplicable: false, duplicate: None }));
+                    tool.gesture = Gesture::Edit(Manip::Drag(manipulate::Drag { label: "move joint".into(), view, start: p0, drags: vec![(h, Affine::IDENTITY)], duplicable: false, duplicate: None, snap: None }));
                 }
                 AfterPress::Link { pin, .. } => {
                     tool.gesture = Gesture::Link(LinkDrag { panel: view.panel.clone(), from: pin.clone(), at: Point::new(pointer.screen.x as f64, pointer.screen.y as f64), target: None, targets: Vec::new() });
@@ -2794,9 +2906,13 @@ fn joint_at(geo: &Geo, view: &PanelView, screen: Point, here: &[&Reach], deep: b
     let b_chain = chain[..=chain.iter().position(|&n| n == b.body)?].to_vec();
     let centre = |x: &iron_document::plug::PortAnchor| geo.store.extent(x.body).map(|r| r.center());
     let at = Point::new(a.world[0], a.world[1]);
+    // Along the way the port faces, its A half toward a's part. Not along
+    // the line between the parts' box centres: a box holding a readout
+    // under a dial has its centre low, which tilted the handle.
+    let facing = kurbo::Vec2::new(a.facing.cos(), a.facing.sin());
     let axis = match (centre(&a), centre(&b)) {
-        (Some(ca), Some(cb)) if (ca - cb).hypot() > 1e-6 => (ca - cb) / (ca - cb).hypot(),
-        _ => kurbo::Vec2::new(a.facing.cos(), a.facing.sin()),
+        (Some(ca), Some(cb)) if facing.dot(ca - cb) < 0.0 => -facing,
+        _ => facing,
     };
     let j = Joint { a, a_chain, b, b_chain, at, axis };
     let part = joint_part(&j, view, screen, k);
@@ -2844,6 +2960,31 @@ fn draw_joint(b: &mut crate::vector::DisplayListBuilder<'_>, view: &PanelView, j
     b.fill(Affine::IDENTITY, teal, kurbo::Circle::new(c, r * k));
     b.fill(Affine::IDENTITY, peniko::Color::new([1.0, 1.0, 1.0, 1.0]), kurbo::Circle::new(c, r * 0.62 * k));
     b.fill(Affine::IDENTITY, teal, kurbo::Circle::new(c, r * 0.32 * k));
+}
+
+/// Snap guides (Figma's): a line through what lined up (unless `lines` is
+/// off, as for a resize), and a cross at each aligned point. `guides` are in
+/// the view's document px; lines sit on the pixel grid so they stay crisp.
+fn draw_guides(b: &mut crate::vector::DisplayListBuilder<'_>, to_screen: Affine, guides: &[iron_spatial::snap::Guide], lines: bool, k: f64) {
+    let red = peniko::Color::new(SNAP_RED);
+    let thin = kurbo::Stroke::new(k);
+    let crisp = |v: f64| (v - 0.5 * k).round() + 0.5 * k;
+    let arm = 2.5 * k;
+    for g in guides {
+        let at = |along: f64| {
+            let q = to_screen * if g.vertical { Point::new(g.at, along) } else { Point::new(along, g.at) };
+            if g.vertical { Point::new(crisp(q.x), q.y) } else { Point::new(q.x, crisp(q.y)) }
+        };
+        let (lo, hi) = g.span();
+        if lines {
+            b.stroke(Affine::IDENTITY, thin.clone(), red, kurbo::Line::new(at(lo), at(hi)));
+        }
+        for &m in &g.marks {
+            let c = at(m);
+            b.stroke(Affine::IDENTITY, thin.clone(), red, kurbo::Line::new(c + kurbo::Vec2::new(-arm, -arm), c + kurbo::Vec2::new(arm, arm)));
+            b.stroke(Affine::IDENTITY, thin.clone(), red, kurbo::Line::new(c + kurbo::Vec2::new(-arm, arm), c + kurbo::Vec2::new(arm, -arm)));
+        }
+    }
 }
 
 pub fn draw_select_overlay(
@@ -3060,7 +3201,7 @@ pub fn draw_select_overlay(
                 // drag pulls out its two mirrored handles.
                 let press = pen.press.as_ref().filter(|(p, ..)| *active == ActiveTool::Pen && p == &o.panel).map(|(_, start, now)| {
                     let out = if start.distance(*now) > 3.0 * k { *now - *start } else { kurbo::Vec2::ZERO };
-                    (*start, out)
+                    (*start + pen.offset, out)
                 });
                 if *active == ActiveTool::Pen
                     && let Some((path, panel, to_comp)) = pen.path.as_ref().filter(|(id, p, _)| p == &o.panel && geo.doc().live(*id).is_some())
@@ -3256,6 +3397,21 @@ pub fn draw_select_overlay(
                     let r = to_screen.transform_rect_bbox(*r);
                     b.fill(Affine::IDENTITY, peniko::Color::new([0.05, 0.6, 1.0, 0.08]), r);
                     b.stroke(Affine::IDENTITY, thin.clone(), blue, r);
+                }
+                // Snap guides: the current move's or resize's, and the pen's.
+                if let Gesture::Edit(m) = &tool.gesture
+                    && let Some(s) = m.snap()
+                    && let Some(guide_view) = match m {
+                        Manip::Drag(d) => Some(&d.view),
+                        Manip::Transform(t) => Some(&t.view),
+                        _ => None,
+                    }
+                    && guide_view.panel == o.panel
+                {
+                    draw_guides(b, to_screen, &s.guides, s.lines, k);
+                }
+                if *active == ActiveTool::Pen && pen.pointer.as_ref().is_some_and(|(p, _)| p == &o.panel) {
+                    draw_guides(b, to_screen, &pen.guides, true, k);
                 }
             });
         });

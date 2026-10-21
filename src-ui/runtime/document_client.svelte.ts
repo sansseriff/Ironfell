@@ -124,10 +124,16 @@ export class DocumentClient {
       // shapes, and per-phase CPU timings (`src/perf.rs`).
       stress: (shapes = 5000) => this.call('stress', [shapes]),
       spatial: (enabled = true) => this.call('spatial', [enabled]),
+      // Object snapping for the select tool (plans/specs/snapping.md).
+      snapping: (enabled = true) => this.call('snapping', [enabled]),
       timings: (reset = false) => this.call('timings', [reset]),
       // The runtime signal layer (vision 10 §4) and its host producers.
       signals: () => this.call('signals', []),
       producer: (name = 'gas', action = 'freeze') => this.call('producer', [name, action]),
+      // Free running (free-running.md): a composition's run mode, by id or
+      // name ('auto' | 'always' | 'on_demand'), and whether it is live.
+      runMode: (source: string, mode: string) => this.call('set_run_mode', [source, mode]),
+      compositionInfo: (source: string) => this.call('composition_info', [source]),
       exportSvg: async (scope = 'selection') => {
         const r = await this.exportSvg(scope);
         if (!r.ok) throw new Error(r.error);

@@ -251,8 +251,8 @@ spatial queries. The cache is not a substitute for those systems.
 Verification commands and the reusable comparison fixtures are in
 `.claude/skills/run-iron/SKILL.md` under “Spatial and picking regression checks”.
 `spatial.txt` covers repeated/nested hidden sources and 2D-on-3D plane hits;
-`check-spatial-images.py` compares complete canvas/editor pixels, excluding the
-live FPS HUD. `picking.txt` checks stationary invalidation; `selection-cache.txt`
+`check-spatial-images.py` compares complete canvas/editor pixels, masking the
+Stats panel. `picking.txt` checks stationary invalidation; `selection-cache.txt`
 checks retained selection geometry and physical offsets at DPR 1/2.
 
 

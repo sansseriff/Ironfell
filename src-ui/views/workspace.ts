@@ -12,7 +12,7 @@ import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import type { ViewSpec } from './views';
 
-const STORAGE_KEY = 'iron.workspace.v5';
+const STORAGE_KEY = 'iron.workspace.v6';
 
 /** The layout to start from: the main viewer with each composition in a
  *  tab beside it, HTML views left and right, the timeline across the bottom.
@@ -40,6 +40,9 @@ function defaultLayout(api: DockviewApi) {
     view('stress', 'Stress', { source: 'stress', notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' });
   }
   view('timeline', 'Timeline', { source: 'timeline', notation: 'timeline' }, { direction: 'below' }, { initialHeight: 220 });
+  // Frame rate, renderer, build and canvas size (free-running.md §4): the
+  // session's stats composition, where the FPS overlay used to sit.
+  view('stats', 'Stats', { source: 'stats', notation: 'composition' }, { referencePanel: 'timeline', direction: 'right' }, { initialWidth: 360 });
   view('document', 'Document', { source: 'document', notation: 'markup' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
   view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
   // The standard components (component-authoring.md §6): a view onto the

@@ -276,7 +276,7 @@ pub fn document_apply(app: &mut WorkerApp, transaction_json: String, expect_vers
 }
 
 pub fn document_build_info(_app: &mut WorkerApp) -> String {
-    let (profile, opt, simd, fast) = crate::fps_overlay::build_profile();
+    let (profile, opt, simd, fast) = crate::document_bridge::stats::build_profile();
     serde_json::json!({
         "profile": profile,
         "opt": opt,
@@ -311,6 +311,16 @@ pub fn document_stress(app: &mut WorkerApp, shapes: u32) -> String {
         active_info.remaining_frames = 10;
     }
     result.to_string()
+}
+
+/// Object snapping on or off for the select tool (plans/specs/snapping.md),
+/// and the guides of the move in progress.
+pub fn document_snapping(app: &mut WorkerApp, enabled: bool) -> String {
+    let mut tool = app.world_mut().resource_mut::<crate::bevy_app::select::SelectTool>();
+    tool.snap_off = !enabled;
+    // The current move's guides, `x=…` or `y=…` with their marks' count.
+    let guides: Vec<String> = tool.snap_guides().iter().map(|g| format!("{}={} ({})", if g.vertical { "x" } else { "y" }, g.at, g.marks.len())).collect();
+    serde_json::json!({"enabled": enabled, "guides": guides}).to_string()
 }
 
 pub fn document_spatial(app: &mut WorkerApp, enabled: bool) -> String {
@@ -1068,6 +1078,64 @@ pub fn document_compositions(app: &mut WorkerApp) -> String {
         })
         .collect();
     serde_json::Value::Array(list).to_string()
+}
+
+/// A composition named by id or name (as a view's `source` names it).
+fn find_composition(doc: &iron_document::Document, source: &str) -> Option<iron_document::NodeId> {
+    use iron_document::composition;
+    let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+    composition::compositions(doc).into_iter().find(|&c| c.to_string() == source || name_of(c).as_deref() == Some(source))
+}
+
+/// The composition settings menu's state (free-running.md §3): the stored
+/// run mode, whether its own view would be free running now, and the live
+/// sources that make it so, by name.
+pub fn document_composition_info(app: &mut WorkerApp, source: String) -> String {
+    use iron_document::composition;
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    let world = app.world();
+    let (Some(store), Some(sources)) = (world.get_resource::<crate::document_bridge::DocumentStore>(), world.get_resource::<crate::document_bridge::liveness::LiveSources>()) else {
+        return fail("no store".into());
+    };
+    let doc = store.0.document();
+    let Some(c) = find_composition(doc, &source) else { return fail(format!("no composition {source:?}")) };
+    let reach = composition::reach(doc, &[c], &sources.0);
+    let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).unwrap_or_else(|| c.to_string());
+    serde_json::json!({
+        "ok": true,
+        "id": c.to_string(),
+        "run": composition::run_mode(doc, c).as_str(),
+        "live": reach.live,
+        "running": reach.running.iter().map(|&s| name_of(s)).collect::<Vec<_>>(),
+    })
+    .to_string()
+}
+
+/// Set a composition's run mode: one transaction, or a session op for a
+/// session composition (the Library, Stats), which history never sees.
+pub fn document_set_run_mode(app: &mut WorkerApp, source: String, mode: String) -> String {
+    use iron_document::{Actor, Op, Slot, TransactionInput, Value};
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    if !matches!(mode.as_str(), "auto" | "always" | "on_demand") {
+        return fail(format!("unknown run mode {mode:?}; use auto, always or on_demand"));
+    }
+    if let Some(mut active) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active.remaining_frames = 10;
+    }
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    let Some(c) = find_composition(store.0.document(), &source) else { return fail(format!("no composition {source:?}")) };
+    let op = Op::Set { id: c, path: "composition.run".parse().expect("declared leaf"), slot: Slot::Const(Value::Enum(mode)) };
+    if c.is_session() {
+        return match store.0.apply_session(vec![op]) {
+            Ok(()) => serde_json::json!({"ok": true}).to_string(),
+            Err(e) => fail(e.to_string()),
+        };
+    }
+    let input = TransactionInput { label: "set run mode".into(), actor: Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops: vec![op], exact: false };
+    match store.0.apply(input) {
+        Ok(a) => serde_json::json!({"ok": true, "version": a.version.0}).to_string(),
+        Err(es) => fail(es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")),
+    }
 }
 
 pub fn document_next_ids(app: &mut WorkerApp, n: u32) -> String {

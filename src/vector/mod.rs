@@ -32,7 +32,7 @@ pub mod view_composite;
 // going through here, so this list stays scoped to the authoring side.
 pub use backend::{BackendKind, Offscreen, Overlay, VectorLayer, VectorView, order};
 pub use hybrid::ViewTarget2d;
-pub use composite::{VECTOR_LAYER, VectorCamera};
+pub use composite::VECTOR_LAYER;
 pub use display_list::{Brush, DisplayList, DisplayListBuilder, DisplayListRebuild, Shape};
 
 use bevy::prelude::*;

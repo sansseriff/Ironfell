@@ -87,8 +87,11 @@ Duplicating or copying a main makes a linked instance (an entity in the model an
 - Two loose ends may plug together. The connection's relation to the end that was landed on
   carries `held`; that end keeps its place and the other follows it. Dragging the held end
   moves the joint.
-- **The joint handle**: hovering a connected port shows a pill along the line between the
-  centres of the two parts it joins, a half on each part's side and a circle in the middle.
+- **The joint handle**: hovering a connected port shows a pill along the way the port
+  faces (`anchor.wrot`), a half on each part's side (the parts' centres decide which) and
+  a circle in the middle. Until 2026-10-20 it lay along the line between the two parts'
+  box centres, which tilted it when a part's box held more than its body (the dial
+  meter's readout pulls its centre below the dial).
   A half drags that part off (a plug drag from its port); the circle moves the joint (the
   held end of a fiber joint, or the rigid part of a mate or a plugged end, whose partner
   follows). In 3D the axis is projected; when it points at the camera, the halves become two

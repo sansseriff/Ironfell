@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "wasm": ".claude/skills/run-iron/build.sh",
     "wasm:fast": "PROFILE=wasm-bench .claude/skills/run-iron/build.sh",
+    "wasm:smallfast": "./build-wasm.sh webgpu && ./build-wasm.sh webgl2",
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",

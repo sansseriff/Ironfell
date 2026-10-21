@@ -1159,6 +1159,17 @@ impl Store {
 
     /// Keep the graph in step with a transaction that just applied.
     fn after_transaction(&mut self, tx: &Transaction) {
+        // Outside a gesture the overlay holds only a live solve's pose (a
+        // producer's publish or a playhead move re-solves the clusters).
+        // Nothing else owns it, so it would shadow what this transaction
+        // wrote, even after the cluster is gone: drop it, and re-solve
+        // against the new document below. A gesture's own commit has taken
+        // the gesture but still holds its drivers, and clears its previews
+        // itself.
+        let live = self.gesture.is_none() && self.drivers.is_empty() && self.fingers.is_empty() && !self.reactive.overlay().is_empty();
+        if live {
+            self.reactive.clear_overlay(&self.doc);
+        }
         self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(tx.expanded.iter()));
         let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(tx.expanded.iter()).any(|op| match op {
             // A link can be a connection's end, which derives a signal.
@@ -1190,6 +1201,9 @@ impl Store {
             self.resample();
         }
         self.rebuild_clusters();
+        if live && !self.clusters.list.is_empty() {
+            self.resolve_clusters_live();
+        }
         self.resolve_physics();
     }
 

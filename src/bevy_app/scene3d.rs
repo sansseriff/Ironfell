@@ -479,7 +479,9 @@ pub(crate) fn to_camera_px(screen: Vec2, rect: Option<&ScreenRect>, pointer: Opt
 /// Keep each texture-backed camera's target, viewport and composite equal to
 /// its screen rectangle, and render it only when something it shows changed:
 /// its rectangle, its pose or lens, or any 3D content on its layers (moved,
-/// highlighted, added or removed).
+/// highlighted, added or removed); or every frame while what it shows is
+/// free running (`Liveness`, free-running.md), which is how a producer's
+/// Bevy-side entities, which are not `Doc3d`, reach the screen.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_view_images(
     mut commands: Commands,
@@ -487,7 +489,8 @@ pub(crate) fn sync_view_images(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<crate::vector::view_composite::ViewCompositeMaterial>>,
     mut quad: Local<Option<Handle<Mesh>>>,
-    mut cams: Query<(Entity, Ref<ScreenRect>, &mut Camera, Option<&mut ViewImage>, &RenderLayers, Ref<GlobalTransform>, Ref<Projection>, Option<&EmbedCam>)>,
+    mut cams: Query<(Entity, Ref<ScreenRect>, &mut Camera, Option<&mut ViewImage>, &RenderLayers, Ref<GlobalTransform>, Ref<Projection>, Option<&EmbedCam>, Option<&PanelCamera>)>,
+    liveness: Res<crate::document_bridge::liveness::Liveness>,
     content: Query<(&RenderLayers, Ref<GlobalTransform>, Ref<ActiveState>), With<crate::document_bridge::Doc3d>>,
     mut removed: RemovedComponents<crate::document_bridge::Doc3d>,
     composites: Query<(Entity, &ViewCompositeOf)>,
@@ -498,12 +501,13 @@ pub(crate) fn sync_view_images(
     use crate::vector::view_composite::{MODE_STRAIGHT_SRGB, ViewCompositeMaterial, bucket, unit_quad};
     let quad = quad.get_or_insert_with(|| meshes.add(unit_quad())).clone();
     let removed_any = removed.read().count() > 0;
-    for (entity, screen, mut camera, view, layers, pose, projection, embed) in &mut cams {
+    for (entity, screen, mut camera, view, layers, pose, projection, embed, panel) in &mut cams {
+        let live = panel.is_some_and(|p| liveness.panels.contains(&p.panel)) || embed.is_some_and(|e| liveness.embeds.contains(&e.key));
         let size = screen.size.max(UVec2::ONE);
         let want = bucket(size);
         let rect = Vec4::new(screen.pos.x as f32, screen.pos.y as f32, size.x as f32, size.y as f32);
         let params = Vec4::new(want.x as f32, want.y as f32, MODE_STRAIGHT_SRGB, 0.0);
-        let mut dirty = screen.is_changed() || pose.is_changed() || projection.is_changed() || removed_any;
+        let mut dirty = live || screen.is_changed() || pose.is_changed() || projection.is_changed() || removed_any;
         let mut awake: Option<u8> = None;
         match view {
             Some(mut v) if v.bucket == want => {

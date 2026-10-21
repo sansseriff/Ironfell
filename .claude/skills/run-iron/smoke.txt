@@ -4,6 +4,8 @@
 # the document through save and load and show the transactions that applied.
 nav
 ready
+# Snapping off (plans/specs/snapping.md): these drags aim at exact points; snapping.txt covers it
+eval __iron.snapping(false)
 shot start
 # Stage A exit: the shadow rect, bound to the square's position, follows it
 # during the drag, not after. The drag is spelled out so a screenshot and a
@@ -221,6 +223,8 @@ errors
 # transaction that undoes in one step.
 nav
 ready
+# Snapping off (plans/specs/snapping.md): these drags aim at exact points; snapping.txt covers it
+eval __iron.snapping(false)
 eval window.sq = async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="square"[^>]*>/)[0]; const n = (k) => Number(m.match(new RegExp(' ' + k + '="([^"]+)"'))[1]); return { x: Math.round(n('x')), y: Math.round(n('y')), w: Math.round(n('w')), h: Math.round(n('h')), deg: Math.round(n('rot') * 180 / Math.PI) }; }
 dclick 540 460
 eval __iron.selection()

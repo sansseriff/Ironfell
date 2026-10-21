@@ -57,6 +57,74 @@ pub fn dims(doc: &Document, composition: NodeId) -> Option<Dims> {
     })
 }
 
+/// When a composition's views render (free-running.md §2).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RunMode {
+    /// Free running when it is live or shows something that is.
+    Auto,
+    Always,
+    /// Never free running, and nothing it shows bubbles out of it.
+    OnDemand,
+}
+
+impl RunMode {
+    pub fn parse(s: &str) -> RunMode {
+        match s {
+            "always" => RunMode::Always,
+            "on_demand" => RunMode::OnDemand,
+            _ => RunMode::Auto,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunMode::Auto => "auto",
+            RunMode::Always => "always",
+            RunMode::OnDemand => "on_demand",
+        }
+    }
+}
+
+pub fn run_mode(doc: &Document, composition: NodeId) -> RunMode {
+    doc.get::<Composition>(composition).and_then(|c| c.run.constant()).and_then(|v| v.as_str()).map_or(RunMode::Auto, RunMode::parse)
+}
+
+/// What a view of `roots` reaches through embeds (free-running.md §2).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reach {
+    /// The view renders every frame.
+    pub live: bool,
+    /// Sources reached on an open path: the producers that should run.
+    pub running: std::collections::BTreeSet<NodeId>,
+}
+
+/// From a view's root compositions, walk embeds depth first. A composition
+/// reached with no `on_demand` composition on its path (itself included) is
+/// open; an open one that is a source, or `always`, makes the view live.
+/// Embeds cannot loop (`validate_embed`), and each composition is walked
+/// once, so this terminates in time linear in the embed graph.
+pub fn reach(doc: &Document, roots: &[NodeId], sources: &std::collections::BTreeSet<NodeId>) -> Reach {
+    let mut out = Reach::default();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stack: Vec<NodeId> = roots.to_vec();
+    while let Some(c) = stack.pop() {
+        if !seen.insert(c) {
+            continue;
+        }
+        let mode = run_mode(doc, c);
+        if mode == RunMode::OnDemand {
+            continue;
+        }
+        if sources.contains(&c) {
+            out.live = true;
+            out.running.insert(c);
+        }
+        out.live |= mode == RunMode::Always;
+        stack.extend(embeds_in(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
+    }
+    out
+}
+
 pub fn notation(doc: &Document, composition: NodeId) -> Option<String> {
     doc.get::<Composition>(composition)?.notation.constant()?.as_str().map(str::to_owned)
 }

@@ -49,7 +49,6 @@ pub mod panels;
 pub mod bevy_app; // expose init_app and related types
 pub use bevy_app::*; // re-export init_app symbols
 
-mod fps_overlay;
 
 mod tracking_circle;
 
@@ -166,7 +165,7 @@ pub(crate) fn decide_redraw(
     mut redraw: ResMut<RedrawNeeded>,
     texture_cameras: Query<&Camera, With<crate::bevy_app::ScreenRectMarker>>,
     lists: Query<(), Or<(Changed<crate::vector::DisplayList>, Changed<crate::vector::VectorView>)>>,
-    ui: Query<(), Or<(Changed<Text>, Changed<TextSpan>, Changed<Node>, Changed<Visibility>)>>,
+    visibility: Query<(), Changed<Visibility>>,
     cameras: Query<(), Or<(Added<Camera>, Changed<Camera>)>>,
     mut removed_cameras: RemovedComponents<Camera>,
     mut removed_lists: RemovedComponents<crate::vector::DisplayList>,
@@ -175,10 +174,14 @@ pub(crate) fn decide_redraw(
     mut images: MessageReader<AssetEvent<Image>>,
     mut meshes: MessageReader<AssetEvent<Mesh>>,
     mut materials: MessageReader<AssetEvent<crate::vector::view_composite::ViewCompositeMaterial>>,
+    liveness: Option<Res<crate::document_bridge::liveness::Liveness>>,
 ) {
-    let changed = texture_cameras.iter().any(|c| c.is_active)
+    // A free-running view (plans/specs/free-running.md) renders every frame.
+    let live = liveness.is_some_and(|l| l.any());
+    let changed = live
+        || texture_cameras.iter().any(|c| c.is_active)
         || !lists.is_empty()
-        || !ui.is_empty()
+        || !visibility.is_empty()
         || !cameras.is_empty()
         || removed_cameras.read().count() > 0
         || removed_lists.read().count() > 0
@@ -190,7 +193,7 @@ pub(crate) fn decide_redraw(
     if changed {
         debug!(
             texture_camera = texture_cameras.iter().any(|c| c.is_active),
-            lists = !lists.is_empty(), ui = !ui.is_empty(), cameras = !cameras.is_empty(),
+            lists = !lists.is_empty(), cameras = !cameras.is_empty(),
             panels = panels.is_changed(), windows = !windows.is_empty(),
             "render-on-demand invalidation"
         );

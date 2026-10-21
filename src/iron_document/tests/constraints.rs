@@ -534,3 +534,37 @@ fn a_constraint_reaching_outside_the_copy_stays_behind() {
     let h = p.store.begin_drag(ball, [0.0, 0.0]);
     assert!(matches!(h.mode, DragMode::Axes { .. }), "{:?}", h.mode);
 }
+
+#[test]
+fn a_live_solve_leaves_nothing_behind_once_a_transaction_applies() {
+    // A producer publishing every frame re-solves the clusters live, and the
+    // solve previews its pose. Outside a gesture nothing owned those
+    // previews, so once a transaction (or an undo) removed the cluster, a
+    // stale preview kept shadowing what the document now says: a meter
+    // unplugged by undo stayed at its mated y (smoke, 2026-10-20).
+    let mut p = pendulum();
+    let ball = p.ball;
+    let before = pos(&p.store, ball);
+    // A producer driving a link's length moves the chain live, by preview.
+    let stats = p.store.register_producer("stats");
+    p.store.publish(stats, BTreeMap::from([(Leaf { node: p.links[0], path: path("constraint.value") }, Value::Number(150.0))]));
+    let live = pos(&p.store, ball);
+    assert!(dist(before, live) > 1e-6, "the live solve previews a pose of its own: {before:?} → {live:?}");
+
+    // Delete every constraint and place the ball: no cluster is left, and
+    // the ball reads its new constant, not the live solve's pose.
+    let constraints: Vec<NodeId> = p.store.document().children(p.group).iter().copied().filter(|&c| p.store.document().live(c).is_some_and(|n| n.ty.name() == "constraint")).collect();
+    assert!(!constraints.is_empty());
+    let mut ops: Vec<Op> = constraints.iter().map(|&id| Op::Delete { id }).collect();
+    ops.push(Op::Set { id: ball, path: path("transform2d.x"), slot: num(500.0) });
+    ops.push(Op::Set { id: ball, path: path("transform2d.y"), slot: num(420.0) });
+    p.store.apply(tx("free the ball", ops)).unwrap();
+    p.store.publish(stats, BTreeMap::new());
+    assert_eq!(pos(&p.store, ball), [500.0, 420.0]);
+    // Undo, which bypasses `apply`, brings the chain back; then a ball
+    // placed by a later transaction reads what it says once more.
+    p.store.undo(0).unwrap().unwrap();
+    p.store.publish(stats, BTreeMap::new());
+    assert!(dist(pos(&p.store, ball), before) < 1e-3, "{:?} vs {before:?}", pos(&p.store, ball));
+    p.store.undo(0);
+}

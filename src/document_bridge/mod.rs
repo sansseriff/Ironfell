@@ -22,6 +22,7 @@
 mod demo;
 pub mod gas;
 mod highlight;
+pub mod liveness;
 mod materialize;
 pub use materialize::EMPTY_HALF;
 pub mod nest;
@@ -29,6 +30,7 @@ mod panel_views;
 pub mod planes;
 mod render;
 mod spatial;
+pub mod stats;
 pub mod stress;
 mod text;
 
@@ -254,12 +256,14 @@ impl Plugin for DocumentPlugin {
             .init_resource::<CompositionLayers>()
             .init_resource::<materialize::MeshMaterials>()
             .init_resource::<gas::GasSim>()
+            .init_resource::<liveness::LiveSources>()
+            .init_resource::<liveness::Liveness>()
             .add_plugins(planes::PlanePlugin)
             .add_systems(Startup, (materialize::setup_mesh_assets, demo::queue_demo_scene, text::want_default_font))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking. Producers publish first, so
             // their signals reconcile with everything else this frame.
-            .add_systems(PreUpdate, (gas::step_and_publish, text::refresh_text, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
+            .add_systems(PreUpdate, (gas::step_and_publish, stats::step_and_publish, text::refresh_text, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
             .add_systems(Update, materialize::assign_mesh_materials)
             .add_systems(
                 PostUpdate,
@@ -277,6 +281,9 @@ impl Plugin for DocumentPlugin {
                     // Where each 3D embed sits on screen this frame; its
                     // camera follows in the same frame (scene3d).
                     nest::collect_embed_views.after(TransformSystems::Propagate),
+                    // What free-runs this frame (free-running.md): after the
+                    // embed views, before the cameras it wakes.
+                    liveness::compute_liveness.after(nest::collect_embed_views),
                 ),
             );
     }
@@ -411,16 +418,16 @@ pub(crate) fn sync_document(
             structure |= collect_ids(op, &mut affected);
         }
     }
-    // The Library tab's composition (component-authoring.md §6): session
-    // state, built from the standard templates when missing (at start, and
-    // after a load replaces the store).
-    {
+    // The Library tab's composition (component-authoring.md §6) and the
+    // Stats composition (free-running.md §4): session state, built when
+    // missing (at start, and after a load replaces the store).
+    for (name, build) in [(iron_document::standard::LIBRARY, iron_document::standard::library_ops as fn(NodeId, iron_document::OrderKey) -> Vec<Op>), (iron_document::standard::STATS, iron_document::standard::stats_ops)] {
         let doc = store.0.document();
-        let has = doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(iron_document::standard::LIBRARY));
+        let has = doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name));
         if !has {
             let first = doc.next_session_ids(1)[0];
             let order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(iron_document::OrderKey::first, |n| iron_document::OrderKey::after(&n.order));
-            let ops = iron_document::standard::library_ops(first, order);
+            let ops = build(first, order);
             let ids: Vec<NodeId> = ops.iter().filter_map(|op| match op {
                 Op::Create { id, .. } => Some(*id),
                 _ => None,
@@ -430,7 +437,7 @@ pub(crate) fn sync_document(
                     affected.extend(ids);
                     structure = true;
                 }
-                Err(e) => warn!("library composition: {e}"),
+                Err(e) => warn!("{name} composition: {e}"),
             }
         }
     }

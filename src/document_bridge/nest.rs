@@ -174,6 +174,9 @@ pub struct EmbedView {
     pub source: NodeId,
     pub camera: Option<NodeId>,
     pub layer: usize,
+    /// No `on_demand` composition between the panel and this embed's
+    /// source, inclusive (free-running.md §2): it may free-run.
+    pub open: bool,
 }
 
 impl EmbedView {
@@ -211,7 +214,8 @@ pub fn collect_embed_views(
     let mut found = Vec::new();
     for view in views.0.iter().filter(|v| v.dims == Dims::Two) {
         let roots = panel_roots(doc, view);
-        collect(&store.0, &spatial, &mut layers, view, &roots, view.affine(), view.rect.to_kurbo(), &view.panel, 0, &mut found);
+        let open = view.composition.is_none_or(|c| composition::run_mode(doc, c) != composition::RunMode::OnDemand);
+        collect(&store.0, &spatial, &mut layers, view, &roots, view.affine(), view.rect.to_kurbo(), &view.panel, 0, open, &mut found);
     }
     if out.0 != found {
         out.0 = found;
@@ -229,9 +233,11 @@ fn collect(
     clip: kurbo::Rect,
     key: &str,
     depth: u32,
+    open: bool,
     found: &mut Vec<EmbedView>,
 ) {
     let doc = store.document();
+    let open_through = |c: NodeId| open && composition::run_mode(doc, c) != composition::RunMode::OnDemand;
     for id in preorder(doc, roots) {
         if !is_embed(doc, id) || depth >= MAX_DEPTH {
             continue;
@@ -242,7 +248,7 @@ fn collect(
             let inner = base * e.placement;
             let clip = clip.intersect(inner.transform_rect_bbox(e.region));
             let kids: Vec<NodeId> = doc.children(e.source).to_vec();
-            collect(store, spatial, layers, view, &kids, inner, clip, &key, depth + 1, found);
+            collect(store, spatial, layers, view, &kids, inner, clip, &key, depth + 1, open_through(e.source), found);
         } else if let Some((source, camera, w, h)) = embed_3d(store, id) {
             let to_window = base * placement;
             let visible = to_window.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w, h)).intersect(clip);
@@ -254,7 +260,7 @@ fn collect(
             let s = to_window.determinant().abs().sqrt().max(1e-6);
             let size = UVec2::new(((w * s).ceil() as u32).clamp(1, 4096), ((h * s).ceil() as u32).clamp(1, 4096));
             let to_texture = kurbo::Affine::scale_non_uniform(size.x as f64 / w, size.y as f64 / h) * to_window.inverse();
-            found.push(EmbedView { key, panel: view.panel.clone(), size, to_texture, clip: visible, source, camera, layer: layers.of(Some(source)) });
+            found.push(EmbedView { key, panel: view.panel.clone(), size, to_texture, clip: visible, source, camera, layer: layers.of(Some(source)), open: open_through(source) });
         }
     }
 }

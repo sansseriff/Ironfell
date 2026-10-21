@@ -45,6 +45,11 @@ pub struct PenTool {
     /// What a click at the pointer would do besides placing a point (the
     /// cursor says so).
     pub hover: PenHover,
+    /// Snapping (plans/specs/snapping.md): window px from the pointer (or
+    /// the held press) to where the point goes, level or plumb with the
+    /// path's anchors, and the guides that show it, in the view's document px.
+    pub offset: kurbo::Vec2,
+    pub guides: Vec<iron_spatial::snap::Guide>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -139,6 +144,7 @@ pub fn pen_tool_system(
     spatial: Res<crate::document_bridge::SpatialScene>,
     drawables: Res<crate::document_bridge::Drawables>,
     (dpr, mut shown, mut edit): (Res<crate::Dpr>, Local<Option<ActiveTool>>, ResMut<PathEdit>),
+    select: Res<crate::bevy_app::select::SelectTool>,
 ) {
     let pen = &mut *pen;
     let doc = store.0.document();
@@ -238,6 +244,31 @@ pub fn pen_tool_system(
         }
         None => PenHover::None,
     };
+    // A point about to be placed lines up with the path's other anchors,
+    // decided at the press and held while its handles are dragged out. Not
+    // when the click would close, add or remove (the cursor says which).
+    if pen.press.is_none() {
+        pen.offset = kurbo::Vec2::ZERO;
+        pen.guides.clear();
+        let bypass = select.snap_off || pointer.modifiers.ctrl || pointer.modifiers.meta;
+        if let Some(v) = view
+            && pen.hover == PenHover::None
+            && !bypass
+            && let Some((path, _, to_comp)) = pen.path.as_ref().filter(|(id, p, _)| p == &v.panel && doc.live(*id).is_some())
+        {
+            let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
+            let to_panel = to_comp.inverse() * geo.world(*path);
+            let targets = iron_spatial::snap::Targets::new(geo.points(*path).iter().map(|q| kurbo::Rect::from_points(to_panel * q.1, to_panel * q.1)));
+            let here = v.affine().inverse() * screen;
+            let tol = crate::bevy_app::select::SNAP_REACH * dpr.0 / (v.zoom as f64).max(1e-9);
+            let s = targets.snap(kurbo::Rect::from_points(here, here), tol, [true, true]);
+            pen.offset = v.affine() * (here + s.delta) - screen;
+            pen.guides = s.guides;
+        }
+        if let Some((_, at)) = pen.pointer.as_mut() {
+            *at += pen.offset;
+        }
+    }
     if pointer.just_pressed_left
         && let Some(v) = view
     {
@@ -288,7 +319,7 @@ pub fn pen_tool_system(
     {
         let points = geo.points(path)[run].to_vec();
         let to_local = geo.world(path).inverse() * to_comp;
-        let at = to_local * (to_doc * start);
+        let at = to_local * (to_doc * (start + pen.offset));
         let out = {
             let [a, b, c, d, _, _] = to_local.as_coeffs();
             kurbo::Vec2::new(a * drag.x + c * drag.y, b * drag.x + d * drag.y)

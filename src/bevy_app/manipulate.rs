@@ -105,6 +105,87 @@ pub(crate) struct Drag {
     /// While Alt holds a duplicate: its transaction and the drags of the
     /// originals, to return to if Alt comes up.
     pub duplicate: Option<(Version, Vec<(DragHandle, Affine)>)>,
+    /// Object snapping, for a move of the selection.
+    pub snap: Option<SnapSession>,
+}
+
+/// Snapping for one move (plans/specs/snapping.md): the moving box at the
+/// press and the boxes it can snap to, frozen then, in the panel's document
+/// px, and the guides the last frame lined up along.
+pub(crate) struct SnapSession {
+    pub start: kurbo::Rect,
+    /// The boxes of what holds still (siblings, the artboard), and the
+    /// movers' own, which become targets while Alt drags copies of them.
+    pub boxes: Vec<kurbo::Rect>,
+    pub own: Vec<kurbo::Rect>,
+    pub targets: iron_spatial::snap::Targets,
+    /// Window px within which a feature snaps.
+    pub reach: f64,
+    pub guides: Vec<iron_spatial::snap::Guide>,
+    /// Guides are drawn as lines with crosses (a move), or as the crosses
+    /// alone (a resize, Figma's).
+    pub lines: bool,
+}
+
+impl SnapSession {
+    pub fn new(start: kurbo::Rect, boxes: Vec<kurbo::Rect>, own: Vec<kurbo::Rect>, reach: f64) -> Self {
+        let targets = iron_spatial::snap::Targets::new(boxes.iter().copied());
+        Self { start, boxes, own, targets, reach, guides: Vec::new(), lines: true }
+    }
+
+    /// The originals are targets while copies of them are dragged.
+    fn retarget(&mut self, duplicating: bool) {
+        let own = if duplicating { &self.own[..] } else { &[] };
+        self.targets = iron_spatial::snap::Targets::new(self.boxes.iter().chain(own).copied());
+    }
+}
+
+/// Bypasses snapping while held (Figma's Ctrl; Cmd here too, which a drag
+/// leaves free since deep select is decided at the press).
+fn snap_bypassed(mods: &crate::ModifierSnapshot) -> bool {
+    mods.ctrl || mods.meta
+}
+
+/// The pointer correction (panel document px) that snaps the edges a
+/// resize moves. The box is unrotated (`frame` maps the unit square onto it,
+/// axis by axis); each edge `e` it moves sits at `anchor + (e − anchor)·f`
+/// in unit coordinates, where `f` is the scale the pointer asks for, so it
+/// moves `(e − anchor) / (u0 − anchor)` doc px per pointer px.
+fn snap_resize(s: &SnapSession, frame: Affine, grip: (f64, f64), anchor: (f64, f64), start: Point, p: Point, tol: f64) -> kurbo::Vec2 {
+    let u0 = frame.inverse() * start;
+    let u = frame.inverse() * p;
+    let mut out = kurbo::Vec2::ZERO;
+    for vertical in [true, false] {
+        let (g, a, u0, u) = if vertical { (grip.0, anchor.0, u0.x, u.x) } else { (grip.1, anchor.1, u0.y, u.y) };
+        if g == 0.5 || (u0 - a).abs() < 1e-9 {
+            continue;
+        }
+        let edges: &[f64] = if a == 0.5 { &[0.0, 1.0] } else { &[g] };
+        let lines: Vec<iron_spatial::snap::Line> = edges
+            .iter()
+            .map(|&e| {
+                let unit = a + (e - a) * (u - a) / (u0 - a);
+                let at = frame * if vertical { Point::new(unit, 0.0) } else { Point::new(0.0, unit) };
+                iron_spatial::snap::Line { at: if vertical { at.x } else { at.y }, rate: (e - a) / (u0 - a) }
+            })
+            .collect();
+        if let Some(c) = s.targets.snap_lines(vertical, &lines, tol) {
+            if vertical { out.x = c } else { out.y = c }
+        }
+    }
+    out
+}
+
+/// Whether `frame` maps the unit square onto an unrotated box.
+pub(crate) fn axis_aligned(frame: Affine) -> bool {
+    let [a, b, c, d, ..] = frame.as_coeffs();
+    b.abs() <= 1e-9 * a.abs().max(d.abs()) && c.abs() <= 1e-9 * a.abs().max(d.abs())
+}
+
+/// Window px of travel per panel document px.
+fn zoom_of(view: &PanelView) -> f64 {
+    let [a, b, c, d, ..] = view.affine().as_coeffs();
+    (a * d - b * c).abs().sqrt().max(1e-9)
 }
 
 impl Drag {
@@ -155,6 +236,9 @@ impl Drag {
             store.begin_gesture(&ids);
             self.drags = originals.iter().map(|(h, inv)| (store.begin_drag(h.node, h.anchor), *inv)).collect();
         }
+        if let Some(s) = &mut self.snap {
+            s.retarget(on);
+        }
         Some(self.drags.iter().map(|(h, _)| h.node).collect())
     }
 }
@@ -168,6 +252,8 @@ pub(crate) struct Transform2 {
     pub start: Point,
     pub parts: Vec<Part>,
     pub rot0: Option<f64>,
+    /// Edge snapping, for a resize of an unrotated box.
+    pub snap: Option<SnapSession>,
 }
 
 /// A 3D move in a plane through the object: camera-facing, or the ground
@@ -224,6 +310,15 @@ pub(crate) enum Manip {
 }
 
 impl Manip {
+    /// Its snapping, with the guides the last frame lined up along.
+    pub fn snap(&self) -> Option<&SnapSession> {
+        match self {
+            Manip::Drag(d) => d.snap.as_ref(),
+            Manip::Transform(t) => t.snap.as_ref(),
+            _ => None,
+        }
+    }
+
     /// The panel view a 2D manipulator reads the pointer through: it
     /// follows the view's pan and zoom, and ends if the view does.
     pub fn view_mut(&mut self) -> Option<&mut PanelView> {
@@ -289,8 +384,26 @@ impl Manip {
             Manip::Drag(d) => {
                 let p = d.view.affine().inverse() * screen;
                 let mut v = p - d.start;
+                let mut axes = [true, true];
                 if mods.shift {
-                    if v.x.abs() > v.y.abs() { v.y = 0.0 } else { v.x = 0.0 }
+                    let along_x = v.x.abs() > v.y.abs();
+                    if along_x { v.y = 0.0 } else { v.x = 0.0 }
+                    axes = [along_x, !along_x];
+                }
+                // An axis a drag cannot move on would show guides it never
+                // reaches, so it does not snap.
+                for (h, _) in &d.drags {
+                    if let DragMode::Axes { free, .. } = &h.mode {
+                        axes = [axes[0] && free[0], axes[1] && free[1]];
+                    }
+                }
+                if let Some(s) = &mut d.snap {
+                    s.guides.clear();
+                    if !snap_bypassed(mods) && !s.targets.is_empty() {
+                        let snap = s.targets.snap(s.start + v, s.reach / zoom_of(&d.view), axes);
+                        v += snap.delta;
+                        s.guides = snap.guides;
+                    }
                 }
                 for (h, inv) in &d.drags {
                     let q = *inv * (d.start + v);
@@ -323,12 +436,26 @@ impl Manip {
                 cx.store.plug_drag(&d.plugging, [q.x, q.y], d.target.as_ref());
             }
             Manip::Transform(t) => {
-                let p = t.view.affine().inverse() * screen;
+                let mut p = t.view.affine().inverse() * screen;
+                if let Some(s) = &mut t.snap {
+                    s.guides.clear();
+                }
                 let a = match t.kind {
                     TransformKind::Resize { grip } => {
                         let frame = t.frame;
-                        let u = frame.inverse() * p;
                         let anchor = if mods.alt { (0.5, 0.5) } else { (1.0 - grip.0, 1.0 - grip.1) };
+                        // Shift at a corner derives one axis from the other,
+                        // so it does not snap.
+                        let corner = grip.0 != 0.5 && grip.1 != 0.5;
+                        if let Some(s) = &t.snap
+                            && !snap_bypassed(mods)
+                            && !(mods.shift && corner)
+                        {
+                            let tol = s.reach / zoom_of(&t.view);
+                            let c = snap_resize(s, frame, grip, anchor, t.start, p, tol);
+                            p += c;
+                        }
+                        let u = frame.inverse() * p;
                         // Relative to where the press landed, not the grip's
                         // exact corner, so pressing alone changes nothing.
                         let u0 = frame.inverse() * t.start;
@@ -357,6 +484,17 @@ impl Manip {
                     }
                 };
                 let resize = matches!(t.kind, TransformKind::Resize { .. });
+                // The crosses where the moved edges now meet targets.
+                if let (Some(s), TransformKind::Resize { grip }) = (&mut t.snap, t.kind)
+                    && !snap_bypassed(mods)
+                {
+                    let moved = (a * t.frame).transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, 1.0, 1.0));
+                    let edges = |g: f64, alt: bool| -> Vec<f64> { if g == 0.5 { vec![] } else if alt { vec![0.0, 1.0] } else { vec![g] } };
+                    let at = |u: f64, v: f64| a * t.frame * Point::new(u, v);
+                    let xs: Vec<f64> = edges(grip.0, mods.alt).into_iter().map(|u| at(u, 0.5).x).collect();
+                    let ys: Vec<f64> = edges(grip.1, mods.alt).into_iter().map(|v| at(0.5, v).y).collect();
+                    s.guides = [s.targets.guides_at(moved, true, &xs), s.targets.guides_at(moved, false, &ys)].concat();
+                }
                 let writes: Vec<(NodeId, &'static str, f64)> = t.parts.iter().flat_map(|part| part.apply(a, resize)).collect();
                 // A text's sizing first, so its box measures the new way.
                 for (id, sizing) in t.parts.iter().filter_map(|part| part.text_sizing(a, resize)) {

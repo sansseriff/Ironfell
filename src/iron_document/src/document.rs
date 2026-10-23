@@ -196,6 +196,36 @@ impl Document {
         out
     }
 
+    /// The preorder of `id` and its descendants, up to `limit` nodes: `None`
+    /// once there are more. What a caller that only wants a small subtree
+    /// uses instead of [`Document::descendants`], which walks all of it.
+    pub fn descendants_within(&self, id: NodeId, limit: usize) -> Option<Vec<NodeId>> {
+        let mut out = Vec::new();
+        let mut stack: Vec<NodeId> = self.children(id).iter().rev().copied().collect();
+        while let Some(n) = stack.pop() {
+            if out.len() == limit {
+                return None;
+            }
+            out.push(n);
+            stack.extend(self.children(n).iter().rev().copied());
+        }
+        Some(out)
+    }
+
+    /// Sibling order from the top of `id`'s tree down to `id`: sorting
+    /// nodes by it puts them in preorder (painter order), whatever set they
+    /// come from, with no walk of the content around them.
+    pub fn order_path(&self, id: NodeId) -> Vec<&OrderKey> {
+        let mut out = Vec::new();
+        let mut at = self.live(id);
+        while let Some(n) = at {
+            out.push(&n.order);
+            at = n.parent.and_then(|p| self.live(p));
+        }
+        out.reverse();
+        out
+    }
+
     /// Every expanded node's id, live or tombstoned (component-model.md §6).
     /// Expanded ids sort after every other id, so this is a range read.
     pub fn expanded_ids(&self) -> impl Iterator<Item = NodeId> + '_ {

@@ -404,10 +404,13 @@ pub fn embed_3d_extent(store: &crate::Store, embed: NodeId) -> Option<(NodeId, O
     Some((source, camera, w, h))
 }
 
-/// Every live embed inside `composition`, in preorder.
+/// Every live embed inside `composition`, in preorder. From the type index,
+/// not a walk of the content: views ask every frame.
 pub fn embeds_in(doc: &Document, composition: NodeId) -> Vec<NodeId> {
     let embed = TypeId::lookup("embed").expect("registered");
-    doc.descendants(composition).into_iter().filter(|&n| doc.live(n).is_some_and(|x| x.ty == embed)).collect()
+    let mut out: Vec<NodeId> = doc.nodes_of_type(embed).filter(|&e| composition_of(doc, e) == Some(composition) && e != composition).collect();
+    out.sort_by_cached_key(|&e| doc.order_path(e).into_iter().cloned().collect::<Vec<_>>());
+    out
 }
 
 /// An embed must sit inside a composition, name a live composition, and not

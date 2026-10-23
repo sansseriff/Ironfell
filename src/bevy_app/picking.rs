@@ -90,7 +90,8 @@ pub fn pick_document_2d_system(
     cache.overlay.clear();
     cache.embed = None;
     cache.chain.clear();
-    let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two) else { return };
+    // A render inspector watches; it is not picked in (render-inspector.md §4).
+    let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two && v.observes.is_none()) else { return };
     let Some(p) = view.to_doc(pointer.screen) else { return };
     let _timing = crate::perf::span(crate::perf::Phase::Pick);
     let doc = store.0.document();

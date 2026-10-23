@@ -1452,3 +1452,29 @@ pub fn text_toggle(app: &mut WorkerApp, what: String) {
         active_info.remaining_frames = 10;
     }
 }
+
+/// A render inspector's legend (plans/specs/render-inspector.md §2): the
+/// watched panel's chunks and how its view culls them.
+pub fn document_render_inspector(app: &mut WorkerApp, panel: String) -> String {
+    crate::document_bridge::inspector::info(app.world(), &panel).to_string()
+}
+
+/// Set what a render inspector draws: `{"tint", "dim", "outlines"}`, each
+/// a bool, missing ones left as they are.
+pub fn document_render_inspector_options(app: &mut WorkerApp, panel: String, options: String) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&options) else {
+        return serde_json::json!({"ok": false, "error": "options must be JSON"}).to_string();
+    };
+    let Some(mut all) = app.world_mut().get_resource_mut::<crate::document_bridge::inspector::InspectorOptions>() else {
+        return serde_json::json!({"ok": false, "error": "no inspector"}).to_string();
+    };
+    let o = all.0.entry(panel).or_default();
+    let flag = |k: &str, old: bool| v.get(k).and_then(|b| b.as_bool()).unwrap_or(old);
+    *o = crate::document_bridge::inspector::Options { tint: flag("tint", o.tint), dim: flag("dim", o.dim), outlines: flag("outlines", o.outlines) };
+    let o = *o;
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    serde_json::json!({"ok": true, "tint": o.tint, "dim": o.dim, "outlines": o.outlines}).to_string()
+}
+

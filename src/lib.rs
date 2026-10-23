@@ -164,7 +164,9 @@ impl Default for RedrawNeeded {
 pub(crate) fn decide_redraw(
     mut redraw: ResMut<RedrawNeeded>,
     texture_cameras: Query<&Camera, With<crate::bevy_app::ScreenRectMarker>>,
-    lists: Query<(), Or<(Changed<crate::vector::DisplayList>, Changed<crate::vector::VectorView>)>>,
+    // A chunk's layer moves with its view's pan and zoom (`VectorLayer::affine`)
+    // without its list changing.
+    lists: Query<(), Or<(Changed<crate::vector::DisplayList>, Changed<crate::vector::VectorView>, Changed<crate::vector::VectorLayer>)>>,
     visibility: Query<(), Changed<Visibility>>,
     cameras: Query<(), Or<(Added<Camera>, Changed<Camera>)>>,
     mut removed_cameras: RemovedComponents<Camera>,

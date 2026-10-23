@@ -609,3 +609,23 @@ In the web build (dev-opt, webgl2, SwiftShader) the drop is one "import SVG" of
 42,667 ops and draws. Phase 4 boxed `Facet`'s variants (it was 616 bytes, `font`'s
 eleven slots, for every facet). Drawing cost of the 28k paths is not yet
 measured with `PROFILE=wasm-bench`.
+
+## 15. Large SVG interaction baseline (2026-10-23)
+
+The Prussia file of §14, drawn: `.claude/skills/run-iron/bench-large-svg.txt`
+(`wasm-bench`, GPU, 1600×1000 @1, unthrottled, webgl2). The table, its four findings and
+what each needs are in [`specs/render-cache.md`](../specs/render-cache.md) §2. In short:
+a pan of the fitted drawing re-encodes 42,839 commands (`encode` 171 ms, changed frame
+254 ms, 5 fps); one dragged shape does the same; and an idle view rebuilds every panel's
+display list (33 ms) on each Stats tick, because rebuilds are not filtered per panel.
+Picking stays at 0.7 ms.
+
+After render-cache phase 0 (same day, same scenario): idle-fitted changed frame 67.6 → 2.4 ms
+and idle frame 10.7 → 0.3 ms (86 → 880 fps); zoomed-in idle 141.6 → 2.2 ms with
+`overlay_geometry` 55 → 0. Motion is unchanged (pan-fitted `encode` 166 ms), as expected
+before chunks and tiles. Details in `specs/render-cache.md` §10.
+
+After phase 1 (chunks): pan-fitted `display_list` 24.7 → 0.2 ms and `extract` 19.7 → 0 (changed
+frame 214.7 → 176.9, all of it `encode` now); one dragged shape re-records one chunk
+(`display_list` 0.6 ms); zoomed-in pan 58.8 → 39.2 ms from per-command culling.
+

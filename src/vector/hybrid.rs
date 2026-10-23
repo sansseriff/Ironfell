@@ -66,7 +66,7 @@ use super::backend::{LayerSpace, Offscreen, Overlay, VectorLayer, VectorView};
 use super::view_composite::{MODE_PREMULTIPLIED_RAW, ViewCompositeMaterial, bucket, unit_quad};
 use super::composite::{VECTOR_LAYER, VectorCamera};
 use super::composite_material::{VectorCompositeMaterial, fullscreen_quad};
-use super::display_list::{Brush, DisplayList, DrawCmd, Shape};
+use super::display_list::{Brush, DisplayList, DrawCmd, Recorded, Shape};
 
 /// Format of the texture the backend renders into and Bevy samples.
 ///
@@ -377,11 +377,12 @@ fn sync_views(
 
 /// One layer's contribution, mirrored into the render world.
 struct ExtractedLayer {
-    order: i32,
+    order: (i32, u32),
     /// Layer space already folded into the transform; see [`layer_transform`].
     transform: Affine,
-    cmds: Vec<DrawCmd>,
-    bounds: Option<Rect>,
+    /// The main world's recording itself, shared, not copied; its
+    /// per-command bounds cull what a large layer has off screen.
+    list: std::sync::Arc<Recorded>,
     /// The view whose texture it renders into; `None` is the window target.
     view: Option<Entity>,
 }
@@ -457,7 +458,7 @@ fn extract_views(
 fn extract_layers(
     mut extracted: ResMut<ExtractedLayers>,
     target: Extract<Option<Res<HybridTarget>>>,
-    layers: Extract<Query<(Entity, &VectorLayer, Ref<DisplayList>, Ref<GlobalTransform>)>>,
+    layers: Extract<Query<(Entity, Ref<VectorLayer>, Ref<DisplayList>, Ref<GlobalTransform>)>>,
     camera: Extract<Option<Res<VectorCamera>>>,
     camera_transforms: Extract<Query<&GlobalTransform, With<Camera>>>,
     mut stats: ResMut<VectorStats>,
@@ -503,7 +504,7 @@ fn extract_layers(
         // that "moves" changes nothing about what this backend draws. Only
         // world layers care, and restricting the test to them is not an
         // optimisation but a correctness statement about what feeds the output.
-        let moved = layer.space == LayerSpace::World && (global.is_changed() || view_moved);
+        let moved = (layer.space == LayerSpace::World && (global.is_changed() || view_moved)) || layer.is_changed();
         let retargeted = extracted.layers.get(&entity).is_some_and(|l| l.view != layer.view);
         // `is_added` covers the first frame, when the mirror has no entry yet.
         if !list.is_changed() && !moved && !retargeted && extracted.layers.contains_key(&entity) {
@@ -516,10 +517,9 @@ fn extract_layers(
         extracted.layers.insert(
             entity,
             ExtractedLayer {
-                order: layer.order,
-                transform: layer_transform(layer.space, &global, view),
-                cmds: list.cmds().to_vec(),
-                bounds: list.bounds(),
+                order: (layer.order, layer.sub),
+                transform: layer_transform(layer.space, &global, view, layer.affine),
+                list: list.shared(),
                 view: layer.view,
             },
         );
@@ -553,8 +553,9 @@ struct ViewMapping {
 
 /// Resolve a layer's own transform into the scene's device space.
 ///
-/// Screen layers are authored in window pixels, which *is* the scene's space, so
-/// they need nothing.
+/// Screen layers are authored in window pixels, which *is* the scene's space, or
+/// carry their own map to it (a chunk in its composition's space, under its
+/// view's pan and zoom: `VectorLayer::affine`).
 ///
 /// World layers are the interesting case, and the one that is silent when wrong.
 /// Their content is authored in y-up world units around the entity's origin, and
@@ -572,9 +573,9 @@ struct ViewMapping {
 ///
 /// Assumes the composite camera is unscaled (1 world unit = 1 pixel, which is
 /// `Camera2d`'s default). If it ever zooms, the scale belongs here too.
-fn layer_transform(space: LayerSpace, global: &GlobalTransform, view: ViewMapping) -> Affine {
+fn layer_transform(space: LayerSpace, global: &GlobalTransform, view: ViewMapping, affine: Affine) -> Affine {
     match space {
-        LayerSpace::Screen => Affine::IDENTITY,
+        LayerSpace::Screen => affine,
         LayerSpace::World => {
             let m = global.to_matrix();
             let entity = Affine::new([
@@ -717,14 +718,14 @@ fn prepare_scene(
         let viewport = Rect::new(0.0, 0.0, tsize.x as f64, tsize.y as f64);
         for layer in ordered {
             // A layer whose content cannot touch the viewport costs nothing.
-            if let Some(bounds) = layer.bounds {
+            if let Some(bounds) = layer.list.bounds() {
                 let device_bounds = (to_target * layer.transform).transform_rect_bbox(bounds);
                 if device_bounds.intersect(viewport).is_zero_area() {
                     culled += 1;
                     continue;
                 }
             }
-            let n = emit_layer(&mut target.scene, &mut target.textures, layer, to_target, scratch);
+            let n = emit_layer(&mut target.scene, &mut target.textures, layer, to_target, viewport, scratch);
             if !overlay {
                 emitted += n;
             }
@@ -756,10 +757,18 @@ fn prepare_scene(
 /// is only the atlas and its eviction policy.
 ///
 /// Returns the number of commands emitted.
-fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, UVec2)>, layer: &ExtractedLayer, to_target: Affine, scratch: &mut BezPath) -> u32 {
+fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, UVec2)>, layer: &ExtractedLayer, to_target: Affine, viewport: Rect, scratch: &mut BezPath) -> u32 {
     let base = to_target * layer.transform;
     let mut emitted = 0;
-    for cmd in &layer.cmds {
+    for (cmd, bounds) in layer.list.cmds().iter().zip(layer.list.cmd_bounds()) {
+        // A drawing command wholly off screen costs nothing; scopes always
+        // go out, so pushes and pops stay balanced. A chunk is culled whole
+        // by its bounds before this; this is what still culls inside one
+        // that is partly visible.
+        let draws = matches!(cmd, DrawCmd::Fill { .. } | DrawCmd::Stroke { .. } | DrawCmd::BlurredRect { .. } | DrawCmd::Texture { .. });
+        if draws && bounds.is_some_and(|b| base.transform_rect_bbox(b).intersect(viewport).is_zero_area()) {
+            continue;
+        }
         match cmd {
             DrawCmd::Fill {
                 transform,
@@ -774,6 +783,8 @@ fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, U
                     // Rects have a dedicated entry point that skips path
                     // handling entirely — the reason `Shape` keeps them apart.
                     Shape::Rect(r) => scene.fill_rect(r),
+                    // A path is drawn where it is, not copied first.
+                    Shape::Path(p) => scene.fill_path(p),
                     other => {
                         fill_scratch(scratch, other);
                         scene.fill_path(scratch);
@@ -791,6 +802,7 @@ fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, U
                 scene.set_stroke(style.clone());
                 match shape {
                     Shape::Rect(r) => scene.stroke_rect(r),
+                    Shape::Path(p) => scene.stroke_path(p),
                     other => {
                         fill_scratch(scratch, other);
                         scene.stroke_path(scratch);

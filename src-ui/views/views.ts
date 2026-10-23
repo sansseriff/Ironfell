@@ -19,8 +19,9 @@ import SelectionView from './html/SelectionView.svelte';
 import ModelView from './html/ModelView.svelte';
 import SettingsView from './html/SettingsView.svelte';
 import CompositionTools from './html/CompositionTools.svelte';
+import RenderInspector from './html/RenderInspector.svelte';
 
-export type Notation = 'composition' | 'timeline' | 'markup' | 'selection' | 'conversation' | 'settings';
+export type Notation = 'composition' | 'timeline' | 'markup' | 'selection' | 'conversation' | 'settings' | 'render-inspector';
 
 export interface ViewSpec {
   source: string;
@@ -31,8 +32,8 @@ export interface NotationDef {
   label: string;
   /** The Rust panel kind for the canvas part, if the canvas draws any. */
   canvas?: string;
-  /** The HTML part, if any. */
-  html?: Component<{ spec: ViewSpec }>;
+  /** The HTML part, if any; `panel` is its view's id. */
+  html?: Component<{ spec: ViewSpec; panel?: string }>;
 }
 
 export const NOTATIONS: Record<Notation, NotationDef> = {
@@ -42,7 +43,15 @@ export const NOTATIONS: Record<Notation, NotationDef> = {
   selection: { label: 'Inspector', html: SelectionView },
   conversation: { label: 'Model', html: ModelView },
   settings: { label: 'Settings', html: SettingsView },
+  // Its source is the panel it watches (plans/specs/render-inspector.md).
+  'render-inspector': { label: 'Render inspector', canvas: 'composition', html: RenderInspector },
 };
+
+/** The composition spec a view's canvas part posts to Rust: a render
+ *  inspector shows what the panel it watches shows (`inspect:<panel>`). */
+export function canvasSource(spec: ViewSpec): string {
+  return spec.notation === 'render-inspector' ? `inspect:${spec.source}` : spec.source;
+}
 
 /** The app's settings (views/html/SettingsView.svelte): not a document view. */
 export const SETTINGS_VIEW: ViewSpec = { source: 'app', notation: 'settings' };

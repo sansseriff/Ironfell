@@ -771,6 +771,11 @@ impl Geo<'_> {
                 let r = doc.children(id).iter().filter_map(|&c| self.local_box(c).map(|(b, _)| (inv * self.world(c)).transform_rect_bbox(b))).fold(marker, |a, b| a.union(b));
                 Some((r, Kind::Fixed))
             }
+            // The spatial scene keeps every group's content union current
+            // (render-cache.md §4.3): no walk of the subtree, which on a
+            // large import cost tens of ms per hover. Leaves count by their
+            // tight geometry, as snapping does. Without the index, walk.
+            "group" | "use" if self.spatial.enabled => Some((self.spatial.group_content(id)?.geometry, Kind::Group)),
             "group" | "use" => {
                 let inv = self.world(id).inverse();
                 let r = doc
@@ -2628,7 +2633,7 @@ pub fn select_tool_system(
         let mut on_grip = false;
         if let Some(view) = view.filter(|v| v.dims == Dims::Two) {
             let mine = movers(&reaches, &view.panel);
-            let cached = geometry_cache.selection(&geo, &view.panel, &mine, GeometryStamp::new(&store.0, geometry_revision.0), false);
+            let cached = geometry_cache.selection(&geo, &view.panel, &mine, GeometryStamp::new(&store.0, geometry_revision.of_view(geo.doc(), view)), false);
             if edit.reach.is_none()
                 && let Some(frame) = cached.frame
             {
@@ -3068,7 +3073,6 @@ pub fn draw_select_overlay(
         }
     }
     let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
-    let stamp = GeometryStamp::new(&store.0, geometry_revision.0);
     let reaches = selected_reaches(&sel, &tool);
     // Sizes are CSS px; `k` makes them window px.
     let k = dpr.0;
@@ -3077,6 +3081,8 @@ pub fn draw_select_overlay(
     let square = Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
     for (_, o, mut list, _) in &mut overlays {
         let Some(view) = views.get(&o.panel) else { continue };
+        // Only what this panel shows invalidates its cached boxes.
+        let stamp = GeometryStamp::new(&store.0, geometry_revision.of_view(geo.doc(), view));
         let to_screen = view.affine();
         // Lit leaves by their outline and lit containers by their box, in
         // screen px so the width holds under zoom. Frames already drawn as

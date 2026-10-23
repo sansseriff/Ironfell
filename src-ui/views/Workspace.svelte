@@ -18,6 +18,8 @@
 
   onMount(() => {
     api = createWorkspace(el);
+    // For the driver (.claude/skills/run-iron): open views as the + menu would.
+    (window as any).__dock = api;
     // Splits and tab moves change rectangles without resizing the window.
     api.onDidLayoutChange(() => controllerManager.syncAllPanels());
     api.onWillDragPanel(() => (dragging = true));

@@ -1,0 +1,68 @@
+# A large SVG's interaction cost (plans/specs/render-cache.md §2): the Prussia coat
+# of arms (Wikimedia, Coat_of_Arms_of_the_Kingdom_of_Prussia_1873-1918.svg, 11 MB),
+# imported into the Controls tab, fitted (Shift+1) and zoomed in. Not in the repo:
+# copy it to .agents/tmp/big.svg first. Build PROFILE=wasm-bench; run with
+#   GPU=1 UNTHROTTLED=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < bench-large-svg.txt
+# and read the `measure` lines (changed_frame, display_list, extract, encode).
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default
+ready
+tab Controls
+sleep 600
+pmove controls 470 370
+eval fetch('/Ironfell/.agents/tmp/big.svg').then(r => r.text()).then(t => __iron.importSvg(t)).then(r => r.nodes)
+sleep 5000
+key Escape
+sleep 300
+key Escape
+sleep 300
+key Shift+Digit1
+sleep 2000
+pmove controls 470 370
+sleep 1000
+shot bench-fit
+measure-reset
+sleep 3000
+measure idle-fit
+measure-reset
+pwheel controls 470 370 0 5 40 40
+pwheel controls 470 370 0 -5 40 40
+measure pan-fit
+measure-reset
+psweep controls 200 150 750 600 60 40
+measure hover-sweep-fit
+measure-reset
+keydown Meta
+pdrag controls 470 370 500 400 30
+keyup Meta
+measure drag-deep-fit
+key Meta+z
+sleep 500
+key Escape
+sleep 300
+key Escape
+sleep 300
+pmove controls 470 370
+sleep 1000
+measure-reset
+keydown Control
+pwheel controls 470 370 0 -10 20 40
+keyup Control
+measure zoom-in-gesture
+sleep 1500
+shot bench-in
+measure-reset
+sleep 3000
+measure idle-in
+measure-reset
+pwheel controls 470 370 0 5 40 40
+pwheel controls 470 370 0 -5 40 40
+measure pan-in
+measure-reset
+psweep controls 200 150 750 600 60 40
+measure hover-sweep-in
+measure-reset
+keydown Control
+pwheel controls 470 370 0 10 20 40
+keyup Control
+measure zoom-out-gesture
+errors

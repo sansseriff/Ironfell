@@ -42,6 +42,10 @@ pub struct PanelView {
     pub pan: Vec2,
     /// A 2D view's zoom: window px per document px.
     pub zoom: f32,
+    /// A render inspector (plans/specs/render-inspector.md): the panel it
+    /// watches, whose composition it shows with that panel's render plan
+    /// drawn over it. Its spec is `inspect:<panel>`.
+    pub observes: Option<String>,
 }
 
 impl PanelView {
@@ -134,6 +138,9 @@ impl CompositionLayers {
     }
 }
 
+/// The spec prefix of a render inspector: `inspect:<panel>`.
+pub const INSPECT: &str = "inspect:";
+
 /// Which composition a spec names: a node id, a composition's name, or
 /// (empty) the first composition with matching dimensions — 2D unless the
 /// document has only 3D ones.
@@ -166,7 +173,13 @@ pub(crate) fn resolve_panel_views(
         .iter()
         .filter(|(_, p)| p.kind == COMPOSITION_PANEL)
         .map(|(id, p)| {
-            let composition = resolve(doc, &p.composition);
+            // An inspector shows what the panel it watches shows.
+            let observes = p.composition.strip_prefix(INSPECT).map(str::to_owned);
+            let shown = match &observes {
+                Some(o) => panels.get(o).map_or("", |q| q.composition.as_str()),
+                None => p.composition.as_str(),
+            };
+            let composition = resolve(doc, shown);
             let dims = composition.and_then(|c| composition::dims(doc, c)).unwrap_or(Dims::Two);
             PanelView {
                 panel: id.clone(),
@@ -174,7 +187,8 @@ pub(crate) fn resolve_panel_views(
                 composition,
                 dims,
                 layer: if dims == Dims::Three { layers.of(composition) } else { 0 },
-                loose: id == VIEWER_PANEL,
+                loose: observes.as_deref().unwrap_or(id) == VIEWER_PANEL,
+                observes,
                 pan: cameras.0.get(id).map_or(Vec2::ZERO, |c| c.pan),
                 zoom: cameras.0.get(id).map_or(1.0, |c| c.zoom),
             }

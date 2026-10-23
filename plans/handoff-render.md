@@ -67,6 +67,11 @@ One count takes ~2.5 min; four counts ~10–12 min, so run it in the background.
 
 ## 4. What to do, in order
 
+**2026-10-23: items 3's open half and 4 are now specified** in
+[`specs/render-cache.md`](specs/render-cache.md) (phases 0–3, with the large-SVG
+baseline) and [`specs/render-inspector.md`](specs/render-inspector.md). Once approved,
+that spec's phase list is the work order for both; the list below is history for them.
+
 **Revised 2026-10-14.** Items 1–4 of the previous list (overlay geometry cache,
 change-driven picking, independent bounds/index, per-view culling) are done and
 committed (`87a9a8e`); the DPR question (old item 7) is verified. The list below

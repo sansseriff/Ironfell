@@ -180,8 +180,8 @@ composition's nodes). Expected output, minus screenshot lines,
 ```
 {"enabled":false,"guides":[]}
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-redraw (document): 2 of 44 nodes changed [#3b #3i/3b]; damage 539,114–661,269
-redraw (document): 2 of 44 nodes changed [#M #U]; damage 560,340–800,460
+redraw (document): 2 of 36 nodes changed [#3b #3i/3b]; damage 539,114–661,269
+redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #11.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#11.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
@@ -423,6 +423,8 @@ clicked .link-popover button.primary
 [[600,300],[600,300],["meter 15.88… mW","short fiber 0 W"]]
 tab Library
 ["slider level 18","laser power 18 mW"]
+"render-controls"
+["Render inspector watching controls","Chunks","1 0 in view","Nodes","25"]
 applied "open demo scene" (298 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3

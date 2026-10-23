@@ -19,7 +19,9 @@
 //!   transaction touched are read off its ops and inverse; only those nodes
 //!   are re-examined.
 
+pub mod chunks;
 mod demo;
+pub mod inspector;
 pub mod gas;
 mod highlight;
 pub mod liveness;
@@ -38,7 +40,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 use iron_document::{Document, NodeId, Op, Store, TransactionInput};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub use highlight::{Highlights, update_highlights};
 pub use nest::{EmbedImage, EmbedImages, EmbedView, EmbedViews};
@@ -192,8 +194,47 @@ impl DocumentChanges {
 /// Monotonic projection generation, including resolved previews and document
 /// replacement. Unlike DocumentChanges this is never drained by rendering.
 /// Consumers can retain derived geometry across unchanged frames.
+///
+/// The second field counts the same changes by where they draw
+/// ([`nest::Home`]), so a consumer about one view can ignore the rest
+/// ([`GeometryRevision::of_view`]).
 #[derive(Resource, Default)]
-pub struct GeometryRevision(pub u64);
+pub struct GeometryRevision(pub u64, BTreeMap<nest::Home, u64>);
+
+impl GeometryRevision {
+    /// Bump for a change to `nodes`, by the compositions they draw in.
+    fn touch(&mut self, doc: &iron_document::Document, nodes: &BTreeSet<NodeId>) {
+        self.0 = self.0.wrapping_add(1);
+        for &n in nodes {
+            let r = self.1.entry(nest::home(doc, n)).or_default();
+            *r = r.wrapping_add(1);
+        }
+    }
+
+    /// Bump for a change to everything (a new document).
+    fn touch_all(&mut self) {
+        self.0 = self.0.wrapping_add(1);
+        let r = self.1.entry(nest::Home::Unknown).or_default();
+        *r = r.wrapping_add(1);
+    }
+
+    /// A stamp for what a 2D view shows: the revisions of the compositions
+    /// it draws (its own and what its embeds show, to any depth), loose
+    /// nodes for the viewer, and changes of unknown home. A change anywhere
+    /// else, a Stats tick beside a large drawing, leaves it alone
+    /// (render-cache.md §4.3).
+    pub fn of_view(&self, doc: &iron_document::Document, view: &PanelView) -> u64 {
+        let get = |h: nest::Home| self.1.get(&h).copied().unwrap_or(0);
+        let mut stamp = get(nest::Home::Unknown);
+        if view.loose {
+            stamp = stamp.wrapping_add(get(nest::Home::Loose));
+        }
+        for c in nest::shown_compositions(doc, view.composition) {
+            stamp = stamp.wrapping_add(get(nest::Home::Composition(c)));
+        }
+        stamp
+    }
+}
 
 /// Bevy's transform propagation, timed from outside its set. Document nodes
 /// are flat entities with store-written transforms, so after vision 10 phase
@@ -241,6 +282,8 @@ impl Plugin for DocumentPlugin {
             .init_resource::<Modes>()
             .init_resource::<DocumentChanges>()
             .init_resource::<GeometryRevision>()
+            .init_resource::<chunks::Chunks>()
+            .init_resource::<inspector::InspectorOptions>()
             .init_resource::<PropagateTimer>()
             .init_resource::<SpatialScene>()
             .init_resource::<HistoryRequests>()
@@ -277,6 +320,7 @@ impl Plugin for DocumentPlugin {
                     planes::sync_planes.after(TransformSystems::Propagate).before(render::render_document_layer),
                     spatial::prepare_spatial.after(TransformSystems::Propagate).before(render::render_document_layer).before(crate::bevy_app::select::draw_select_overlay),
                     render::render_document_layer.after(TransformSystems::Propagate),
+                    inspector::draw_render_inspectors.after(render::render_document_layer),
                     propagate_begin.before(TransformSystems::Propagate).after(sync_document),
                     propagate_end.after(TransformSystems::Propagate).before(spatial::prepare_spatial),
                     // The store's world transforms must agree with Bevy's
@@ -340,7 +384,7 @@ pub(crate) fn sync_document(
     let mut structure = false;
     let version_before = synced.0;
     if let Some(doc) = load.0.take() {
-        geometry_revision.0 = geometry_revision.0.wrapping_add(1);
+        geometry_revision.touch_all();
         structure = true;
         // Everything materialised belongs to the old document. Tear it all
         // down rather than diffing: ids may coincide with different types.
@@ -473,7 +517,7 @@ pub(crate) fn sync_document(
     if affected.is_empty() {
         return;
     }
-    geometry_revision.0 = geometry_revision.0.wrapping_add(1);
+    geometry_revision.touch(store.0.document(), &affected);
     let Some(assets) = assets else {
         warn!("mesh assets missing; cannot reconcile");
         return;

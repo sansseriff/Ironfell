@@ -24,10 +24,18 @@
 //! no overlay of its own.
 
 use super::{SpatialScene, Doc2d, DocumentChanges, DocumentStore, Highlights, PanelViews, Shape2d, nest};
+use super::chunks::{ChunkLayer, Chunks, panel_homes};
 use iron_document::composition::Dims;
-use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, VectorView, order};
+use crate::vector::{DisplayList, DisplayListRebuild, Recorded, VectorLayer, VectorView, order};
 use bevy::prelude::*;
 use iron_document::NodeId;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
+
+/// The clip a chunk records under: none. A chunk is recorded once for
+/// every panel, so it cannot be cut to any one view; the backend culls
+/// per layer and per command instead.
+const UNCLIPPED: kurbo::Rect = kurbo::Rect::new(-1e9, -1e9, 1e9, 1e9);
 
 /// One document layer per 2D panel, each its own [`VectorView`]: it renders
 /// into a texture the panel's size and re-renders only when its own content
@@ -69,9 +77,15 @@ pub(super) fn sync_document_views(
 /// How many changed node ids a redraw line names before summarising.
 const LOG_IDS: usize = 12;
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_document_layer(
-    mut panel_layers: Query<(&mut DisplayList, &DocumentPanelLayer), Without<super::planes::PlaneLayer>>,
-    mut plane_layers: Query<(&mut DisplayList, &super::planes::PlaneLayer, &VectorView), Without<DocumentPanelLayer>>,
+    mut commands: Commands,
+    mut panel_layers: Query<(Entity, &mut DisplayList, &DocumentPanelLayer), (Without<super::planes::PlaneLayer>, Without<ChunkLayer>)>,
+    mut plane_layers: Query<(&mut DisplayList, &super::planes::PlaneLayer, &VectorView), (Without<DocumentPanelLayer>, Without<ChunkLayer>)>,
+    mut chunk_layers: Query<(Entity, &ChunkLayer, &mut DisplayList, &mut VectorLayer), (Without<DocumentPanelLayer>, Without<super::planes::PlaneLayer>)>,
+    mut chunks: ResMut<Chunks>,
+    time: Res<Time>,
+    inspector: Res<super::inspector::InspectorOptions>,
     new_panels: Query<(), Or<(Added<DocumentPanelLayer>, Changed<super::planes::PlaneLayer>)>>,
     drawables: Res<super::Drawables>,
     store: Res<DocumentStore>,
@@ -85,7 +99,7 @@ pub fn render_document_layer(
         "document"
     } else if spatial.is_changed() {
         "spatial projection"
-    } else if views.is_changed() {
+    } else if views.is_changed() || inspector.is_changed() {
         "panel layout"
     } else if !new_panels.is_empty() {
         "new view"
@@ -106,19 +120,152 @@ pub fn render_document_layer(
     // It is diagnostic here; per-view damage mapping/partial rasterization is later.
     let damage = spatial.damage.iter().copied().reduce(|a,b| a.union(b));
     let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, drawables: &drawables, highlights: None, spatial: &spatial, drawn: 0 };
-    // A layer per panel: a panel whose content is unchanged rebuilds to the
-    // same commands, so its view does not re-render.
-    for (mut panel_list, layer) in panel_layers.iter_mut().filter(|_| !planes_only) {
-        let Some(view) = views.get(&layer.panel) else { continue };
-        let roots = nest::panel_roots(doc, view);
-        panel_list.rebuild(|b| {
-            b.clipped(kurbo::Affine::IDENTITY, view.rect.to_kurbo(), |b| cx.walk(b, &roots, view.affine(), view.rect.to_kurbo(), &view.panel, 0));
-        });
+    // Where the changed nodes draw, when only the document changed: a
+    // panel rebuilds only for changes it shows (render-cache.md §4.3), so a
+    // Stats tick does not rebuild a 29k-node drawing beside it. Any other
+    // reason, or a structure change with no nodes named, rebuilds every
+    // panel. A panel that does rebuild unchanged gets equal commands, so its
+    // view does not re-render.
+    let homes: Option<std::collections::BTreeSet<nest::Home>> = (reason == "document" && !changed.nodes.is_empty())
+        .then(|| changed.nodes.iter().map(|&n| nest::home(doc, n)).collect())
+        .filter(|h: &std::collections::BTreeSet<nest::Home>| !h.contains(&nest::Home::Unknown));
+    let shows = |composition: Option<NodeId>, loose: bool| {
+        homes.as_ref().is_none_or(|homes| {
+            let shown = nest::shown_compositions(doc, composition);
+            homes.iter().any(|h| match h {
+                nest::Home::Composition(c) => shown.contains(c),
+                nest::Home::Loose => loose,
+                nest::Home::Unknown => true,
+            })
+        })
+    };
+    let mut skipped = 0_usize;
+    if !planes_only {
+        // Panels draw chunks (render-cache.md §4): cut what they show,
+        // re-record only the chunks whose nodes changed, and give each panel
+        // a layer per chunk under its own pan and zoom.
+        let wanted: BTreeSet<nest::Home> = views.0.iter().filter(|v| v.dims == Dims::Two).flat_map(panel_homes).collect();
+        // A spatial or embedded-view change can move what any chunk draws
+        // (an embed's region, a 3D texture) without naming its nodes.
+        let everything = !matches!(reason, "document" | "panel layout" | "new view");
+        let mut recut: BTreeSet<nest::Home> = wanted.iter().copied().filter(|h| changed.structure || !chunks.homes.contains_key(h)).collect();
+        let mut dirty: BTreeMap<nest::Home, BTreeSet<usize>> = BTreeMap::new();
+        for &n in &changed.nodes {
+            let home = nest::home(doc, n);
+            if !wanted.contains(&home) {
+                continue;
+            }
+            match chunks.chunk_of(home, n) {
+                Some(Ok(i)) => {
+                    dirty.entry(home).or_default().insert(i);
+                }
+                // A split group, or a node no chunk holds (the composition
+                // itself): cut again.
+                _ => {
+                    recut.insert(home);
+                }
+            }
+        }
+        for &home in &recut {
+            chunks.partition(&store.0, &drawables, home);
+        }
+        chunks.homes.retain(|h, _| wanted.contains(h));
+        for (home, part) in chunks.homes.iter_mut() {
+            for (i, chunk) in part.chunks.iter_mut().enumerate() {
+                if chunk.embeds || !(chunk.recorded.is_none() || everything || dirty.get(home).is_some_and(|d| d.contains(&i))) {
+                    continue;
+                }
+                let rec = Recorded::record(|b| cx.branches(b, &chunk.roots, kurbo::Affine::IDENTITY, UNCLIPPED, "", 0, None));
+                if chunk.recorded.as_deref() != Some(&rec) {
+                    chunk.recorded = Some(Arc::new(rec));
+                    chunk.recorded_at = time.elapsed_secs_f64();
+                }
+            }
+        }
+        // Each panel's layers: its homes' chunks in painter order. An embed
+        // chunk is recorded per panel, and only when the panel shows the
+        // change.
+        let mut want: HashMap<(String, nest::Home, NodeId), (Arc<Recorded>, u32, kurbo::Affine, Entity)> = HashMap::new();
+        let mut per_panel = std::mem::take(&mut chunks.per_panel);
+        let mut kept: HashMap<(String, NodeId), Arc<Recorded>> = HashMap::new();
+        let mut tinted = HashMap::new();
+        let mut inspected: Vec<(Arc<Recorded>, NodeId, (String, nest::Home, NodeId))> = Vec::new();
+        for (entity, mut panel_list, layer) in &mut panel_layers {
+            let Some(view) = views.get(&layer.panel) else { continue };
+            // The panel's own list stays empty: its chunks draw.
+            panel_list.rebuild(|_| {});
+            let panel_shows = shows(view.composition, view.loose);
+            if !panel_shows {
+                skipped += 1;
+            }
+            let mut sub = 0_u32;
+            for home in panel_homes(view) {
+                let Some(part) = chunks.homes.get(&home) else { continue };
+                for chunk in &part.chunks {
+                    let first = chunk.roots[0];
+                    let rec = if chunk.embeds {
+                        let key = (view.panel.clone(), first);
+                        let old = per_panel.remove(&key);
+                        let rec = match old {
+                            Some(old) if !panel_shows && !everything => old,
+                            old => {
+                                let rec = Recorded::record(|b| cx.branches(b, &chunk.roots, kurbo::Affine::IDENTITY, UNCLIPPED, &view.panel, 0, None));
+                                match old {
+                                    Some(old) if *old == rec => old,
+                                    _ => Arc::new(rec),
+                                }
+                            }
+                        };
+                        kept.insert(key, rec.clone());
+                        rec
+                    } else {
+                        let Some(rec) = chunk.recorded.clone() else { continue };
+                        rec
+                    };
+                    // A render inspector shows each chunk in its own colour.
+                    if view.observes.is_some() && inspector.0.get(&view.panel).is_none_or(|o| o.tint) {
+                        inspected.push((rec.clone(), first, (view.panel.clone(), home, first)));
+                    }
+                    want.insert((view.panel.clone(), home, first), (rec, sub, view.affine(), entity));
+                    sub += 1;
+                }
+            }
+        }
+        chunks.per_panel = kept;
+        for (rec, first, key) in inspected {
+            let t = chunks.tinted(&rec, first, &mut tinted);
+            if let Some(w) = want.get_mut(&key) {
+                w.0 = t;
+            }
+        }
+        chunks.keep_tinted(tinted);
+        for (e, layer, mut list, mut vl) in &mut chunk_layers {
+            let Some((rec, sub, affine, view)) = want.remove(&(layer.panel.clone(), layer.home, layer.first)) else {
+                commands.entity(e).despawn();
+                continue;
+            };
+            list.set(rec);
+            if vl.sub != sub || vl.affine != affine || vl.view != Some(view) {
+                vl.sub = sub;
+                vl.affine = affine;
+                vl.view = Some(view);
+            }
+        }
+        for ((panel, home, first), (rec, sub, affine, view)) in want {
+            let mut vl = VectorLayer::screen(order::DOCUMENT_2D).in_view(view);
+            vl.sub = sub;
+            vl.affine = affine;
+            commands.spawn((DisplayList::from(rec), vl, ChunkLayer { panel, home, first }));
+        }
     }
     // A plane's view: its composition's region, at its density, into its
     // own texture (`planes`), lit nodes outlined.
     cx.highlights = Some(&highlights);
     for (mut plane_list, layer, vview) in &mut plane_layers {
+        if !planes_only && !shows(Some(layer.source), false) {
+            skipped += 1;
+            continue;
+        }
         let roots: Vec<NodeId> = doc.children(layer.source).to_vec();
         let key = format!("plane/{}", layer.embed);
         let clip = kurbo::Rect::new(0.0, 0.0, vview.size.x as f64, vview.size.y as f64);
@@ -127,13 +274,20 @@ pub fn render_document_layer(
         });
     }
     let drawn = cx.drawn;
-    crate::perf::set_drawn(drawn as u32);
+    // A frame that rebuilt nothing leaves the last count standing.
+    if drawn > 0 || skipped == 0 {
+        crate::perf::set_drawn(drawn as u32);
+    }
 
     let mut ids: Vec<String> = changed.nodes.iter().take(LOG_IDS).map(|id| id.to_string()).collect();
     if changed.nodes.len() > LOG_IDS {
         ids.push(format!("+{} more", changed.nodes.len() - LOG_IDS));
     }
     let damage = damage.map(|r| format!("{:.0},{:.0}–{:.0},{:.0}", r.x0, r.y0, r.x1, r.y1)).unwrap_or_else(|| "none".into());
+    if drawn == 0 && skipped > 0 {
+        // Only views that show none of it: nothing rebuilt, nothing to say.
+        return;
+    }
     info!(
         "redraw ({reason}{}): {} of {drawn} nodes changed [{}]; damage {damage}",
         if changed.structure { ", structure" } else { "" },
@@ -174,16 +328,18 @@ impl Draw<'_> {
                 at = self.doc.live(n).and_then(|n| n.parent);
             }
         }
-        self.branches(b, roots, base, clip, key, depth, &allowed);
+        self.branches(b, roots, base, clip, key, depth, Some(&allowed));
     }
 
     fn number(&self, id: NodeId, leaf: &str, fallback: f64) -> f64 {
         self.store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(fallback)
     }
 
-    fn branches(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32, allowed: &std::collections::BTreeSet<NodeId>) {
+    /// Draw `roots` with their subtrees in painter order: every node, or
+    /// only those in `allowed` (a view's culled set).
+    fn branches(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32, allowed: Option<&BTreeSet<NodeId>>) {
         for &id in roots {
-            if !allowed.contains(&id) { continue; }
+            if allowed.is_some_and(|a| !a.contains(&id)) { continue; }
             let opacity = self.number(id, "appearance.opacity", 1.0).clamp(0.0, 1.0) as f32;
             let frame = iron_document::appearance::ClipFrame::read(self.store, id);
             b.opacity(opacity, clip, |b| {
@@ -192,7 +348,7 @@ impl Draw<'_> {
                     let rect = kurbo::Rect::new(0.0, 0.0, w, h);
                     let shape = if frame.ellipse {
                         use kurbo::Shape;
-                        crate::vector::Shape::Path(kurbo::Ellipse::new((w/2.0, h/2.0), (w/2.0, h/2.0), 0.0).to_path(0.1))
+                        kurbo::Ellipse::new((w/2.0, h/2.0), (w/2.0, h/2.0), 0.0).to_path(0.1).into()
                     } else { crate::vector::Shape::RoundedRect(rect.to_rounded_rect(r)) };
                     let placement = self.world(id);
                     let affine = base * placement;
@@ -205,7 +361,7 @@ impl Draw<'_> {
         }
     }
 
-    fn content(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, id: NodeId, base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32, allowed: &std::collections::BTreeSet<NodeId>) {
+    fn content(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, id: NodeId, base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32, allowed: Option<&BTreeSet<NodeId>>) {
             if nest::is_embed(self.doc, id) {
                 if depth >= nest::MAX_DEPTH {
                     return;
@@ -252,7 +408,7 @@ impl Draw<'_> {
         // What fill, stroke and shadow paint: the shape, or a text's glyphs
         // (its `shape` is its box, which only picking and outlines use).
         let painted = match &d.shape {
-            Shape2d::Text { glyphs, .. } => crate::vector::Shape::Path((**glyphs).clone()),
+            Shape2d::Text { glyphs, .. } => glyphs.clone().into(),
             _ => shape.clone(),
         };
         if let Shape2d::Slider { w, h, t } = d.shape.clone() {
@@ -281,7 +437,7 @@ impl Draw<'_> {
                     for p in paints.iter() {
                         match p {
                             iron_text::TextPaint::Fill { color, path } => {
-                                let path = crate::vector::Shape::Path((**path).clone());
+                                let path: crate::vector::Shape = path.clone().into();
                                 let brush = match color {
                                     Some(c) => Some(peniko::Color::new(*c).into()),
                                     None => node_brush.clone(),
@@ -304,7 +460,7 @@ impl Draw<'_> {
                     match &d.shape {
                         Shape2d::Path { fill: Some(f), even_odd, .. } => {
                             let rule = if *even_odd { peniko::Fill::EvenOdd } else { peniko::Fill::NonZero };
-                            b.fill_with_rule(affine, brush, rule, crate::vector::Shape::Path((**f).clone()));
+                            b.fill_with_rule(affine, brush, rule, f.clone());
                         }
                         Shape2d::Path { fill: None, .. } => {}
                         _ => b.fill(affine, brush, painted.clone()),
@@ -388,7 +544,7 @@ fn color_glyph<'a>(b: &mut crate::vector::DisplayListBuilder<'_>, at: kurbo::Aff
     while let Some(op) = ops.next() {
         match op {
             ColorOp::PushClip { transform, path } => {
-                b.clipped(at * *transform, crate::vector::Shape::Path(path.clone()), |b| color_glyph(b, at, ops, foreground));
+                b.clipped(at * *transform, path.clone(), |b| color_glyph(b, at, ops, foreground));
             }
             ColorOp::PushLayer(mode) => b.blended(*mode, |b| color_glyph(b, at, ops, foreground)),
             ColorOp::PopClip | ColorOp::PopLayer => return,
@@ -398,7 +554,7 @@ fn color_glyph<'a>(b: &mut crate::vector::DisplayListBuilder<'_>, at: kurbo::Aff
                     ColorFill::Foreground(a) => peniko::Color::new([foreground[0], foreground[1], foreground[2], foreground[3] * a]).into(),
                     ColorFill::Gradient(g) => g.clone().into(),
                 };
-                b.fill(at * *transform, brush, crate::vector::Shape::Path(path.clone()));
+                b.fill(at * *transform, brush, path.clone());
             }
         }
     }

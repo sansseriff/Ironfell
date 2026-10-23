@@ -105,11 +105,11 @@ pub(super) fn decide_modes(store: Res<super::DocumentStore>, sel: Res<crate::Sel
         for n in super::nest::lineage(doc, id) {
             live.insert(n);
         }
-        let below = doc.descendants(id);
-        if below.len() <= LIVE_BUDGET {
-            live.extend(below);
-        } else {
-            live.extend(doc.children(id).iter().copied());
+        // Counted only up to the budget: this runs every frame, and a
+        // hovered group of a large import has tens of thousands below it.
+        match doc.descendants_within(id, LIVE_BUDGET) {
+            Some(below) => live.extend(below),
+            None => live.extend(doc.children(id).iter().copied()),
         }
     }
     if modes.live != live {

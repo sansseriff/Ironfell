@@ -16,6 +16,7 @@
 
   async function opened(now: boolean) {
     if (!now) return;
+    listWatchable();
     try {
       compositions = await controllerManager.docClient.call("compositions", []);
     } catch {
@@ -38,6 +39,14 @@
   }
 
   const STRESS_SIZES = [1000, 2000, 5000, 10000, 20000];
+
+  /** The open composition views a render inspector can watch. */
+  let watchable: { id: string; title: string }[] = $state([]);
+  function listWatchable() {
+    watchable = api.panels
+      .filter((p) => (p.params as any)?.spec?.notation === "composition")
+      .map((p) => ({ id: p.id, title: p.title ?? p.id }));
+  }
 
   /** Build (or rebuild at a new size) the `stress` composition, then show
    *  its tab: the one already open, or a new one here. */
@@ -76,6 +85,13 @@
           <DropdownMenu.GroupHeading class="ui-menu-heading">Views</DropdownMenu.GroupHeading>
           {#each FIXED_VIEWS as v (v.title)}
             <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(v.title, v.spec)}>{v.title}</DropdownMenu.Item>
+          {/each}
+        </DropdownMenu.Group>
+        <DropdownMenu.Separator class="ui-menu-separator" />
+        <DropdownMenu.Group>
+          <DropdownMenu.GroupHeading class="ui-menu-heading">Render inspector</DropdownMenu.GroupHeading>
+          {#each watchable as w (w.id)}
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(`Render: ${w.title}`, { source: w.id, notation: "render-inspector" })}>Watch {w.title}</DropdownMenu.Item>
           {/each}
         </DropdownMenu.Group>
         <DropdownMenu.Separator class="ui-menu-separator" />

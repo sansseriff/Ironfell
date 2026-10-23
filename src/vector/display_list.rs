@@ -26,6 +26,27 @@ use peniko;
 
 use kurbo::{Affine, BezPath, Circle, Line, Rect, RoundedRect, Shape as _, Stroke};
 use peniko::{Color, Fill};
+use std::sync::Arc;
+
+/// A path shared with whoever made it (a packed path's cached outline, a
+/// glyph run), so building, comparing and extracting display lists never
+/// copies outlines (render-cache.md §4.2). Equal by identity first, then by
+/// content.
+#[derive(Clone, Debug)]
+pub struct SharedPath(pub Arc<BezPath>);
+
+impl PartialEq for SharedPath {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || *self.0 == *other.0
+    }
+}
+
+impl std::ops::Deref for SharedPath {
+    type Target = BezPath;
+    fn deref(&self) -> &BezPath {
+        &self.0
+    }
+}
 
 /// A drawable outline, keeping its specific type so backends can take fast paths.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,7 +55,7 @@ pub enum Shape {
     RoundedRect(RoundedRect),
     Circle(Circle),
     Line(Line),
-    Path(BezPath),
+    Path(SharedPath),
 }
 
 impl From<Rect> for Shape {
@@ -59,7 +80,12 @@ impl From<Line> for Shape {
 }
 impl From<BezPath> for Shape {
     fn from(v: BezPath) -> Self {
-        Self::Path(v)
+        Self::Path(SharedPath(Arc::new(v)))
+    }
+}
+impl From<Arc<BezPath>> for Shape {
+    fn from(v: Arc<BezPath>) -> Self {
+        Self::Path(SharedPath(v))
     }
 }
 
@@ -71,7 +97,7 @@ impl Shape {
             Self::RoundedRect(s) => s.to_path(0.1),
             Self::Circle(s) => s.to_path(0.1),
             Self::Line(s) => s.to_path(0.1),
-            Self::Path(s) => s.clone(),
+            Self::Path(s) => (*s.0).clone(),
         }
     }
 
@@ -166,6 +192,109 @@ pub enum DrawCmd {
     PopLayer,
 }
 
+/// A recorded list of commands and what is derived from it, computed once
+/// when the list changes and shared from then on: by the component, by the
+/// backend's mirror, and by every view that draws the same chunk
+/// (plans/specs/render-cache.md §4.2).
+#[derive(Debug, Default, PartialEq)]
+pub struct Recorded {
+    cmds: Vec<DrawCmd>,
+    /// Each command's bounds in layer space, `None` for scope commands
+    /// (opacity, blend, pop), which draw nothing themselves.
+    cmd_bounds: Vec<Option<Rect>>,
+    /// Their union: `None` for an empty list.
+    bounds: Option<Rect>,
+}
+
+impl Recorded {
+    /// Record what `f` draws.
+    pub fn record(f: impl FnOnce(&mut DisplayListBuilder<'_>)) -> Recorded {
+        let mut cmds = Vec::new();
+        let mut builder = DisplayListBuilder { out: &mut cmds, depth: 0 };
+        f(&mut builder);
+        debug_assert_eq!(builder.depth, 0, "unbalanced clip scope in display list build");
+        Recorded::of(cmds)
+    }
+
+    fn of(cmds: Vec<DrawCmd>) -> Recorded {
+        let cmd_bounds: Vec<Option<Rect>> = cmds.iter().map(cmd_bounds).collect();
+        let bounds = cmd_bounds.iter().flatten().copied().reduce(|a, b| a.union(b));
+        Recorded { cmds, cmd_bounds, bounds }
+    }
+
+    pub fn cmds(&self) -> &[DrawCmd] {
+        &self.cmds
+    }
+
+    /// The same commands with every colour mixed `amount` of the way toward
+    /// `tint`, alpha kept: how the render inspector colours a chunk
+    /// (plans/specs/render-inspector.md §2). Shapes and bounds are shared.
+    pub fn tinted(&self, tint: [f32; 3], amount: f32) -> Recorded {
+        use peniko::color::{DynamicColor, Srgb};
+        let mix = |c: Color| {
+            let [r, g, b, a] = c.components;
+            Color::new([r + (tint[0] - r) * amount, g + (tint[1] - g) * amount, b + (tint[2] - b) * amount, a])
+        };
+        let brush = |b: &Brush| match b {
+            Brush::Solid(c) => Brush::Solid(mix(*c)),
+            Brush::Gradient(g) => {
+                let mut g = g.clone();
+                for stop in g.stops.iter_mut() {
+                    stop.color = DynamicColor::from_alpha_color(mix(stop.color.to_alpha_color::<Srgb>()));
+                }
+                Brush::Gradient(g)
+            }
+        };
+        let cmds = self
+            .cmds
+            .iter()
+            .map(|c| match c {
+                DrawCmd::Fill { transform, brush: b, fill_rule, shape } => DrawCmd::Fill { transform: *transform, brush: brush(b), fill_rule: *fill_rule, shape: shape.clone() },
+                DrawCmd::Stroke { transform, style, brush: b, shape } => DrawCmd::Stroke { transform: *transform, style: style.clone(), brush: brush(b), shape: shape.clone() },
+                DrawCmd::BlurredRect { transform, color, rect, radius, std_dev } => DrawCmd::BlurredRect { transform: *transform, color: mix(*color), rect: *rect, radius: *radius, std_dev: *std_dev },
+                other => other.clone(),
+            })
+            .collect();
+        Recorded { cmds, cmd_bounds: self.cmd_bounds.clone(), bounds: self.bounds }
+    }
+
+    /// Each command's bounds, alongside [`Recorded::cmds`].
+    pub fn cmd_bounds(&self) -> &[Option<Rect>] {
+        &self.cmd_bounds
+    }
+
+    /// Conservative bounds of everything this list draws, in layer space.
+    ///
+    /// `None` for an empty list. Clips are treated as content rather than as
+    /// intersections, so the result can be larger than what is actually
+    /// painted — never smaller, which is the direction that keeps callers
+    /// correct. It culls a layer whose bounds miss the viewport, and is where
+    /// a damage rect and a raster's size and placement come from.
+    pub fn bounds(&self) -> Option<Rect> {
+        self.bounds
+    }
+}
+
+/// One command's bounds in layer space; see [`Recorded::bounds`].
+fn cmd_bounds(cmd: &DrawCmd) -> Option<Rect> {
+    Some(match cmd {
+        DrawCmd::Fill { transform, shape, .. } | DrawCmd::PushClip { transform, shape } => transform.transform_rect_bbox(shape.bounding_box()),
+        DrawCmd::Stroke { transform, style, shape, .. } => {
+            // Inflate by half the stroke width before mapping, so the
+            // outset is measured in the space the width is defined in.
+            let half = style.width * 0.5;
+            transform.transform_rect_bbox(shape.bounding_box().inflate(half, half))
+        }
+        DrawCmd::Texture { transform, size, .. } => transform.transform_rect_bbox(Rect::new(0.0, 0.0, size.x as f64, size.y as f64)),
+        DrawCmd::BlurredRect { transform, rect, std_dev, .. } => {
+            let pad = 3.0 * std_dev;
+            transform.transform_rect_bbox(rect.inflate(pad, pad))
+        }
+        DrawCmd::PushShadow { transform, bounds, .. } => transform.transform_rect_bbox(*bounds),
+        DrawCmd::PushOpacity { .. } | DrawCmd::PushBlend { .. } | DrawCmd::PopLayer => return None,
+    })
+}
+
 /// An ordered list of drawing commands for one layer.
 ///
 /// Held as a component and rewritten by app systems through
@@ -173,73 +302,35 @@ pub enum DrawCmd {
 /// the content actually differs. That single behaviour is what keeps an idle
 /// frame from re-encoding anything — the cheapest large win available, and the
 /// reason this type owns a scratch buffer.
+///
+/// The recording is shared ([`DisplayList::shared`]): the backend's mirror
+/// holds the same one rather than a copy, and a chunk's layers in several
+/// views hold one recording between them ([`DisplayList::set`]).
 #[derive(Component, Default, Debug)]
 pub struct DisplayList {
-    cmds: Vec<DrawCmd>,
-    /// Retained so a rebuild allocates nothing in the steady state.
+    recorded: Arc<Recorded>,
+    /// What the next rebuild records into, compared with `recorded`.
     scratch: Vec<DrawCmd>,
+}
+
+impl From<Arc<Recorded>> for DisplayList {
+    fn from(recorded: Arc<Recorded>) -> Self {
+        DisplayList { recorded, scratch: Vec::new() }
+    }
 }
 
 impl DisplayList {
     pub fn cmds(&self) -> &[DrawCmd] {
-        &self.cmds
+        &self.recorded.cmds
     }
 
-    /// Conservative bounds of everything this layer draws, in layer space.
-    ///
-    /// `None` for an empty list. Clips are treated as content rather than as
-    /// intersections, so the result can be larger than what is actually painted
-    /// — never smaller, which is the direction that keeps callers correct.
-    ///
-    /// Three things want this, in increasing order of ambition:
-    ///
-    /// 1. **Culling** (used today): skip a layer entirely when its bounds miss
-    ///    the viewport, so an off-screen layer costs no encoding at all.
-    /// 2. **Damage**: union of a layer's previous and current bounds is the
-    ///    region a change actually dirtied.
-    /// 3. **Rasterization**: a cached raster needs a size and a placement, and
-    ///    this is where both come from.
-    ///
-    /// Recomputed on demand rather than cached, because it is O(commands) over
-    /// data that is already hot and is only asked for once per rebuild. If that
-    /// stops being true, cache it next to `cmds` and invalidate in `rebuild`.
+    /// The recording, shared rather than copied.
+    pub fn shared(&self) -> Arc<Recorded> {
+        self.recorded.clone()
+    }
+
     pub fn bounds(&self) -> Option<Rect> {
-        let mut acc: Option<Rect> = None;
-        for cmd in &self.cmds {
-            let b = match cmd {
-                DrawCmd::Fill {
-                    transform, shape, ..
-                }
-                | DrawCmd::PushClip { transform, shape } => {
-                    transform.transform_rect_bbox(shape.bounding_box())
-                }
-                DrawCmd::Stroke {
-                    transform,
-                    style,
-                    shape,
-                    ..
-                } => {
-                    // Inflate by half the stroke width before mapping, so the
-                    // outset is measured in the space the width is defined in.
-                    let half = style.width * 0.5;
-                    transform.transform_rect_bbox(shape.bounding_box().inflate(half, half))
-                }
-                DrawCmd::Texture { transform, size, .. } => {
-                    transform.transform_rect_bbox(Rect::new(0.0, 0.0, size.x as f64, size.y as f64))
-                }
-                DrawCmd::BlurredRect { transform, rect, std_dev, .. } => {
-                    let pad = 3.0 * std_dev;
-                    transform.transform_rect_bbox(rect.inflate(pad, pad))
-                }
-                DrawCmd::PushShadow { transform, bounds, .. } => transform.transform_rect_bbox(*bounds),
-                DrawCmd::PushOpacity { .. } | DrawCmd::PushBlend { .. } | DrawCmd::PopLayer => continue,
-            };
-            acc = Some(match acc {
-                Some(a) => a.union(b),
-                None => b,
-            });
-        }
-        acc
+        self.recorded.bounds
     }
 }
 
@@ -356,6 +447,10 @@ pub trait DisplayListRebuild {
     /// unchanged component when the output is identical, so backends downstream
     /// can skip the work with an ordinary `Changed<DisplayList>` filter.
     fn rebuild(&mut self, f: impl FnOnce(&mut DisplayListBuilder<'_>)) -> bool;
+
+    /// Show a recording made elsewhere (a chunk's), marking the component
+    /// changed only when it is a different one.
+    fn set(&mut self, recorded: Arc<Recorded>) -> bool;
 }
 
 impl DisplayListRebuild for Mut<'_, DisplayList> {
@@ -375,10 +470,10 @@ impl DisplayListRebuild for Mut<'_, DisplayList> {
                 "unbalanced clip scope in display list build"
             );
 
-            if list.scratch == list.cmds {
+            if list.scratch == list.recorded.cmds {
                 false
             } else {
-                core::mem::swap(&mut list.cmds, &mut list.scratch);
+                list.recorded = Arc::new(Recorded::of(std::mem::take(&mut list.scratch)));
                 true
             }
         };
@@ -386,5 +481,13 @@ impl DisplayListRebuild for Mut<'_, DisplayList> {
             self.set_changed();
         }
         changed
+    }
+
+    fn set(&mut self, recorded: Arc<Recorded>) -> bool {
+        if Arc::ptr_eq(&self.recorded, &recorded) {
+            return false;
+        }
+        self.recorded = recorded;
+        true
     }
 }

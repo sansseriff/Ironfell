@@ -157,6 +157,14 @@ impl Scene {
         self.scopes.get(&scope_of(composition))?.union.map(|b| b.painted)
     }
 
+    /// A group's content in the group's own space: the union of its
+    /// scope's entries, kept current by [`Scene::update`]. `O(1)`; what a
+    /// selection frame needs without walking the subtree. `None` for a node
+    /// with no indexed content.
+    pub fn group_content(&self, group: NodeId) -> Option<Bounds> {
+        self.scopes.get(&scope_of(group))?.union
+    }
+
     pub fn record(&self, id: NodeId) -> Option<Record> {
         let e = self.entries.get(&id)?;
         Some(Record { bounds: self.bounds(id)?, order: e.order })

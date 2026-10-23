@@ -841,6 +841,11 @@ sleep 600
 drag 860 672 940 672
 sleep 600
 eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return [...v.matchAll(/<entity[^>]*name="(slider|laser)"[^>]*mode="linked"[\s\S]*?<port id="[^"]+" name="(level|power)"[^>]*signal="([^"]+)"/g)].map(m => `${m[1]} ${m[2]} ${m[3]}`); })()
+# The render inspector (plans/specs/render-inspector.md): one watching the
+# Controls tab shows that composition's chunks and how many the tab has in view.
+eval __dock.addPanel({ id: 'render-controls', component: 'view', title: 'Render: Controls', params: { spec: { source: 'controls', notation: 'render-inspector' } }, position: { referencePanel: 'controls', direction: 'right' } }).id
+sleep 1500
+eval document.querySelector('.legend')?.innerText.split('\n').slice(0, 5)
 logs applied|rejected|panicked
 errors
 quit

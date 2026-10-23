@@ -489,6 +489,18 @@ pub fn document_composition_info(ptr: u64, source: String) -> String {
 }
 
 #[wasm_bindgen]
+pub fn document_render_inspector(ptr: u64, panel: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_render_inspector(app, panel)
+}
+
+#[wasm_bindgen]
+pub fn document_render_inspector_options(ptr: u64, panel: String, options: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_render_inspector_options(app, panel, options)
+}
+
+#[wasm_bindgen]
 pub fn document_set_run_mode(ptr: u64, source: String, mode: String) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_set_run_mode(app, source, mode)

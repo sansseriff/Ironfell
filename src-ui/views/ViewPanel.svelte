@@ -6,7 +6,7 @@
   import type { DockviewPanelApi } from "dockview-core";
   import { onDestroy } from "svelte";
   import BevyPanel from "../lib/BevyPanel.svelte";
-  import { NOTATIONS, type ViewSpec } from "./views";
+  import { NOTATIONS, canvasSource, type ViewSpec } from "./views";
 
   let { id, spec, api }: { id: string; spec: ViewSpec; api: DockviewPanelApi } = $props();
 
@@ -19,13 +19,13 @@
 <div class="view" class:hybrid={def.canvas && def.html}>
   {#if def.canvas && visible}
     <div class="canvas-part">
-      <BevyPanel {id} kind={def.canvas} composition={spec.source} />
+      <BevyPanel {id} kind={def.canvas} composition={canvasSource(spec)} />
     </div>
   {/if}
   {#if def.html}
     {@const Html = def.html}
     <div class="html-part">
-      <Html {spec} />
+      <Html {spec} panel={id} />
     </div>
   {/if}
   {#if !def.canvas && !def.html}

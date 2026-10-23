@@ -44,6 +44,14 @@ pub enum LayerSpace {
 pub struct VectorLayer {
     pub space: LayerSpace,
     pub order: i32,
+    /// Painter order among layers sharing `order` in one view: a 2D panel's
+    /// chunks (plans/specs/render-cache.md §4).
+    pub sub: u32,
+    /// For a screen layer, the map from the space its commands are authored
+    /// in to window px: identity for layers authored in window px, a view's
+    /// pan and zoom for a chunk authored in its composition's space. A pan
+    /// changes this, not the commands.
+    pub affine: kurbo::Affine,
     /// The view this layer renders into on its own (an entity carrying
     /// [`VectorView`]); `None` draws into the window-sized target.
     pub view: Option<Entity>,
@@ -76,6 +84,8 @@ impl VectorLayer {
         Self {
             space: LayerSpace::Screen,
             order,
+            sub: 0,
+            affine: kurbo::Affine::IDENTITY,
             view: None,
         }
     }
@@ -90,6 +100,8 @@ impl VectorLayer {
         Self {
             space: LayerSpace::World,
             order,
+            sub: 0,
+            affine: kurbo::Affine::IDENTITY,
             view: None,
         }
     }

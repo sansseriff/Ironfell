@@ -31,7 +31,7 @@ pub struct Embed2d {
 /// A node's shape as a path in its own local space.
 pub fn shape_path(shape: &Shape2d) -> kurbo::BezPath {
     match draw_shape(shape) {
-        crate::vector::Shape::Path(p) => p,
+        crate::vector::Shape::Path(p) => (*p.0).clone(),
         other => other.to_path(),
     }
 }
@@ -51,9 +51,10 @@ pub fn draw_shape(shape: &Shape2d) -> crate::vector::Shape {
         &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } | &Shape2d::Text { w, h, .. } => Shape::Rect(kurbo::Rect::new(0.0, 0.0, w as f64, h as f64)),
         &Shape2d::Ellipse { rx, ry, arc } => {
             let arc = arc.map(|a| a.map(f64::from));
-            Shape::Path(iron_document::shape::to_bez(&iron_document::shape::ellipse_outline(rx as f64, ry as f64, arc)))
+            iron_document::shape::to_bez(&iron_document::shape::ellipse_outline(rx as f64, ry as f64, arc)).into()
         }
-        Shape2d::Path { outline, .. } => Shape::Path((**outline).clone()),
+        // The packed path's cached outline itself (packed-paths.md §2.1).
+        Shape2d::Path { outline, .. } => outline.clone().into(),
     }
 }
 
@@ -62,10 +63,86 @@ pub fn draw_shape(shape: &Shape2d) -> crate::vector::Shape {
 pub fn panel_roots(doc: &Document, view: &PanelView) -> Vec<NodeId> {
     let mut roots: Vec<NodeId> = view.composition.map(|c| doc.children(c).to_vec()).unwrap_or_default();
     if view.loose {
-        let structural = ["composition", "model", "library", "timeline", "session"].map(|t| TypeId::lookup(t).expect("registered"));
-        roots.extend(doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !structural.contains(&n.ty))));
+        roots.extend(loose_roots(doc));
     }
     roots
+}
+
+/// 2D nodes outside every composition: what the viewer draws besides its
+/// composition.
+pub fn loose_roots(doc: &Document) -> Vec<NodeId> {
+    let structural = ["composition", "model", "library", "timeline", "session"].map(|t| TypeId::lookup(t).expect("registered"));
+    doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !structural.contains(&n.ty))).collect()
+}
+
+/// Where a changed node draws, for deciding which panels rebuild
+/// (plans/specs/render-cache.md §4.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Home {
+    /// Inside this composition.
+    Composition(NodeId),
+    /// A 2D node outside every composition: the viewer draws it.
+    Loose,
+    /// No record of it: every panel rebuilds.
+    Unknown,
+}
+
+/// The composition `id` belongs to, deleted nodes included (a tombstone
+/// keeps its parent, so a deletion still finds the panels that drew it).
+pub fn home(doc: &Document, id: NodeId) -> Home {
+    let composition = TypeId::lookup("composition").expect("registered");
+    let mut cur = doc.node(id);
+    if cur.is_none() {
+        return Home::Unknown;
+    }
+    while let Some(n) = cur {
+        if n.ty == composition {
+            return Home::Composition(n.id);
+        }
+        cur = n.parent.and_then(|p| doc.node(p));
+    }
+    Home::Loose
+}
+
+/// The compositions a panel showing `root` draws: `root` and whatever its
+/// embeds show, through embeds inside those, to any depth.
+pub fn shown_compositions(doc: &Document, root: Option<NodeId>) -> std::collections::BTreeSet<NodeId> {
+    let embed = TypeId::lookup("embed").expect("registered");
+    let edges: Vec<(NodeId, NodeId)> = doc
+        .nodes_of_type(embed)
+        .filter(|&e| doc.is_live(e))
+        .filter_map(|e| Some((composition::composition_of(doc, e)?, composition::embedded(doc, e)?)))
+        .collect();
+    let mut shown = std::collections::BTreeSet::new();
+    let mut stack: Vec<NodeId> = root.into_iter().collect();
+    while let Some(c) = stack.pop() {
+        if shown.insert(c) {
+            stack.extend(edges.iter().filter(|(host, _)| *host == c).map(|(_, source)| *source));
+        }
+    }
+    shown
+}
+
+/// The embeds at or under `roots`, in painter order. Found from the
+/// document's type index, not by walking the content: this runs every
+/// frame, and the walk cost ~8 ms a frame on a 42k-node import
+/// (render-cache.md §2).
+pub fn embeds_under(doc: &Document, roots: &[NodeId]) -> Vec<NodeId> {
+    let embed = TypeId::lookup("embed").expect("registered");
+    let under = |e: NodeId| {
+        let mut at = doc.live(e);
+        while let Some(n) = at {
+            if let Some(i) = roots.iter().position(|&r| r == n.id) {
+                return Some(i);
+            }
+            at = n.parent.and_then(|p| doc.live(p));
+        }
+        None
+    };
+    // In `roots`' order, then preorder within each.
+    let mut found: Vec<(usize, Vec<&iron_document::OrderKey>, NodeId)> = doc.nodes_of_type(embed).filter_map(|e| Some((under(e)?, doc.order_path(e), e))).collect();
+    found.sort();
+    found.into_iter().map(|(.., e)| e).collect()
 }
 
 /// Preorder of `roots` and their descendants: painter order.
@@ -238,8 +315,8 @@ fn collect(
 ) {
     let doc = store.document();
     let open_through = |c: NodeId| open && composition::run_mode(doc, c) != composition::RunMode::OnDemand;
-    for id in preorder(doc, roots) {
-        if !is_embed(doc, id) || depth >= MAX_DEPTH {
+    for id in embeds_under(doc, roots) {
+        if depth >= MAX_DEPTH {
             continue;
         }
         let placement = world_2d(store, spatial, id);

@@ -40,15 +40,19 @@ const page: Page = await browser.newPage({ viewport: { width: vw, height: vh }, 
 // Console output. Playwright forwards the worker's console on the page
 // channel too, so one listener sees both. Rust logs arrive with %c colour
 // markup; strip it. `logs` prints what arrived since the last `logs` call,
-// and `errors` prints page errors.
+// and `errors` prints page errors, and any interaction work the engine
+// reported drawing a frame late (`report_late_work`), kept apart from `logs`
+// so a filtered `logs` cannot clear it.
 let logs: string[] = [];
 const errors: string[] = [];
+const late: string[] = [];
 let commandFailed = false;
 const clean = (t: string) => t.replace(/%c/g, "").replace(/ color:.*$/s, "").trim();
 page.on("pageerror", (e) => errors.push(String(e)));
 page.on("console", (m) => {
   const text = clean(m.text());
   logs.push(text);
+  if (text.includes("drawn a frame late")) late.push(text);
   // Rust panics can be caught by the frame wrapper rather than surfacing as
   // pageerror. They must still fail a smoke/benchmark run.
   if (text.includes("panicked at")) commandFailed = true;
@@ -142,9 +146,11 @@ async function run(line: string) {
       return page.mouse.move(p.x, p.y);
     }
     case "down":
-      return page.mouse.down();
-    case "up":
-      return page.mouse.up();
+    case "up": {
+      // down|up [left|right|middle]: right-drag orbits a 3D panel's camera.
+      const button = (rest[0] ?? "left") as "left" | "right" | "middle";
+      return cmd === "down" ? page.mouse.down({ button }) : page.mouse.up({ button });
+    }
     case "drag":
       return drag(n[0], n[1], n[2], n[3], n[4] || 10);
     case "ddrag": {
@@ -421,9 +427,11 @@ async function run(line: string) {
       const re = rest.length ? new RegExp(rest.join(" ")) : null;
       return out(logs.filter((l) => !re || re.test(l)).join("\n") || "(no matching console output)");
     }
-    case "errors":
-      if (errors.length) commandFailed = true;
-      return out(errors.join("\n") || "(no page errors)");
+    case "errors": {
+      if (errors.length || late.length) commandFailed = true;
+      const lateLines = late.splice(0).map((l) => `late: ${l}`);
+      return out([...lateLines, errors.join("\n") || "(no page errors)"].join("\n"));
+    }
     case "quit":
       await browser.close();
       process.exit(commandFailed ? 1 : 0);

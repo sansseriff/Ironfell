@@ -7,10 +7,12 @@
 //! It carries [`Reserved`], which cannot be constructed anywhere.
 
 use crate::expr::Expr;
+use crate::geometry::Geometry;
 use crate::id::NodeId;
 use crate::sym::intern;
 use crate::units::{self, Dim};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -36,6 +38,10 @@ pub enum Value {
     /// names its schema; fields are read with `Expr::Get` (`beam.waist`).
     /// Field order is canonical (sorted), so files and views are stable.
     Record { kind: &'static str, fields: BTreeMap<&'static str, Value> },
+    /// A path's outlines, packed (plans/specs/packed-paths.md). Shared, so
+    /// copies of a document or an op never copy the anchors. Constant only:
+    /// no expression produces one.
+    Geometry(Arc<Geometry>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -50,6 +56,7 @@ pub enum ValueKind {
     Ref,
     Quantity,
     Record,
+    Geometry,
     /// Only as a declared field kind: the field accepts any value. Used by
     /// clip endpoints, whose kind is the target leaf's. No value has it.
     Any,
@@ -67,6 +74,7 @@ impl ValueKind {
         ValueKind::Ref,
         ValueKind::Quantity,
         ValueKind::Record,
+        ValueKind::Geometry,
         ValueKind::Any,
     ];
 
@@ -86,6 +94,7 @@ impl ValueKind {
             ValueKind::Ref => "ref",
             ValueKind::Quantity => "quantity",
             ValueKind::Record => "record",
+            ValueKind::Geometry => "geometry",
             ValueKind::Any => "any",
         }
     }
@@ -104,6 +113,7 @@ impl Value {
             Value::Ref(_) => ValueKind::Ref,
             Value::Quantity { .. } => ValueKind::Quantity,
             Value::Record { .. } => ValueKind::Record,
+            Value::Geometry(_) => ValueKind::Geometry,
         }
     }
 
@@ -184,6 +194,13 @@ impl Value {
     pub fn as_color(&self) -> Option<[f32; 4]> {
         match self {
             Value::Color(c) => Some(*c),
+            _ => None,
+        }
+    }
+
+    pub fn as_geometry(&self) -> Option<&Arc<Geometry>> {
+        match self {
+            Value::Geometry(g) => Some(g),
             _ => None,
         }
     }
@@ -269,6 +286,8 @@ impl Value {
                         }
                         _ => Err("rec must be [\"kind\", {fields}]".to_owned()),
                     },
+                    // `{"geo": [[closed, [x, y, ix, iy, ox, oy, …]], …]}`.
+                    "geo" => Geometry::from_json(inner).map(|g| Value::Geometry(Arc::new(g))),
                     other => Err(format!("unknown value tag {other:?}")),
                 }
             }
@@ -329,6 +348,7 @@ impl fmt::Display for Value {
                 }
                 f.write_str("}")
             }
+            Value::Geometry(g) => write!(f, "{g}"),
         }
     }
 }
@@ -374,6 +394,11 @@ impl Serialize for Value {
                 let fields: BTreeMap<&str, &Value> = fields.iter().map(|(k, v)| (*k, v)).collect();
                 let mut m = s.serialize_map(Some(1))?;
                 m.serialize_entry("rec", &(kind, fields))?;
+                m.end()
+            }
+            Value::Geometry(g) => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("geo", &g.to_json())?;
                 m.end()
             }
         }

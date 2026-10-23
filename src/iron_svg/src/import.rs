@@ -14,13 +14,15 @@
 //! group with an `id`, or with several children, becomes a `group`.
 
 use crate::{round4, Cut, Cuts};
-use iron_document::facet::{Appearance, Arc, Contour, Corners, Fill, Handles, Name, PathShape, Radius, Shadow, Size, Stroke, Transform2d};
+use iron_document::facet::{Appearance, Arc as ArcFacet, Corners, Fill, Name, PathShape, Radius, Shadow, Size, Stroke, Transform2d};
 use iron_document::copy::Fragment;
+use iron_document::geometry::{Geometry, PackedContour};
 use iron_document::shape::{self, Anchor};
 use iron_document::{Actor, Affine2, Facet, LeafStruct, NodeId, Op, OrderKey, Slot, Store, TransactionInput, TypeId, Value};
 use kurbo::{Affine, Point, Vec2};
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
+use std::sync::Arc;
 use usvg::roxmltree;
 
 /// What an import makes, and what it could not carry.
@@ -29,8 +31,10 @@ pub struct Imported {
     /// The new nodes; paste it with `iron_document::copy::paste`.
     pub fragment: Fragment,
     pub cuts: Vec<Cut>,
-    /// How many nodes it creates, points included.
+    /// How many nodes it creates.
     pub nodes: usize,
+    /// How many path anchors they hold, packed (not nodes).
+    pub anchors: usize,
 }
 
 /// Whether pasted text is SVG rather than an Iron fragment or prose.
@@ -49,6 +53,11 @@ struct INode {
 impl INode {
     fn count(&self) -> usize {
         1 + self.kids.iter().map(INode::count).sum::<usize>()
+    }
+
+    fn anchors(&self) -> usize {
+        let own = self.comps.iter().filter_map(|c| c.get("d")).filter_map(|s| s.constant()).filter_map(Value::as_geometry).map(|g| g.anchor_count()).sum::<usize>();
+        own + self.kids.iter().map(INode::anchors).sum::<usize>()
     }
 }
 
@@ -99,8 +108,9 @@ pub fn import(text: &str) -> Result<Imported, String> {
         return Err(if cuts.is_empty() { "the SVG draws nothing Iron can import".into() } else { format!("the SVG draws nothing Iron can import: {}", cuts.join("; ")) });
     }
     let count = nodes.iter().map(INode::count).sum();
+    let anchors = nodes.iter().map(INode::anchors).sum();
     let fragment = fragment(nodes, count)?;
-    Ok(Imported { fragment, cuts, nodes: count })
+    Ok(Imported { fragment, cuts, nodes: count, anchors })
 }
 
 /// The nodes as a fragment: created in a scratch store, which checks them
@@ -134,7 +144,7 @@ fn fragment(nodes: Vec<INode>, count: usize) -> Result<Fragment, String> {
     store
         .apply(TransactionInput { label: "import SVG".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false })
         .map_err(|e| format!("the import did not apply: {e:?}"))?;
-    Ok(Fragment { doc: store.document().clone(), roots, extras: Vec::new(), homes, parent_world, externals: BTreeMap::new(), origin: "svg".into(), dropped: Vec::new() })
+    Ok(Fragment { doc: store.into_document(), roots, extras: Vec::new(), homes, parent_world, externals: BTreeMap::new(), origin: "svg".into(), dropped: Vec::new() })
 }
 
 fn affine(t: usvg::Transform) -> Affine {
@@ -339,14 +349,6 @@ fn usvg_contours(p: &usvg::Path) -> Vec<(Vec<Anchor>, bool)> {
         }
     }
     c.finish()
-}
-
-fn point_node(a: &Anchor) -> INode {
-    let mut t = Transform2d::default();
-    (t.x, t.y) = (n(a.at.x), n(a.at.y));
-    let mut h = Handles::default();
-    (h.ix, h.iy, h.ox, h.oy) = (n(a.inn.x), n(a.inn.y), n(a.out.x), n(a.out.y));
-    INode { ty: "point", comps: vec![t.wrap(), h.wrap()], kids: Vec::new() }
 }
 
 struct Ctx<'a, 'input> {
@@ -580,7 +582,7 @@ impl<'a, 'input> Ctx<'a, 'input> {
                     (r.rx, r.ry) = (n(rx), n(ry));
                     let mut comps = vec![r.wrap()];
                     if let Some(&[start, sweep, inner]) = attr_nums(el, "data-iron-arc").as_deref() {
-                        let mut a = Arc::default();
+                        let mut a = ArcFacet::default();
                         (a.start, a.sweep, a.inner) = (n(start), n(sweep), n(inner));
                         comps.push(a.wrap());
                     }
@@ -670,18 +672,15 @@ impl<'a, 'input> Ctx<'a, 'input> {
         if evenodd && contours.len() > 1 {
             ps.fill_rule = Slot::Const(Value::Enum("evenodd".into()));
         }
+        // Packed (plans/specs/packed-paths.md): the anchors are one value,
+        // point nodes only once someone edits them.
+        let anchors = contours.into_iter().map(|(anchors, closed)| PackedContour { closed, anchors }).collect();
+        ps.d = Slot::Const(Value::Geometry(Arc::new(Geometry::new(anchors))));
         let mut comps = vec![transform2d(t), ps.wrap()];
         comps.extend(paint);
         comps.extend(extra);
-        let kids = contours.iter().map(|(run, closed)| contour_node(run, *closed)).collect();
-        out.push(INode { ty: "path", comps, kids });
+        out.push(INode { ty: "path", comps, kids: Vec::new() });
     }
-}
-
-fn contour_node(run: &[Anchor], closed: bool) -> INode {
-    let mut c = Contour::default();
-    c.closed = Slot::Const(Value::Bool(closed));
-    INode { ty: "contour", comps: vec![c.wrap()], kids: run.iter().map(point_node).collect() }
 }
 
 /// Whether every sampled point of `b` lies within `tol` of `a`.

@@ -536,8 +536,9 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
 /// The piston demo (vision 10 §4, phase 4). A 3D composition `cylinder`:
 /// a translucent `chamber` (a unit cylinder scaled to radius 0.6, length 3,
 /// along X), a `piston` disc whose position is bound to the `stroke`
-/// slider, and a `rod` bound to the piston. A 2D composition `piston`
-/// shows it through an embed, with the slider and two gauges. The gas is
+/// slider, a `rod` bound to the piston, and a `camera`. A 2D composition
+/// `piston` shows it through an embed that looks through the camera, with
+/// the slider and two gauges. The gas is
 /// Bevy's (`document_bridge::gas`): particles with no document nodes,
 /// bouncing in the chamber; the pressure they put on the piston face is
 /// published onto the library's `pressure` input every frame, as a
@@ -573,9 +574,9 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     let bound = |e: String| Slot::Bound(Expr::parse(&e).expect("demo binding"));
     let v3 = |v: [f64; 3]| Slot::Const(Value::Vec3(v));
     // In creation order: ids must ascend with the ops that mint them.
-    let ids = scratch.document().next_ids(13);
-    let (gas_def, pressure, cylinder, chamber, piston, rod) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5]);
-    let (comp, view, stroke, p_frame, p_bar, pv_frame, pv_bar) = (ids[6], ids[7], ids[8], ids[9], ids[10], ids[11], ids[12]);
+    let ids = scratch.document().next_ids(14);
+    let (gas_def, pressure, cylinder, chamber, piston, rod, camera) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6]);
+    let (comp, view, stroke, p_frame, p_bar, pv_frame, pv_bar) = (ids[7], ids[8], ids[9], ids[10], ids[11], ids[12], ids[13]);
     let mut ops = Vec::new();
 
     // The signal's host: an input of a `gas` definition in the library.
@@ -598,6 +599,7 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     let k0 = OrderKey::first();
     let k1 = OrderKey::after(&k0);
     let k2 = OrderKey::after(&k1);
+    let k3 = OrderKey::after(&k2);
     // The chamber: axis along +X (a unit cylinder is along Y; rotated by
     // −90° about Z, so its local +Y is world +X and the closed end is at
     // x = −1.5), radius 0.6, length 3, centred at (0, 1.2, 0).
@@ -617,6 +619,17 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     t.pos = bound(format!("{piston}.transform3d.pos + [0.9, 0, 0]"));
     t.scale = v3([1.7, 0.12, 0.12]);
     ops.push(Op::Create { id: rod, ty: ty("mesh"), parent: Some(cylinder), order: k2, facets: vec![t.wrap(), mesh("cube"), fill([0.5, 0.5, 0.55, 1.0]), named("rod")] });
+    // The camera, fixed: the derived default view's direction (from above
+    // and in front, pitched down 0.574 rad), aimed at (0.75, 1.2, 0), the
+    // middle of the chamber's closed end (x = −1.5) and the rod's tip at
+    // stroke 0 (x ≈ 3.05), and far enough back to hold both with margin.
+    // Its aspect is the embed's (620 × 340), so the embed keeps its shape.
+    let mut t = Transform3d::default();
+    t.pos = v3([0.75, 3.59, 3.7]);
+    t.rot = v3([-0.574, 0.0, 0.0]);
+    let mut lens = iron_document::facet::Camera::default();
+    lens.aspect = n(620.0 / 340.0);
+    ops.push(Op::Create { id: camera, ty: ty("camera"), parent: Some(cylinder), order: k3, facets: vec![t.wrap(), lens.wrap(), named("camera")] });
 
     // The 2D composition: the view, the stroke slider and the gauges.
     let mut c = Composition::default();
@@ -636,7 +649,9 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
         key = OrderKey::after(&key);
         k
     };
-    ops.push(Op::Create { id: view, ty: ty("embed"), parent: Some(comp), order: order(), facets: vec![e.wrap(), t.wrap(), s.wrap(), named("cylinder view")] });
+    let mut through = iron_document::facet::EmbedCamera::default();
+    through.camera = Slot::Const(Value::Ref(camera));
+    ops.push(Op::Create { id: view, ty: ty("embed"), parent: Some(comp), order: order(), facets: vec![e.wrap(), t.wrap(), s.wrap(), through.wrap(), named("cylinder view")] });
     let mut sl = Slider::default();
     sl.value = n(0.2);
     let mut t = Transform2d::default();

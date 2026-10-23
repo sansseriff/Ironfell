@@ -428,6 +428,10 @@ impl SelectTool {
         self.gizmo.as_ref()
     }
 
+    pub(crate) fn gizmo_mut(&mut self) -> Option<&mut Gizmo3d> {
+        self.gizmo.as_mut()
+    }
+
     /// The guides the current move lines up along.
     pub(crate) fn snap_guides(&self) -> &[iron_spatial::snap::Guide] {
         match &self.gesture {
@@ -576,6 +580,9 @@ pub(crate) struct Part {
     bounds: Rect,
     /// A path's points: id, position, in and out handles (path space).
     points: Vec<(NodeId, Point, kurbo::Vec2, kurbo::Vec2)>,
+    /// A packed path's geometry instead (packed-paths.md §5): a resize
+    /// writes it whole, as `path.d`.
+    packed: Option<std::sync::Arc<iron_document::geometry::Geometry>>,
 }
 
 /// Read access to everything geometry needs.
@@ -821,8 +828,9 @@ impl Geo<'_> {
             return;
         }
         let parent = self.doc().live(id).and_then(|n| n.parent).map_or(Affine::IDENTITY, |p| self.world(p));
-        let points = if kind == Kind::Points { self.points(id) } else { Vec::new() };
-        out.push(Part { id, kind, parent: space * parent, trs: self.trs(id), bounds, points });
+        let packed = (kind == Kind::Points).then(|| iron_document::contour::packed(self.doc(), id).cloned()).flatten();
+        let points = if kind == Kind::Points && packed.is_none() { self.points(id) } else { Vec::new() };
+        out.push(Part { id, kind, parent: space * parent, trs: self.trs(id), bounds, points, packed });
     }
 
     /// A path's points, contour after contour, in order: id, position, in
@@ -1012,10 +1020,8 @@ impl Part {
                 put("frame.y1", self.bounds.y1, r.y1);
             }
             (true, Kind::Points) => {
-                // Path space to path space; handles take the linear part.
-                let m = l.inverse() * q * l;
-                let [a0, b0, c0, d0, _, _] = m.as_coeffs();
-                let lin = |v: kurbo::Vec2| kurbo::Vec2::new(a0 * v.x + c0 * v.y, b0 * v.x + d0 * v.y);
+                let m = self.path_map(a);
+                let lin = linear(m);
                 for &(pid, p, hi, ho) in &self.points {
                     let np = m * p;
                     out.push((pid, "transform2d.x", np.x));
@@ -1038,7 +1044,32 @@ impl Part {
     }
 }
 
+/// An affine's linear part, for handles, which are offsets.
+fn linear(m: Affine) -> impl Fn(kurbo::Vec2) -> kurbo::Vec2 {
+    let [a0, b0, c0, d0, _, _] = m.as_coeffs();
+    move |v| kurbo::Vec2::new(a0 * v.x + c0 * v.y, b0 * v.x + d0 * v.y)
+}
+
 impl Part {
+    /// What a resize by `a` does to a path's points: path space to path
+    /// space. Its transform stays; the points move and the handles take the
+    /// linear part, so the stroke keeps its width.
+    fn path_map(&self, a: Affine) -> Affine {
+        let [x, y, rot, sx, sy] = self.trs;
+        let q = self.parent.inverse() * a * self.parent;
+        let l = Affine::translate((x, y)) * Affine::rotate(rot) * Affine::scale_non_uniform(sx, sy);
+        l.inverse() * q * l
+    }
+
+    /// The geometry a resize by `a` gives a packed path: its `path.d`,
+    /// written whole. `None` for anything else.
+    pub(crate) fn packed_d(&self, a: Affine, resize: bool) -> Option<(NodeId, iron_document::geometry::Geometry)> {
+        let g = self.packed.as_ref().filter(|_| resize && self.kind == Kind::Points)?;
+        let m = self.path_map(a);
+        let lin = linear(m);
+        Some((self.id, g.map_anchors(|p| iron_document::shape::Anchor { at: m * p.at, inn: lin(p.inn), out: lin(p.out) })))
+    }
+
     /// The sizing a resize by `a` gives a text node (`Kind::Text`): fixed
     /// once its height changes, auto height once an auto-width text's width
     /// does, else as it was. `None` for anything else.
@@ -1251,7 +1282,7 @@ pub(crate) const SNAP_REACH: f64 = 5.0;
 fn snap_box(geo: &Geo, chain: &[NodeId]) -> Option<Rect> {
     let id = *chain.last()?;
     if geo.ty(id) == "path" {
-        let b = crate::document_bridge::path_outline(geo.store, id).bounding_box();
+        let b = iron_document::contour::geometry(geo.store, id).bounds();
         return Some((geo.space(chain)? * geo.world(id)).transform_rect_bbox(b));
     }
     Some(geo.frame(chain)?.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)))
@@ -1538,11 +1569,13 @@ pub fn select_tool_system(
             tool.hover = None;
         }
         // Editing lasts while its path is the whole selection, and a path
-        // (or about to be: a rect's conversion still pending).
+        // with point nodes (or about to be: a rect's conversion or a packed
+        // path's expansion still pending). Undoing the expansion leaves.
         if let Some(r) = &edit.reach {
             let id = r.node();
-            let converting = pending.0.iter().any(|t| t.ops.iter().any(|o| matches!(o, Op::Create { id: c, .. } if *c == id)));
-            if sel.selected != [id] || !(doc.live(id).is_some_and(|n| n.ty.name() == "path") || converting) {
+            let converting = pending.0.iter().any(|t| t.ops.iter().any(|o| matches!(o, Op::Create { id: c, .. } if *c == id) || matches!(o, Op::Set { id: c, path, .. } if *c == id && path.facet == iron_document::FacetKind::PathShape)));
+            let editable = doc.live(id).is_some_and(|n| n.ty.name() == "path") && iron_document::contour::packed(doc, id).is_none();
+            if sel.selected != [id] || !(editable || converting) {
                 *edit = PathEdit::default();
             }
         }
@@ -1584,6 +1617,7 @@ pub fn select_tool_system(
             // Esc leaves editing a path, keeping it selected.
             "escape" if edit.reach.is_some() => *edit = PathEdit::default(),
             "enter" if !shift && edit.reach.is_none() && reaches.len() == 1 && doc.live(reaches[0].node()).is_some_and(|n| n.ty.name() == "path") => {
+                expand_points(&store.0, &mut pending, reaches[0].node());
                 *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
             }
             "escape" | "enter" if key == "escape" || shift => {
@@ -2197,6 +2231,7 @@ pub fn select_tool_system(
             } else if dbl && sel.selected == [chain[k]] && geo.ty(chain[k]) == "path" {
                 // A double-click on a lone path edits its points.
                 tool.last_click = None;
+                expand_points(&store.0, &mut pending, chain[k]);
                 *edit = PathEdit { reach: Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() }), point: None };
                 break 'press;
             } else if dbl && sel.selected == [chain[k]] && iron_document::shape::convertible(&store.0, chain[k]) {
@@ -2765,6 +2800,16 @@ pub(crate) fn shape_grip_writes(geo: &Geo, id: NodeId, grip: ShapeGrip, p: Point
     }
 }
 
+/// Edit a path's points: a packed one gets its point nodes first, in one
+/// transaction that one undo takes back (packed-paths.md §4), as a rect's
+/// conversion is.
+fn expand_points(store: &Store, pending: &mut PendingTransactions, id: NodeId) {
+    let ops = iron_document::contour::expand_points(store, id);
+    if !ops.is_empty() {
+        pending.0.push(TransactionInput { label: "edit points".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
+    }
+}
+
 /// Edit a rect's or an ellipse's points: it becomes a path with the same id,
 /// in one transaction (`iron_document::shape`). When that would cut a
 /// binding or a clip, the shell asks first and converts on a yes.
@@ -3186,7 +3231,7 @@ pub fn draw_select_overlay(
                     let path = r.node();
                     let to_screen = to_screen * space * geo.world(path);
                     let outline = crate::document_bridge::path_outline(geo.store, path);
-                    b.stroke(Affine::IDENTITY, thin.clone(), peniko::Color::new(EDIT_OUTLINE), to_screen * outline);
+                    b.stroke(Affine::IDENTITY, thin.clone(), peniko::Color::new(EDIT_OUTLINE), to_screen * &*outline);
                     let points = geo.points(path);
                     for (pid, out) in geo.shown_handles(path, edit.point) {
                         if let Some(&(_, p, hi, ho)) = points.iter().find(|q| q.0 == pid) {

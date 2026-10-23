@@ -386,18 +386,19 @@ impl Writer<'_> {
             }
             _ => {
                 // Each contour a subpath; the fill rule decides the holes.
-                let contours = contour::contours(self.store, id);
-                if contours.iter().all(|c| c.points.len() < 2) {
+                let geometry = contour::geometry(self.store, id);
+                let contours = geometry.contours();
+                if contours.iter().all(|c| c.anchors.len() < 2) {
                     self.cuts.add(format!("path {id} has fewer than two points and is left out"));
                     return;
                 }
                 if contour::fill_rule(self.store, id) == contour::FillRule::EvenOdd {
                     attrs.push(("fill-rule", "evenodd".into()));
                 }
-                let outline = contour::outline(&contours);
+                let outline = (**geometry.outline()).clone();
                 attrs.insert(0, ("d", path_d(&outline)));
-                open_filled = contours.iter().any(|c| c.points.len() >= 2 && !contour::draws_closed(c)) && contours.iter().any(contour::draws_closed);
-                fill_outline = Some(contour::fill_outline(&contours));
+                open_filled = contours.iter().any(|c| c.anchors.len() >= 2 && !c.draws_closed()) && contours.iter().any(|c| c.draws_closed());
+                fill_outline = Some((**geometry.fill_outline()).clone());
                 ("path", outline)
             }
         };
@@ -665,7 +666,7 @@ impl Writer<'_> {
                 "slider" => Some(Rect::new(0.0, 0.0, self.f(n, "size.w", 200.0), self.f(n, "size.h", 24.0))),
                 "text" => Some(iron_document::text::measure(self.store, n).frame),
                 "path" => {
-                    let pts: Vec<Point> = contour::contours(self.store, n).into_iter().flat_map(|c| c.points).map(|p| p.1.at).collect();
+                    let pts: Vec<Point> = contour::geometry(self.store, n).contours().iter().flat_map(|c| &c.anchors).map(|a| a.at).collect();
                     pts.iter().map(|&p| Rect::from_points(p, p)).reduce(|a, b| a.union(b))
                 }
                 _ => None,

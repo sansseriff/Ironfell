@@ -316,9 +316,11 @@ fn the_round_trip_law() {
     let doc = fresh.document();
     let types: Vec<&str> = doc.children(target).iter().map(|&c| doc.live(c).unwrap().ty.name()).collect();
     assert_eq!(types, ["group", "rect", "ellipse", "ellipse", "ellipse", "path", "path", "path"]);
-    // The frame keeps both contours and its rule.
+    // The frame keeps both contours and its rule, packed (packed-paths.md):
+    // no point nodes until someone edits them.
     let frame = *doc.children(target).last().unwrap();
-    assert_eq!(iron_document::contour::contours(&fresh, frame).len(), 2);
+    assert_eq!(iron_document::contour::geometry(&fresh, frame).contours().len(), 2);
+    assert!(doc.children(frame).is_empty());
     assert_eq!(iron_document::contour::fill_rule(&fresh, frame), iron_document::contour::FillRule::EvenOdd);
 }
 
@@ -373,9 +375,10 @@ fn figma_copy_as_svg_imports_editable() {
     assert_eq!(store.resolved(circle, "fill.color".parse().unwrap()), Some(Value::Color([1.0, 92.0 / 255.0, 0.0, 1.0])));
     // A line: open, stroked, not filled, two points.
     let line = roots[2];
-    assert_eq!(store.resolved(kids_of(&store, line)[0], "contour.closed".parse().unwrap()), Some(Value::Bool(false)));
+    let g = iron_document::contour::geometry(&store, line);
+    assert!(!g.contours()[0].closed);
     assert_eq!(f(&store, line, "stroke.width"), 2.0);
-    assert_eq!(kids_of(&store, kids_of(&store, line)[0]).len(), 2);
+    assert_eq!(g.contours()[0].anchors.len(), 2);
     assert_eq!(store.resolved(line, "stroke.cap".parse().unwrap()), Some(Value::Enum("butt".into())));
     // A sharp-cornered square has no corners facet.
     assert!(store.resolved(roots[3], "corners.tl".parse().unwrap()).is_none());
@@ -444,18 +447,17 @@ fn nested_transforms_use_and_skew() {
     // The skewed one bakes the skew into its points: the top edge shifts.
     let skewed = roots[1];
     assert_eq!(ty_of(&store, skewed), "path");
-    let pts = kids_of(&store, kids_of(&store, skewed)[0]);
-    let xs: Vec<f64> = pts.iter().map(|&p| f(&store, p, "transform2d.x")).collect();
+    let xs: Vec<f64> = iron_document::contour::geometry(&store, skewed).contours()[0].anchors.iter().map(|a| a.at.x).collect();
     assert_eq!(xs, [0.0, 10.0, 15.7735, 5.7735]);
     // The donut: one path, two contours, the even-odd rule: a hole.
     let donut = roots[2];
     assert_eq!(ty_of(&store, donut), "path");
-    assert_eq!(kids_of(&store, donut).len(), 2);
+    assert_eq!(iron_document::contour::geometry(&store, donut).contours().len(), 2);
     assert_eq!(iron_document::contour::fill_rule(&store, donut), iron_document::contour::FillRule::EvenOdd);
     assert!(!imported.cuts.iter().any(|c| c.contains("hole")), "{:?}", imported.cuts);
     // An arc and a quadratic become cubics.
     let curve = roots[3];
-    assert!(kids_of(&store, kids_of(&store, curve)[0]).iter().any(|&p| f(&store, p, "handles.ox") != 0.0));
+    assert!(iron_document::contour::geometry(&store, curve).contours()[0].anchors.iter().any(|a| a.out.x != 0.0));
 }
 
 #[test]

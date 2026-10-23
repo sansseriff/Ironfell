@@ -11,12 +11,15 @@ which plans are historical. Where plans disagree, that index decides.
   expected output in `.claude/skills/run-iron/SKILL.md` current.
 - Record completed work in `plans/roadmap.md`'s Status table and the owning plan.
 - Don't push. End commit messages with the `Co-Authored-By` line the session gives you.
+- Check in with the user before running a step that takes over a minute: rebuilds,
+  the full smoke, cold test runs. Typical times are in the run-iron skill's
+  "Typical durations" table (marked ⏱); say which step and its estimate, and add or
+  correct a row when a step's time is new or off.
 
 ## Worktrees
 
-Before starting substantial work, ask the user whether it should be done in a
-worktree. Small-scale work may be done in the main checkout without asking.
-Do not assume that worktree isolation is required.
+Do work in the currently checked-out branch. Only do work in a worktree if the user
+requests one; don't ask.
 
 Worktrees for this repo live in **`.agents/worktrees/<name>`**, inside the repo and
 gitignored. Never create a worktree in `/tmp`, in a session scratchpad, or anywhere

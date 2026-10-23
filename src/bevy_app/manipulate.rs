@@ -503,6 +503,14 @@ impl Manip {
                         cx.store.preview(id, path, iron_document::Value::Enum(sizing.into()));
                     }
                 }
+                // A packed path's points are one value; as `preview_writes`
+                // does for numbers, an unchanged one is not previewed.
+                for (id, d) in t.parts.iter().filter_map(|part| part.packed_d(a, resize)) {
+                    let path = "path.d".parse().expect("declared leaf");
+                    if cx.store.resolved(id, path).as_ref().and_then(iron_document::Value::as_geometry).is_none_or(|g| **g != d) {
+                        cx.store.preview(id, path, iron_document::Value::Geometry(std::sync::Arc::new(d)));
+                    }
+                }
                 preview_writes(cx.store, writes);
             }
             Manip::PathHandle { point, out, to_local, at } => {
@@ -701,6 +709,9 @@ pub(crate) struct Gizmo3d {
     pub clip: kurbo::Rect,
     /// This frame's interaction result, for `Manip::Gizmo` to preview.
     pub last: Option<(transform_gizmo::GizmoResult, Vec<transform_gizmo::math::Transform>)>,
+    /// What `frame` fed it, minus the press: the pointer in window px,
+    /// hovered, dragging. `reproject` replays it.
+    fed: Option<(Point, bool, bool)>,
 }
 
 /// The gizmo's modes: translation along axes and in planes, rotation about
@@ -747,21 +758,60 @@ fn rows(m: bevy::math::DMat4) -> transform_gizmo::mint::RowMatrix4<f64> {
 
 impl Gizmo3d {
     pub fn new(panel: String, camera: Entity, targets: Vec<NodeId>) -> Gizmo3d {
-        Gizmo3d { gizmo: transform_gizmo::Gizmo::default(), panel, camera, targets, to_camera: Affine::IDENTITY, clip: kurbo::Rect::ZERO, last: None }
+        Gizmo3d { gizmo: transform_gizmo::Gizmo::default(), panel, camera, targets, to_camera: Affine::IDENTITY, clip: kurbo::Rect::ZERO, last: None, fed: None }
     }
 
     /// Configure for this frame's camera and targets, and feed it the
     /// pointer: `dragging` while a gizmo gesture holds the button. Leaves the
     /// result in `last`; `false` when the camera or a target is gone.
     pub fn frame(&mut self, store: &Store, pointer: &crate::PointerState, cameras: &DragCameras, clip: kurbo::Rect, dpr: f32, dragging: bool) -> bool {
-        let Ok((_, camera, cam_tf, rect, to_camera)) = cameras.get(self.camera) else { return false };
-        let Some(rect) = rect else { return false };
+        let Some(transforms) = self.configure(store, cameras, clip, dpr) else { return false };
+        let screen = Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
+        let at = self.to_camera * screen;
+        let over = clip.contains(screen);
+        let interaction = transform_gizmo::GizmoInteraction {
+            cursor_pos: (at.x as f32, at.y as f32),
+            hovered: over || dragging,
+            drag_started: pointer.just_pressed_left && over,
+            dragging: pointer.buttons.left && (dragging || pointer.just_pressed_left),
+        };
+        self.fed = Some((screen, interaction.hovered, interaction.dragging));
+        self.last = self.gizmo.update(interaction, &transforms);
+        true
+    }
+
+    /// Re-pose it for drawing, once this frame's camera and embed placement
+    /// are final: `frame` runs in the select tool, before a camera moved
+    /// this frame has propagated and before a 3D embed's camera follows a
+    /// pan, so drawn from there it trails the 3D view by a frame. The crate
+    /// re-poses only in `update`, so this replays what `frame` fed it,
+    /// without the press: the same focus, seen through the final camera.
+    /// Not during a gizmo drag: the crate's subgizmos apply each update's
+    /// delta to the current transform, so a replay would take up motion that
+    /// `frame`'s preview never applied (and the view holds still then, the
+    /// button being the gizmo's).
+    pub fn reproject(&mut self, store: &Store, cameras: &DragCameras, clip: kurbo::Rect, dpr: f32) {
+        let Some((screen, hovered, dragging)) = self.fed else { return };
+        if dragging || self.last.is_some() {
+            return;
+        }
+        let Some(transforms) = self.configure(store, cameras, clip, dpr) else { return };
+        let at = self.to_camera * screen;
+        let interaction = transform_gizmo::GizmoInteraction { cursor_pos: (at.x as f32, at.y as f32), hovered, drag_started: false, dragging: false };
+        self.gizmo.update(interaction, &transforms);
+    }
+
+    /// Point it through the camera as it is now, at the targets' resolved
+    /// transforms (`None` when the camera or a target is gone).
+    fn configure(&mut self, store: &Store, cameras: &DragCameras, clip: kurbo::Rect, dpr: f32) -> Option<Vec<transform_gizmo::math::Transform>> {
+        let Ok((_, camera, cam_tf, rect, to_camera)) = cameras.get(self.camera) else { return None };
+        let rect = rect?;
         self.to_camera = match to_camera {
             Some(p) => p.0,
             None => Affine::translate((-(rect.pos.x as f64), -(rect.pos.y as f64))),
         };
         self.clip = clip;
-        let Some(transforms) = self.targets.iter().map(|&id| target_transform(store, id)).collect::<Option<Vec<_>>>() else { return false };
+        let transforms = self.targets.iter().map(|&id| target_transform(store, id)).collect::<Option<Vec<_>>>()?;
         let scale = (self.to_camera.determinant().abs().sqrt() as f32).max(1e-3);
         let config = transform_gizmo::GizmoConfig {
             view_matrix: rows(cam_tf.to_matrix().inverse().as_dmat4()),
@@ -775,16 +825,7 @@ impl Gizmo3d {
             ..Default::default()
         };
         self.gizmo.update_config(config);
-        let at = self.to_camera * Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
-        let over = clip.contains(Point::new(pointer.screen.x as f64, pointer.screen.y as f64));
-        let interaction = transform_gizmo::GizmoInteraction {
-            cursor_pos: (at.x as f32, at.y as f32),
-            hovered: over || dragging,
-            drag_started: pointer.just_pressed_left && over,
-            dragging: pointer.buttons.left && (dragging || pointer.just_pressed_left),
-        };
-        self.last = self.gizmo.update(interaction, &transforms);
-        true
+        Some(transforms)
     }
 
     /// Whether the pointer is over one of its handles.
@@ -835,14 +876,33 @@ impl Gizmo3d {
 pub(crate) struct GizmoOverlay;
 
 /// Draw the gizmo in its own overlay vector view over its panel; gone with
-/// the gizmo. The list is rebuilt every frame, and only a changed one
-/// re-encodes (`DisplayListRebuild`).
+/// the gizmo. Scheduled after propagation and the embed cameras, where it is
+/// re-posed through this frame's final camera (`Gizmo3d::reproject`), so it
+/// moves with the 3D view instead of a frame behind it. The list is rebuilt
+/// every frame, and only a changed one re-encodes (`DisplayListRebuild`).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_gizmo_overlay(
     mut commands: Commands,
-    tool: Res<crate::bevy_app::select::SelectTool>,
+    mut tool: ResMut<crate::bevy_app::select::SelectTool>,
     views: Res<PanelViews>,
+    store: Res<crate::document_bridge::DocumentStore>,
+    cameras: DragCameras,
+    embed_cams: Query<&crate::bevy_app::scene3d::EmbedCam>,
+    embed_views: Res<crate::document_bridge::EmbedViews>,
+    dpr: Res<crate::Dpr>,
     mut overlays: Query<(Entity, &mut crate::vector::DisplayList, &mut crate::vector::VectorView), With<GizmoOverlay>>,
 ) {
+    if let Some(g) = tool.gizmo_mut() {
+        // Where it may draw now: its embed's clip as placed this frame, or
+        // its 3D panel.
+        let clip = match embed_cams.get(g.camera) {
+            Ok(cam) => embed_views.0.iter().find(|v| v.key == cam.key).map(|v| v.clip),
+            Err(_) => views.get(&g.panel).map(|v| v.rect.to_kurbo()),
+        };
+        if let Some(clip) = clip {
+            g.reproject(&store.0, &cameras, clip, dpr.0 as f32);
+        }
+    }
     let Some((g, view)) = tool.gizmo().and_then(|g| Some((g, views.get(&g.panel)?))) else {
         for (e, ..) in &overlays {
             commands.entity(e).despawn();

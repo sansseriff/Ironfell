@@ -184,8 +184,8 @@ impl Shape2d {
 
 /// A path node's outline: every contour, in the path's space
 /// (`iron_document::contour`).
-pub fn path_outline(store: &Store, id: NodeId) -> kurbo::BezPath {
-    iron_document::contour::outline(&iron_document::contour::contours(store, id))
+pub fn path_outline(store: &Store, id: NodeId) -> std::sync::Arc<kurbo::BezPath> {
+    iron_document::contour::geometry(store, id).outline().clone()
 }
 
 /// A `stroke` component's style as kurbo strokes: Iron's names are SVG's.
@@ -554,11 +554,12 @@ impl Reader<'_> {
                 }
                 "path" => {
                     use iron_document::contour;
-                    let contours = contour::contours(store, id);
-                    let fill = contour::fill_outline(&contours);
-                    let fill = (!fill.elements().is_empty() && (r.color("fill.color").is_some() || r.color("gradient.start").is_some())).then(|| std::sync::Arc::new(fill));
+                    // A packed path's outlines are cached with its value.
+                    let geometry = contour::geometry(store, id);
+                    let fill = geometry.fill_outline();
+                    let fill = (!fill.elements().is_empty() && (r.color("fill.color").is_some() || r.color("gradient.start").is_some())).then(|| fill.clone());
                     let even_odd = contour::fill_rule(store, id) == contour::FillRule::EvenOdd;
-                    Shape2d::Path { outline: std::sync::Arc::new(contour::outline(&contours)), fill, even_odd }
+                    Shape2d::Path { outline: geometry.outline().clone(), fill, even_odd }
                 }
                 "text" => {
                     let m = iron_document::text::measure(store, id);

@@ -154,7 +154,7 @@ fn resolve(doc: &Document, spec: &str) -> Option<NodeId> {
 /// Resolve every composition panel against the current document. Writes the
 /// resource only when something differs, so its change detection means
 /// "what a panel shows changed".
-pub(super) fn resolve_panel_views(
+pub(crate) fn resolve_panel_views(
     panels: Res<Panels>,
     store: Res<DocumentStore>,
     cameras: Res<ViewCameras>,

@@ -27,6 +27,7 @@ pub mod expand;
 pub mod make;
 pub mod expr;
 pub mod geom;
+pub mod geometry;
 pub mod gesture;
 pub mod anchor;
 pub mod author;
@@ -1209,6 +1210,11 @@ impl Store {
 
     pub fn document(&self) -> &Document {
         &self.doc
+    }
+
+    /// The document, without copying it; the store's history goes with it.
+    pub fn into_document(self) -> Document {
+        self.doc
     }
 
     pub fn history(&self) -> &History {

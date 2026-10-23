@@ -26,7 +26,7 @@
  *   __iron.copied()                -> the last fragment Cmd+C or Cmd+X copied in this tab
  *   __iron.paste(text?)            -> paste a fragment (default: the last copied), as a paste event does
  *   await __iron.exportSvg(scope?) -> SVG text of a composition (id or name), a node, or 'selection' (default)
- *   await __iron.importSvg(text)   -> import SVG as a paste: {ok, cuts, nodes}; placed next frame
+ *   await __iron.importSvg(text)   -> import SVG as a paste: {ok, cuts, nodes, anchors}; placed next frame
  */
 import { lastCopied } from './clipboard';
 
@@ -181,7 +181,7 @@ export class DocumentClient {
 
   /** Import SVG text as a paste: under the pointer or at the view's centre,
    *  one "import SVG" transaction. `cuts` lists what it could not carry. */
-  async importSvg(text: string): Promise<{ ok: boolean; cuts?: string[]; nodes?: number; error?: string }> {
+  async importSvg(text: string): Promise<{ ok: boolean; cuts?: string[]; nodes?: number; anchors?: number; error?: string }> {
     const r = await this.call('import_svg', [text]);
     if (!r.ok) this.error = `import SVG: ${r.error}`;
     return r;

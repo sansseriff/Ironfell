@@ -58,9 +58,9 @@ macro_rules! facets {
                 fn get_mut(&mut self, field: &str) -> Option<&mut Slot> {
                     match field { $( stringify!($field) => Some(&mut self.$field), )* _ => None }
                 }
-                fn wrap(self) -> Facet { Facet::$variant(self) }
+                fn wrap(self) -> Facet { Facet::$variant(Box::new(self)) }
                 fn unwrap_ref(c: &Facet) -> Option<&Self> {
-                    match c { Facet::$variant(v) => Some(v), _ => None }
+                    match c { Facet::$variant(v) => Some(&**v), _ => None }
                 }
             }
         )*
@@ -94,15 +94,17 @@ macro_rules! facets {
 
             pub fn default_facet(self) -> Facet {
                 match self {
-                    $( FacetKind::$variant => Facet::$variant($name::default()), )*
-                    $( FacetKind::$dvariant => Facet::$dvariant($dname::default()), )*
+                    $( FacetKind::$variant => Facet::$variant(Box::default()), )*
+                    $( FacetKind::$dvariant => Facet::$dvariant(Box::default()), )*
                 }
             }
         }
 
-        /// One authored facet of a node.
+        /// One authored facet of a node. Boxed, so a facet costs its own
+        /// fields rather than the largest facet's (`font` has eleven; a
+        /// `transform2d` five): a document holds hundreds of thousands.
         #[derive(Clone, Debug, PartialEq)]
-        pub enum Facet { $( $variant($name), )* $( $dvariant($dname), )* }
+        pub enum Facet { $( $variant(Box<$name>), )* $( $dvariant(Box<$dname>), )* }
 
         impl Facet {
             pub fn kind(&self) -> FacetKind {
@@ -197,11 +199,15 @@ facets! {
     }
 
     /// A path (roadmap stage E; plans/specs/svg-import-export.md phase 3):
-    /// its `contour` children, each an outline, filled together. Where
-    /// outlines overlap, `fill_rule` decides what is inside, as in SVG:
-    /// `nonzero` (an outline running the other way cuts a hole) or `evenodd`
-    /// (every enclosed outline cuts a hole).
-    PathShape / "path" => PathShape { fill_rule: Enum = Value::Enum("nonzero".to_owned()) }
+    /// its outlines, filled together. Packed (plans/specs/packed-paths.md),
+    /// they are `d`; expanded, they are `contour` children, and `d` is
+    /// empty. Never both. Where outlines overlap, `fill_rule` decides what is
+    /// inside, as in SVG: `nonzero` (an outline running the other way cuts a
+    /// hole) or `evenodd` (every enclosed outline cuts a hole).
+    PathShape / "path" => PathShape {
+        fill_rule: Enum = Value::Enum("nonzero".to_owned()),
+        d: Geometry = Value::Geometry(crate::geometry::Geometry::empty()),
+    }
 
     /// One outline of a path: its `point` children in sibling order, joined
     /// by lines or curves, closed back to the first or not. Only closed
@@ -495,11 +501,11 @@ impl LeafStruct for Args {
         self.slots.get_mut(field)
     }
     fn wrap(self) -> Facet {
-        Facet::Args(self)
+        Facet::Args(Box::new(self))
     }
     fn unwrap_ref(c: &Facet) -> Option<&Self> {
         match c {
-            Facet::Args(v) => Some(v),
+            Facet::Args(v) => Some(&**v),
             _ => None,
         }
     }
@@ -517,12 +523,15 @@ pub enum LeafError {
         expected: ValueKind,
         got: ValueKind,
     },
+    /// A binding on a leaf no expression can produce (a path's `d`).
+    ConstantOnly(LeafPath),
 }
 
 impl fmt::Display for LeafError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LeafError::UnknownFacet(c) => write!(f, "unknown component {c:?}"),
+            LeafError::ConstantOnly(path) => write!(f, "{path} holds a constant; it cannot be bound"),
             LeafError::UnknownField { facet, field } => {
                 if facet.is_dynamic() {
                     return write!(f, "{} has no argument {:?} (arguments come from the definition's in ports)", facet.name(), field);
@@ -580,6 +589,9 @@ impl Facet {
             facet: kind,
             field: field.to_owned(),
         })?;
+        if slot.expr().is_some() && expected == ValueKind::Geometry {
+            return Err(LeafError::ConstantOnly(LeafPath::new(kind, field).expect("field checked above")));
+        }
         // A binding's kind is only known when it is evaluated; the graph
         // reports a mismatch then. Constants are checked here.
         if let Some(v) = slot.constant()

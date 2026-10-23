@@ -664,7 +664,7 @@ pub fn document_import_svg(app: &mut WorkerApp, text: String) -> String {
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
-    serde_json::json!({"ok": true, "cuts": imported.cuts, "nodes": imported.nodes}).to_string()
+    serde_json::json!({"ok": true, "cuts": imported.cuts, "nodes": imported.nodes, "anchors": imported.anchors}).to_string()
 }
 
 pub fn document_import_svg_at(app: &mut WorkerApp, text: String, parent: String, x: f64, y: f64, actor: String) -> String {

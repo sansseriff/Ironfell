@@ -44,6 +44,7 @@ pub use highlight::{Highlights, update_highlights};
 pub use nest::{EmbedImage, EmbedImages, EmbedView, EmbedViews};
 pub use materialize::{Doc2d, Doc3d, Drawables, MeshAssets, MeshColor, Modes, Shape2d, path_outline};
 pub use panel_views::{CompositionLayers, FocusRequests, InComposition, ViewCameras, PanelView, PanelViews};
+pub(crate) use panel_views::resolve_panel_views;
 pub use render::{DocumentPanelLayer, LIT_HOVERED, LIT_SELECTED, render_document_layer};
 pub use spatial::SpatialScene;
 
@@ -52,7 +53,7 @@ pub use spatial::SpatialScene;
 #[derive(Resource)]
 pub struct DocumentStore(pub Store);
 
-/// Transactions queued for the next sync. Anything that wants to change
+/// Transactions queued for the next sync (`sync_document`). Anything that wants to change
 /// authored state pushes here: gestures, keyboard commands, the FFI, the
 /// model surface.
 #[derive(Resource, Default)]
@@ -268,13 +269,15 @@ impl Plugin for DocumentPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    render::sync_document_views.before(render::render_document_layer),
+                    // After the post-tool sync (`bevy_app`), which re-resolves
+                    // the views a pan or zoom just moved.
+                    render::sync_document_views.after(panel_views::resolve_panel_views).before(render::render_document_layer),
                     // Planes: after transforms (they project their corners)
                     // and before the 2D layer draws their views.
                     planes::sync_planes.after(TransformSystems::Propagate).before(render::render_document_layer),
                     spatial::prepare_spatial.after(TransformSystems::Propagate).before(render::render_document_layer).before(crate::bevy_app::select::draw_select_overlay),
                     render::render_document_layer.after(TransformSystems::Propagate),
-                    propagate_begin.before(TransformSystems::Propagate).after(reconcile_gesture),
+                    propagate_begin.before(TransformSystems::Propagate).after(sync_document),
                     propagate_end.after(TransformSystems::Propagate).before(spatial::prepare_spatial),
                     // The store's world transforms must agree with Bevy's
                     // (constraint-system.md §4.3); checked whenever one moves.
@@ -285,12 +288,22 @@ impl Plugin for DocumentPlugin {
                     // embed views, before the cameras it wakes.
                     liveness::compute_liveness.after(nest::collect_embed_views),
                 ),
-            );
+            )
+            .add_systems(Last, report_late_work);
     }
 }
 
 /// Apply every pending transaction and history request, then reconcile the
 /// nodes they touched.
+///
+/// It runs twice a frame. In `PreUpdate` it takes what arrived from outside
+/// since the last frame (the FFI, the model surface, producers). In
+/// `PostUpdate`, right after the tools (`bevy_app`'s `GestureSystems`), it
+/// takes what the tools just queued, so a pen click, a drawn shape, a delete,
+/// an undo or a gesture's commit reaches the screen in the frame of its
+/// input, and it drains a drag's previews before transform propagation
+/// (constraint-system.md §8.2). Anything queued after that second run waits a
+/// frame; [`report_late_work`] says so.
 pub(crate) fn sync_document(
     events: Res<crate::host_events::HostEvents>,
     mut store: ResMut<DocumentStore>,
@@ -318,7 +331,10 @@ pub(crate) fn sync_document(
     {
         return;
     }
-    let _timing = crate::perf::span(crate::perf::Phase::Sync);
+    // A pass with only previewed values to drain is a drag frame, timed
+    // apart from applying transactions.
+    let previews_only = pending.0.is_empty() && history.0.is_empty() && load.0.is_none() && gestures.0.is_empty() && store.0.document().version() == synced.0;
+    let _timing = crate::perf::span(if previews_only { crate::perf::Phase::GestureReconcile } else { crate::perf::Phase::Sync });
     let now = time.elapsed().as_millis() as u64;
     let mut affected: BTreeSet<NodeId> = BTreeSet::new();
     let mut structure = false;
@@ -470,33 +486,35 @@ pub(crate) fn sync_document(
     changes.structure |= structure;
 }
 
-/// The in-frame half of a gesture (constraint-system.md §8.2). `sync_document`
-/// runs in `PreUpdate`, but drags preview in `PostUpdate`; without this pass
-/// every previewed value would reach the screen a frame behind the pointer.
-/// It drains the resolved changes the previews produced (the dragged leaves
-/// and every binding that read them) and rewrites those entities, scheduled
-/// before transform propagation so rendering sees them this frame. Values
-/// only: a preview never changes the tree, so the paint order stands.
-pub(crate) fn reconcile_gesture(
-    mut store: ResMut<DocumentStore>,
-    mut map: ResMut<NodeMap>,
-    mut changes: ResMut<DocumentChanges>,
-    mut geometry_revision: ResMut<GeometryRevision>,
-    mut layers: ResMut<CompositionLayers>,
-    mut commands: Commands,
-    assets: Option<Res<MeshAssets>>,
-    mut drawables: ResMut<Drawables>,
-    modes: Res<Modes>,
+/// Warn about interaction work left for the next frame: requests queued
+/// after the post-tool [`sync_document`], or a view whose pan or zoom moved
+/// after its views were resolved. Either one is drawn a frame late. The FFI
+/// queues between frames, so at `Last` all of these should be empty.
+fn report_late_work(
+    pending: Res<PendingTransactions>,
+    history: Res<HistoryRequests>,
+    gestures: Res<GestureRequests>,
+    cameras: Res<ViewCameras>,
+    views: Res<PanelViews>,
 ) {
-    if !store.0.has_changes() {
-        return;
+    let mut late: Vec<String> = Vec::new();
+    late.extend(pending.0.iter().map(|t| format!("transaction {:?}", t.label)));
+    if !history.0.is_empty() {
+        late.push(format!("{} history request(s)", history.0.len()));
     }
-    let _timing = crate::perf::span(crate::perf::Phase::GestureReconcile);
-    let affected: BTreeSet<NodeId> = store.0.drain_changes().into_iter().map(|c| c.leaf.node).collect();
-    geometry_revision.0 = geometry_revision.0.wrapping_add(1);
-    let Some(assets) = assets else { return };
-    materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets, &mut drawables, &modes);
-    changes.nodes.extend(affected);
+    if !gestures.0.is_empty() {
+        late.push(format!("{} gesture request(s)", gestures.0.len()));
+    }
+    for v in &views.0 {
+        if let Some(c) = cameras.0.get(&v.panel)
+            && (c.pan != v.pan || c.zoom != v.zoom)
+        {
+            late.push(format!("panel {} pan/zoom", v.panel));
+        }
+    }
+    if !late.is_empty() {
+        warn!("queued after this frame's sync, drawn a frame late: {}", late.join(", "));
+    }
 }
 
 /// The nodes an op touches. Returns whether it changed the tree's shape

@@ -260,7 +260,7 @@ pub fn local_bounds(store: &Store, id: NodeId) -> Option<LocalBounds> {
             let outline = crate::shape::outline(store, id)?;
             (crate::shape::to_bez(&outline).bounding_box(), 0.0)
         }
-        "path" => (crate::contour::outline(&crate::contour::contours(store, id)).bounding_box(), PATH_HIT),
+        "path" => (crate::contour::geometry(store, id).bounds(), PATH_HIT),
         "text" => (crate::text::measure(store, id).frame, 0.0),
         // A bare empty is its marker (the bridge draws a box with a cross);
         // one with children is a container, like a group, its bounds theirs.
@@ -310,7 +310,7 @@ pub fn effect_of(doc: &Document, leaf: Leaf) -> GeometryEffect {
         FacetKind::Transform2d if matches!(ty, "point" | "contour") => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
         FacetKind::Transform2d => GeometryEffect::Placement(leaf.node),
         FacetKind::Handles | FacetKind::Contour => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
-        FacetKind::Size | FacetKind::Text | FacetKind::Font | FacetKind::Radius | FacetKind::Arc | FacetKind::Stroke | FacetKind::Shadow | FacetKind::Frame | FacetKind::Embed | FacetKind::EmbedCamera => {
+        FacetKind::Size | FacetKind::PathShape | FacetKind::Text | FacetKind::Font | FacetKind::Radius | FacetKind::Arc | FacetKind::Stroke | FacetKind::Shadow | FacetKind::Frame | FacetKind::Embed | FacetKind::EmbedCamera => {
             GeometryEffect::Local(leaf.node)
         }
         // A camera's aspect shapes every embed that looks through it; rare,

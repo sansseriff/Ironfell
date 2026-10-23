@@ -274,18 +274,36 @@ fn free_order(used: &mut Vec<isize>) -> isize {
 }
 
 /// The camera of one 3D embed seen in a 2D panel (ECM §7.4), keyed like
-/// its `EmbedView`. `framed` is the sphere the derived default view last
-/// framed: the view holds still until the content leaves it, so dragging
-/// something does not chase the camera.
+/// its `EmbedView`. For the derived default view, `framed` is the sphere it
+/// is heading for and `shown` the one it frames now, easing towards it.
 #[derive(Component, Debug)]
 pub(crate) struct EmbedCam {
     pub key: String,
     framed: Option<(Vec3, f32)>,
+    shown: Option<(Vec3, f32)>,
 }
 
 /// The direction the derived default view looks from.
 const DEFAULT_VIEW_FROM: Vec3 = Vec3::new(0.0, 0.55, 0.85);
 const DEFAULT_FOV: f32 = 0.8;
+/// The derived view's dead zone: content whose bounding sphere stays within
+/// this fraction of the framed one, in radius and in centre (relative to
+/// the radius), keeps the framing. 5% of radius is about 10% of the area on
+/// screen, and the framing's 10% margin still holds all of it.
+const FRAME_SLACK: f32 = 0.05;
+/// How quickly the derived view follows a new framing: the time constant of
+/// its easing, seconds.
+const FRAME_EASE: f32 = 0.3;
+
+/// Set a perspective camera's field of view, touching the projection only
+/// when it differs: a changed projection re-renders the view.
+fn set_fov(projection: &mut Mut<Projection>, fov: f32) {
+    if matches!(&**projection, Projection::Perspective(p) if p.fov != fov)
+        && let Projection::Perspective(p) = projection.as_mut()
+    {
+        p.fov = fov;
+    }
+}
 
 /// One `Camera3d` per 3D embed view: viewport at the embed's rectangle,
 /// rendering scenery plus the embedded composition's layer, posed by the
@@ -301,8 +319,9 @@ pub(crate) fn sync_embed_cameras(
     poses: Query<&GlobalTransform, Without<EmbedCam>>,
     volumes: Query<(&CurrentVolume, &crate::document_bridge::InComposition)>,
     planes: Query<(&GlobalTransform, &crate::document_bridge::planes::EmbedPlane, &crate::document_bridge::InComposition), Without<EmbedCam>>,
-    mut cams: Query<(Entity, &mut EmbedCam, &mut Camera, &mut RenderLayers, &mut Transform, &mut Projection, Option<&mut ScreenRect>, Option<&mut PointerToCamera>)>,
+    mut cams: Query<(Entity, &mut EmbedCam, &mut Camera, &mut RenderLayers, &mut Transform, &mut GlobalTransform, &mut Projection, Option<&mut ScreenRect>, Option<&mut PointerToCamera>)>,
     others: Query<&Camera, Without<EmbedCam>>,
+    time: Res<Time>,
 ) {
     let _ = windows;
     for (e, cam, ..) in &cams {
@@ -327,7 +346,7 @@ pub(crate) fn sync_embed_cameras(
                         Camera { order: free_order(&mut used), ..default() },
                         ScreenRect::of(&viewport),
                         PointerToCamera(view.to_texture),
-                        EmbedCam { key: view.key.clone(), framed: None },
+                        EmbedCam { key: view.key.clone(), framed: None, shown: None },
                         layers.clone(),
                         Projection::Perspective(PerspectiveProjection { fov: DEFAULT_FOV, near: 0.1, far: 1000.0, ..default() }),
                         Transform::from_translation(DEFAULT_VIEW_FROM * 10.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -337,7 +356,7 @@ pub(crate) fn sync_embed_cameras(
                 continue;
             }
         };
-        let Ok((_, mut cam, mut camera, mut current, mut transform, mut projection, screen, pointer)) = cams.get_mut(entity) else { continue };
+        let Ok((_, mut cam, mut camera, mut current, mut transform, mut global, mut projection, screen, pointer)) = cams.get_mut(entity) else { continue };
         place(&mut camera, screen, &viewport);
         if let Some(mut p) = pointer
             && p.0 != view.to_texture
@@ -357,16 +376,14 @@ pub(crate) fn sync_embed_cameras(
                     *transform = t;
                 }
                 let fov = "camera.fov".parse().ok().and_then(|p| store.0.resolved(node, p)).and_then(|v| v.as_f64()).unwrap_or(DEFAULT_FOV as f64) as f32;
-                if let Projection::Perspective(p) = projection.as_mut()
-                    && p.fov != fov
-                {
-                    p.fov = fov;
-                }
+                set_fov(&mut projection, fov);
                 cam.framed = None;
+                cam.shown = None;
             }
             // The derived default view: frame every mesh of the composition
-            // from a fixed direction, re-framing only when the content
-            // leaves what was framed.
+            // from a fixed direction. A change of the content's bounds inside
+            // the dead zone (`FRAME_SLACK`) keeps the framing; past it, the
+            // view eases to the new one (`FRAME_EASE`).
             None => {
                 // Meshes, and the corners of planes (2D compositions in it).
                 let plane_corners = planes.iter().filter(|(_, _, within)| within.0 == Some(view.source)).flat_map(|(gt, plane, _)| {
@@ -386,21 +403,39 @@ pub(crate) fn sync_embed_cameras(
                     Some((lo, hi)) => ((lo + hi) * 0.5, ((hi - lo) * 0.5).length().max(0.25)),
                     None => (Vec3::ZERO, 2.0),
                 };
-                let reframe = match cam.framed {
-                    Some((c0, r0)) => centre.distance(c0) + radius > r0 * 1.001 || radius < r0 * 0.5,
-                    None => true,
+                let target = match cam.framed {
+                    Some((c0, r0)) if (radius / r0 - 1.0).abs() <= FRAME_SLACK && centre.distance(c0) <= FRAME_SLACK * r0 => (c0, r0),
+                    _ => (centre, radius),
                 };
-                if reframe {
-                    let half_v = DEFAULT_FOV * 0.5;
-                    let half_h = (half_v.tan() * aspect).atan();
-                    let dist = radius / half_v.min(half_h).sin() * 1.1;
-                    *transform = Transform::from_translation(centre + DEFAULT_VIEW_FROM.normalize() * dist).looking_at(centre, Vec3::Y);
-                    cam.framed = Some((centre, radius));
-                    if let Projection::Perspective(p) = projection.as_mut() {
-                        p.fov = DEFAULT_FOV;
+                cam.framed = Some(target);
+                // The first framing is immediate; later ones ease, and land
+                // exactly once close, so a settled view stops re-rendering.
+                let shown = match cam.shown {
+                    Some((c, r)) => {
+                        let k = 1.0 - (-time.delta_secs() / FRAME_EASE).exp();
+                        let (c, r) = (c.lerp(target.0, k), r + (target.1 - r) * k);
+                        if c.distance(target.0) < 1e-3 * target.1 && (r - target.1).abs() < 1e-3 * target.1 { target } else { (c, r) }
                     }
+                    None => target,
+                };
+                cam.shown = Some(shown);
+                let (centre, radius) = shown;
+                let half_v = DEFAULT_FOV * 0.5;
+                let half_h = (half_v.tan() * aspect).atan();
+                let dist = radius / half_v.min(half_h).sin() * 1.1;
+                let posed = Transform::from_translation(centre + DEFAULT_VIEW_FROM.normalize() * dist).looking_at(centre, Vec3::Y);
+                if *transform != posed {
+                    *transform = posed;
                 }
+                set_fov(&mut projection, DEFAULT_FOV);
             }
+        }
+        // Posed after propagation, so the pose goes to the global transform
+        // too: Bevy renders from that, and would otherwise show this pose
+        // (and the gizmo would sit on it) a frame late.
+        let posed = GlobalTransform::from(*transform);
+        if *global != posed {
+            *global = posed;
         }
     }
 }
@@ -489,7 +524,7 @@ pub(crate) fn sync_view_images(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<crate::vector::view_composite::ViewCompositeMaterial>>,
     mut quad: Local<Option<Handle<Mesh>>>,
-    mut cams: Query<(Entity, Ref<ScreenRect>, &mut Camera, Option<&mut ViewImage>, &RenderLayers, Ref<GlobalTransform>, Ref<Projection>, Option<&EmbedCam>, Option<&PanelCamera>)>,
+    mut cams: Query<(Entity, Ref<ScreenRect>, &mut Camera, Option<&mut ViewImage>, Option<&mut bevy::camera::RenderTarget>, &RenderLayers, Ref<GlobalTransform>, Ref<Projection>, Option<&EmbedCam>, Option<&PanelCamera>)>,
     liveness: Res<crate::document_bridge::liveness::Liveness>,
     content: Query<(&RenderLayers, Ref<GlobalTransform>, Ref<ActiveState>), With<crate::document_bridge::Doc3d>>,
     mut removed: RemovedComponents<crate::document_bridge::Doc3d>,
@@ -501,7 +536,7 @@ pub(crate) fn sync_view_images(
     use crate::vector::view_composite::{MODE_STRAIGHT_SRGB, ViewCompositeMaterial, bucket, unit_quad};
     let quad = quad.get_or_insert_with(|| meshes.add(unit_quad())).clone();
     let removed_any = removed.read().count() > 0;
-    for (entity, screen, mut camera, view, layers, pose, projection, embed, panel) in &mut cams {
+    for (entity, screen, mut camera, view, target, layers, pose, projection, embed, panel) in &mut cams {
         let live = panel.is_some_and(|p| liveness.panels.contains(&p.panel)) || embed.is_some_and(|e| liveness.embeds.contains(&e.key));
         let size = screen.size.max(UVec2::ONE);
         let want = bucket(size);
@@ -550,6 +585,13 @@ pub(crate) fn sync_view_images(
                         v.bucket = want;
                         v.fresh = 2;
                         v.was_active = true;
+                        v.version = v.version.wrapping_add(1);
+                        // Published this frame too: left out, the 2D view
+                        // that embeds it would draw a frame with no 3D view
+                        // in it, a flash on every bucket a zoom crosses.
+                        if let Some(ec) = embed {
+                            published.insert(ec.key.clone(), crate::document_bridge::EmbedImage { image: image.clone(), size, version: v.version });
+                        }
                     }
                     None => {
                         let material = materials.add(ViewCompositeMaterial { texture: image.clone(), rect, params });
@@ -572,7 +614,18 @@ pub(crate) fn sync_view_images(
                         commands.entity(entity).insert(ViewImage { image: image.clone(), bucket: want, composite, material, fresh: 2, awake: 0, was_active: true, version: 0 });
                     }
                 }
-                commands.entity(entity).insert(bevy::camera::RenderTarget::from(image));
+                // In place where it exists, so Bevy's camera update, which
+                // runs after this, sizes the camera's render to the new
+                // texture this frame. Through commands it would see the old
+                // one, render at the old size and scale the result into the
+                // new texture: a shrunken 3D view on each bucket a zoom
+                // crosses.
+                match target {
+                    Some(mut t) => *t = bevy::camera::RenderTarget::from(image),
+                    None => {
+                        commands.entity(entity).insert(bevy::camera::RenderTarget::from(image));
+                    }
+                }
                 dirty = true;
             }
         }

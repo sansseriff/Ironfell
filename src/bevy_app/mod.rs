@@ -21,9 +21,11 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 use crate::vector::VectorPlugin;
-use crate::document_bridge::{DocumentPlugin, reconcile_gesture};
+use crate::document_bridge::{DocumentPlugin, resolve_panel_views, sync_document};
 
-/// The drag's preview, reconcile and command flush, in that order.
+/// What the tools did this frame, applied this frame: the document sync
+/// (queued edits, gesture commits, undo, a drag's previews), its command
+/// flush, then the views a pan or zoom moved.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct GestureSystems;
 
@@ -234,17 +236,27 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
             text_tool::text_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
             select::select_tool_system,
             select::sync_session_selection.after(select::select_tool_system),
-            // A drag previews into the store, the bridge rewrites the
-            // affected entities, and the deferred inserts are applied, all
-            // before propagation so transform consumers and the 2D layer see
-            // this frame's pointer position (constraint-system.md §8.2).
-            (reconcile_gesture, ApplyDeferred)
+            // The tools' output applied in their frame: queued transactions,
+            // gesture commits and undo through a second document sync (its
+            // first is in PreUpdate), a drag's previews drained into the
+            // affected entities, the deferred inserts applied, and the views
+            // re-resolved for a pan or zoom. All before propagation, so
+            // transform consumers and the 2D layer see this frame's input
+            // (constraint-system.md §8.2). Anything a tool queues must be
+            // written before this set, or it lands a frame late.
+            (sync_document, ApplyDeferred, resolve_panel_views)
                 .chain()
                 .in_set(GestureSystems)
                 .after(select::select_tool_system)
                 .before(TransformSystems::Propagate),
-            // The 3D gizmo's triangles, in an overlay view over its panel.
-            manipulate::draw_gizmo_overlay.after(select::select_tool_system),
+            // The 3D gizmo's triangles, in an overlay view over its panel,
+            // posed through the cameras as they render this frame: after
+            // propagation (a panel camera moved in Update) and after the
+            // embed cameras follow their embeds.
+            manipulate::draw_gizmo_overlay
+                .after(select::select_tool_system)
+                .after(TransformSystems::Propagate)
+                .after(sync_embed_cameras),
             update_aabbes.after(GestureSystems),
             // A 3D embed's camera follows its rectangle in the same frame,
             // after the meshes' volumes it may frame are current.
@@ -264,11 +276,22 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
                 .before(bevy::camera::visibility::VisibilitySystems::UpdateFrusta)
                 // The 2D layer draws 3D embeds' textures by the versions
                 // published here.
-                .before(crate::document_bridge::render_document_layer),
+                .before(crate::document_bridge::render_document_layer)
+                // A texture made here is announced to the render world by
+                // this frame's asset events, so it is on the GPU this frame;
+                // after them, it would arrive a frame late and the views
+                // drawing it would skip a frame (a hitch on each bucket a
+                // zoom crosses).
+                .before(bevy::asset::AssetEventSystems)
+                // Before Bevy's camera update, which computes the target's
+                // size and the projection from the viewport and target set
+                // here; after it, the camera renders this frame with last
+                // frame's (a squeezed or shrunken view while zooming).
+                .before(bevy::camera::CameraUpdateSystems),
             // Highlights before the 2D layer draws (after propagation) and
             // before the 3D outlines read them.
             crate::document_bridge::update_highlights
-                .after(select::select_tool_system)
+                .after(GestureSystems)
                 .before(TransformSystems::Propagate),
             selection_reflect_system.after(crate::document_bridge::update_highlights),
             outbound_hover_system.after(select::select_tool_system),

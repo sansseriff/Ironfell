@@ -347,6 +347,12 @@ fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fideli
             }
             for f in c.field_names() {
                 let slot = c.get(f).expect("declared");
+                // An expanded path's `d` is empty: its outlines are its
+                // children. A packed one's shows as a summary (`Geometry`'s
+                // `Display`); the anchors themselves are in the file form.
+                if slot.constant().and_then(crate::value::Value::as_geometry).is_some_and(|g| g.is_empty()) {
+                    continue;
+                }
                 // A bound slot shows its current value like any other, and
                 // its binding as `<attr>.bind`, so a reader sees both what a
                 // value is and why.

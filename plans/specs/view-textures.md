@@ -271,6 +271,56 @@ that ever shows.
   at 1600×1000 and 5K, with and without these fixes, so the report is not reproduced
   headless.
 
+### Frame-ordering fixes (2026-10-22)
+
+- A 3D embed whose on-screen size crossed a 64 px bucket (every Ctrl-zoom step at
+  piston scale) was left out of `EmbedImages` on the frame its new texture was made,
+  so the 2D view drew a frame with no 3D view in it; the next frame, the new texture
+  was not on the GPU yet (`sync_view_images` ran after Bevy's `AssetEventSystems`, so
+  the image's `Added` event went out a frame late) and the 2D view skipped a frame.
+  Now the new texture is published on the frame it is made, and `sync_view_images`,
+  `sync_target` and `sync_views` run before `AssetEventSystems`. Measured with a
+  temporary probe over ten zoom steps: nine frames with the texture missing on the GPU
+  before, none after.
+- Embed cameras are posed after propagation, so `sync_embed_cameras` now writes the
+  `GlobalTransform` too; before, a reframed embed rendered its new pose a frame late.
+- The transform gizmo was framed inside the select tool, before a panel camera moved
+  in `Update` had propagated and before an embed's camera followed a 2D pan, so it
+  trailed the 3D view by a frame. `draw_gizmo_overlay` now runs after propagation and
+  the embed cameras and re-poses it (`Gizmo3d::reproject`, replaying the frame's
+  pointer without the press; skipped during a gizmo drag, whose subgizmos apply
+  incremental deltas). A probe saw it re-posed on 11 of 12 frames of a 2D pan over the
+  Main tab's assembly embed and on 54 frames of flying the Assembly camera.
+- A screen recording still showed the 3D view shrunken into its frame's top-left corner
+  on zoom steps. On each bucket crossing, Bevy's `camera_system` (`CameraUpdateSystems`)
+  still held the old texture's size: it ran before `sync_view_images` set the viewport,
+  and the new `RenderTarget` was inserted through commands it could not see. Bevy sized
+  the camera's main texture from the old target and scaled the result into the new one
+  (576/640 ≈ 0.9). `sync_view_images` now runs before `CameraUpdateSystems` and swaps an
+  existing `RenderTarget` in place; the projection's aspect, which also trailed a frame
+  on every zoom step, now follows in the same frame. A probe comparing each embed's
+  published size, viewport, computed target and projection aspect at `Last` logged a
+  mismatch on every crossing before and none after.
+- Not fixed: a 3D embed's first frame (a tab opened) draws its frame with no texture,
+  since its camera is spawned that frame and posed and given a texture the next.
+
+### Embed cameras (2026-10-22)
+
+- The piston demo's `cylinder` composition has a `camera` node, and its embed looks
+  through it (`embed_camera`): the view no longer reframes as the piston moves.
+- The derived default view (an embed naming no camera) follows its content slowly: a
+  bounding sphere within 5% of the framed one, in radius and in centre, keeps the
+  framing (`FRAME_SLACK`; about 10% of screen area, inside the 10% framing margin), and
+  past it the view eases to the new framing with a 0.3 s time constant (`FRAME_EASE`),
+  landing exactly once within 0.1% so a settled view stops rendering. The first
+  framing is immediate. Before, it reframed at once whenever content left the framed
+  sphere and only shrank once the content halved, so the view jumped.
+- `set_fov` touches a camera's projection only when the field of view differs; the
+  camera-node branch used to mark it changed every frame, re-rendering the view.
+- The camera's aspect, 620/340, was the first value in the demo needing all 17
+  digits, and the save/load round trip lost its last bit: serde_json now has
+  `float_roundtrip` (`tests/values.rs` checks it).
+
 ## 6. Migration order (after the spike)
 
 1. Composition panels (2D and 3D) onto views and the compositor; drop window-sized

@@ -110,3 +110,18 @@ fn clips_interpolate_quantities() {
     assert_eq!(store.resolved(target, "clip.from".parse().unwrap()), Some(q("2.5 W")));
     assert!(store.time_errors().is_empty(), "{:?}", store.time_errors());
 }
+
+#[test]
+fn numbers_needing_every_digit_survive_save_and_load() {
+    // 620 / 340 prints as 1.8235294117647058; a parser that is not
+    // correctly rounded reads it back as …056 (serde_json without
+    // `float_roundtrip`), and the second save differs from the first.
+    let mut store = Store::new();
+    let id = store.document().next_ids(1)[0];
+    let mut lens = iron_document::facet::Camera::default();
+    lens.aspect = Slot::Const(Value::Number(620.0 / 340.0));
+    store.apply(tx("camera", vec![Op::Create { id, ty: ty("camera"), parent: None, order: OrderKey::first(), facets: vec![iron_document::facet::Transform3d::default().wrap(), lens.wrap()] }])).unwrap();
+    let text = store.save();
+    assert!(text.contains("1.8235294117647058"), "{text}");
+    assert_eq!(Store::load(&text).unwrap().save(), text);
+}

@@ -600,7 +600,8 @@ eval [!!document.querySelector('[data-panel-id="pendulum"]'), !!document.querySe
 # with its rounded corners and shadow filter, the quarter pie as a path. Figma's
 # "Copy as SVG" of four shapes (src/iron_svg/tests/fixtures/figma.svg) imports
 # into the Controls tab as one "import SVG": its rects and circle recognised as a
-# rect (rounded) and an ellipse, the line a path of two points. One undo takes it back; a paste
+# rect (rounded) and an ellipse, the line a path of two anchors, packed
+# (plans/specs/packed-paths.md: no point nodes). One undo takes it back; a paste
 # event carrying the same SVG imports it again, undone too. Counts are the
 # Controls composition's nodes.
 tab Controls
@@ -615,7 +616,7 @@ eval fetch('src/iron_svg/tests/fixtures/figma.svg').then(r => r.text()).then(t =
 sleep 800
 eval (async () => [await controlsCount(), __iron.selection().length])()
 eval (async () => { const tags = []; for (const id of __iron.selection()) tags.push((await __iron.view({scope: id, fidelity: 'full'})).match(/<(rect|ellipse|path) [^>]*>/)[0].replace(/ (color|closed)=.*/, '')); return tags; })()
-eval (async () => (await __iron.view({scope: __iron.selection()[2], fidelity: 'full'})).match(/<point [^>]*>/g))()
+eval (async () => (await __iron.view({scope: __iron.selection()[2], fidelity: 'full'})).match(/ d="[^"]*"/)[0])()
 shot svg-import
 # Copy as SVG (Alt+Shift+C): the selection's SVG reaches the system clipboard.
 key Alt+Shift+KeyC

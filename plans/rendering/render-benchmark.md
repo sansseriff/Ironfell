@@ -588,3 +588,24 @@ here. Raw samples appended to
 as `upgrade` rows. Verification on this build: `piston.txt`, the full smoke
 (exit 0, no page errors), `spatial.txt` at DPR 1 with identical pixels
 (36/37, as §10) and `picking.txt` 10/10.
+
+## 14. Packed paths: a large SVG import (2026-10-23)
+
+Store-side, not a frame measurement: what importing the 11 MB Wikimedia
+`Coat_of_Arms_of_the_Kingdom_of_Prussia_1873-1918.svg` costs before and after
+[`specs/packed-paths.md`](../specs/packed-paths.md). Native, release, Apple Silicon,
+`src/iron_svg/tests/big_import.rs` (`BIG_SVG=… cargo test -p iron_svg --target
+aarch64-apple-darwin --release --test big_import -- --ignored --nocapture`).
+
+| | Before (points as nodes) | Packed (phases 1–3) | Packed, boxed facets (phase 4) |
+|---|---|---|---|
+| Nodes | 684,104 (603,023 `point`, 38,414 `contour`) | 42,667 | 42,667 |
+| Anchors | as nodes | 603,023 in 28,083 `path.d` values | same |
+| `iron_svg::import` | 5.1 s, peak RSS 3.4 GB | 1.3 s, peak RSS 557 MB | 1.3 s, peak RSS 250 MB |
+| One `Document` clone (every transaction pays one) | ~607 MB | ~169 MB | 28–40 MB, 9 ms |
+| Paste and apply into an empty store | aborted in wasm (`rust_oom`) | 176 ms, process RSS 1.06 GB | 102 ms, process RSS 332 MB |
+
+In the web build (dev-opt, webgl2, SwiftShader) the drop is one "import SVG" of
+42,667 ops and draws. Phase 4 boxed `Facet`'s variants (it was 616 bytes, `font`'s
+eleven slots, for every facet). Drawing cost of the 28k paths is not yet
+measured with `PROFILE=wasm-bench`.

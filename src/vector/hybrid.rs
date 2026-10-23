@@ -129,7 +129,9 @@ pub struct HybridBackend;
 impl Plugin for HybridBackend {
     fn build(&self, app: &mut App) {
         app.add_systems(PostStartup, setup_target)
-            .add_systems(PostUpdate, (sync_target, sync_views));
+            // Before the asset events, so a texture they make is on the GPU
+            // the frame it is made (see `sync_view_images`).
+            .add_systems(PostUpdate, (sync_target, sync_views).before(bevy::asset::AssetEventSystems));
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;

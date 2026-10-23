@@ -17,7 +17,8 @@ use std::sync::Mutex;
 pub enum Phase {
     /// `sync_document`: apply queued transactions and reconcile entities.
     Sync,
-    /// `reconcile_gesture`: rewrite entities a preview moved, in-frame.
+    /// `sync_document` after the tools, with only previews to drain: rewrite
+    /// entities a drag moved, in-frame.
     GestureReconcile,
     /// `render_document_layer`: walk every 2D view's nodes into display lists.
     DisplayList,

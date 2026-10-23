@@ -22,10 +22,12 @@ use std::fmt;
 /// definition's parameters became `in` ports and an entity's `params` its
 /// `args` (component-model.md §4), and the facet table's key became
 /// `facets`, and to 7 when instances became linked by default (an entity's
-/// `instance.mode`; component-model.md §5.2). Older files still load
-/// (`renamed`, `migrate_radius`, `migrate_contours`, `migrate_inputs`,
-/// `migrate_detached`).
-pub const SCHEMA: u64 = 7;
+/// `instance.mode`; component-model.md §5.2), and to 8 when a path's
+/// outlines could be packed into `path.d`, a geometry value
+/// (packed-paths.md; nothing migrates: a schema 7 path is expanded). Older
+/// files still load (`renamed`, `migrate_radius`, `migrate_contours`,
+/// `migrate_inputs`, `migrate_detached`).
+pub const SCHEMA: u64 = 8;
 const OLDEST_READABLE: u64 = 1;
 
 #[derive(Debug, Clone, PartialEq)]

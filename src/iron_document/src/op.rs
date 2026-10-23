@@ -9,7 +9,7 @@ use crate::document::{Document, Node, Relation};
 use crate::id::{NodeId, RelationId, Version};
 use crate::order::OrderKey;
 use crate::registry::TypeId;
-use crate::value::Slot;
+use crate::value::{Slot, Value, ValueKind};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -161,6 +161,9 @@ pub enum ErrorKind {
     /// The required constraints cannot all hold after this transaction (or,
     /// with `exact`, a requested value could not be honoured).
     Unsatisfiable,
+    /// A path holds packed geometry (`path.d`) and `contour` children at
+    /// once (plans/specs/packed-paths.md §2).
+    MixedPath,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -358,14 +361,40 @@ pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Versio
         }
         return Ok(());
     }
-    let Op::Create { id, .. } = op else { return Ok(()) };
     let cx = Ctx { index, stamp };
+    // A path is packed or expanded, never both; whichever op could make it
+    // both is checked once the transaction has applied, so expanding (an
+    // emptied `d` and new contours) may come in any order.
+    let path = match op {
+        Op::Create { id, ty, parent, .. } => match ty.name() {
+            "path" => Some(*id),
+            "contour" => *parent,
+            _ => None,
+        },
+        Op::Reparent { id, parent, .. } if doc.live(*id).is_some_and(|n| n.ty.name() == "contour") => *parent,
+        Op::Set { id, path, .. } if path.facet == FacetKind::PathShape => Some(*id),
+        Op::AddFacet { id, facet } if facet.kind() == FacetKind::PathShape => Some(*id),
+        _ => None,
+    };
+    if let Some(path) = path {
+        check_path_form(doc, &cx, path)?;
+    }
+    let Op::Create { id, .. } = op else { return Ok(()) };
     if doc.live(*id).is_none() {
         return Ok(());
     }
     let comps: Vec<Facet> = doc.facets_of(*id).cloned().collect();
     check_facet_bindings(doc, &cx, *id, &comps)?;
     check_entity(doc, &cx, *id)
+}
+
+fn check_path_form(doc: &Document, cx: &Ctx, path: NodeId) -> Result<(), ApplyError> {
+    let packed = doc.get::<crate::facet::PathShape>(path).and_then(|p| p.d.constant()).and_then(Value::as_geometry).is_some_and(|g| !g.is_empty());
+    let expanded = doc.children(path).iter().any(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "contour"));
+    if packed && expanded {
+        return Err(cx.err(ErrorKind::MixedPath, format!("{path} holds its outlines in path.d and in contour children; a path has one or the other")));
+    }
+    Ok(())
 }
 
 /// An entity's instance and params must agree with its definition; checked
@@ -477,6 +506,9 @@ fn check_facet_bindings(doc: &Document, cx: &Ctx, id: NodeId, comps: &[Facet]) -
         for field in c.field_names() {
             if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
                 let path = LeafPath::new(c.kind(), field).expect("declared field");
+                if path.kind() == ValueKind::Geometry {
+                    return Err(cx.err(ErrorKind::TypeMismatch, crate::facet::LeafError::ConstantOnly(path).to_string()));
+                }
                 check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
             }
         }

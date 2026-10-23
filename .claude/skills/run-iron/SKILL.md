@@ -34,6 +34,23 @@ Verified on macOS (Apple Silicon) on 2026-09-18 and on a Linux cloud container
   solver-count and version drift); a wrong *target* (another node) is the
   failure to look for.
 
+## Typical durations
+
+Wall-clock on the Apple Silicon dev machine, from timed runs on 2026-10-22. Per
+AGENTS.md, check in with the user before running a step marked ⏱ (over a minute).
+
+| step | typical time |
+|---|---|
+| `BACKENDS=webgl2 build.sh`, warm, after a source change | ~45 s (cargo ~25 s) |
+| ⏱ `build.sh` (both backends), warm | ~1.5 min |
+| ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
+| ⏱ `build.sh` cold | ~5 min |
+| ⏱ full `smoke.txt` (`GPU=1`) | ~3.5 min |
+| `piston.txt` | ~1 min |
+| `snapping.txt` | ~30 s |
+| a short ad-hoc driver script (a few commands) | 20–40 s |
+| ⏱ `cargo test -p iron_document`, after a dependency change | a few minutes (not yet timed) |
+
 ## Prerequisites
 
 Already present on the machine this was verified on; nothing was installed:
@@ -154,7 +171,7 @@ green Y arrow dragged up: y only, one "move mesh", undone), and SVG
 (plans/specs/svg-import-export.md: the Controls composition exported, with its
 cuts; Figma's "Copy as SVG" fixture `src/iron_svg/tests/fixtures/figma.svg`
 imported into the Controls tab by `__iron.importSvg` as one "import SVG": two rects
-(one rounded) and an ellipse recognised, the line a path of two points; Alt+Shift+C putting the
+(one rounded) and an ellipse recognised, the line a packed path of two anchors; Alt+Shift+C putting the
 selection's SVG on the clipboard; undo; the same SVG imported by a paste event and
 by the model's `<import-svg>`, each undone; each count is the Controls
 composition's nodes). Expected output, minus screenshot lines,
@@ -169,9 +186,9 @@ redraw (document): 2 of 44 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,5.34…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#3s"}}
+{"ok":true,"version":9,"aliases":{"$n":"#3t"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#3s\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#3t\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -191,19 +208,19 @@ true
 ["#l","#Q"]
 clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#3u\" name=\"box\" def=\"#3t\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3u\">"
+"<entity id=\"#3v\" name=\"box\" def=\"#3u\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3v\">"
 clicked Show in assembly
 clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3w\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3w\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3x\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3x\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":58959}
+{"roundtrip_equal":true,"bytes":59348}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" run=\"auto\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (297 ops, System) -> v1
+applied "open demo scene" (298 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -238,7 +255,7 @@ applied "link" (4 ops, Model) -> v23
 "link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (289 live nodes)
+loaded document v25 (290 live nodes)
 (no page errors)
 {"enabled":false,"guides":[]}
 undefined
@@ -261,10 +278,10 @@ tab Controls
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
-["#3s"]
-"<point id=\"#3w\" x=\"130\" y=\"220\""
+["#3t"]
+"<point id=\"#3x\" x=\"130\" y=\"220\""
 "pen-add"
-[4,"<point id=\"#3x\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
+[4,"<point id=\"#3y\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
 3
 "bend"
 " ox=\"0.0\" oy=\"-63.4\""
@@ -292,22 +309,22 @@ tab Controls
 undefined
 clicked .toolbar button[aria-label="Rectangle"]
 "Rectangle (R)"
-["<rect id=\"#3y\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
-"<ellipse id=\"#3z\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
-"<ellipse id=\"#3z\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+["<rect id=\"#3z\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
+"<ellipse id=\"#40\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
+"<ellipse id=\"#40\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 4
-"<ellipse id=\"#3z\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+"<ellipse id=\"#40\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 tab Main
 {"cuts":["its h is bound to #11.port.signal * 300; the path keeps the current value"],"ok":false}
 ["its h is bound to #11.port.signal * 300; the path keeps the current value"]
 clicked Cancel
 null
 tab Controls
-"<rect id=\"#3y\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
+"<rect id=\"#3z\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
 clicked Add effect
 clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
-"<ellipse id=\"#3z\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
+"<ellipse id=\"#40\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
 tab Optics
 undefined
 undefined
@@ -342,26 +359,26 @@ undefined
 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"30\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.0914 38.6599 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.57… 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
 ["slider level is exported as a picture of itself; it imports as shapes"]
 4
-{"cuts":["filters are not imported"],"nodes":7,"ok":true}
+{"anchors":2,"cuts":["filters are not imported"],"nodes":4,"ok":true}
 [8,4]
-["<rect id=\"#4L\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#4M\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#4N\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\"","<rect id=\"#4R\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
-["<point id=\"#4P\" x=\"10\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>","<point id=\"#4Q\" x=\"190\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" ix=\"0\" iy=\"0\" ox=\"0\" oy=\"0\"/>"]
+["<rect id=\"#4M\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#4N\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#4O\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\" d=\"1 contour, 2 anchors\"","<rect id=\"#4P\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
+" d=\"1 contour, 2 anchors\""
 [true,4]
 4
 undefined
 8
 4
-{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#4Z #4a #4b #4f\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
+{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#4U #4V #4W #4X\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
 8
 4
 tab Components
 undefined
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
 undefined
-["#…/3U","7.94… mW"]
+["#…/3V","7.94… mW"]
 {"derivedNodesSaved":0,"connectionsToPorts":4}
 [0,5]
-["#…/3U","15.88… mW"]
+["#…/3V","15.88… mW"]
 ["source lasersource",["power"]]
 clicked button[aria-label="Detach instance"]
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser detached","short fiber linked","long fiber linked"]
@@ -378,7 +395,7 @@ undefined
 [[545,175],[545,175]]
 clicked button[title^="Make a component"]
 [["power value in","out optical_power out"],"#….slider.value * 0.00… W",["fiber detached","meter detached","meter linked","spare laser linked","short fiber linked","long fiber linked"]]
-["#…/3U","15.88… mW"]
+["#…/3V","15.88… mW"]
 undefined
 [2,[[240,175],[545,175]]]
 [2,[[240,175],[665,435]]]
@@ -392,7 +409,7 @@ undefined
 [[240,475],["meter 15.88… mW","short fiber 10 mW"]]
 ["meter 15.88… mW","short fiber 0 W"]
 clicked button[title^="Make a component"]
-"component use #56"
+"component use #4y"
 clicked button[title="Shape tools"]
 clicked [role="menuitem"]:has-text("Port")
 "in"
@@ -406,7 +423,7 @@ clicked .link-popover button.primary
 [[600,300],[600,300],["meter 15.88… mW","short fiber 0 W"]]
 tab Library
 ["slider level 18","laser power 18 mW"]
-applied "open demo scene" (297 ops, System) -> v1
+applied "open demo scene" (298 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -461,12 +478,12 @@ applied "duplicate rect" (2 ops, Human) -> v52
 applied "undo: duplicate rect" (7 ops, System) -> v53
 applied "move mesh" (1 ops, Human) -> v54
 applied "undo: move mesh" (1 ops, System) -> v55
-applied "import SVG" (7 ops, Human) -> v56
-applied "undo: import SVG" (7 ops, System) -> v57
-applied "import SVG" (7 ops, Human) -> v58
-applied "undo: import SVG" (7 ops, System) -> v59
-applied "import SVG" (7 ops, Model) -> v60
-applied "undo: import SVG" (7 ops, System) -> v61
+applied "import SVG" (4 ops, Human) -> v56
+applied "undo: import SVG" (4 ops, System) -> v57
+applied "import SVG" (4 ops, Human) -> v58
+applied "undo: import SVG" (4 ops, System) -> v59
+applied "import SVG" (4 ops, Model) -> v60
+applied "undo: import SVG" (4 ops, System) -> v61
 applied "set slider" (1 ops, Human) -> v62
 applied "detach instance" (6 ops, Human) -> v63
 applied "undo: detach instance" (6 ops, System) -> v64
@@ -486,8 +503,8 @@ applied "disconnect in" (3 ops, Human) -> v77
 applied "disconnect in" (2 ops, Human) -> v78
 applied "connect in to out" (2 ops, Human) -> v79
 applied "connect in to out" (3 ops, Human) -> v80
-applied "move use" (3 ops, Human) -> v81
-applied "undo: move use" (6 ops, System) -> v82
+applied "move use" (2 ops, Human) -> v81
+applied "undo: move use" (4 ops, System) -> v82
 applied "undo: connect in to out" (10 ops, System) -> v83
 applied "connect in to out" (3 ops, Human) -> v84
 applied "undo: connect in to out" (3 ops, System) -> v85
@@ -663,7 +680,7 @@ cd -
 | `nav [url]` | open the app; default `http://localhost:5173/Ironfell/?gfx=webgl2` |
 | `ready` | wait until the `.loading` overlay leaves the DOM and the frame loop is cycling (cadence probe frame count advancing between polls), then read the viewer panel rect. About 6 s under SwiftShader |
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
-| `move x y`, `down`, `up`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels |
+| `move x y`, `down [button]`, `up [button]`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels; `down right` … `up right` around `move`s orbits a 3D panel's camera |
 | `dmove x y`, `ddrag x0 y0 x1 y1 [steps]` | the same in document 2D space: viewer-panel top-left origin, y-down, the space `transform2d.x/y` are in |
 | `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); a drag along the timeline scrubs the playhead over its 30 s |
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
@@ -680,7 +697,7 @@ cd -
 | `eval <js>` | evaluate in the page and print the JSON result; an async IIFE is awaited |
 | `logs [regex]` | print console output since the last `logs`, optionally filtered; Rust `info!`/`warn!` lines from the worker appear here |
 | `peek [regex]` | like `logs`, without clearing the buffer |
-| `errors` | print uncaught page errors |
+| `errors` | print uncaught page errors, then fail the run on any of them or on any `late:` line (the engine's `drawn a frame late` warning, kept since the start of the run) |
 | `panel [name]` | print a panel's rect (default the viewer) |
 | `sleep ms` | wait |
 | `quit` | close the browser |
@@ -822,8 +839,7 @@ Live 2D set) and `live` (the Live set's size); with nothing selected or hovered 
 
 The smoke's Link step sleeps between the box click and `keydown Shift`: at a few
 fps both can land in one frame, and the click then adds instead of replacing.
-Likewise it rests after the length-slider drag (its commit lands a frame after
-the release) and before the save/load roundtrip. Undo and redo themselves are
+Likewise it rests after the length-slider drag and before the save/load roundtrip. Undo and redo themselves are
 ordered with the other keys since 2026-10-17 (`engine_api::history_request`
 queues them as tool keys), so a Backspace followed by Cmd+Z undoes the delete
 even when both land in one slow frame. What still varies run to run is the
@@ -1153,16 +1169,16 @@ screenshot, `nav` and `ready` lines:
 {"enabled":true,"guides":[]}
 "<rect id=\"#M\" name=\"square\" x=\"523\" y=\"423\""
 {"enabled":true,"guides":["x=580 (4)","y=501 (4)"]}
-["<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\"","<rect id=\"#3s\" name=\"square\" x=\"580\" y=\"421\""]
+["<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\"","<rect id=\"#3t\" name=\"square\" x=\"580\" y=\"421\""]
 {"enabled":false,"guides":[]}
 "<rect id=\"#M\" name=\"square\" x=\"523\" y=\"423\""
 {"enabled":true,"guides":[]}
 {"enabled":true,"guides":["y=587 (4)"]}
 "<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" h=\"167.00000000000003\""
-["<path id=\"#3u\" name=\"path\" x=\"870\" y=\"420\"","<point id=\"#3w\" x=\"0\" y=\"0\"","<point id=\"#3x\" x=\"120\" y=\"0\"","<point id=\"#3y\" x=\"66\" y=\"77\""]
+["<path id=\"#3v\" name=\"path\" x=\"870\" y=\"420\"","<point id=\"#3x\" x=\"0\" y=\"0\"","<point id=\"#3y\" x=\"120\" y=\"0\"","<point id=\"#3z\" x=\"66\" y=\"77\""]
 {"enabled":true,"guides":["x=870 (2)"]}
-["<point id=\"#3w\" x=\"0\" y=\"0\"","<point id=\"#3x\" x=\"120\" y=\"0\"","<point id=\"#3y\" x=\"0\" y=\"100\""]
-applied "open demo scene" (297 ops, System) -> v1
+["<point id=\"#3x\" x=\"0\" y=\"0\"","<point id=\"#3y\" x=\"120\" y=\"0\"","<point id=\"#3z\" x=\"0\" y=\"100\""]
+applied "open demo scene" (298 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "undo: move rect" (2 ops, System) -> v3
 applied "move rect" (2 ops, Human) -> v4

@@ -206,7 +206,7 @@ fn an_arc_is_a_pie_a_ring_segment_or_a_ring() {
     assert_eq!(contours.iter().map(|c| (c.points.len(), c.closed)).collect::<Vec<_>>(), [(4, true), (4, true)]);
     assert_eq!(contour::fill_rule(&store, id), contour::FillRule::NonZero);
     use kurbo::Shape as _;
-    let fill = contour::fill_outline(&contours);
+    let fill = contour::geometry(&store, id).fill_outline().clone();
     assert_eq!(fill.winding(kurbo::Point::new(0.0, 0.0)), 0, "the hole is empty");
     assert_ne!(fill.winding(kurbo::Point::new(40.0, 0.0)), 0, "the ring is filled");
 }

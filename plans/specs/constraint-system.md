@@ -437,6 +437,8 @@ interaction time, and it belongs on the open-questions list rather than in slice
   reconcile pass right after `drag_apply_system` in `Update` that drains changes and
   rewrites affected entities. It must run before `TransformSystems::Propagate` in
   `PostUpdate`, so that `render_document_layer` sees the new transforms the same frame.
+  (2026-10-22: that pass is now `sync_document` itself, run again after the tools, so
+  commits, queued edits and undo also land in their frame; roadmap "Same-frame input".)
 - **Axis locking.** The working tree's `interaction_decide_system` already locks each
   axis whose leaf is bound or clip-driven, for the whole gesture. `begin_drag` absorbs
   that logic: locked leaves are simply knowns for the solve. A node whose `x` and `y`

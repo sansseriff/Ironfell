@@ -25,6 +25,7 @@ mod composite;
 mod composite_material;
 mod display_list;
 mod hybrid;
+pub mod raster;
 pub mod view_composite;
 
 // Re-exported: what app drawing code needs. Backends reach into the submodules

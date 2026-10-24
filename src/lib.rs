@@ -180,7 +180,9 @@ pub(crate) fn decide_redraw(
 ) {
     // A free-running view (plans/specs/free-running.md) renders every frame.
     let live = liveness.is_some_and(|l| l.any());
+    // So does a view with tiles left to bake or a chunk about to go cold.
     let changed = live
+        || crate::vector::raster::pending()
         || texture_cameras.iter().any(|c| c.is_active)
         || !lists.is_empty()
         || !visibility.is_empty()

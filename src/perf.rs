@@ -32,6 +32,9 @@ pub enum Phase {
     OverlayEncode,
     /// `render_scene`: submit each changed view's scene to the GPU.
     Render,
+    /// `prepare_scene`: encode cold chunks into raster tiles
+    /// (`vector::raster`), apart from [`Phase::Encode`].
+    Bake,
     /// `pick_document_2d_system`: hit-test the pointer against a 2D view,
     /// every frame the pointer is over one.
     Pick,
@@ -56,7 +59,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    const ALL: [Phase; 14] = [
+    const ALL: [Phase; 15] = [
         Phase::Sync,
         Phase::GestureReconcile,
         Phase::DisplayList,
@@ -64,6 +67,7 @@ impl Phase {
         Phase::Encode,
         Phase::OverlayEncode,
         Phase::Render,
+        Phase::Bake,
         Phase::Pick,
         Phase::OverlayGeometry,
         Phase::Bounds,
@@ -82,6 +86,7 @@ impl Phase {
             Phase::Encode => "encode",
             Phase::OverlayEncode => "overlay_encode",
             Phase::Render => "render",
+            Phase::Bake => "bake",
             Phase::Pick => "pick",
             Phase::OverlayGeometry => "overlay_geometry",
             Phase::Bounds => "bounds",

@@ -16,27 +16,16 @@
 //!   commands actually changed — roughly a 10x saving on idle frames, and the
 //!   single most valuable behaviour in this file.
 //!
-//! # Where future caching plugs in
+//! # Raster layers
 //!
-//! [`emit_layer`] is the substitution point. Today every layer emits live
-//! commands. A layer whose content is static and expensive is exactly the thing
-//! that should instead be rasterized once into a texture and drawn as a single
-//! quad via `Scene::draw_texture_rect`, which `vello_hybrid` 0.2 supports
-//! against any externally-owned `wgpu::TextureView` — including a Bevy one.
-//!
-//! The structure needed to decide *which* layers deserve that already exists:
-//! [`DisplayList::bounds`] gives the raster size and placement, and
-//! [`VectorStats`] records how often each layer rebuilds and how many commands
-//! it carries. A layer that is large, command-heavy and rarely rebuilt is a
-//! rasterization candidate; one that rebuilds every frame is not. That decision
-//! should be driven by those measurements rather than by guesswork, which is why
-//! the instrumentation lands before the cache.
-//!
-//! Note the granularity this implies: **the layer is the natural cache unit**,
-//! because it is already the unit of change detection, painter order and bounds.
-//! A finer unit (per-shape) has no invalidation story; a coarser one (the whole
-//! view) is what the tile cache in `plans/vision/01` describes and needs spatial
-//! indexing this backend does not have.
+//! A view's scene is built by [`Raster::draw_view`] (`raster.rs`): layers
+//! marked cacheable ([`VectorLayer::cache`], a document chunk) that have
+//! gone cold draw from tiles on shared atlas pages, and only hot or
+//! uncacheable layers are encoded command by command ([`emit_list`]).
+//! Pages baked this frame render first in [`render_scene`], so every view
+//! after them samples this frame's tiles. The pages hold Vello's own output,
+//! so they are bound as they are, without the `Convert` pass that Bevy
+//! cameras' images need.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -67,6 +56,7 @@ use super::view_composite::{MODE_PREMULTIPLIED_RAW, ViewCompositeMaterial, bucke
 use super::composite::{VECTOR_LAYER, VectorCamera};
 use super::composite_material::{VectorCompositeMaterial, fullscreen_quad};
 use super::display_list::{Brush, DisplayList, DrawCmd, Recorded, Shape};
+use super::raster::{Item, Raster};
 
 /// Format of the texture the backend renders into and Bevy samples.
 ///
@@ -385,6 +375,8 @@ struct ExtractedLayer {
     list: std::sync::Arc<Recorded>,
     /// The view whose texture it renders into; `None` is the window target.
     view: Option<Entity>,
+    /// The chunk's key, when its pixels may be cached ([`VectorLayer::cache`]).
+    cache: Option<u64>,
 }
 
 /// Where a target's scene goes: the window-sized texture (`None`) or one
@@ -521,6 +513,7 @@ fn extract_layers(
                 transform: layer_transform(layer.space, &global, view, layer.affine),
                 list: list.shared(),
                 view: layer.view,
+                cache: layer.cache,
             },
         );
         extracted.dirty.insert(layer.view);
@@ -634,6 +627,9 @@ struct HybridInner {
     convert: Option<Convert>,
     /// Converted copies of other views' textures, by source image.
     converted: HashMap<AssetId<Image>, (wgpu::Texture, wgpu::TextureView, UVec2)>,
+    /// Cold chunks' tiles and every view's raster plan
+    /// (plans/specs/render-cache.md §5).
+    raster: Option<Raster>,
 }
 
 /// One target's retained scene.
@@ -644,6 +640,8 @@ struct TargetScene {
     rendered: bool,
     /// Other views' textures this scene draws, bound at render time.
     textures: Vec<(TextureId, Handle<Image>, UVec2)>,
+    /// Atlas pages its raster layers sample, bound at render time.
+    pages: Vec<u16>,
     /// A target that draws textures renders inside the render graph, in its
     /// shared submission, so it has its own renderer: the queue writes a
     /// renderer stages for its buffers land before the whole submission, and
@@ -657,6 +655,7 @@ fn prepare_scene(
     mut extracted: ResMut<ExtractedLayers>,
     views: Res<ExtractedViews>,
     mut stats: ResMut<VectorStats>,
+    device: Res<RenderDevice>,
 ) {
     let size = extracted.target_size;
     let window = extracted.window_size;
@@ -678,6 +677,9 @@ fn prepare_scene(
     }
     // Targets that went away.
     state.targets.retain(|k, _| k.is_none_or(|e| views.0.contains_key(&e)));
+    let raster = state.raster.get_or_insert_with(|| Raster::new(TARGET_FORMAT));
+    raster.retain_views(|k| k.is_none_or(|e| views.0.contains_key(&e)));
+    raster.begin_frame(extracted.layers.values().filter_map(|l| Some((l.cache?, &l.list))));
 
     let mut keys: Vec<TargetKey> = vec![None];
     keys.extend(views.0.keys().map(|&e| Some(e)));
@@ -692,7 +694,9 @@ fn prepare_scene(
             }
         };
         let fresh = !state.targets.contains_key(&key);
-        if !fresh && !extracted.dirty.contains(&key) {
+        let raster_work = state.raster.as_ref().is_some_and(|r| r.wants_rebuild(key));
+        let changed = fresh || extracted.dirty.contains(&key);
+        if !changed && !raster_work {
             continue;
         }
         extracted.dirty.remove(&key);
@@ -700,13 +704,15 @@ fn prepare_scene(
         // `Scene::new` takes u16; a 5K display is well inside that, but a bad
         // size should clamp rather than wrap.
         let (w, h) = (tsize.x.min(u16::MAX as u32) as u16, tsize.y.min(u16::MAX as u32) as u16);
-        let HybridInner { targets, scratch, .. } = &mut *state;
-        let target = targets.entry(key).or_insert_with(|| TargetScene { scene: Scene::new(w, h), size: tsize, rendered: false, textures: Vec::new(), own: None });
+        let HybridInner { targets, scratch, raster, .. } = &mut *state;
+        let raster = raster.as_mut().expect("made above");
+        let target = targets.entry(key).or_insert_with(|| TargetScene { scene: Scene::new(w, h), size: tsize, rendered: false, textures: Vec::new(), pages: Vec::new(), own: None });
         // Reuse the allocation; `reset_and_resize` keeps its buffers.
         target.scene.reset_and_resize(w, h);
         target.size = tsize;
         target.rendered = false;
         target.textures.clear();
+        target.pages.clear();
 
         // Painter order across layers is explicit; within a layer it is
         // emission order.
@@ -716,23 +722,26 @@ fn prepare_scene(
         // in window px, shift by the view's position.
         let to_target = Affine::translate((-(offset.x as f64), -(offset.y as f64)));
         let viewport = Rect::new(0.0, 0.0, tsize.x as f64, tsize.y as f64);
-        for layer in ordered {
-            // A layer whose content cannot touch the viewport costs nothing.
-            if let Some(bounds) = layer.list.bounds() {
-                let device_bounds = (to_target * layer.transform).transform_rect_bbox(bounds);
-                if device_bounds.intersect(viewport).is_zero_area() {
-                    culled += 1;
-                    continue;
-                }
-            }
-            let n = emit_layer(&mut target.scene, &mut target.textures, layer, to_target, viewport, scratch);
-            if !overlay {
-                emitted += n;
-            }
+        // Hot and uncacheable layers are emitted live; cold runs of chunks
+        // draw from tiles, baked here as needed (`raster`). A layer whose
+        // content cannot touch the viewport costs nothing either way.
+        let items: Vec<Item<'_>> = ordered.iter().map(|l| Item { cache: l.cache, base: to_target * l.transform, list: &l.list }).collect();
+        let TargetScene { scene, textures, pages, .. } = target;
+        let mut emit = |scene: &mut Scene, list: &Recorded, base: Affine, cull: Rect| emit_list(scene, textures, list, base, cull, scratch);
+        let built = raster.draw_view(key, &items, viewport, !changed, device.wgpu_device(), scene, pages, &mut emit);
+        culled += built.culled;
+        if !overlay {
+            emitted += built.emitted;
         }
-        let ms = started.elapsed().as_secs_f32() * 1000.0;
+        let ms = started.elapsed().as_secs_f32() * 1000.0 - built.bake_ms;
+        if built.bake_ms > 0.0 {
+            crate::perf::record(crate::perf::Phase::Bake, built.bake_ms);
+        }
         let total = if overlay { &mut overlay_ms } else { &mut content_ms };
         *total = Some(total.unwrap_or(0.0) + ms);
+    }
+    if let Some(r) = state.raster.as_mut() {
+        r.end_frame();
     }
     if let Some(ms) = overlay_ms {
         crate::perf::record(crate::perf::Phase::OverlayEncode, ms);
@@ -747,20 +756,14 @@ fn prepare_scene(
     }
 }
 
-/// Emit one layer's contribution into the merged scene.
-///
-/// **This is the seam a raster cache substitutes into.** A layer that has been
-/// rasterized would, instead of walking commands, bind its texture and issue a
-/// single `scene.draw_texture_rect(ExternalTextureRect { .. })` covering
-/// `layer.bounds`. Everything that decision needs — stable identity, bounds,
-/// rebuild frequency — is already available at this call site; what is missing
-/// is only the atlas and its eviction policy.
+/// Emit one list's commands into a scene under `base`: a live layer into its
+/// view's scene, or a raster layer's chunks into an atlas page (`raster`).
+/// Commands wholly outside `viewport` (scene px) are skipped.
 ///
 /// Returns the number of commands emitted.
-fn emit_layer(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, UVec2)>, layer: &ExtractedLayer, to_target: Affine, viewport: Rect, scratch: &mut BezPath) -> u32 {
-    let base = to_target * layer.transform;
+fn emit_list(scene: &mut Scene, textures: &mut Vec<(TextureId, Handle<Image>, UVec2)>, list: &Recorded, base: Affine, viewport: Rect, scratch: &mut BezPath) -> u32 {
     let mut emitted = 0;
-    for (cmd, bounds) in layer.list.cmds().iter().zip(layer.list.cmd_bounds()) {
+    for (cmd, bounds) in list.cmds().iter().zip(list.cmd_bounds()) {
         // A drawing command wholly off screen costs nothing; scopes always
         // go out, so pushes and pops stay balanced. A chunk is culled whole
         // by its bounds before this; this is what still culls inside one
@@ -938,19 +941,26 @@ fn render_scene(
     }
     let timing = crate::perf::span(crate::perf::Phase::Render);
     let mut rendered = false;
-    let HybridInner { inner, targets, convert, converted, .. } = &mut *state;
+    let HybridInner { inner, targets, convert, converted, raster, .. } = &mut *state;
     let (renderer_inner, resources) = inner.as_mut().expect("created above");
     let convert = convert.get_or_insert_with(|| Convert::new(device.wgpu_device()));
     // Converted copies nobody draws any more.
     converted.retain(|id, _| targets.values().any(|t| t.textures.iter().any(|(_, h, _)| h.id() == *id)));
     let _ = (&convert, &converted);
+    // This frame's tiles first: every view below may sample them.
+    if let Some(raster) = raster.as_mut() {
+        raster.render_pages(renderer_inner, resources, device.wgpu_device(), queue.as_ref());
+    }
     for (key, t) in targets.iter_mut() {
         // Targets that draw other views' textures render in the graph
         // (`render_textured_scenes`), once those views have.
         if t.rendered || !t.textures.is_empty() {
             continue;
         }
-        let bindings = vello_gpu::TextureBindings::new();
+        let mut bindings = vello_gpu::TextureBindings::new();
+        if let Some(raster) = raster.as_ref() {
+            raster.bind(&t.pages, &mut bindings);
+        }
         let handle = match key {
             None => target.as_ref().map(|t| &t.0),
             Some(e) => views.0.get(e).map(|v| &v.image),
@@ -1137,7 +1147,7 @@ fn render_textured_scenes(
     if window.x == 0 || window.y == 0 {
         return;
     }
-    let HybridInner { targets, convert, converted, .. } = &mut *state;
+    let HybridInner { targets, convert, converted, raster, .. } = &mut *state;
     let convert = convert.get_or_insert_with(|| Convert::new(device.wgpu_device()));
     converted.retain(|id, _| targets.values().any(|t| t.textures.iter().any(|(_, h, _)| h.id() == *id)));
     for (key, t) in targets.iter_mut() {
@@ -1150,6 +1160,9 @@ fn render_textured_scenes(
         };
         let Some(gpu_image) = handle.and_then(|h| gpu_images.get(h)) else { continue };
         let mut bindings = vello_gpu::TextureBindings::new();
+        if let Some(raster) = raster.as_ref() {
+            raster.bind(&t.pages, &mut bindings);
+        }
         let mut missing = false;
         for (id, image, size) in &t.textures {
             let Some(src) = gpu_images.get(image) else {

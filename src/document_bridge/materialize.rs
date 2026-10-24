@@ -416,14 +416,20 @@ pub(super) fn reconcile(
     }
 }
 
-/// A node under a `library` is a definition's template, shown only when
-/// instantiated; nothing in a library is materialised.
+/// Nothing in a `library` is materialised but definitions' templates' 2D
+/// content: references draw it in place (instance-cache.md phase D), and
+/// it shows nowhere else, since no composition holds it.
 fn drawable(doc: &iron_document::Document, id: NodeId) -> bool {
     let library = TypeId::lookup("library").expect("registered");
+    let template = TypeId::lookup("template").expect("registered");
+    let mut in_template = false;
     let mut cur = Some(id);
     while let Some(n) = cur.and_then(|c| doc.live(c)) {
+        if n.ty == template && n.id != id {
+            in_template = true;
+        }
         if n.ty == library {
-            return false;
+            return in_template;
         }
         cur = n.parent;
     }

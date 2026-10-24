@@ -17,6 +17,7 @@
 //! ```
 
 pub mod facet;
+pub mod analysis;
 pub mod composition;
 pub mod constraint;
 pub mod contour;

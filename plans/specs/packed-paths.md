@@ -284,7 +284,9 @@ else changes.
 
 ## 9. Not in this spec
 
-- **`<use>` as linked instances.** Import a repeated `<use>` target as a definition
+- **Done 2026-10-24** as references ([`instance-cache.md`](instance-cache.md) phase D):
+  Prussia imports as 5,924 paths, 534 definitions and 1,832 references.
+  **`<use>` as linked instances.** Import a repeated `<use>` target as a definition
   and its uses as linked instances (component-model phase 2). That would cut this
   file's paths by about 3×. Its own spec, after this one.
 - **Drawing it fast.** After phase 3 the file is 28k paths and 603k anchors on

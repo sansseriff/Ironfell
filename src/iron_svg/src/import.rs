@@ -12,6 +12,14 @@
 //! An anonymous group with one child (usvg makes one for every transformed
 //! shape, and for opacity, filters and clips) is folded into that child; a
 //! group with an `id`, or with several children, becomes a `group`.
+//!
+//! A piece drawn more than once (a `<use>` of it, or any identical subtree)
+//! becomes a definition, and each place it is drawn a *reference* to it
+//! (`iron_document::expand::reference_template`, instance-cache.md phase D):
+//! a `use` placed where the piece was, drawn from the definition's template.
+//! Pieces are matched by content once usvg has resolved them, names aside, so
+//! a `<use>` that inherits another colour is a piece of its own. Definitions
+//! nest: a repeated piece inside a definition is a reference too.
 
 use crate::{round4, Cut, Cuts};
 use iron_document::facet::{Appearance, Arc as ArcFacet, Corners, Fill, Name, PathShape, Radius, Shadow, Size, Stroke, Transform2d};
@@ -35,6 +43,9 @@ pub struct Imported {
     pub nodes: usize,
     /// How many path anchors they hold, packed (not nodes).
     pub anchors: usize,
+    /// Definitions made from repeated pieces, and references to them.
+    pub definitions: usize,
+    pub references: usize,
 }
 
 /// Whether pasted text is SVG rather than an Iron fragment or prose.
@@ -48,11 +59,20 @@ struct INode {
     ty: &'static str,
     comps: Vec<Facet>,
     kids: Vec<INode>,
+    /// For a reference, the definition it shows, by its index among the
+    /// import's definitions.
+    def: Option<usize>,
 }
 
 impl INode {
     fn count(&self) -> usize {
         1 + self.kids.iter().map(INode::count).sum::<usize>()
+    }
+
+    /// References in it, and definitions (a `definition` node counts one).
+    fn references(&self) -> (usize, usize) {
+        let own = (usize::from(self.def.is_some()), usize::from(self.ty == "definition"));
+        self.kids.iter().map(INode::references).fold(own, |a, b| (a.0 + b.0, a.1 + b.1))
     }
 
     fn anchors(&self) -> usize {
@@ -61,8 +81,15 @@ impl INode {
     }
 }
 
-/// Parse `text` and turn what it draws into new nodes.
+/// Parse `text` and turn what it draws into new nodes, repeated pieces as
+/// references to definitions.
 pub fn import(text: &str) -> Result<Imported, String> {
+    import_with(text, true)
+}
+
+/// [`import`], with every repeated piece drawn out in full when `share` is
+/// off: the reference sharing is checked against.
+pub fn import_with(text: &str, share: bool) -> Result<Imported, String> {
     let opt = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
     let xml = roxmltree::Document::parse_with_options(text, opt).map_err(|e| format!("not valid XML: {e}"))?;
     let svg = xml.root_element();
@@ -107,35 +134,275 @@ pub fn import(text: &str) -> Result<Imported, String> {
     if nodes.is_empty() {
         return Err(if cuts.is_empty() { "the SVG draws nothing Iron can import".into() } else { format!("the SVG draws nothing Iron can import: {}", cuts.join("; ")) });
     }
-    let count = nodes.iter().map(INode::count).sum();
-    let anchors = nodes.iter().map(INode::anchors).sum();
-    let fragment = fragment(nodes, count)?;
-    Ok(Imported { fragment, cuts, nodes: count, anchors })
+    let (nodes, definitions) = if share { instance_repeats(nodes) } else { (nodes, Vec::new()) };
+    let count = nodes.iter().chain(&definitions).map(INode::count).sum();
+    let anchors = nodes.iter().chain(&definitions).map(INode::anchors).sum();
+    let references = nodes.iter().chain(&definitions).map(INode::references).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+    let fragment = fragment(nodes, definitions, count)?;
+    Ok(Imported { fragment, cuts, nodes: count, anchors, definitions: references.1, references: references.0 })
+}
+
+/// The fewest nodes (or path anchors) a repeated piece holds to become a
+/// definition: a lone small shape, even in the group usvg wraps a `<use>`
+/// of it in, costs less drawn twice than referenced.
+const SHARE_NODES: usize = 3;
+const SHARE_ANCHORS: usize = 32;
+
+/// Each subtree's content hash, names aside: `own` without the subtree
+/// root's placement (what two occurrences of one piece share), `full` with
+/// it (what its parent's hash takes in).
+struct Keys {
+    own: u64,
+    full: u64,
+    kids: Vec<Keys>,
+}
+
+/// A facet's content into `h`, exactly: a path's packed geometry by its
+/// anchors (its `Debug` is only a summary), anything else by its `Debug`.
+fn hash_facet(c: &Facet, h: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+    c.kind().hash(h);
+    for field in c.field_names() {
+        field.hash(h);
+        match c.get(field) {
+            Some(Slot::Const(Value::Geometry(g))) => {
+                for contour in g.contours() {
+                    contour.closed.hash(h);
+                    for a in &contour.anchors {
+                        [a.at.x, a.at.y, a.inn.x, a.inn.y, a.out.x, a.out.y].map(f64::to_bits).hash(h);
+                    }
+                }
+            }
+            other => format!("{other:?}").hash(h),
+        }
+    }
+}
+
+fn keys(n: &INode) -> Keys {
+    use std::hash::{Hash, Hasher};
+    let kids: Vec<Keys> = n.kids.iter().map(keys).collect();
+    let mut own = std::collections::hash_map::DefaultHasher::new();
+    n.ty.hash(&mut own);
+    let mut placement = std::collections::hash_map::DefaultHasher::new();
+    for c in &n.comps {
+        match c.kind() {
+            iron_document::FacetKind::Name => {}
+            iron_document::FacetKind::Transform2d => hash_facet(c, &mut placement),
+            _ => hash_facet(c, &mut own),
+        }
+    }
+    for k in &kids {
+        k.full.hash(&mut own);
+    }
+    let own = own.finish();
+    let mut full = std::collections::hash_map::DefaultHasher::new();
+    (own, placement.finish()).hash(&mut full);
+    Keys { own, full: full.finish(), kids }
+}
+
+fn tally(k: &Keys, counts: &mut HashMap<u64, usize>) {
+    *counts.entry(k.own).or_default() += 1;
+    for c in &k.kids {
+        tally(c, counts);
+    }
+}
+
+/// Replace every repeated piece with a reference to a definition made from
+/// its first occurrence. Returns the drawing and the definitions, each a
+/// `definition` node holding a `template` with the piece, its placement
+/// cleared; a definition comes before any that references it.
+fn instance_repeats(nodes: Vec<INode>) -> (Vec<INode>, Vec<INode>) {
+    let ks: Vec<Keys> = nodes.iter().map(keys).collect();
+    let mut counts = HashMap::new();
+    for k in &ks {
+        tally(k, &mut counts);
+    }
+    struct Defs {
+        counts: HashMap<u64, usize>,
+        index: HashMap<u64, usize>,
+        out: Vec<INode>,
+    }
+    fn rewrite(n: INode, k: &Keys, inside: &[u64], d: &mut Defs) -> INode {
+        let repeated = d.counts.get(&k.own).copied().unwrap_or(0) >= 2 && (n.count() >= SHARE_NODES || n.anchors() >= SHARE_ANCHORS);
+        if repeated && !inside.contains(&k.own) {
+            let placement = n.comps.iter().find(|c| c.kind() == iron_document::FacetKind::Transform2d).cloned();
+            let label = n.comps.iter().find(|c| c.kind() == iron_document::FacetKind::Name).cloned();
+            let index = match d.index.get(&k.own) {
+                Some(&i) => i,
+                None => {
+                    // The piece, where its first occurrence was, made the
+                    // template's content at the origin.
+                    let mut root = n;
+                    root.comps.retain(|c| c.kind() != iron_document::FacetKind::Transform2d);
+                    root.comps.push(transform2d([0.0, 0.0, 0.0, 1.0, 1.0]));
+                    let mut within = inside.to_vec();
+                    within.push(k.own);
+                    let kids = std::mem::take(&mut root.kids);
+                    root.kids = kids.into_iter().zip(&k.kids).map(|(c, ck)| rewrite(c, ck, &within, d)).collect();
+                    let mut t = iron_document::facet::Template::default();
+                    t.notation = Slot::Const(Value::Str("free".into()));
+                    let template = INode { ty: "template", comps: vec![t.wrap()], kids: vec![root], def: None };
+                    let comps = vec![label.clone().unwrap_or_else(|| name(&format!("piece {}", d.out.len() + 1)))];
+                    d.out.push(INode { ty: "definition", comps, kids: vec![template], def: None });
+                    let i = d.out.len() - 1;
+                    d.index.insert(k.own, i);
+                    return reference(placement, label, i);
+                }
+            };
+            return reference(placement, label, index);
+        }
+        let mut n = n;
+        let kids = std::mem::take(&mut n.kids);
+        n.kids = kids.into_iter().zip(&k.kids).map(|(c, ck)| rewrite(c, ck, inside, d)).collect();
+        n
+    }
+    fn reference(placement: Option<Facet>, label: Option<Facet>, def: usize) -> INode {
+        let mut comps = vec![placement.unwrap_or_else(|| transform2d([0.0, 0.0, 0.0, 1.0, 1.0]))];
+        comps.extend(label);
+        let mut u = iron_document::facet::Use::default();
+        u.notation = Slot::Const(Value::Str("free".into()));
+        comps.push(u.wrap());
+        let mut inst = iron_document::facet::Instance::default();
+        inst.mode = Slot::Const(Value::Enum("linked".into()));
+        comps.push(inst.wrap());
+        INode { ty: "use", comps, kids: Vec::new(), def: Some(def) }
+    }
+    let mut d = Defs { counts, index: HashMap::new(), out: Vec::new() };
+    let drawing: Vec<INode> = nodes.into_iter().zip(&ks).map(|(n, k)| rewrite(n, k, &[], &mut d)).collect();
+    inline_singles(drawing, d.out)
+}
+
+/// Put back every definition referenced only once: a piece repeated only
+/// because the piece around it is (counted over the drawing before it was
+/// shared) is drawn once after all. Its one reference becomes the piece,
+/// placed where the reference was. Definitions are renumbered.
+fn inline_singles(mut drawing: Vec<INode>, mut defs: Vec<INode>) -> (Vec<INode>, Vec<INode>) {
+    fn count(n: &INode, refs: &mut [usize]) {
+        if let Some(i) = n.def {
+            refs[i] += 1;
+        }
+        for k in &n.kids {
+            count(k, refs);
+        }
+    }
+    /// The piece a definition holds: its template's one child.
+    fn piece(def: &INode) -> &INode {
+        &def.kids[0].kids[0]
+    }
+    fn clone(n: &INode) -> INode {
+        INode { ty: n.ty, comps: n.comps.clone(), kids: n.kids.iter().map(clone).collect(), def: n.def }
+    }
+    fn expand(n: INode, single: &[bool], defs: &[INode]) -> INode {
+        if let Some(i) = n.def.filter(|&i| single[i]) {
+            let mut p = clone(piece(&defs[i]));
+            p.comps.retain(|c| c.kind() != iron_document::FacetKind::Transform2d);
+            p.comps.extend(n.comps.into_iter().filter(|c| c.kind() == iron_document::FacetKind::Transform2d));
+            return expand(p, single, defs);
+        }
+        let mut n = n;
+        let kids = std::mem::take(&mut n.kids);
+        n.kids = kids.into_iter().map(|k| expand(k, single, defs)).collect();
+        n
+    }
+    fn renumber(n: &mut INode, to: &[Option<usize>]) {
+        if let Some(i) = n.def {
+            n.def = to[i];
+        }
+        for k in &mut n.kids {
+            renumber(k, to);
+        }
+    }
+    loop {
+        let mut refs = vec![0; defs.len()];
+        for n in drawing.iter().chain(&defs) {
+            count(n, &mut refs);
+        }
+        let single: Vec<bool> = refs.iter().map(|&r| r <= 1).collect();
+        if !single.iter().any(|&s| s) {
+            return (drawing, defs);
+        }
+        let snapshot: Vec<INode> = defs.iter().map(clone).collect();
+        drawing = drawing.into_iter().map(|n| expand(n, &single, &snapshot)).collect();
+        let kept: Vec<INode> = defs.into_iter().enumerate().filter(|(i, _)| !single[*i]).map(|(_, d)| expand(d, &single, &snapshot)).collect();
+        let mut to = vec![None; single.len()];
+        let mut next = 0;
+        for (i, s) in single.iter().enumerate() {
+            if !s {
+                to[i] = Some(next);
+                next += 1;
+            }
+        }
+        defs = kept;
+        for n in drawing.iter_mut().chain(defs.iter_mut()) {
+            renumber(n, &to);
+        }
+    }
 }
 
 /// The nodes as a fragment: created in a scratch store, which checks them
-/// as any transaction is checked, with no home of their own.
-fn fragment(nodes: Vec<INode>, count: usize) -> Result<Fragment, String> {
+/// as any transaction is checked, with no home of their own. Definitions go
+/// in a library there and are the fragment's extras, so a paste puts them
+/// in the document's library.
+fn fragment(nodes: Vec<INode>, definitions: Vec<INode>, count: usize) -> Result<Fragment, String> {
     let mut store = Store::new();
-    let mut ids = store.document().next_ids(count).into_iter();
+    let library = (!definitions.is_empty()).then(|| store.document().next_id());
+    let mut ids = store.document().next_ids(count + usize::from(library.is_some())).into_iter();
+    if library.is_some() {
+        ids.next();
+    }
     let mut ops = Vec::new();
-    fn create(n: INode, parent: Option<NodeId>, order: OrderKey, ids: &mut impl Iterator<Item = NodeId>, ops: &mut Vec<Op>) -> NodeId {
+    fn create(n: INode, parent: Option<NodeId>, order: OrderKey, defs: &[NodeId], ids: &mut impl Iterator<Item = NodeId>, ops: &mut Vec<Op>) -> NodeId {
         let id = ids.next().expect("counted");
         let ty = TypeId::lookup(n.ty).expect("registered type");
-        ops.push(Op::Create { id, ty, parent, order, facets: n.comps });
+        let mut facets = n.comps;
+        if let Some(def) = n.def {
+            for f in &mut facets {
+                if let Facet::Instance(inst) = f {
+                    inst.def = Slot::Const(Value::Ref(defs[def]));
+                }
+            }
+        }
+        ops.push(Op::Create { id, ty, parent, order, facets });
         let mut k = OrderKey::first();
         for kid in n.kids {
-            create(kid, Some(id), k.clone(), ids, ops);
+            create(kid, Some(id), k.clone(), defs, ids, ops);
             k = OrderKey::after(&k);
         }
         id
     }
     let mut roots = Vec::new();
+    let mut extras = Vec::new();
     let mut homes = BTreeMap::new();
     let mut parent_world = BTreeMap::new();
+    if let Some(lib) = library {
+        ops.push(Op::Create { id: lib, ty: TypeId::lookup("library").expect("registered"), parent: None, order: OrderKey::first(), facets: vec![] });
+        // Inner definitions first: each one's id exists before a template
+        // that references it is created.
+        let mut k = OrderKey::first();
+        let mut defs = Vec::new();
+        for d in definitions {
+            let id = create(d, Some(lib), k.clone(), &defs, &mut ids, &mut ops);
+            defs.push(id);
+            extras.push(id);
+            homes.insert(id, (Some(lib), k.clone()));
+            k = OrderKey::after(&k);
+        }
+        let mut k = OrderKey::after(&OrderKey::first());
+        for n in nodes {
+            let id = create(n, None, k.clone(), &defs, &mut ids, &mut ops);
+            roots.push(id);
+            homes.insert(id, (None, k.clone()));
+            parent_world.insert(id, Affine2::IDENTITY);
+            k = OrderKey::after(&k);
+        }
+        store
+            .apply(TransactionInput { label: "import SVG".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false })
+            .map_err(|e| format!("the import did not apply: {e:?}"))?;
+        return Ok(Fragment { doc: store.into_document(), roots, extras, homes, parent_world, externals: BTreeMap::new(), origin: "svg".into(), dropped: Vec::new() });
+    }
     let mut k = OrderKey::first();
     for n in nodes {
-        let id = create(n, None, k.clone(), &mut ids, &mut ops);
+        let id = create(n, None, k.clone(), &[], &mut ids, &mut ops);
         roots.push(id);
         homes.insert(id, (None, k.clone()));
         parent_world.insert(id, Affine2::IDENTITY);
@@ -443,7 +710,7 @@ impl<'a, 'input> Ctx<'a, 'input> {
         comps.extend(extras);
         let mut kids = Vec::new();
         self.group_children(g, rest, 1.0, &mut kids);
-        out.push(INode { ty: "group", comps, kids });
+        out.push(INode { ty: "group", comps, kids, def: None });
     }
 
     fn appearance(&mut self, el: Option<roxmltree::Node<'_, '_>>) -> Vec<Facet> {
@@ -595,7 +862,7 @@ impl<'a, 'input> Ctx<'a, 'input> {
                 all.extend(comps);
                 all.extend(paint);
                 all.extend(extra);
-                out.push(INode { ty, comps: all, kids: Vec::new() });
+                out.push(INode { ty, comps: all, kids: Vec::new(), def: None });
                 return;
             }
         }
@@ -660,7 +927,7 @@ impl<'a, 'input> Ctx<'a, 'input> {
             all.extend(comps);
             all.extend(paint);
             all.extend(extra);
-            out.push(INode { ty, comps: all, kids: Vec::new() });
+            out.push(INode { ty, comps: all, kids: Vec::new(), def: None });
             return;
         }
         // One path; several subpaths are its contours, holes and all.
@@ -679,7 +946,7 @@ impl<'a, 'input> Ctx<'a, 'input> {
         let mut comps = vec![transform2d(t), ps.wrap()];
         comps.extend(paint);
         comps.extend(extra);
-        out.push(INode { ty: "path", comps, kids: Vec::new() });
+        out.push(INode { ty: "path", comps, kids: Vec::new(), def: None });
     }
 }
 
@@ -747,3 +1014,4 @@ fn first_stop(stops: &[usvg::Stop], cuts: &mut Cuts) -> Option<(usvg::Color, f64
     cuts.add("gradients are imported as their first stop's colour");
     stops.first().map(|s| (s.color(), s.opacity().get() as f64))
 }
+

@@ -351,6 +351,12 @@ pub fn document_stress(ptr: u64, shapes: u32) -> String {
 }
 
 #[wasm_bindgen]
+pub fn document_meters(ptr: u64, n: u32) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_meters(app, n)
+}
+
+#[wasm_bindgen]
 pub fn document_snapping(ptr: u64, enabled: bool) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_snapping(app, enabled)
@@ -372,6 +378,12 @@ pub fn document_signals(ptr: u64) -> String {
 pub fn document_producer(ptr: u64, name: String, action: String) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_producer(app, name, action)
+}
+
+#[wasm_bindgen]
+pub fn document_raster(ptr: u64, enabled: bool, budget_mb: u32) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_raster(app, enabled, budget_mb)
 }
 
 #[wasm_bindgen]
@@ -426,6 +438,12 @@ pub fn document_export_svg(ptr: u64, scope: String) -> String {
 pub fn document_import_svg(ptr: u64, text: String) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_import_svg(app, text)
+}
+
+#[wasm_bindgen]
+pub fn document_import_svg_flat(ptr: u64, text: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_import_svg_flat(app, text)
 }
 
 #[wasm_bindgen]

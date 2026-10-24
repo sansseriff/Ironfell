@@ -1,6 +1,8 @@
 # Render inspector: watching another view's culling and caching
 
-**Status:** approved 2026-10-23. Phase A built the same day (§8); phase B lands with render-cache phase 2.
+**Status:** approved 2026-10-23. Phases A and B built the same day (§8). Its legend
+also lists the selected component instance's parts, each static, keyed or live and why
+(2026-10-24, [`instance-cache.md`](instance-cache.md) phase A).
 **Relates to:** [`render-cache.md`](render-cache.md) (what it shows),
 [`panels-and-session.md`](panels-and-session.md) ("Views and presenters": a view is a
 source, a notation and a target), [`free-running.md`](free-running.md) §4 (the Stats
@@ -134,3 +136,21 @@ canvas part's composition (`views.ts`, `canvasSource`).
   and choosing the watched panel from a dropdown (each inspector watches the panel
   it was opened for). The driver opens views through `window.__dock`, the dock API.
 
+**Phase B (2026-10-23).** With render-cache phase 2.
+
+- **Squares:** the overlay outlines every raster square the watched view drew in its
+  last build (`raster::picture`, by the panel's view entity): green from its own tile,
+  amber stretched from another scale, red live because nothing covered it, magenta
+  split around a hot chunk (the hot chunk live, its neighbours from their own tiles).
+  Drawn over the chunk bounds, under the viewport box; toggled by *Raster squares*.
+- **Legend:** whether the view rasters, its squares by kind with the same colours, the
+  tile scale, atlas tiles and memory against the budget, tiles baked and their time,
+  and live squares, over the last second (`raster::summary`).
+- **Its own content** is tinted chunks under their own cache keys, so it rasters like
+  any view and never shares tiles with the observed one. It shares the observed view's
+  atlas budget and bake budget rather than a separate 64 MB, and does not bake last.
+- **Cost:** with the inspector beside it, the observed Controls view's fitted Prussia
+  pan is 1.4 ms a changed frame (1.1 beside an ordinary view) and a deep drag 2.7 ms
+  (2.7), p50 at `wasm-bench`.
+- **Not built:** bucket labels and eviction fades (display lists draw no text yet), the
+  queued state (a square is drawn, or baked the same frame), and the prefetch margin.

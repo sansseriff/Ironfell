@@ -55,6 +55,11 @@ pub struct VectorLayer {
     /// The view this layer renders into on its own (an entity carrying
     /// [`VectorView`]); `None` draws into the window-sized target.
     pub view: Option<Entity>,
+    /// A stable key for content whose pixels the backend may cache: a
+    /// document chunk (plans/specs/render-cache.md §5). Equal keys mean the
+    /// same content, so views showing it share its tiles. `None` is always
+    /// drawn live.
+    pub cache: Option<u64>,
 }
 
 /// A rectangle of the window whose layers render into a texture of their
@@ -87,6 +92,7 @@ impl VectorLayer {
             sub: 0,
             affine: kurbo::Affine::IDENTITY,
             view: None,
+            cache: None,
         }
     }
 
@@ -103,6 +109,7 @@ impl VectorLayer {
             sub: 0,
             affine: kurbo::Affine::IDENTITY,
             view: None,
+            cache: None,
         }
     }
 }

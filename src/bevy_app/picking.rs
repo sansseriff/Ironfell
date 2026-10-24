@@ -152,6 +152,20 @@ impl Pick<'_> {
             let mut chain = prefix.to_vec();
             if indexed { chain.extend_from_slice(self.spatial.chain(id)); }
             else { chain.push(id); }
+            // A reference: into its definition's template, through it.
+            if let Some(template) = nest::reference(self.doc, id) {
+                if depth >= nest::MAX_DEPTH {
+                    continue;
+                }
+                let placement = nest::world_2d(self.store, self.spatial, id);
+                if placement.determinant().abs() < 1e-12 {
+                    continue;
+                }
+                let inv = placement.inverse();
+                let kids: Vec<NodeId> = self.doc.children(template).to_vec();
+                self.walk(&kids, &chain, inv * p, inv * space, key, depth + 1);
+                continue;
+            }
             if nest::is_embed(self.doc, id) {
                 if depth >= nest::MAX_DEPTH {
                     continue;

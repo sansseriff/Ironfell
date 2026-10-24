@@ -1,0 +1,55 @@
+# References against copies (plans/specs/instance-cache.md phase D): the
+# Prussia coat of arms (see bench-large-svg.txt; copy it to .agents/tmp/big.svg
+# first) imported into a fresh page with every repeated piece drawn out
+# (`share: false`), then into another fresh page with its repeated pieces as
+# references to definitions, each fitted and zoomed in the same way, so the
+# views match. Compare with
+#   PREFIX=ip- PAIR="shared flat" python3 raster-pixels.py screenshots 380 36 940 744
+# Run with GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@1.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default
+ready
+tab Controls
+sleep 600
+pmove controls 470 370
+eval fetch('/Ironfell/.agents/tmp/big.svg').then(r => r.text()).then(t => __iron.importSvg(t, { share: false })).then(r => [r.nodes, r.references])
+sleep 5000
+key Escape
+sleep 300
+key Escape
+sleep 300
+key Shift+Digit1
+sleep 2000
+pmove controls 900 760
+sleep 2500
+shot ip-fit-flat
+pmove controls 470 370
+keydown Control
+pwheel controls 470 370 0 -10 20 40
+keyup Control
+pmove controls 900 760
+sleep 2500
+shot ip-in-flat
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default
+ready
+tab Controls
+sleep 600
+pmove controls 470 370
+eval fetch('/Ironfell/.agents/tmp/big.svg').then(r => r.text()).then(t => __iron.importSvg(t)).then(r => [r.nodes, r.definitions, r.references])
+sleep 5000
+key Escape
+sleep 300
+key Escape
+sleep 300
+key Shift+Digit1
+sleep 2000
+pmove controls 900 760
+sleep 2500
+shot ip-fit-shared
+pmove controls 470 370
+keydown Control
+pwheel controls 470 370 0 -10 20 40
+keyup Control
+pmove controls 900 760
+sleep 2500
+shot ip-in-shared
+errors

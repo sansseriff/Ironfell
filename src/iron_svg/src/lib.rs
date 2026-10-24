@@ -20,7 +20,7 @@ mod export;
 mod import;
 
 pub use export::{export, Export, Scope};
-pub use import::{import, is_svg_text, Imported};
+pub use import::{import, import_with, is_svg_text, Imported};
 
 /// One human-readable line about a feature that was dropped or approximated.
 pub type Cut = String;

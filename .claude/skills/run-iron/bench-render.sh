@@ -4,6 +4,7 @@
 #
 #   .claude/skills/run-iron/bench-render.sh [shape counts…]     # default 1000 5000 10000 20000
 #   SIZES="1600x1000@1 2560x1440@2" .claude/skills/run-iron/bench-render.sh 10000
+#   RASTER=0 .claude/skills/run-iron/bench-render.sh 10000     # raster tiles off: every view live
 #
 # Needs a build (build.sh) and Vite running (serve.sh start). Runs headless
 # Chrome on the GPU with vsync and the frame-rate limit off, so frames per
@@ -36,6 +37,9 @@ set -eu -o pipefail
 cd "$(dirname "$0")"
 COUNTS=("${@:-1000 5000 10000 20000}")
 SIZES=${SIZES:-1600x1000@1}
+# Raster tiles (src/vector/raster.rs) are on unless RASTER=0.
+PRELUDE=""
+if [ "${RASTER:-1}" = "0" ]; then PRELUDE="eval __iron.raster(false)"; fi
 SCRIPT=$(mktemp -t iron-bench-render)
 trap 'rm -f "$SCRIPT"' EXIT
 
@@ -48,6 +52,7 @@ for N in ${COUNTS[@]}; do
     cat > "$SCRIPT" <<EOS
 nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=$N
 ready
+$PRELUDE
 sleep 4000
 eval (async () => { const text = await __iron.view({fidelity:'full'}); window.__benchField = text.match(/<group id="([^"]+)" name="field"/)?.[1]; window.__benchSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; return [window.__benchField, window.__benchSample]; })()
 assert !!window.__benchField && !!window.__benchSample

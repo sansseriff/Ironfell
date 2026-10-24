@@ -1,6 +1,6 @@
 # Render cache: chunks, raster tiles, and when to use which
 
-**Status:** approved 2026-10-23. Phases 0 and 1 done the same day (§10); the inspector's phase A, then phase 2, next.
+**Status:** approved 2026-10-23. Phases 0, 1 and 2 done the same day (§10), with the inspector's phases A and B. Phase 3 only if the inspector shows the need (§6). §7's rigid move of a split group, and tiles keyed by sub-pixel phase, built 2026-10-24 in [`instance-cache.md`](instance-cache.md) phase B.
 **Relates to:** [`rendering/architecture.md`](../rendering/architecture.md) §4–8 (the
 three levels of retention, the contracts and acceptance tests this spec builds on),
 [`handoff-render.md`](../handoff-render.md) §4 items 3–4, [`view-textures.md`](view-textures.md)
@@ -151,6 +151,10 @@ Two fixes that change no design, so that measurements mean what they say:
 
 ## 5. Raster layers (phase 2)
 
+As built, §10 phase 2: a hot chunk stays in its group and only the squares it touches
+are split (replacing §5.4's promotion), tiles bake in scenes of their own, and a
+settled view bakes at its exact scale.
+
 ### 5.1 Layerization: which chunks are raster (the heuristic)
 
 Decided per view, each frame, from measured costs, with hysteresis:
@@ -260,7 +264,9 @@ the view's.
 
 ## 7. Later, not in this spec
 
-- **A hot chunk moved rigidly as its own surface**, by placement alone (architecture.md §6,
+- **Built 2026-10-24** ([`instance-cache.md`](instance-cache.md) phase B), for a group split
+  into chunks: they are recorded relative to its position and their tiles move with it.
+  **A hot chunk moved rigidly as its own surface**, by placement alone (architecture.md §6,
   "Move a baked group"), so a large group's drag costs no encode.
 - **Embedded 2D compositions' own tilings**: v1 treats an embed as one chunk drawn live
   inside its layer.
@@ -349,3 +355,101 @@ every frame:
   differ, 741 by one level, at scattered antialiased edges, from no longer
   compositing through the panel's clip layer. Planes keep the old walk.
 
+**Phase 2 (2026-10-23).** Raster tiles, in `vector/raster.rs` (render world). Same scenario
+(`bench-large-svg.txt`, `wasm-bench`, webgl2, 1600×1000 @1); live is the same build with
+`__iron.raster(false)`. Changed frames, ms:
+
+| | Live | Raster |
+|---|---|---|
+| Pan, fitted: p50 / max | 177.3 / 183.2 | 1.2 / 2.8 |
+| Drag one deep shape, fitted: p50 / p95 / max | 182.3 / 253.2 / 253.2 | 2.9 / 5.0 / 130.8 |
+| Zoom-in gesture: p50 / p95 / max | 56.5 / 181.7 / 181.7 | 0.5 / 1.3 / 35.1 |
+| Zoom-out gesture: p50 / p95 / max | 71.2 / 181.4 / 181.4 | 0.5 / 0.9 / 12.3 |
+| Pan, zoomed in: p50 / p95 / max | 39.3 / 46.1 / 49.4 | 1.2 / 7.5 / 38.8 |
+| Idle, fitted and zoomed in: content `encode` | 0.1 | 0.1 |
+
+The Piston tab with the drawing moved into it (its gauges change every frame) went from
+16 ms of encode a frame to 0.2 (`dev-opt`). The stress fixture at 10k: pan 3.2 → 0.8,
+drag-one 3.1 → 1.1, zoomed pan 3.5 → 0.8; at 1k nothing rasters (1,295 commands is under
+`LIVE_OK`) and every row matches live. The maxima are single bakes of a dense tile at
+fitted zoom, where one tile holds a large share of the drawing; drawing that square
+live would cost the same.
+
+- **Main world:** a chunk layer carries `VectorLayer::cache`, a key from its home and
+  first root (an inspector's tinted copy gets a different one); embed chunks have none.
+  `PanelView::affine` places the document origin on a whole pixel, and `to_doc` is its
+  exact inverse, so a tile drawn at the view's own scale maps texel for pixel.
+- **Planner** (`Raster::draw_view`, called for every view's scene build): runs of
+  cacheable layers under one uniform pan and zoom; within them, runs of bakeable chunks
+  (no texture, filter or blend) are groups, shared by every view drawing the same chunks
+  in the same order. A view rasters once its cold visible content passes `LIVE_OK` =
+  2,000 commands, and stops under 1,000.
+- **Tiles:** 254 px squares of bucket px plus a 1 px gutter, 64 to a 2048² page, within
+  `RASTER_BUDGET` = 256 MB; the least recently drawn tile is evicted, never one drawn
+  this frame. A tile bakes into a scene of its own slot's size, renders into a scratch
+  texture and is copied into its slot, one submission each. Pages are bound as
+  external textures without the `Convert` pass; quads are pixel-snapped rects with the
+  image placed by a paint transform, so neighbours share edges exactly.
+- **Scales:** at rest the view's own scale. While the scale changed in the last 150 ms,
+  the nearest existing tiling within ½–2× is drawn stretched, else tiles bake at the √2
+  step above.
+- **Damage:** a changed chunk drops, in every group holding it, the tiles under the
+  commands that differ (old and new bounds), or under both whole recordings when the
+  lists do not line up.
+- **Budget:** visible squares bake while the 6 ms `BAKE_MS` lasts, then draw stretched
+  from another scale if one covers them, else bake anyway, since drawing them live
+  would cost as much and leave nothing behind. Background bakes (the one-tile prefetch
+  ring, a regrouping's new groups, a stretched square's sharp tile) run only when the
+  tile's estimate fits what is left (its commands × the measured µs per command), or as the first bake of a frame where the view changed nothing else.
+  `raster::pending` keeps frames coming until the work is done (`decide_redraw`).
+- **Pixels** (`raster-pixels.txt` and `.py`, both backends): raster against live at fit,
+  zoomed in, after a deep drag, after its undo and after a deep zoom within a 32 MB
+  atlas (159 evictions). 0.06–0.08% of panel pixels differ, nearly all by one level;
+  at most five by more than 8 (worst 40, an isolated pixel on a thin edge), from
+  antialiasing computed at a different strip phase. The declared tolerance is 0.2% of
+  pixels differing and 0.01% by more than 8.
+
+Built differently from §5, with measurements behind each:
+
+1. **Hot chunks stay in their group (§5.4's promotion, replaced).** Splitting a run
+   into below / hot / above and baking both new layers over the whole view cost 45 ms a
+   frame through a short drag: the bakes did not fit the budget, so the old layer drew
+   its damaged squares live throughout. Instead, squares a hot chunk's bounds touch
+   draw split: the cold runs on either side from tiles of their own, baked only for
+   those squares, with the hot chunk live in between. Every other square keeps the
+   group's tiles. The drag then costs its chunk's encode plus the bakes under it
+   (2.9 ms p50). Hotness is a recording change in the last 500 ms; a gesture watching a
+   chunk is not a separate signal, since its first move is such a change.
+2. **No page-sized bake scenes.** One Vello render per page with a clip per slot cost
+   about 35 ms a tile at `dev-opt`, as much as encoding the whole fitted view twice:
+   every tile paid for strips across the full 2048² viewport. Per-tile scenes let
+   Vello cull to the slot. That needs one submission per tile, which the shared-upload
+   hazard required anyway.
+3. **At rest, the exact scale, not the bucket.** A √2-rounded bucket at rest would leave
+   every settled zoom drawn at a 0.71–1× bilinear downsample. Buckets are used only for
+   what a gesture bakes, so it is reused within the gesture.
+4. **`LIVE_OK` counts commands**, not milliseconds, and the inspector's tinted tiles
+   share the observed view's budget instead of having their own 64 MB.
+5. **Not built:** the prefetch bias toward the direction of motion, and keeping a
+   tiling as a fallback until the new one covers the view (squares fall back per
+   square instead). Embedded 2D compositions stay live inside their embed chunk (§7),
+   so the Main tab draws an imported drawing live through its embed.
+
+**After first use (2026-10-23), three fixes:**
+
+- **A moved large group no longer cuts its composition again.** A group too large for
+  one chunk is split into its children's chunks, and a change to it re-cut the whole
+  home, in case it had gained an appearance or a clip. Dragging such a group (the
+  Prussia shield, 4,344 nodes) therefore dropped every recording each frame and drew
+  the whole view live: 228 ms a frame. Now a split group's change marks the chunks
+  its subtree was cut into (a contiguous range, `Place::Split`), and cuts again only
+  if the group must now be drawn whole (`Chunks::must_cut_again`): 9.9 ms p50.
+  Dragging the 38,901-node group that holds nearly the whole drawing is still 236 ms,
+  since every chunk changes: that is §7's rigid move of a baked group.
+- **An old group stays only while a wanted one replaces it.** When a view stopped
+  rastering (zoomed so far in that little is visible), the groups it drew last were
+  kept and drawn from their tiles, stretched up to 36× and never rebaked, until an
+  edit regrouped them. Now they are dropped and the view draws live (pixel-identical
+  at 64×).
+- **Another scale's tiles fill a square only within 2×** of the view's scale; past
+  that the square bakes or draws live.

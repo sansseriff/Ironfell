@@ -228,6 +228,11 @@ fn diamond(c: Point, r: f64) -> kurbo::BezPath {
 #[derive(Resource, Default)]
 pub struct SelectionGeometryCache {
     selection: HashMap<String, CachedSelection>,
+    /// Whether each panel's selection can be resized, by the document
+    /// version it was worked out at: it reads which leaves are bound, never
+    /// where they are, so a drag's previews keep it. Working it out walks
+    /// every leaf of a selected group, tens of ms for a large import.
+    resizable: HashMap<String, (iron_document::Version, Vec<Reach>, bool)>,
     hover: Option<(GeometryStamp, Reach, Option<Affine>)>,
     lit: HashMap<String, CachedLit>,
 }
@@ -302,13 +307,19 @@ impl SelectionGeometryCache {
                 _ => frames.iter().map(|f| f.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)))
                     .reduce(|a, b| a.union(b)).map(unit),
             };
-            let mut capabilities = Vec::new();
-            if frame.is_some() {
-                for r in items {
-                    geo.resize_capabilities(&r.chain, &mut capabilities);
+            let version = geo.store.document().version();
+            let resizable = match self.resizable.get(panel) {
+                Some((v, reaches, known)) if *v == version && reaches.len() == items.len() && reaches.iter().zip(items).all(|(a, b)| a == *b) => *known,
+                _ => {
+                    let mut capabilities = Vec::new();
+                    for r in items {
+                        geo.resize_capabilities(&r.chain, &mut capabilities);
+                    }
+                    let known = !capabilities.is_empty() && capabilities.iter().all(|b| *b);
+                    self.resizable.insert(panel.to_owned(), (version, items.iter().map(|r| (*r).clone()).collect(), known));
+                    known
                 }
-            }
-            let resizable = !capabilities.is_empty() && capabilities.iter().all(|b| *b);
+            } && frame.is_some();
             // Rotation writes the selected roots, unlike group resizing.
             let rotatable = frame.is_some() && !items.is_empty() && items.iter()
                 .filter(|r| geo.space(&r.chain).is_some() && geo.local_box(r.node()).is_some())
@@ -711,6 +722,11 @@ impl Geo<'_> {
         let mut a = Affine::IDENTITY;
         let (last, outer) = chain.split_last()?;
         for &e in outer {
+            // A reference places its definition's template through itself.
+            if nest::reference(doc, e).is_some() {
+                a = a * self.world(e);
+                continue;
+            }
             if !nest::is_embed(doc, e) {
                 continue;
             }
@@ -775,6 +791,11 @@ impl Geo<'_> {
             // (render-cache.md §4.3): no walk of the subtree, which on a
             // large import cost tens of ms per hover. Leaves count by their
             // tight geometry, as snapping does. Without the index, walk.
+            // A reference's box is its template's content.
+            "use" if nest::reference(doc, id).is_some() => {
+                let t = nest::reference(doc, id)?;
+                Some((self.spatial.group_content(t)?.geometry, Kind::Group))
+            }
             "group" | "use" if self.spatial.enabled => Some((self.spatial.group_content(id)?.geometry, Kind::Group)),
             "group" | "use" => {
                 let inv = self.world(id).inverse();
@@ -1333,6 +1354,7 @@ fn snap_session(geo: &Geo, view: &PanelView, mine: &[&Reach], k: f64) -> Option<
                 }
                 composition::embedded(doc, c).map(|s| doc.children(s).to_vec()).unwrap_or_default()
             }
+            Some(&c) if nest::reference(doc, c).is_some() => nest::reference(doc, c).map(|t| doc.children(t).to_vec()).unwrap_or_default(),
             Some(&c) => doc.children(c).to_vec(),
         };
         let Some(space) = geo.space(&r.chain) else { continue };
@@ -1464,6 +1486,7 @@ fn siblings(doc: &iron_document::Document, views: &PanelViews, r: &Reach) -> (Ve
     let prefix = r.chain[..r.chain.len() - 1].to_vec();
     let roots = match prefix.last() {
         Some(&c) if nest::is_embed(doc, c) => composition::embedded(doc, c).map(|s| doc.children(s).to_vec()).unwrap_or_default(),
+        Some(&c) if nest::reference(doc, c).is_some() => nest::reference(doc, c).map(|t| doc.children(t).to_vec()).unwrap_or_default(),
         Some(&c) => doc.children(c).to_vec(),
         None => views.get(&r.panel).map(|v| nest::panel_roots(doc, v)).unwrap_or_default(),
     };
@@ -1473,7 +1496,13 @@ fn siblings(doc: &iron_document::Document, views: &PanelViews, r: &Reach) -> (Ve
 /// Children of a node as chains: a group's children, an embed's content.
 fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
     let id = r.node();
-    let kids = if nest::is_embed(doc, id) { composition::embedded(doc, id).map(|s| doc.children(s).to_vec()).unwrap_or_default() } else { doc.children(id).to_vec() };
+    let kids = if nest::is_embed(doc, id) {
+        composition::embedded(doc, id).map(|s| doc.children(s).to_vec()).unwrap_or_default()
+    } else if let Some(t) = nest::reference(doc, id) {
+        doc.children(t).to_vec()
+    } else {
+        doc.children(id).to_vec()
+    };
     kids.into_iter()
         .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "empty" | "embed" | "mesh")))
         .map(|k| {
@@ -2091,6 +2120,10 @@ pub fn select_tool_system(
                 && top_hit(&hits).is_some_and(|(chain, _)| chain.contains(&r.node()))
                 && (geo.ty(r.node()) == "path" || (iron_document::shape::convertible(&store.0, r.node()) && edit_as_path(&store.0, &mut pending, r.node(), &events)))
             {
+                // A packed path (an imported one) gets its point nodes first.
+                if geo.ty(r.node()) == "path" {
+                    expand_points(&store.0, &mut pending, r.node());
+                }
                 *edit = PathEdit { reach: Some(r.clone()), point: None };
                 tool.last_click = None;
                 tool.last_press = None;

@@ -293,6 +293,10 @@ async function run(line: string) {
           commands: t.commands,
           culled: t.culled,
           drawn: t.drawn,
+          // Raster tiles (src/vector/raster.rs): bake time, and the counts
+          // without the per-view picture.
+          bake: phase("bake"),
+          raster: t.raster && (({ views, ...rest }: any) => rest)(t.raster),
         };
       });
       return out(`measure ${label} ${JSON.stringify(m)}`);
@@ -352,6 +356,22 @@ async function run(line: string) {
       await page.mouse.down();
       await page.waitForTimeout(200);
       await page.mouse.up();
+      await page.waitForTimeout(200);
+      return;
+    }
+    case "pdouble": {
+      // Double-click inside a named panel, panel-relative: two clicks well
+      // inside the select tool's 0.4 s (`pclick` takes 0.6 s each).
+      const r = await panelRect(rest[0]);
+      const [x, y] = rest.slice(1).map(Number);
+      await page.mouse.move(r.x + x * panelUnit, r.y + y * panelUnit);
+      await page.waitForTimeout(200);
+      for (let i = 0; i < 2; i++) {
+        await page.mouse.down();
+        await page.waitForTimeout(30);
+        await page.mouse.up();
+        await page.waitForTimeout(60);
+      }
       await page.waitForTimeout(200);
       return;
     }

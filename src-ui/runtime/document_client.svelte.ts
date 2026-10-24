@@ -20,13 +20,16 @@
  *   await __iron.focus('#a')       -> "Show in": frame #a in its panels
  *   await __iron.session()         -> the session's selection [{node, panel, chain, …}]
  *   await __iron.stress(5000)      -> add the render benchmark's `stress` composition
- *   await __iron.timings(reset?)   -> per-phase CPU render timings since the last reset
+ *   await __iron.meters(100)       -> add the instance-cache benchmark's `meters` composition
+ *   await __iron.timings(reset?)   -> per-phase CPU render timings since the last reset, raster tiles under `raster`
+ *   await __iron.raster(enabled?, budgetMb?) -> raster tiles on (default) or off, every view live, and the atlas budget (0: 256 MB); returns the raster report
  *   await __iron.signals()         -> runtime signals: producers, published leaves, conflicts
  *   await __iron.producer('gas', 'freeze' | 'stop' | 'run') -> commit a producer's values as one transaction and stop it, stop, or run
  *   __iron.copied()                -> the last fragment Cmd+C or Cmd+X copied in this tab
  *   __iron.paste(text?)            -> paste a fragment (default: the last copied), as a paste event does
  *   await __iron.exportSvg(scope?) -> SVG text of a composition (id or name), a node, or 'selection' (default)
- *   await __iron.importSvg(text)   -> import SVG as a paste: {ok, cuts, nodes, anchors}; placed next frame
+ *   await __iron.importSvg(text)   -> import SVG as a paste: {ok, cuts, nodes, anchors, definitions, references}; placed next frame
+ *   await __iron.importSvg(text, {share: false}) -> the same with repeated pieces drawn out, no references
  */
 import { lastCopied } from './clipboard';
 
@@ -123,10 +126,15 @@ export class DocumentClient {
       // The render benchmark (roadmap stage H): a composition of `shapes`
       // shapes, and per-phase CPU timings (`src/perf.rs`).
       stress: (shapes = 5000) => this.call('stress', [shapes]),
+      // The instance-cache benchmark: `n` dial meters, the first driven by
+      // a slider (plans/specs/instance-cache.md phase 0).
+      meters: (n = 100) => this.call('meters', [n]),
       spatial: (enabled = true) => this.call('spatial', [enabled]),
       // Object snapping for the select tool (plans/specs/snapping.md).
       snapping: (enabled = true) => this.call('snapping', [enabled]),
       timings: (reset = false) => this.call('timings', [reset]),
+      // Raster tiles for cold chunks (render-cache.md §5); off draws live.
+      raster: (enabled = true, budgetMb = 0) => this.call('raster', [enabled, budgetMb]),
       // The runtime signal layer (vision 10 §4) and its host producers.
       signals: () => this.call('signals', []),
       producer: (name = 'gas', action = 'freeze') => this.call('producer', [name, action]),
@@ -140,7 +148,7 @@ export class DocumentClient {
         return r.svg;
       },
       exportSvgCuts: async (scope = 'selection') => (await this.exportSvg(scope)).cuts,
-      importSvg: (text: string) => this.importSvg(text),
+      importSvg: (text: string, opts?: { share?: boolean }) => this.importSvg(text, opts),
       copied: () => lastCopied(),
       paste: (text?: string) => {
         const dt = new DataTransfer();
@@ -181,8 +189,11 @@ export class DocumentClient {
 
   /** Import SVG text as a paste: under the pointer or at the view's centre,
    *  one "import SVG" transaction. `cuts` lists what it could not carry. */
-  async importSvg(text: string): Promise<{ ok: boolean; cuts?: string[]; nodes?: number; anchors?: number; error?: string }> {
-    const r = await this.call('import_svg', [text]);
+  async importSvg(text: string, opts: { share?: boolean } = {}): Promise<{ ok: boolean; cuts?: string[]; nodes?: number; anchors?: number; definitions?: number; references?: number; error?: string }> {
+    // Repeated pieces come in as references to definitions; `share: false`
+    // draws every one out in full, the reference the sharing is checked
+    // against (plans/specs/instance-cache.md phase D).
+    const r = await this.call(opts.share === false ? 'import_svg_flat' : 'import_svg', [text]);
     if (!r.ok) this.error = `import SVG: ${r.error}`;
     return r;
   }
@@ -272,6 +283,8 @@ export class DocumentClient {
           this.stressed = true;
           const shapes = Number(new URLSearchParams(location.search).get('stress'));
           if (shapes > 0) void this.call('stress', [shapes]);
+          const meters = Number(new URLSearchParams(location.search).get('meters'));
+          if (meters > 0) void this.call('meters', [meters]);
         }
         void this.refresh();
         void this.refreshCounterparts();

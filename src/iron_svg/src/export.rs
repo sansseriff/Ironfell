@@ -316,7 +316,13 @@ impl Writer<'_> {
                     attrs.push(("clip-path", format!("url(#{cid})")));
                 }
                 let here = parent * self.local(id);
-                let kids = self.doc.children(id).to_vec();
+                // A reference exports what it shows, its definition's
+                // template, in place (instance-cache.md phase D).
+                let kids = match iron_document::expand::reference_template(self.doc, id) {
+                    Some(t) if depth < 64 => self.doc.children(t).to_vec(),
+                    Some(_) => Vec::new(),
+                    None => self.doc.children(id).to_vec(),
+                };
                 if kids.is_empty() {
                     self.line(depth, &element("g", &attrs, true));
                 } else {

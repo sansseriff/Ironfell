@@ -48,6 +48,11 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ full `smoke.txt` (`GPU=1`) | ~3.5 min |
 | `piston.txt` | ~1 min |
 | `snapping.txt` | ~30 s |
+| ⏱ `raster-pixels.txt` (with the Prussia import, then the meters) | ~1.5 min |
+| ⏱ `bench-instances.txt` | ~1.5 min |
+| `instance-pixels.txt` | ~1 min |
+| ⏱ `instance_cost` (native, release) | ~1.5 min |
+| `bench-large-svg.txt` | ~1 min |
 | a short ad-hoc driver script (a few commands) | 20–40 s |
 | ⏱ `cargo test -p iron_document`, after a dependency change | a few minutes (not yet timed) |
 
@@ -200,7 +205,7 @@ redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
 "<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00…\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
 true
 "<ellipse id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
-["<ellipse id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"281.00…\" x.by=\"#V\" y=\"38.20…\" y.by=\"#V\""]
+["<ellipse id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"281.00…\" x.by=\"#V\" y=\"38.19…\" y.by=\"#V\""]
 "x.by=\"#V\""
 "#s"
 found at … (a point on the card dot; varies with the sweep)
@@ -359,7 +364,7 @@ undefined
 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"30\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.0914 38.6599 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.57… 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
 ["slider level is exported as a picture of itself; it imports as shapes"]
 4
-{"anchors":2,"cuts":["filters are not imported"],"nodes":4,"ok":true}
+{"anchors":2,"cuts":["filters are not imported"],"definitions":0,"nodes":4,"ok":true,"references":0}
 [8,4]
 ["<rect id=\"#4M\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#4N\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#4O\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\" d=\"1 contour, 2 anchors\"","<rect id=\"#4P\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
 " d=\"1 contour, 2 anchors\""
@@ -688,6 +693,7 @@ cd -
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
 | `pclick <panel> x y` | click inside a named panel, panel-relative |
+| `pdouble <panel> x y` | double-click inside a named panel (two clicks 90 ms apart; two `pclick`s, 0.6 s each, miss the select tool's 0.4 s window) |
 | `wheel dx dy` | scroll at the pointer: pans a 2D view; hold `Control` (`keydown Control`) to zoom about the pointer, as a pinch does |
 | `tab <title>` | activate the dock tab with that title (`Pendulum`, `Assembly`, …) |
 | `dragtab <title> x y` | drag a dock tab to a window point: a group's edge splits, its centre or tab bar stacks |
@@ -808,6 +814,81 @@ correct slider/sample addressing at DPR 1/2. The slider must commit approximatel
 0.5. Inspect the `selection-cache-view-mapping` and `selection-cache-dpr-fixture`
 screenshots. Do not build/rebind wasm during a driver run: a later navigation can
 mix cached glue with a new wasm artifact and make the run invalid.
+
+## Raster tiles (render-cache phase 2)
+
+Cold chunks of a 2D view draw from raster tiles (`src/vector/raster.rs`,
+plans/specs/render-cache.md §5 and §10) once its cold visible content passes
+2,000 commands, so the demo document draws live and the Prussia file rasters.
+`await __iron.raster(false)` draws every view live (the reference raster output
+is compared against); `__iron.raster(true, mb)` turns tiles back on with an
+atlas budget of `mb` MB (0: the default 256), which is how eviction is tested.
+`__iron.timings()` carries the cache's state under `raster` (pages, tiles,
+groups, and since the last reset `baked`, `bake_ms`, `live_squares`,
+`stretched_squares`, `evicted`; `views` has each view's squares by kind), and
+the driver's `measure` lines carry `bake` (the phase) and `raster` (those counts
+without `views`). Encode excludes bake time.
+
+Two checks, both on the Prussia coat of arms (Wikimedia,
+`Coat_of_Arms_of_the_Kingdom_of_Prussia_1873-1918.svg`, 11 MB; copy it to
+`.agents/tmp/big.svg`):
+
+```bash
+cd .claude/skills/run-iron
+GPU=1 UNTHROTTLED=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < bench-large-svg.txt
+GPU=1 UNTHROTTLED=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < raster-pixels.txt
+python3 raster-pixels.py screenshots 380 36 940 744
+```
+
+`bench-large-svg.txt` prints the interaction rows; at `wasm-bench` expect changed
+frames p50 ≈ 1.2 ms for both pans, ≈ 3 ms for the deep drag and ≈ 0.5 ms for the zoom
+gestures, with single-frame maxima up to ≈ 130 ms where a dense tile bakes (the
+table is in `render-cache.md` §10). With `?gfx=webgl2` replaced by `webgpu` it runs
+on the other backend. `raster-pixels.py` must print `pass` for `rp-deep`,
+`rp-dragged`, `rp-fit`, `rp-group`, `rp-in`, `rp-meters` and `rp-undone`. It bounds
+pixels off by more than 2 levels (0.2%) and by more than 8 (0.01%), not every
+difference: each chunk frame (a group's position) is a raster group composited on its
+own, so about 2–3% of pixels differ by 1–2 levels where antialiased edges overlap
+(with the Prussia file imported as references, about 21,000 differ, ~500 by more than
+2, 8 by more than 8; `rp-meters` 321, worst 1). The `eval` after the deep zoom reports
+`evicted` > 0 (it runs in a 32 MB atlas). `RASTER=0 bench-render.sh …` runs the
+stress benchmark with tiles off.
+
+## Instance cache (plans/specs/instance-cache.md)
+
+`?meters=N` (or `await __iron.meters(n)`) adds a `meters` composition and a Meters
+tab: N dial meters from the standard library, their definition given 60 tick marks,
+and a slider bound to the first one's `in`. SVG import turns every piece drawn twice
+or more into a definition and its occurrences into references
+(`__iron.importSvg(text)` returns `definitions` and `references`);
+`__iron.importSvg(text, { share: false })` imports every copy in full. Three checks:
+
+```bash
+cd .claude/skills/run-iron
+GPU=1 UNTHROTTLED=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < bench-instances.txt
+GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < instance-pixels.txt
+PREFIX=ip- PAIR="shared flat" python3 raster-pixels.py screenshots 380 36 940 744
+```
+
+`bench-instances.txt` (build `PROFILE=wasm-bench`) measures the meters idle, scrubbed
+twice and panned, then the Prussia near-whole group (g93169) dragged. Expect changed
+frames p50 ≈ 0.4 ms for the scrubs with `baked: 0` on the second, the `eval` lines
+printing `{"groups":2,"tiles":8}`, and the drag ≈ 7 ms p50 (0.6 ms with the file
+imported unshared). `instance-pixels.txt` imports the file unshared and shared, each
+in a fresh page, and screenshots both fitted and zoomed in; the comparison passes
+(drawn from tiles, ~8,000 pixels differ from grouping; drawn live, with
+`__iron.raster(false)` after `ready`, none). Natively (copy the file first):
+
+```bash
+BIG_SVG=$PWD/.agents/tmp/big.svg cargo test -p iron_svg --target aarch64-apple-darwin --release --test big_import -- --ignored --nocapture
+BIG_SVG=$PWD/.agents/tmp/big.svg cargo test -p iron_spatial --target aarch64-apple-darwin --release --test references -- --ignored
+cargo test -p iron_document --release --target aarch64-apple-darwin --test instance_cost -- --ignored --nocapture
+```
+
+`big_import` prints 14,407 nodes, 534 definitions and 1,832 references and checks that
+the shared and unshared imports place every node alike; `references` checks the
+spatial scene's bounds agree; `instance_cost` prints what expanded instances cost
+(1,000 meters: a structural edit ≈ 160 ms).
 
 ## Spatial and picking regression checks
 

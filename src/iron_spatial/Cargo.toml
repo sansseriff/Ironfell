@@ -8,3 +8,6 @@ description = "Derived bounds and spatial queries keyed by Iron document identit
 iron_document = { path = "../iron_document" }
 kurbo = "0.13.1"
 understory_index = { git = "https://github.com/forest-rs/understory", rev = "2ac7efbc010c8ee4daa316c34eadc0bafacfe83b", default-features = false }
+
+[dev-dependencies]
+iron_svg = { path = "../iron_svg" }

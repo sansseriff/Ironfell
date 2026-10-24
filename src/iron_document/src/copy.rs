@@ -325,7 +325,12 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
         create.push(r);
         create.extend(frag.doc.descendants(r));
     }
-    let ids = doc.next_ids(create.len());
+    // Definitions an SVG import brought go in the library, made if missing.
+    let library = doc.roots().iter().copied().find(|&r| type_name(doc, r) == "library");
+    let needs_library = library.is_none() && frag.extras.iter().any(|&e| type_name(&frag.doc, e) == "definition");
+    let mut ids = doc.next_ids(create.len() + usize::from(needs_library));
+    let made_library = needs_library.then(|| ids.remove(0));
+    let library = library.or(made_library);
     let map: BTreeMap<NodeId, NodeId> = create.iter().copied().zip(ids.iter().copied()).collect();
     // A copied node, or an expanded node of a copied instance: the paste's.
     let follow = |n: NodeId| -> Option<NodeId> { map.get(&n).copied().or_else(|| n.expanded_parts().and_then(|(owner, local)| map.get(&owner).and_then(|&o| NodeId::expanded(o, local)))) };
@@ -344,6 +349,9 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
     let offset = Affine2::translate(place.offset[0], place.offset[1]);
     let mut last_key: BTreeMap<Option<NodeId>, OrderKey> = BTreeMap::new();
     let mut ops = Vec::new();
+    if let Some(lib) = made_library {
+        ops.push(Op::Create { id: lib, ty: ty("library"), parent: None, order: key_last(doc, None), facets: vec![] });
+    }
     for &old in &create {
         let node = frag.doc.node(old).expect("fragment node");
         let is_root = frag.roots.contains(&old);
@@ -374,6 +382,7 @@ pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> R
                 // clip in the first timeline, a constraint with the roots.
                 let parent = match node.ty.name() {
                     "entity" | "connection" => composition::model_root(doc),
+                    "definition" => library,
                     "clip" => doc.nodes_of_type(ty("timeline")).next(),
                     _ => place.parent,
                 };

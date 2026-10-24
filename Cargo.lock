@@ -4346,6 +4346,7 @@ name = "iron_spatial"
 version = "0.1.0"
 dependencies = [
  "iron_document",
+ "iron_svg",
  "kurbo",
  "understory_index",
 ]

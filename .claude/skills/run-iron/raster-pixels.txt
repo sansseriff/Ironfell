@@ -1,0 +1,136 @@
+# Raster tiles against live output (plans/specs/render-cache.md §5): the
+# Prussia coat of arms (see bench-large-svg.txt; copy it to .agents/tmp/big.svg
+# first) in the Controls tab, screenshotted with raster tiles on and then with
+# `__iron.raster(false)` (every view live), at fit, zoomed in, after a deep
+# drag and after its undo, after dragging the group that holds nearly the whole
+# drawing, after a deep zoom in steps within a small atlas, which evicts, and
+# for 100 dial meters drawn from shared tiles. Compare with
+#   python3 raster-pixels.py screenshots 380 36 940 744
+# Run with GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@1.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default
+ready
+tab Controls
+sleep 600
+pmove controls 470 370
+eval fetch('/Ironfell/.agents/tmp/big.svg').then(r => r.text()).then(t => __iron.importSvg(t)).then(r => r.nodes)
+sleep 5000
+key Escape
+sleep 300
+key Escape
+sleep 300
+key Shift+Digit1
+sleep 2000
+pmove controls 900 760
+sleep 2500
+shot rp-fit-raster
+eval __iron.raster(false).then(() => 'live')
+sleep 1500
+shot rp-fit-live
+eval __iron.raster(true).then(() => 'raster')
+sleep 1500
+pmove controls 470 370
+keydown Control
+pwheel controls 470 370 0 -10 20 40
+keyup Control
+pmove controls 900 760
+sleep 2500
+shot rp-in-raster
+eval __iron.raster(false).then(() => 'live')
+sleep 1500
+shot rp-in-live
+eval __iron.raster(true).then(() => 'raster')
+sleep 1500
+key Shift+Digit1
+sleep 2000
+keydown Meta
+pdrag controls 470 370 560 430 30
+keyup Meta
+pmove controls 900 760
+sleep 2500
+shot rp-dragged-raster
+eval __iron.raster(false).then(() => 'live')
+sleep 1500
+shot rp-dragged-live
+eval __iron.raster(true).then(() => 'raster')
+sleep 1500
+key Meta+z
+sleep 2500
+shot rp-undone-raster
+eval __iron.raster(false).then(() => 'live')
+sleep 1500
+shot rp-undone-live
+eval __iron.raster(true).then(() => 'raster')
+sleep 1500
+# The group holding nearly the whole drawing (g93169: a click selects layer2,
+# a double-click enters it) dragged by a distance that lands it on a fraction
+# of a pixel: its chunks are recorded in its space and its tiles move with it
+# (instance-cache.md §2), then rebake at the new phase once it rests.
+key Escape
+sleep 300
+key Escape
+sleep 300
+pclick controls 470 420
+sleep 300
+pdouble controls 470 420
+sleep 300
+pdrag controls 470 420 503 447 30
+pmove controls 900 760
+sleep 3000
+shot rp-group-raster
+eval __iron.raster(false).then(() => 'live')
+sleep 1500
+shot rp-group-live
+eval __iron.raster(true).then(() => 'raster')
+sleep 1500
+key Meta+z
+sleep 2500
+key Escape
+sleep 300
+key Escape
+sleep 300
+# Deep zoom in steps, each settling (and baking at its own scale), within a
+# 32 MB atlas (two pages), so tiles are evicted and baked again.
+eval __iron.raster(true, 32).then(() => 'raster, 32 MB')
+pmove controls 470 370
+keydown Control
+pwheel controls 470 370 0 -6 10 30
+sleep 400
+pwheel controls 470 370 0 -6 10 30
+sleep 400
+pwheel controls 470 370 0 -6 10 30
+sleep 400
+pwheel controls 470 370 0 -6 10 30
+sleep 400
+pwheel controls 470 370 0 -6 10 30
+sleep 400
+pwheel controls 470 370 0 -6 10 30
+sleep 400
+pwheel controls 470 370 0 6 10 30
+sleep 400
+pwheel controls 470 370 0 6 10 30
+sleep 400
+keyup Control
+sleep 1500
+shot rp-deep-raster
+eval __iron.raster(false).then(() => 'live')
+sleep 1500
+shot rp-deep-live
+eval __iron.raster(true).then(() => 'raster')
+eval __iron.timings(false).then(t => { const { views, ...r } = t.raster; return r; })
+# Component instances drawn from shared tiles (instance-cache.md phase C):
+# 100 dial meters, one driven by a slider, scrubbed and settled.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&meters=100
+ready
+sleep 3000
+tab Meters
+sleep 1500
+pdrag meters 120 32 170 32 20
+pmove meters 900 60
+sleep 2500
+shot rp-meters-raster
+eval __iron.raster(false).then(() => 'live')
+sleep 1500
+shot rp-meters-live
+eval __iron.raster(true).then(() => 'raster')
+eval __iron.timings(false).then(t => ({ groups: t.raster.groups, tiles: t.raster.tiles }))
+errors

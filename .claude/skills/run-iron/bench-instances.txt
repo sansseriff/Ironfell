@@ -1,0 +1,73 @@
+# The instance-cache benchmark (plans/specs/instance-cache.md phase 0): what
+# component instances and a large group's drag cost per frame.
+#
+#   Meters: `?meters=100` adds 100 dial meters from the standard library (their
+#   definition given 60 tick marks, so a face is worth baking) and a slider
+#   driving the first one's `in`. Idle; scrubbing the slider (one needle and
+#   readout change), twice: the first scrub bakes the view's first tiles, the
+#   second should bake none; a pan. The `eval` lines print the raster groups
+#   and tiles: equal instances share one face.
+#   Prussia: the coat of arms (bench-large-svg.txt; copy it to
+#   .agents/tmp/big.svg first) fitted in the Controls tab; a click selects
+#   layer2, a double-click enters g93169 (38,901 nodes, nearly the whole
+#   drawing), which is dragged and then undone.
+#
+# Build PROFILE=wasm-bench; run with
+#   GPU=1 UNTHROTTLED=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < bench-instances.txt
+# and read the `measure` lines (changed_frame, display_list, encode, bake).
+nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&meters=100
+ready
+sleep 4000
+tab Meters
+sleep 1500
+pmove meters 900 60
+sleep 1500
+shot bi-meters
+measure-reset
+sleep 3000
+measure meters-idle
+eval __iron.timings(false).then(t => ({ groups: t.raster.groups, tiles: t.raster.tiles }))
+measure-reset
+pdrag meters 120 32 210 32 40
+pdrag meters 210 32 60 32 40
+measure meters-drive-one
+eval __iron.timings(false).then(t => ({ groups: t.raster.groups, tiles: t.raster.tiles }))
+sleep 1500
+measure-reset
+pdrag meters 60 32 210 32 40
+pdrag meters 210 32 120 32 40
+measure meters-drive-again
+eval __iron.timings(false).then(t => ({ groups: t.raster.groups, tiles: t.raster.tiles }))
+sleep 1500
+pmove meters 900 60
+measure-reset
+pwheel meters 900 60 0 5 40 40
+pwheel meters 900 60 0 -5 40 40
+measure meters-pan
+tab Controls
+sleep 600
+pmove controls 470 370
+eval fetch('/Ironfell/.agents/tmp/big.svg').then(r => r.text()).then(t => __iron.importSvg(t)).then(r => r.nodes)
+sleep 5000
+key Escape
+sleep 300
+key Escape
+sleep 300
+key Shift+Digit1
+sleep 2500
+pclick controls 470 420
+sleep 300
+pdouble controls 470 420
+sleep 300
+eval __iron.session().then(s => __iron.view({scope: s[0]?.node, fidelity: 'skeleton'})).then(v => v.slice(0, 80))
+measure-reset
+pdrag controls 470 420 520 470 40
+measure prussia-drag-whole
+sleep 2500
+shot bi-dragged
+measure-reset
+sleep 3000
+measure prussia-after-drag
+key Meta+z
+sleep 1500
+errors

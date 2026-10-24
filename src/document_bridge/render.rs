@@ -24,7 +24,7 @@
 //! no overlay of its own.
 
 use super::{SpatialScene, Doc2d, DocumentChanges, DocumentStore, Highlights, PanelViews, Shape2d, nest};
-use super::chunks::{ChunkLayer, Chunks, panel_homes};
+use super::chunks::{ChunkLayer, Chunks, Place, panel_homes};
 use iron_document::composition::Dims;
 use crate::vector::{DisplayList, DisplayListRebuild, Recorded, VectorLayer, VectorView, order};
 use bevy::prelude::*;
@@ -74,6 +74,38 @@ pub(super) fn sync_document_views(
     }
 }
 
+/// A chunk's key for the backend's raster cache (`VectorLayer::cache`): its
+/// home and first root, which stay while a re-cut keeps it, and whether it
+/// is a render inspector's tinted copy, which must not share its tiles.
+fn cache_key(home: nest::Home, first: NodeId, tinted: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (home, first, tinted).hash(&mut h);
+    h.finish()
+}
+
+/// The definition template `n` belongs to, if it is inside one.
+fn template_of(doc: &iron_document::Document, n: NodeId) -> Option<NodeId> {
+    let mut at = doc.node(n).and_then(|x| x.parent);
+    while let Some(p) = at {
+        let node = doc.node(p)?;
+        match node.ty.name() {
+            "template" => return Some(p),
+            "composition" => return None,
+            _ => at = node.parent,
+        }
+    }
+    None
+}
+
+/// Two keys made one.
+fn mix(a: u64, b: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (a, b).hash(&mut h);
+    h.finish()
+}
+
 /// How many changed node ids a redraw line names before summarising.
 const LOG_IDS: usize = 12;
 
@@ -119,14 +151,17 @@ pub fn render_document_layer(
     // Damage belongs to the independently prepared canonical compositions.
     // It is diagnostic here; per-view damage mapping/partial rasterization is later.
     let damage = spatial.damage.iter().copied().reduce(|a,b| a.union(b));
-    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, drawables: &drawables, highlights: None, spatial: &spatial, drawn: 0 };
+    let mut cx = Draw { store: &store.0, embed_images: &embed_images, doc, drawables: &drawables, highlights: None, spatial: &spatial, drawn: 0, relative: None };
     // Where the changed nodes draw, when only the document changed: a
     // panel rebuilds only for changes it shows (render-cache.md §4.3), so a
     // Stats tick does not rebuild a 29k-node drawing beside it. Any other
     // reason, or a structure change with no nodes named, rebuilds every
     // panel. A panel that does rebuild unchanged gets equal commands, so its
     // view does not re-render.
-    let homes: Option<std::collections::BTreeSet<nest::Home>> = (reason == "document" && !changed.nodes.is_empty())
+    // An edit inside a definition's template shows wherever it is
+    // referenced: every panel rebuilds.
+    let in_templates = changed.nodes.iter().any(|&n| template_of(doc, n).is_some());
+    let homes: Option<std::collections::BTreeSet<nest::Home>> = (reason == "document" && !changed.nodes.is_empty() && !in_templates)
         .then(|| changed.nodes.iter().map(|&n| nest::home(doc, n)).collect())
         .filter(|h: &std::collections::BTreeSet<nest::Home>| !h.contains(&nest::Home::Unknown));
     let shows = |composition: Option<NodeId>, loose: bool| {
@@ -150,17 +185,40 @@ pub fn render_document_layer(
         let everything = !matches!(reason, "document" | "panel layout" | "new view");
         let mut recut: BTreeSet<nest::Home> = wanted.iter().copied().filter(|h| changed.structure || !chunks.homes.contains_key(h)).collect();
         let mut dirty: BTreeMap<nest::Home, BTreeSet<usize>> = BTreeMap::new();
+        // Chunks whose frame may have moved, with nothing they draw changed.
+        let mut reframe: BTreeMap<nest::Home, BTreeSet<usize>> = BTreeMap::new();
         for &n in &changed.nodes {
+            // Inside a definition's template: every chunk that shows it
+            // through a reference (instance-cache.md phase D).
+            if let Some(t) = template_of(doc, n) {
+                for (home, part) in &chunks.homes {
+                    if let Some(shown) = part.shows_template.get(&t) {
+                        dirty.entry(*home).or_default().extend(shown.iter().copied());
+                    }
+                }
+                continue;
+            }
             let home = nest::home(doc, n);
             if !wanted.contains(&home) {
                 continue;
             }
             match chunks.chunk_of(home, n) {
-                Some(Ok(i)) => {
+                // An instance moved as a whole: its runs are recorded
+                // relative to it, so only its frame changes.
+                Some(Place::Chunk(i)) if chunks.homes.get(&home).and_then(|p| p.chunks.get(i)).is_some_and(|c| !c.runs.is_empty() && c.roots[0] == n) => {
+                    reframe.entry(home).or_default().insert(i);
+                }
+                Some(Place::Chunk(i)) => {
                     dirty.entry(home).or_default().insert(i);
                 }
-                // A split group, or a node no chunk holds (the composition
-                // itself): cut again.
+                // A split group changed: it draws nothing itself, so only
+                // its placement can matter, which its chunks' frames carry
+                // (instance-cache.md §2). No re-recording, no cutting again.
+                Some(Place::Split(range)) if !Chunks::must_cut_again(&store.0, &drawables, n) => {
+                    reframe.entry(home).or_default().extend(range);
+                }
+                // A split group that must now be drawn whole, or a node no
+                // chunk holds (the composition itself): cut again.
                 _ => {
                     recut.insert(home);
                 }
@@ -170,26 +228,58 @@ pub fn render_document_layer(
             chunks.partition(&store.0, &drawables, home);
         }
         chunks.homes.retain(|h, _| wanted.contains(h));
-        for (home, part) in chunks.homes.iter_mut() {
+        let Chunks { homes: chunk_homes, shared, .. } = &mut *chunks;
+        let now = time.elapsed_secs_f64();
+        for (home, part) in chunk_homes.iter_mut() {
             for (i, chunk) in part.chunks.iter_mut().enumerate() {
-                if chunk.embeds || !(chunk.recorded.is_none() || everything || dirty.get(home).is_some_and(|d| d.contains(&i))) {
+                let mut record = chunk.fresh() || everything || dirty.get(home).is_some_and(|d| d.contains(&i));
+                if !chunk.runs.is_empty() {
+                    // An instance: recorded relative to its own position.
+                    if record || reframe.get(home).is_some_and(|d| d.contains(&i)) {
+                        let [a, b, c, d, e, f] = cx.world(chunk.roots[0]).as_coeffs();
+                        let basis = kurbo::Affine::new([a, b, c, d, 0.0, 0.0]);
+                        record |= basis != chunk.basis;
+                        chunk.basis = basis;
+                        chunk.frame = kurbo::Affine::translate((e, f));
+                    }
+                    if record && cx.record_instance(chunk, *home, shared) {
+                        chunk.recorded_at = now;
+                    }
                     continue;
                 }
-                let rec = Recorded::record(|b| cx.branches(b, &chunk.roots, kurbo::Affine::IDENTITY, UNCLIPPED, "", 0, None));
+                // The frame is the parent's position only: a chunk is
+                // recorded with its parent's turn and scale applied, so its
+                // coordinates stay composition-sized and a large import's
+                // raw ones never meet a large opposite translation in f32.
+                // A parent that turned or scaled is recorded again.
+                if !chunk.embeds && (record || reframe.get(home).is_some_and(|d| d.contains(&i))) {
+                    let w = cx.parent_world(chunk.roots[0]);
+                    let [a, b, c, d, e, f] = w.as_coeffs();
+                    let basis = kurbo::Affine::new([a, b, c, d, 0.0, 0.0]);
+                    record |= basis != chunk.basis;
+                    chunk.basis = basis;
+                    chunk.frame = kurbo::Affine::translate((e, f));
+                }
+                if chunk.embeds || !record {
+                    continue;
+                }
+                let into = chunk.frame.inverse();
+                let rec = Recorded::record(|b| cx.branches(b, &chunk.roots, into, UNCLIPPED, "", 0, None));
                 if chunk.recorded.as_deref() != Some(&rec) {
                     chunk.recorded = Some(Arc::new(rec));
-                    chunk.recorded_at = time.elapsed_secs_f64();
+                    chunk.recorded_at = now;
                 }
             }
         }
+        shared.collect();
         // Each panel's layers: its homes' chunks in painter order. An embed
         // chunk is recorded per panel, and only when the panel shows the
         // change.
-        let mut want: HashMap<(String, nest::Home, NodeId), (Arc<Recorded>, u32, kurbo::Affine, Entity)> = HashMap::new();
+        let mut want: HashMap<(String, nest::Home, NodeId, u32), (Arc<Recorded>, u32, kurbo::Affine, Entity, Option<u64>)> = HashMap::new();
         let mut per_panel = std::mem::take(&mut chunks.per_panel);
         let mut kept: HashMap<(String, NodeId), Arc<Recorded>> = HashMap::new();
         let mut tinted = HashMap::new();
-        let mut inspected: Vec<(Arc<Recorded>, NodeId, (String, nest::Home, NodeId))> = Vec::new();
+        let mut inspected: Vec<(Arc<Recorded>, NodeId, (String, nest::Home, NodeId, u32))> = Vec::new();
         for (entity, mut panel_list, layer) in &mut panel_layers {
             let Some(view) = views.get(&layer.panel) else { continue };
             // The panel's own list stays empty: its chunks draw.
@@ -203,13 +293,36 @@ pub fn render_document_layer(
                 let Some(part) = chunks.homes.get(&home) else { continue };
                 for chunk in &part.chunks {
                     let first = chunk.roots[0];
+                    let tint = view.observes.is_some() && inspector.0.get(&view.panel).is_none_or(|o| o.tint);
+                    // An instance: a layer per run, a static or keyed one
+                    // cached under the run's key, which equal instances
+                    // share.
+                    if !chunk.runs.is_empty() {
+                        for (r, run) in chunk.runs.iter().enumerate() {
+                            let Some(rec) = run.recorded.clone() else { continue };
+                            let key = (view.panel.clone(), home, first, r as u32);
+                            if tint {
+                                inspected.push((rec.clone(), first, key.clone()));
+                            }
+                            // A live run is known to change: drawn live,
+                            // never grouped with what is baked around it.
+                            let cache = run.share.map(|_| if tint { mix(run.key, 1) } else { run.key });
+                            want.insert(key, (rec, sub, view.affine() * chunk.frame, entity, cache));
+                            sub += 1;
+                        }
+                        continue;
+                    }
+                    // A chunk that draws an embed changes with it (a 3D
+                    // view's texture), so only the others may be cached.
+                    let cache = (!chunk.embeds).then(|| cache_key(home, first, tint));
                     let rec = if chunk.embeds {
                         let key = (view.panel.clone(), first);
                         let old = per_panel.remove(&key);
                         let rec = match old {
                             Some(old) if !panel_shows && !everything => old,
                             old => {
-                                let rec = Recorded::record(|b| cx.branches(b, &chunk.roots, kurbo::Affine::IDENTITY, UNCLIPPED, &view.panel, 0, None));
+                                let into = chunk.frame.inverse();
+                                let rec = Recorded::record(|b| cx.branches(b, &chunk.roots, into, UNCLIPPED, &view.panel, 0, None));
                                 match old {
                                     Some(old) if *old == rec => old,
                                     _ => Arc::new(rec),
@@ -223,10 +336,10 @@ pub fn render_document_layer(
                         rec
                     };
                     // A render inspector shows each chunk in its own colour.
-                    if view.observes.is_some() && inspector.0.get(&view.panel).is_none_or(|o| o.tint) {
-                        inspected.push((rec.clone(), first, (view.panel.clone(), home, first)));
+                    if tint {
+                        inspected.push((rec.clone(), first, (view.panel.clone(), home, first, 0)));
                     }
-                    want.insert((view.panel.clone(), home, first), (rec, sub, view.affine(), entity));
+                    want.insert((view.panel.clone(), home, first, 0), (rec, sub, view.affine() * chunk.frame, entity, cache));
                     sub += 1;
                 }
             }
@@ -240,22 +353,24 @@ pub fn render_document_layer(
         }
         chunks.keep_tinted(tinted);
         for (e, layer, mut list, mut vl) in &mut chunk_layers {
-            let Some((rec, sub, affine, view)) = want.remove(&(layer.panel.clone(), layer.home, layer.first)) else {
+            let Some((rec, sub, affine, view, cache)) = want.remove(&(layer.panel.clone(), layer.home, layer.first, layer.run)) else {
                 commands.entity(e).despawn();
                 continue;
             };
             list.set(rec);
-            if vl.sub != sub || vl.affine != affine || vl.view != Some(view) {
+            if vl.sub != sub || vl.affine != affine || vl.view != Some(view) || vl.cache != cache {
                 vl.sub = sub;
                 vl.affine = affine;
                 vl.view = Some(view);
+                vl.cache = cache;
             }
         }
-        for ((panel, home, first), (rec, sub, affine, view)) in want {
+        for ((panel, home, first, run), (rec, sub, affine, view, cache)) in want {
             let mut vl = VectorLayer::screen(order::DOCUMENT_2D).in_view(view);
             vl.sub = sub;
             vl.affine = affine;
-            commands.spawn((DisplayList::from(rec), vl, ChunkLayer { panel, home, first }));
+            vl.cache = cache;
+            commands.spawn((DisplayList::from(rec), vl, ChunkLayer { panel, home, first, run }));
         }
     }
     // A plane's view: its composition's region, at its density, into its
@@ -307,6 +422,11 @@ struct Draw<'a> {
     highlights: Option<&'a Highlights>,
     spatial: &'a SpatialScene,
     drawn: usize,
+    /// While an instance's runs record: the instance and its turn and scale.
+    /// Its parts are then placed relative to it, from the template's own
+    /// local transforms, so equal instances record equal lists wherever they
+    /// are.
+    relative: Option<(NodeId, kurbo::Affine)>,
 }
 
 impl Draw<'_> {
@@ -362,6 +482,19 @@ impl Draw<'_> {
     }
 
     fn content(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, id: NodeId, base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32, allowed: Option<&BTreeSet<NodeId>>) {
+            // A reference: its definition's template, in place, placed
+            // through it (instance-cache.md phase D).
+            if let Some(template) = nest::reference(self.doc, id) {
+                if depth >= nest::MAX_DEPTH {
+                    return;
+                }
+                let outer = self.relative;
+                self.relative = Some((template, self.world(id)));
+                let kids: Vec<NodeId> = self.doc.children(template).to_vec();
+                self.branches(b, &kids, base, clip, key, depth + 1, None);
+                self.relative = outer;
+                return;
+            }
             if nest::is_embed(self.doc, id) {
                 if depth >= nest::MAX_DEPTH {
                     return;
@@ -392,9 +525,82 @@ impl Draw<'_> {
             self.branches(b, self.doc.children(id), base, clip, key, depth, allowed);
     }
 
-    /// A node's placement in its composition's space (`nest::world_2d`).
+    /// A node's placement in its composition's space (`nest::world_2d`), or
+    /// inside an instance being recorded, relative to the instance.
     fn world(&self, id: NodeId) -> kurbo::Affine {
+        if let Some((root, basis)) = self.relative {
+            let read = |l: iron_document::Leaf| self.store.resolved(l.node, l.path);
+            let mut chain = Vec::new();
+            let mut at = Some(id);
+            while let Some(n) = at.filter(|&n| n != root) {
+                chain.push(n);
+                at = self.doc.live(n).and_then(|x| x.parent);
+            }
+            if at == Some(root) {
+                return chain.iter().rev().fold(basis, |acc, &n| acc * kurbo::Affine::new(iron_document::geom::local_affine(self.doc, &read, n).0));
+            }
+        }
         nest::world_2d(self.store, self.spatial, id)
+    }
+
+    /// Record an instance chunk's runs, relative to it. A static or keyed
+    /// run shares the recording of every equal instance: its analysis key
+    /// and the instance's turn and scale say which instances may be equal,
+    /// and among those, each distinct recording is a variant with a layer
+    /// key of its own ([`super::chunks::Shared`]), so one key always means
+    /// one content, whatever the analysis missed (a font that loaded since).
+    /// Returns whether any run's recording changed.
+    fn record_instance(&mut self, chunk: &mut super::chunks::Chunk, home: nest::Home, shared: &mut super::chunks::Shared) -> bool {
+        // The classes can change without a re-cut (an input wired or
+        // unwired), so the runs are worked out again.
+        if let Some(runs) = super::chunks::instance_runs(self.store, chunk.roots[0]) {
+            let same = runs.len() == chunk.runs.len() && runs.iter().zip(&chunk.runs).all(|(a, b)| a.parts == b.parts && a.share == b.share);
+            if !same {
+                chunk.runs = runs;
+            }
+        }
+        let into = kurbo::Affine::IDENTITY;
+        let [a, b, c, d, ..] = chunk.basis.as_coeffs();
+        let basis = mix(mix(a.to_bits(), b.to_bits()), mix(c.to_bits(), d.to_bits()));
+        let mut changed = false;
+        for (r, run) in chunk.runs.iter_mut().enumerate() {
+            self.relative = Some((run.root, chunk.basis));
+            let rec = Recorded::record(|bl| {
+                for (&p, &whole) in run.parts.iter().zip(&run.whole) {
+                    if whole {
+                        self.branches(bl, &[p], into, UNCLIPPED, "", 0, None);
+                    } else {
+                        self.node(bl, p, into);
+                    }
+                }
+            });
+            let own = mix(cache_key(home, chunk.roots[0], false), r as u64);
+            let (key, arc) = match run.share.map(|s| mix(s, basis)) {
+                Some(k) => shared.find_or_add(k, rec),
+                None => match &run.recorded {
+                    Some(have) if run.key == own && **have == rec => (own, have.clone()),
+                    _ => (own, Arc::new(rec)),
+                },
+            };
+            if run.key != key || run.recorded.as_ref().is_none_or(|have| !Arc::ptr_eq(have, &arc)) {
+                changed = true;
+            }
+            run.key = key;
+            run.recorded = Some(arc);
+        }
+        self.relative = None;
+        changed
+    }
+
+    /// The placement of the parent a chunk starting at `root` hangs from,
+    /// in its composition: identity for a composition's own children.
+    fn parent_world(&self, root: NodeId) -> kurbo::Affine {
+        let Some(parent) = self.doc.live(root).and_then(|n| n.parent) else { return kurbo::Affine::IDENTITY };
+        if self.doc.live(parent).is_none_or(|p| p.ty.name() == "composition") {
+            return kurbo::Affine::IDENTITY;
+        }
+        let w = self.world(parent);
+        if w.as_coeffs().iter().all(|c| c.is_finite()) { w } else { kurbo::Affine::IDENTITY }
     }
 
     fn node(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, id: NodeId, base: kurbo::Affine) {

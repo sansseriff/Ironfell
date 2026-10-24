@@ -236,3 +236,75 @@ pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressId
     let ids = StressIds { sample_at: (60.0, 100.0), composition, slider, field, sample: sample.expect("at least one shape"), nodes: total, width, height };
     (input, ids)
 }
+
+/// The instance-cache benchmark (plans/specs/instance-cache.md phase 0):
+/// a `meters` composition of `n` dial meters from the standard library in a
+/// grid, their definition given 60 tick marks so a face is worth baking, and
+/// a slider whose value drives the first meter's `in`, so one needle moves
+/// while every other meter rests. Replaces an earlier one.
+pub fn meters_scene(store: &mut Store, count: usize) -> Result<serde_json::Value, String> {
+    let ty = |s: &str| TypeId::lookup(s).expect("registered type");
+    let tx = |label: &str, ops| TransactionInput { label: label.into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false };
+    let err = |e: Vec<iron_document::op::ApplyError>| e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
+    let doc = store.document();
+    let mut ops = Vec::new();
+    for old in iron_document::composition::compositions(doc) {
+        if doc.get::<Name>(old).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("meters") {
+            ops.push(Op::Delete { id: old });
+        }
+    }
+    let composition = doc.next_id();
+    let root_order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    ops.push(Op::Create { id: composition, ty: ty("composition"), parent: None, order: root_order, facets: vec![named("meters"), c.wrap()] });
+    store.apply(tx("meters", ops)).map_err(err)?;
+    let slider = store.place_standard("slider", composition, [20.0, 20.0], Actor::Human)?;
+    let cols = (count as f64).sqrt().ceil().max(1.0) as usize;
+    let mut meters = Vec::new();
+    for i in 0..count {
+        let at = [20.0 + (i % cols) as f64 * 130.0, 80.0 + (i / cols) as f64 * 140.0];
+        meters.push(store.place_standard("meter", composition, at, Actor::Human)?);
+    }
+    // A face worth baking: 60 tick marks round the dial, between it and the
+    // needle in painter order, added to the definition so every instance
+    // draws them.
+    let doc = store.document();
+    let def = iron_document::standard::find(doc, "meter").ok_or("no meter definition")?;
+    let template = iron_document::definition::template_of(doc, def, "free").ok_or("no meter template")?;
+    let kids = doc.children(template).to_vec();
+    let order_of = |n: NodeId| doc.live(n).map(|x| x.order.clone());
+    let (lo, hi) = (kids.first().and_then(|&k| order_of(k)), kids.get(1).and_then(|&k| order_of(k)));
+    let ids = doc.next_ids(60);
+    let mut ops = Vec::new();
+    let mut prev = lo;
+    for (i, &id) in ids.iter().enumerate() {
+        let a = i as f64 / 60.0 * std::f64::consts::TAU;
+        let long = i % 5 == 0;
+        let r = if long { 41.0 } else { 45.0 };
+        let mut sz = Size::default();
+        sz.w = n(if long { 10.0 } else { 6.0 });
+        sz.h = n(if long { 2.0 } else { 1.2 });
+        let order = OrderKey::between(prev.as_ref(), hi.as_ref()).map_err(|e| e.to_string())?;
+        prev = Some(order.clone());
+        ops.push(Op::Create { id, ty: ty("rect"), parent: Some(template), order, facets: vec![named(&format!("tick {i}")), at(55.0 + r * a.cos(), 55.0 + r * a.sin(), a), sz.wrap(), fill([0.25, 0.27, 0.32, 1.0])] });
+    }
+    store.apply(tx("meter ticks", ops)).map_err(err)?;
+    let doc = store.document();
+    let port = |u: NodeId, name: &str| -> Option<NodeId> {
+        let e = iron_document::expand::use_entity(doc, u)?;
+        doc.children(e).iter().copied().find(|&p| doc.get::<Name>(p).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name))
+    };
+    let value = port(slider, "value").ok_or("the slider has no value port")?;
+    let first = meters.first().and_then(|&m| iron_document::expand::use_entity(doc, m)).ok_or("no meter")?;
+    let expr = Expr::parse(&format!("{value}.port.signal")).map_err(|e| e.to_string())?;
+    let path = "args.in".parse().map_err(|e: iron_document::facet::LeafError| e.to_string())?;
+    store.apply(tx("drive the first meter", vec![Op::Set { id: first, path, slot: Slot::Bound(expr) }])).map_err(err)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "composition": composition.to_string(),
+        "slider": slider.to_string(),
+        "driven": meters.first().map(|m| m.to_string()),
+        "meters": meters.len(),
+    }))
+}

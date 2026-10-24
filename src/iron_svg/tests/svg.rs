@@ -577,3 +577,63 @@ fn text_exports_as_tspans() {
     let ys: Vec<f64> = svg.match_indices(" y=\"").map(|(i, _)| svg[i + 4..].split('"').next().unwrap().parse().unwrap()).collect();
     assert!(ys.last().unwrap() > ys.first().unwrap(), "{ys:?}");
 }
+
+/// A repeated piece becomes a definition and each place it is drawn a
+/// reference (instance-cache.md phase D), nested pieces too; the paste puts
+/// the definitions in the library, and export draws every copy again.
+#[test]
+fn repeated_pieces_import_as_references() {
+    let imported = import(&fixture_text("repeated.svg")).unwrap();
+    // leaf (3 references), flower (2), petal (2, inside flower's template).
+    assert_eq!((imported.definitions, imported.references), (3, 7), "{:?}", imported.cuts);
+    let (mut store, comp) = empty_composition();
+    let roots = paste(&mut store, &imported.fragment, comp);
+    let doc = store.document();
+    let refs: Vec<NodeId> = doc.descendants(comp).into_iter().filter(|&n| expand::reference_template(doc, n).is_some()).collect();
+    assert_eq!(refs.len(), 5, "three leaves and two flowers, at the top");
+    let library = doc.roots().iter().copied().find(|&r| ty_of(&store, r) == "library").expect("a library");
+    assert_eq!(doc.children(library).len(), 3);
+    // Nothing is expanded: a reference has no children.
+    assert!(refs.iter().all(|&r| doc.children(r).is_empty()));
+    assert!(!roots.is_empty());
+    // Every copy is drawn on export: 3 leaves of 2 paths and a circle, 2
+    // flowers of 2 petals of 2 ellipses and a circle.
+    let svg = export(&store, &Scope::Composition(comp)).unwrap().svg;
+    let shapes = |tag: &str| svg.matches(&format!("<{tag} ")).count();
+    assert_eq!(shapes("path"), 6, "{svg}");
+    assert_eq!(shapes("ellipse") + shapes("circle"), 3 + 2 * (2 * 2 + 1), "{svg}");
+    // Re-imported, the drawing is shared the same way.
+    let again = import(&svg).unwrap();
+    assert_eq!((again.definitions, again.references), (3, 7));
+}
+
+/// With and without references, an import draws every shape in the same
+/// place.
+#[test]
+fn references_draw_where_copies_do() {
+    let text = fixture_text("repeated.svg");
+    let drawn = |share: bool| -> Vec<[i64; 4]> {
+        let imported = iron_svg::import_with(&text, share).unwrap();
+        let (mut store, comp) = empty_composition();
+        paste(&mut store, &imported.fragment, comp);
+        let svg = export(&store, &Scope::Composition(comp)).unwrap().svg;
+        let back = iron_svg::import_with(&svg, false).unwrap();
+        let (mut s2, c2) = empty_composition();
+        paste(&mut s2, &back.fragment, c2);
+        let mut out: Vec<[i64; 4]> = s2
+            .document()
+            .descendants(c2)
+            .into_iter()
+            .filter(|&n| matches!(ty_of(&s2, n), "path" | "ellipse" | "rect"))
+            .filter_map(|n| s2.local_bounds(n).map(|lb| (n, lb)))
+            .map(|(n, lb)| {
+                let w = kurbo::Affine::new(s2.world_affine(n).0);
+                let b = w.transform_rect_bbox(kurbo::Rect::new(lb.geometry.x0, lb.geometry.y0, lb.geometry.x1, lb.geometry.y1));
+                [b.x0, b.y0, b.x1, b.y1].map(|v| (v * 10.0).round() as i64)
+            })
+            .collect();
+        out.sort();
+        out
+    };
+    assert_eq!(drawn(true), drawn(false));
+}

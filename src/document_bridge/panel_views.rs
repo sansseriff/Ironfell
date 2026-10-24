@@ -49,15 +49,23 @@ pub struct PanelView {
 }
 
 impl PanelView {
-    /// Document 2D space to window space, for this panel.
+    /// Where document space's origin lands, in window px: on a whole pixel,
+    /// so a raster tile maps texel for pixel (`vector::raster`) and a live
+    /// chunk beside it lines up exactly.
+    fn origin(&self) -> Vec2 {
+        Vec2::new((self.rect.x + self.pan.x).round(), (self.rect.y + self.pan.y).round())
+    }
+
+    /// Document 2D space to window px, for this panel.
     pub fn affine(&self) -> kurbo::Affine {
-        kurbo::Affine::translate(((self.rect.x + self.pan.x) as f64, (self.rect.y + self.pan.y) as f64)) * kurbo::Affine::scale(self.zoom as f64)
+        let o = self.origin();
+        kurbo::Affine::translate((o.x as f64, o.y as f64)) * kurbo::Affine::scale(self.zoom as f64)
     }
 
     /// A window-space point in this panel's document space; `None` outside
-    /// the panel.
+    /// the panel. The inverse of [`Self::affine`].
     pub fn to_doc(&self, screen: Vec2) -> Option<Vec2> {
-        self.rect.contains(screen).then(|| (Vec2::new(screen.x - self.rect.x - self.pan.x, screen.y - self.rect.y - self.pan.y)) / self.zoom)
+        self.rect.contains(screen).then(|| (screen - self.origin()) / self.zoom)
     }
 
     /// Whether a node drawn in `composition` belongs in this panel.

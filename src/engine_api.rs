@@ -287,6 +287,19 @@ pub fn document_build_info(_app: &mut WorkerApp) -> String {
     .to_string()
 }
 
+/// The instance-cache benchmark's `meters` composition (`?meters=N`,
+/// `__iron.meters(n)`): `n` dial meters, the first driven by a slider.
+pub fn document_meters(app: &mut WorkerApp, n: u32) -> String {
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
+    };
+    let out = crate::document_bridge::stress::meters_scene(&mut store.0, n as usize).unwrap_or_else(|e| serde_json::json!({"ok": false, "error": e}));
+    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active_info.remaining_frames = 10;
+    }
+    out.to_string()
+}
+
 pub fn document_stress(app: &mut WorkerApp, shapes: u32) -> String {
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
@@ -408,8 +421,23 @@ pub fn document_producer(app: &mut WorkerApp, name: String, action: String) -> S
     result.to_string()
 }
 
+/// Turn raster layers on or off (`vector::raster`); off draws every view
+/// live. `budget_mb` sets the atlas budget, `0` the default. Returns the
+/// raster report.
+pub fn document_raster(app: &mut WorkerApp, enabled: bool, budget_mb: u32) -> String {
+    crate::vector::raster::set_enabled(enabled, budget_mb as u64);
+    if let Some(mut active) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active.remaining_frames = 10;
+    }
+    crate::vector::raster::report(false).to_string()
+}
+
+/// The frame-phase timings, with the raster cache's state and counters
+/// under `raster` (`vector::raster::report`).
 pub fn document_timings(_app: &mut WorkerApp, reset: bool) -> String {
-    crate::perf::report(reset).to_string()
+    let mut out = crate::perf::report(reset);
+    out["raster"] = crate::vector::raster::report(reset);
+    out.to_string()
 }
 
 /// Make a component of the selected pictures (component-model.md §5.5):
@@ -650,7 +678,17 @@ pub fn document_export_svg(app: &mut WorkerApp, scope: String) -> String {
 }
 
 pub fn document_import_svg(app: &mut WorkerApp, text: String) -> String {
-    let imported = match iron_svg::import(&text) {
+    import_svg(app, text, true)
+}
+
+/// [`document_import_svg`] with every repeated piece drawn out in full, no
+/// references: what the references are checked against.
+pub fn document_import_svg_flat(app: &mut WorkerApp, text: String) -> String {
+    import_svg(app, text, false)
+}
+
+fn import_svg(app: &mut WorkerApp, text: String, share: bool) -> String {
+    let imported = match iron_svg::import_with(&text, share) {
         Ok(i) => i,
         Err(e) => return serde_json::json!({"ok": false, "error": e}).to_string(),
     };
@@ -664,7 +702,7 @@ pub fn document_import_svg(app: &mut WorkerApp, text: String) -> String {
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
-    serde_json::json!({"ok": true, "cuts": imported.cuts, "nodes": imported.nodes, "anchors": imported.anchors}).to_string()
+    serde_json::json!({"ok": true, "cuts": imported.cuts, "nodes": imported.nodes, "anchors": imported.anchors, "definitions": imported.definitions, "references": imported.references}).to_string()
 }
 
 pub fn document_import_svg_at(app: &mut WorkerApp, text: String, parent: String, x: f64, y: f64, actor: String) -> String {
@@ -1470,11 +1508,11 @@ pub fn document_render_inspector_options(app: &mut WorkerApp, panel: String, opt
     };
     let o = all.0.entry(panel).or_default();
     let flag = |k: &str, old: bool| v.get(k).and_then(|b| b.as_bool()).unwrap_or(old);
-    *o = crate::document_bridge::inspector::Options { tint: flag("tint", o.tint), dim: flag("dim", o.dim), outlines: flag("outlines", o.outlines) };
+    *o = crate::document_bridge::inspector::Options { tint: flag("tint", o.tint), dim: flag("dim", o.dim), outlines: flag("outlines", o.outlines), tiles: flag("tiles", o.tiles) };
     let o = *o;
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
-    serde_json::json!({"ok": true, "tint": o.tint, "dim": o.dim, "outlines": o.outlines}).to_string()
+    serde_json::json!({"ok": true, "tint": o.tint, "dim": o.dim, "outlines": o.outlines, "tiles": o.tiles}).to_string()
 }
 

@@ -209,10 +209,13 @@ pub fn embed_2d(store: &iron_document::Store, spatial: &super::SpatialScene, emb
 /// Stops below the composition root, or at a loose root.
 pub fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
     let composition = TypeId::lookup("composition").expect("registered");
+    let template = TypeId::lookup("template").expect("registered");
     let mut out = vec![id];
     let mut cur = doc.live(id).and_then(|n| n.parent);
     while let Some(n) = cur.and_then(|c| doc.live(c)) {
-        if n.ty == composition {
+        // A definition's template is a root like a composition: what a
+        // reference shows (instance-cache.md phase D).
+        if n.ty == composition || n.ty == template {
             break;
         }
         out.push(n.id);
@@ -220,6 +223,12 @@ pub fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
     }
     out.reverse();
     out
+}
+
+/// The template a reference shows (`iron_document::expand::reference_template`):
+/// a repeated piece of an imported drawing, drawn from its definition.
+pub fn reference(doc: &Document, id: NodeId) -> Option<NodeId> {
+    iron_document::expand::reference_template(doc, id)
 }
 
 pub fn is_embed(doc: &Document, id: NodeId) -> bool {

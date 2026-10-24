@@ -629,3 +629,20 @@ After phase 1 (chunks): pan-fitted `display_list` 24.7 → 0.2 ms and `extract` 
 frame 214.7 → 176.9, all of it `encode` now); one dragged shape re-records one chunk
 (`display_list` 0.6 ms); zoomed-in pan 58.8 → 39.2 ms from per-command culling.
 
+After phase 2 (raster tiles, `vector/raster.rs`), the same build with tiles off as the
+reference (`__iron.raster(false)`), changed frames p50 / max in ms:
+
+| Scenario | Live | Raster |
+|---|---|---|
+| pan, fitted | 177.3 / 183.2 | 1.2 / 2.8 |
+| drag one deep shape, fitted | 182.3 / 253.2 | 2.9 / 130.8 |
+| zoom-in gesture | 56.5 / 181.7 | 0.5 / 35.1 |
+| zoom-out gesture | 71.2 / 181.4 | 0.5 / 12.3 |
+| pan, zoomed in | 39.3 / 49.4 | 1.2 / 38.8 |
+| idle, hover sweeps | 2.1–2.4 | 1.8–2.3 |
+
+The maxima are single bakes of dense tiles. The stress fixture (`RASTER=0
+bench-render.sh` for the reference): at 10k shapes pan 3.2 → 0.8 ms, drag-one 3.1 → 1.1,
+zoomed pan 3.5 → 0.8, spin unchanged (everything moves, so everything is live); at 1k
+nothing rasters and every row matches. Details and what was built differently from the
+spec: `specs/render-cache.md` §10.

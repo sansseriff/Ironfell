@@ -52,6 +52,26 @@ pub fn linked_definition(doc: &Document, entity: NodeId) -> Option<NodeId> {
     doc.live(def).filter(|n| n.ty.name() == "definition").map(|_| def)
 }
 
+/// A *reference* (instance-cache.md §3, phase D): a `use` whose own
+/// `instance` facet names a definition, `linked`, with no entity figured.
+/// It is drawn from its definition's template, wherever that template is,
+/// and never expanded: its picture costs no nodes. SVG import makes one for
+/// every repeated piece of a drawing. Its template, for `notation`, if `u`
+/// is one.
+pub fn reference_template(doc: &Document, u: NodeId) -> Option<NodeId> {
+    if doc.live(u)?.ty.name() != "use" || doc.relations_from(u).any(|r| r.rel == RelKind::Figures) {
+        return None;
+    }
+    let inst = doc.get::<Instance>(u)?;
+    if inst.mode.constant().and_then(|v| v.as_str()) != Some("linked") {
+        return None;
+    }
+    let def = inst.def.constant()?.as_ref()?;
+    doc.live(def).filter(|n| n.ty.name() == "definition")?;
+    let notation = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free");
+    definition::template_of(doc, def, notation)
+}
+
 /// The definition a `use` is the main of (component-authoring.md §1): its
 /// `instance` facet says `main`. A main figures no entity; edits inside it
 /// are edits to the definition.
@@ -274,6 +294,12 @@ fn overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Va
         }
     }
     out
+}
+
+/// The overrides reaching `owner`'s copies, as (definition-local target,
+/// leaf, value), weakest first: for render analysis (`analysis.rs`).
+pub fn overrides_of(doc: &Document, owner: NodeId) -> Vec<(NodeId, LeafPath, Value)> {
+    overrides(doc, owner).into_iter().map(|(_, t, l, v)| (t, l, v)).collect()
 }
 
 fn own_overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {

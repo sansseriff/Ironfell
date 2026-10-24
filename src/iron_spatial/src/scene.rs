@@ -23,15 +23,46 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Deepest nesting of 2D embeds a region lookup follows; the hosts' limit.
 const MAX_EMBED_DEPTH: u32 = 8;
 
+/// Deepest nesting of references (definitions whose templates reference
+/// others) the bounds follow; a definition that pictures itself stops here.
+const MAX_REFERENCE_DEPTH: u32 = 64;
+
+/// Every live definition template, each after the templates its references
+/// show: inner first.
+fn template_order(doc: &Document) -> Vec<NodeId> {
+    let Some(template) = TypeId::lookup("template") else { return Vec::new() };
+    fn visit(doc: &Document, t: NodeId, depth: u32, seen: &mut BTreeSet<NodeId>, out: &mut Vec<NodeId>) {
+        if depth > MAX_REFERENCE_DEPTH || !seen.insert(t) {
+            return;
+        }
+        for d in doc.descendants(t) {
+            if let Some(inner) = iron_document::expand::reference_template(doc, d) {
+                visit(doc, inner, depth + 1, seen, out);
+            }
+        }
+        out.push(t);
+    }
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for t in doc.nodes_of_type(template).filter(|&t| doc.is_live(t)).collect::<Vec<_>>() {
+        visit(doc, t, 0, &mut seen, &mut out);
+    }
+    out
+}
+
 /// Paint outset of an embed's frame, as the hosts stroke it.
 const EMBED_PAD: f64 = 2.0;
+
+
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
     /// A drawable node, or a 3D embed's frame: its own local bounds.
     Leaf,
     /// An embed of a 2D composition: its region (frame, or the source's
-    /// content), which follows the source's content.
+    /// content), which follows the source's content. A reference to a
+    /// definition (`expand::reference_template`) is one too, its source the
+    /// definition's template.
     Embed2d { source: NodeId, framed: bool },
     /// A group with content below it.
     Group,
@@ -87,10 +118,12 @@ fn scope_of(node: NodeId) -> Option<NodeId> {
 
 fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
     let composition = TypeId::lookup("composition").expect("registered");
+    let template = TypeId::lookup("template").expect("registered");
     let mut out = vec![id];
     let mut cur = doc.live(id).and_then(|n| n.parent);
     while let Some(n) = cur.and_then(|c| doc.live(c)) {
-        if n.ty == composition {
+        // A template is a root like a composition: what references show.
+        if n.ty == composition || n.ty == template {
             break;
         }
         out.push(n.id);
@@ -310,8 +343,9 @@ impl Scene {
                 continue;
             }
             let Some(g) = scope else { continue };
-            if is_type(store.document(), g, "composition") {
-                // Content changed: the embeds showing it follow.
+            if is_type(store.document(), g, "composition") || is_type(store.document(), g, "template") {
+                // Content changed: the embeds (and references) showing it
+                // follow.
                 for embed in self.shown_by.get(&g).cloned().unwrap_or_default() {
                     let Some(es) = self.entries.get(&embed).filter(|e| matches!(e.kind, Kind::Embed2d { framed: false, .. })).map(|e| e.scope) else { continue };
                     self.refresh_embed(store, embed);
@@ -374,6 +408,15 @@ impl Scene {
         let Some(e) = self.entries.get(&embed) else { return };
         let (scope, affine) = (e.scope, e.affine);
         let Kind::Embed2d { source, .. } = e.kind else { return };
+        // A reference is its template's content placed, geometry and paint
+        // alike, as a group's entry is its scope's.
+        if iron_document::expand::reference_template(store.document(), embed).is_some() {
+            match self.scopes.get(&scope_of(source)).and_then(|s| s.union) {
+                Some(u) => self.upsert(embed, scope, u.mapped(affine), affine),
+                None => self.remove(embed),
+            }
+            return;
+        }
         match self.embed_region(store, embed, source) {
             Some((region, framed)) => {
                 self.entries.get_mut(&embed).expect("entry").kind = Kind::Embed2d { source, framed };
@@ -405,6 +448,20 @@ impl Scene {
             if composition::dims(doc, c) == Some(Dims::Two) {
                 top.push((scope_of(c), doc.children(c).to_vec()));
             }
+        }
+        // Definitions' templates, what references show (phase D), first and
+        // each settled before any template or composition that references
+        // it: a reference's entry is then its template's union, placed.
+        for t in template_order(doc) {
+            let before: BTreeSet<Option<NodeId>> = self.scopes.keys().copied().collect();
+            let mut s = Scope::default();
+            s.depth = 0;
+            self.scopes.insert(scope_of(t), s);
+            for c in doc.children(t).to_vec() {
+                self.build_node(store, c, scope_of(t), 1, &order);
+            }
+            let made: BTreeSet<Option<NodeId>> = self.scopes.keys().copied().filter(|k| !before.contains(k)).collect();
+            self.settle(store, made);
         }
         let loose: Vec<NodeId> = doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !structural.contains(&n.ty))).collect();
         top.push((None, loose));
@@ -455,6 +512,14 @@ impl Scene {
         let ord = order.get(&id).copied().unwrap_or(0);
         let affine = affine_of(store.local_affine(id));
         let ty = node.ty.name();
+        if let Some(template) = iron_document::expand::reference_template(doc, id) {
+            self.shown_by.entry(template).or_default().push(id);
+            // Its template is indexed and settled already (`rebuild`); one
+            // with nothing in it indexes nothing, like an empty group.
+            let Some(u) = self.scopes.get(&scope_of(template)).and_then(|s| s.union) else { return false };
+            self.insert(id, scope, Kind::Embed2d { source: template, framed: false }, affine, u.mapped(affine), ord, doc);
+            return true;
+        }
         if ty == "embed" {
             let kind = match composition::embedded(doc, id) {
                 Some(source) if composition::dims(doc, source) == Some(Dims::Two) => {

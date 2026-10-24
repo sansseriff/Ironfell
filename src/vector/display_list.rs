@@ -282,7 +282,15 @@ fn cmd_bounds(cmd: &DrawCmd) -> Option<Rect> {
         DrawCmd::Stroke { transform, style, shape, .. } => {
             // Inflate by half the stroke width before mapping, so the
             // outset is measured in the space the width is defined in.
-            let half = style.width * 0.5;
+            // A miter reaches up to `miter_limit` half-widths out and a
+            // square cap √2: bounds that missed them would cut them off at
+            // a raster tile's edge.
+            let reach = match style.join {
+                kurbo::Join::Miter => style.miter_limit.max(std::f64::consts::SQRT_2),
+                _ if style.start_cap == kurbo::Cap::Square || style.end_cap == kurbo::Cap::Square => std::f64::consts::SQRT_2,
+                _ => 1.0,
+            };
+            let half = style.width * 0.5 * reach;
             transform.transform_rect_bbox(shape.bounding_box().inflate(half, half))
         }
         DrawCmd::Texture { transform, size, .. } => transform.transform_rect_bbox(Rect::new(0.0, 0.0, size.x as f64, size.y as f64)),

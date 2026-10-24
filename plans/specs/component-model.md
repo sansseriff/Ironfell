@@ -783,6 +783,9 @@ undoable transaction listing the overrides it made stale; make local keeps insta
 linked.
 
 **Phase 6 — Render analysis.** §11, consumed by the render track's chunk and bake work.
+**Done 2026-10-24** as [`instance-cache.md`](instance-cache.md) phases A and C: two
+voltmeters share one dial surface, and driving `in` from a slider bakes nothing and
+redraws only the needle and readout.
 *Exit:* two voltmeters share one dial surface; driving `in` from a slider rebakes
 nothing and redraws only the needle.
 

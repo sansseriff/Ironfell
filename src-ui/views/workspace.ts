@@ -39,6 +39,10 @@ function defaultLayout(api: DockviewApi) {
   if (new URLSearchParams(location.search).has('stress')) {
     view('stress', 'Stress', { source: 'stress', notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' });
   }
+  // The instance-cache benchmark's (`?meters=N`).
+  if (new URLSearchParams(location.search).has('meters')) {
+    view('meters', 'Meters', { source: 'meters', notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' });
+  }
   view('timeline', 'Timeline', { source: 'timeline', notation: 'timeline' }, { direction: 'below' }, { initialHeight: 220 });
   // Frame rate, renderer, build and canvas size (free-running.md §4): the
   // session's stats composition, where the FPS overlay used to sit.

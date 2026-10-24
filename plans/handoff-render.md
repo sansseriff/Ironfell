@@ -67,10 +67,18 @@ One count takes ~2.5 min; four counts ~10–12 min, so run it in the background.
 
 ## 4. What to do, in order
 
+**2026-10-24: [`specs/instance-cache.md`](specs/instance-cache.md) built** (phases 0, A–D):
+split groups move rigidly with their tiles (the Prussia near-whole drag 235.5 → 0.6 ms),
+equal component instances share drawings and tiles, and SVG repeats import as
+references. Next on this track: incremental instance expansion (§7, "Open"), then
+render-cache phase 3 if the inspector asks.
+
 **2026-10-23: items 3's open half and 4 are now specified** in
 [`specs/render-cache.md`](specs/render-cache.md) (phases 0–3, with the large-SVG
-baseline) and [`specs/render-inspector.md`](specs/render-inspector.md). Once approved,
-that spec's phase list is the work order for both; the list below is history for them.
+baseline) and [`specs/render-inspector.md`](specs/render-inspector.md). That spec's
+phase list is the work order for both; the list below is history for them. Phases 0–2
+are done (raster tiles: a fitted Prussia pan 177 → 1.2 ms a changed frame, §10); phase 3,
+vector retention for live layers, waits for the inspector to show the need.
 
 **Revised 2026-10-14.** Items 1–4 of the previous list (overlay geometry cache,
 change-driven picking, independent bounds/index, per-view culling) are done and

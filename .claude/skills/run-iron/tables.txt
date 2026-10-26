@@ -1,0 +1,65 @@
+# Tables (plans/specs/layout-and-tables.md, phases 2-3), in a fresh "slide"
+# composition: the model's <table> op with a caption, its compact read-back,
+# a replace that keeps ids, a merge refused; then the select tool through rows
+# (click the table, double-click a cell, Shift-click a second, merge, Esc back
+# to the table), the inspector's Table section, the Table tool, and a
+# spreadsheet paste into the table and onto the canvas.
+nav
+ready
+eval __iron.snapping(false)
+eval (async()=>{await __iron.edit(`<edit expect-version="1"><create id="$c" type="composition" name="slide" notation="free" dims="2d"/></edit>`); return 1})()
+eval __dock.addPanel({ id: 'slide', component: 'view', title: 'Slide', params: { spec: { source: 'slide', notation: 'composition' } }, position: { referencePanel: 'viewer', direction: 'within' } }).id
+sleep 1200
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="2"><table to="#3t" x="60" y="40" preset="light" header="1" label-col="true" emphasis="3" caption="Same cable, other polyimide thickness">\nPI per side (µm) | 75 | 100 | 125\nS (µm) | 85 | 113 | 140\nGap W (µm) | 153 | 138 | 125\n</table></edit>`); return r.summary})()
+sleep 1200
+eval (async()=>{const v=await __iron.view({fidelity:'full', scope:'#3t'}); return v.split('\n').map(l=>l.trim()).filter(l=>/^<table |\|/.test(l)).map(l=>l.replace(/ w="\d+" h="\d+"/, ''))})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="3"><table id="#3w">\nPI per side (µm) | 75 | 100 | 125\nS (µm) | 85 | 120 | 140\nGap W (µm) | 153 | 138 | 125\n</table></edit>`); const v=await __iron.view({fidelity:'full', scope:'#3t'}); return [r.ok, (v.match(/<cells>[^<]*<\/cells>/)||[])[0]]})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="4"><table to="#3t" x="60" y="400">\na | b\n^ | <\n</table></edit>`); return r.failure})()
+shot tables-op
+# A captioned table sits in its caption's stack: a click selects the stack.
+pclick slide 196 104
+sleep 800
+eval __iron.selection()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="4"><table to="#3t" x="60" y="300" preset="light" header="1" label-col="true" emphasis="3">\nPI per side (µm) | 75 | 100 | 125\nS (µm) | 85 | 113 | 140\nGap W (µm) | 153 | 138 | 125\n</table></edit>`); return r.summary})()
+sleep 1200
+pclick slide 196 344
+sleep 800
+eval __iron.selection()
+eval [...document.querySelectorAll('.property-section .component')].map(e=>e.textContent.trim()).slice(0, 2)
+clickel button[title="Add a row at the bottom"]
+sleep 800
+pdouble slide 316 354
+sleep 1000
+keydown Shift
+pclick slide 316 390
+keyup Shift
+sleep 800
+eval (async()=>{const v=await __iron.view({fidelity:'full', scope:'#3t', expand:['#4C']}); return __iron.selection().map(id=>(v.match(new RegExp('<text id="'+id+'"[^>]*content="([^"]*)"'))||[])[1])})()
+clickel button[title="Merge the selected cells into one"]
+sleep 1000
+key Escape
+sleep 600
+eval __iron.selection()
+pdouble slide 196 344
+sleep 1000
+eval __iron.selection()
+eval __iron.paste('A\tB\nC\tD')
+sleep 1200
+eval (async()=>{const v=await __iron.view({fidelity:'full', scope:'#4C'}); return v.split('\n').map(l=>l.trim()).filter(l=>/\|/.test(l))})()
+key Escape
+sleep 500
+pclick slide 900 600
+sleep 600
+eval __iron.paste('x\ty\tz\n1\t2\t3')
+sleep 1200
+eval (async()=>{const v=await __iron.view({fidelity:'full', scope:'#3t'}); return (v.match(/<table /g)||[]).length})()
+clickel button[title="Shape tools"]
+clickel [role="menuitem"]:has-text("Table")
+sleep 400
+pclick slide 620 60
+sleep 1200
+eval (async()=>{const v=await __iron.view({fidelity:'full', scope:'#3t'}); return (v.match(/<table /g)||[]).length})()
+shot tables-ui
+logs applied|rejected|panicked
+errors
+quit

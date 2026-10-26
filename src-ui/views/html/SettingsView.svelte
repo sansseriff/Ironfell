@@ -1,6 +1,6 @@
 <script lang="ts">
   // App settings (source: app, notation: settings): how this browser runs
-  // Iron — appearance, render scale, 2D renderer, runtime — and what build
+  // Iron — appearance, render scale, 2D renderer, runtime, developer mode — and what build
   // is running.
   // Stored per browser (runtime/settings.svelte.ts). Render scale applies
   // live; the renderer and runtime restart the app, carrying the document.
@@ -12,7 +12,7 @@
   import { Switch } from "bits-ui";
   import Select from "../../lib/ui/Select.svelte";
   import type { ViewSpec } from "../views";
-  import { resetWorkspace } from "../workspace";
+  import { closeRenderInspectors, resetWorkspace } from "../workspace";
 
   let { spec }: { spec: ViewSpec } = $props();
   void spec;
@@ -54,6 +54,11 @@
 
   async function setMode(worker: boolean) {
     await controllerManager.switchMode(worker ? "worker" : "main");
+  }
+
+  function setDeveloper(developer: boolean) {
+    saveSettings({ developer });
+    if (!developer) closeRenderInspectors();
   }
 
   const busy = $derived(controllerManager.loadingInProgress);
@@ -110,6 +115,15 @@
   </div>
   {/if}
   <button class="reset" onclick={resetWorkspace}>Reset layout</button>
+
+  <h3>Developer</h3>
+  <div class="setting">
+    <span>Developer mode</span>
+    <Switch.Root class="ui-switch" checked={settings.developer} onCheckedChange={setDeveloper} aria-label="Developer mode">
+      <Switch.Thumb class="ui-switch-thumb" />
+    </Switch.Root>
+  </div>
+  <p class="note">Adds the render inspector to each composition's settings menu (top right of the tab): the composition beside a view of its chunks, culling and raster tiles.</p>
 
   <h3>Build</h3>
   {#if build}

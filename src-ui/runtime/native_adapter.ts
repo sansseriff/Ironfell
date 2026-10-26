@@ -100,6 +100,7 @@ export class NativeAdapter {
       link: (a, b, keep, actor) => json('link', [a, b, keep, actor]),
       selection: () => json('selection'),
       importSvg: (text, parent, x, y, actor) => json('import_svg_at', [text, parent, x, y, actor]),
+      table: spec => json('table', [spec]),
     };
   }
   private fail(error: unknown) {

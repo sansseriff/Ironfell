@@ -46,8 +46,8 @@ export interface ViewQuery {
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
 /** The pointer's tools and their keys (Figma's). */
-export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text' | 'port' | 'empty';
-const TOOL_KEYS: Record<Tool, string> = { select: 'v', pen: 'p', rect: 'r', ellipse: 'o', text: 't', port: 'port', empty: 'empty' };
+export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text' | 'port' | 'empty' | 'table';
+const TOOL_KEYS: Record<Tool, string> = { select: 'v', pen: 'p', rect: 'r', ellipse: 'o', text: 't', port: 'port', empty: 'empty', table: 'table' };
 
 export class DocumentClient {
   view = $state('');
@@ -132,6 +132,11 @@ export class DocumentClient {
       spatial: (enabled = true) => this.call('spatial', [enabled]),
       // Object snapping for the select tool (plans/specs/snapping.md).
       snapping: (enabled = true) => this.call('snapping', [enabled]),
+      // Tables (plans/specs/layout-and-tables.md): make one from a spec
+      // ({parent, x, y, rows, preset, header, label_col, emphasis, align}),
+      // and edit one's structure ('add_row', 'merge', 'preset:boxed', …).
+      table: (spec: object) => this.call('table', [JSON.stringify(spec)]),
+      tableEdit: (table: string, verb: string, cells: string[] = []) => this.call('table_edit', [table, verb, JSON.stringify(cells)]),
       timings: (reset = false) => this.call('timings', [reset]),
       // Raster tiles for cold chunks (render-cache.md §5); off draws live.
       raster: (enabled = true, budgetMb = 0) => this.call('raster', [enabled, budgetMb]),

@@ -1,0 +1,12 @@
+[package]
+name = "iron_layout"
+version = "0.1.0"
+edition = "2024"
+description = "Stacks and grids for 2D compositions, on Taffy. No Bevy; used by the document store, which publishes its results (plans/specs/layout-and-tables.md)."
+
+# Only this crate names Taffy's types; the store speaks `iron_layout`'s own
+# small vocabulary. Grid and flexbox only: no block, float or calc, and not
+# Taffy's own tree (the store's document is the tree). The version
+# `bevy_ui` already resolves.
+[dependencies]
+taffy = { version = "0.14.0", default-features = false, features = ["std", "flexbox", "grid", "content_size", "detailed_layout_info"] }

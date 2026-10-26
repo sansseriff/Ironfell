@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-10-23 on `master`. Update this file whenever a plan is added,
+**Updated:** 2026-10-26 on `master`. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -51,6 +51,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`component-authoring.md`](specs/component-authoring.md) | Making components from the UI: mains, the port and empty tools, links and lines, the joint handle, the Library tab | Approved and built 2026-10-18 |
 | [`component-model.md`](specs/component-model.md) | Components: authored vs expanded instances, ports as the one interface, overrides, scope, libraries, render analysis; amends ECM §4, §6.1, §9 | Approved 2026-10-18; phases 0–4 done (the `Facet` rename; `in` ports replace parameters; linked instances, schema 7; overrides, edit translation, scope; anchors and empties; make component with nesting; plugging, mates and nested overrides). 5 waits on the project container, 6 is render-track work |
 | [`snapping.md`](specs/snapping.md) | Object snapping and smart guides in 2D compositions (Figma's edges and centres), the core in `iron_spatial::snap` | Phases 1–2 and most of 3 built 2026-10-20 (moving, resizing, path points, the pen); the shape tools, 4–5 open |
+| [`layout-and-tables.md`](specs/layout-and-tables.md) | A layout engine for 2D compositions (Taffy inside `iron_layout`: stacks and grids on groups, published by a layout producer), tables on it (rows of text cells, merges, boxed and light presets, the `<table>` model op and compact view, spreadsheet paste), and §10's proposal: affordances, how a container declares what gestures on its children mean, as document data | Phases 0–3 done 2026-10-26 (style inheritance deferred); §10 proposed, not approved |
 | [`packed-paths.md`](specs/packed-paths.md) | A path's anchors packed into one `path.d` value by default; `point` nodes only when editing, binding or constraining them. Fixes the out-of-memory abort on large SVG imports | Approved and built 2026-10-23 (phases 0–4); the Prussia SVG imports. Follow-ups in §9 |
 | [`render-cache.md`](specs/render-cache.md) | Chunks (vector subgroups) per composition, raster layers of 256 px tiles at √2 scale buckets drawn stretched during zoom, damage and promotion for edits, the automatic heuristic; vector retention for live layers if measurement asks | Approved 2026-10-23; phases 0–2 built (§10: idle frames 10.7 → 0.3 ms; a fitted Prussia pan 177 → 1.2 ms from raster tiles); phase 3 only if the inspector shows the need |
 | [`render-inspector.md`](specs/render-inspector.md) | A debug view that observes another 2D view: chunk tints, its viewport box and culling, live layers, tiles by state, a legend | Approved 2026-10-23; phases A and B built (chunk colours, viewport and culling, raster squares by state, legend) |

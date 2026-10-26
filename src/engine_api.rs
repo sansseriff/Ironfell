@@ -544,6 +544,121 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
+/// Make or rewrite a table (layout-and-tables.md §5.2): `spec` is JSON,
+/// `{parent, x, y, rows, preset?, header?, label_col?, emphasis?, align?,
+/// caption?, actor?}` to make one, where `rows` is a list of rows of cells
+/// or text with one row per line and cells split by `|`, and `emphasis` is
+/// 0-based. With `id`, the table's words are replaced (`table::replace_ops`),
+/// and a `header` or a different `preset` is applied in the same history
+/// entry. A `caption` puts the caption and the table in a vertical stack.
+/// Returns the table's id.
+pub fn document_table(app: &mut WorkerApp, spec: String) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        use iron_document::{table, Actor, LeafStruct, NodeId, Op, OrderKey, Slot, TransactionInput, TypeId, Value};
+        let v: serde_json::Value = serde_json::from_str(&spec).map_err(|e| e.to_string())?;
+        let id_of = |k: &str| v.get(k).and_then(|p| p.as_str()).map(|p| p.parse::<NodeId>().map_err(|e| format!("{k}: {e}"))).transpose();
+        let rows: Vec<Vec<String>> = match v.get("rows") {
+            Some(serde_json::Value::String(text)) => table::parse_rows(text),
+            Some(serde_json::Value::Array(rows)) => rows.iter().map(|r| r.as_array().map(|r| r.iter().map(|c| c.as_str().map(str::to_owned).unwrap_or_else(|| c.to_string())).collect()).unwrap_or_default()).collect(),
+            _ => return Err("rows: a list of rows, or text with one row per line".into()),
+        };
+        let actor = if v.get("actor").and_then(|a| a.as_str()) == Some("model") { Actor::Model } else { Actor::Human };
+        let tx = |label: &str, ops| TransactionInput { label: label.into(), actor, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false };
+        let err = |es: Vec<iron_document::op::ApplyError>| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        if let Some(t) = id_of("id")? {
+            let mut ops = table::replace_ops(&store.0, t, &rows)?;
+            if let Some(h) = v.get("header").and_then(|h| h.as_u64()) {
+                ops.push(Op::Set { id: t, path: "table.header".parse().expect("declared leaf"), slot: Slot::Const(Value::Number(h as f64)) });
+            }
+            let first = store.0.apply(tx("replace table", ops)).map_err(err)?.version;
+            let mut version = first;
+            let now = store.0.resolved(t, "table.preset".parse().expect("declared leaf")).and_then(|p| p.as_str().map(str::to_owned));
+            if let Some(p) = v.get("preset").and_then(|p| p.as_str()).filter(|p| Some(*p) != now.as_deref()) {
+                let (ops, _) = table::edit_ops(&store.0, t, &format!("preset:{p}"), &[])?;
+                version = store.0.apply(tx("replace table", ops)).map_err(err)?.version;
+                store.0.merge_with_previous(first, "replace table");
+            }
+            return Ok(serde_json::json!({"ok": true, "version": version.0, "table": t.to_string()}));
+        }
+        let parent = id_of("parent")?;
+        let spec = table::Spec {
+            rows,
+            preset: table::Preset::parse(v.get("preset").and_then(|p| p.as_str()).unwrap_or("light")),
+            header: v.get("header").and_then(|h| h.as_u64()).unwrap_or(1) as usize,
+            label_col: v.get("label_col").and_then(|b| b.as_bool()).unwrap_or(false),
+            emphasis: v.get("emphasis").and_then(|e| e.as_u64()).map(|e| e as usize),
+            align: v.get("align").and_then(|a| a.as_str()).map(|a| a.split_whitespace().map(str::to_owned).collect()).unwrap_or_default(),
+        };
+        let at = [v.get("x").and_then(|x| x.as_f64()).unwrap_or(0.0), v.get("y").and_then(|y| y.as_f64()).unwrap_or(0.0)];
+        let doc = store.0.document();
+        // Last among its siblings: drawn on top.
+        let siblings = match parent {
+            Some(p) => doc.children(p).to_vec(),
+            None => doc.roots().to_vec(),
+        };
+        let order = siblings.iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+        let caption = v.get("caption").and_then(|c| c.as_str()).filter(|c| !c.trim().is_empty());
+        let (ops, made) = match caption {
+            None => table::create_ops(doc, parent, order, at, &spec)?,
+            Some(words) => {
+                // A stack: the caption above the table (layout-and-tables.md
+                // §3.3), small, spaced capitals in the muted ink.
+                let ids = doc.next_ids(2);
+                let mut stack = iron_document::facet::Layout::default();
+                stack.mode = Slot::Const(Value::Enum("stack_y".into()));
+                stack.gap = Slot::Const(Value::Number(10.0));
+                let mut place = iron_document::facet::Transform2d::default();
+                place.x = Slot::Const(Value::Number(at[0]));
+                place.y = Slot::Const(Value::Number(at[1]));
+                let mut name = iron_document::facet::Name::default();
+                name.text = Slot::Const(Value::Str("captioned table".into()));
+                let mut text = iron_document::facet::Text::default();
+                text.content = Slot::Const(Value::Str(words.to_uppercase()));
+                let mut font = iron_document::facet::Font::default();
+                font.size = Slot::Const(Value::Number(12.0));
+                font.weight = Slot::Const(Value::Number(500.0));
+                font.letter_spacing = Slot::Const(Value::Number(12.0));
+                let mut fill = iron_document::facet::Fill::default();
+                fill.color = Slot::Const(Value::Color([0.45, 0.48, 0.55, 1.0]));
+                let mut ops = vec![
+                    Op::Create { id: ids[0], ty: TypeId::lookup("group").expect("registered"), parent, order, facets: vec![place.wrap(), stack.wrap(), name.wrap()] },
+                    Op::Create { id: ids[1], ty: TypeId::lookup("text").expect("registered"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![iron_document::facet::Transform2d::default().wrap(), text.wrap(), font.wrap(), fill.wrap()] },
+                ];
+                // The table's ids follow the two just taken.
+                let (more, t) = table::create_ops_after(doc, 2, Some(ids[0]), OrderKey::after(&OrderKey::first()), [0.0, 0.0], &spec)?;
+                ops.extend(more);
+                (ops, t)
+            }
+        };
+        let applied = store.0.apply(tx("add table", ops)).map_err(err)?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "table": made.to_string()}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// Edit a table's structure (layout-and-tables.md §5.1): `verb` is one of
+/// `table::edit_ops`'s, `cells` a JSON list of the selected cells (for merge
+/// and split). One transaction.
+pub fn document_table_edit(app: &mut WorkerApp, table: String, verb: String, cells: String) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        let table = table.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
+        let cells: Vec<String> = serde_json::from_str(&cells).map_err(|e| e.to_string())?;
+        let cells = cells.iter().map(|s| s.parse::<iron_document::NodeId>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let (ops, label) = iron_document::table::edit_ops(&store.0, table, &verb, &cells)?;
+        let applied = store.0
+            .apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
+            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
 /// Detach a linked instance (component-model.md §5.2): what it derives
 /// becomes authored, one transaction.
 pub fn document_detach(app: &mut WorkerApp, entity: String) -> String {
@@ -829,7 +944,9 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     let component = inspect_component(&store.0, id);
     let main = inspect_main(&store.0, id);
     let port = inspect_port(&store.0, id);
-    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component, "main": main, "port": port}).to_string()
+    // The table this node is, or is a cell of (layout-and-tables.md §5.1).
+    let table = iron_document::table::table_of(doc, id).map(|t| t.to_string());
+    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component, "main": main, "port": port, "table": table}).to_string()
 }
 
 /// A main (component-authoring.md §1): its definition and the definition's
@@ -1338,7 +1455,7 @@ pub fn solve_bench(iterations: u32, repeats: u32) -> String {
     .to_string()
 }
 
-const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip"];
+const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip", "layout", "layout_item", "rules"];
 
 /// The font picker's list (plans/specs/text.md §4): the catalog, the
 /// installed families on a native host, and which are loaded now.

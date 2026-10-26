@@ -411,6 +411,18 @@ pub fn document_author(ptr: u64, verb: String, args: String) -> String {
 }
 
 #[wasm_bindgen]
+pub fn document_table(ptr: u64, spec: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_table(app, spec)
+}
+
+#[wasm_bindgen]
+pub fn document_table_edit(ptr: u64, table: String, verb: String, cells: String) -> String {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    crate::engine_api::document_table_edit(app, table, verb, cells)
+}
+
+#[wasm_bindgen]
 pub fn document_detach(ptr: u64, entity: String) -> String {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::document_detach(app, entity)

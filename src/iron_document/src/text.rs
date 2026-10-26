@@ -95,15 +95,32 @@ pub fn measure_with(store: &Store, id: NodeId, text: &str, runs: &[StyleRun]) ->
     let sizing = Sizing::parse(read("text.sizing").and_then(|v| v.as_str().map(str::to_owned)).as_deref().unwrap_or("auto_width"));
     let style = style(store, id);
     let (w, h) = (num("size.w", 100.0).max(1.0), num("size.h", 100.0).max(1.0));
-    let layout = iron_text::engine().layout(text, &style, runs, (sizing != Sizing::AutoWidth).then_some(w));
+    // A table's cell: its box is the whole cell, its words inset by the
+    // table's padding (layout-and-tables.md §3).
+    let [px, py] = cell_pad(store, id);
+    let layout = iron_text::engine().layout(text, &style, runs, (sizing != Sizing::AutoWidth).then_some((w - 2.0 * px).max(1.0)));
     let (fw, fh) = match sizing {
-        Sizing::AutoWidth => (layout.width, layout.height),
-        Sizing::AutoHeight => (w, layout.height),
+        Sizing::AutoWidth => (layout.width + 2.0 * px, layout.height + 2.0 * py),
+        Sizing::AutoHeight => (w, layout.height + 2.0 * py),
         Sizing::Fixed => (w, h),
     };
     let valign = VAlign::parse(read("font.valign").and_then(|v| v.as_str().map(str::to_owned)).as_deref().unwrap_or("top"));
-    let dy = if sizing == Sizing::Fixed { valign.offset(layout.height, fh) } else { 0.0 };
-    Measured { layout, frame: Rect::new(0.0, 0.0, fw, fh), offset: kurbo::Vec2::new(0.0, dy), sizing }
+    let dy = if sizing == Sizing::Fixed { valign.offset(layout.height, fh - 2.0 * py) } else { 0.0 };
+    Measured { layout, frame: Rect::new(0.0, 0.0, fw, fh), offset: kurbo::Vec2::new(px, py + dy), sizing }
+}
+
+/// How far a text's words sit inside its box: a table's cell padding, or
+/// nothing for any other text.
+pub fn cell_pad(store: &Store, id: NodeId) -> [f64; 2] {
+    let doc = store.document();
+    let row = doc.live(id).and_then(|n| n.parent).filter(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "row"));
+    match row.and_then(|r| crate::table::table_of(doc, r)) {
+        Some(t) => {
+            let num = |leaf: &str, d: f64| store.resolved(t, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(d).max(0.0);
+            [num("table.pad_x", 12.0), num("table.pad_y", 8.0)]
+        }
+        None => [0.0, 0.0],
+    }
 }
 
 /// Plain text pasted onto the canvas (plans/specs/text.md §7): a fragment of

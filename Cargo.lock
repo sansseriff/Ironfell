@@ -4313,11 +4313,19 @@ name = "iron_document"
 version = "0.1.0"
 dependencies = [
  "glam 0.32.1",
+ "iron_layout",
  "iron_solve",
  "iron_text",
  "kurbo",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "iron_layout"
+version = "0.1.0"
+dependencies = [
+ "taffy",
 ]
 
 [[package]]

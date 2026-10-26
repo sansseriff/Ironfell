@@ -45,6 +45,9 @@ export interface DocumentApi {
    *  transaction (plans/specs/svg-import-export.md). `cuts` lists what it
    *  could not carry. */
   importSvg(text: string, parent: string, x: number, y: number, actor: 'human' | 'model'): MaybePromise<ImportSvgResult>;
+  /** Make a table, or with `id` replace one's words, from a JSON spec
+   *  (plans/specs/layout-and-tables.md §5.2), as one history entry. */
+  table(spec: string): MaybePromise<{ ok: boolean; version?: number; table?: string; error?: string }>;
 }
 
 export interface ImportSvgResult {
@@ -89,5 +92,6 @@ export function makeDocumentApi(glue: Glue, handle: bigint): DocumentApi {
     link: (a, b, keep, actor) => JSON.parse((glue as any).document_link(handle, a, b, keep, actor)),
     selection: () => JSON.parse((glue as any).document_selection(handle)),
     importSvg: (text, parent, x, y, actor) => JSON.parse((glue as any).document_import_svg_at(handle, text, parent, x, y, actor)),
+    table: (spec) => JSON.parse((glue as any).document_table(handle, spec)),
   };
 }

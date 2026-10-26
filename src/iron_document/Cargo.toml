@@ -16,6 +16,8 @@ iron_solve = { path = "../iron_solve" }
 kurbo = "0.13.1"
 # Text layout for text nodes' bounds (plans/specs/text.md); Bevy-free.
 iron_text = { path = "../iron_text" }
+# Stacks and grids on groups (plans/specs/layout-and-tables.md); Bevy-free.
+iron_layout = { path = "../iron_layout" }
 
 [dev-dependencies]
 # Only for the test that pins `geom::world_affine` to Bevy's own transform

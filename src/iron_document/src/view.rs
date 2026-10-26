@@ -127,6 +127,30 @@ fn node(
     let n = doc.live(id).expect("live");
     let indent = "  ".repeat(level as usize + 1);
     let mut attrs = leaf_attrs(doc, reactive, by, q.fidelity, id);
+    // A table reads as its rows of words (layout-and-tables.md §5.2), unless
+    // its cells are asked for (`expand`).
+    if n.ty.name() == "table" && q.fidelity != Fidelity::Skeleton && !q.expand.contains(&id) {
+        let read = |node: NodeId, leaf: &str| reactive.read(doc, crate::expr::Leaf { node, path: leaf.parse().expect("declared leaf") });
+        let bound = |cell: NodeId| doc.leaf(cell, "text.content".parse().expect("declared leaf")).and_then(|s| s.expr()).map(|e| e.to_string());
+        let (more, lines) = crate::table::compact(doc, &read, &bound, id);
+        let keep = ["id", "name", "x", "x.bind", "x.by", "y", "y.bind", "y.by"];
+        attrs.retain(|(k, _)| keep.contains(&k.as_str()));
+        // Its size, which layout decides, to the pixel: a reader needs the
+        // extent, not the float noise.
+        for (k, leaf) in [("w", "size.w"), ("h", "size.h")] {
+            if let Some(v) = read(id, leaf).and_then(|v| v.as_f64()) {
+                attrs.push((k.into(), format!("{}", v.round())));
+            }
+        }
+        attrs.extend(more);
+        write_open(out, &indent, "table", &attrs);
+        out.push_str(">\n");
+        for line in lines {
+            writeln!(out, "{indent}  {line}").expect("string write");
+        }
+        writeln!(out, "{indent}</table>").expect("string write");
+        return;
+    }
     // In a composition view a figure names what it pictures, in place of
     // the relation element (ECM §11).
     let as_of = matches!(q.relation, ViewRelation::Composition(_));
@@ -377,6 +401,12 @@ fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fideli
                 // whose effect spreads through the cluster (CS §9.3).
                 if let Some(cluster) = by.get(&leaf) {
                     attrs.push((format!("{key}.by"), cluster.to_string()));
+                } else if reactive.signal(leaf).is_some_and(|s| s.producer == crate::graph::ProducerId::LAYOUT) {
+                    // Placed by its group's layout (layout-and-tables.md
+                    // §2.4): the value shown is the layout's, locked.
+                    if let Some(group) = doc.live(id).and_then(|n| n.parent) {
+                        attrs.push((format!("{key}.by"), group.to_string()));
+                    }
                 }
             }
         }

@@ -1,0 +1,38 @@
+# Layout on groups (plans/specs/layout-and-tables.md, phase 1). A stack made by
+# the model surface lays out three texts; growing the middle one moves the last
+# with no authored change to it; undo puts it back. Then three rects, shift-
+# picked, become a horizontal stack with Shift+A, keeping their 20 px gaps.
+nav
+ready
+eval __iron.snapping(false)
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><create id="$g" type="group" parent="#1" x="120" y="60" layout.mode="stack_y" layout.gap="8" layout.pad_t="12" layout.pad_l="12" layout.pad_r="12" layout.pad_b="12"/><create id="$a" type="text" parent="$g" name="title" content="Title" font.size="20" font.weight="700"/><create id="$b" type="text" parent="$g" name="body" content="Body line" font.size="14"/><create id="$c" type="text" parent="$g" name="footer" content="Footer" font.size="12"/></edit>`); return r.ok})()
+sleep 1000
+eval (async()=>{const v=await __iron.view({fidelity:'full'}); return v.split('\n').filter(l=>/<text[^>]*name="(title|body|footer)"/.test(l)).map(l=>l.trim().match(/name="\w+" x="[^"]+" x.by="[^"]+" y="[^"]+"/)[0])})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="2"><set id="#3v" content="Body line\nand a second"/></edit>`); return r.ok})()
+sleep 1000
+shot layout-stack-grown
+eval (async()=>{const v=await __iron.view({fidelity:'full'}); return v.split('\n').filter(l=>/<text[^>]*name="footer"/.test(l)).map(l=>l.trim().match(/ y="[^"]+"/)[0])})()
+key Meta+z
+sleep 1000
+eval (async()=>{const v=await __iron.view({fidelity:'full'}); return v.split('\n').filter(l=>/<text[^>]*name="footer"/.test(l)).map(l=>l.trim().match(/ y="[^"]+"/)[0])})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="4"><create id="$a" type="rect" parent="#1" name="a" x="510" y="280" w="40" h="40" color="#e04040ff"/><create id="$b" type="rect" parent="#1" name="b" x="570" y="280" w="40" h="60" color="#40a040ff"/><create id="$c" type="rect" parent="#1" name="c" x="630" y="280" w="40" h="40" color="#4060e0ff"/></edit>`); return r.ok})()
+sleep 800
+dclick 530 300
+sleep 700
+keydown Shift
+dclick 590 300
+sleep 700
+dclick 650 300
+keyup Shift
+sleep 700
+key Shift+A
+sleep 1500
+shot layout-shift-a
+eval (async()=>{const v=await __iron.view({fidelity:'full'}); return v.split('\n').filter(l=>/name="(a|b|c|stack)"/.test(l) && /<(rect|group)/.test(l)).map(l=>l.trim().match(/name="\w+" x="[^"]+"( x.by="[^"]+")?( y="[^"]+")?|mode="\w+" gap="\d+"/g).join(' '))})()
+eval [...document.querySelectorAll('.property-section .component')].map(e=>e.textContent).includes('Auto layout')
+key Meta+z
+sleep 1000
+eval (async()=>{const v=await __iron.view({fidelity:'full'}); return v.split('\n').filter(l=>/<rect[^>]*name="b"/.test(l)).map(l=>l.trim().match(/name="b" x="[^"]+" y="[^"]+"/)[0])})()
+logs applied|rejected|panicked
+errors
+quit

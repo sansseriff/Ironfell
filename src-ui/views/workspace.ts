@@ -132,14 +132,32 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
     api.clear();
     defaultLayout(api);
   }
-  api.onDidLayoutChange(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(api.toJSON()));
-    } catch {
-      // storage unavailable: the layout lasts this session only
-    }
-  });
+  api.onDidLayoutChange(save);
   return api;
+}
+
+function save() {
+  if (!current) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(current.toJSON()));
+  } catch {
+    // storage unavailable: the layout lasts this session only
+  }
+}
+
+/** Open or close a composition view's render inspector, drawn in the same
+ *  tab beside it (plans/specs/render-inspector.md): `share` is the view's
+ *  part of the width, `undefined` closes it. Kept with the layout. */
+export function setInspecting(panel: string, share: number | undefined) {
+  current?.getPanel(panel)?.api.updateParameters({ inspect: share });
+  save();
+}
+
+/** Close every render inspector (developer mode turned off). */
+export function closeRenderInspectors() {
+  for (const p of current?.panels ?? []) {
+    if ((p.params as { inspect?: number } | undefined)?.inspect !== undefined) setInspecting(p.id, undefined);
+  }
 }
 
 /** Forget the saved layout and start again from the default. */

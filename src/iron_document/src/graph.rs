@@ -29,7 +29,7 @@ pub struct ResolvedChange {
     pub value: Value,
 }
 
-/// Who publishes a runtime signal. Two producers are built in; a host
+/// Who publishes a runtime signal. Three producers are built in; a host
 /// registers more through `Store::register_producer`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ProducerId(pub u32);
@@ -39,8 +39,10 @@ impl ProducerId {
     pub const CLIPS: ProducerId = ProducerId(0);
     /// The across/through network's solution (`Store::resolve_physics`).
     pub const NETWORK: ProducerId = ProducerId(1);
+    /// Where groups' layouts place their children (`layout.rs`).
+    pub const LAYOUT: ProducerId = ProducerId(2);
     /// The first id a host producer receives.
-    pub const FIRST_HOST: ProducerId = ProducerId(2);
+    pub const FIRST_HOST: ProducerId = ProducerId(3);
 }
 
 /// One published value: who published it and at which of their frames.

@@ -47,6 +47,8 @@ pub mod solve;
 pub mod standard;
 pub mod sym;
 pub mod text;
+pub mod layout;
+pub mod table;
 pub mod time;
 pub mod units;
 pub mod value;
@@ -194,6 +196,8 @@ pub struct Store {
     /// the document's version alone.
     session_version: u64,
     physics_error: Option<String>,
+    /// Each table's grid from the last layout (`layout.rs`, `table.rs`).
+    tables: std::collections::BTreeMap<NodeId, table::Grid>,
     /// What the last expansion could not derive (component-model.md §3).
     expansion_problems: Vec<String>,
     /// The gesture whose previews are in the overlay (`gesture`).
@@ -243,6 +247,7 @@ impl Store {
             fingers: Vec::new(),
             session_version: 0,
             physics_error: None,
+            tables: Default::default(),
             expansion_problems: Vec::new(),
             gesture: None,
             ended: None,
@@ -587,6 +592,7 @@ impl Store {
         match producer {
             ProducerId::CLIPS => "clips".to_owned(),
             ProducerId::NETWORK => "network".to_owned(),
+            ProducerId::LAYOUT => "layout".to_owned(),
             p => self.producers.get(&p).cloned().unwrap_or_else(|| format!("producer {}", p.0)),
         }
     }
@@ -718,6 +724,8 @@ impl Store {
             let value = self.reactive.read(&self.doc, leaf).unwrap_or(Value::Str(String::new()));
             self.reactive.mark(leaf, value);
         }
+        // New faces measure differently: layouts holding text reflow.
+        self.resolve_layout();
         !ids.is_empty()
     }
 
@@ -1004,11 +1012,50 @@ impl Store {
         Ok(())
     }
 
+    /// Recompute what the store derives after every change: the
+    /// across/through network's solution, then the layouts that place
+    /// groups' children (`layout.rs`), which may read it.
+    pub fn resolve_physics(&mut self) {
+        self.solve_network();
+        self.resolve_layout();
+    }
+
+    /// Publish every laid-out group's placements (layout-and-tables.md §2.3)
+    /// under `ProducerId::LAYOUT`: derived, never stored, locked against
+    /// direct edits like any published leaf.
+    pub fn resolve_layout(&mut self) {
+        let (values, grids) = layout::compute(self);
+        // A table whose tracks moved redraws its lines: report it changed.
+        if grids != self.tables {
+            let columns: LeafPath = "table.columns".parse().expect("declared leaf");
+            let moved: Vec<NodeId> = grids.iter().filter(|(t, g)| self.tables.get(t) != Some(g)).map(|(t, _)| *t).collect();
+            self.tables = grids;
+            for t in moved {
+                let leaf = Leaf { node: t, path: columns };
+                let value = self.reactive.read(&self.doc, leaf).unwrap_or(Value::Str(String::new()));
+                self.reactive.mark(leaf, value);
+            }
+        }
+        if values.is_empty() && self.reactive.published_by(ProducerId::LAYOUT).is_empty() {
+            return;
+        }
+        if values == self.reactive.published_by(ProducerId::LAYOUT) {
+            return;
+        }
+        self.signal_stamp += 1;
+        self.reactive.publish(&self.doc, ProducerId::LAYOUT, values, self.signal_stamp);
+    }
+
+    /// Where a table's cells fell, as of the last layout (`table::Grid`).
+    pub fn table_grid(&self, table: NodeId) -> Option<&table::Grid> {
+        self.tables.get(&table)
+    }
+
     /// Solve the across/through network (ECM §6.1, step 3) and put its
     /// solution in the graph's physics layer: derived, never stored, read by
-    /// bindings like any value. Run after every change. A network that does
-    /// not converge keeps its previous solution and says why.
-    pub fn resolve_physics(&mut self) {
+    /// bindings like any value. A network that does not converge keeps its
+    /// previous solution and says why.
+    fn solve_network(&mut self) {
         let net = crate::port::network(&self.doc);
         if net.unknowns.is_empty() {
             if !self.reactive.published_by(ProducerId::NETWORK).is_empty() {

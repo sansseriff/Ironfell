@@ -28,6 +28,9 @@
     "gradient.kind": ["linear", "radial"], "group_clip.shape": ["rect", "ellipse"],
     "stroke.join": ["miter", "round", "bevel"], "stroke.cap": ["butt", "round", "square"],
     "path.fill_rule": ["nonzero", "evenodd"],
+    "layout.mode": ["none", "stack_x", "stack_y", "grid"], "layout.align": ["start", "center", "end", "stretch"],
+    "layout.justify": ["start", "center", "end", "between"], "layout.sizing_w": ["hug", "fixed"], "layout.sizing_h": ["hug", "fixed"],
+    "layout_item.w": ["auto", "fill"], "layout_item.h": ["auto", "fill"], "layout_item.align": ["auto", "start", "center", "end", "stretch"],
   } as Record<string, string[]>)[f.leaf]);
   const labels: Record<string, string> = { x: "X", y: "Y", w: "W", h: "H", rot: "Rotation", sx: "Scale X", sy: "Scale Y", rx: "Radius X", ry: "Radius Y", opacity: "Opacity", kind: "Type", start: "Start", end: "End", enabled: "Clip content", radius: "Radius", color: "Colour", width: "Weight", fill_rule: "Fill rule", dash_offset: "Offset" };
   const displayLabel = $derived(label ?? labels[f.field] ?? f.field.replaceAll("_", " "));

@@ -18,6 +18,9 @@ import { isNativeHost } from './native_host';
  *   runtime      the app in a worker (default) or on the main thread.
  *   appearance   light or dark: the system's (default), or forced
  *                (runtime/theme.svelte.ts).
+ *   developer    debugging tools in the UI: the composition settings menu's
+ *                render inspector, which splits a composition tab with a view
+ *                of how it renders.
  */
 import type { RuntimeMode } from './session_adapter';
 
@@ -30,10 +33,11 @@ export interface Settings {
   renderer: Renderer;
   runtime: RuntimeMode;
   appearance: Appearance;
+  developer: boolean;
 }
 
 const KEY = 'iron.settings.v1';
-const DEFAULTS: Settings = { renderScale: 'auto', renderer: 'hybrid', runtime: 'worker', appearance: 'system' };
+const DEFAULTS: Settings = { renderScale: 'auto', renderer: 'hybrid', runtime: 'worker', appearance: 'system', developer: false };
 
 function read(): Settings {
   try {

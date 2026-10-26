@@ -267,6 +267,14 @@ export class InputManager {
                 return;
             }
         }
+        // Add auto layout (Shift+A, Figma's; layout-and-tables.md §2.4). The
+        // key also goes on to Bevy, where Shift+A runs a 3D camera left; the
+        // engine acts on 'layout' only with the pointer over a 2D view.
+        if (!command && !event.altKey && event.shiftKey && event.code === 'KeyA' && !event.repeat) {
+            const target = event.target as HTMLElement | null;
+            const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+            if (!editing) this.post({ ty: 'toolKey', key: 'layout', m: 0 });
+        }
         // Copy as SVG (Alt+Shift+C; Figma has no default). By key code: with
         // Alt held, macOS reports the character it types. Cmd+Shift+C and
         // Cmd+Alt+C belong to the browser's developer tools.

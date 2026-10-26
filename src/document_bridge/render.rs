@@ -617,6 +617,21 @@ impl Draw<'_> {
             Shape2d::Text { glyphs, .. } => glyphs.clone().into(),
             _ => shape.clone(),
         };
+        if let Shape2d::Table { decor, .. } = &d.shape {
+            // Under its cells: its background, its bands, then its lines
+            // (layout-and-tables.md §3.2), butt-capped so hairlines meet.
+            if let Some(brush) = self.fill_brush(id, d, &shape) {
+                b.fill(affine, brush, shape.clone());
+            }
+            for (rect, c) in &decor.bands {
+                b.fill(affine, peniko::Color::new(*c), *rect);
+            }
+            for (line, width, c) in &decor.lines {
+                let style = kurbo::Stroke::new(*width).with_caps(kurbo::Cap::Butt);
+                b.stroke(affine, style, peniko::Color::new(*c), *line);
+            }
+            return;
+        }
         if let Shape2d::Slider { w, h, t } = d.shape.clone() {
             // Track, filled part, knob. The hit shape stays the whole w×h
             // box so the knob is easy to grab.

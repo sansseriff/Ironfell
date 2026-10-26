@@ -90,6 +90,8 @@ pub enum ActiveTool {
     /// Placing a port on a component's main, or an empty (`author_tool`).
     Port,
     Empty,
+    /// Placing a table (`author_tool`; layout-and-tables.md §5.1).
+    Table,
 }
 
 impl ActiveTool {
@@ -102,6 +104,7 @@ impl ActiveTool {
             ActiveTool::Text => "text",
             ActiveTool::Port => "port",
             ActiveTool::Empty => "empty",
+            ActiveTool::Table => "table",
         }
     }
 }
@@ -1124,13 +1127,24 @@ impl Part {
     }
 }
 
+/// Whether the select tool looks through a node to its children: a table's
+/// row (layout-and-tables.md §3), which nothing selects, so a double-click
+/// on a table reaches a cell, as in Slides and PowerPoint.
+fn see_through(doc: &iron_document::Document, id: NodeId) -> bool {
+    doc.live(id).is_some_and(|n| n.ty.name() == "row")
+}
+
 /// Which node along `chain` a press selects: the outermost one whose
-/// container is not open (or the hit node itself, `deep`).
+/// container is not open (or the hit node itself, `deep`). Rows are passed
+/// over (`see_through`).
 fn target_index(doc: &iron_document::Document, chain: &[NodeId], selected: &[&Reach], deep: bool) -> usize {
     if deep {
         return chain.len() - 1;
     }
     for i in 0..chain.len() {
+        if see_through(doc, chain[i]) && i + 1 < chain.len() {
+            continue;
+        }
         let open = (i == 0 && nest::is_embed(doc, chain[0])) || selected.iter().any(|r| r.chain.len() > i + 1 && r.chain[..=i] == chain[..=i]);
         if !open {
             return i;
@@ -1359,7 +1373,7 @@ fn snap_session(geo: &Geo, view: &PanelView, mine: &[&Reach], k: f64) -> Option<
         };
         let Some(space) = geo.space(&r.chain) else { continue };
         for n in roots {
-            if moving(n) || !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "embed")) {
+            if moving(n) || !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "table" | "group" | "use" | "embed")) {
                 continue;
             }
             // Off screen: not a target (Figma's rule, and it keeps a large
@@ -1504,11 +1518,17 @@ fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
         doc.children(id).to_vec()
     };
     kids.into_iter()
-        .filter(|&k| doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "empty" | "embed" | "mesh")))
-        .map(|k| {
+        .flat_map(|k| {
+            // Through a row to its cells.
             let mut chain = r.chain.clone();
             chain.push(k);
-            Reach { panel: r.panel.clone(), chain }
+            if see_through(doc, k) {
+                children(doc, &Reach { panel: r.panel.clone(), chain })
+            } else if doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "table" | "group" | "use" | "empty" | "embed" | "mesh")) {
+                vec![Reach { panel: r.panel.clone(), chain }]
+            } else {
+                Vec::new()
+            }
         })
         .collect()
 }
@@ -1658,8 +1678,13 @@ pub fn select_tool_system(
                 // Up a level: each node's container, or nothing at the top.
                 let mut up: Vec<Reach> = Vec::new();
                 for r in &reaches {
+                    // Up past any row to the table.
+                    let mut n = r.chain.len().saturating_sub(1);
+                    while n > 1 && see_through(doc, r.chain[n - 1]) {
+                        n -= 1;
+                    }
                     if r.chain.len() > 1 {
-                        let p = Reach { panel: r.panel.clone(), chain: r.chain[..r.chain.len() - 1].to_vec() };
+                        let p = Reach { panel: r.panel.clone(), chain: r.chain[..n].to_vec() };
                         if !up.contains(&p) {
                             up.push(p);
                         }
@@ -1702,6 +1727,19 @@ pub fn select_tool_system(
                     Err(e) => info!("wrap in empty: {e}"),
                 }
             }
+            // Add auto layout (layout-and-tables.md §2.4): a group gets a
+            // layout; siblings are wrapped in a laid-out group.
+            "layout" if !reaches.is_empty() && hits.panel.as_deref().and_then(|p| views.get(p)).is_some_and(|v| v.dims == Dims::Two) => {
+                let ids: Vec<NodeId> = reaches.iter().map(|r| r.node()).collect();
+                let extent = |n: NodeId| store.0.extent(n);
+                match iron_document::layout::add_ops(doc, &extent, &ids) {
+                    Ok((ops, group)) => {
+                        tool.select_when_live = vec![group];
+                        pending.0.push(TransactionInput { label: "add auto layout".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
+                    }
+                    Err(e) => info!("add auto layout: {e}"),
+                }
+            }
             "a" if command => {
                 let (panel, prefix, roots) = match reaches.first() {
                     Some(r) => {
@@ -1715,7 +1753,7 @@ pub fn select_tool_system(
                 };
                 let all = roots
                     .into_iter()
-                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "empty" | "embed")))
+                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "table" | "group" | "use" | "empty" | "embed")))
                     .map(|n| {
                         let mut chain = prefix.clone();
                         chain.push(n);
@@ -1840,6 +1878,27 @@ pub fn select_tool_system(
                     arrivals.push((imported.fragment, false, "import SVG"));
                 }
                 Err(e) => warn!("import SVG: {e}"),
+            }
+            continue;
+        }
+        if text.contains('\t') && !Fragment::is_fragment_text(&text) {
+            // A spreadsheet's cells (layout-and-tables.md §5.1): into the
+            // selected table from the selected cell, or a new table.
+            let rows = iron_document::table::from_tsv(&text);
+            if let Some((t, n)) = sel.selected.iter().find_map(|&n| iron_document::table::table_of(store.0.document(), n).map(|t| (t, n))) {
+                match iron_document::table::paste_ops(&store.0, t, (n != t).then_some(n), &rows) {
+                    Ok(ops) => pending.0.push(TransactionInput { label: "paste into table".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }),
+                    Err(e) => warn!("paste into table: {e}"),
+                }
+                continue;
+            }
+            let view = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two).or_else(|| views.0.iter().find(|v| v.dims == Dims::Two));
+            let Some(view) = view else { continue };
+            let r = view.rect;
+            let c = view.affine().inverse() * Point::new((r.x + r.w * 0.5) as f64, (r.y + r.h * 0.5) as f64);
+            match iron_document::table::fragment(rows, [c.x, c.y]) {
+                Ok(f) => arrivals.push((f, false, "paste table")),
+                Err(e) => warn!("paste table: {e}"),
             }
             continue;
         }
@@ -2265,6 +2324,9 @@ pub fn select_tool_system(
             let dbl = tool.last_click.is_some_and(|(t, p, id)| now - t <= DOUBLE_CLICK.0 && p.distance(pointer.screen) <= DOUBLE_CLICK.1 && id == chain[k]);
             if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
                 k += 1;
+                while see_through(geo.doc(), chain[k]) && k + 1 < chain.len() {
+                    k += 1;
+                }
                 tool.last_click = None;
             } else if dbl && sel.selected == [chain[k]] && geo.ty(chain[k]) == "path" {
                 // A double-click on a lone path edits its points.
@@ -2568,7 +2630,7 @@ pub fn select_tool_system(
                 tool.marquee = Some((view.panel.clone(), rect));
                 let mut list = base.clone();
                 for &n in roots.iter() {
-                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "group" | "use" | "empty" | "embed")) {
+                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "table" | "group" | "use" | "empty" | "embed")) {
                         continue;
                     }
                     let mut chain = prefix.clone();

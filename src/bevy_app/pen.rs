@@ -176,7 +176,11 @@ pub fn pen_tool_system(
                 *active = ActiveTool::Empty;
                 pen.path = None;
             }
-            "escape" if matches!(*active, ActiveTool::Rect | ActiveTool::Ellipse | ActiveTool::Port | ActiveTool::Empty) => *active = ActiveTool::Select,
+            "table" if m == 0 => {
+                *active = ActiveTool::Table;
+                pen.path = None;
+            }
+            "escape" if matches!(*active, ActiveTool::Rect | ActiveTool::Ellipse | ActiveTool::Port | ActiveTool::Empty | ActiveTool::Table) => *active = ActiveTool::Select,
             "v" if m == 0 => {
                 *active = ActiveTool::Select;
                 pen.path = None;

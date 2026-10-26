@@ -1,17 +1,19 @@
 <script lang="ts">
   // Composition settings (plans/specs/free-running.md §3): a button in the
-  // view's top right corner. Run: Auto (free running while the composition
+  // tab's top right corner. Run: Auto (free running while the composition
   // or anything it shows is live, as the engine reports), Always, or On
   // demand (never; what it shows does not bubble out, and producers seen
-  // only through it pause).
+  // only through it pause). In developer mode, the render inspector toggle
+  // (plans/specs/render-inspector.md §8), which splits the tab.
   import { DropdownMenu } from "bits-ui";
   import Check from "@lucide/svelte/icons/check";
   import Settings2 from "@lucide/svelte/icons/settings-2";
   import { onDestroy } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
+  import { settings } from "../../runtime/settings.svelte";
   import type { ViewSpec } from "../views";
 
-  let { spec }: { spec: ViewSpec } = $props();
+  let { spec, inspecting, onInspect }: { spec: ViewSpec; inspecting: boolean; onInspect: () => void } = $props();
 
   const doc = controllerManager.docClient;
 
@@ -76,6 +78,15 @@
           {/each}
           <div class="ui-menu-separator"></div>
           <div class="ui-menu-heading status" data-status>{status}</div>
+          {#if settings.developer}
+            <div class="ui-menu-separator"></div>
+            <div class="ui-menu-heading">Developer</div>
+            <DropdownMenu.Item class="ui-menu-item" onSelect={onInspect} data-inspector>
+              <span class="check">{#if inspecting}<Check size={14} strokeWidth={2} />{/if}</span>
+              <span>Render inspector</span>
+              <span class="ui-hint">Chunks, culling and tiles beside the view</span>
+            </DropdownMenu.Item>
+          {/if}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

@@ -1,6 +1,7 @@
 <script lang="ts">
   // The tools, Figma's way: a toolbar floating at the bottom of a 2D
-  // composition view. Select (V); the shapes, rectangle (R) and ellipse (O),
+  // composition view. Select (V); the shapes, rectangle (R), ellipse (O) and
+  // table,
   // and the component tools, port and empty (component-authoring.md §2),
   // behind one button that remembers the last one used; the pen (P); text
   // (T). The
@@ -14,11 +15,11 @@
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
   import PenTool from "@lucide/svelte/icons/pen-tool";
   import Square from "@lucide/svelte/icons/square";
+  import Table from "@lucide/svelte/icons/table";
   import Type from "@lucide/svelte/icons/type";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { Tool } from "../../runtime/document_client.svelte";
   import type { ViewSpec } from "../views";
-  import CompositionSettings from "./CompositionSettings.svelte";
 
   let { spec }: { spec: ViewSpec } = $props();
 
@@ -42,6 +43,7 @@
   const SHAPES = [
     { id: "rect", key: "R", label: "Rectangle", icon: Square },
     { id: "ellipse", key: "O", label: "Ellipse", icon: Circle },
+    { id: "table", key: "", label: "Table", icon: Table },
     { id: "port", key: "", label: "Port (on a component's main)", icon: CircleDot },
     { id: "empty", key: "", label: "Empty", icon: Crosshair },
   ] as const;
@@ -58,7 +60,6 @@
   }
 </script>
 
-<CompositionSettings {spec} />
 
 {#if twoD}
   <div class="toolbar canvas-ui" role="toolbar" aria-label="Tools">

@@ -62,6 +62,10 @@ pub enum Shape2d {
     /// `paints` are what is drawn (outline glyphs by colour, decorations,
     /// colour glyphs), placed by `offset` like the glyphs.
     Text { w: f32, h: f32, glyphs: std::sync::Arc<kurbo::BezPath>, paints: std::sync::Arc<Vec<iron_text::TextPaint>>, layout: std::sync::Arc<iron_text::TextLayout>, offset: [f32; 2] },
+    /// A table (plans/specs/layout-and-tables.md §3): its box spans `(0, 0)`
+    /// to `(w, h)`; `decor` is what it draws under its cells, its bands and
+    /// lines (`iron_document::table::decor`).
+    Table { w: f32, h: f32, decor: std::sync::Arc<iron_document::table::Decor> },
 }
 
 /// Every drawable 2D node's draw data, by node, whether or not the node has
@@ -161,7 +165,7 @@ impl Shape2d {
                 use kurbo::Shape;
                 super::nest::rounded_rect(w, h, radii).contains(kurbo::Point::new(p.x as f64, p.y as f64))
             }
-            &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } | &Shape2d::Text { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
+            &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } | &Shape2d::Text { w, h, .. } | &Shape2d::Table { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
             &Shape2d::Ellipse { rx, ry, arc: None } => (p / Vec2::new(rx, ry).max(Vec2::splat(1e-6))).length_squared() <= 1.0,
             Shape2d::Ellipse { .. } => {
                 use kurbo::Shape;
@@ -448,7 +452,7 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
         // and texture.
         "embed" if in_3d(store, id) => commands.spawn((Provenance(id), Doc3d, ActiveState::default(), Name::new(format!("embed plane {id}")), Visibility::default())),
         "group" | "use" | "embed" => commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default())),
-        "rect" | "ellipse" | "slider" | "path" | "text" | "empty" => {
+        "rect" | "ellipse" | "slider" | "path" | "text" | "empty" | "table" => {
             commands.spawn((Provenance(id), Name::new(format!("{} {id}", node.ty)), Visibility::default()))
         }
         // A camera node is a pose: embeds that name it look through it.
@@ -485,7 +489,7 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut e
     }
     // 3D nodes always have an entity; 2D ones may not.
     let Some(ec3) = ec.as_deref_mut() else {
-        if let "rect" | "ellipse" | "slider" | "path" | "text" = node.ty.name() {
+        if let "rect" | "ellipse" | "slider" | "path" | "text" | "table" = node.ty.name() {
             drawables.0.insert(id, r.doc2d(node.ty.name()));
         }
         return;
@@ -500,7 +504,7 @@ fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut e
             ec.insert((r.pose_3d(), RenderLayers::layer(layers.of(composition))));
         }
         "group" | "use" | "embed" => {}
-        "rect" | "ellipse" | "slider" | "path" | "text" | "empty" => {
+        "rect" | "ellipse" | "slider" | "path" | "text" | "empty" | "table" => {
             let d = r.doc2d(node.ty.name());
             drawables.0.insert(id, d.clone());
             ec.insert(d);
@@ -571,6 +575,10 @@ impl Reader<'_> {
                     let m = iron_document::text::measure(store, id);
                     let glyphs = if m.offset == kurbo::Vec2::ZERO { m.layout.outline.clone() } else { std::sync::Arc::new(kurbo::Affine::translate(m.offset) * &*m.layout.outline) };
                     Shape2d::Text { w: m.frame.width() as f32, h: m.frame.height() as f32, glyphs, paints: m.layout.paints.clone(), layout: m.layout.clone(), offset: [m.offset.x as f32, m.offset.y as f32] }
+                }
+                "table" => {
+                    let decor = store.table_grid(id).map(|g| iron_document::table::decor(store, id, g)).unwrap_or_default();
+                    Shape2d::Table { w: r.num("size.w", 0.0), h: r.num("size.h", 0.0), decor: std::sync::Arc::new(decor) }
                 }
                 "slider" => {
                     let (min, max) = (r.num("slider.min", 0.0), r.num("slider.max", 1.0));

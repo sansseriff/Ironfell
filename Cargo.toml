@@ -2,7 +2,7 @@
 cargo-features = ["panic-immediate-abort"]
 
 [workspace]
-members = [".", "src/iron_document", "src/iron_solve", "src/iron_spatial", "src/iron_renderer_probe", "src/iron_svg", "src/iron_text", "src-native"]
+members = [".", "src/iron_document", "src/iron_solve", "src/iron_spatial", "src/iron_renderer_probe", "src/iron_svg", "src/iron_text", "src/iron_layout", "src-native"]
 
 
 [workspace.dependencies]

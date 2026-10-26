@@ -48,6 +48,8 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ full `smoke.txt` (`GPU=1`) | ~3.5 min |
 | `piston.txt` | ~1 min |
 | `snapping.txt` | ~30 s |
+| `layout.txt` | ~35 s |
+| `tables.txt` | ~45 s |
 | ⏱ `raster-pixels.txt` (with the Prussia import, then the meters) | ~1.5 min |
 | ⏱ `bench-instances.txt` | ~1.5 min |
 | `instance-pixels.txt` | ~1 min |
@@ -428,7 +430,8 @@ clicked .link-popover button.primary
 [[600,300],[600,300],["meter 15.88… mW","short fiber 0 W"]]
 tab Library
 ["slider level 18","laser power 18 mW"]
-"render-controls"
+tab Controls
+"controls"
 ["Render inspector watching controls","Chunks","1 0 in view","Nodes","25"]
 applied "open demo scene" (298 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
@@ -1282,6 +1285,116 @@ applied "move point" (2 ops, Human) -> v16
 
 The snap core's native tests: `cargo test -p iron_spatial --target
 aarch64-apple-darwin --test snap` (9 tests).
+
+## Layout (2026-10-26)
+
+`plans/specs/layout-and-tables.md` phase 1: groups with a `layout` facet place their
+children (`iron_layout`, on Taffy), published by the store's layout producer and
+never stored. After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < layout.txt; cd -
+```
+
+A `stack_y` group made through the model surface places three texts at its padding,
+each `x.by` its group; a second line in the middle text moves the footer down by one
+line (69.14 → 86.08) and undo puts it back. Three rects shift-picked and laid out with
+Shift+A become a `stack_x` group with the 20 px gap they were drawn with, nothing
+moving; the inspector shows Auto layout; undo restores the rects. Inspect
+`screenshots/layout-stack-grown.png` and `layout-shift-a.png`. Expected, minus
+screenshot, `nav` and `ready` lines:
+
+```
+{"enabled":false,"guides":[]}
+true
+["name=\"title\" x=\"12\" x.by=\"#3t\" y=\"12\"","name=\"body\" x=\"12\" x.by=\"#3t\" y=\"44.19921875\"","name=\"footer\" x=\"12\" x.by=\"#3t\" y=\"69.138671875\""]
+true
+[" y=\"86.078125\""]
+[" y=\"69.138671875\""]
+true
+["name=\"stack\" x=\"510\" y=\"280\" mode=\"stack_x\" gap=\"20\"","name=\"a\" x=\"0\" x.by=\"#40\" y=\"0\"","name=\"b\" x=\"60\" x.by=\"#40\" y=\"0\"","name=\"c\" x=\"120\" x.by=\"#40\" y=\"0\""]
+true
+["name=\"b\" x=\"570\" y=\"280\""]
+applied "open demo scene" (298 ops, System) -> v1
+applied "model edit" (4 ops, Model) -> v2
+applied "model edit" (1 ops, Model) -> v3
+applied "undo: model edit" (1 ops, System) -> v4
+applied "model edit" (3 ops, Model) -> v5
+applied "add auto layout" (10 ops, Human) -> v6
+applied "undo: add auto layout" (10 ops, System) -> v7
+(no page errors)
+```
+
+The text positions depend on Inter's metrics. Native: `cargo test -p iron_layout
+--target aarch64-apple-darwin` (5 tests: tracks against hand calculations, a merged
+cell, wrapping, stacks, fill) and `cargo test -p iron_document --target
+aarch64-apple-darwin --test layout` (5 tests: reflow, undo and save, locking and
+absolute, a grid of rects with fill, wrapping text, Shift+A keeping the arrangement).
+
+## Tables (2026-10-26)
+
+`plans/specs/layout-and-tables.md` phases 2–3: a `table` of `row`s of `text` cells,
+laid out as a grid, drawing its own bands and lines; the model's `<table>` op and
+compact read form; the select tool looking through rows. After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < tables.txt; cd -
+```
+
+In a fresh `slide` composition: the `<table>` op with a caption makes a stack of the
+caption and the table, read back in rows (`emphasis="3"` as written, 1-based);
+replacing one word keeps every cell's id (one op); a merge that is not a rectangle is
+refused. A click on the captioned table selects its stack. On a second table: a click
+selects the table and the inspector shows Table; + Row adds a row; a double-click
+reaches the "113" cell (through its row), Shift-click adds "138", Merge joins them,
+Esc goes back to the table; a double-click then selects "S (µm)", and a pasted
+spreadsheet block fills from there (the vertical merge survives); a paste with
+nothing selected makes a third table and the Table tool a fourth. Inspect
+`screenshots/tables-op.png` and `tables-ui.png`. Expected, minus screenshot, `nav`
+and `ready` lines:
+
+```
+{"enabled":false,"guides":[]}
+1
+"slide"
+"<applied version=\"3\">\n  <table id=\"#3w\"/>\n</applied>"
+["<table id=\"#3w\" name=\"table\" x=\"0\" x.by=\"#3u\" y=\"24.51953125\" y.by=\"#3u\" preset=\"light\" header=\"1\" columns=\"auto auto auto auto\" label-col=\"true\" emphasis=\"3\">","PI per side (µm) | 75  | 100 | 125","S (µm)           | 85  | 113 | 140","Gap W (µm)       | 153 | 138 | 125"]
+[true,"<cells>#40 #41 #42 #43 / #44 #45 #46 #47 / #48 #49 #4A #4B</cells>"]
+"<edit-failed applied=\"none\" version=\"4\">\n  <error op=\"0\" kind=\"table\">the merge at row 1 column 1 is not a rectangle</error>\n</edit-failed>"
+["#3u"]
+"<applied version=\"5\">\n  <table id=\"#4C\"/>\n</applied>"
+["#4C"]
+["Table","Position"]
+clicked button[title="Add a row at the bottom"]
+["113","138"]
+clicked button[title="Merge the selected cells into one"]
+["#4C"]
+["#4K"]
+undefined
+["PI per side (µm) | 75 | 100      | 125","A                | B  | 113\\n138 | 140","C                | D  | ^        | 125","|    |          |"]
+undefined
+3
+clicked button[title="Shape tools"]
+clicked [role="menuitem"]:has-text("Table")
+4
+applied "open demo scene" (298 ops, System) -> v1
+applied "model edit" (1 ops, Model) -> v2
+applied "add table" (18 ops, Model) -> v3
+applied "replace table" (1 ops, Model) -> v4
+applied "add table" (16 ops, Model) -> v5
+applied "add row" (5 ops, Human) -> v6
+applied "merge cells" (3 ops, Human) -> v7
+applied "paste into table" (4 ops, Human) -> v8
+applied "paste table" (9 ops, Human) -> v9
+applied "add table" (13 ops, Human) -> v10
+(no page errors)
+```
+
+Cell positions depend on Inter's and JetBrains Mono's metrics. Native: `cargo test -p
+iron_document --target aarch64-apple-darwin --test table` (11 tests: the reference
+table, boxed lines, merges and the lines around them, a bound cell relaying, row and
+column edits, merge and split, restyling, a deleted cell disturbing only its row, the
+compact view, replace keeping ids, spreadsheet paste).
 
 ## Free running and the Stats view (2026-10-18)
 

@@ -26,6 +26,8 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "make_component" => { arity(args,2)?; crate::engine_api::document_make_component(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "author" => { arity(args,2)?; crate::engine_api::document_author(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "detach" => { arity(args,1)?; crate::engine_api::document_detach(app,argument::<String>(args,0)?) },
+        "table" => { arity(args,1)?; crate::engine_api::document_table(app,argument::<String>(args,0)?) },
+        "table_edit" => { arity(args,3)?; crate::engine_api::document_table_edit(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "link" => { arity(args,4)?; crate::engine_api::document_link(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },
         "counterparts" => { arity(args,1)?; crate::engine_api::document_counterparts(app,argument::<String>(args,0)?) },
         "to_path" => { arity(args,2)?; crate::engine_api::document_to_path(app,argument::<String>(args,0)?,argument::<bool>(args,1)?) },

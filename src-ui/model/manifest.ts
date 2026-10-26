@@ -147,6 +147,41 @@ CONSTRAINTS
   A value may be bound (a driving dimension); binding it to one of the cluster's own
   variables is a cycle and is rejected.
 
+LAYOUT
+  A group with layout.mode stack_x, stack_y or grid places its children: gap,
+  row_gap (grids), pad_t pad_r pad_b pad_l, align (start center end stretch),
+  justify (start center end between), columns and rows (grids: "auto 120 1fr"),
+  sizing_w / sizing_h (hug: fits its children; fixed: its own size.w / size.h).
+  A child's x and y, and any size the layout decides, show as x.by="#group": they
+  are the layout's and cannot be set. A child's layout_item says how it sits:
+  w / h (auto or fill), align, absolute="true" (leaves the flow, keeps its own x, y),
+  and in a grid column / row (1-based) with span_x / span_y. Order children with
+  after= or <reparent>; the stack follows sibling order.
+
+TABLES
+  A table reads as its rows of words, one line per row, cells split by |:
+    <table id="#T" x="80" y="400" w="464" h="200" preset="light" header="1" columns="auto auto auto" label-col="true" emphasis="2">
+      Param  | A    | B
+      S (µm) | 85   | {= fmt(#m.port.signal, "mW", 2)}
+      Gap    | wide | <
+      <cells>#c1 #c2 #c3 / #c4 #c5 #c6 / #c7 #c8</cells>
+      <style cell="#c5" color="#cc1a1aff"/>
+    </table>
+  < marks a position merged into the cell on its left, ^ into the one above; {= expr}
+  is a bound cell; \| \< \^ \n are a bar, <, ^ and a line break in a cell. <cells>
+  lists each row's cell ids (merged positions have none): <set id="#c5" content="90"/>
+  changes one cell. <style> lines are cells styled unlike the preset. Attributes:
+  preset (light: hairlines between rows, a muted monospace label column; boxed:
+  every line, a filled header), header (header rows), columns (one size per column:
+  auto, a length, 1fr), label-col, emphasis (1-based column: bold, accent header),
+  align (per column: left center right). Make one, alone in its <edit>:
+    <edit><table to="#comp" x="80" y="400" preset="light" header="1" label-col="true" emphasis="3" caption="Same cable, other thickness">
+    PI per side (µm) | 75 | 100 | 125
+    S (µm)           | 85 | 113 | 140
+    </table></edit>
+  Rewrite one's words with <table id="#T">rows</table> (same rows and merges keep every
+  cell's id); preset= or header= there restyle it.
+
 TIME
   A clip node (child of a timeline) has timing.start, timing.dur, timing.easing and
   clip.prop (the leaf it drives, e.g. transform2d.x), clip.from, clip.to. It reaches

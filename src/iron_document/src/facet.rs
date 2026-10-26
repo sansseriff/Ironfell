@@ -253,6 +253,83 @@ facets! {
         radius: Number = Value::Number(0.0),
     }
 
+    /// A group that places its children (plans/specs/layout-and-tables.md
+    /// §2.2): `mode` `stack_x`, `stack_y`, `grid`, or `none` (children place
+    /// themselves). `gap` separates a stack's items, or a grid's columns;
+    /// `row_gap` a grid's rows. `align` places items across a stack or within
+    /// a grid cell (`start`, `center`, `end`, `stretch`); `justify` spreads a
+    /// stack (`start`, `center`, `end`, `between`). A grid's `columns` and
+    /// `rows` are space-separated tracks: `auto`, a length, or `2fr`; rows
+    /// left empty are `auto`. `sizing_w`/`sizing_h`: `hug` (the group fits
+    /// its content) or `fixed` (its `size`). The positions it gives its
+    /// children are published, never stored (`layout.rs`).
+    Layout / "layout" => Layout {
+        mode: Enum = Value::Enum("stack_y".to_owned()),
+        gap: Number = Value::Number(0.0),
+        row_gap: Number = Value::Number(0.0),
+        pad_t: Number = Value::Number(0.0),
+        pad_r: Number = Value::Number(0.0),
+        pad_b: Number = Value::Number(0.0),
+        pad_l: Number = Value::Number(0.0),
+        align: Enum = Value::Enum("start".to_owned()),
+        justify: Enum = Value::Enum("start".to_owned()),
+        columns: Str = Value::Str(String::new()),
+        rows: Str = Value::Str(String::new()),
+        sizing_w: Enum = Value::Enum("hug".to_owned()),
+        sizing_h: Enum = Value::Enum("hug".to_owned()),
+    }
+
+    /// How a child sits in its group's layout. `w`/`h`: `auto` (its own
+    /// size) or `fill` (what the layout gives it). `align` overrides the
+    /// group's (`auto` keeps it). `absolute` takes it out of the layout: it
+    /// keeps its own position, as in Figma. In a grid, `column` and `row`
+    /// (1-based; 0 flows into the next free cell) and the spans place it.
+    LayoutItem / "layout_item" => LayoutItem {
+        w: Enum = Value::Enum("auto".to_owned()),
+        h: Enum = Value::Enum("auto".to_owned()),
+        align: Enum = Value::Enum("auto".to_owned()),
+        absolute: Bool = Value::Bool(false),
+        column: Number = Value::Number(0.0),
+        row: Number = Value::Number(0.0),
+        span_x: Number = Value::Number(1.0),
+        span_y: Number = Value::Number(1.0),
+    }
+
+    /// A table (plans/specs/layout-and-tables.md §3): its cells are its
+    /// `text` children in reading order, flowing into `columns` (one track
+    /// per column, as `layout.columns`: `auto`, a length, `1fr`); a cell's
+    /// `layout_item.span_x`/`span_y` merge it with its neighbours. The first
+    /// `header` rows are the header. `pad_x`/`pad_y` inset each cell's words
+    /// from its edges. `width` 0 hugs the columns; more fixes the table's
+    /// width, which `fr` columns share. `header_fill` bands the header,
+    /// `zebra_fill` every other body row; transparent for none. `preset`
+    /// names the look its cells were styled with (`light`, `boxed`).
+    Table / "table" => Table {
+        columns: Str = Value::Str("auto auto auto".to_owned()),
+        header: Number = Value::Number(1.0),
+        pad_x: Number = Value::Number(12.0),
+        pad_y: Number = Value::Number(8.0),
+        width: Number = Value::Number(0.0),
+        header_fill: Color = Value::Color([0.0, 0.0, 0.0, 0.0]),
+        zebra_fill: Color = Value::Color([0.0, 0.0, 0.0, 0.0]),
+        preset: Enum = Value::Enum("light".to_owned()),
+    }
+
+    /// A table's lines (layout-and-tables.md §3.2), each a width (0 for
+    /// none) and a colour: `outer` around it, `header` under the header
+    /// rows, `rows` between body rows, `columns` between columns. Lines are
+    /// not drawn through a merged cell.
+    Rules / "rules" => Rules {
+        outer_width: Number = Value::Number(0.0),
+        outer_color: Color = Value::Color([0.0, 0.0, 0.0, 0.2]),
+        header_width: Number = Value::Number(1.0),
+        header_color: Color = Value::Color([0.0, 0.0, 0.0, 0.2]),
+        rows_width: Number = Value::Number(1.0),
+        rows_color: Color = Value::Color([0.0, 0.0, 0.0, 0.12]),
+        columns_width: Number = Value::Number(0.0),
+        columns_color: Color = Value::Color([0.0, 0.0, 0.0, 0.2]),
+    }
+
     /// A text node's words and how its box sizes (plans/specs/text.md §2).
     /// `content` is an ordinary leaf: typed, bound to an expression
     /// (`"P = " + fmt(p, "kPa", 1)`), or driven by a runtime signal.

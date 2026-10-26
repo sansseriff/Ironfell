@@ -54,7 +54,7 @@
   type Field = Property;
   type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean };
   type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[] };
-  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null };
+  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null };
   let inspected: Inspected | null = $state(null);
   let setError = $state("");
   let generation = 0;
@@ -76,8 +76,8 @@
     if (previousNode !== node) { previousNode = node; separateCorners = false; inspected = null; setError = ""; }
     void refresh();
   });
-  const titles: Record<string, string> = { transform2d: "Position", size: "Layout", radius: "Dimensions", appearance: "Appearance", fill: "Fill", gradient: "Gradient", stroke: "Stroke", corners: "Corner radius", arc: "Arc", shadow: "Drop shadow", group_clip: "Clip content" };
-  const order = ["transform2d", "size", "radius", "appearance", "corners", "arc", "group_clip", "fill", "gradient", "stroke", "shadow"];
+  const titles: Record<string, string> = { transform2d: "Position", size: "Layout", radius: "Dimensions", appearance: "Appearance", fill: "Fill", gradient: "Gradient", stroke: "Stroke", corners: "Corner radius", arc: "Arc", shadow: "Drop shadow", group_clip: "Clip content", layout: "Auto layout", layout_item: "In layout", table: "Table style", rules: "Lines" };
+  const order = ["transform2d", "size", "radius", "layout", "layout_item", "appearance", "corners", "arc", "group_clip", "fill", "gradient", "stroke", "shadow"];
   const components = $derived.by(() => {
     const current = inspected as Inspected | null;
     return current ? [...current.components].sort((a, b) => (order.indexOf(a.kind) < 0 ? 99 : order.indexOf(a.kind)) - (order.indexOf(b.kind) < 0 ? 99 : order.indexOf(b.kind))) : [];
@@ -94,6 +94,11 @@
     return { ...corners[0], edit: locked ? "locked" : corners[0].edit, why: locked?.why ?? null, bind: corners.find(f => f.bind)?.bind ?? null };
   });
   const mixedCorners = $derived(["tr", "br", "bl"].some(k => field("corners", k).text !== field("corners", "tl").text));
+  // Facets offered as "add" buttons: auto layout on a group
+  // (layout-and-tables.md §2), and how a child sits in one, only where a
+  // layout already places it (its position is locked by it).
+  const placedByLayout = $derived(fields("transform2d").some(f => f.edit === "locked" && (f.why ?? "").includes("layout")));
+  const addKinds = $derived(["arc", "group_clip", "layout", "rules", ...(placedByLayout ? ["layout_item"] : [])]);
   const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "shadow", "text", "font", "args"].includes(c.kind)));
   // A text node's box is its words' unless it is fixed (or wraps): only
   // then are W and H its own (plans/specs/text.md §2).
@@ -119,6 +124,17 @@
     setError = "";
     try {
       const r = await doc.call("detach", [inspected.component.entity]);
+      if (!r.ok) setError = r.error;
+      await refresh();
+    } catch (e) { setError = String(e); }
+  }
+  // A table's structure (layout-and-tables.md §5.1): rows and columns at
+  // its end, and merging or splitting the selected cells. One undo each.
+  async function tableEdit(verb: string) {
+    if (!inspected?.table) return;
+    setError = "";
+    try {
+      const r = await doc.call("table_edit", [inspected.table, verb, JSON.stringify(doc.selection)]);
       if (!r.ok) setError = r.error;
       await refresh();
     } catch (e) { setError = String(e); }
@@ -228,6 +244,23 @@
         </div>
       {/if}
       {#if fields("transform2d").length}
+        {#if inspected.table}
+          <div class="property-section" data-section="table">
+            <div class="component"><span>Table</span></div>
+            <div class="add table-edits">
+              <button onclick={() => tableEdit("add_row")} title="Add a row at the bottom"><Plus size={13} />Row</button>
+              <button onclick={() => tableEdit("remove_row")} title="Remove the bottom row"><Minus size={13} />Row</button>
+              <button onclick={() => tableEdit("add_column")} title="Add a column at the right"><Plus size={13} />Column</button>
+              <button onclick={() => tableEdit("remove_column")} title="Remove the right column"><Minus size={13} />Column</button>
+              <button onclick={() => tableEdit("preset:light")} title="Hairlines between rows, a muted label column">Light</button>
+              <button onclick={() => tableEdit("preset:boxed")} title="Every cell boxed, a filled header">Boxed</button>
+              {#if inspected.table !== inspected.node}
+                <button onclick={() => tableEdit("merge")} disabled={doc.selection.length < 2} title="Merge the selected cells into one">Merge</button>
+                <button onclick={() => tableEdit("split")} disabled={doc.selection.length !== 1} title="Split a merged cell into single cells">Split</button>
+              {/if}
+            </div>
+          </div>
+        {/if}
         <div class="property-section" data-section="position">
           <div class="component"><span>Position</span></div>
           <div class="field-grid">
@@ -347,8 +380,8 @@
           <div class="field-grid">{#each c.fields as f (f.leaf)}<PropertyField field={f} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
         </div>
       {/each}
-      {#if inspected.addable.some(k => ["arc", "group_clip"].includes(k))}
-        <div class="add">{#each inspected.addable.filter(k => ["arc", "group_clip"].includes(k)) as kind}<button aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={13} />{titles[kind] ?? kind}</button>{/each}</div>
+      {#if inspected.addable.some(k => addKinds.includes(k))}
+        <div class="add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<button aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={13} />{titles[kind] ?? kind}</button>{/each}</div>
       {/if}
     </div>
   {:else}
@@ -388,6 +421,7 @@
   .effect-row :global(.effect-trigger span) { flex: 1; text-align: left; }
   .effect-row :global(.effect-trigger:hover) { border-color: var(--fg-faint); }
   .add { display: flex; flex-wrap: wrap; gap: 6px; padding: 16px; }
+  .table-edits { padding: 8px 0 0; }
   .add button { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; padding: 5px 7px; background: transparent; }
   .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 40px 20px; color: var(--fg-faint); }
   .empty strong { font-size: 13px; color: var(--fg-muted); }

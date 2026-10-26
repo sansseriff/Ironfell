@@ -50,6 +50,7 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
         return Handle::Locked(match signal.producer {
             ProducerId::CLIPS => format!("{leaf} is driven by a clip at the current time"),
             ProducerId::NETWORK => format!("{leaf} is solved by its across/through network; change a source or a parameter instead"),
+            ProducerId::LAYOUT => format!("{leaf} is placed by its group's layout; change the layout, or make it absolute"),
             p => format!("{leaf} is published by producer {} at runtime; freeze it to edit", p.0),
         });
     }

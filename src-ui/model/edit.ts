@@ -18,6 +18,7 @@
  *
  *   <edit><link-figures a="#l" b="#Q" keep="#v"/></edit>   (alone: the store builds it)
  *   <edit><import-svg to="#4" x="100" y="50"><svg …>…</svg></import-svg></edit>   (alone too)
+ *   <edit><table to="#4" x="80" y="400" preset="light">a | b\n1 | 2</table></edit>   (alone too)
  */
 import { XMLParser } from 'fast-xml-parser';
 import type { ApplyResult, DocumentApi, SolverSummary } from './api';
@@ -299,6 +300,47 @@ async function importSvg(api: DocumentApi, attrText: string, svg: string): Promi
   return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <imported roots="${(r.roots ?? []).join(' ')}"/>${cuts}\n</applied>` };
 }
 
+/** `<table>` (plans/specs/layout-and-tables.md §5.2): rows of cells, one per
+ *  line, split by `|`; `<` merges a position into the cell on its left, `^`
+ *  into the one above; `{= expr}` binds a cell. With `to` (and `x`, `y`,
+ *  `preset`, `header`, `label-col`, `emphasis` (1-based), `align`, `caption`)
+ *  it makes a table; with `id` it replaces that table's words, keeping each
+ *  cell's id when the shape holds. Alone in its edit. The `<cells>` and
+ *  `<style>` lines of a table's view are ignored, so a model may send back
+ *  what it read. */
+const TABLE = /^\s*<edit(?:\s[^>]*)?>\s*<table(\s[^>]*?)?>([\s\S]*)<\/table>\s*<\/edit>\s*$/;
+
+async function table(api: DocumentApi, attrText: string, body: string): Promise<EditOutcome> {
+  const attrs: Record<string, string> = {};
+  for (const m of attrText.matchAll(/([\w.-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
+  const version = await api.version();
+  const fail = (message: string) => ({ ok: false as const, failure: failed(version, [{ op: 0, kind: 'table', message }]) });
+  const unescape = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const rows = body
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('<cells') && !l.startsWith('<style'))
+    .map(unescape)
+    .join('\n');
+  const hash = (s: string) => (s.startsWith('#') ? s : `#${s}`);
+  const num = (k: string) => (attrs[k] !== undefined && attrs[k] !== '' ? Number(attrs[k]) : undefined);
+  let spec: Record<string, unknown>;
+  if (attrs.id) {
+    spec = { id: hash(attrs.id), rows, header: num('header'), preset: attrs.preset };
+  } else if (attrs.to) {
+    const emphasis = num('emphasis');
+    spec = {
+      parent: hash(attrs.to), x: num('x') ?? 0, y: num('y') ?? 0, rows, preset: attrs.preset ?? 'light', header: num('header') ?? 1,
+      label_col: attrs['label-col'] === 'true', emphasis: emphasis !== undefined && emphasis >= 1 ? emphasis - 1 : undefined, align: attrs.align, caption: attrs.caption,
+    };
+  } else {
+    return fail('<table> needs to="#id" (a composition or group) to make a table, or id="#table" to replace one');
+  }
+  const r = await api.table(JSON.stringify({ ...spec, actor: 'model' }));
+  if (!r.ok) return fail(r.error ?? 'table failed');
+  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <table id="${r.table}"/>\n</applied>` };
+}
+
 /** Parse and apply one edit as the model, answering in the model's terms. */
 export async function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): Promise<EditOutcome> {
   const link = xml.match(LINK_FIGURES);
@@ -308,6 +350,11 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
   }
   const svg = xml.match(IMPORT_SVG);
   if (svg) return importSvg(api, svg[1], svg[2]);
+  const tbl = xml.match(TABLE);
+  if (tbl) return table(api, tbl[1] ?? '', tbl[2]);
+  if (/<table[\s/>]/.test(xml)) {
+    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<table> must be the only verb in its <edit>' }]) };
+  }
   if (/<import-svg[\s/>]/.test(xml)) {
     return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<import-svg> must be the only verb in its <edit>' }]) };
   }

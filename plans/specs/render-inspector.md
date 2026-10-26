@@ -67,7 +67,9 @@ slow inspector frame is a slow frame for everything.
 ## 4. Using it
 
 - **Opening:** the **+** menu's *Views* section has "Render inspector", next to Stats. It
-  opens docked beside the active 2D panel and observes it.
+  opens docked beside the active 2D panel and observes it. *(Superseded 2026-10-24,
+  §8 "In the same tab": a developer-mode toggle in the composition settings menu
+  splits the composition's own tab.)*
 - **The observed view:** a dropdown in the view's settings menu (top right, as the
   composition settings menu is) lists the open 2D panels.
 - **Toggles** in the same menu: chunk tint, tiles, culled dimming, damage, legend.
@@ -154,3 +156,20 @@ canvas part's composition (`views.ts`, `canvasSource`).
   (2.7), p50 at `wasm-bench`.
 - **Not built:** bucket labels and eviction fades (display lists draw no text yet), the
   queued state (a square is drawn, or baked the same frame), and the prefetch margin.
+
+**In the same tab (2026-10-24, user request).** A separate inspector tab could watch a
+panel that was hidden behind it in the same tab group. A hidden tab's canvas panel is
+unmounted, so the lookup of the watched panel failed and fell back to the first 2D
+composition, Main. The inspector is now the second half of the composition's own tab:
+
+- **Opening:** Settings → *Developer mode* adds a *Developer* section to the
+  composition settings menu (the button in the tab's top right corner, over whichever
+  half is there) with "Render inspector", a toggle. It splits the tab, the view left
+  and the inspector right, past a draggable 1 px divider (`ViewPanel.svelte`). Turning
+  developer mode off closes every inspector.
+- **State:** the panel's `inspect` parameter, the view's share of the width, kept with
+  the layout (`workspace.ts`, `setInspecting`). The inspector's canvas panel is
+  `<id>.inspect` and still posts `inspect:<id>`; the Rust side is unchanged.
+- **Removed:** the `render-inspector` notation and the "Watch <tab>" items. A saved
+  layout holding one shows "No notation" in that tab.
+- **Smoke:** brings Controls to the front and sets its `inspect` parameter.

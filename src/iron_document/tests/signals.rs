@@ -109,7 +109,7 @@ fn a_published_signal_reads_beneath_bindings_and_above_constants() {
     assert_eq!(store.drain_changes().len(), 2);
 
     // A driven leaf is locked to gestures, naming the producer.
-    assert!(matches!(store.handle(gauge, path("slider.value")), Handle::Locked(reason) if reason.contains("producer 2")));
+    assert!(matches!(store.handle(gauge, path("slider.value")), Handle::Locked(reason) if reason.contains(&format!("producer {}", gas.0))));
 
     // Releasing it reads as authored again.
     store.unpublish(gas);

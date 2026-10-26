@@ -1,7 +1,8 @@
-//! The port and empty tools (component-authoring.md §2): a click places a
-//! port on the component main under the pointer, or an empty where it
-//! lands (inside a main, in its definition). One transaction each; the new
-//! node is selected and the select tool is back, as after drawing a shape.
+//! The port, empty and table tools (component-authoring.md §2,
+//! layout-and-tables.md §5.1): a click places a port on the component main
+//! under the pointer, an empty where it lands (inside a main, in its
+//! definition), or a 3 × 3 table there. One transaction each; the new node
+//! is selected and the select tool is back, as after drawing a shape.
 
 use bevy::prelude::*;
 use iron_document::composition::Dims;
@@ -38,7 +39,7 @@ pub fn author_tool_system(
         }
         return;
     }
-    if !matches!(*active, ActiveTool::Port | ActiveTool::Empty) || !pointer.just_pressed_left {
+    if !matches!(*active, ActiveTool::Port | ActiveTool::Empty | ActiveTool::Table) || !pointer.just_pressed_left {
         return;
     }
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two).cloned() else { return };
@@ -59,6 +60,26 @@ pub fn author_tool_system(
                     Ok((ops, _, anchor)) => (ops, NodeId::expanded(main, anchor), "add port"),
                     Err(e) => {
                         warn!("port tool: {e}");
+                        return;
+                    }
+                }
+            }
+            ActiveTool::Table => {
+                let Some((parent, to_comp)) = drop_target(&geo, &hits, &view) else { return };
+                let local = to_comp * at;
+                let words = |r: &[&str]| r.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+                let spec = iron_document::table::Spec {
+                    rows: vec![words(&["Column 1", "Column 2", "Column 3"]), words(&["Cell", "Cell", "Cell"]), words(&["Cell", "Cell", "Cell"])],
+                    preset: iron_document::table::Preset::Light,
+                    header: 1,
+                    label_col: false,
+                    emphasis: None,
+                    align: vec!["left".into(); 3],
+                };
+                match iron_document::table::create_ops(doc, Some(parent), after_last(doc, Some(parent)), [local.x, local.y], &spec) {
+                    Ok((ops, table)) => (ops, Some(table), "add table"),
+                    Err(e) => {
+                        warn!("table tool: {e}");
                         return;
                     }
                 }

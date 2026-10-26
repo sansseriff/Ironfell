@@ -50,7 +50,7 @@ use FacetKind as K;
 static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "group",
-        facets: &[(K::Name, false), (K::Transform2d, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false)],
+        facets: &[(K::Name, false), (K::Transform2d, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -67,6 +67,7 @@ static TYPES: &[TypeSpec] = &[
             (K::Shadow, false),
             (K::Name, false),
             (K::Host, false),
+            (K::LayoutItem, false),
         ],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
@@ -86,6 +87,7 @@ static TYPES: &[TypeSpec] = &[
             (K::Shadow, false),
             (K::Name, false),
             (K::Host, false),
+            (K::LayoutItem, false),
         ],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
@@ -106,9 +108,36 @@ static TYPES: &[TypeSpec] = &[
             (K::Shadow, false),
             (K::Name, false),
             (K::Host, false),
+            (K::LayoutItem, false),
         ],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
+    },
+    // A table (plans/specs/layout-and-tables.md §3): its rows, each holding
+    // its cells (text); it draws its bands and lines under them.
+    TypeSpec {
+        name: "table",
+        facets: &[
+            (K::Transform2d, true),
+            (K::Table, true),
+            (K::Rules, false),
+            (K::Fill, false),
+            (K::Size, false),
+            (K::Appearance, false),
+            (K::Name, false),
+            (K::Host, false),
+            (K::LayoutItem, false),
+        ],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["row"]),
+    },
+    // A table's row: its cells, left to right. It has no placement of its
+    // own (layout places the cells), so it is never drawn or selected.
+    TypeSpec {
+        name: "row",
+        facets: &[(K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["text"]),
     },
     // A path (roadmap stage E): its outlines are `contour` children, so it
     // can have holes (schema 5; before, its points were its children).
@@ -124,6 +153,7 @@ static TYPES: &[TypeSpec] = &[
             (K::Shadow, false),
             (K::Name, false),
             (K::Host, false),
+            (K::LayoutItem, false),
         ],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["contour"]),
@@ -157,6 +187,7 @@ static TYPES: &[TypeSpec] = &[
             (K::Size, false),
             (K::Name, false),
             (K::Host, false),
+            (K::LayoutItem, false),
         ],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
@@ -278,7 +309,7 @@ static TYPES: &[TypeSpec] = &[
     // whose children are its definition's template, expanded, never stored.
     TypeSpec {
         name: "use",
-        facets: &[(K::Use, true), (K::Transform2d, true), (K::Name, false), (K::Appearance, false), (K::Instance, false)],
+        facets: &[(K::Use, true), (K::Transform2d, true), (K::Name, false), (K::Appearance, false), (K::Instance, false), (K::LayoutItem, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },

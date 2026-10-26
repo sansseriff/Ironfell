@@ -84,6 +84,7 @@ silently. Each line names the spec that owns its detail and exit criteria.
 | Typed UI protocol | Typed requests, subscriptions, request generations, disposal | same, §5 |
 | CS phase 4 | Degrees-of-freedom display, conflict highlighting, constraint glyphs, gesture-created constraints | [`specs/constraint-system.md`](specs/constraint-system.md) §14 phase 4 |
 | Stage G | Semantic model-surface views and verbs, then lessons (ECM phase 6) | roadmap stage G, ECM §10–11 |
+| Layout and tables | Phases 0–3 done 2026-10-26. Next, once the user approves it: §10, affordances (a resolver replacing `select.rs`'s node-type lists, then the `sequence` and `ring` archetypes, then authored `affordance` nodes and a demo composition whose interaction is declared in the document). Smaller open items: Tab between cells, a designed Table inspector, SVG export of table lines, row heights | [`specs/layout-and-tables.md`](specs/layout-and-tables.md) |
 
 Open questions to raise rather than decide: ECM §15, CS §18, and the panels plan's open
 questions. Notably still undecided: what the model sees and may edit of

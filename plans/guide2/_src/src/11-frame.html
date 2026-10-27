@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 11 of 13 · <chip sys="bound"/> <chip sys="shell"/></p>
+  <p class="kicker">Part 11 of 14 · <chip sys="bound"/> <chip sys="shell"/></p>
   <h1>One frame, in order</h1>
   <p class="lede">F4 described the bridge as "a sync at the start of the frame and a reconcile pass for gestures". There is more to it now: the engine has a second host (a native macOS app), the boundary is one shared module instead of a wasm-only file, the store has a producer that publishes before the sync, and an ordering bug showed that <em>when</em> a message lands matters as much as what it says. This part follows a frame from the messages that arrive before it to the events that leave after it, system by system, with what each one reads and writes.</p>
   <div class="prereq">

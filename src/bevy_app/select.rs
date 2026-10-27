@@ -113,12 +113,15 @@ impl ActiveTool {
 
 use crate::bevy_app::tolerances::DOUBLE_CLICK;
 /// Grip sizes, CSS px (times [`crate::Dpr`] for window px), Figma's: a
-/// corner's reach, an edge's, how far outside a corner rotation reaches, and
-/// the drawn corner square.
+/// corner's reach, an edge's, and how far outside a corner rotation reaches.
+/// The drawn corner grip is the view's `chrome.grip`.
 const CORNER_HIT: f64 = 8.0;
 const EDGE_HIT: f64 = 5.0;
 const ROTATE_HIT: f64 = 24.0;
-const HANDLE: f64 = 8.0;
+/// A part's own handle (`chrome.handle="dot"`), diameter, CSS px; and how
+/// many of a lit container's children are looked at for one.
+const PART_DOT: f64 = 8.0;
+const PART_SCAN: usize = 64;
 /// A path point's drawn circle and a Bézier handle's end diamond, as
 /// diameters, CSS px.
 const POINT: f64 = 7.0;
@@ -237,6 +240,18 @@ pub struct SelectionGeometryCache {
     resizable: HashMap<String, (iron_document::Version, Vec<Reach>, bool)>,
     hover: Option<(GeometryStamp, Reach, Option<Affine>)>,
     lit: HashMap<String, CachedLit>,
+    /// Each panel's chains whose node shows its own handle
+    /// (`chrome.handle`), by what decides it: the document version, the
+    /// chains looked at, and the nodes' interaction states. Resolving them
+    /// every frame cost 0.7 ms with a 10k group selected.
+    handles: HashMap<String, CachedHandles>,
+}
+
+struct CachedHandles {
+    version: iron_document::Version,
+    looked: Vec<Vec<NodeId>>,
+    states: std::collections::BTreeMap<NodeId, Vec<&'static str>>,
+    dotted: Vec<Vec<NodeId>>,
 }
 
 /// What lights up in one panel for the current highlights.
@@ -353,8 +368,10 @@ impl SelectionGeometryCache {
                     continue;
                 }
                 for chain in occurrences(doc, view, embeds, id) {
-                    let frame = geo.contexts().get(&chain, chain.len() - 1, Field::LIT) == "frame";
+                    let lit = geo.contexts().get(&chain, chain.len() - 1, Field::LIT);
+                    let frame = lit == "frame";
                     let shape = match () {
+                        _ if lit == "none" => None,
                         _ if frame && boxed.contains(&chain) => None,
                         _ if frame => geo.frame(&chain).map(LitShape::Frame),
                         _ => geo.drawables.0.get(&id).and_then(|d| {
@@ -3477,10 +3494,11 @@ pub fn draw_select_overlay(
     active: Res<ActiveTool>,
     geometry_revision: Res<crate::document_bridge::GeometryRevision>,
     mut geometry_cache: ResMut<SelectionGeometryCache>,
-    (highlights, spatial, dpr): (Res<crate::document_bridge::Highlights>, Res<crate::document_bridge::SpatialScene>, Res<crate::Dpr>),
+    (highlights, spatial, dpr, focus): (Res<crate::document_bridge::Highlights>, Res<crate::document_bridge::SpatialScene>, Res<crate::Dpr>, Res<crate::bevy_app::view_focus::ViewFocus>),
 ) {
     geometry_cache.selection.retain(|panel, _| views.get(panel).is_some());
     geometry_cache.lit.retain(|panel, _| views.get(panel).is_some());
+    geometry_cache.handles.retain(|panel, _| views.get(panel).is_some());
     for (e, o, ..) in &overlays {
         if !panel_layers.iter().any(|(l, _)| l.panel == o.panel) {
             commands.entity(e).despawn();
@@ -3503,18 +3521,21 @@ pub fn draw_select_overlay(
     let reaches = selected_reaches(&sel, &tool);
     // Sizes are CSS px; `k` makes them window px.
     let k = dpr.0;
-    let blue = peniko::Color::new(BLUE);
     let thin = kurbo::Stroke::new(k);
     let square = Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
     for (_, o, mut list, _) in &mut overlays {
         let Some(view) = views.get(&o.panel) else { continue };
+        // How this view's chrome looks (`chrome.*`, its focus context).
+        let chrome = focus.chrome(&o.panel);
+        let blue = peniko::Color::new(chrome.accent.unwrap_or(BLUE));
+        let hover = tool.hover.as_ref().filter(|_| chrome.hover);
         // Only what this panel shows invalidates its cached boxes.
         let stamp = GeometryStamp::new(&store.0, geometry_revision.of_view(geo.doc(), view));
         let to_screen = view.affine();
         // Lit leaves by their outline and lit containers by their box, in
         // screen px so the width holds under zoom. Frames already drawn as
         // the selection's box or the hover box are skipped.
-        let boxed = reaches.iter().chain(tool.hover.as_ref()).filter(|r| r.panel == o.panel).map(|r| r.chain.clone()).collect();
+        let boxed = reaches.iter().chain(hover).filter(|r| r.panel == o.panel).map(|r| r.chain.clone()).collect();
         // The path being edited here shows no box and no selection light:
         // its points are its feedback.
         let editing = edit.path_in(&o.panel).map(Reach::node);
@@ -3522,9 +3543,11 @@ pub fn draw_select_overlay(
             .lit(&geo, view, spatial.embeds(), &highlights, boxed, stamp)
             .iter()
             .filter(|m| editing.is_none_or(|e| m.chain.last() != Some(&e)))
+            .filter(|m| m.selected || chrome.hover)
             .filter_map(|m| match &m.shape {
                 LitShape::Outline(a, path) => {
                     let c = if m.selected { crate::document_bridge::LIT_SELECTED } else { crate::document_bridge::LIT_HOVERED };
+                    let c = chrome.accent.map_or(c, |a| [a[0], a[1], a[2], a[3] * c[3]]);
                     Some((peniko::Color::new(c), 2.0 * k, (to_screen * *a) * path.clone()))
                 }
                 LitShape::Frame(f) => {
@@ -3533,14 +3556,43 @@ pub fn draw_select_overlay(
                 }
             })
             .collect();
-        let hover_frame = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
+        let hover_frame = hover.filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
             .filter(|h| geo.contexts().get(&h.chain, h.chain.len() - 1, Field::LIT) == "frame")
             .and_then(|h| geometry_cache.hover(&geo, h, stamp));
         let mine = movers(&reaches, &o.panel);
+        // Parts' own handles (`chrome.handle`): a dot at each one's origin
+        // while it or its container is selected or hovered.
+        let mut part_dots: Vec<Point> = Vec::new();
+        if editing.is_none() {
+            let looked: Vec<Vec<NodeId>> = mine.iter().copied().chain(hover.filter(|h| h.panel == o.panel)).map(|r| r.chain.clone()).collect();
+            let version = geo.doc().version();
+            let states = geo.store.interaction();
+            if geometry_cache.handles.get(&o.panel).is_none_or(|c| c.version != version || c.looked != looked || &c.states != states) {
+                let r = geo.contexts();
+                let mut dotted = Vec::new();
+                for chain in &looked {
+                    let parts = geo.doc().children(chain[chain.len() - 1]).iter().take(PART_SCAN).map(|&c| [&chain[..], &[c]].concat());
+                    for chain in std::iter::once(chain.clone()).chain(parts) {
+                        if r.get(&chain, chain.len() - 1, Field::HANDLE) == "dot" && !dotted.contains(&chain) {
+                            dotted.push(chain);
+                        }
+                    }
+                }
+                geometry_cache.handles.insert(o.panel.clone(), CachedHandles { version, looked, states: states.clone(), dotted });
+            }
+            for chain in &geometry_cache.handles[&o.panel].dotted {
+                if let Some(space) = geo.space(chain) {
+                    let at = to_screen * space * geo.world(chain[chain.len() - 1]) * Point::ORIGIN;
+                    if !part_dots.contains(&at) {
+                        part_dots.push(at);
+                    }
+                }
+            }
+        }
         let cached = geometry_cache.selection(&geo, &o.panel, &mine, stamp, true);
         // A component's frames are violet, and it wears its chip, while it
         // is selected or hovered.
-        let hover_tint = tool.hover.as_ref().and_then(|h| component_tint(geo.doc(), h.node())).unwrap_or(blue);
+        let hover_tint = hover.and_then(|h| component_tint(geo.doc(), h.node())).unwrap_or(blue);
         let box_tint = match &mine[..] {
             [] => blue,
             [first, rest @ ..] => match component_tint(geo.doc(), first.node()) {
@@ -3549,7 +3601,7 @@ pub fn draw_select_overlay(
             },
         };
         let mut chips: Vec<(Point, bool, String)> = Vec::new();
-        for r in mine.iter().copied().chain(tool.hover.as_ref().filter(|h| h.panel == o.panel)) {
+        for r in mine.iter().copied().chain(hover.filter(|h| h.panel == o.panel)) {
             if let Some((main, name)) = component_of(geo.doc(), r.node())
                 && let Some(f) = geo.frame(&r.chain)
                 && !chips.iter().any(|c| c.2 == name && c.1 == main && (to_screen * f).transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)).origin() == c.0)
@@ -3606,13 +3658,22 @@ pub fn draw_select_overlay(
                     let fill = if cached.resizable { peniko::Color::new([1.0, 1.0, 1.0, 1.0]) } else { peniko::Color::new([0.8, 0.82, 0.85, 1.0]) };
                     let [a, bb, ..] = f.as_coeffs();
                     let angle = bb.atan2(a);
+                    let grip = if chrome.round {
+                        kurbo::Circle::new(Point::ORIGIN, chrome.grip * 0.5 * k).to_path(0.1)
+                    } else {
+                        Rect::from_center_size(Point::ORIGIN, (chrome.grip * k, chrome.grip * k)).to_path(0.1)
+                    };
                     for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
                         let c = f * Point::new(u, v);
                         let at = Affine::translate(c.to_vec2()) * Affine::rotate(angle);
-                        let r = Rect::from_center_size(Point::ORIGIN, (HANDLE * k, HANDLE * k));
-                        b.fill(at, fill, r);
-                        b.stroke(at, thin.clone(), box_tint, r);
+                        b.fill(at, fill, grip.clone());
+                        b.stroke(at, thin.clone(), box_tint, grip.clone());
                     }
+                }
+                for &at in &part_dots {
+                    let dot = kurbo::Circle::new(at, PART_DOT * 0.5 * k);
+                    b.fill(Affine::IDENTITY, peniko::Color::new([1.0, 1.0, 1.0, 1.0]), dot);
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), blue, dot);
                 }
                 // A path's points and handles, Figma's way: anchors are
                 // circles (the active one filled), handle ends diamonds on
@@ -3703,7 +3764,7 @@ pub fn draw_select_overlay(
                 }
                 if let Some((start, out)) = press {
                     if out != kurbo::Vec2::ZERO {
-                        let arm = peniko::Color::new([BLUE[0], BLUE[1], BLUE[2], 0.35]);
+                        let arm = blue.with_alpha(0.35);
                         handle(b, start, start - out, arm);
                         handle(b, start, start + out, arm);
                     }

@@ -467,6 +467,23 @@ fn a_views_tolerances_are_context_data() {
 }
 
 #[test]
+fn a_views_chrome_is_context_data_and_a_part_can_ask_for_its_handle() {
+    let mut store = Store::new();
+    let world = composition(&mut store, "pitch", "pitch");
+    let (ops, _) = contexts::put_ops(store.document(), r##"<context name="pitch" extends="std:free-2d"><rule match="view" chrome.accent="#e8711aff" chrome.grip_shape="round" chrome.hover="off"/></context>"##).unwrap();
+    store.apply(tx(ops)).unwrap();
+    let id = store.document().next_id();
+    let mut a = facet::Affords::default();
+    a.style = Slot::Const(Value::Str("drag: ring; chrome.handle: dot; chrome.lit: none".into()));
+    store.apply(tx(vec![Op::Create { id, ty: TypeId::lookup("rect").unwrap(), parent: Some(world), order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap(), a.wrap()] }])).unwrap();
+    let r = store.resolver();
+    let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
+    assert_eq!((v.get(Field::ACCENT), v.get(Field::GRIP), v.get(Field::GRIP_SHAPE), v.get(Field::HOVER)), ("#e8711aff", "8", "round", "off"));
+    assert_eq!((r.get(&[id], 0, Field::HANDLE), r.get(&[id], 0, Field::LIT)), ("dot".into(), "none".into()));
+    assert!(contexts::parse(r#"<context name="k"><rule match="view" chrome.accent="orange"/></context>"#).unwrap_err().contains("expected a colour"));
+}
+
+#[test]
 fn typing_into_a_readout_edits_what_it_reads() {
     let mut store = Store::new();
     let ids = store.document().next_ids(3);

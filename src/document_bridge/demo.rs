@@ -1423,7 +1423,7 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     };
 
     // Outline.
-    let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"outline\" extends=\"std:free-2d\">\n  <rule match=\"type:text\" affords.enter=\"edit\"/>\n</context>")?;
+    let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"outline\" extends=\"std:free-2d\">\n  <rule match=\"type:text\" affords.enter=\"edit\"/>\n  <rule match=\"view\" chrome.hover=\"off\" chrome.grip=\"14\" tolerance.hit=\"2\"/>\n</context>")?;
     phase(&mut scratch, ops)?;
     let outline = scratch.document().next_id();
     let op = composition(&scratch, outline, "outline", "outline");
@@ -1434,7 +1434,7 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     let spec = table::Spec { rows, preset: table::Preset::Light, header: 1, label_col: true, emphasis: Some(2), align: vec![] };
     let (ops, _) = table::create_ops(scratch.document(), Some(outline), key(1), [60.0, 60.0], &spec)?;
     phase(&mut scratch, ops)?;
-    let ids = scratch.document().next_ids(5);
+    let ids = scratch.document().next_ids(6);
     let mut layout = Layout::default();
     layout.mode = Slot::Const(Value::Enum("stack_y".into()));
     layout.gap = n(8.0);
@@ -1452,10 +1452,11 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         item(ids[2], 0, "First point"),
         item(ids[3], 1, "Second point"),
         item(ids[4], 2, "Third point"),
+        caption(ids[5], outline, 4, 60.0, 420.0, "Touch-like chrome, from the same context: nothing lights on hover, and grips are 14 px and reach twice as far."),
     ])?;
 
     // Pitch.
-    let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"pitch\" extends=\"std:free-2d\">\n  <rule match=\"view\" palette.tools=\"select text table\" keys.tools=\"v:select t:text b:table\" inspector.sections=\"position text fill\"/>\n</context>")?;
+    let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"pitch\" extends=\"std:free-2d\">\n  <rule match=\"view\" palette.tools=\"select text table\" keys.tools=\"v:select t:text b:table\" inspector.sections=\"position text fill\" chrome.accent=\"#e8711aff\" chrome.grip_shape=\"round\"/>\n</context>")?;
     phase(&mut scratch, ops)?;
     let pitch = scratch.document().next_id();
     let op = composition(&scratch, pitch, "pitch", "pitch");
@@ -1472,7 +1473,7 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     let mut title = words("Pitch", 40.0);
     title.push(at(60.0, 120.0).wrap());
     phase(&mut scratch, vec![
-        caption(ids[0], pitch, 0, 60.0, 24.0, "The pitch notation's own tools (Move, Text, Table; B for a table) and an inspector of\nPosition, Text and Fill only, from one context in this document. Compare the toolbar with Main's.\nThe card lights while hovered: its fill reads its own interaction state."),
+        caption(ids[0], pitch, 0, 60.0, 24.0, "The pitch notation's own tools (Move, Text, Table; B for a table) and an inspector of\nPosition, Text and Fill only, from one context in this document. Compare the toolbar with Main's.\nThe card lights while hovered: its fill reads its own interaction state.\nSelect something: the same context makes the chrome orange, with round grips."),
         Op::Create { id: ids[1], ty: ty("text"), parent: Some(pitch), order: key(1), facets: title },
         Op::Create { id: ids[2], ty: ty("rect"), parent: Some(pitch), order: key(2), facets: vec![at(60.0, 200.0).wrap(), size.wrap(), card_fill, named("card"), iron_document::facet::Interaction::default().wrap()] },
     ])?;
@@ -1504,12 +1505,12 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     phase(&mut scratch, vec![
         caption(ids[0], dials, 0, 60.0, 16.0, "Controls made only of data (inline affords facets): turn the red needle, drag the blue bar's bottom,\nclick the three words. Each gesture drives its node's own leaf through its binding; one undo each."),
         Op::Create { id: slider, ty: ty("slider"), parent: Some(dials), order: key(1), facets: vec![at(60.0, 60.0).wrap(), s.wrap(), named("level")] },
-        Op::Create { id: ids[2], ty: ty("rect"), parent: Some(dials), order: key(2), facets: vec![needle_at.wrap(), rect(80.0, 6.0).wrap(), paint([0.82, 0.19, 0.19, 1.0]), named("needle"), affords("drag: ring; drives: transform2d.rot; step: 0.2618")] },
+        Op::Create { id: ids[2], ty: ty("rect"), parent: Some(dials), order: key(2), facets: vec![needle_at.wrap(), rect(80.0, 6.0).wrap(), paint([0.82, 0.19, 0.19, 1.0]), named("needle"), affords("drag: ring; drives: transform2d.rot; step: 0.2618; chrome.handle: dot")] },
         Op::Create { id: ids[3], ty: ty("rect"), parent: Some(dials), order: key(3), facets: vec![at(500.0, 100.0).wrap(), bar.wrap(), paint([0.19, 0.44, 0.82, 1.0]), named("bar"), affords("drag: track; axis: y; drives: size.h")] },
         control(ids[4], 4, 320.0, "Italic (click)", "activate: toggle; drives: font.italic"),
         control(ids[5], 5, 380.0, "Bigger (click)", "activate: step; step: 4; drives: font.size"),
         control(ids[6], 6, 440.0, "Align (click)", "activate: cycle; drives: font.align"),
-        caption(ids[7], dials, 7, 230.0, 300.0, "needle: rot = level × π"),
+        caption(ids[7], dials, 7, 230.0, 300.0, "needle: rot = level × π (the dot is its pivot)"),
         caption(ids[8], dials, 8, 470.0, 320.0, "bar: h = level × 200"),
         caption(ids[9], dials, 9, 60.0, 90.0, "level"),
     ])?;

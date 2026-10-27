@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 10 of 13 · <chip sys="bound"/> <chip sys="react"/></p>
+  <p class="kicker">Part 10 of 14 · <chip sys="bound"/> <chip sys="react"/></p>
   <h1>Who computes where things are</h1>
   <p class="lede">Up to Part 9, three different pieces of code each worked out where a node sits on screen, and Bevy's was the one that drew. On October 17 that was settled the other way round: <strong>Iron computes every world transform, and Bevy only receives them</strong>. That one decision changed what the store tracks, gave the spatial index a different shape, removed Bevy's transform tree for document nodes, and removed most of the entities. This part follows the four commits that did it (<code>161648c</code>, <code>26de602</code>, <code>1cbe2d1</code>, and the signal layer of Part 12), with the data structures each one introduced.</p>
   <div class="prereq">

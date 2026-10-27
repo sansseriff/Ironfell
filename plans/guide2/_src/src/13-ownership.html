@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 13 of 13 · <chip sys="react"/> <chip sys="solve"/> <chip sys="tools"/></p>
+  <p class="kicker">Part 13 of 14 · <chip sys="react"/> <chip sys="solve"/> <chip sys="tools"/></p>
   <h1>Gestures have owners</h1>
   <p class="lede">Part 3's gestures were a store-wide overlay of previews plus one commit on release. That was safe only while nothing else wrote the document during a drag. Since the model applies edits between frames, the inspector writes immediately, and undo can arrive mid-drag, other things do. Commit <code>ac92fa7</code> gave each gesture an identity and a set of watched nodes, and made every other transaction be classified against it first. This part covers the three leaks that forced it (one of them inside the constraint solver), the algorithm in <code>Store::apply</code>, how tools find out, Alt-drag as one undo step, copy and paste, and the pointer state machine that now drives every edit.</p>
   <div class="prereq">

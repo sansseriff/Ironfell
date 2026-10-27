@@ -1,0 +1,51 @@
+# Chrome as data (plans/specs/chrome.md's revision; contexts.md step 7): how
+# selection and hover look is a view's context. A notation whose context
+# makes the chrome orange with 12 px round grips: a selected rect's corner grip
+# is orange, not blue. A group holding a part that asks for its own handle
+# (`chrome.handle: dot`) shows a dot at the part's origin while the group is
+# selected. Hovering lights the rect's outline (orange, half strength) until
+# the context says `chrome.hover="off"`. Each `tint` counts the pixels of a
+# box near a colour.
+nav
+ready
+eval __iron.snapping(false)
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><context name="orangey" extends="std:free-2d">\n  <rule match="view" chrome.accent="#e8711aff" chrome.grip="12" chrome.grip_shape="round"/>\n</context></edit>`); return r.ok || r.failure})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="2"><create id="$c" type="composition" name="kit" notation="orangey" dims="2d"/></edit>`); return r.ok || r.failure})()
+eval __dock.addPanel({ id: 'kit', component: 'view', title: 'Kit', params: { spec: { source: 'kit', notation: 'composition' } }, position: { referencePanel: 'viewer', direction: 'within' } }).id
+sleep 1200
+eval (async()=>{const v=await __iron.view({fidelity:'skeleton', depth: 0}); window.kit=v.match(/<composition id="(#\w+)" name="kit"/)[1]; const r=await __iron.edit(`<edit expect-version="3"><create id="$r" type="rect" parent="${kit}" name="card" x="200" y="150" w="120" h="80" color="#404040ff"/><create id="$g" type="group" parent="${kit}" name="dial" x="0" y="0"/><create id="$d" type="ellipse" parent="$g" name="disc" x="500" y="200" rx="40" ry="40" color="#c8c8c8ff"/><create id="$n" type="rect" parent="$g" name="needle" x="500" y="200" w="36" h="4" rot="0.5" color="#d03030ff" affords.style="chrome.handle: dot"/></edit>`); return r.ok || r.failure})()
+sleep 1000
+# Nothing selected: no orange anywhere near the card's corner or the pivot.
+tint kit 190 140 20 20 #e8711a
+tint kit 494 194 12 12 #e8711a
+pclick kit 260 190
+sleep 600
+# The card selected: its top-left grip is orange and round; no blue.
+tint kit 190 140 20 20 #e8711a
+tint kit 190 140 20 20 #0d99ff
+shot chrome-grips
+# The dial selected (a click on its disc): the needle's pivot dot shows.
+pclick kit 485 220
+sleep 600
+eval __iron.selection().length
+tint kit 494 194 12 12 #e8711a
+shot chrome-handle
+# Hover the card, nothing selected: its outline lights at half strength.
+key Escape
+sleep 300
+pmove kit 200 300
+sleep 300
+pmove kit 260 190
+sleep 600
+tint kit 230 146 60 8 #f3c9bc
+shot chrome-hover
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="4"><context name="orangey" extends="std:free-2d">\n  <rule match="view" chrome.accent="#e8711aff" chrome.grip="12" chrome.grip_shape="round" chrome.hover="off"/>\n</context></edit>`); return r.ok || r.failure})()
+pmove kit 200 300
+sleep 300
+pmove kit 260 190
+sleep 600
+tint kit 230 146 60 8 #f3c9bc
+shot chrome-nohover
+logs applied|rejected|panicked
+errors
+quit

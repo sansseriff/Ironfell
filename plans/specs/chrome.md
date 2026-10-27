@@ -1,6 +1,7 @@
 # The editor's chrome as context-aware data
 
-**Status:** Proposed 2026-10-26; nothing built. Follows [`affordances.md`](affordances.md),
+**Status:** Proposed 2026-10-26. The revision below built 2026-10-27 (chrome as
+context fields); §§2–7's chrome nodes not built. Follows [`affordances.md`](affordances.md),
 whose phases A and B it needs; to be scheduled after them.
 **Scope:** Everything the editor draws over content that is not content: selection
 boxes and grips, hover and selection outlines, component frames and chips, ports'
@@ -36,17 +37,26 @@ restyle in geometry, picking over chrome as stacking, §4) stays the later step,
 a notation needs chrome whose shape (not only colour and size) differs: the
 schematic's terminal dots and bend handles (§8 demo 1, with `contexts.md` §5 step 8).
 
-**Progress:** the fields are registered (`contexts.rs`, with a test that every
-`Field` constant names its field). **Next:** `view_focus` resolves the view tokens
-into `Offer`; `draw_select_overlay` reads them (accent for box, grips, frames and
-lit outlines only when overridden, so the default stays pixel-identical; grip size
-and shape; hover off skips hover frames, hovered outlines and hover chips;
-`chrome.lit="none"` skips a node in `SelectionGeometryCache::lit`; `chrome.handle`
-dots); the showcase gets Pitch restyled (orange, round grips), a touch-like Outline
-(no hover, 14 px grips, `tolerance.hit` 2) and the Dials needle's pivot dot; a
-driver script `chrome.txt`; the full guard set; then the HTML guide the user asked
-for (plans/guide2 style: everything done in this change and the app's architecture,
-with diagrams).
+**Progress (done 2026-10-27):** the fields are registered (`contexts.rs`, with a test
+that every `Field` constant names its field, and `tests/contexts.rs`'s
+`a_views_chrome_is_context_data_and_a_part_can_ask_for_its_handle`). `view_focus`
+resolves the view fields into each view's `Offer` (`Chrome`: accent, grip, round,
+hover). `draw_select_overlay` reads them: the accent replaces the box's, grips',
+frames' and lit outlines' blues only when a context sets one, so the default draws
+as before; grips take the size and shape; hover off skips hover frames, hovered
+outlines and hover chips; `chrome.lit="none"` leaves a node out of
+`SelectionGeometryCache::lit`; `chrome.handle="dot"` draws a dot at a part's origin
+while it or its container (its first 64 children are looked at) is selected or
+hovered; which chains are dotted is cached by document version, chains and
+interaction states (resolving it every frame cost 0.7 ms at 10k; the A/B is in
+`contexts.md` step 7). The showcase: Pitch orange with round grips, Outline touch-like (no hover
+light, 14 px grips, `tolerance.hit` 2), the Dials needle's pivot dot. Shown by
+`chrome.txt` (the driver's `tint` counts a box's pixels near a colour: orange grip,
+no blue, the pivot dot, the hover outline lit then not).
+**Not done:** the other chrome (path points, ports, guides, empties' markers, chips,
+the marquee, tool previews) keeps its built-in colours; `chrome.hover` does not
+stop hover from being tracked (the `interaction` state still says `hovered`), only
+from lighting; chrome nodes (§§2–7).
 
 ---
 

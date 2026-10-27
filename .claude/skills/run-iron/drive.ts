@@ -9,6 +9,7 @@
 import { chromium, type Browser, type Page } from "playwright-core";
 import { mkdirSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { inflateSync } from "node:zlib";
 
 // URL=… overrides it, e.g. to run the smoke script with ?bevy=views.
 // `showcase=0`: no contexts showcase, so scripts' ids follow the demo scene's.
@@ -98,6 +99,35 @@ async function drag(x0: number, y0: number, x1: number, y1: number, steps = 10) 
 }
 
 const out = (s: string) => console.log(s);
+// An 8-bit RGB or RGBA PNG (what Chrome's screenshots are) as pixels.
+function decodePng(png: Buffer) {
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  const channels = png[25] === 6 ? 4 : 3;
+  const idat: Buffer[] = [];
+  for (let at = 8; at < png.length; ) {
+    const len = png.readUInt32BE(at);
+    if (png.toString("ascii", at + 4, at + 8) === "IDAT") idat.push(png.subarray(at + 8, at + 8 + len));
+    at += 12 + len;
+  }
+  const raw = inflateSync(Buffer.concat(idat));
+  const stride = width * channels;
+  const data = new Uint8Array(height * stride);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)];
+    for (let i = 0; i < stride; i++) {
+      const v = raw[y * (stride + 1) + 1 + i];
+      const a = i >= channels ? data[y * stride + i - channels] : 0;
+      const b = y > 0 ? data[(y - 1) * stride + i] : 0;
+      const c = i >= channels && y > 0 ? data[(y - 1) * stride + i - channels] : 0;
+      const p = a + b - c;
+      const paeth = Math.abs(p - a) <= Math.abs(p - b) && Math.abs(p - a) <= Math.abs(p - c) ? a : Math.abs(p - b) <= Math.abs(p - c) ? b : c;
+      data[y * stride + i] = (v + [0, a, b, (a + b) >> 1, paeth][filter]) & 255;
+    }
+  }
+  return { width, height, channels, data };
+}
+
 async function run(line: string) {
   const [cmd, ...rest] = line.trim().split(/\s+/);
   const n = rest.map(Number);
@@ -347,6 +377,21 @@ async function run(line: string) {
       // refuses when another element (the canvas) would receive the click.
       await page.locator(rest.join(" ")).first().click({ timeout: 5000 });
       return out(`clicked ${rest.join(" ")}`);
+    }
+    case "tint": {
+      // tint <panel> x y w h #rrggbb: how many pixels of a panel-relative
+      // box are near a colour (each channel within 40), for chrome whose
+      // look is the point (chrome.txt).
+      const r = await panelRect(rest[0]);
+      const [x, y, w, h] = rest.slice(1, 5).map(Number);
+      const want = [1, 3, 5].map((i) => parseInt(rest[5].slice(i, i + 2), 16));
+      const png = await page.screenshot({ clip: { x: r.x + x * panelUnit, y: r.y + y * panelUnit, width: w * panelUnit, height: h * panelUnit } });
+      const { width, height, channels, data } = decodePng(png);
+      let n = 0;
+      for (let i = 0; i < width * height; i++) {
+        if (want.every((c, j) => Math.abs(data[i * channels + j] - c) <= 40)) n++;
+      }
+      return out(String(n));
     }
     case "pclick": {
       // Click inside a named panel, panel-relative.

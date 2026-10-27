@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 12 of 13 · <chip sys="react"/> <chip sys="bound"/></p>
+  <p class="kicker">Part 12 of 14 · <chip sys="react"/> <chip sys="bound"/></p>
   <h1>Runtime signals and producers</h1>
   <p class="lede">F3 described a stack of layers that every read goes through: overlay, binding, physics, clips, constant. Two of those were special-purpose maps, and a planned simulation would have been a third. Phase 4 of vision 10 (<code>50b36f1</code>) replaced them with one <em>runtime layer</em> of signals, each owned by a producer. Clips and the port network became the first two producers. A Bevy system became the third: 160 gas particles that have no document nodes, push on a piston, and publish a pressure the document's bindings read like any value. This part covers the layer, the publish algorithm, freezing, and the demo.</p>
   <div class="prereq">

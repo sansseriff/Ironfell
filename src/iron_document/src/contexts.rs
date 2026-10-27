@@ -244,9 +244,9 @@ pub struct Rule {
     position: Position,
     /// Any of these types; empty for any type.
     types: Vec<TypeId>,
-    /// A state from [`STATES`]. A view's focus supplies its states; nothing
-    /// sets a node's yet (affordances.md §8.1), so such a node rule never
-    /// matches.
+    /// A state from [`STATES`]. A view's focus supplies its states; a node's
+    /// come from the host's interaction state (`Store::set_interaction`,
+    /// affordances.md §8.1).
     state: Option<String>,
     decls: Vec<(Field, Val)>,
     /// The document `context` node a rule came from, and its index there.

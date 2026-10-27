@@ -631,3 +631,12 @@ svg .dot-w { fill: var(--accent); stroke: var(--accent); }
 svg .dot-r { fill: var(--surface); stroke: var(--accent); stroke-width: 1.6; }
 svg .grid { stroke: var(--rule); stroke-width: 1; fill: none; }
 svg .ln-thin { stroke: currentColor; stroke-width: 1; fill: none; }
+
+/* ---- Guide 2, Part 14: contexts --------------------------------------- */
+:root { --sys-ctx: #5d7a0e; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --sys-ctx: #b5d35a; }
+}
+:root[data-theme="dark"] { --sys-ctx: #b5d35a; }
+.sys-ctx { --c: var(--sys-ctx); }
+svg .s-ctx { fill: color-mix(in srgb, var(--sys-ctx) 14%, var(--surface)); stroke: var(--sys-ctx); }

@@ -29,6 +29,7 @@ SYSTEMS = {
     "shell": "Shell & views",
     "model": "Model surface",
     "bound": "Engine boundary",
+    "ctx": "Contexts",
 }
 
 PAGES = [
@@ -51,6 +52,7 @@ PAGES = [
     ("11-frame", "11", "One frame, in order", "Two hosts, one engine: what crosses the boundary, which system runs when, what each reads and writes, and how answers get out"),
     ("12-signals", "12", "Runtime signals and producers", "Clips, the port network and Bevy simulations as producers of one runtime layer; freeze; the piston demo"),
     ("13-ownership", "13", "Gestures have owners", "Previews that belong to a gesture, edits that race it, Alt-drag as one undo step, copy and paste, one pointer state machine"),
+    ("14-contexts", "14", "Behaviour as data", "The app today on one page; then contexts: rules the engine reads for selection, controls, keys, motion, palettes, tolerances and chrome"),
     ("field-guide", "", "Field guide", "Every function and type the guide covers, searchable, with its system and file:line"),
 ]
 
@@ -73,6 +75,8 @@ def lines_of(path, rev=None):
 def system_of(path):
     p = path
     name = os.path.basename(p)
+    if name in ("contexts.rs", "std_contexts.xml", "view_focus.rs", "tolerances.rs", "motion.rs") or p == "src/iron_document/src/interaction.rs" or p == "src/bevy_app/interaction.rs":
+        return "ctx"
     if p.startswith("src/iron_spatial/") or p.startswith("src-native/") or name in ("engine_api.rs", "engine_dispatch.rs", "host_events.rs", "host_services.rs", "materialize.rs", "spatial.rs", "gas.rs"):
         return "bound"
     if p.startswith("src/iron_document/"):
@@ -227,7 +231,7 @@ def page(i, body):
     if prev_:
         pager += f'<a href="{href(prev_[0])}" aria-label="Previous part">&larr;</a>'
     if num:
-        pager += f'<span class="here">{label(num)} of {4 if num.startswith("F") else 13}</span>'
+        pager += f'<span class="here">{label(num)} of {4 if num.startswith("F") else 14}</span>'
     if next_:
         pager += f'<a href="{href(next_[0])}" aria-label="Next part">&rarr;</a>'
     np = '<nav class="nextprev">'

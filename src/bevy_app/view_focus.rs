@@ -21,6 +21,34 @@ pub struct Offer {
     pub palette: String,
     pub keys: String,
     pub tolerances: crate::bevy_app::tolerances::Tolerances,
+    pub chrome: Chrome,
+}
+
+/// How a view's chrome looks (`chrome.*`, plans/specs/chrome.md's revision):
+/// the overlay drawer reads it. The defaults are today's look.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Chrome {
+    /// Boxes, grips, outlines and handles, when a context sets a colour;
+    /// `None` keeps the built-in blues.
+    pub accent: Option<[f32; 4]>,
+    /// A box's grip size, CSS px.
+    pub grip: f64,
+    pub round: bool,
+    /// Whether hovering lights anything.
+    pub hover: bool,
+}
+
+impl Default for Chrome {
+    fn default() -> Self {
+        Chrome { accent: None, grip: 8.0, round: false, hover: true }
+    }
+}
+
+/// `#rrggbb` or `#rrggbbaa` as an sRGB colour.
+fn hex(v: &str) -> Option<[f32; 4]> {
+    let h = v.trim().strip_prefix('#')?;
+    let byte = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok().map(|b| b as f32 / 255.0);
+    Some([byte(0)?, byte(2)?, byte(4)?, if h.len() == 8 { byte(6)? } else { 1.0 }])
 }
 
 #[derive(Resource, Default)]
@@ -47,6 +75,11 @@ impl ViewFocus {
     /// A view's tolerances (the defaults for a view not yet focused).
     pub fn tolerances(&self, panel: Option<&str>) -> crate::bevy_app::tolerances::Tolerances {
         panel.and_then(|p| self.views.iter().find(|(v, ..)| v == p)).map(|(_, _, o)| o.tolerances).unwrap_or_default()
+    }
+
+    /// A view's chrome (the defaults for a view not yet focused).
+    pub fn chrome(&self, panel: &str) -> Chrome {
+        self.views.iter().find(|(v, ..)| v == panel).map(|(_, _, o)| o.chrome).unwrap_or_default()
     }
 }
 
@@ -138,7 +171,16 @@ pub fn view_focus_system(
         let v = r.view_values(&f);
         let num = |f: Field, d: f64| v.get(f).parse::<f64>().unwrap_or(d);
         let tolerances = crate::bevy_app::tolerances::Tolerances { slop: num(Field::SLOP, 3.0) as f32, double_click: num(Field::DOUBLE_CLICK, 400.0) / 1000.0, hit: num(Field::HIT, 1.0) };
-        let offer = Offer { palette: v.get(Field::PALETTE).to_owned(), keys: v.get(Field::KEYS).to_owned(), tolerances };
+        let accent = v.get(Field::ACCENT);
+        let chrome = Chrome {
+            // The registry's default is the box's blue; only another colour
+            // replaces the built-in blues, so the default look is unchanged.
+            accent: (accent != Field::ACCENT.spec().options[0]).then(|| hex(accent)).flatten(),
+            grip: num(Field::GRIP, 8.0),
+            round: v.get(Field::GRIP_SHAPE) == "round",
+            hover: v.get(Field::HOVER) != "off",
+        };
+        let offer = Offer { palette: v.get(Field::PALETTE).to_owned(), keys: v.get(Field::KEYS).to_owned(), tolerances, chrome };
         if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&o.palette, &o.keys) != (&offer.palette, &offer.keys)) {
             events.push(EngineEvent::Focus { panel: view.panel.clone(), palette: offer.palette.clone(), keys: offer.keys.clone() });
         }

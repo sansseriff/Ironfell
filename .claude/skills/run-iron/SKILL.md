@@ -55,6 +55,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `sequence.txt` | ~30 s |
 | `controls.txt` | ~30 s |
 | `showcase.txt` | ~30 s |
+| `chrome.txt` | ~30 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -1490,7 +1491,7 @@ only Position and Fill, while a click in Main (on the scene's embed, `#15`) show
 
 ```
 [["Move (V)","Rectangle (R)","Pen (P)","Text (T)"]]
-["<computed view=\"viewer\">","palette.tools=\"select rect|ellipse|table|empty pen text\" palette.tools.by=\"std:free-2d rule 9\"","keys.tools=\"v:select p:pen r:rect o:ellipse t:text\" keys.tools.by=\"std:free-2d rule 9\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"main port component table position text layout appearance fill stroke effects other add\" inspector.sections.by=\"std:free-2d rule 9\"","</computed>"]
+["<computed view=\"viewer\">","palette.tools=\"select rect|ellipse|table|empty pen text\" palette.tools.by=\"std:free-2d rule 9\"","keys.tools=\"v:select p:pen r:rect o:ellipse t:text\" keys.tools.by=\"std:free-2d rule 9\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"main port component table position text layout appearance fill stroke effects other add\" inspector.sections.by=\"std:free-2d rule 9\"","chrome.accent=\"#0d99ffff\"","chrome.grip=\"8\"","chrome.grip_shape=\"square\"","chrome.hover=\"on\"","</computed>"]
 undefined
 [[],"select rect|ellipse|table|empty pen text"]
 clicked button[title^="Make a component"]
@@ -1500,7 +1501,7 @@ true
 true
 "deck"
 [["Move (V)","Rectangle (R)","Pen (P)","Text (T)"],["Move (V)","Text (T)","Table (B)"]]
-["<computed view=\"deck\">","palette.tools=\"select text table\" palette.tools.by=\"deck rule 1 from #…\"","keys.tools=\"v:select t:text b:table\" keys.tools.by=\"deck rule 1 from #…\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"position fill\" inspector.sections.by=\"deck rule 1 from #…\"","</computed>"]
+["<computed view=\"deck\">","palette.tools=\"select text table\" palette.tools.by=\"deck rule 1 from #…\"","keys.tools=\"v:select t:text b:table\" keys.tools.by=\"deck rule 1 from #…\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"position fill\" inspector.sections.by=\"deck rule 1 from #…\"","chrome.accent=\"#…\"","chrome.grip=\"8\"","chrome.grip_shape=\"square\"","chrome.hover=\"on\"","</computed>"]
 ["Table","Table (B)"]
 ["Table","Table (B)"]
 ["Rectangle (R)"]
@@ -1687,7 +1688,7 @@ showcase" (`document_bridge::demo::showcase`): **Outline** (a notation whose tex
 edit on entering: a table's cell takes words on the first double-click; a column
 stack to drag, glide and Alt+arrow), **Pitch** (a notation with its own palette, keys
 and inspector sections, and a card lit by its own interaction state), **Dials**
-(controls made of inline `affords` facets) and **Data** (demo 4: three sliders shown
+(controls made of inline `affords` facets; the needle shows its pivot as a dot) and **Data** (demo 4: three sliders shown
 as a table of bound readouts and as bars; dragging a bar's top sets the data, 0.40 to
 0.60, and typing 90 into its cell sets it to 0.90, the words inverting through their
 `fmt` binding while the binding stays).
@@ -1716,14 +1717,59 @@ tab Dials
 ["affords.drag=\"ring\" affords.drag.by=\"inline on #…\"","affords.drives=\"transform2d.rot\" affords.drives.by=\"inline on #…\""]
 tab Data
 undefined
-["0.40","north  | {= fmt(#4Z.slider.value * 100, 0)}"]
-["0.60","north  | {= fmt(#4Z.slider.value * 100, 0)}"]
+["0.40","north  | {= fmt(#4a.slider.value * 100, 0)}"]
+["0.60","north  | {= fmt(#4a.slider.value * 100, 0)}"]
 "90"
-["0.90","north  | {= fmt(#4Z.slider.value * 100, 0)}"]
+["0.90","north  | {= fmt(#4a.slider.value * 100, 0)}"]
 applied "open demo scene" (298 ops, System) -> v1
-applied "open showcase" (64 ops, System) -> v2
+applied "open showcase" (65 ops, System) -> v2
 applied "set size.h" (1 ops, Human) -> v3
 applied "edit text" (1 ops, Human) -> v4
+(no page errors)
+```
+
+Outline's chrome is touch-like (no hover light, 14 px grips reaching twice as far)
+and Pitch's orange with round grips, from their contexts' view rules.
+
+## Chrome as data (2026-10-27)
+
+`chrome.txt` (plans/specs/chrome.md's revision; contexts.md step 7): how selection
+and hover look is a view's context. A notation `orangey` whose view rule sets
+`chrome.accent`, `chrome.grip` and `chrome.grip_shape`; a selected rect's corner grip
+is orange and round, with no blue; a group holding a needle whose inline style asks
+for `chrome.handle: dot` shows the pivot dot while the group is selected; hovering
+the rect lights its outline at half strength until the context adds
+`chrome.hover="off"`. The driver's `tint <panel> x y w h #rrggbb` counts a
+panel-relative box's pixels near a colour (each channel within 40). After a build,
+with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < chrome.txt; cd -
+```
+
+Inspect `screenshots/chrome-grips.png`, `chrome-handle.png`, `chrome-hover.png` and
+`chrome-nohover.png`. Expected, minus `nav`, `ready` and screenshot lines:
+
+```
+{"enabled":false,"guides":[]}
+true
+true
+"kit"
+true
+0
+0
+22
+0
+1
+24
+60
+true
+0
+applied "open demo scene" (298 ops, System) -> v1
+applied "context" (1 ops, Model) -> v2
+applied "model edit" (1 ops, Model) -> v3
+applied "model edit" (4 ops, Model) -> v4
+applied "context" (1 ops, Model) -> v5
 (no page errors)
 ```
 

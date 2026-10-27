@@ -1,6 +1,6 @@
 # Contexts: Iron's behaviour as data (master plan)
 
-**Status:** §5 steps 0–6 built 2026-10-26/27 (4 in its first part; `track` along a path deferred); chrome (step 7) next; the rest proposed. The user supports the direction ("I'm not afraid of
+**Status:** §5 steps 0–7 built 2026-10-26/27 (4 in its first part; `track` along a path deferred; 7 as `chrome.md`'s revision, chrome as context fields the overlay reads, not yet chrome nodes); a schematic notation (step 8) next; the rest proposed. The user supports the direction ("I'm not afraid of
 thinking big on this topic. Now is the time in this program to have these overarching
 ideas"). Nothing built. This plan owns the shared foundation and the order of work;
 domain specs own their detail: [`affordances.md`](affordances.md) (interaction and
@@ -463,6 +463,23 @@ behaviour-neutral refactor before anything shows.
    are not linear in anything, so §5.4's own-leaf rule refuses it; it comes with a
    component demo that gives the bead an input.
 7. **`chrome.md`** C1–C5.
+   *Done 2026-10-27, revised* (`chrome.md`'s revision note): chrome's choices and looks
+   are context fields the existing overlay drawer reads, rather than session nodes.
+   View fields `chrome.accent`, `chrome.grip`, `chrome.grip_shape`, `chrome.hover`
+   (resolved into each view's `Offer` by `view_focus`) and node fields `chrome.lit`
+   (`shape`, `frame`, `none`) and `chrome.handle` (`dot`: a part's own handle at its
+   origin while it or its container is selected or hovered). The defaults draw exactly
+   today's chrome (an accent replaces the built-in blues only when a context sets one).
+   The showcase shows them: Pitch orange with round grips, Outline touch-like (no hover
+   light, 14 px grips, `tolerance.hit` 2), the Dials needle's pivot dot. Shown by
+   `chrome.txt`, which counts pixels by colour (`tint`). Chrome as picture nodes
+   (C1–C5 proper) waits for a notation whose chrome differs in shape: step 8.
+   Checkpoint, a same-day A/B (`bench-render.sh 1000 10000`, `wasm-bench`): the first
+   version resolved `chrome.handle` for the selection's and hover's children every
+   frame and cost ~0.7 ms a frame at 10k (`hover-sweep` frame p50 0.4 → 1.1 ms);
+   caching which chains are dotted, by document version, chains and interaction
+   states, put every scenario back on the base commit's numbers (`hover-sweep`
+   frame p50 0.3 ms, changed frame 1.8 ms, at 1k and 10k).
 8. **A schematic notation** (13), with what it needs: snapping settings (6), domain
    libraries (10), parts as data (11), the wire tool. §6's demo.
 9. **State machines** (14), on motion's primitives; workspace defaults (12) whenever

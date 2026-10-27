@@ -1233,7 +1233,8 @@ impl Store {
     }
 
     /// The contexts this document's nodes resolve against
-    /// (plans/specs/contexts.md): the built-in library, for now.
+    /// (plans/specs/contexts.md): the built-in library, with the document's
+    /// own `context` nodes merged over it (`resolve_contexts`).
     pub fn contexts(&self) -> &contexts::Library {
         match &self.contexts {
             Some((_, lib)) => lib,

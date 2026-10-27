@@ -2,6 +2,8 @@
 //! Splits 3D scene setup, 2D overlay, and shared types/systems into submodules.
 
 mod input_accum;
+pub(crate) mod tolerances;
+pub(crate) mod view_focus;
 mod interaction;
 pub(crate) mod manipulate;
 mod picking;
@@ -226,6 +228,16 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
                 .after(pick_world_3d_system),
         ),
     );
+    // Each view's focus context (contexts.md §2.7): plain letters become
+    // tool picks through the hovered view's keymap before any tool reads the
+    // keys, and the focus is recomputed once the select tool has run.
+    app.add_systems(
+        PostUpdate,
+        (
+            view_focus::route_tool_keys.before(select::navigate_views),
+            view_focus::view_focus_system.after(select::select_tool_system),
+        ),
+    );
     app.add_systems(
         PostUpdate,
         (
@@ -342,6 +354,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<text_tool::TextTool>();
     app.init_resource::<select::ShellModifiers>();
     app.init_resource::<select::ToolKeys>();
+    app.init_resource::<view_focus::ViewFocus>();
     app.init_resource::<select::Clipboard>();
 }
 

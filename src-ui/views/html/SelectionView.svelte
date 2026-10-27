@@ -56,7 +56,10 @@
   type Field = Property;
   type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean };
   type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[] };
-  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null };
+  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null; sections?: string[] };
+  // Every section, in the built-in order: what an older engine's inspection
+  // (without `sections`) shows.
+  const SECTIONS = ["main", "port", "component", "table", "position", "text", "layout", "appearance", "fill", "stroke", "effects", "other", "add"];
   let inspected: Inspected | null = $state(null);
   let setError = $state("");
   let generation = 0;
@@ -220,173 +223,167 @@
           <label class="wide">{p.dir === "out" ? "Value" : "Default"}<input class="mono" value={p.bind ? `{= ${p.bind}}` : (p.signal ?? "")} disabled={!editable} title="A number or quantity (10 mW), or an expression in braces: {'{'}= #power.port.signal{'}'}" onchange={(e) => editPort(p.spec, { signal: e.currentTarget.value })} /></label>
         </div>
       {/snippet}
-      {#if inspected.main}
-        <div class="property-section" data-section="main">
-          <div class="component main-head"><span class="main-chip">◆◆ Main component</span><span class="mono">{inspected.main.instances} instance{inspected.main.instances === 1 ? "" : "s"}</span></div>
-          <label class="name-row">Name<input value={inspected.main.name ?? ""} onchange={(e) => author("rename", { node: inspected!.main!.def, name: e.currentTarget.value })} /></label>
-          <div class="ports" data-section="ports">
-            {#each inspected.main.ports as p (p.spec)}
-              <button class="port-row" class:open={openSpec === p.spec} onclick={() => (openSpec = openSpec === p.spec ? null : p.spec)} title={p.placed ? "A port placed on the picture" : "A setting: no place on the picture"}>
-                <span class="dir {p.dir}">{p.dir}</span><span>{p.name}</span><span class="mono">{p.port?.kind}</span>{#if !p.placed}<span class="setting">setting</span>{/if}
-              </button>
-              {#if openSpec === p.spec && p.port}{@render portEditor(p.port, true)}{/if}
-            {/each}
-          </div>
-          <div class="row"><button onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture">+ input</button><span class="hint">Ports: the port tool, on the main</span></div>
-        </div>
-      {/if}
-      {#if inspected.port}
-        <div class="property-section" data-section="port">
-          <div class="component"><span>Port</span><span class="mono">{inspected.port.editable ? "" : "edit on the main"}</span></div>
-          {@render portEditor(inspected.port, !!inspected.port.editable)}
-        </div>
-      {/if}
-      {#if inspected.component}
-        <div class="property-section" data-section="component">
-          <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<button class="property-icon" aria-label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach}><Unlink size={14} strokeWidth={1.5} /></button>{/if}</div>
-          <div class="field-grid">{#each inspected.component.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
-        </div>
-      {/if}
-      {#if fields("transform2d").length}
-        {#if inspected.table}
-          <div class="property-section" data-section="table">
-            <div class="component"><span>Table</span></div>
-            <div class="add table-edits">
-              <button onclick={() => tableEdit("add_row")} title="Add a row at the bottom"><Plus size={13} />Row</button>
-              <button onclick={() => tableEdit("remove_row")} title="Remove the bottom row"><Minus size={13} />Row</button>
-              <button onclick={() => tableEdit("add_column")} title="Add a column at the right"><Plus size={13} />Column</button>
-              <button onclick={() => tableEdit("remove_column")} title="Remove the right column"><Minus size={13} />Column</button>
-              <button onclick={() => tableEdit("preset:light")} title="Hairlines between rows, a muted label column">Light</button>
-              <button onclick={() => tableEdit("preset:boxed")} title="Every cell boxed, a filled header">Boxed</button>
-              {#if inspected.table !== inspected.node}
-                <button onclick={() => tableEdit("merge")} disabled={doc.selection.length < 2} title="Merge the selected cells into one">Merge</button>
-                <button onclick={() => tableEdit("split")} disabled={doc.selection.length !== 1} title="Split a merged cell into single cells">Split</button>
-              {/if}
-            </div>
-          </div>
-        {/if}
-        <div class="property-section" data-section="position">
-          <div class="component"><span>Position</span></div>
-          <div class="field-grid">
-            {#each ["x", "y"] as axis}<PropertyField field={field("transform2d", axis)} node={inspected.node} compact prefix={axis.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
-            <PropertyField field={field("transform2d", "rot")} node={inspected.node} label="Rotation" onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
-          </div>
-          <details class="advanced"><summary>Scale</summary><div class="field-grid">
-            {#each ["sx", "sy"] as axis}<PropertyField field={field("transform2d", axis, "1")} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
-          </div></details>
-        </div>
-      {/if}
-      {#if fields("text").length}
-        <TextSection node={inspected.node} {field} {patch} {refresh} onError={(e) => setError = e} />
-      {/if}
-      {#if (fields("size").length && textSizing !== "auto_width") || fields("radius").length}
-        <div class="property-section" data-section="layout">
-          <div class="component"><span>Layout</span></div>
-          <div class="subheading">{fields("size").length ? "Dimensions" : "Radii"}</div>
-          <div class="field-grid">
-            {#each (fields("size").length ? fields("size").filter(f => textSizing !== "auto_height" || f.field === "w") : fields("radius")) as f (f.leaf)}
-              <PropertyField field={f} node={inspected.node} compact prefix={f.field.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
-            {/each}
-          </div>
-        </div>
-      {/if}
-      {#if supports("appearance") || supports("corners")}
-        <div class="property-section" data-section="appearance">
-          <div class="component"><span>Appearance</span></div>
-          <div class="field-grid appearance-grid" class:has-corners={supports("corners")}>
-            {#if supports("appearance")}<PropertyField field={field("appearance", "opacity", "1")} node={inspected.node} inlineUnit onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
-              {#snippet icon()}<AppearanceIcon kind="opacity" />{/snippet}
-            </PropertyField>{/if}
-            {#if supports("corners")}
-              <PropertyField field={cornerField} node={inspected.node} label="Corner radius" mixed={mixedCorners} scrubLeaves={cornerLeaves} onSet={setCorners} onRefresh={refresh} onError={(e) => setError = e}>
-                {#snippet icon()}<AppearanceIcon kind="radius" />{/snippet}
-              </PropertyField>
-              <button class="property-icon corner-toggle" class:active={separateCorners} aria-label="Individual corners" aria-pressed={separateCorners} title="Individual corners" onclick={() => separateCorners = !separateCorners}><Scan size={16} strokeWidth={1.5} /></button>
-            {/if}
-          </div>
-          {#if separateCorners}
-            <div class="field-grid individual-corners">
-              {#each [{ key: "tl", label: "Top left" }, { key: "tr", label: "Top right" }, { key: "bl", label: "Bottom left" }, { key: "br", label: "Bottom right" }] as const as corner}
-                <PropertyField field={field("corners", corner.key)} node={inspected.node} compact label={corner.label} onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
-                  {#snippet icon()}<AppearanceIcon kind={corner.key} />{/snippet}
-                </PropertyField>
+      <!-- Sections in the order the selection's view resolves (`inspector.sections`,
+           contexts.md §2.7); each shows only where its node has what it edits. -->
+      {#each inspected.sections ?? SECTIONS as section (section)}
+        {#if section === "main" && (inspected.main)}
+          <div class="property-section" data-section="main">
+            <div class="component main-head"><span class="main-chip">◆◆ Main component</span><span class="mono">{inspected.main.instances} instance{inspected.main.instances === 1 ? "" : "s"}</span></div>
+            <label class="name-row">Name<input value={inspected.main.name ?? ""} onchange={(e) => author("rename", { node: inspected!.main!.def, name: e.currentTarget.value })} /></label>
+            <div class="ports" data-section="ports">
+              {#each inspected.main.ports as p (p.spec)}
+                <button class="port-row" class:open={openSpec === p.spec} onclick={() => (openSpec = openSpec === p.spec ? null : p.spec)} title={p.placed ? "A port placed on the picture" : "A setting: no place on the picture"}>
+                  <span class="dir {p.dir}">{p.dir}</span><span>{p.name}</span><span class="mono">{p.port?.kind}</span>{#if !p.placed}<span class="setting">setting</span>{/if}
+                </button>
+                {#if openSpec === p.spec && p.port}{@render portEditor(p.port, true)}{/if}
               {/each}
             </div>
-          {/if}
-        </div>
-      {/if}
-      {#if supports("fill") || fields("gradient").length}
-        <div class="property-section" data-section="fill">
-          <div class="component"><span>Fill</span>{#if !fields("fill").length && !fields("gradient").length}<button class="property-icon" aria-label="Add fill" title="Add fill" onclick={() => component("fill", true)}><Plus size={17} strokeWidth={1.5} /></button>{/if}</div>
-          {#if fields("fill").length || fields("gradient").length}
-            <PaintRow node={inspected.node} label="Fill" color={field("fill", "color", "#808080ff", "color")} opacity={field("fill", "opacity", "1")} gradient={fields("gradient")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onMode={paintMode} onRemove={() => patch({}, ["fill", "gradient"], "remove fill")} />
-          {:else}<p class="section-empty">No fill</p>{/if}
-        </div>
-      {/if}
-      {#if supports("stroke")}
-        <div class="property-section" data-section="stroke">
-          <div class="component"><span>Stroke</span>{#if !fields("stroke").length}<button class="property-icon" aria-label="Add stroke" title="Add stroke" onclick={() => component("stroke", true)}><Plus size={17} strokeWidth={1.5} /></button>{/if}</div>
-          {#if fields("stroke").length}
-            <PaintRow node={inspected.node} label="Stroke" color={field("stroke", "color", "#000000ff", "color")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onRemove={() => component("stroke", false)} />
-            <div class="stroke-options" bind:this={strokeAnchor}>
-              <div><div class="subheading">Position</div><div class="readout" title="Strokes currently render centred on the outline">Centre</div></div>
-              <PropertyField field={field("stroke", "width", "1")} node={inspected.node} label="Weight" onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
-              <Popover.Root>
-                <Popover.Trigger class="property-icon stroke-settings" aria-label="Stroke settings" title="Stroke settings"><SlidersHorizontal size={16} strokeWidth={1.5} /></Popover.Trigger>
-                <Popover.Portal><Popover.Content class="property-popover" side="left" align="center" sideOffset={12} customAnchor={strokeAnchor} aria-label="Stroke settings">
-                  <header><strong>Stroke settings</strong><Popover.Close class="property-icon" aria-label="Close stroke settings"><X size={15} /></Popover.Close></header>
-                  <div class="property-popover-body">
-                    <div class="subheading">Basic</div>
-                    <div class="property-grid">
-                      {#each fields("stroke").filter(f => ["join", "cap", "miter", "dash", "dash_offset"].includes(f.field)) as f (f.leaf)}
-                        <PropertyField field={f} node={inspected.node} label={{ join: "Join", cap: "Cap", miter: "Miter limit", dash: "Dash pattern", dash_offset: "Dash offset" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
-                      {/each}
-                    </div>
-                  </div>
-                </Popover.Content></Popover.Portal>
-              </Popover.Root>
-            </div>
-          {:else}<p class="section-empty">No stroke</p>{/if}
-        </div>
-      {/if}
-      {#if supports("shadow")}
-        <div class="property-section" data-section="effects">
-          <div class="component"><span>Effects</span>
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger class="property-icon" aria-label="Add effect" title="Add effect"><Plus size={17} strokeWidth={1.5} /></DropdownMenu.Trigger>
-              <DropdownMenu.Portal><DropdownMenu.Content class="ui-menu" side="left" align="start" sideOffset={10}>
-                {#each effectTypes as effect}<DropdownMenu.Item class="ui-menu-item" data-effect-type={effect.kind} disabled={fields(effect.kind).length > 0} onSelect={() => component(effect.kind, true)}>{effect.label}</DropdownMenu.Item>{/each}
-              </DropdownMenu.Content></DropdownMenu.Portal>
-            </DropdownMenu.Root>
+            <div class="row"><button onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture">+ input</button><span class="hint">Ports: the port tool, on the main</span></div>
           </div>
-          {#each effects as effect (effect.kind)}
-            <div class="effect-row">
-              <Popover.Root>
-                <Popover.Trigger class="effect-trigger" aria-label="{effect.label} settings"><Square size={16} strokeWidth={1.5} /><span>{effect.label}</span><SlidersHorizontal size={14} strokeWidth={1.5} /></Popover.Trigger>
-                <Popover.Portal><Popover.Content class="property-popover" side="left" align="start" sideOffset={12} aria-label="{effect.label} settings">
-                  <header><strong>{effect.label}</strong><Popover.Close class="property-icon" aria-label="Close effect settings"><X size={15} /></Popover.Close></header>
-                  <div class="property-popover-body">
-                    <PaintRow node={inspected.node} label="Shadow" color={field(effect.kind, "color", "#00000040", "color")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
-                    <div class="property-grid">
-                      {#each fields(effect.kind).filter(f => f.kind === "number") as f (f.leaf)}<PropertyField field={f} node={inspected.node} label={{ dx: "X", dy: "Y", blur: "Blur" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
-                    </div>
-                  </div>
-                </Popover.Content></Popover.Portal>
-              </Popover.Root>
-              <button class="property-icon" aria-label="Remove {effect.kind}" title="Remove {effect.label.toLowerCase()}" onclick={() => component(effect.kind, false)}><Minus size={16} strokeWidth={1.5} /></button>
+        {:else if section === "port" && (inspected.port)}
+          <div class="property-section" data-section="port">
+            <div class="component"><span>Port</span><span class="mono">{inspected.port.editable ? "" : "edit on the main"}</span></div>
+            {@render portEditor(inspected.port, !!inspected.port.editable)}
+          </div>
+        {:else if section === "component" && (inspected.component)}
+          <div class="property-section" data-section="component">
+            <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<button class="property-icon" aria-label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach}><Unlink size={14} strokeWidth={1.5} /></button>{/if}</div>
+            <div class="field-grid">{#each inspected.component.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+          </div>
+        {:else if section === "table" && inspected.table && fields("transform2d").length}
+            <div class="property-section" data-section="table">
+              <div class="component"><span>Table</span></div>
+              <div class="add table-edits">
+                <button onclick={() => tableEdit("add_row")} title="Add a row at the bottom"><Plus size={13} />Row</button>
+                <button onclick={() => tableEdit("remove_row")} title="Remove the bottom row"><Minus size={13} />Row</button>
+                <button onclick={() => tableEdit("add_column")} title="Add a column at the right"><Plus size={13} />Column</button>
+                <button onclick={() => tableEdit("remove_column")} title="Remove the right column"><Minus size={13} />Column</button>
+                <button onclick={() => tableEdit("preset:light")} title="Hairlines between rows, a muted label column">Light</button>
+                <button onclick={() => tableEdit("preset:boxed")} title="Every cell boxed, a filled header">Boxed</button>
+                {#if inspected.table !== inspected.node}
+                  <button onclick={() => tableEdit("merge")} disabled={doc.selection.length < 2} title="Merge the selected cells into one">Merge</button>
+                  <button onclick={() => tableEdit("split")} disabled={doc.selection.length !== 1} title="Split a merged cell into single cells">Split</button>
+                {/if}
+              </div>
             </div>
-          {:else}<p class="section-empty">No effects</p>{/each}
-        </div>
-      {/if}
-      {#each otherComponents as c (c.kind)}
-        <div class="property-section">
-          <div class="component" data-kind={c.kind}><span>{titles[c.kind] ?? c.kind}</span>{#if inspected.removable.includes(c.kind)}<button class="property-icon" aria-label="Remove {c.kind}" onclick={() => component(c.kind, false)}><Minus size={16} /></button>{/if}</div>
-          <div class="field-grid">{#each c.fields as f (f.leaf)}<PropertyField field={f} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
-        </div>
+        {:else if section === "position" && fields("transform2d").length}
+          <div class="property-section" data-section="position">
+            <div class="component"><span>Position</span></div>
+            <div class="field-grid">
+              {#each ["x", "y"] as axis}<PropertyField field={field("transform2d", axis)} node={inspected.node} compact prefix={axis.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
+              <PropertyField field={field("transform2d", "rot")} node={inspected.node} label="Rotation" onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+            </div>
+            <details class="advanced"><summary>Scale</summary><div class="field-grid">
+              {#each ["sx", "sy"] as axis}<PropertyField field={field("transform2d", axis, "1")} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
+            </div></details>
+          </div>
+        {:else if section === "text" && (fields("text").length)}
+          <TextSection node={inspected.node} {field} {patch} {refresh} onError={(e) => setError = e} />
+        {:else if section === "layout" && ((fields("size").length && textSizing !== "auto_width") || fields("radius").length)}
+          <div class="property-section" data-section="layout">
+            <div class="component"><span>Layout</span></div>
+            <div class="subheading">{fields("size").length ? "Dimensions" : "Radii"}</div>
+            <div class="field-grid">
+              {#each (fields("size").length ? fields("size").filter(f => textSizing !== "auto_height" || f.field === "w") : fields("radius")) as f (f.leaf)}
+                <PropertyField field={f} node={inspected.node} compact prefix={f.field.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+              {/each}
+            </div>
+          </div>
+        {:else if section === "appearance" && (supports("appearance") || supports("corners"))}
+          <div class="property-section" data-section="appearance">
+            <div class="component"><span>Appearance</span></div>
+            <div class="field-grid appearance-grid" class:has-corners={supports("corners")}>
+              {#if supports("appearance")}<PropertyField field={field("appearance", "opacity", "1")} node={inspected.node} inlineUnit onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
+                {#snippet icon()}<AppearanceIcon kind="opacity" />{/snippet}
+              </PropertyField>{/if}
+              {#if supports("corners")}
+                <PropertyField field={cornerField} node={inspected.node} label="Corner radius" mixed={mixedCorners} scrubLeaves={cornerLeaves} onSet={setCorners} onRefresh={refresh} onError={(e) => setError = e}>
+                  {#snippet icon()}<AppearanceIcon kind="radius" />{/snippet}
+                </PropertyField>
+                <button class="property-icon corner-toggle" class:active={separateCorners} aria-label="Individual corners" aria-pressed={separateCorners} title="Individual corners" onclick={() => separateCorners = !separateCorners}><Scan size={16} strokeWidth={1.5} /></button>
+              {/if}
+            </div>
+            {#if separateCorners}
+              <div class="field-grid individual-corners">
+                {#each [{ key: "tl", label: "Top left" }, { key: "tr", label: "Top right" }, { key: "bl", label: "Bottom left" }, { key: "br", label: "Bottom right" }] as const as corner}
+                  <PropertyField field={field("corners", corner.key)} node={inspected.node} compact label={corner.label} onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
+                    {#snippet icon()}<AppearanceIcon kind={corner.key} />{/snippet}
+                  </PropertyField>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else if section === "fill" && (supports("fill") || fields("gradient").length)}
+          <div class="property-section" data-section="fill">
+            <div class="component"><span>Fill</span>{#if !fields("fill").length && !fields("gradient").length}<button class="property-icon" aria-label="Add fill" title="Add fill" onclick={() => component("fill", true)}><Plus size={17} strokeWidth={1.5} /></button>{/if}</div>
+            {#if fields("fill").length || fields("gradient").length}
+              <PaintRow node={inspected.node} label="Fill" color={field("fill", "color", "#808080ff", "color")} opacity={field("fill", "opacity", "1")} gradient={fields("gradient")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onMode={paintMode} onRemove={() => patch({}, ["fill", "gradient"], "remove fill")} />
+            {:else}<p class="section-empty">No fill</p>{/if}
+          </div>
+        {:else if section === "stroke" && (supports("stroke"))}
+          <div class="property-section" data-section="stroke">
+            <div class="component"><span>Stroke</span>{#if !fields("stroke").length}<button class="property-icon" aria-label="Add stroke" title="Add stroke" onclick={() => component("stroke", true)}><Plus size={17} strokeWidth={1.5} /></button>{/if}</div>
+            {#if fields("stroke").length}
+              <PaintRow node={inspected.node} label="Stroke" color={field("stroke", "color", "#000000ff", "color")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onRemove={() => component("stroke", false)} />
+              <div class="stroke-options" bind:this={strokeAnchor}>
+                <div><div class="subheading">Position</div><div class="readout" title="Strokes currently render centred on the outline">Centre</div></div>
+                <PropertyField field={field("stroke", "width", "1")} node={inspected.node} label="Weight" onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+                <Popover.Root>
+                  <Popover.Trigger class="property-icon stroke-settings" aria-label="Stroke settings" title="Stroke settings"><SlidersHorizontal size={16} strokeWidth={1.5} /></Popover.Trigger>
+                  <Popover.Portal><Popover.Content class="property-popover" side="left" align="center" sideOffset={12} customAnchor={strokeAnchor} aria-label="Stroke settings">
+                    <header><strong>Stroke settings</strong><Popover.Close class="property-icon" aria-label="Close stroke settings"><X size={15} /></Popover.Close></header>
+                    <div class="property-popover-body">
+                      <div class="subheading">Basic</div>
+                      <div class="property-grid">
+                        {#each fields("stroke").filter(f => ["join", "cap", "miter", "dash", "dash_offset"].includes(f.field)) as f (f.leaf)}
+                          <PropertyField field={f} node={inspected.node} label={{ join: "Join", cap: "Cap", miter: "Miter limit", dash: "Dash pattern", dash_offset: "Dash offset" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+                        {/each}
+                      </div>
+                    </div>
+                  </Popover.Content></Popover.Portal>
+                </Popover.Root>
+              </div>
+            {:else}<p class="section-empty">No stroke</p>{/if}
+          </div>
+        {:else if section === "effects" && (supports("shadow"))}
+          <div class="property-section" data-section="effects">
+            <div class="component"><span>Effects</span>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger class="property-icon" aria-label="Add effect" title="Add effect"><Plus size={17} strokeWidth={1.5} /></DropdownMenu.Trigger>
+                <DropdownMenu.Portal><DropdownMenu.Content class="ui-menu" side="left" align="start" sideOffset={10}>
+                  {#each effectTypes as effect}<DropdownMenu.Item class="ui-menu-item" data-effect-type={effect.kind} disabled={fields(effect.kind).length > 0} onSelect={() => component(effect.kind, true)}>{effect.label}</DropdownMenu.Item>{/each}
+                </DropdownMenu.Content></DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            </div>
+            {#each effects as effect (effect.kind)}
+              <div class="effect-row">
+                <Popover.Root>
+                  <Popover.Trigger class="effect-trigger" aria-label="{effect.label} settings"><Square size={16} strokeWidth={1.5} /><span>{effect.label}</span><SlidersHorizontal size={14} strokeWidth={1.5} /></Popover.Trigger>
+                  <Popover.Portal><Popover.Content class="property-popover" side="left" align="start" sideOffset={12} aria-label="{effect.label} settings">
+                    <header><strong>{effect.label}</strong><Popover.Close class="property-icon" aria-label="Close effect settings"><X size={15} /></Popover.Close></header>
+                    <div class="property-popover-body">
+                      <PaintRow node={inspected.node} label="Shadow" color={field(effect.kind, "color", "#00000040", "color")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+                      <div class="property-grid">
+                        {#each fields(effect.kind).filter(f => f.kind === "number") as f (f.leaf)}<PropertyField field={f} node={inspected.node} label={{ dx: "X", dy: "Y", blur: "Blur" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
+                      </div>
+                    </div>
+                  </Popover.Content></Popover.Portal>
+                </Popover.Root>
+                <button class="property-icon" aria-label="Remove {effect.kind}" title="Remove {effect.label.toLowerCase()}" onclick={() => component(effect.kind, false)}><Minus size={16} strokeWidth={1.5} /></button>
+              </div>
+            {:else}<p class="section-empty">No effects</p>{/each}
+          </div>
+        {:else if section === "other"}
+        {#each otherComponents as c (c.kind)}
+          <div class="property-section">
+            <div class="component" data-kind={c.kind}><span>{titles[c.kind] ?? c.kind}</span>{#if inspected.removable.includes(c.kind)}<button class="property-icon" aria-label="Remove {c.kind}" onclick={() => component(c.kind, false)}><Minus size={16} /></button>{/if}</div>
+            <div class="field-grid">{#each c.fields as f (f.leaf)}<PropertyField field={f} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+          </div>
+        {/each}
+        {:else if section === "add" && (inspected.addable.some(k => addKinds.includes(k)))}
+          <div class="add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<button aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={13} />{titles[kind] ?? kind}</button>{/each}</div>
+        {/if}
       {/each}
-      {#if inspected.addable.some(k => addKinds.includes(k))}
-        <div class="add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<button aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={13} />{titles[kind] ?? kind}</button>{/each}</div>
-      {/if}
     </div>
   {:else}
     <div class="empty"><MousePointer2 size={28} strokeWidth={1.25} /><strong>Make a selection</strong><span>Select an object to see its properties.</span></div>

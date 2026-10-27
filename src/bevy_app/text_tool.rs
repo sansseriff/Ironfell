@@ -37,10 +37,7 @@ use crate::document_bridge::{DocumentPanelLayer, DocumentStore, GestureRequest, 
 use crate::host_events::{EngineEvent, HostEvents};
 use crate::vector::{DisplayList, DisplayListRebuild, VectorLayer, VectorView, order};
 
-/// Window px a press must travel to drag out a box instead of clicking.
-const DRAG: f64 = 3.0;
-/// Seconds and window px between presses that make a double-click.
-const DOUBLE_CLICK: (f64, f64) = (0.4, 5.0);
+use crate::bevy_app::tolerances::{DOUBLE_CLICK, SLOP};
 const BLUE: [f32; 4] = [0.05, 0.6, 1.0, 1.0];
 const SELECTION: [f32; 4] = [0.05, 0.6, 1.0, 0.25];
 
@@ -177,9 +174,15 @@ pub fn utf16_of(s: &str, byte: usize) -> u32 {
     s[..byte.min(s.len())].chars().map(|c| c.len_utf16() as u32).sum()
 }
 
-/// Whether a text node's words can be typed: its content is a constant.
+/// Whether a node's words can be typed: its context says editing it means
+/// its words (`affords.edit="text"`), and its content is a constant.
 fn editable(store: &iron_document::Store, id: NodeId) -> bool {
-    store.document().live(id).is_some_and(|n| n.ty.name() == "text") && store.document().leaf(id, content_path()).is_some_and(|s| s.expr().is_none()) && store.reactive().signal(iron_document::Leaf { node: id, path: content_path() }).is_none()
+    let doc = store.document();
+    let chain = iron_document::contexts::chain_of(doc, id);
+    !chain.is_empty()
+        && iron_document::contexts::Resolver::new(doc, store.contexts()).get(&chain, chain.len() - 1, iron_document::contexts::Field::EDIT) == "text"
+        && doc.leaf(id, content_path()).is_some_and(|s| s.expr().is_none())
+        && store.reactive().signal(iron_document::Leaf { node: id, path: content_path() }).is_none()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -191,7 +194,7 @@ pub fn text_tool_system(
     mut text: ResMut<TextTool>,
     mut keys: ResMut<ToolKeys>,
     mut sel: ResMut<crate::SelectionState>,
-    select: Res<SelectTool>,
+    mut select: ResMut<SelectTool>,
     mut store: ResMut<DocumentStore>,
     mut pending: ResMut<PendingTransactions>,
     (mut gestures, mut history): (ResMut<GestureRequests>, ResMut<HistoryRequests>),
@@ -206,7 +209,7 @@ pub fn text_tool_system(
     let mut finish = false;
     for (key, m) in std::mem::take(&mut keys.0) {
         match key.as_str() {
-            "t" if m == 0 && text.edit.is_none() => *active = ActiveTool::Text,
+            "tool:text" if text.edit.is_none() => *active = ActiveTool::Text,
             "escape" if text.edit.is_some() => finish = true,
             "escape" if *active == ActiveTool::Text => *active = ActiveTool::Select,
             // Enter on one selected text node edits it, everything selected.
@@ -234,10 +237,24 @@ pub fn text_tool_system(
         finish = true;
     }
 
+    // A double-click that entered a node whose context says entering edits
+    // it (select.rs, `affords.enter`): edit there, its word selected; or
+    // Enter on a grid's cell: edit it, all its words selected.
+    if let Some((id, at)) = select.enter_edit.take()
+        && let Some(r) = select.reach.get(&id)
+        && let Some(view) = views.get(&r.panel)
+    {
+        let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
+        if let Some(space) = geo.space(&r.chain) {
+            text.request = Some(EditRequest { id, panel: r.panel.clone(), base: view.affine() * space, at, created: None });
+            text.last_press = None;
+        }
+    }
+
     // A double-click on the one selected text node edits it there, its
     // word selected (the first click selected it, through the select tool).
     if *active == ActiveTool::Select && text.edit.is_none() && pointer.just_pressed_left {
-        let double = text.last_press.is_some_and(|(t, p)| now - t <= DOUBLE_CLICK.0 && p.distance(screen) <= DOUBLE_CLICK.1);
+        let double = text.last_press.is_some_and(|(t, p)| now - t <= DOUBLE_CLICK.0 && p.distance(screen) <= DOUBLE_CLICK.1 as f64);
         text.last_press = Some((now, screen));
         if double
             && let [id] = sel.selected[..]
@@ -354,7 +371,7 @@ pub fn text_tool_system(
         let local = to_screen.inverse() * screen;
         if measured.frame.contains(local) {
             let at = to_layout * screen;
-            let double = text.last_press.is_some_and(|(t, p)| now - t <= DOUBLE_CLICK.0 && p.distance(screen) <= DOUBLE_CLICK.1);
+            let double = text.last_press.is_some_and(|(t, p)| now - t <= DOUBLE_CLICK.0 && p.distance(screen) <= DOUBLE_CLICK.1 as f64);
             if double {
                 (edit.anchor, edit.focus) = measured.layout.word_at(at.x, at.y);
             } else {
@@ -436,7 +453,7 @@ fn arm(
         text.press = drop_target(&geo, hits, view).map(|(container, to_comp)| TextPress { panel: view.panel.clone(), container, to_comp, start: screen, dragged: false, rect: None });
     }
     let Some(press) = text.press.as_mut() else { return };
-    press.dragged |= press.start.distance(screen) > DRAG;
+    press.dragged |= press.start.distance(screen) > SLOP as f64;
     if press.dragged
         && let Some(view) = views.get(&press.panel)
     {

@@ -31,9 +31,7 @@ use crate::vector::DisplayListRebuild;
 pub(crate) type DragCameras<'w, 's> = Query<'w, 's, (Entity, &'static Camera, &'static GlobalTransform, Option<&'static crate::bevy_app::scene3d::ScreenRect>, Option<&'static crate::bevy_app::scene3d::PointerToCamera>)>;
 pub(crate) type Planes<'w, 's> = Query<'w, 's, (&'static GlobalTransform, &'static EmbedPlane)>;
 
-/// Window px the pointer may travel before a 3D or plane drag moves
-/// anything, so a click is not a move.
-const SLOP: f32 = 3.0;
+use crate::bevy_app::tolerances::SLOP;
 /// Rotation snap with Shift.
 const SNAP: f64 = std::f64::consts::PI / 12.0;
 

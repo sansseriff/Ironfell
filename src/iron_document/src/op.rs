@@ -164,6 +164,8 @@ pub enum ErrorKind {
     /// A path holds packed geometry (`path.d`) and `contour` children at
     /// once (plans/specs/packed-paths.md §2).
     MixedPath,
+    /// A `context` node's markup does not parse (contexts.md §2.1).
+    BadContext,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -378,6 +380,17 @@ pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Versio
     };
     if let Some(path) = path {
         check_path_form(doc, &cx, path)?;
+    }
+    let context = match op {
+        Op::Create { id, ty, .. } if ty.name() == "context" => Some(*id),
+        Op::Set { id, path, .. } if path.facet == FacetKind::ContextDef => Some(*id),
+        Op::AddFacet { id, facet } if facet.kind() == FacetKind::ContextDef => Some(*id),
+        _ => None,
+    };
+    if let Some(c) = context
+        && let Some(markup) = doc.get::<crate::facet::ContextDef>(c).and_then(|d| d.markup.constant().and_then(Value::as_str).map(str::to_owned))
+    {
+        crate::contexts::parse(&markup).map_err(|e| cx.err(ErrorKind::BadContext, format!("{c}: {e}")))?;
     }
     let Op::Create { id, .. } = op else { return Ok(()) };
     if doc.live(*id).is_none() {

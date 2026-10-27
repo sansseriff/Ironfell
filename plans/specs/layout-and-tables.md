@@ -3,8 +3,8 @@
 **Status:** Approved 2026-10-26. Phases 0–3 done 2026-10-26 (Taffy in `iron_layout`;
 layout on groups and Shift+A; tables with merges, presets, the Table tool and
 inspector; the `<table>` op, the compact view and spreadsheet paste), apart from style
-inheritance (§4, deferred). §10 proposes affordances, how a container says what
-gestures on its children mean, for the user to approve. Work order:
+inheritance (§4, deferred). What tables showed about interaction is proposed in
+[`affordances.md`](affordances.md). Work order:
 `handoff-product.md`, "Layout and tables".
 **Scope:** A layout engine for 2D compositions (stacks and grids on groups), and a
 static `table` built on it, with two looks (boxed and light), an inspector section and
@@ -463,159 +463,10 @@ Open:
 
 ---
 
-## 10. Affordances: how a container says what gestures on its children mean (proposal)
+## 10. Affordances (moved)
 
-**Status:** Proposed 2026-10-26, for the user to approve; nothing built. Written at the
-end of phase 3, at the user's request, after tables needed the select tool to treat
-one node type (`row`) differently. It may move to its own spec when approved.
-
-### 10.1 What layout and tables showed
-
-Two kinds of interaction customisation came up, and only one is general today.
-
-- **What a gesture writes is data.** When layout took a child's position over, no
-  interaction code changed: the position became a published leaf, `handle.rs` locks
-  every published leaf, and the drag was refused with layout's reason. Binding
-  inversion, overrides, solver drivers and locks all work this way: the gesture → op
-  mapping is decided by the document (vision 02 §8.2, §9.2), not by node types.
-- **What a gesture targets is code.** Which node a press selects, what a double-click
-  enters, what Esc climbs to, what Enter lists, what counts as a container, what a drag
-  on a node *means*: `select.rs` decides these with about 51 node-type checks, in about
-  ten hand-kept lists (`"group" | "use" | "empty" | "embed"`, with variations). Tables
-  added `"table"` to four lists and a new rule, `see_through` for rows. Each new kind
-  of content adds branches here.
-
-The second kind has a pattern: **the role a node plays in a gesture is decided by its
-container, not by its own type.**
-
-| Container | What its children are, to a gesture |
-|---|---|
-| A free composition or group | Points: a drag moves them (vision 02 §9.3's "point in 2D") |
-| A stack (layout) | A sequence: Figma's drag reorders (today: locked) |
-| A table | Cells: the rows are looked through; a drag would select a range of cells (a region) |
-| A component instance | Closed: only its ports are hot (component-model §4.3) |
-| A path being edited | Points again, of its contours |
-
-So the general statement: **every gesture is resolved in an interaction context, the
-nearest enclosing container that declares one, and the context assigns each of its
-children an *affordance*.** The free composition is the default context.
-
-### 10.2 The model
-
-An affordance answers four questions about a node, for one container:
-
-| Question | Values | Today's code it replaces |
-|---|---|---|
-| **select**: what a press on it targets | `target` (selectable, enterable if it has children), `through` (never a target; presses go to its children: a row), `closed` (a target that is never entered; its ports are hot: an instance), `none` | `target_index`, `see_through`, the Enter and Esc paths, the container lists |
-| **drag**: which manipulation a drag is | one of vision 02 §9.3's archetypes: `point`, `track` (along a path), `ring` (an angle about a centre), `sequence` (reorder among siblings), `region` (a set by area), `none` | the per-type drag branches; laid-out children's lock |
-| **writes**: where the manipulation lands | for built-ins, the node's own leaves (`transform2d` for `point`, sibling order for `sequence`); in general, assignments from the archetype's value to leaves (§10.4) | `preview_writes`, `shape_grip_writes` choosing leaves by type |
-| **edit**: what entering it in place means | `text` (the text tool), `points` (path editing), `none` | the double-click branches for paths, rects and text |
-
-It sits between the layers that exist. The pointer state machine (`select.rs`) asks
-the **resolver** which node a press targets and which archetype a drag is; the
-archetype's **manipulator** (`manipulate.rs`) turns the pointer into a value each
-frame; the store realises the writes (`handle.rs`: direct, inverted, translated to an
-override, or locked with a reason), previews them and commits one transaction. Undo,
-gesture ownership (infinite-canvas §4), locks and the model surface see nothing new,
-because the writes are ordinary leaf edits. That is what keeps interaction code from
-growing: a new kind of content adds an affordance record, and at most one new
-archetype; it adds no branches to the state machine.
-
-The vision's rule still decides what is allowed: **an affordance's writes must land on
-leaves** (§9.2). A write to a derived leaf goes through the store's translation, which
-inverts it when it can and refuses it with a reason when it cannot, so an affordance
-cannot smuggle in a non-injective manipulation; those keep vision 02 §8.3's route
-(model-mediated repair as a reviewable diff).
-
-### 10.3 Where affordances come from
-
-1. **Built in, per node type.** `TypeSpec` (the registry) gains a default affordance
-   for its children and for itself: a composition and a group give children `point`;
-   a `table` gives its rows `through` and its cells `target` + `region` + `text`; a
-   `use` is `closed`. These are the ten lists of today, written once as data.
-2. **From a facet that makes a container a context.** A group with `layout` gives its
-   items `sequence` instead of `point`.
-3. **Authored in the document** (§10.4): a container holds `affordance` children that
-   override the built-ins for some of its children.
-
-Resolution walks the hit's chain from the outside in; at each level the nearest
-declaring context gives that level's affordance. Cmd (deep select) still reaches the
-hit node itself, whatever the contexts say: an escape hatch that keeps every node
-reachable.
-
-### 10.4 Affordances as document data
-
-A node type `affordance`, a child of any container (a group, a composition, a table, a
-definition's template), with one facet:
-
-| Field | Meaning |
-|---|---|
-| `of` | Which children it applies to: `all`, or a name or type to match |
-| `select`, `drag`, `edit` | As in §10.2; `default` keeps the built-in |
-| `along` | The node an archetype runs along or about: the path of a `track`, the centre of a `ring` (a Ref) |
-| `writes` | Assignments from the archetype's value to leaves, in the expression language: `#m.args.in = (angle + pi) / pi * #m.args.range` |
-
-The archetype supplies named values to `writes`: `p` (the pointer in the container's
-space) for `point`, `t` (0–1 along the path) for `track`, `angle` for `ring`, `index`
-for `sequence`. Because an affordance is a node, it is undoable, saved, shown in views
-and authored by a model with `<create type="affordance" …>`; because `writes` are
-expressions over leaves, they are checked by the same scope rules and read the same
-way as bindings. This is vision 02 §9.3's "making the binding layer data", applied to
-gestures on content rather than to editor panels, and it is how a document defines
-its own interaction dynamics.
-
-### 10.5 The demo
-
-One composition, `affordances`, whose dynamics are all declared in the document:
-
-- **A dial you turn.** A dial meter whose needle is dragged *around* its pivot. Its
-  container declares `drag="ring" along="#pivot" writes="#m.args.in = …"`. Linear
-  inversion cannot do this: the needle's position is not linear in the input; its
-  angle is, and only a ring archetype produces an angle.
-- **A bead on a wire.** A circle constrained to a curved path, dragged along it:
-  `drag="track" along="#wire" writes="#bead.args.t = t"`, the bead's position bound
-  to the point at `t` on the wire. Needs two expression functions, the point at `t` on
-  a path and the nearest `t` to a point.
-- **A slide sorter.** A stack of slide thumbnails (embeds) whose drag reorders them,
-  the built-in `sequence` of a laid-out group, with the presentation order following
-  sibling order.
-- **A model that rewrites the dynamics.** The demo's last step asks the model to
-  change one affordance ("make the dial snap to whole milliwatts", a `writes` edit),
-  and the next drag behaves differently with no code change.
-
-### 10.6 Phases
-
-**A. The resolver.** `iron_document::interaction` (Bevy-free, tested natively):
-`Affordance`, the built-in records on `TypeSpec`, layout's and table's overrides, and
-`resolve(doc, chain, selection, deep)`. `select.rs`'s type lists and `see_through`
-become calls to it. *Exit:* behaviour unchanged (the full smoke, `layout.txt`,
-`tables.txt`, `snapping.txt`); `select.rs` has no node-type lists left for selection.
-
-**B. Two archetypes.** `sequence` (stacks reorder by drag, replacing the lock; table
-rows reorder by a row handle) and `ring`. *Exit:* dragging a stack's item reorders it
-in one undo step; a ring drag on the dial meter sets its input.
-
-**C. Authored affordances and the demo.** The `affordance` type, `writes` evaluated
-through the store's edit translation, views and the manifest, the `track` archetype
-and its two path functions, the `affordances` composition. *Exit:* §10.5 runs, and a
-model edit to an affordance changes the next drag.
-
-**D. Later.** `region` (a range of table cells), drop semantics (what dropping into a
-container means: reparent, insert at an index, paste into cells), and 3D.
-
-A is the "small refactor" of the earlier discussion, but built as the data structure
-B and C read, so the refactor is done once.
-
-### 10.7 Open questions
-
-1. **Precedence between nested contexts.** Nearest wins in this proposal; should a
-   component be able to declare its own affordances that its user's container cannot
-   override (a sealed control)?
-2. **Modifiers.** Cmd is the deep-select escape hatch; Alt duplicates. May an
-   affordance claim a modifier (Shift to snap a ring to steps), or are modifiers the
-   archetype's?
-3. **What a model is told.** Should views print a node's effective affordance (an
-   `affords="sequence"` attribute), or only the `affordance` nodes authored?
-4. **Constraints.** A `point` drag on a solver variable already runs through the
-   solver (constraint-system.md's interaction-time roles). Are a cluster's roles an
-   affordance (the context is the cluster), or stay as they are below the write?
+Tables needed the select tool to treat one node type (`row`) differently, which
+showed that what a gesture *targets* is decided in code by node type while what it
+*writes* is already data. The proposal that follows from it, affordances declared by
+containers, with phases A–D and a demo, is its own spec:
+[`affordances.md`](affordances.md).

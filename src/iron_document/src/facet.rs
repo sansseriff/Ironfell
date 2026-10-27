@@ -25,6 +25,8 @@ use std::str::FromStr;
 pub trait LeafStruct: Sized + Default + Clone {
     const KIND: FacetKind;
     const FIELDS: &'static [(&'static str, ValueKind)];
+    /// The values an `Enum` field takes, for the fields that list them.
+    const OPTIONS: &'static [(&'static str, &'static [&'static str])];
     fn get(&self, field: &str) -> Option<&Slot>;
     fn get_mut(&mut self, field: &str) -> Option<&mut Slot>;
     fn wrap(self) -> Facet;
@@ -33,7 +35,7 @@ pub trait LeafStruct: Sized + Default + Clone {
 
 macro_rules! facets {
     ( $( $(#[$m:meta])* $variant:ident / $json:literal => $name:ident {
-          $( $field:ident : $vk:ident = $default:expr ),* $(,)?
+          $( $field:ident : $vk:ident = $default:expr $( => [ $( $opt:literal ),* ] )? ),* $(,)?
       } )*
       @dynamic { $( $(#[$dm:meta])* $dvariant:ident / $djson:literal => $dname:ident )* }
     ) => {
@@ -52,6 +54,8 @@ macro_rules! facets {
                 const KIND: FacetKind = FacetKind::$variant;
                 const FIELDS: &'static [(&'static str, ValueKind)] =
                     &[ $( (stringify!($field), ValueKind::$vk), )* ];
+                const OPTIONS: &'static [(&'static str, &'static [&'static str])] =
+                    &[ $( $( (stringify!($field), &[ $( $opt ),* ]), )? )* ];
                 fn get(&self, field: &str) -> Option<&Slot> {
                     match field { $( stringify!($field) => Some(&self.$field), )* _ => None }
                 }
@@ -86,6 +90,12 @@ macro_rules! facets {
                 match self { $( FacetKind::$variant => <$name as LeafStruct>::FIELDS, )* $( FacetKind::$dvariant => &[], )* }
             }
 
+            /// The values an `Enum` field takes, where the schema lists
+            /// them (the inspector's choices, the manifest's).
+            pub fn options(self, field: &str) -> Option<&'static [&'static str]> {
+                let all: &[(&str, &[&str])] = match self { $( FacetKind::$variant => <$name as LeafStruct>::OPTIONS, )* $( FacetKind::$dvariant => &[], )* };
+                all.iter().find(|(f, _)| *f == field).map(|(_, o)| *o)
+            }
             /// Whether this facet's fields come from the document rather
             /// than from this table.
             pub fn is_dynamic(self) -> bool {
@@ -137,7 +147,7 @@ facets! {
 
     /// Which renderer materialises this node: `canvas` or `dom`
     /// (plans/specs/document-spine.md §4). Absent means the type's default.
-    Host / "host" => Host { mode: Enum = Value::Enum("canvas".to_owned()) }
+    Host / "host" => Host { mode: Enum = Value::Enum("canvas".to_owned()) => ["canvas", "dom"] }
 
     /// Document 2D space: y-down, origin top-left, matching SVG and the
     /// DisplayList seam. Scalars, not a vector, because they are the leaves a
@@ -205,7 +215,7 @@ facets! {
     /// inside, as in SVG: `nonzero` (an outline running the other way cuts a
     /// hole) or `evenodd` (every enclosed outline cuts a hole).
     PathShape / "path" => PathShape {
-        fill_rule: Enum = Value::Enum("nonzero".to_owned()),
+        fill_rule: Enum = Value::Enum("nonzero".to_owned()) => ["nonzero", "evenodd"],
         d: Geometry = Value::Geometry(crate::geometry::Geometry::empty()),
     }
 
@@ -234,7 +244,7 @@ facets! {
     /// radial uses (x0,y0) as centre and the distance to (x1,y1) as radius.
     /// The solid fill remains the fallback when this facet is removed.
     Gradient / "gradient" => Gradient {
-        kind: Enum = Value::Enum("linear".to_owned()),
+        kind: Enum = Value::Enum("linear".to_owned()) => ["linear", "radial"],
         start: Color = Value::Color([0.35, 0.3, 0.95, 1.0]),
         end: Color = Value::Color([1.0, 0.45, 0.65, 1.0]),
         x0: Number = Value::Number(0.0),
@@ -247,7 +257,7 @@ facets! {
     /// radius; ellipses occupy the same (0,0)-(w,h) frame.
     GroupClip / "group_clip" => GroupClip {
         enabled: Bool = Value::Bool(true),
-        shape: Enum = Value::Enum("rect".to_owned()),
+        shape: Enum = Value::Enum("rect".to_owned()) => ["rect", "ellipse"],
         w: Number = Value::Number(200.0),
         h: Number = Value::Number(200.0),
         radius: Number = Value::Number(0.0),
@@ -264,19 +274,19 @@ facets! {
     /// its content) or `fixed` (its `size`). The positions it gives its
     /// children are published, never stored (`layout.rs`).
     Layout / "layout" => Layout {
-        mode: Enum = Value::Enum("stack_y".to_owned()),
+        mode: Enum = Value::Enum("stack_y".to_owned()) => ["none", "stack_x", "stack_y", "grid"],
         gap: Number = Value::Number(0.0),
         row_gap: Number = Value::Number(0.0),
         pad_t: Number = Value::Number(0.0),
         pad_r: Number = Value::Number(0.0),
         pad_b: Number = Value::Number(0.0),
         pad_l: Number = Value::Number(0.0),
-        align: Enum = Value::Enum("start".to_owned()),
-        justify: Enum = Value::Enum("start".to_owned()),
+        align: Enum = Value::Enum("start".to_owned()) => ["start", "center", "end", "stretch"],
+        justify: Enum = Value::Enum("start".to_owned()) => ["start", "center", "end", "between"],
         columns: Str = Value::Str(String::new()),
         rows: Str = Value::Str(String::new()),
-        sizing_w: Enum = Value::Enum("hug".to_owned()),
-        sizing_h: Enum = Value::Enum("hug".to_owned()),
+        sizing_w: Enum = Value::Enum("hug".to_owned()) => ["hug", "fixed"],
+        sizing_h: Enum = Value::Enum("hug".to_owned()) => ["hug", "fixed"],
     }
 
     /// How a child sits in its group's layout. `w`/`h`: `auto` (its own
@@ -285,9 +295,9 @@ facets! {
     /// keeps its own position, as in Figma. In a grid, `column` and `row`
     /// (1-based; 0 flows into the next free cell) and the spans place it.
     LayoutItem / "layout_item" => LayoutItem {
-        w: Enum = Value::Enum("auto".to_owned()),
-        h: Enum = Value::Enum("auto".to_owned()),
-        align: Enum = Value::Enum("auto".to_owned()),
+        w: Enum = Value::Enum("auto".to_owned()) => ["auto", "fill"],
+        h: Enum = Value::Enum("auto".to_owned()) => ["auto", "fill"],
+        align: Enum = Value::Enum("auto".to_owned()) => ["auto", "start", "center", "end", "stretch"],
         absolute: Bool = Value::Bool(false),
         column: Number = Value::Number(0.0),
         row: Number = Value::Number(0.0),
@@ -312,7 +322,7 @@ facets! {
         width: Number = Value::Number(0.0),
         header_fill: Color = Value::Color([0.0, 0.0, 0.0, 0.0]),
         zebra_fill: Color = Value::Color([0.0, 0.0, 0.0, 0.0]),
-        preset: Enum = Value::Enum("light".to_owned()),
+        preset: Enum = Value::Enum("light".to_owned()) => ["light", "boxed"],
     }
 
     /// A table's lines (layout-and-tables.md §3.2), each a width (0 for
@@ -338,7 +348,7 @@ facets! {
     /// `fixed` (`size.w` by `size.h`; text may overflow).
     Text / "text" => Text {
         content: Str = Value::Str(String::new()),
-        sizing: Enum = Value::Enum("auto_width".to_owned()),
+        sizing: Enum = Value::Enum("auto_width".to_owned()) => ["auto_width", "auto_height", "fixed"],
         // Styled parts (§2.1): JSON, `[{"start":0,"end":5,"weight":700}]`,
         // byte ranges of `content` and the properties they override.
         runs: Str = Value::Str(String::new()),
@@ -356,8 +366,8 @@ facets! {
         italic: Bool = Value::Bool(false),
         line_height: Number = Value::Number(0.0),
         letter_spacing: Number = Value::Number(0.0),
-        align: Enum = Value::Enum("left".to_owned()),
-        valign: Enum = Value::Enum("top".to_owned()),
+        align: Enum = Value::Enum("left".to_owned()) => ["left", "center", "right"],
+        valign: Enum = Value::Enum("top".to_owned()) => ["top", "middle", "bottom"],
         tabular: Bool = Value::Bool(false),
         underline: Bool = Value::Bool(false),
         strike: Bool = Value::Bool(false),
@@ -377,8 +387,8 @@ facets! {
     Stroke / "stroke" => Stroke {
         color: Color = Value::Color([0.0, 0.0, 0.0, 1.0]),
         width: Number = Value::Number(1.0),
-        join: Enum = Value::Enum("round".to_owned()),
-        cap: Enum = Value::Enum("round".to_owned()),
+        join: Enum = Value::Enum("round".to_owned()) => ["round", "miter", "bevel"],
+        cap: Enum = Value::Enum("round".to_owned()) => ["round", "butt", "square"],
         miter: Number = Value::Number(4.0),
         dash: Str = Value::Str(String::new()),
         dash_offset: Number = Value::Number(0.0),
@@ -400,7 +410,7 @@ facets! {
     Timing / "timing" => Timing {
         start: Number = Value::Number(0.0),
         dur: Number = Value::Number(1.0),
-        easing: Enum = Value::Enum("linear".to_owned()),
+        easing: Enum = Value::Enum("linear".to_owned()) => ["linear", "ease_in", "ease_out", "ease_in_out"],
     }
 
     /// What a clip does to its target. Endpoints stay literal (doc 05 §2.1)
@@ -416,7 +426,7 @@ facets! {
     /// Operands are `constrains` relations. `value` is a distance or angle
     /// for the kinds that use one, and may be bound: a driving dimension.
     Constraint / "constraint" => Constraint {
-        kind: Enum = Value::Enum("coincident".to_owned()),
+        kind: Enum = Value::Enum("coincident".to_owned()) => ["coincident", "distance", "pin", "fix", "angle", "horizontal", "vertical", "mate"],
         value: Number = Value::Number(0.0),
         enabled: Bool = Value::Bool(true),
     }
@@ -427,7 +437,7 @@ facets! {
     /// nodes that only remember where they came from.
     Instance / "instance" => Instance {
         def: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
-        mode: Enum = Value::Enum("linked".to_owned()),
+        mode: Enum = Value::Enum("linked".to_owned()) => ["linked", "detached", "main"],
     }
 
     /// A per-instance change to one leaf of what an instance derives
@@ -508,14 +518,14 @@ facets! {
     /// connection partner's, derived by the graph, never stored.
     Port / "port" => Port {
         kind: Str = Value::Str("value".to_owned()),
-        dir: Enum = Value::Enum("in".to_owned()),
+        dir: Enum = Value::Enum("in".to_owned()) => ["in", "out"],
         signal: Any = Value::Number(0.0),
         across: Any = Value::Number(0.0),
         through: Any = Value::Number(0.0),
         // What plugs into it (component-authoring.md §4): a connector type
         // ("" matches any) and a gender (`any`, `male`, `female`, `neutral`).
         connector: Str = Value::Str(String::new()),
-        gender: Enum = Value::Enum("any".to_owned()),
+        gender: Enum = Value::Enum("any".to_owned()) => ["any", "male", "female", "neutral"],
     }
 
     /// A behaviour equation of a definition or entity (ECM §6.1): `lhs` and
@@ -531,14 +541,20 @@ facets! {
     /// relations. `domain` is informational; the ports' kinds decide.
     Connection / "connection" => Connection { domain: Str = Value::Str(String::new()) }
 
+    /// A document's own context (plans/specs/contexts.md §2.2), in the
+    /// markup the built-in ones are written in: `<context name="…">` holding
+    /// `<rule …/>`s. One whose name is a built-in context's (`std:table`)
+    /// adds its rules after the built-in's, overriding it in this document.
+    ContextDef / "context_def" => ContextDef { markup: Str = Value::Str(String::new()) }
+
     /// A composition root (ECM §5): one diagram in one notation, 2D or 3D.
     /// Its subtree is layout, figures and composition-local geometry.
     /// `run` is when its views render (free-running.md §2): `auto` (when
     /// it or anything it shows is live), `always`, or `on_demand`.
     Composition / "composition" => Composition {
         notation: Str = Value::Str("free".to_owned()),
-        dims: Enum = Value::Enum("2d".to_owned()),
-        run: Enum = Value::Enum("auto".to_owned()),
+        dims: Enum = Value::Enum("2d".to_owned()) => ["2d", "3d"],
+        run: Enum = Value::Enum("auto".to_owned()) => ["auto", "always", "on_demand"],
     }
 
     @dynamic {
@@ -571,6 +587,7 @@ impl Args {
 impl LeafStruct for Args {
     const KIND: FacetKind = FacetKind::Args;
     const FIELDS: &'static [(&'static str, ValueKind)] = &[];
+    const OPTIONS: &'static [(&'static str, &'static [&'static str])] = &[];
     fn get(&self, field: &str) -> Option<&Slot> {
         self.slots.get(field)
     }

@@ -14,8 +14,9 @@ export function manifest(schema: Schema): string {
     })
     .join('\n');
   const comps = Object.entries(schema.facets)
-    .map(([name, fields]) => `  ${name.padEnd(12)} ${Object.entries(fields).map(([f, k]) => `${f}:${k}`).join(' ')}`)
+    .map(([name, fields]) => `  ${name.padEnd(12)} ${Object.entries(fields).map(([f, k]) => { const o = schema.options?.[`${name}.${f}`]; return o ? `${f}:${o.join('|')}` : `${f}:${k}`; }).join(' ')}`)
     .join('\n');
+  const contextFields = (schema.contexts ?? []).map((f) => `  ${f.field}: ${f.options.join('|')}\n      ${f.doc} (default ${f.options[0]})`).join('\n');
   return `You edit a scene document for a scientific-visualisation tool. You are given the
 document as an XML-ish VIEW and a request. Reply with ONE <edit> block that makes
 the change, and at most one short sentence before it. Read markup, write ops:
@@ -32,7 +33,7 @@ VIEW
 NODE TYPES  (facet? = optional)
 ${types}
 
-FACETS AND FIELDS  (field:kind)
+FACETS AND FIELDS  (field:kind, or field:a|b|c for an enum's values)
 ${comps}
 
 VERBS, inside <edit expect-version="N">  (N = the version you read)
@@ -56,6 +57,21 @@ VERBS, inside <edit expect-version="N">  (N = the version you read)
       SVG's shapes as new nodes under #comp (or a group), the SVG's origin at x, y
       (alone in its <edit>). Paths stay paths; what SVG cannot carry (text, images,
       gradients beyond their first colour, filters) is listed as <cut> lines.
+
+CONTEXTS  (how things behave: data, not code)
+  Behaviour comes from contexts: rules matching nodes and declaring fields. Built-in
+  ones (std:free-2d, std:3d, and std:table for a table's rows and cells) are never
+  saved. A node's values come from its world's context (by type), its own context,
+  and its direct container's; a node with affords.select="through" (a table's row) is
+  passed over, so its container's rules reach its children. Write rules with
+      <context name="std:table">
+        <rule match="type:text" affords.enter="edit"/>
+      </context>
+  alone in its <edit>: rules after the built-in's, so they win, in this document only.
+  match is all, self or children, with type:a|b and state:s. Writing a name again
+  replaces its rules; <delete> its id removes them. Views print a document's contexts
+  in this markup. Fields:
+${contextFields}
 
 VALUES
   numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or

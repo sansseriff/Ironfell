@@ -198,7 +198,15 @@ static TYPES: &[TypeSpec] = &[
         name: "library",
         facets: &[(K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["definition"]),
+        children: ChildPolicy::Only(&["definition", "context"]),
+    },
+    // A document's context (contexts.md §2.2): rules over the built-in
+    // ones, in a library. Behaviour, never drawn.
+    TypeSpec {
+        name: "context",
+        facets: &[(K::ContextDef, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
     },
     TypeSpec {
         name: "definition",
@@ -409,7 +417,13 @@ impl TypeSpec {
 pub fn schema_json() -> serde_json::Value {
     use serde_json::{Map, Value, json};
     let mut facets = Map::new();
+    let mut options = Map::new();
     for kind in FacetKind::ALL {
+        for (n, _) in kind.fields() {
+            if let Some(o) = kind.options(n) {
+                options.insert(format!("{}.{n}", kind.name()), json!(o));
+            }
+        }
         let mut fields: Map<String, Value> = kind
             .fields()
             .iter()
@@ -440,7 +454,13 @@ pub fn schema_json() -> serde_json::Value {
             }),
         );
     }
-    json!({ "facets": facets, "types": types })
+    // What a context may declare (contexts.md §2.6): the manifest's
+    // CONTEXTS section, as NODE TYPES comes from the types.
+    let contexts: Vec<Value> = crate::contexts::FIELDS
+        .iter()
+        .map(|f| json!({"field": format!("{}.{}", f.domain, f.name), "options": f.options, "doc": f.doc}))
+        .collect();
+    json!({ "facets": facets, "types": types, "options": options, "contexts": contexts })
 }
 
 impl fmt::Display for TypeId {

@@ -22,7 +22,9 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
+use iron_document::contexts::{Field, Resolver};
 use iron_document::copy::{self, Fragment};
+use iron_document::interaction;
 use iron_document::{Actor, DragMode, GestureId, GestureStatus, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
 use bevy::ecs::system::SystemParam;
 use kurbo::{Affine, ParamCurve as _, Point, Rect, Shape as _};
@@ -109,10 +111,7 @@ impl ActiveTool {
     }
 }
 
-/// Window px the pointer may travel and still click.
-const SLOP: f32 = 3.0;
-/// Seconds and window px between two clicks that make a double-click.
-const DOUBLE_CLICK: (f64, f32) = (0.4, 5.0);
+use crate::bevy_app::tolerances::{DOUBLE_CLICK, SLOP};
 /// Grip sizes, CSS px (times [`crate::Dpr`] for window px), Figma's: a
 /// corner's reach, an edge's, how far outside a corner rotation reaches, and
 /// the drawn corner square.
@@ -322,9 +321,9 @@ impl SelectionGeometryCache {
                     self.resizable.insert(panel.to_owned(), (version, items.iter().map(|r| (*r).clone()).collect(), known));
                     known
                 }
-            } && frame.is_some();
+            } && frame.is_some() && geo.boxed(items);
             // Rotation writes the selected roots, unlike group resizing.
-            let rotatable = frame.is_some() && !items.is_empty() && items.iter()
+            let rotatable = frame.is_some() && geo.boxed(items) && !items.is_empty() && items.iter()
                 .filter(|r| geo.space(&r.chain).is_some() && geo.local_box(r.node()).is_some())
                 .all(|r| geo.free(r.node(), "transform2d.rot"));
             self.selection.insert(panel.to_owned(), CachedSelection {
@@ -354,9 +353,10 @@ impl SelectionGeometryCache {
                     continue;
                 }
                 for chain in occurrences(doc, view, embeds, id) {
-                    let shape = match geo.ty(id) {
-                        "group" | "use" | "empty" | "embed" if boxed.contains(&chain) => None,
-                        "group" | "use" | "empty" | "embed" => geo.frame(&chain).map(LitShape::Frame),
+                    let frame = geo.contexts().get(&chain, chain.len() - 1, Field::LIT) == "frame";
+                    let shape = match () {
+                        _ if frame && boxed.contains(&chain) => None,
+                        _ if frame => geo.frame(&chain).map(LitShape::Frame),
                         _ => geo.drawables.0.get(&id).and_then(|d| {
                             Some(LitShape::Outline(geo.space(&chain)? * geo.world(id), nest::shape_path(&d.shape)))
                         }),
@@ -413,6 +413,9 @@ pub struct SelectTool {
     /// belongs to no tool.
     middle: Option<Option<MiddlePan>>,
     last_click: Option<(f64, Vec2, NodeId)>,
+    /// A node a double-click entered whose context says entering edits its
+    /// words (`affords.enter="edit"`), and where: the text tool starts there.
+    pub(crate) enter_edit: Option<(NodeId, Option<Point>)>,
     /// The last press, whatever it began, so a double-click on a selected
     /// shape edits it even on its box's grips.
     last_press: Option<(f64, Vec2)>,
@@ -480,6 +483,77 @@ enum Gesture {
     /// A standard component dragged out of the Library tab
     /// (component-authoring.md §6): its key, and the pointer, window px.
     Library { key: String, at: Point },
+    /// An item of a container that lays its items out in sequence, dragged
+    /// among them (`affords.drag="sequence"`, affordances.md §6).
+    Sequence(Sequence),
+}
+
+/// A reorder in progress: the item floats at the pointer while the store
+/// lays its container out in the previewed order, the others opening a gap
+/// where it would land (`layout::Preview`). Release commits one `Reorder`.
+pub(crate) struct Sequence {
+    view: PanelView,
+    container: NodeId,
+    item: NodeId,
+    /// The container's other items, in order.
+    others: Vec<NodeId>,
+    /// Where the item was among all the items, and where it would land
+    /// among the others.
+    from: usize,
+    index: usize,
+    /// The press, panel document px, and panel px → the container's space.
+    start: Point,
+    inv: Affine,
+    /// The item's position in its container at the press.
+    base: [f64; 2],
+    /// The others' midpoints along the axis, and the item's, panel px.
+    mids: Vec<f64>,
+    center: f64,
+    axis: usize,
+}
+
+/// A reorder of the one selected item, if its context says a drag moves it
+/// in sequence among its container's items.
+fn sequence_drag(geo: &Geo, view: &PanelView, mine: &[&Reach], start: Point) -> Option<Sequence> {
+    let [r] = mine else { return None };
+    let chain = &r.chain;
+    let i = chain.len() - 1;
+    let cx = geo.contexts();
+    if cx.get(chain, i, Field::DRAG) != "sequence" {
+        return None;
+    }
+    let c = (0..i).rev().find(|&k| !cx.values(chain, k).is(Field::SELECT, "through"))?;
+    let container = chain[c];
+    let axis = if cx.get(chain, c, Field::NAV) == "list-x" { 0 } else { 1 };
+    let sub = |n: NodeId| {
+        let mut ch = chain[..=c].to_vec();
+        ch.push(n);
+        ch
+    };
+    let items: Vec<NodeId> = geo.doc().children(container).iter().copied().filter(|&n| selectable(&cx, &sub(n))).collect();
+    let item = chain[i];
+    let from = items.iter().position(|&n| n == item)?;
+    let others: Vec<NodeId> = items.iter().copied().filter(|&n| n != item).collect();
+    let mid = |n: NodeId| {
+        let b = geo.frame(&sub(n))?.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0));
+        Some(if axis == 0 { b.center().x } else { b.center().y })
+    };
+    let mids = others.iter().map(|&n| mid(n)).collect::<Option<Vec<_>>>()?;
+    let num = |p: &str| geo.store.resolved(item, leaf(p)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    Some(Sequence {
+        view: view.clone(),
+        container,
+        item,
+        others,
+        from,
+        index: from,
+        start,
+        inv: (geo.space(&chain[..=c])? * geo.world(container)).inverse(),
+        base: [num("transform2d.x"), num("transform2d.y")],
+        mids,
+        center: mid(item)?,
+        axis,
+    })
 }
 
 /// A line being drawn from a pin: to another component's pin (a
@@ -623,6 +697,32 @@ fn wrap(a: f64) -> f64 {
 }
 
 impl Geo<'_> {
+    /// What the contexts say about nodes (plans/specs/contexts.md).
+    pub(crate) fn contexts(&self) -> Resolver<'_> {
+        Resolver::new(self.store.document(), self.store.contexts())
+    }
+
+    /// Whether the node a chain ends at offers `grip` (`affords.grips`).
+    pub(crate) fn offers(&self, chain: &[NodeId], grip: &str) -> bool {
+        self.contexts().values(chain, chain.len() - 1).has(Field::GRIPS, grip)
+    }
+
+    /// Whether every item offers its box's grips: resize and rotate.
+    fn boxed(&self, items: &[&Reach]) -> bool {
+        items.iter().all(|r| self.offers(&r.chain, "box"))
+    }
+
+    /// Whether a node's geometry is points already (a path), so editing its
+    /// points needs no conversion.
+    pub(crate) fn is_points(&self, id: NodeId) -> bool {
+        self.has(id, iron_document::FacetKind::PathShape)
+    }
+
+    /// What editing a node in place means (`affords.edit`).
+    fn edits(&self, chain: &[NodeId]) -> String {
+        self.contexts().get(chain, chain.len() - 1, Field::EDIT)
+    }
+
     pub(crate) fn doc(&self) -> &iron_document::Document {
         self.store.document()
     }
@@ -889,7 +989,10 @@ impl Geo<'_> {
     /// collecting path points. Detailed Parts are built only on a press.
     fn resize_capabilities(&self, chain: &[NodeId], out: &mut Vec<bool>) {
         let Some(&id) = chain.last() else { return };
-        if matches!(self.ty(id), "group" | "use" | "empty") {
+        let Some((_, kind)) = self.local_box(id) else { return };
+        // A group's box, or an empty's marker with what hangs off it, is
+        // resized through its children.
+        if kind == Kind::Group || (kind == Kind::Fixed && !self.doc().children(id).is_empty()) {
             for &c in self.doc().children(id) {
                 let mut sub = chain.to_vec();
                 sub.push(c);
@@ -897,7 +1000,6 @@ impl Geo<'_> {
             }
             return;
         }
-        let Some((_, kind)) = self.local_box(id) else { return };
         if self.space(chain).is_none() { return; }
         out.push(match kind {
             Kind::Sized { .. } => self.free(id, "size.w") || self.free(id, "size.h"),
@@ -1127,30 +1229,17 @@ impl Part {
     }
 }
 
-/// Whether the select tool looks through a node to its children: a table's
-/// row (layout-and-tables.md §3), which nothing selects, so a double-click
-/// on a table reaches a cell, as in Slides and PowerPoint.
-fn see_through(doc: &iron_document::Document, id: NodeId) -> bool {
-    doc.live(id).is_some_and(|n| n.ty.name() == "row")
+/// Which node along `chain` a press selects (`interaction::target`): the
+/// outermost one whose container the selection is not inside, or the hit
+/// node itself (`deep`).
+fn target_index(cx: &Resolver, chain: &[NodeId], selected: &[&Reach], deep: bool) -> usize {
+    interaction::target(cx, chain, &|i| selected.iter().any(|r| r.chain.len() > i + 1 && r.chain[..=i] == chain[..=i]), deep)
 }
 
-/// Which node along `chain` a press selects: the outermost one whose
-/// container is not open (or the hit node itself, `deep`). Rows are passed
-/// over (`see_through`).
-fn target_index(doc: &iron_document::Document, chain: &[NodeId], selected: &[&Reach], deep: bool) -> usize {
-    if deep {
-        return chain.len() - 1;
-    }
-    for i in 0..chain.len() {
-        if see_through(doc, chain[i]) && i + 1 < chain.len() {
-            continue;
-        }
-        let open = (i == 0 && nest::is_embed(doc, chain[0])) || selected.iter().any(|r| r.chain.len() > i + 1 && r.chain[..=i] == chain[..=i]);
-        if !open {
-            return i;
-        }
-    }
-    chain.len() - 1
+/// Whether the node a chain ends at is selectable: by a marquee, select
+/// all, or Enter.
+fn selectable(cx: &Resolver, chain: &[NodeId]) -> bool {
+    cx.values(chain, chain.len() - 1).selectable()
 }
 
 /// Where `id` shows in a 2D panel, for a selection made elsewhere: in a
@@ -1321,7 +1410,7 @@ pub(crate) const SNAP_REACH: f64 = 5.0;
 /// which overshoots a curve).
 fn snap_box(geo: &Geo, chain: &[NodeId]) -> Option<Rect> {
     let id = *chain.last()?;
-    if geo.ty(id) == "path" {
+    if geo.is_points(id) {
         let b = iron_document::contour::geometry(geo.store, id).bounds();
         return Some((geo.space(chain)? * geo.world(id)).transform_rect_bbox(b));
     }
@@ -1372,8 +1461,13 @@ fn snap_session(geo: &Geo, view: &PanelView, mine: &[&Reach], k: f64) -> Option<
             Some(&c) => doc.children(c).to_vec(),
         };
         let Some(space) = geo.space(&r.chain) else { continue };
+        let cx = geo.contexts();
+        let mut chain = prefix.to_vec();
         for n in roots {
-            if moving(n) || !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "table" | "group" | "use" | "embed")) {
+            chain.push(n);
+            let target = cx.get(&chain, chain.len() - 1, Field::SNAP_TARGET) == "yes";
+            chain.pop();
+            if moving(n) || !target {
                 continue;
             }
             // Off screen: not a target (Figma's rule, and it keeps a large
@@ -1508,7 +1602,8 @@ fn siblings(doc: &iron_document::Document, views: &PanelViews, r: &Reach) -> (Ve
 }
 
 /// Children of a node as chains: a group's children, an embed's content.
-fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
+fn children(cx: &Resolver, r: &Reach) -> Vec<Reach> {
+    let doc = cx.doc;
     let id = r.node();
     let kids = if nest::is_embed(doc, id) {
         composition::embedded(doc, id).map(|s| doc.children(s).to_vec()).unwrap_or_default()
@@ -1519,12 +1614,13 @@ fn children(doc: &iron_document::Document, r: &Reach) -> Vec<Reach> {
     };
     kids.into_iter()
         .flat_map(|k| {
-            // Through a row to its cells.
+            // Through a `through` node (a table's row) to its children.
             let mut chain = r.chain.clone();
             chain.push(k);
-            if see_through(doc, k) {
-                children(doc, &Reach { panel: r.panel.clone(), chain })
-            } else if doc.live(k).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "table" | "group" | "use" | "empty" | "embed" | "mesh")) {
+            let v = cx.values(&chain, chain.len() - 1);
+            if v.is(Field::SELECT, "through") {
+                children(cx, &Reach { panel: r.panel.clone(), chain })
+            } else if v.selectable() {
                 vec![Reach { panel: r.panel.clone(), chain }]
             } else {
                 Vec::new()
@@ -1628,7 +1724,7 @@ pub fn select_tool_system(
         if let Some(r) = &edit.reach {
             let id = r.node();
             let converting = pending.0.iter().any(|t| t.ops.iter().any(|o| matches!(o, Op::Create { id: c, .. } if *c == id) || matches!(o, Op::Set { id: c, path, .. } if *c == id && path.facet == iron_document::FacetKind::PathShape)));
-            let editable = doc.live(id).is_some_and(|n| n.ty.name() == "path") && iron_document::contour::packed(doc, id).is_none();
+            let editable = doc.facet(id, iron_document::FacetKind::PathShape).is_some() && iron_document::contour::packed(doc, id).is_none();
             if sel.selected != [id] || !(editable || converting) {
                 *edit = PathEdit::default();
             }
@@ -1647,6 +1743,35 @@ pub fn select_tool_system(
         let command = m & (MOD_CTRL | MOD_META) != 0;
         let reaches = selected_reaches(&sel, tool);
         let doc = store.0.document();
+        // Inside a container that navigates (`keys.nav`: a stack's list, a
+        // table's grid; ARIA's composites, affordances.md §5.7), arrows, Tab
+        // and Enter move among its items; elsewhere they keep their
+        // free-canvas meanings below.
+        let navigates = matches!(key.as_str(), "arrowleft" | "arrowright" | "arrowup" | "arrowdown" | "tab" | "enter") && matches!(tool.gesture, Gesture::Idle) && edit.reach.is_none() && reaches.len() == 1;
+        let action = navigates
+            .then(|| interaction::key(&Resolver::new(doc, store.0.contexts()), &reaches[0].chain, &key, shift, m & MOD_ALT != 0, &|t| store.0.table_grid(t).map(|g| g.cells.clone())))
+            .flatten();
+        if let Some(action) = action {
+            match action {
+                interaction::KeyAction::Select(chain) => set_selection(&mut sel, tool, vec![Reach { panel: reaches[0].panel.clone(), chain }]),
+                interaction::KeyAction::Reorder { id, order } => {
+                    let label = format!("reorder {}", type_label(doc, &[id]));
+                    pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![Op::Reorder { id, order }], exact: false });
+                }
+                interaction::KeyAction::Edit(chain) => tool.enter_edit = chain.last().map(|&n| (n, None)),
+                interaction::KeyAction::AddRow(table) => match iron_document::table::edit_ops(&store.0, table, "add_row", &[]) {
+                    Ok((ops, label)) => {
+                        // The new row's first cell, once it exists.
+                        let text = iron_document::TypeId::lookup("text").expect("registered");
+                        tool.select_when_live = ops.iter().find_map(|o| match o { Op::Create { id, ty, .. } if *ty == text => Some(*id), _ => None }).into_iter().collect();
+                        pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
+                    }
+                    Err(e) => info!("add row: {e}"),
+                },
+                interaction::KeyAction::Stay => {}
+            }
+            continue;
+        }
         match key.as_str() {
             // In key order with everything above (`engine_api::history_request`).
             "undo" => history.0.push(crate::document_bridge::HistoryOp::Undo),
@@ -1664,13 +1789,17 @@ pub fn select_tool_system(
                             store.0.retract(v, 0);
                         }
                     }
+                    Gesture::Sequence(_) => store.0.set_layout_preview(None),
                     _ => {}
                 }
                 tool.marquee = None;
             }
             // Esc leaves editing a path, keeping it selected.
             "escape" if edit.reach.is_some() => *edit = PathEdit::default(),
-            "enter" if !shift && edit.reach.is_none() && reaches.len() == 1 && doc.live(reaches[0].node()).is_some_and(|n| n.ty.name() == "path") => {
+            // Enter edits a lone node's points where its context says editing
+            // means points: a path's at once, a rect's or an ellipse's once
+            // it is a path.
+            "enter" if !shift && edit.reach.is_none() && reaches.len() == 1 && doc.facet(reaches[0].node(), iron_document::FacetKind::PathShape).is_some() && Resolver::new(doc, store.0.contexts()).get(&reaches[0].chain, reaches[0].chain.len() - 1, Field::EDIT) == "points" => {
                 expand_points(&store.0, &mut pending, reaches[0].node());
                 *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
             }
@@ -1678,11 +1807,8 @@ pub fn select_tool_system(
                 // Up a level: each node's container, or nothing at the top.
                 let mut up: Vec<Reach> = Vec::new();
                 for r in &reaches {
-                    // Up past any row to the table.
-                    let mut n = r.chain.len().saturating_sub(1);
-                    while n > 1 && see_through(doc, r.chain[n - 1]) {
-                        n -= 1;
-                    }
+                    // Up past any `through` node (a row, to its table).
+                    let n = interaction::up(&Resolver::new(doc, store.0.contexts()), &r.chain);
                     if r.chain.len() > 1 {
                         let p = Reach { panel: r.panel.clone(), chain: r.chain[..n].to_vec() };
                         if !up.contains(&p) {
@@ -1692,13 +1818,14 @@ pub fn select_tool_system(
                 }
                 set_selection(&mut sel, tool, up);
             }
-            "enter" if reaches.len() == 1 && iron_document::shape::convertible(&store.0, reaches[0].node()) => {
+            "enter" if reaches.len() == 1 && iron_document::shape::convertible(&store.0, reaches[0].node()) && Resolver::new(doc, store.0.contexts()).get(&reaches[0].chain, reaches[0].chain.len() - 1, Field::EDIT) == "points" => {
                 if edit_as_path(&store.0, &mut pending, reaches[0].node(), &events) {
                     *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
                 }
             }
             "enter" => {
-                let down: Vec<Reach> = reaches.iter().flat_map(|r| children(doc, r)).collect();
+                let cx = Resolver::new(doc, store.0.contexts());
+                let down: Vec<Reach> = reaches.iter().flat_map(|r| children(&cx, r)).collect();
                 if !down.is_empty() {
                     set_selection(&mut sel, tool, down);
                 }
@@ -1751,14 +1878,15 @@ pub fn select_tool_system(
                         (v.panel.clone(), Vec::new(), nest::panel_roots(doc, v))
                     }
                 };
+                let cx = Resolver::new(doc, store.0.contexts());
                 let all = roots
                     .into_iter()
-                    .filter(|&n| doc.live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "table" | "group" | "use" | "empty" | "embed")))
                     .map(|n| {
                         let mut chain = prefix.clone();
                         chain.push(n);
                         Reach { panel: panel.clone(), chain }
                     })
+                    .filter(|r| selectable(&cx, &r.chain))
                     .collect();
                 set_selection(&mut sel, tool, all);
             }
@@ -2083,7 +2211,7 @@ pub fn select_tool_system(
             // editing and goes on as a plain press.
             if view.dims == Dims::Two
                 && let Some(r) = edit.path_in(&view.panel).cloned()
-                && geo.ty(r.node()) == "path"
+                && geo.is_points(r.node())
                 && let Some(space) = geo.space(&r.chain)
             {
                 let path = r.node();
@@ -2157,7 +2285,7 @@ pub fn select_tool_system(
             // come before the box's grips too.
             if view.dims == Dims::Two
                 && let [r] = movers(&reaches, &view.panel)[..]
-                && matches!(geo.ty(r.node()), "rect" | "ellipse")
+                && geo.offers(&r.chain, "shape")
                 && let Some(space) = geo.space(&r.chain)
             {
                 let id = r.node();
@@ -2177,10 +2305,11 @@ pub fn select_tool_system(
                 && view.dims == Dims::Two
                 && let [r] = movers(&reaches, &view.panel)[..]
                 && top_hit(&hits).is_some_and(|(chain, _)| chain.contains(&r.node()))
-                && (geo.ty(r.node()) == "path" || (iron_document::shape::convertible(&store.0, r.node()) && edit_as_path(&store.0, &mut pending, r.node(), &events)))
+                && geo.edits(&r.chain) == "points"
+                && (geo.is_points(r.node()) || (iron_document::shape::convertible(&store.0, r.node()) && edit_as_path(&store.0, &mut pending, r.node(), &events)))
             {
                 // A packed path (an imported one) gets its point nodes first.
-                if geo.ty(r.node()) == "path" {
+                if geo.is_points(r.node()) {
                     expand_points(&store.0, &mut pending, r.node());
                 }
                 *edit = PathEdit { reach: Some(r.clone()), point: None };
@@ -2208,7 +2337,8 @@ pub fn select_tool_system(
                         }
                         v
                     };
-                    let grip = grip_at(view.affine() * frame, screen, geo.resizable(&resize_parts), geo.rotatable(&rotate_parts), k);
+                    let boxed = geo.boxed(&mine);
+                    let grip = grip_at(view.affine() * frame, screen, boxed && geo.resizable(&resize_parts), boxed && geo.rotatable(&rotate_parts), k);
                     let ids: Vec<NodeId> = mine.iter().map(|r| r.node()).collect();
                     let start = doc_point(&view);
                     match grip {
@@ -2319,22 +2449,28 @@ pub fn select_tool_system(
                 break 'press;
             };
 
-            let mut k = target_index(geo.doc(), &chain, &here, deep);
+            let cx = geo.contexts();
+            let mut k = target_index(&cx, &chain, &here, deep);
             // A double-click on a selected node enters it.
             let dbl = tool.last_click.is_some_and(|(t, p, id)| now - t <= DOUBLE_CLICK.0 && p.distance(pointer.screen) <= DOUBLE_CLICK.1 && id == chain[k]);
             if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
-                k += 1;
-                while see_through(geo.doc(), chain[k]) && k + 1 < chain.len() {
-                    k += 1;
-                }
+                k = interaction::enter(&cx, &chain, k);
                 tool.last_click = None;
-            } else if dbl && sel.selected == [chain[k]] && geo.ty(chain[k]) == "path" {
+                // Entering may start the node's edit, as its context says
+                // (a document's `std:table` override: a cell's words).
+                let v = cx.values(&chain, k);
+                if v.is(Field::ENTER, "edit") && v.is(Field::EDIT, "text") {
+                    set_selection(&mut sel, tool, vec![Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() }]);
+                    tool.enter_edit = Some((chain[k], Some(screen)));
+                    break 'press;
+                }
+            } else if dbl && sel.selected == [chain[k]] && geo.edits(&chain[..=k]) == "points" && geo.is_points(chain[k]) {
                 // A double-click on a lone path edits its points.
                 tool.last_click = None;
                 expand_points(&store.0, &mut pending, chain[k]);
                 *edit = PathEdit { reach: Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() }), point: None };
                 break 'press;
-            } else if dbl && sel.selected == [chain[k]] && iron_document::shape::convertible(&store.0, chain[k]) {
+            } else if dbl && sel.selected == [chain[k]] && geo.edits(&chain[..=k]) == "points" && iron_document::shape::convertible(&store.0, chain[k]) {
                 // A double-click on a lone rect or ellipse makes it a path
                 // and edits its points.
                 tool.last_click = None;
@@ -2355,7 +2491,10 @@ pub fn select_tool_system(
             };
             // A 2D node is placed by the store; a 3D one has an entity.
             let flat = drawables.0.contains_key(&id);
-            let is_slider = drawables.0.get(&id).is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. }));
+            // A control: its context says a drag drives its value along its
+            // track (`affords.drag`); a slider's shape says where that is.
+            let track = |chain: &[NodeId]| cx.get(chain, chain.len() - 1, Field::DRAG) == "track";
+            let is_slider = track(&chain[..=k]) && drawables.0.get(&id).is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. }));
             let is_3d_target = matches!(source, Source::World(_)) && k + 1 == chain.len();
             // A slider's knob inside a component scrubs it, as a control
             // (the standard slider, component-authoring.md §6); its track
@@ -2364,6 +2503,7 @@ pub fn select_tool_system(
             if !is_slider
                 && k + 1 < chain.len()
                 && view.dims == Dims::Two
+                && track(&chain)
                 && let Some(Shape2d::Slider { w, h, t }) = drawables.0.get(&deepest).map(|d| d.shape.clone())
                 && let Source::Overlay(i) = source
             {
@@ -2468,6 +2608,7 @@ pub fn select_tool_system(
     };
     let view_gone = match &mut tool.gesture {
         Gesture::Marquee { view, .. } => follow(view),
+        Gesture::Sequence(q) => follow(&mut q.view),
         Gesture::Edit(m) => m.view_mut().is_some_and(follow),
         _ => false,
     };
@@ -2477,6 +2618,7 @@ pub fn select_tool_system(
             m.end(&mut store.0);
         }
         store.0.cancel_gesture();
+        store.0.set_layout_preview(None);
         tool.owned = None;
         tool.gesture = Gesture::Idle;
         tool.marquee = None;
@@ -2494,7 +2636,9 @@ pub fn select_tool_system(
             && let Some(view) = views.get(panel).cloned()
         {
             let p0 = view.affine().inverse() * Point::new(start.x as f64, start.y as f64);
+            let mut sequence = matches!(then, AfterPress::Move { .. }).then(|| sequence_drag(&geo, &view, &movers(&reaches, &view.panel), p0)).flatten();
             match then {
+                AfterPress::Move { .. } if sequence.is_some() => tool.gesture = Gesture::Sequence(sequence.take().expect("checked")),
                 AfterPress::Move { .. } => {
                     let mine = movers(&reaches, &view.panel);
                     let mut drags = Vec::new();
@@ -2593,6 +2737,19 @@ pub fn select_tool_system(
                 view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
             }
             Gesture::Library { at, .. } => *at = screen,
+            // The item lands among the others where its centre passes their
+            // midpoints; the store lays the container out so.
+            Gesture::Sequence(q) => {
+                let at = q.view.affine().inverse() * screen;
+                let d = at - q.start;
+                let along = q.center + if q.axis == 0 { d.x } else { d.y };
+                q.index = q.mids.iter().filter(|&&m| m < along).count();
+                let mut order = q.others.clone();
+                order.insert(q.index, q.item);
+                let moved = q.inv * at - q.inv * q.start;
+                let floating = Some((q.item, [q.base[0] + moved.x, q.base[1] + moved.y]));
+                store.0.set_layout_preview(Some(iron_document::layout::Preview { container: q.container, order, floating }));
+            }
             Gesture::Link(l) => {
                 let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
                 l.at = screen;
@@ -2629,12 +2786,13 @@ pub fn select_tool_system(
                 let rect = Rect::from_points(*start, doc_point(view));
                 tool.marquee = Some((view.panel.clone(), rect));
                 let mut list = base.clone();
+                let cx = geo.contexts();
                 for &n in roots.iter() {
-                    if !geo.doc().live(n).is_some_and(|n| matches!(n.ty.name(), "rect" | "ellipse" | "path" | "slider" | "text" | "table" | "group" | "use" | "empty" | "embed")) {
-                        continue;
-                    }
                     let mut chain = prefix.clone();
                     chain.push(n);
+                    if !selectable(&cx, &chain) {
+                        continue;
+                    }
                     if geo.frame(&chain).is_some_and(|f| touches(f, rect)) {
                         let r = Reach { panel: view.panel.clone(), chain };
                         if !list.contains(&r) {
@@ -2715,6 +2873,20 @@ pub fn select_tool_system(
                 });
             }
             Gesture::Marquee { .. } => tool.marquee = None,
+            // Dropped where it started: nothing to write.
+            Gesture::Sequence(q) => {
+                store.0.set_layout_preview(None);
+                if q.index != q.from {
+                    let doc = store.0.document();
+                    let order_of = |n: NodeId| doc.live(n).map(|x| x.order.clone());
+                    let before = q.index.checked_sub(1).and_then(|p| order_of(q.others[p]));
+                    let after = q.others.get(q.index).and_then(|&n| order_of(n));
+                    if let Ok(order) = iron_document::OrderKey::between(before.as_ref(), after.as_ref()) {
+                        let label = format!("reorder {}", type_label(doc, &[q.item]));
+                        pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![Op::Reorder { id: q.item, order }], exact: false });
+                    }
+                }
+            }
             Gesture::Pan { .. } | Gesture::Idle => {}
         }
     }
@@ -2743,7 +2915,7 @@ pub fn select_tool_system(
             if !space
                 && *active == ActiveTool::Select
                 && let [r] = mine[..]
-                && matches!(geo.ty(r.node()), "rect" | "ellipse")
+                && geo.offers(&r.chain, "shape")
                 && let Some(space) = geo.space(&r.chain)
                 && geo.shape_grips(r.node(), view.affine() * space * geo.world(r.node()), k).iter().any(|(_, p)| p.distance(screen) <= POINT_HIT * k)
             {
@@ -2756,7 +2928,7 @@ pub fn select_tool_system(
             if !space
                 && *active == ActiveTool::Select
                 && let Some(r) = edit.path_in(&view.panel)
-                && geo.ty(r.node()) == "path"
+                && geo.is_points(r.node())
                 && let Some(space) = geo.space(&r.chain)
             {
                 let path = r.node();
@@ -2804,7 +2976,7 @@ pub fn select_tool_system(
             (_, _) if tool.port_hover.is_some() || tool.joint_hover.as_ref().is_some_and(|j| j.2.is_some()) => None,
             (Some(view), Some((chain, _))) if !on_grip && !gizmo_hot => {
                 let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
-                let k = target_index(geo.doc(), &chain, &here, mods(MOD_META));
+                let k = target_index(&geo.contexts(), &chain, &here, mods(MOD_META));
                 Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() })
             }
             _ => None,
@@ -2994,7 +3166,7 @@ fn hot_port_within(geo: &Geo, view: &PanelView, screen: Point, here: &[&Reach], 
         }
         chain.reverse();
         let Some(b) = chain.iter().position(|&n| n == a.body) else { continue };
-        if !deep && target_index(doc, &chain, here, false) != b {
+        if !deep && target_index(&geo.contexts(), &chain, here, false) != b {
             continue;
         }
         let to_body = chain[..=b].to_vec();
@@ -3202,7 +3374,7 @@ pub fn draw_select_overlay(
             })
             .collect();
         let hover_frame = tool.hover.as_ref().filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
-            .filter(|h| matches!(geo.ty(h.node()), "group" | "use" | "empty" | "embed"))
+            .filter(|h| geo.contexts().get(&h.chain, h.chain.len() - 1, Field::LIT) == "frame")
             .and_then(|h| geometry_cache.hover(&geo, h, stamp));
         let mine = movers(&reaches, &o.panel);
         let cached = geometry_cache.selection(&geo, &o.panel, &mine, stamp, true);
@@ -3313,7 +3485,7 @@ pub fn draw_select_overlay(
                 // A lone shape's corner dots or arc handles.
                 if *active == ActiveTool::Select
                     && let [r] = movers(&reaches, &o.panel)[..]
-                    && matches!(geo.ty(r.node()), "rect" | "ellipse")
+                    && geo.offers(&r.chain, "shape")
                     && let Some(space) = geo.space(&r.chain)
                 {
                     for (_, at) in geo.shape_grips(r.node(), to_screen * space * geo.world(r.node()), k) {
@@ -3326,7 +3498,7 @@ pub fn draw_select_overlay(
                 // selected point's handles with its neighbours' facing ones.
                 if matches!(*active, ActiveTool::Select | ActiveTool::Pen)
                     && let Some(r) = edit.path_in(&o.panel)
-                    && geo.ty(r.node()) == "path"
+                    && geo.is_points(r.node())
                     && let Some(space) = geo.space(&r.chain)
                 {
                     let path = r.node();
@@ -3433,7 +3605,7 @@ pub fn draw_select_overlay(
                             continue;
                         }
                         chain.reverse();
-                        if !selected && target_index(doc, &chain, &here, false) + 1 != chain.len() {
+                        if !selected && target_index(&geo.contexts(), &chain, &here, false) + 1 != chain.len() {
                             continue;
                         }
                         let c = peniko::Color::new([0.45, 0.55, 0.75, 0.9 * fade as f32]);

@@ -18,8 +18,7 @@ use crate::bevy_app::pen::{after_last, drop_target};
 use crate::bevy_app::select::{ActiveTool, Geo};
 use crate::document_bridge::{DocumentStore, PanelViews, PendingTransactions};
 
-/// Window px a press must travel to drag out a box instead of clicking.
-const DRAG: f64 = 3.0;
+use crate::bevy_app::tolerances::SLOP;
 /// A clicked shape's size, document px.
 const CLICKED: f64 = 100.0;
 /// Figma's default fill for a new shape.
@@ -103,7 +102,7 @@ pub fn shape_tool_system(
         d = kurbo::Vec2::new(side.copysign(d.x), side.copysign(d.y));
     }
     let rect = if pointer.modifiers.alt { Rect::from_points(a - d, a + d) } else { Rect::from_points(a, a + d) };
-    if press.rect.is_some() || press.start.distance(screen) > DRAG {
+    if press.rect.is_some() || press.start.distance(screen) > SLOP as f64 {
         press.rect = Some(rect);
     }
     if !pointer.just_released_left {

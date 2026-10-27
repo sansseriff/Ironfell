@@ -9,6 +9,7 @@ import { DocumentClient } from './runtime/document_client.svelte';
 import { copied, setSelectionCount } from './runtime/clipboard';
 import { applyCursor } from './cursors';
 import { TextInputMirror } from './runtime/text_input';
+import { setViewKeys } from './runtime/tool_keys';
 
 interface PanelEntry {
   id: string;
@@ -245,6 +246,10 @@ export class PanelManager {
         break;
       case 'tool':
         this.docClient.tool = data.tool as import('./runtime/document_client.svelte').Tool;
+        break;
+      case 'focus':
+        setViewKeys(data.panel, data.keys);
+        this.docClient.focus = { ...this.docClient.focus, [data.panel]: { palette: data.palette, keys: data.keys } };
         break;
       case 'convertQuestion':
         this.docClient.convertQuestion = data.question;

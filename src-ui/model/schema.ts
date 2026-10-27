@@ -6,6 +6,10 @@ export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'e
 
 export interface Schema {
   facets: Record<string, Record<string, Kind>>;
+  /** The values of each enum leaf that lists them, by `facet.field`. */
+  options?: Record<string, string[]>;
+  /** What a context's rules may declare (plans/specs/contexts.md). */
+  contexts?: { field: string; options: string[]; doc: string }[];
   types: Record<
     string,
     {

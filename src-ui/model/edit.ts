@@ -341,6 +341,18 @@ async function table(api: DocumentApi, attrText: string, body: string): Promise<
   return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <table id="${r.table}"/>\n</applied>` };
 }
 
+/** `<context name="…">` (plans/specs/contexts.md §2.2): rules over a
+ *  built-in context (`std:table`) or a new one, in the markup views print
+ *  them in. Alone in its edit; writing a name again replaces its rules. */
+const CONTEXT = /^\s*<edit(?:\s[^>]*)?>\s*(<context[\s>][\s\S]*<\/context>)\s*<\/edit>\s*$/;
+
+async function context(api: DocumentApi, markup: string): Promise<EditOutcome> {
+  // A context printed by a view carries its node's id; the name decides.
+  const r = await api.context(markup.replace(/^<context id="[^"]*"/, '<context'));
+  if (!r.ok) return { ok: false, failure: failed(await api.version(), [{ op: 0, kind: 'context', message: r.error ?? 'context failed' }]) };
+  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <context id="${r.context}"/>\n</applied>` };
+}
+
 /** Parse and apply one edit as the model, answering in the model's terms. */
 export async function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): Promise<EditOutcome> {
   const link = xml.match(LINK_FIGURES);
@@ -350,6 +362,11 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
   }
   const svg = xml.match(IMPORT_SVG);
   if (svg) return importSvg(api, svg[1], svg[2]);
+  const ctx = xml.match(CONTEXT);
+  if (ctx) return context(api, ctx[1]);
+  if (/<context[\s/>]/.test(xml)) {
+    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<context> must be the only verb in its <edit>' }]) };
+  }
   const tbl = xml.match(TABLE);
   if (tbl) return table(api, tbl[1] ?? '', tbl[2]);
   if (/<table[\s/>]/.test(xml)) {

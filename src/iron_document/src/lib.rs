@@ -20,6 +20,7 @@ pub mod facet;
 pub mod analysis;
 pub mod composition;
 pub mod constraint;
+pub mod contexts;
 pub mod contour;
 pub mod copy;
 pub mod definition;
@@ -29,6 +30,7 @@ pub mod make;
 pub mod expr;
 pub mod geom;
 pub mod geometry;
+pub mod interaction;
 pub mod gesture;
 pub mod anchor;
 pub mod author;
@@ -198,6 +200,18 @@ pub struct Store {
     physics_error: Option<String>,
     /// Each table's grid from the last layout (`layout.rs`, `table.rs`).
     tables: std::collections::BTreeMap<NodeId, table::Grid>,
+    /// The built-in contexts with this document's `context` nodes over
+    /// them, and the markups they were made from; `None` while it has none.
+    contexts: Option<(Vec<(NodeId, String)>, contexts::Library)>,
+    /// A reorder being dragged (affordances.md §6): its container laid out
+    /// in a previewed order, the dragged item where the pointer holds it.
+    /// Session state, never saved; a release commits one `Reorder`.
+    layout_preview: Option<layout::Preview>,
+    /// Declared transitions in flight (affordances.md §8.2), and what layout
+    /// last asked for, which they ease towards. Off until a host with a
+    /// clock turns it on (`set_motion`): a document read without one sees
+    /// where things are, never part-way.
+    motion: Motion,
     /// What the last expansion could not derive (component-model.md §3).
     expansion_problems: Vec<String>,
     /// The gesture whose previews are in the overlay (`gesture`).
@@ -220,6 +234,50 @@ pub struct Store {
 impl Default for Store {
     fn default() -> Self {
         Store::new()
+    }
+}
+
+/// Declared transitions (affordances.md §8.2): the one interpolator.
+#[derive(Default)]
+struct Motion {
+    enabled: bool,
+    /// The host's clock, seconds, as of its last frame.
+    clock: f64,
+    anims: BTreeMap<NodeId, Anim>,
+    /// What layout last asked for: where the transitions are heading.
+    targets: BTreeMap<Leaf, Value>,
+}
+
+struct Anim {
+    from: [f64; 2],
+    to: [f64; 2],
+    t0: f64,
+    ms: f64,
+    ease: &'static str,
+}
+
+impl Motion {
+    /// Put each node in flight where its transition has got to; drop the
+    /// finished ones (they rest where layout put them).
+    fn apply(&mut self, values: &mut BTreeMap<Leaf, Value>) {
+        let (xp, yp): (LeafPath, LeafPath) = ("transform2d.x".parse().expect("declared leaf"), "transform2d.y".parse().expect("declared leaf"));
+        let clock = self.clock;
+        self.anims.retain(|&node, a| {
+            let u = ((clock - a.t0) * 1000.0 / a.ms).clamp(0.0, 1.0);
+            if u >= 1.0 {
+                return false;
+            }
+            let name = match a.ease {
+                "in" => "ease_in",
+                "out" => "ease_out",
+                "in_out" => "ease_in_out",
+                _ => "linear",
+            };
+            let e = time::ease(name, u);
+            values.insert(Leaf { node, path: xp }, Value::Number(a.from[0] + (a.to[0] - a.from[0]) * e));
+            values.insert(Leaf { node, path: yp }, Value::Number(a.from[1] + (a.to[1] - a.from[1]) * e));
+            true
+        });
     }
 }
 
@@ -248,6 +306,9 @@ impl Store {
             session_version: 0,
             physics_error: None,
             tables: Default::default(),
+            contexts: None,
+            layout_preview: None,
+            motion: Motion::default(),
             expansion_problems: Vec::new(),
             gesture: None,
             ended: None,
@@ -1018,13 +1079,37 @@ impl Store {
     pub fn resolve_physics(&mut self) {
         self.solve_network();
         self.resolve_layout();
+        self.resolve_contexts();
+    }
+
+    /// Merge the document's `context` nodes over the built-in library when
+    /// their markup changed (contexts.md §2.2).
+    fn resolve_contexts(&mut self) {
+        let ty = TypeId::lookup("context").expect("registered");
+        let markups: Vec<(NodeId, String)> = self
+            .doc
+            .nodes_of_type(ty)
+            .filter(|&n| self.doc.is_live(n))
+            .filter_map(|n| Some((n, self.doc.get::<facet::ContextDef>(n)?.markup.constant()?.as_str()?.to_owned())))
+            .collect();
+        if markups.is_empty() {
+            self.contexts = None;
+        } else if self.contexts.as_ref().is_none_or(|(m, _)| *m != markups) {
+            let lib = contexts::Library::with_document(&markups);
+            self.contexts = Some((markups, lib));
+        }
     }
 
     /// Publish every laid-out group's placements (layout-and-tables.md §2.3)
     /// under `ProducerId::LAYOUT`: derived, never stored, locked against
     /// direct edits like any published leaf.
     pub fn resolve_layout(&mut self) {
-        let (values, grids) = layout::compute(self);
+        let (mut values, grids) = layout::compute(self);
+        if self.motion.enabled {
+            self.start_motion(&values);
+            self.motion.targets = values.clone();
+            self.motion.apply(&mut values);
+        }
         // A table whose tracks moved redraws its lines: report it changed.
         if grids != self.tables {
             let columns: LeafPath = "table.columns".parse().expect("declared leaf");
@@ -1044,6 +1129,84 @@ impl Store {
         }
         self.signal_stamp += 1;
         self.reactive.publish(&self.doc, ProducerId::LAYOUT, values, self.signal_stamp);
+    }
+
+    pub fn motion_enabled(&self) -> bool {
+        self.motion.enabled
+    }
+
+    /// Turn declared transitions on (a host with a clock) or off.
+    pub fn set_motion(&mut self, enabled: bool) {
+        self.motion.enabled = enabled;
+        if !enabled {
+            self.motion.anims.clear();
+        }
+    }
+
+    /// Advance the transitions in flight to `now` (seconds, the host's
+    /// clock) and publish where they have got to. Returns the nodes that
+    /// moved, so the host renders them; empty when nothing is in flight.
+    pub fn advance_motion(&mut self, now: f64) -> Vec<NodeId> {
+        self.motion.clock = now;
+        if self.motion.anims.is_empty() {
+            return Vec::new();
+        }
+        let moving: Vec<NodeId> = self.motion.anims.keys().copied().collect();
+        let mut values = self.motion.targets.clone();
+        self.motion.apply(&mut values);
+        if values != self.reactive.published_by(ProducerId::LAYOUT) {
+            self.signal_stamp += 1;
+            self.reactive.publish(&self.doc, ProducerId::LAYOUT, values, self.signal_stamp);
+        }
+        moving
+    }
+
+    /// Start a transition for each node layout moved whose context declares
+    /// one for its placement: from where it is drawn to where layout puts
+    /// it. A dragged item floating at the pointer does not ease.
+    fn start_motion(&mut self, values: &BTreeMap<Leaf, Value>) {
+        let (xp, yp): (LeafPath, LeafPath) = ("transform2d.x".parse().expect("declared leaf"), "transform2d.y".parse().expect("declared leaf"));
+        let shown = self.reactive.published_by(ProducerId::LAYOUT);
+        let num = |m: &BTreeMap<Leaf, Value>, node: NodeId, path: LeafPath| m.get(&Leaf { node, path }).and_then(|v| v.as_f64());
+        let floating = self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n);
+        let nodes: Vec<NodeId> = values.keys().filter(|l| l.path == xp).map(|l| l.node).collect();
+        for node in nodes {
+            let (Some(tx), Some(ty)) = (num(values, node, xp), num(values, node, yp)) else { continue };
+            let before = (num(&self.motion.targets, node, xp), num(&self.motion.targets, node, yp));
+            if before == (Some(tx), Some(ty)) || Some(node) == floating {
+                continue;
+            }
+            let (Some(sx), Some(sy)) = (num(&shown, node, xp), num(&shown, node, yp)) else { continue };
+            let chain = contexts::chain_of(&self.doc, node);
+            if chain.is_empty() {
+                continue;
+            }
+            let declared = contexts::Resolver::new(&self.doc, self.contexts()).get(&chain, chain.len() - 1, contexts::Field::PLACEMENT);
+            let Some(m) = contexts::motion(&declared).filter(|m| matches!(m.when, "any" | "layout") && m.ms > 0.0) else { continue };
+            self.motion.anims.insert(node, Anim { from: [sx, sy], to: [tx, ty], t0: self.motion.clock, ms: m.ms, ease: m.ease });
+        }
+    }
+
+    /// Lay a container out in a previewed order, or stop (`None`): the
+    /// gap a dragged item would land in opens by ordinary layout.
+    pub fn set_layout_preview(&mut self, preview: Option<layout::Preview>) {
+        if self.layout_preview != preview {
+            self.layout_preview = preview;
+            self.resolve_layout();
+        }
+    }
+
+    pub fn layout_preview(&self) -> Option<&layout::Preview> {
+        self.layout_preview.as_ref()
+    }
+
+    /// The contexts this document's nodes resolve against
+    /// (plans/specs/contexts.md): the built-in library, for now.
+    pub fn contexts(&self) -> &contexts::Library {
+        match &self.contexts {
+            Some((_, lib)) => lib,
+            None => contexts::Library::builtin(),
+        }
     }
 
     /// Where a table's cells fell, as of the last layout (`table::Grid`).

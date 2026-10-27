@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type Property = { leaf: string; field: string; kind: string | null; text: string | null; bind: string | null; edit: string; via: string | null; why: string | null };
+  export type Property = { leaf: string; field: string; kind: string | null; text: string | null; bind: string | null; edit: string; via: string | null; why: string | null; options?: string[] | null };
 </script>
 
 <script lang="ts">
@@ -24,14 +24,8 @@
   // Stored as a percent already (plans/specs/text.md §2): shown with %, unscaled.
   const percentStored = $derived(f.leaf === "font.line_height" || f.leaf === "font.letter_spacing");
   const unit = $derived(percent || percentStored ? "%" : angle ? "°" : "");
-  const options = $derived(({
-    "gradient.kind": ["linear", "radial"], "group_clip.shape": ["rect", "ellipse"],
-    "stroke.join": ["miter", "round", "bevel"], "stroke.cap": ["butt", "round", "square"],
-    "path.fill_rule": ["nonzero", "evenodd"],
-    "layout.mode": ["none", "stack_x", "stack_y", "grid"], "layout.align": ["start", "center", "end", "stretch"],
-    "layout.justify": ["start", "center", "end", "between"], "layout.sizing_w": ["hug", "fixed"], "layout.sizing_h": ["hug", "fixed"],
-    "layout_item.w": ["auto", "fill"], "layout_item.h": ["auto", "fill"], "layout_item.align": ["auto", "start", "center", "end", "stretch"],
-  } as Record<string, string[]>)[f.leaf]);
+  // The schema's values for an enum field (`facet.rs`).
+  const options = $derived(f.options ?? undefined);
   const labels: Record<string, string> = { x: "X", y: "Y", w: "W", h: "H", rot: "Rotation", sx: "Scale X", sy: "Scale Y", rx: "Radius X", ry: "Radius Y", opacity: "Opacity", kind: "Type", start: "Start", end: "End", enabled: "Clip content", radius: "Radius", color: "Colour", width: "Weight", fill_rule: "Fill rule", dash_offset: "Offset" };
   const displayLabel = $derived(label ?? labels[f.field] ?? f.field.replaceAll("_", " "));
   const numberValue = $derived(channel === "alpha" ? Math.round(parseInt((f.text ?? "#000000ff").slice(7, 9) || "ff", 16) / 255 * 100) / 100 : Number(f.text));

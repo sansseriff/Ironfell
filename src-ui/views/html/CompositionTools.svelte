@@ -1,11 +1,15 @@
 <script lang="ts">
   // The tools, Figma's way: a toolbar floating at the bottom of a 2D
-  // composition view. Select (V); the shapes, rectangle (R), ellipse (O) and
-  // table,
-  // and the component tools, port and empty (component-authoring.md §2),
+  // composition view. Which tools, in what order, and their keys are context
+  // data (plans/specs/contexts.md §2.7): the engine resolves this view's
+  // palette and keymap from its focus (its world's notation, the container
+  // the selection is open in, editing states) and reports them per panel.
+  // By default (`std:free-2d`): Move (V); the shapes, rectangle (R),
+  // ellipse (O), table and empty (and port, where a component's main is),
   // behind one button that remembers the last one used; the pen (P); text
-  // (T). The
-  // engine reports which tool is active. A 3D composition has no toolbar.
+  // (T). A tool's icon and label are the shell's, by tool id. The engine
+  // reports which tool is active. A view whose palette is empty (a 3D one)
+  // has no toolbar.
   import { DropdownMenu } from "bits-ui";
   import Check from "@lucide/svelte/icons/check";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
@@ -17,82 +21,83 @@
   import Square from "@lucide/svelte/icons/square";
   import Table from "@lucide/svelte/icons/table";
   import Type from "@lucide/svelte/icons/type";
-  import { getContext } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { Tool } from "../../runtime/document_client.svelte";
   import type { ViewSpec } from "../views";
 
-  let { spec }: { spec: ViewSpec } = $props();
+  let { spec, panel = "" }: { spec: ViewSpec; panel?: string } = $props();
 
   const doc = controllerManager.docClient;
-  const active = getContext<() => boolean>("iron-view-active") ?? (() => true);
 
-  // Whether this view's composition is 2D, re-read as the document changes.
-  let twoD = $state(false);
+  const TOOLS: Record<string, { label: string; icon: typeof Square }> = {
+    select: { label: "Move", icon: MousePointer2 },
+    pen: { label: "Pen", icon: PenTool },
+    rect: { label: "Rectangle", icon: Square },
+    ellipse: { label: "Ellipse", icon: Circle },
+    text: { label: "Text", icon: Type },
+    table: { label: "Table", icon: Table },
+    port: { label: "Port", icon: CircleDot },
+    empty: { label: "Empty", icon: Crosshair },
+  };
+
+  const offer = $derived(doc.focus[panel]);
+  // The library and the Stats view show their own content, not a world to draw in.
+  const shown = $derived(!!offer?.palette && spec.source !== "library" && spec.source !== "stats");
+  const slots = $derived((offer?.palette ?? "").split(/\s+/).filter(Boolean).map((slot) => slot.split("|").filter((t) => t in TOOLS)).filter((s) => s.length));
+  const keyOf = $derived(Object.fromEntries((offer?.keys ?? "").split(/\s+/).filter(Boolean).map((p) => p.split(":")).map(([k, t]) => [t, k.toUpperCase()])));
+  const title = (tool: string) => (keyOf[tool] ? `${TOOLS[tool].label} (${keyOf[tool]})` : TOOLS[tool].label);
+
+  // A shared slot shows the tool last used from it.
+  let last: Record<string, string> = $state({});
   $effect(() => {
-    void doc.generation;
-    const source = spec.source;
-    if (!active()) return;
-    return doc.subscribe<{ id: string; name: string | null; dims: string }[]>({ op: 'compositions' }, list => {
-      const c = list.find(c => c.id === source || c.name === source);
-      twoD = c?.dims === "2d" && source !== "library" && source !== "stats";
-    }, () => { twoD = false; });
+    for (const slot of slots) if (slot.length > 1 && slot.includes(doc.tool)) last[slot.join("|")] = doc.tool;
   });
+  const current = (slot: string[]) => (slot.includes(last[slot.join("|")]) ? last[slot.join("|")] : slot[0]);
+  let menu: Record<string, boolean> = $state({});
 
-  const SHAPES = [
-    { id: "rect", key: "R", label: "Rectangle", icon: Square },
-    { id: "ellipse", key: "O", label: "Ellipse", icon: Circle },
-    { id: "table", key: "", label: "Table", icon: Table },
-    { id: "port", key: "", label: "Port (on a component's main)", icon: CircleDot },
-    { id: "empty", key: "", label: "Empty", icon: Crosshair },
-  ] as const;
-  let lastShape: (typeof SHAPES)[number]["id"] = $state("rect");
-  $effect(() => {
-    if (SHAPES.some((s) => s.id === doc.tool)) lastShape = doc.tool as (typeof SHAPES)[number]["id"];
-  });
-  const shape = $derived(SHAPES.find((s) => s.id === lastShape)!);
-  let menu = $state(false);
-
-  function pick(tool: Tool) {
-    menu = false;
-    doc.setTool(tool);
+  function pick(tool: string, slot?: string[]) {
+    if (slot) menu[slot.join("|")] = false;
+    doc.setTool(tool as Tool);
   }
 </script>
 
 
-{#if twoD}
+{#if shown}
   <div class="toolbar canvas-ui" role="toolbar" aria-label="Tools">
-    <button class="tool" class:active={doc.tool === "select"} title="Move (V)" aria-label="Move" onclick={() => pick("select")}>
-      <MousePointer2 size={18} strokeWidth={1.6} />
-    </button>
-    <div class="group">
-      <button class="tool" class:active={doc.tool === shape.id} title="{shape.label} ({shape.key})" aria-label={shape.label} onclick={() => pick(shape.id)}>
-        <shape.icon size={18} strokeWidth={1.6} />
-      </button>
-      <DropdownMenu.Root bind:open={menu}>
-        <DropdownMenu.Trigger class="more" title="Shape tools" aria-label="Shape tools">
-          <ChevronDown size={12} strokeWidth={2} />
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content class="ui-menu" side="top" sideOffset={8} align="start">
-            {#each SHAPES as s (s.id)}
-              <DropdownMenu.Item class="ui-menu-item" onSelect={() => pick(s.id)}>
-                <span class="check">{#if doc.tool === s.id}<Check size={14} strokeWidth={2} />{/if}</span>
-                <s.icon size={15} strokeWidth={1.75} />
-                <span>{s.label}</span>
-                <span class="ui-hint">{s.key}</span>
-              </DropdownMenu.Item>
-            {/each}
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-    </div>
-    <button class="tool" class:active={doc.tool === "pen"} title="Pen (P)" aria-label="Pen" onclick={() => pick("pen")}>
-      <PenTool size={18} strokeWidth={1.6} />
-    </button>
-    <button class="tool" class:active={doc.tool === "text"} title="Text (T)" aria-label="Text" onclick={() => pick("text")}>
-      <Type size={18} strokeWidth={1.6} />
-    </button>
+    {#each slots as slot (slot.join("|"))}
+      {#if slot.length === 1}
+        {@const t = TOOLS[slot[0]]}
+        <button class="tool" class:active={doc.tool === slot[0]} title={title(slot[0])} aria-label={t.label} onclick={() => pick(slot[0])}>
+          <t.icon size={18} strokeWidth={1.6} />
+        </button>
+      {:else}
+        {@const id = current(slot)}
+        {@const t = TOOLS[id]}
+        <div class="group">
+          <button class="tool" class:active={doc.tool === id} title={title(id)} aria-label={t.label} onclick={() => pick(id)}>
+            <t.icon size={18} strokeWidth={1.6} />
+          </button>
+          <DropdownMenu.Root bind:open={() => menu[slot.join("|")] ?? false, (v) => (menu[slot.join("|")] = v)}>
+            <DropdownMenu.Trigger class="more" title="Shape tools" aria-label="Shape tools">
+              <ChevronDown size={12} strokeWidth={2} />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content class="ui-menu" side="top" sideOffset={8} align="start">
+                {#each slot as s (s)}
+                  {@const m = TOOLS[s]}
+                  <DropdownMenu.Item class="ui-menu-item" onSelect={() => pick(s, slot)}>
+                    <span class="check">{#if doc.tool === s}<Check size={14} strokeWidth={2} />{/if}</span>
+                    <m.icon size={15} strokeWidth={1.75} />
+                    <span>{m.label}</span>
+                    <span class="ui-hint">{keyOf[s] ?? ""}</span>
+                  </DropdownMenu.Item>
+                {/each}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
+      {/if}
+    {/each}
   </div>
 {/if}
 

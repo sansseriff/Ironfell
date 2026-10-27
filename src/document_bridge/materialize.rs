@@ -155,8 +155,7 @@ pub(super) fn sync_live(
     }
 }
 
-/// How near (local px) the pointer must come to a path's line to hit it.
-const PATH_HIT: f64 = 5.0;
+use iron_document::geom::PATH_HIT;
 
 impl Shape2d {
     pub fn contains_local(&self, p: Vec2) -> bool {

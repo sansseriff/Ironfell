@@ -49,6 +49,10 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `piston.txt` | ~1 min |
 | `snapping.txt` | ~30 s |
 | `layout.txt` | ~35 s |
+| `contexts.txt` | ~35 s |
+| `focus.txt` | ~40 s |
+| `keys.txt` | ~30 s |
+| `sequence.txt` | ~30 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -1193,21 +1197,23 @@ T and a click make a text node and focus the hidden textarea (`[true,""]`).
 Typing through it shows on the canvas, and Esc commits. The font picker shows 15
 previews; picking Playfair Display fetches that file in the worker. Content bound
 to `"level = " + fmt(#O.slider.value, 3)` follows the level slider. Four undos
-remove everything, the last one undoing the creation and the typing as one entry.
-Expected, minus screenshot and `WARN` lines:
+remove everything, the last one undoing the creation and the typing as one entry
+(the demo's own bound `readout` text, in the Optics composition, is listed and stays;
+expected refreshed 2026-10-27 for the 298-op demo). Expected, minus screenshot and
+`WARN` lines:
 
 ```
 [true,""]
 "Pressure"
-["<text id=\"#33\" name=\"Text\" x=\"260\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"100\" content=\"Pressure\""]
+["<text id=\"#3c\" name=\"readout\" x=\"560\" y=\"240\" rot=\"0\" sx=\"1\" sy=\"1\" content=\"0.00 mW\" content.bind=\"fmt(#3V.port.signal, &quot;mW&quot;, 2)\"","<text id=\"#3t\" name=\"Text\" x=\"260\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"100\" content=\"Pressure\""]
 clicked button[aria-label="Font family"]
 15
 clicked button[title="Playfair Display"]
 clicked button[aria-label="Bind content"]
 1
-[["content=\"level = 0.200\"","family=\"Playfair Display\""]]
-0
-applied "open demo scene" (233 ops, System) -> v1
+[["content=\"0.00 mW\"","family=\"Inter\""],["content=\"level = 0.200\"","family=\"Playfair Display\""]]
+1
+applied "open demo scene" (298 ops, System) -> v1
 applied "add text" (1 ops, Human) -> v2
 applied "add text" (1 ops, Human) -> v3
 applied "style text" (1 ops, Human) -> v4
@@ -1404,6 +1410,216 @@ iron_document --target aarch64-apple-darwin --test table` (11 tests: the referen
 table, boxed lines, merges and the lines around them, a bound cell relaying, row and
 column edits, merge and split, restyling, a deleted cell disturbing only its row, the
 compact view, replace keeping ids, spreadsheet paste).
+
+## Contexts (2026-10-26)
+
+`plans/specs/contexts.md` §5 steps 0–1 (with `affordances.md` phase A1): behaviour
+as context rules, the built-in `std:*` library, and a document overriding it. After a
+build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < contexts.txt; cd -
+```
+
+In a fresh `slide` composition with a table: `__iron.contexts()` shows `std:table`'s
+row rule; a click selects the table and a double-click its "113" cell (through its
+row), whose computed values name their rules and start no text edit. The model's
+`<context name="std:table">` verb adds `affords.enter="edit"` for cells; the view
+prints it as markup, and the cell's computed `affords.enter` names `std:table rule 1
+from #…`. The same click and double-click now edit the cell, its word selected
+(`[true,"113","113"]`); one undo removes the context, and the double-click selects
+the cell again. Inspect `screenshots/contexts-edit.png` (the cell in text edit, the
+Text tool lit). Expected, minus screenshot, `nav` and `ready` lines:
+
+```
+{"enabled":false,"guides":[]}
+1
+"slide"
+"<applied version=\"3\">\n  <table id=\"#3u\"/>\n</applied>"
+["<context name=\"std:table\" for=\"type:table\">","<rule match=\"type:row\" affords.select=\"through\"/>"]
+["#44"]
+["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"select\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\""]
+"no textarea"
+"<applied version=\"4\">\n  <context id=\"#4A\"/>\n</applied>"
+["<context id=\"#…\" name=\"std:table\">","<rule match=\"type:text\" affords.enter=\"edit\"/>","</context>"]
+["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"edit\" affords.enter.by=\"std:table rule 1 from #…\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\""]
+[true,"113","113"]
+false
+false
+1
+applied "open demo scene" (298 ops, System) -> v1
+applied "model edit" (1 ops, Model) -> v2
+applied "add table" (16 ops, Model) -> v3
+applied "context" (1 ops, Model) -> v4
+applied "undo: context" (1 ops, System) -> v5
+(no page errors)
+```
+
+Native: `cargo test -p iron_document --target aarch64-apple-darwin --test contexts`
+(7 tests: `std:*` prints back to itself, bad markup names the field or word, rows
+passed through to cells, locality, a document override with its provenance and undo,
+bad markup refused, the view's markup) and `--test registry_options` (every enum
+field lists its values).
+
+## View focus: palettes, keymaps, inspector sections (2026-10-27)
+
+`plans/specs/contexts.md` §5 step 2: each view's focus context (its world, the
+container its selection is open in, `editing-text`, `editing-points`, `main`) and
+what it offers, its palette and keymap, as `match="view"` rules. The engine pushes
+them per panel (`focus` events); the toolbar draws the palette, and plain letters
+reach tools through the keymap of the view under the pointer
+(`bevy_app/view_focus.rs`). After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < focus.txt; cd -
+```
+
+The Main view's toolbar and `viewContext` are `std:free-2d`'s (the shapes share a
+slot). Make component on the square puts a main in the scene the view embeds: the
+focus gains `main` and the palette the port tool; undo takes both away. A `deck`
+composition whose notation is defined only by a document context (`extends`
+`std:free-2d`) shows Move, Text and Table (B); B over the deck picks the table and
+R does nothing there; over Main, R picks the rectangle and B does nothing. (The
+active tool is global, so Main's shape slot lights Table too.) The deck's context also
+sets `inspector.sections="position fill"`: a rect made and clicked in the deck shows
+only Position and Fill, while a click in Main (on the scene's embed, `#15`) shows
+`std:free-2d`'s list, of which an embed has Position and its own section. Expected, minus
+`nav` and `ready` lines:
+
+```
+[["Move (V)","Rectangle (R)","Pen (P)","Text (T)"]]
+["<computed view=\"viewer\">","palette.tools=\"select rect|ellipse|table|empty pen text\" palette.tools.by=\"std:free-2d rule 9\"","keys.tools=\"v:select p:pen r:rect o:ellipse t:text\" keys.tools.by=\"std:free-2d rule 9\"","inspector.sections=\"main port component table position text layout appearance fill stroke effects other add\" inspector.sections.by=\"std:free-2d rule 9\"","</computed>"]
+undefined
+[[],"select rect|ellipse|table|empty pen text"]
+clicked button[title^="Make a component"]
+[["main"],"select rect|ellipse|table|port|empty pen text"]
+[[],"select rect|ellipse|table|empty pen text"]
+true
+true
+"deck"
+[["Move (V)","Rectangle (R)","Pen (P)","Text (T)"],["Move (V)","Text (T)","Table (B)"]]
+["<computed view=\"deck\">","palette.tools=\"select text table\" palette.tools.by=\"deck rule 1 from #…\"","keys.tools=\"v:select t:text b:table\" keys.tools.by=\"deck rule 1 from #…\"","inspector.sections=\"position fill\" inspector.sections.by=\"deck rule 1 from #…\"","</computed>"]
+["Table","Table (B)"]
+["Table","Table (B)"]
+["Rectangle (R)"]
+["Rectangle (R)"]
+true
+["position","fill"]
+["#15"]
+["position","embed"]
+applied "open demo scene" (298 ops, System) -> v1
+applied "make component component" (6 ops, Human) -> v2
+applied "undo: make component component" (6 ops, System) -> v3
+applied "model edit" (1 ops, Model) -> v4
+applied "context" (1 ops, Model) -> v5
+applied "model edit" (1 ops, Model) -> v6
+(no page errors)
+```
+
+Native: `--test contexts` covers view rules (palette and keys by focus, `main`, a
+container in focus, a notation named by a document context that extends a built-in
+one, view and node fields kept apart).
+
+## Keyboard navigation by context (2026-10-27)
+
+`plans/specs/affordances.md` §5.7 (phase B; `contexts.md` §5 step 5): a container's
+`keys.nav` (`std:table`: `grid`; `std:row`/`std:column`, groups laid out in a line:
+`list-x`/`list-y`) decides what arrows, Tab and Enter do to its items
+(`iron_document::interaction::key`). After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < keys.txt; cd -
+```
+
+In a table's cells: Right from "113" to "140", Down to "125", Right at the edge stays;
+Tab past the last cell adds a row ("add row") and selects its first, empty cell (4
+rows); Esc goes back to the table. In a column stack in the scene: Down from "title"
+to "body", Right (across the axis) stays, Alt+Down moves "body" past "footer" (one
+"reorder text"), undone in one step. Expected, minus `nav` and `ready` lines:
+
+```
+{"enabled":false,"guides":[]}
+1
+"slide"
+true
+undefined
+["113"]
+["140"]
+["125"]
+["125"]
+[[""],4]
+["table"]
+true
+tab Main
+undefined
+undefined
+["title"]
+["body"]
+["body"]
+[["body"],["title","footer","body"]]
+["title","body","footer"]
+applied "open demo scene" (298 ops, System) -> v1
+applied "model edit" (1 ops, Model) -> v2
+applied "add table" (16 ops, Model) -> v3
+applied "add row" (5 ops, Human) -> v4
+applied "model edit" (4 ops, Model) -> v5
+applied "reorder text" (1 ops, Human) -> v6
+applied "undo: reorder text" (1 ops, System) -> v7
+(no page errors)
+```
+
+Native: `--test contexts` (`a_tables_cells_navigate_as_a_grid`,
+`a_stacks_items_navigate_as_a_list_and_alt_moves_one`).
+
+## Reordering in sequence (2026-10-27)
+
+`plans/specs/affordances.md` §6 (phase B; `contexts.md` §5 step 5): a stack's items
+drag `sequence` (`std:row`/`std:column`'s rule for children). While held, the store
+lays the stack out in a previewed order (`Store::set_layout_preview`, session state,
+never an edit) with the dragged item floating at the pointer; release commits one
+`Reorder`, a drop where it started writes nothing. After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < sequence.txt; cd -
+```
+
+A column stack's title (y 12) dragged down past the footer: mid-drag the title floats
+at the pointer (78) while body and footer move up into its place (12, 37), the
+document still at version 2; release lands it last (59) as one "reorder text"; undo
+restores the order. Then motion as data (`motion.placement`, affordances.md §8.2;
+`std:column`'s items glide "out 160 layout", the store easing what layout moves on
+the frame clock, `document_bridge/motion.rs`): a document context slows it to 1.5 s,
+so half a second after Alt+Down body is part-way (`true`) and then rests; with `none`
+the next Alt+Up lands at once. Inspect `screenshots/sequence-mid.png`. Expected,
+minus `nav` and `ready` lines:
+
+```
+{"enabled":false,"guides":[]}
+true
+undefined
+["title 12","body 44","footer 69"]
+["title"]
+[["title 78","body 12","footer 37"],"2"]
+["body 12","footer 37","title 59"]
+["title 12","body 44","footer 69"]
+true
+true
+["body 12","title 37","footer 69"]
+true
+["title 12","body 44","footer 69"]
+applied "open demo scene" (298 ops, System) -> v1
+applied "model edit" (4 ops, Model) -> v2
+applied "reorder text" (1 ops, Human) -> v3
+applied "undo: reorder text" (1 ops, System) -> v4
+applied "context" (1 ops, Model) -> v5
+applied "reorder text" (1 ops, Human) -> v6
+applied "context" (1 ops, Model) -> v7
+applied "reorder text" (1 ops, Human) -> v8
+(no page errors)
+```
+
+Native: `--test contexts`
+(`a_previewed_order_lays_the_stack_out_and_floats_the_dragged_item`).
 
 ## Free running and the Stats view (2026-10-18)
 

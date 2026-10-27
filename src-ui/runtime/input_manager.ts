@@ -1,6 +1,7 @@
 import type { UiRequest } from './protocol';
 import { oppositeVectorBackendUrl } from './variant_policy';
 import { beginCopy, canvasOwnsCopy, pastedFragment } from './clipboard';
+import { isToolLetter } from './tool_keys';
 
 export interface InputPoster {
     post(data: UiRequest): void;
@@ -225,8 +226,9 @@ export class InputManager {
             const target = event.target as HTMLElement | null;
             const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
             const selectAll = key === 'a' && (event.metaKey || event.ctrlKey);
-            // Tools, Figma's keys: V select, P pen, R rectangle, O ellipse, T text.
-            const toolSwitch = ['v', 'p', 'r', 'o', 't'].includes(key) && !event.metaKey && !event.ctrlKey && !event.altKey;
+            // Tool keys: whatever the views' keymaps bind (context data,
+            // contexts.md §2.7); by default Figma's V, P, R, O and T.
+            const toolSwitch = isToolLetter(key) && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
             if (!editing && (InputManager.TOOL_KEYS.includes(key) || selectAll || toolSwitch)) {
                 event.preventDefault();
                 this.post({ ty: 'toolKey', key, m: InputManager.mods(event) });

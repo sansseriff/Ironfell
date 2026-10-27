@@ -151,6 +151,20 @@ fn node(
         writeln!(out, "{indent}</table>").expect("string write");
         return;
     }
+    // A document's context reads as the markup it is written in
+    // (contexts.md §2.3), the same a model writes and `std:*` is read in.
+    if n.ty.name() == "context" && q.fidelity != Fidelity::Skeleton {
+        let markup = doc.get::<crate::facet::ContextDef>(id).and_then(|d| d.markup.constant().and_then(|v| v.as_str()).map(str::to_owned)).unwrap_or_default();
+        if let Ok(contexts) = crate::contexts::parse(&markup) {
+            for c in contexts {
+                let printed = crate::contexts::print_context(&c).replacen("<context ", &format!("<context id=\"{id}\" "), 1);
+                for line in printed.lines() {
+                    writeln!(out, "{indent}{line}").expect("string write");
+                }
+            }
+            return;
+        }
+    }
     // In a composition view a figure names what it pictures, in place of
     // the relation element (ECM §11).
     let as_of = matches!(q.relation, ViewRelation::Composition(_));

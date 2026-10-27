@@ -17,6 +17,10 @@ export type DocumentCommand =
   | { op: 'author'; verb: string; args: string }
   | { op: 'detach'; entity: string }
   | { op: 'table'; spec: string }
+  | { op: 'context'; markup: string }
+  | { op: 'computed'; node: string }
+  | { op: 'view_context'; panel: string }
+  | { op: 'contexts' }
   | { op: 'table_edit'; table: string; verb: string; cells: string }
   | { op: 'link'; a: string; b: string; keep: string; actor: string }
   | { op: 'counterparts'; node: string }
@@ -66,6 +70,10 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'author': return { fn: command.op, args: [command.verb, command.args] };
     case 'detach': return { fn: command.op, args: [command.entity] };
     case 'table': return { fn: command.op, args: [command.spec] };
+    case 'context': return { fn: command.op, args: [command.markup] };
+    case 'computed': return { fn: command.op, args: [command.node] };
+    case 'view_context': return { fn: command.op, args: [command.panel] };
+    case 'contexts': return { fn: command.op, args: [] };
     case 'table_edit': return { fn: command.op, args: [command.table, command.verb, command.cells] };
     case 'link': return { fn: command.op, args: [command.a, command.b, command.keep, command.actor] };
     case 'counterparts': return { fn: command.op, args: [command.node] };
@@ -143,4 +151,5 @@ export type EngineEvent =
   | { ty: 'fonts'; fonts: ({ family: string; file: string })[] }
   | { ty: 'textEdit'; active: boolean; node: string; text: string; anchor: number; focus: number; caret: [number, number, number] }
   | { ty: 'linkDrop'; spec: string; node: string; x: number; y: number }
+  | { ty: 'focus'; panel: string; palette: string; keys: string }
 ;

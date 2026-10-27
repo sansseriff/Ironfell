@@ -1,0 +1,52 @@
+# Reordering in sequence (plans/specs/affordances.md §6, phase B): a stack's
+# items drag `sequence` (std:column's rule for its children). The title of a
+# column stack in the scene, dragged down past the footer: mid-drag the others
+# move up into its place (the store lays the stack out in the previewed
+# order, the document unchanged) while it floats at the pointer; release
+# commits one "reorder", and undo puts it back. Then the glide, which is data:
+# slowed by a document context, then turned off.
+nav
+ready
+eval __iron.snapping(false)
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><create id="$g" type="group" parent="#1" x="120" y="60" layout.mode="stack_y" layout.gap="8" layout.pad_t="12" layout.pad_l="12" layout.pad_r="12" layout.pad_b="12"/><create id="$a" type="text" parent="$g" name="title" content="Title" font.size="20" font.weight="700"/><create id="$b" type="text" parent="$g" name="body" content="Body line" font.size="14"/><create id="$c" type="text" parent="$g" name="footer" content="Footer" font.size="12"/></edit>`); return r.ok})()
+sleep 1000
+eval window.ys = async () => { const v = await __iron.view({fidelity:'full', scope:'#1'}); return [...v.matchAll(/<text id="[^"]+" name="(title|body|footer)"[^>]* y="([\d.]+)"/g)].map(m => `${m[1]} ${Math.round(Number(m[2]))}`); }
+eval ys()
+dclick 150 84
+sleep 400
+ddblclick 150 84
+sleep 600
+eval (async()=>{const v=await __iron.view({fidelity:"full", scope:"#1"}); return __iron.selection().map(id=>(v.match(new RegExp("<\\w+ id=\""+id+"\" name=\"([^\"]*)\""))||[])[1])})()
+dmove 150 84
+down
+sleep 300
+dmove 150 100
+sleep 300
+dmove 150 130
+sleep 300
+dmove 150 150
+sleep 600
+eval (async()=>[await ys(), (await __iron.view({fidelity:'skeleton', depth: 0})).match(/version="(\d+)"/)[1]])()
+shot sequence-mid
+up
+sleep 800
+eval ys()
+key Meta+z
+sleep 800
+eval ys()
+# Motion is data: std:column's items glide when layout moves them ("out 160
+# layout"). A document slows it to 1.5 s: half a second after Alt+Down, body is
+# part-way up; then it rests. With "none" the next move lands at once.
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="5"><context name="std:column">\n  <rule match="children" motion.placement="linear 1500 layout"/>\n</context></edit>`); return r.ok})()
+key Alt+ArrowDown
+sleep 500
+eval (async()=>{const y=Number((await ys()).find(s=>s.startsWith('body')).split(' ')[1]); return y > 12 && y < 44})()
+sleep 1600
+eval ys()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="7"><context name="std:column">\n  <rule match="children" motion.placement="none"/>\n</context></edit>`); return r.ok})()
+key Alt+ArrowUp
+sleep 150
+eval ys()
+logs applied|rejected|panicked
+errors
+quit

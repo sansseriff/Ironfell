@@ -28,6 +28,10 @@ pub enum EngineEvent {
     /// (component-authoring.md §3): the host asks which property, and how
     /// the port's range maps onto it. `x`, `y` are CSS px in the window.
     LinkDrop { spec: String, node: String, x: f32, y: f32 },
+    /// What a view offers, resolved from its focus context
+    /// (plans/specs/contexts.md §2.7): its palette (`select rect|ellipse
+    /// pen`, `|` sharing a slot) and keymap (`v:select r:rect`).
+    Focus { panel: String, palette: String, keys: String },
 }
 
 #[derive(Debug, Clone, Serialize)]

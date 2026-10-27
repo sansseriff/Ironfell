@@ -1,0 +1,56 @@
+<!-- Iron's built-in contexts (plans/specs/contexts.md §2.2): the user-agent
+     stylesheet. Read-only, never saved; a document overrides them sparsely.
+     A node's values come from its notation's context (by type), its own
+     context (`self` rules), and its direct container's context (`children`
+     rules), nearer winning; a `through` container is passed over, as CSS's
+     `display: contents` is. `all` is self and children. -->
+
+<context name="std:free-2d">
+  <!-- What a press selects: content, not its parts (points, contours,
+       constraints, ports, anchors). -->
+  <rule match="type:rect|ellipse|path|slider|text|table|group|use|empty" affords.select="target" affords.drag="point" affords.grips="box" snap.target="yes"/>
+  <!-- An embed at the top of a view is a window: its content selects directly. -->
+  <rule match="type:embed" affords.select="window" affords.drag="point" affords.grips="box" snap.target="yes"/>
+  <rule match="type:empty" snap.target="no"/>
+  <!-- A rect's corners round, an ellipse's arc opens, by their own handles. -->
+  <rule match="type:rect|ellipse" affords.grips="box shape"/>
+  <!-- A slider is a control: a press on it drives its value. -->
+  <rule match="type:slider" affords.drag="track"/>
+  <!-- Containers light as frames; shapes as their outlines. -->
+  <rule match="type:group|use|empty|embed" chrome.lit="frame"/>
+  <rule match="type:text" affords.edit="text"/>
+  <rule match="type:rect|ellipse|path" affords.edit="points"/>
+  <!-- What a view of a free 2D world offers (contexts.md §2.7): Figma's tools
+       and keys. The shapes share a slot. -->
+  <rule match="view" palette.tools="select rect|ellipse|table|empty pen text" keys.tools="v:select p:pen r:rect o:ellipse t:text" inspector.sections="main port component table position text layout appearance fill stroke effects other add"/>
+  <!-- Where a component's main is, a port can be placed on it. -->
+  <rule match="view state:main" palette.tools="select rect|ellipse|table|port|empty pen text"/>
+</context>
+
+<context name="std:3d">
+  <!-- A 3D world has no tools yet: no palette, no keys. -->
+  <rule match="type:mesh|group|use|empty|embed" affords.select="target"/>
+</context>
+
+<context name="std:table" for="type:table">
+  <!-- Rows are structure, not targets: a double-click on a table reaches a
+       cell, as in Slides and PowerPoint. -->
+  <rule match="type:row" affords.select="through"/>
+  <!-- ARIA's grid: arrows move cell to cell, Tab to the next (a new row past
+       the last), Enter edits, Esc goes back to the table. -->
+  <rule match="self" keys.nav="grid"/>
+</context>
+
+<!-- A group laid out in a line (layout-and-tables.md §2): ARIA's listbox
+     along its axis; Alt with an arrow moves the item. -->
+<context name="std:row" for="type:group layout.mode=stack_x">
+  <rule match="self" keys.nav="list-x"/>
+  <!-- Figma's auto layout: a drag reorders, the others opening a gap, and
+       they glide when layout moves them. -->
+  <rule match="children" affords.drag="sequence" motion.placement="out 160 layout"/>
+</context>
+
+<context name="std:column" for="type:group layout.mode=stack_y">
+  <rule match="self" keys.nav="list-y"/>
+  <rule match="children" affords.drag="sequence" motion.placement="out 160 layout"/>
+</context>

@@ -51,6 +51,17 @@ fn word(store: &Store, id: NodeId, leaf: &str) -> String {
     base(store, id, leaf).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
+/// A container laid out in a previewed order (`Store::set_layout_preview`):
+/// its children as `order` lists them (others after, as they are), and
+/// `floating`, if set, published where the pointer holds it, in the
+/// container's space, while still taking its place in the flow.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Preview {
+    pub container: NodeId,
+    pub order: Vec<NodeId>,
+    pub floating: Option<(NodeId, [f64; 2])>,
+}
+
 /// The container a group's `layout` facet describes, if it lays out.
 fn container(store: &Store, id: NodeId) -> Option<Container> {
     store.doc.facet(id, FacetKind::Layout)?;
@@ -265,7 +276,10 @@ impl Builder<'_> {
         self.tree.nodes.push(Node { key: id.raw(), item, container: container_spec, children: Vec::new(), measured });
         self.entries.push(Entry { id, kind, offset, fill: fills });
         if kind == Kind::Container {
-            let kids: Vec<NodeId> = store.doc.children(id).iter().copied().filter(|&c| is_item(store, c)).collect();
+            let mut kids: Vec<NodeId> = store.doc.children(id).iter().copied().filter(|&c| is_item(store, c)).collect();
+            if let Some(p) = store.layout_preview().filter(|p| p.container == id) {
+                kids.sort_by_key(|k| p.order.iter().position(|o| o == k).unwrap_or(usize::MAX));
+            }
             for c in kids {
                 let k = kind_of(store, c);
                 let i = self.add(c, k);
@@ -348,8 +362,16 @@ pub fn compute(store: &Store) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate:
                     (Kind::Ellipse, [fw, fh]) if fw || fh => [if fw { -w / 2.0 } else { e.offset[0] }, if fh { -h / 2.0 } else { e.offset[1] }],
                     _ => e.offset,
                 };
-                put("transform2d.x", x - off[0]);
-                put("transform2d.y", y - off[1]);
+                match store.layout_preview().and_then(|p| p.floating).filter(|(n, _)| *n == e.id) {
+                    Some((_, [fx, fy])) => {
+                        put("transform2d.x", fx);
+                        put("transform2d.y", fy);
+                    }
+                    None => {
+                        put("transform2d.x", x - off[0]);
+                        put("transform2d.y", y - off[1]);
+                    }
+                }
             }
             match e.kind {
                 Kind::Table => {

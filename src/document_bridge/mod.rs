@@ -26,6 +26,7 @@ pub mod gas;
 mod highlight;
 pub mod liveness;
 mod materialize;
+mod motion;
 pub(crate) mod ui;
 pub use materialize::EMPTY_HALF;
 pub mod nest;
@@ -310,7 +311,7 @@ impl Plugin for DocumentPlugin {
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking. Producers publish first, so
             // their signals reconcile with everything else this frame.
-            .add_systems(PreUpdate, (gas::step_and_publish, stats::step_and_publish, text::refresh_text, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
+            .add_systems(PreUpdate, (gas::step_and_publish, stats::step_and_publish, motion::advance, text::refresh_text, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
             .add_systems(Update, materialize::assign_mesh_materials)
             .add_systems(
                 PostUpdate,

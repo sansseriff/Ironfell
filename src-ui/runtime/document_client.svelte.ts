@@ -30,6 +30,9 @@
  *   await __iron.exportSvg(scope?) -> SVG text of a composition (id or name), a node, or 'selection' (default)
  *   await __iron.importSvg(text)   -> import SVG as a paste: {ok, cuts, nodes, anchors, definitions, references}; placed next frame
  *   await __iron.importSvg(text, {share: false}) -> the same with repeated pieces drawn out, no references
+ *   await __iron.computed('#a')    -> #a's resolved behaviour, each value with its rule (contexts.md §2.6): {values, text}
+ *   await __iron.contexts()        -> the built-in contexts (`std:*`) in their markup
+ *   await __iron.viewContext('viewer') -> a view's focus (world, scope, states), palette and keys, each with its rule
  */
 import { QuerySubscriptions } from './query_subscriptions';
 import { PendingRequests } from './pending_requests';
@@ -49,7 +52,6 @@ export interface ViewQuery {
 
 /** The pointer's tools and their keys (Figma's). */
 export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text' | 'port' | 'empty' | 'table';
-const TOOL_KEYS: Record<Tool, string> = { select: 'v', pen: 'p', rect: 'r', ellipse: 'o', text: 't', port: 'port', empty: 'empty', table: 'table' };
 
 export class DocumentClient {
   view = $state('');
@@ -73,6 +75,10 @@ export class DocumentClient {
   /** The tool the pointer drives (`select`, `pen`, `rect`, `ellipse`), as
    *  the engine reports it. */
   tool: Tool = $state('select');
+  /** What each view offers, by panel, resolved from its focus context
+   *  (plans/specs/contexts.md §2.7): its palette (`select rect|ellipse pen`,
+   *  `|` sharing a slot) and keymap (`v:select r:rect`). */
+  focus: Record<string, { palette: string; keys: string }> = $state({});
   /** Font families whose files have arrived (plans/specs/text.md §4), so
    *  the picker can mark what will draw at once. */
   loadedFonts: string[] = $state([]);
@@ -154,6 +160,11 @@ export class DocumentClient {
       // and edit one's structure ('add_row', 'merge', 'preset:boxed', …).
       table: (spec: object) => this.command({ op: 'table', spec: JSON.stringify(spec) }),
       tableEdit: (table: string, verb: string, cells: string[] = []) => this.command({ op: 'table_edit', table: table, verb: verb, cells: JSON.stringify(cells) }),
+      // Contexts (plans/specs/contexts.md): a node's resolved behaviour with
+      // the rule behind each value, and the built-in library's markup.
+      computed: (node: string) => this.command({ op: 'computed', node: node }),
+      contexts: () => this.command({ op: 'contexts' }),
+      viewContext: (panel: string) => this.command({ op: 'view_context', panel: panel }),
       timings: (reset = false) => this.command({ op: 'timings', reset: reset }),
       // Raster tiles for cold chunks (render-cache.md §5); off draws live.
       raster: (enabled = true, budgetMb = 0) => this.command({ op: 'raster', enabled: enabled, budget_mb: budgetMb }),
@@ -197,7 +208,7 @@ export class DocumentClient {
 
   /** Pick a tool, as its key would (V select, P pen, R rectangle, O ellipse). */
   setTool(tool: Tool) {
-    this.post?.({ ty: 'toolKey', key: TOOL_KEYS[tool], m: 0 });
+    this.post?.({ ty: 'toolKey', key: `tool:${tool}`, m: 0 });
   }
 
   /** Turn a rect or an ellipse into a path, as editing its points does.

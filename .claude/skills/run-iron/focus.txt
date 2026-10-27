@@ -1,0 +1,66 @@
+# A view's focus context (plans/specs/contexts.md §2.7, §5 step 2): the
+# palette and keymap each view offers, resolved from context data. The Main
+# view's toolbar and keys are std:free-2d's; once its world holds a
+# component's main (Make component on the square), its palette adds the port
+# tool. A "deck" composition whose notation is
+# defined only by a document context (extending std:free-2d) shows its own
+# palette and keys; a key picks a tool by the keymap of the view under the
+# pointer (B is table over the deck and nothing over Main; R the reverse).
+# The deck's context also orders the inspector: a rect selected there shows
+# Position and Fill only.
+nav
+ready
+eval [...document.querySelectorAll('.toolbar')].filter(e=>e.offsetParent).map(e=>[...e.querySelectorAll('button.tool')].map(b=>b.title))
+eval (async()=>{const v=await __iron.viewContext('viewer'); return v.text.split('\n').map(l=>l.trim())})()
+# The square made a component: its main is in the scene the Main view embeds,
+# the world the view's tools create into while the selection is in it.
+eval window.ctx = async () => { const v = await __iron.viewContext('viewer'); return [v.states, v.palette]; }
+dclick 540 460
+sleep 400
+eval ctx()
+clickel button[title^="Make a component"]
+sleep 800
+eval ctx()
+key Meta+z
+sleep 800
+eval ctx()
+key Escape
+key Escape
+sleep 300
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="3"><create id="$c" type="composition" name="deck" notation="deck" dims="2d"/></edit>`); return r.ok})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="4"><context name="deck" extends="std:free-2d">\n  <rule match="view" palette.tools="select text table" keys.tools="v:select t:text b:table" inspector.sections="position fill"/>\n</context></edit>`); return r.ok})()
+eval __dock.addPanel({ id: 'deck', component: 'view', title: 'Deck', params: { spec: { source: 'deck', notation: 'composition' } }, position: { referencePanel: 'viewer', direction: 'right' } }).id
+sleep 1500
+eval [...document.querySelectorAll('.toolbar')].filter(e=>e.offsetParent).map(e=>[...e.querySelectorAll('button.tool')].map(b=>b.title))
+eval (async()=>{const v=await __iron.viewContext('deck'); return v.text.split('\n').map(l=>l.trim().replace(/#\w+/, '#…'))})()
+# Keys go by the view under the pointer.
+pmove deck 200 200
+key b
+sleep 400
+eval [...document.querySelectorAll(".toolbar .tool.active")].map(b=>b.title)
+key r
+sleep 400
+eval [...document.querySelectorAll('.toolbar .tool.active')].map(b=>b.title)
+pmove viewer 200 200
+key r
+sleep 400
+eval [...document.querySelectorAll('.toolbar .tool.active')].map(b=>b.title)
+key b
+sleep 400
+eval [...document.querySelectorAll('.toolbar .tool.active')].map(b=>b.title)
+key v
+sleep 300
+# The inspector's sections follow the selection's view: the deck's context
+# keeps Position and Fill; Main shows std:free-2d's full list.
+eval (async()=>{const deck=(await __iron.view({fidelity:'skeleton', depth: 0})).match(/<composition id="(#\w+)" name="deck"/)[1]; const r=await __iron.edit(`<edit expect-version="5"><create id="$r" type="rect" parent="${deck}" x="100" y="100" w="120" h="80" color="#3366ccff"/></edit>`); return r.ok})()
+sleep 800
+pclick deck 160 140
+sleep 800
+eval [...document.querySelectorAll('.property-section')].map(e=>e.dataset.section ?? e.querySelector('.component')?.textContent.trim())
+pclick viewer 160 424
+sleep 800
+eval __iron.selection()
+eval [...document.querySelectorAll('.property-section')].map(e=>e.dataset.section ?? e.querySelector('.component')?.textContent.trim())
+logs applied|rejected|panicked
+errors
+quit

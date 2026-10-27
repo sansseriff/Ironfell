@@ -661,6 +661,70 @@ pub fn document_table_edit(app: &mut WorkerApp, table: String, verb: String, cel
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
+/// Write one context into the document (plans/specs/contexts.md §2.2; the
+/// model's `<context name="…">` verb): its markup replaces a document
+/// context of the same name, or a new `context` node holds it. One
+/// transaction.
+pub fn document_context(app: &mut WorkerApp, markup: String) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let (ops, node) = iron_document::contexts::put_ops(store.0.document(), &markup)?;
+        let applied = store.0
+            .apply(iron_document::TransactionInput { label: "context".into(), actor: iron_document::Actor::Model, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
+            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "context": node.to_string()}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// What the contexts resolve for a node, each value with the rule that set
+/// it (contexts.md §2.6), through the node's own containers.
+pub fn document_computed(app: &mut WorkerApp, node: String) -> String {
+    let run = || -> Result<serde_json::Value, String> {
+        let id = node.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
+        let store = app.world().get_resource::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let doc = store.0.document();
+        if !doc.is_live(id) {
+            return Err(format!("{id} is not a live node"));
+        }
+        let chain = iron_document::contexts::chain_of(doc, id);
+        let r = iron_document::contexts::Resolver::new(doc, store.0.contexts());
+        let i = chain.len() - 1;
+        let values: Vec<serde_json::Value> = r.computed(&chain, i).into_iter().map(|(f, v, by)| serde_json::json!({"field": f, "value": v, "by": by})).collect();
+        Ok(serde_json::json!({"ok": true, "values": values, "text": r.computed_markup(&chain, i)}))
+    };
+    run().unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// What a view offers and why (contexts.md §2.7): its focus (world, open
+/// scope, states) and each view field's value with the rule that set it.
+pub fn document_view_context(app: &mut WorkerApp, panel: String) -> String {
+    let run = || -> Result<serde_json::Value, String> {
+        let store = app.world().get_resource::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let focus = app.world().get_resource::<crate::bevy_app::view_focus::ViewFocus>().ok_or("no view focus")?;
+        let (_, f, offer) = focus.views.iter().find(|(p, ..)| *p == panel).ok_or_else(|| format!("no view {panel}"))?;
+        let r = iron_document::contexts::Resolver::new(store.0.document(), store.0.contexts());
+        Ok(serde_json::json!({
+            "ok": true,
+            "world": f.world.map(|w| w.to_string()),
+            "scope": f.scope.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "states": f.states,
+            "palette": offer.palette,
+            "keys": offer.keys,
+            "text": r.computed_view_markup(&panel, f),
+        }))
+    };
+    run().unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// The built-in contexts (`std:*`) in their markup: how things behave
+/// before a document says otherwise.
+pub fn document_contexts(_app: &mut WorkerApp) -> String {
+    serde_json::json!({"ok": true, "markup": iron_document::contexts::Library::builtin().print()}).to_string()
+}
+
 /// Detach a linked instance (component-model.md §5.2): what it derives
 /// becomes authored, one transaction.
 pub fn document_detach(app: &mut WorkerApp, entity: String) -> String {
@@ -933,6 +997,7 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
                         "edit": edit,
                         "via": via,
                         "why": why,
+                        "options": kind.options(field),
                     }))
                 })
                 .collect();
@@ -948,7 +1013,16 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     let port = inspect_port(&store.0, id);
     // The table this node is, or is a cell of (layout-and-tables.md §5.1).
     let table = iron_document::table::table_of(doc, id).map(|t| t.to_string());
-    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component, "main": main, "port": port, "table": table}).to_string()
+    // The inspector's sections, as the view holding the selection says
+    // (contexts.md §2.7): that view's focus, or the node's own world.
+    let focus = app
+        .world()
+        .get_resource::<crate::bevy_app::select::SelectTool>()
+        .and_then(|t| t.reach.get(&id))
+        .and_then(|r| app.world().get_resource::<crate::bevy_app::view_focus::ViewFocus>()?.views.iter().find(|(p, ..)| *p == r.panel).map(|(_, f, _)| f.clone()))
+        .unwrap_or_else(|| iron_document::contexts::Focus { world: iron_document::composition::composition_of(doc, id), ..Default::default() });
+    let sections = iron_document::contexts::Resolver::new(doc, store.0.contexts()).view_values(&focus).get(iron_document::contexts::Field::SECTIONS).to_owned();
+    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component, "main": main, "port": port, "table": table, "sections": sections.split_whitespace().collect::<Vec<_>>()}).to_string()
 }
 
 /// A main (component-authoring.md §1): its definition and the definition's

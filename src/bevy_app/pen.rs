@@ -28,8 +28,6 @@ use crate::document_bridge::{DocumentStore, PanelView, PanelViews, PendingTransa
 
 /// CSS px within which a click on the first point closes the path.
 const CLOSE_HIT: f64 = 8.0;
-/// CSS px a press must travel to make a smooth point instead of a corner.
-const DRAG: f64 = 3.0;
 
 /// The pen's state between frames.
 #[derive(Resource, Default)]
@@ -153,35 +151,35 @@ pub fn pen_tool_system(
         pen.path = None;
     }
 
-    // Tool keys: V, P, R and O switch (Figma's); Enter and Esc finish a
-    // path (Esc with nothing drawn goes back to selecting), and Esc puts
-    // the shape tools down.
+    // Tool picks (`tool:<id>`, from the palette or a view's keymap,
+    // `view_focus`); Enter and Esc finish a path (Esc with nothing drawn goes
+    // back to selecting), and Esc puts the shape tools down.
     let mut rest = Vec::new();
     for (key, m) in std::mem::take(&mut keys.0) {
         match key.as_str() {
-            "p" if m == 0 => *active = ActiveTool::Pen,
-            "r" if m == 0 => {
+            "tool:pen" => *active = ActiveTool::Pen,
+            "tool:rect" => {
                 *active = ActiveTool::Rect;
                 pen.path = None;
             }
-            "o" if m == 0 => {
+            "tool:ellipse" => {
                 *active = ActiveTool::Ellipse;
                 pen.path = None;
             }
-            "port" if m == 0 => {
+            "tool:port" => {
                 *active = ActiveTool::Port;
                 pen.path = None;
             }
-            "empty" if m == 0 => {
+            "tool:empty" => {
                 *active = ActiveTool::Empty;
                 pen.path = None;
             }
-            "table" if m == 0 => {
+            "tool:table" => {
                 *active = ActiveTool::Table;
                 pen.path = None;
             }
             "escape" if matches!(*active, ActiveTool::Rect | ActiveTool::Ellipse | ActiveTool::Port | ActiveTool::Empty | ActiveTool::Table) => *active = ActiveTool::Select,
-            "v" if m == 0 => {
+            "tool:select" => {
                 *active = ActiveTool::Select;
                 pen.path = None;
             }
@@ -289,7 +287,7 @@ pub fn pen_tool_system(
     let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
     let to_doc = view.affine().inverse();
     let mut drag = (to_doc * end) - (to_doc * start);
-    if drag.hypot() * view.zoom as f64 <= DRAG * dpr.0 {
+    if drag.hypot() * view.zoom as f64 <= crate::bevy_app::tolerances::SLOP as f64 * dpr.0 {
         drag = kurbo::Vec2::ZERO;
     } else if pointer.modifiers.shift {
         // Shift keeps the handle on an axis.

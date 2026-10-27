@@ -1353,3 +1353,161 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
     let _ = spare;
     out
 }
+
+/// The contexts showcase (plans/specs/contexts.md): three compositions whose
+/// behaviour comes from context data, in one transaction after the demo
+/// scene (so the demo's ids stay put; `?showcase=0` leaves it out, as the
+/// driver does). `outline`: a notation extending `std:free-2d` whose texts
+/// edit on entering, so a table's cell takes words on the first
+/// double-click; and a column stack to reorder (drag, Alt+arrows) whose items
+/// glide. `pitch`: a notation with its own palette, keys and inspector
+/// sections. `dials`: controls made only of inline `affords` facets.
+pub fn showcase(store: &iron_document::Store) -> Result<iron_document::TransactionInput, String> {
+    use iron_document::contexts;
+    use iron_document::facet::{Affords, Font, Layout, Text};
+    use iron_document::table;
+    let ty = |s: &str| TypeId::lookup(s).expect("registered type");
+    let mut scratch = iron_document::Store::with_document(store.document().clone());
+    let mut out: Vec<Op> = Vec::new();
+    let mut phase = |scratch: &mut iron_document::Store, ops: Vec<Op>| -> Result<(), String> {
+        scratch
+            .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
+            .map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;
+        out.extend(ops);
+        Ok(())
+    };
+    let named = |t: &str| {
+        let mut nm = DocName::default();
+        nm.text = Slot::Const(Value::Str(t.into()));
+        nm.wrap()
+    };
+    let at = |x: f64, y: f64| {
+        let mut t = Transform2d::default();
+        t.x = n(x);
+        t.y = n(y);
+        t
+    };
+    // Text draws with its fill; dark unless a caption says otherwise.
+    let words = |content: &str, size: f64| -> Vec<iron_document::Facet> {
+        let mut t = Text::default();
+        t.content = Slot::Const(Value::Str(content.into()));
+        let mut f = Font::default();
+        f.size = n(size);
+        let mut ink = Fill::default();
+        ink.color = Slot::Const(Value::Color([0.1, 0.1, 0.12, 1.0]));
+        vec![t.wrap(), f.wrap(), ink.wrap()]
+    };
+    let affords = |style: &str| {
+        let mut a = Affords::default();
+        a.style = Slot::Const(Value::Str(style.into()));
+        a.wrap()
+    };
+    let bound = |e: String| Slot::Bound(Expr::parse(&e).expect("showcase binding"));
+    let paint = |c: [f32; 4]| {
+        let mut f = Fill::default();
+        f.color = Slot::Const(Value::Color(c));
+        f.wrap()
+    };
+    let after_roots = |s: &iron_document::Store| s.document().roots().iter().filter_map(|&r| s.document().live(r)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+    let composition = |s: &iron_document::Store, id: NodeId, name: &str, notation: &str| {
+        let mut c = Composition::default();
+        c.notation = Slot::Const(Value::Str(notation.into()));
+        Op::Create { id, ty: ty("composition"), parent: None, order: after_roots(s), facets: vec![named(name), c.wrap()] }
+    };
+    let key = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let caption = |id: NodeId, parent: NodeId, i: u32, x: f64, y: f64, text: &str| {
+        let mut f: Vec<iron_document::Facet> = words(text, 14.0).into_iter().filter(|f| f.kind() != iron_document::FacetKind::Fill).collect();
+        f.push(at(x, y).wrap());
+        f.push(paint([0.35, 0.37, 0.42, 1.0]));
+        Op::Create { id, ty: ty("text"), parent: Some(parent), order: key(i), facets: f }
+    };
+
+    // Outline.
+    let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"outline\" extends=\"std:free-2d\">\n  <rule match=\"type:text\" affords.enter=\"edit\"/>\n</context>")?;
+    phase(&mut scratch, ops)?;
+    let outline = scratch.document().next_id();
+    let op = composition(&scratch, outline, "outline", "outline");
+    phase(&mut scratch, vec![op])?;
+    let ids = scratch.document().next_ids(1);
+    phase(&mut scratch, vec![caption(ids[0], outline, 0, 60.0, 24.0, "A notation whose texts edit on entering: double-click the table, then a cell, and type.\nArrows move between cells; Tab past the last adds a row; Esc goes back to the table.")])?;
+    let rows: Vec<Vec<String>> = ["Polyimide (µm) | 75 | 100 | 125", "S (µm) | 85 | 113 | 140", "Gap W (µm) | 153 | 138 | 125"].iter().map(|r| r.split('|').map(|c| c.trim().to_owned()).collect()).collect();
+    let spec = table::Spec { rows, preset: table::Preset::Light, header: 1, label_col: true, emphasis: Some(2), align: vec![] };
+    let (ops, _) = table::create_ops(scratch.document(), Some(outline), key(1), [60.0, 60.0], &spec)?;
+    phase(&mut scratch, ops)?;
+    let ids = scratch.document().next_ids(5);
+    let mut layout = Layout::default();
+    layout.mode = Slot::Const(Value::Enum("stack_y".into()));
+    layout.gap = n(8.0);
+    for p in [&mut layout.pad_t, &mut layout.pad_r, &mut layout.pad_b, &mut layout.pad_l] {
+        *p = n(12.0);
+    }
+    let item = |id: NodeId, i: u32, text: &str| {
+        let mut f = words(text, 18.0);
+        f.push(at(0.0, 0.0).wrap());
+        Op::Create { id, ty: ty("text"), parent: Some(ids[1]), order: key(i), facets: f }
+    };
+    phase(&mut scratch, vec![
+        caption(ids[0], outline, 2, 60.0, 250.0, "A column stack: double-click an item, drag it (the others glide aside), or press Alt+Up/Down."),
+        Op::Create { id: ids[1], ty: ty("group"), parent: Some(outline), order: key(3), facets: vec![at(60.0, 280.0).wrap(), layout.wrap(), named("stack")] },
+        item(ids[2], 0, "First point"),
+        item(ids[3], 1, "Second point"),
+        item(ids[4], 2, "Third point"),
+    ])?;
+
+    // Pitch.
+    let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"pitch\" extends=\"std:free-2d\">\n  <rule match=\"view\" palette.tools=\"select text table\" keys.tools=\"v:select t:text b:table\" inspector.sections=\"position text fill\"/>\n</context>")?;
+    phase(&mut scratch, ops)?;
+    let pitch = scratch.document().next_id();
+    let op = composition(&scratch, pitch, "pitch", "pitch");
+    phase(&mut scratch, vec![op])?;
+    let ids = scratch.document().next_ids(3);
+    let mut size = Size::default();
+    size.w = n(220.0);
+    size.h = n(120.0);
+    let mut title = words("Pitch", 40.0);
+    title.push(at(60.0, 120.0).wrap());
+    phase(&mut scratch, vec![
+        caption(ids[0], pitch, 0, 60.0, 24.0, "The pitch notation's own tools (Move, Text, Table; B for a table) and an inspector of\nPosition, Text and Fill only, from one context in this document. Compare the toolbar with Main's."),
+        Op::Create { id: ids[1], ty: ty("text"), parent: Some(pitch), order: key(1), facets: title },
+        Op::Create { id: ids[2], ty: ty("rect"), parent: Some(pitch), order: key(2), facets: vec![at(60.0, 200.0).wrap(), size.wrap(), paint([0.95, 0.55, 0.2, 1.0]), named("card")] },
+    ])?;
+
+    // Dials.
+    let dials = scratch.document().next_id();
+    let op = composition(&scratch, dials, "dials", "free");
+    phase(&mut scratch, vec![op])?;
+    let ids = scratch.document().next_ids(11);
+    let slider = ids[1];
+    let mut s = Slider::default();
+    s.value = n(0.5);
+    let rect = |w: f64, h: f64| {
+        let mut sz = Size::default();
+        sz.w = n(w);
+        sz.h = n(h);
+        sz
+    };
+    let mut needle_at = at(300.0, 200.0);
+    needle_at.rot = bound(format!("{slider}.slider.value * 3.14159265"));
+    let mut bar = rect(40.0, 0.0);
+    bar.h = bound(format!("{slider}.slider.value * 200"));
+    let control = |id: NodeId, i: u32, y: f64, text: &str, style: &str| {
+        let mut f = words(text, 22.0);
+        f.push(at(60.0, y).wrap());
+        f.push(affords(style));
+        Op::Create { id, ty: ty("text"), parent: Some(dials), order: key(i), facets: f }
+    };
+    phase(&mut scratch, vec![
+        caption(ids[0], dials, 0, 60.0, 16.0, "Controls made only of data (inline affords facets): turn the red needle, drag the blue bar's bottom,\nclick the three words. Each gesture drives its node's own leaf through its binding; one undo each."),
+        Op::Create { id: slider, ty: ty("slider"), parent: Some(dials), order: key(1), facets: vec![at(60.0, 60.0).wrap(), s.wrap(), named("level")] },
+        Op::Create { id: ids[2], ty: ty("rect"), parent: Some(dials), order: key(2), facets: vec![needle_at.wrap(), rect(80.0, 6.0).wrap(), paint([0.82, 0.19, 0.19, 1.0]), named("needle"), affords("drag: ring; drives: transform2d.rot; step: 0.2618")] },
+        Op::Create { id: ids[3], ty: ty("rect"), parent: Some(dials), order: key(3), facets: vec![at(500.0, 100.0).wrap(), bar.wrap(), paint([0.19, 0.44, 0.82, 1.0]), named("bar"), affords("drag: track; axis: y; drives: size.h")] },
+        control(ids[4], 4, 320.0, "Italic (click)", "activate: toggle; drives: font.italic"),
+        control(ids[5], 5, 380.0, "Bigger (click)", "activate: step; step: 4; drives: font.size"),
+        control(ids[6], 6, 440.0, "Align (click)", "activate: cycle; drives: font.align"),
+        caption(ids[7], dials, 7, 230.0, 300.0, "needle: rot = level × π"),
+        caption(ids[8], dials, 8, 470.0, 320.0, "bar: h = level × 200"),
+        caption(ids[9], dials, 9, 60.0, 90.0, "level"),
+    ])?;
+    let _ = ids[10];
+    Ok(iron_document::TransactionInput { label: "open showcase".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: out, exact: false })
+}

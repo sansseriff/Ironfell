@@ -32,6 +32,10 @@ function defaultLayout(api: DockviewApi) {
     ['thermal', 'Thermal'],
     ['piston', 'Piston'],
     ['components', 'Components'],
+    // The contexts showcase (absent with `?showcase=0`).
+    ['outline', 'Outline'],
+    ['pitch', 'Pitch'],
+    ['dials', 'Dials'],
   ]) {
     view(id, title, { source: id, notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' }, { inactive: true });
   }

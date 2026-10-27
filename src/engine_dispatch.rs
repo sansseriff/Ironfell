@@ -31,6 +31,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "context" => { arity(args,1)?; crate::engine_api::document_context(app,argument::<String>(args,0)?) },
         "computed" => { arity(args,1)?; crate::engine_api::document_computed(app,argument::<String>(args,0)?) },
         "view_context" => { arity(args,1)?; crate::engine_api::document_view_context(app,argument::<String>(args,0)?) },
+        "showcase" => { arity(args,0)?; crate::engine_api::document_showcase(app) },
         "contexts" => { arity(args,0)?; crate::engine_api::document_contexts(app) },
         "table_edit" => { arity(args,3)?; crate::engine_api::document_table_edit(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "link" => { arity(args,4)?; crate::engine_api::document_link(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },

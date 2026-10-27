@@ -1,0 +1,23 @@
+# The contexts showcase (src/document_bridge/demo.rs `showcase`): with the
+# app's default URL (no `showcase=0`) the Outline, Pitch and Dials tabs hold
+# compositions whose behaviour comes from context data. Each tab's toolbar,
+# and Dials' controls by their computed values.
+nav http://localhost:5173/Ironfell/?gfx=webgl2
+ready
+sleep 1500
+eval (async()=>{const v=await __iron.view({fidelity:'skeleton', depth: 0}); return [...v.matchAll(/<composition id="[^"]+" name="(outline|pitch|dials)"/g)].map(m=>m[1])})()
+tab Outline
+sleep 800
+eval [...document.querySelectorAll('.toolbar')].filter(e=>e.offsetParent).map(e=>[...e.querySelectorAll('button.tool')].map(b=>b.title))
+shot showcase-outline
+tab Pitch
+sleep 800
+eval [...document.querySelectorAll('.toolbar')].filter(e=>e.offsetParent).map(e=>[...e.querySelectorAll('button.tool')].map(b=>b.title))
+shot showcase-pitch
+tab Dials
+sleep 800
+eval (async()=>{const all=await __iron.view({fidelity:'skeleton', depth: 0}); const d=all.match(/<composition id="(#\w+)" name="dials"/)[1]; const v=await __iron.view({fidelity:'full', scope: d}); const id=v.match(/<rect id="(#\w+)" name="needle"/)[1]; return (await __iron.computed(id)).text.split('\n').filter(l=>/drag|drives/.test(l)).map(l=>l.trim().replace(/#\w+/, '#…'))})()
+shot showcase-dials
+logs applied|rejected|panicked
+errors
+quit

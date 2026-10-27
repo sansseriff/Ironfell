@@ -346,6 +346,10 @@ export class DocumentClient {
           if (shapes > 0) void this.command({ op: 'stress', shapes: shapes });
           const meters = Number(new URLSearchParams(location.search).get('meters'));
           if (meters > 0) void this.command({ op: 'meters', n: meters });
+          // The contexts showcase (plans/specs/contexts.md): its outline,
+          // pitch and dials tabs. `?showcase=0` leaves it out (the driver does,
+          // so its scripts' ids stay those after the demo scene).
+          if (new URLSearchParams(location.search).get('showcase') !== '0') void this.command({ op: 'showcase' });
         }
         return true;
       case 'documentSaved':

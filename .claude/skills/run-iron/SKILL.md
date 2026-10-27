@@ -54,6 +54,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `keys.txt` | ~30 s |
 | `sequence.txt` | ~30 s |
 | `controls.txt` | ~30 s |
+| `showcase.txt` | ~20 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -1678,6 +1679,38 @@ Native: `--test contexts`
 (`a_definitions_part_declares_its_drag_for_every_instance_and_drives_through_its_binding`:
 a rule on the standard meter's pivot reaches both placed meters, and turning one
 moves its `in`).
+
+## The contexts showcase (2026-10-27)
+
+The app's own URL adds three tabs after the demo scene, one transaction "open
+showcase" (`document_bridge::demo::showcase`): **Outline** (a notation whose texts
+edit on entering: a table's cell takes words on the first double-click; a column
+stack to drag, glide and Alt+arrow), **Pitch** (a notation with its own palette, keys
+and inspector sections) and **Dials** (controls made of inline `affords` facets).
+`drive.ts`'s default URL carries `showcase=0`, so every other script's ids follow the
+demo scene as before; this script navigates without it. A saved layout from before
+2026-10-27 lacks the tabs: open `?layout=default` or use the Document view's **Reset
+layout**. After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < showcase.txt; cd -
+```
+
+Inspect `screenshots/showcase-outline.png`, `showcase-pitch.png` and
+`showcase-dials.png`. Expected, minus `nav` and `ready` lines:
+
+```
+["outline","pitch","dials"]
+tab Outline
+[["Move (V)","Rectangle (R)","Pen (P)","Text (T)"]]
+tab Pitch
+[["Move (V)","Text (T)","Table (B)"]]
+tab Dials
+["affords.drag=\"ring\" affords.drag.by=\"inline on #…\"","affords.drives=\"transform2d.rot\" affords.drives.by=\"inline on #…\""]
+applied "open demo scene" (298 ops, System) -> v1
+applied "open showcase" (40 ops, System) -> v2
+(no page errors)
+```
 
 ## Free running and the Stats view (2026-10-18)
 

@@ -719,6 +719,24 @@ pub fn document_view_context(app: &mut WorkerApp, panel: String) -> String {
     run().unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
+/// Add the contexts showcase (`document_bridge::demo::showcase`): the
+/// outline, pitch and dials compositions, one transaction.
+pub fn document_showcase(app: &mut WorkerApp) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let doc = store.0.document();
+        if iron_document::composition::compositions(doc).iter().any(|&c| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).as_deref() == Some("dials")) {
+            return Ok(serde_json::json!({"ok": true, "already": true}));
+        }
+        let tx = crate::document_bridge::showcase(&store.0)?;
+        let applied = store.0.apply(tx).map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
 /// The built-in contexts (`std:*`) in their markup: how things behave
 /// before a document says otherwise.
 pub fn document_contexts(_app: &mut WorkerApp) -> String {

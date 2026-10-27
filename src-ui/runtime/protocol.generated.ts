@@ -20,6 +20,7 @@ export type DocumentCommand =
   | { op: 'context'; markup: string }
   | { op: 'computed'; node: string }
   | { op: 'view_context'; panel: string }
+  | { op: 'showcase' }
   | { op: 'contexts' }
   | { op: 'table_edit'; table: string; verb: string; cells: string }
   | { op: 'link'; a: string; b: string; keep: string; actor: string }
@@ -73,6 +74,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'context': return { fn: command.op, args: [command.markup] };
     case 'computed': return { fn: command.op, args: [command.node] };
     case 'view_context': return { fn: command.op, args: [command.panel] };
+    case 'showcase': return { fn: command.op, args: [] };
     case 'contexts': return { fn: command.op, args: [] };
     case 'table_edit': return { fn: command.op, args: [command.table, command.verb, command.cells] };
     case 'link': return { fn: command.op, args: [command.a, command.b, command.keep, command.actor] };

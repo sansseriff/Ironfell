@@ -35,6 +35,10 @@ pub enum Kind {
     /// A declared transition (affordances.md §8.2): `<ease> <ms> [<when>]`,
     /// or `none`.
     Motion,
+    /// One of the node's own leaves (`transform2d.rot`), or empty.
+    Leaf,
+    /// A number.
+    Number,
 }
 
 /// A declared transition, parsed (`motion.placement="out 160 layout"`).
@@ -100,7 +104,18 @@ pub const FIELDS: &[FieldSpec] = &[
         options: &[""],
         doc: "the handles a selected node offers: box (resize and rotate), shape (a rect's corner radii, an ellipse's arc)",
     },
-    FieldSpec { domain: "affords", name: "drag", view: false, kind: Kind::Choice, options: &["none", "point", "track", "sequence"], doc: "what a drag on it does: moves it (point), drives its value along its track (a slider's), or moves it among its container's items (sequence; the others open a gap)" },
+    FieldSpec {
+        domain: "affords",
+        name: "drag",
+        view: false,
+        kind: Kind::Choice,
+        options: &["none", "point", "track", "ring", "sequence"],
+        doc: "what a drag on it does: moves it (point); drives a value along a track (a slider's, or `drives` along `axis`) or around its origin (ring, `drives` in radians); or moves it among its container's items (sequence; the others open a gap)",
+    },
+    FieldSpec { domain: "affords", name: "drives", view: false, kind: Kind::Leaf, options: &[""], doc: "the node's own leaf a track, ring or activate changes, through its binding (a bound leaf moves its source; one that cannot follow refuses)" },
+    FieldSpec { domain: "affords", name: "activate", view: false, kind: Kind::Choice, options: &["none", "toggle", "step", "cycle"], doc: "what a click does to `drives`: flips a yes/no, adds `step`, or picks the next of an enum's values" },
+    FieldSpec { domain: "affords", name: "step", view: false, kind: Kind::Number, options: &["1"], doc: "what `activate=step` adds; a ring's snap with Shift (radians)" },
+    FieldSpec { domain: "affords", name: "axis", view: false, kind: Kind::Choice, options: &["x", "y", "-x", "-y"], doc: "the direction a track drag increases `drives`, in the node's parent's space" },
     FieldSpec {
         domain: "keys",
         name: "nav",
@@ -153,11 +168,15 @@ impl Field {
     pub const SNAP_TARGET: Field = Field(4);
     pub const GRIPS: Field = Field(5);
     pub const DRAG: Field = Field(6);
-    pub const NAV: Field = Field(7);
-    pub const PLACEMENT: Field = Field(8);
-    pub const PALETTE: Field = Field(9);
-    pub const KEYS: Field = Field(10);
-    pub const SECTIONS: Field = Field(11);
+    pub const DRIVES: Field = Field(7);
+    pub const ACTIVATE: Field = Field(8);
+    pub const STEP: Field = Field(9);
+    pub const AXIS: Field = Field(10);
+    pub const NAV: Field = Field(11);
+    pub const PLACEMENT: Field = Field(12);
+    pub const PALETTE: Field = Field(13);
+    pub const KEYS: Field = Field(14);
+    pub const SECTIONS: Field = Field(15);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]
@@ -235,7 +254,13 @@ pub struct Context {
 pub struct Source {
     pub context: u16,
     pub rule: u16,
+    /// The node whose inline `affords` facet declared it, for an inline
+    /// exception (`context` is then [`INLINE`]).
+    pub node: Option<NodeId>,
 }
+
+/// [`Source::context`] for a value an inline `affords` facet declared.
+pub const INLINE: u16 = u16::MAX;
 
 /// A node's or a view's resolved values, each with its source (`None`: the
 /// universal default).
@@ -368,6 +393,12 @@ impl Library {
 
     /// Where a value came from, for views: `std:table rule 1`.
     pub fn describe(&self, s: Source) -> String {
+        if s.context == INLINE {
+            return match s.node {
+                Some(n) => format!("inline on {n}"),
+                None => "inline".into(),
+            };
+        }
         let c = &self.contexts[s.context as usize];
         match c.rules[s.rule as usize].origin {
             Some((node, i)) => format!("{} rule {} from {node}", c.id, i + 1),
@@ -452,7 +483,24 @@ impl<'a> Resolver<'a> {
         if let Some(c) = container.and_then(|n| self.lib.for_node(self.doc, n)) {
             self.apply(&mut v, c, Some(ty), &[], |p| p == Position::All || p == Position::Children);
         }
+        // 4. Inline exceptions (`affords` facets): its container's for its
+        //    children, then its own.
+        if let Some(c) = container {
+            self.apply_inline(&mut v, c, "children");
+        }
+        self.apply_inline(&mut v, chain[i], "self");
         v
+    }
+
+    fn apply_inline(&self, v: &mut Values, node: NodeId, scope: &str) {
+        let Some(f) = self.doc.get::<crate::facet::Affords>(node) else { return };
+        if f.scope.constant().and_then(|s| s.as_str()).unwrap_or("self") != scope {
+            return;
+        }
+        let style = f.style.constant().and_then(|s| s.as_str()).unwrap_or("");
+        if let Ok(rule) = parse_style(style, scope) {
+            v.apply(&rule, Source { context: INLINE, rule: 0, node: Some(node) });
+        }
     }
 
     /// The effective container of `chain[i]`: the nearest node before it
@@ -510,7 +558,7 @@ impl<'a> Resolver<'a> {
             };
             let state = rule.state.as_deref().is_none_or(|s| states.contains(&s));
             if position(rule.position) && typed && state {
-                v.apply(rule, Source { context: c as u16, rule: r as u16 });
+                v.apply(rule, Source { context: c as u16, rule: r as u16, node: None });
             }
         }
     }
@@ -536,6 +584,12 @@ impl<'a> Resolver<'a> {
             }
         }
         self.lib.notation("free", false)
+    }
+
+    /// Where a field's value came from: a rule, an inline facet, or the
+    /// default.
+    pub fn describe_source(&self, v: &Values, f: Field) -> String {
+        v.source(f).map(|s| self.lib.describe(s)).unwrap_or_else(|| "default".into())
     }
 
     fn describe_all(&self, v: &Values, view: bool) -> Vec<(String, String, String)> {
@@ -605,6 +659,22 @@ pub fn chain_of(doc: &Document, id: NodeId) -> Vec<NodeId> {
     }
     chain.reverse();
     chain
+}
+
+/// An inline `affords` facet's style (affordances.md §4.4), CSS's `style`
+/// attribute for behaviour: `field: value` pairs separated by `;`, a bare
+/// field meaning the `affords` domain (`drag: ring; drives: transform2d.rot;
+/// motion.placement: out 120`). Parsed as one rule for `scope` (`self` or
+/// `children`).
+pub fn parse_style(style: &str, scope: &str) -> Result<Rule, String> {
+    let mut attrs = vec![("match".to_owned(), scope.to_owned())];
+    for part in style.split(';').map(str::trim).filter(|p| !p.is_empty()) {
+        let (k, v) = part.split_once(':').ok_or_else(|| format!("{part}: expected field: value"))?;
+        let k = k.trim();
+        let k = if k.contains('.') { k.to_owned() } else { format!("affords.{k}") };
+        attrs.push((k, v.trim().to_owned()));
+    }
+    rule(attrs)
 }
 
 /// Ops writing one context into a document (the model's `<context>` verb):
@@ -776,6 +846,16 @@ fn rule(attrs: Vec<(String, String)>) -> Result<Rule, String> {
                     return Err(format!("{k}=\"{v}\": unknown word {w} ({})", vocab.join(", ")));
                 }
                 Val::Text(Arc::from(v.split_whitespace().collect::<Vec<_>>().join(" ")))
+            }
+            Kind::Leaf => {
+                if !v.is_empty() {
+                    v.parse::<crate::facet::LeafPath>().map_err(|e| format!("{k}=\"{v}\": {e}"))?;
+                }
+                Val::Text(Arc::from(v.as_str()))
+            }
+            Kind::Number => {
+                v.trim().parse::<f64>().ok().filter(|n| n.is_finite()).ok_or_else(|| format!("{k}=\"{v}\": expected a number"))?;
+                Val::Text(Arc::from(v.trim()))
             }
             Kind::Motion => {
                 let v = v.split_whitespace().collect::<Vec<_>>().join(" ");

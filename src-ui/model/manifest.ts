@@ -70,7 +70,12 @@ CONTEXTS  (how things behave: data, not code)
   alone in its <edit>: rules after the built-in's, so they win, in this document only.
   match is all, self or children, with type:a|b and state:s. Writing a name again
   replaces its rules; <delete> its id removes them. Views print a document's contexts
-  in this markup. Fields:
+  in this markup. One node's exception is its affords facet, CSS's style attribute:
+      <set id="#n" affords.style="drag: ring; drives: transform2d.rot"/>
+  (a bare field is affords.*; affords.scope="children" applies it to its children).
+  On a definition's template part it holds for every instance. A gesture drives the
+  node's own leaf through its binding, so a needle bound to a slider moves the slider.
+  Fields:
 ${contextFields}
 
 VALUES

@@ -3,7 +3,8 @@
 **Status:** Proposed 2026-10-26 (third draft, after review the same day). Phases A1 and A2
 built 2026-10-26/27 with `contexts.md`'s foundation (its §5 steps 1 and 3); B in part
 (ARIA keys for lists and grids, sequence, declared transitions; `contexts.md` §5
-step 5 says what and what is left); C–D to come. Grew out of
+step 5 says what and what is left); C in its core (inline facet, definition rules
+through expansion, drives, ring, activate; demo 3; §5 step 6 there); D to come. Grew out of
 [`layout-and-tables.md`](layout-and-tables.md) §10.
 **Scope:** How input on 2D content is resolved (which node, which manipulation, which
 leaf, what entering means, how focus moves) and how its presented values move when

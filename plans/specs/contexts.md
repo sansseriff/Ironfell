@@ -1,6 +1,6 @@
 # Contexts: Iron's behaviour as data (master plan)
 
-**Status:** §5 steps 0–4 built 2026-10-26/27 (4 in part), step 5 in part; the rest proposed. The user supports the direction ("I'm not afraid of
+**Status:** §5 steps 0–4 built 2026-10-26/27 (4 in part), step 5 in part, step 6 (affordances C) in its core; the rest proposed. The user supports the direction ("I'm not afraid of
 thinking big on this topic. Now is the time in this program to have these overarching
 ideas"). Nothing built. This plan owns the shared foundation and the order of work;
 domain specs own their detail: [`affordances.md`](affordances.md) (interaction and
@@ -422,6 +422,27 @@ behaviour-neutral refactor before anything shows.
    as data.
 6. **`affordances.md` C**: document contexts (decide open question 1 here), `notation`
    resolving to a context, definition rules, the inline facet. Demos 3–4.
+   *Done 2026-10-27, demo 3 and the core of C:* the inline `affords` facet (`style`,
+   CSS-like `drag: ring; drives: transform2d.rot`, a bare field meaning `affords.*`;
+   `scope` `self` or `children`), applied after a node's contexts, the container's
+   `children` facet before its own; values it sets print `.by="inline on #n"`; bad
+   style is refused (`bad_context`). **Definition rules need no mechanism of their
+   own:** the facet on a template's part is copied into every instance by expansion,
+   so editing the definition changes every instance's next drag (the standard meter's
+   pivot, natively). New fields `affords.drives` (one of the node's own leaves),
+   `affords.activate` (`toggle`, `step`, `cycle`), `affords.step`, `affords.axis`, and
+   `ring` among the drag kinds. A press on a control (the deepest node on the chain
+   declaring one; Cmd still selects) drives its leaf through `Store::preview_target`,
+   so a bound leaf moves its source and one that cannot follow is refused with its
+   reason; an activation is a click, `cycle` taking the enum's values from the schema.
+   Shown by `controls.txt` (demo 3, with plain nodes rather than components: a needle
+   turning a slider through its binding, a bar sliding it, toggle, stepper, choice).
+   Open question 1 stays settled as markup in one leaf. **Not done:** a `context`
+   facet naming a document context for one container (`notation` and built-in names
+   cover today's cases), presentation-only bindings on interaction state (needs B's
+   readable state), `track` along a path, and demo 4 (a table and charts of one
+   dataset, edited from either side: a bar drag already edits bound data; typing in a
+   bound cell needs an inverse for formatted text).
 7. **`chrome.md`** C1–C5.
 8. **A schematic notation** (13), with what it needs: snapping settings (6), domain
    libraries (10), parts as data (11), the wire tool. §6's demo.

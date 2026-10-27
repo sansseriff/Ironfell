@@ -541,6 +541,15 @@ facets! {
     /// relations. `domain` is informational; the ports' kinds decide.
     Connection / "connection" => Connection { domain: Str = Value::Str(String::new()) }
 
+    /// A node's own behaviour, the inline exception to its contexts
+    /// (affordances.md §4.4): `style` is CSS-like, `drag: ring; drives:
+    /// transform2d.rot`, a bare field meaning the `affords` domain; `scope`
+    /// says whether it is for the node itself or for its children.
+    Affords / "affords" => Affords {
+        style: Str = Value::Str(String::new()),
+        scope: Enum = Value::Enum("self".to_owned()) => ["self", "children"],
+    }
+
     /// A document's own context (plans/specs/contexts.md §2.2), in the
     /// markup the built-in ones are written in: `<context name="…">` holding
     /// `<rule …/>`s. One whose name is a built-in context's (`std:table`)

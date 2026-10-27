@@ -486,6 +486,87 @@ enum Gesture {
     /// An item of a container that lays its items out in sequence, dragged
     /// among them (`affords.drag="sequence"`, affordances.md §6).
     Sequence(Sequence),
+    /// A control driving one of its node's own leaves (`affords.drives`):
+    /// turned (`ring`) or slid (`track` along `axis`), through the leaf's
+    /// binding (affordances.md §5.2, §5.4).
+    Drive(Drive),
+}
+
+pub(crate) struct Drive {
+    view: PanelView,
+    id: NodeId,
+    leaf: LeafPath,
+    ring: bool,
+    /// The leaf's value at the press, and the press, panel document px.
+    v0: f64,
+    start: Point,
+    /// A ring's centre (the node's origin), panel px, and the angle turned
+    /// so far, unwrapped; a track's direction (unit) and leaf units per px.
+    origin: Point,
+    last: f64,
+    turned: f64,
+    dir: kurbo::Vec2,
+    per_px: f64,
+    step: f64,
+    label: String,
+}
+
+/// What a press on a control does, if a node on the hit's chain (deepest
+/// first, down to the target) declares one: a drive (`ring`, or `track`
+/// with `drives`) or an activation. Controls stay live inside components,
+/// as a slider's knob does.
+enum Control {
+    Drive(Drive),
+    Activate { id: NodeId, leaf: LeafPath, kind: String, step: f64 },
+}
+
+fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Point) -> Option<Control> {
+    let cx = geo.contexts();
+    for j in (k..chain.len()).rev() {
+        let v = cx.values(chain, j);
+        let drives = v.get(Field::DRIVES);
+        if drives.is_empty() {
+            continue;
+        }
+        let id = chain[j];
+        let leaf_path: LeafPath = drives.parse().ok()?;
+        let step = v.get(Field::STEP).parse::<f64>().unwrap_or(1.0);
+        if v.get(Field::ACTIVATE) != "none" {
+            return Some(Control::Activate { id, leaf: leaf_path, kind: v.get(Field::ACTIVATE).to_owned(), step });
+        }
+        let drag = v.get(Field::DRAG);
+        if drag != "ring" && drag != "track" {
+            continue;
+        }
+        let v0 = geo.store.resolved(id, leaf_path).and_then(|x| x.as_f64())?;
+        let m = geo.space(&chain[..=j])? * geo.world(id);
+        let origin = m * Point::ORIGIN;
+        let unit = match v.get(Field::AXIS) {
+            "y" => kurbo::Vec2::new(0.0, 1.0),
+            "-x" => kurbo::Vec2::new(-1.0, 0.0),
+            "-y" => kurbo::Vec2::new(0.0, -1.0),
+            _ => kurbo::Vec2::new(1.0, 0.0),
+        };
+        let along = linear(m)(unit);
+        let a0 = (start - origin).atan2();
+        let verb = if drag == "ring" { "turn" } else { "set" };
+        return Some(Control::Drive(Drive {
+            view: view.clone(),
+            id,
+            leaf: leaf_path,
+            ring: drag == "ring",
+            v0,
+            start,
+            origin,
+            last: a0,
+            turned: 0.0,
+            dir: along.normalize(),
+            per_px: 1.0 / along.hypot().max(1e-9),
+            step,
+            label: format!("{verb} {}", drives),
+        }));
+    }
+    None
 }
 
 /// A reorder in progress: the item floats at the pointer while the store
@@ -609,6 +690,8 @@ enum AfterPress {
     JointMove { anchor: NodeId, click: Click },
     /// A drag takes a standard component out of the Library tab.
     Library { key: String, click: Click },
+    /// A click activates a control (`affords.activate`); a drag does nothing.
+    Activate { id: NodeId, leaf: LeafPath, kind: String, step: f64 },
 }
 
 /// What a press that did not become a drag does on release.
@@ -1790,6 +1873,7 @@ pub fn select_tool_system(
                         }
                     }
                     Gesture::Sequence(_) => store.0.set_layout_preview(None),
+                    Gesture::Drive(_) => store.0.cancel_gesture(),
                     _ => {}
                 }
                 tool.marquee = None;
@@ -2451,6 +2535,24 @@ pub fn select_tool_system(
 
             let cx = geo.contexts();
             let mut k = target_index(&cx, &chain, &here, deep);
+            // A control on the chain takes the press (not with Cmd, which
+            // selects what is under the pointer).
+            if !deep && view.dims == Dims::Two && *active == ActiveTool::Select && let Some(control) = control_at(&geo, &view, &chain, k, doc_point(&view)) {
+                match control {
+                    Control::Drive(d) => match store.0.handle(d.id, d.leaf) {
+                        Handle::Locked(why) => info!("{} cannot follow: {why}", d.id),
+                        _ => {
+                            store.0.begin_gesture(&[d.id]);
+                            tool.gesture = Gesture::Drive(d);
+                            break 'press;
+                        }
+                    },
+                    Control::Activate { id, leaf, kind, step } => {
+                        tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Activate { id, leaf, kind, step } };
+                        break 'press;
+                    }
+                }
+            }
             // A double-click on a selected node enters it.
             let dbl = tool.last_click.is_some_and(|(t, p, id)| now - t <= DOUBLE_CLICK.0 && p.distance(pointer.screen) <= DOUBLE_CLICK.1 && id == chain[k]);
             if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
@@ -2609,6 +2711,7 @@ pub fn select_tool_system(
     let view_gone = match &mut tool.gesture {
         Gesture::Marquee { view, .. } => follow(view),
         Gesture::Sequence(q) => follow(&mut q.view),
+        Gesture::Drive(d) => follow(&mut d.view),
         Gesture::Edit(m) => m.view_mut().is_some_and(follow),
         _ => false,
     };
@@ -2639,6 +2742,8 @@ pub fn select_tool_system(
             let mut sequence = matches!(then, AfterPress::Move { .. }).then(|| sequence_drag(&geo, &view, &movers(&reaches, &view.panel), p0)).flatten();
             match then {
                 AfterPress::Move { .. } if sequence.is_some() => tool.gesture = Gesture::Sequence(sequence.take().expect("checked")),
+                // A drag off a control is not a click: nothing happens.
+                AfterPress::Activate { .. } => tool.gesture = Gesture::Idle,
                 AfterPress::Move { .. } => {
                     let mine = movers(&reaches, &view.panel);
                     let mut drags = Vec::new();
@@ -2737,6 +2842,25 @@ pub fn select_tool_system(
                 view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
             }
             Gesture::Library { at, .. } => *at = screen,
+            Gesture::Drive(d) => {
+                let at = d.view.affine().inverse() * screen;
+                let v = if d.ring {
+                    // Unwrapped across ±π, so a full turn keeps counting.
+                    let a = (at - d.origin).atan2();
+                    d.turned += (a - d.last + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+                    d.last = a;
+                    let mut t = d.turned;
+                    if mods(MOD_SHIFT) && d.step > 0.0 {
+                        t = (t / d.step).round() * d.step;
+                    }
+                    d.v0 + t
+                } else {
+                    d.v0 + (at - d.start).dot(d.dir) * d.per_px
+                };
+                if let Err(why) = store.0.preview_target(d.id, d.leaf, Value::Number(v)) {
+                    info!("{} cannot follow: {why}", d.id);
+                }
+            }
             // The item lands among the others where its centre passes their
             // midpoints; the store lays the container out so.
             Gesture::Sequence(q) => {
@@ -2817,9 +2941,30 @@ pub fn select_tool_system(
     if pointer.just_released_left {
         tool.owned = None;
         match std::mem::take(&mut tool.gesture) {
+            Gesture::Press { then: AfterPress::Activate { id, leaf, kind, step }, .. } => {
+                let now = store.0.resolved(id, leaf);
+                let next = match (kind.as_str(), now) {
+                    ("toggle", Some(Value::Bool(b))) => Some(Value::Bool(!b)),
+                    ("step", Some(Value::Number(n))) => Some(Value::Number(n + step)),
+                    ("cycle", Some(Value::Enum(e))) => leaf.facet.options(leaf.field).and_then(|o| {
+                        let i = o.iter().position(|x| *x == e).map_or(0, |i| (i + 1) % o.len());
+                        Some(Value::Enum(o[i].to_owned()))
+                    }),
+                    _ => None,
+                };
+                match next {
+                    Some(v) => {
+                        if let Err(why) = store.0.set_through_handle(id, leaf, v, format!("{kind} {leaf}"), Actor::Human, crate::host_services::unix_millis()) {
+                            info!("{id} cannot follow: {why}");
+                        }
+                    }
+                    None => info!("{id}: {kind} needs a {} leaf", match kind.as_str() { "toggle" => "yes/no", "step" => "number", _ => "choice" }),
+                }
+            }
             Gesture::Press { then, .. } => {
                 let click = match then {
                     AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } | AfterPress::Link { click, .. } | AfterPress::JointMove { click, .. } | AfterPress::Library { click, .. } => click,
+                    AfterPress::Activate { .. } => Click::Keep,
                 };
                 match click {
                     Click::Keep => {}
@@ -2873,6 +3018,7 @@ pub fn select_tool_system(
                 });
             }
             Gesture::Marquee { .. } => tool.marquee = None,
+            Gesture::Drive(d) => gestures.0.push(GestureRequest::Commit(d.label)),
             // Dropped where it started: nothing to write.
             Gesture::Sequence(q) => {
                 store.0.set_layout_preview(None);

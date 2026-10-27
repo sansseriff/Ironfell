@@ -35,7 +35,7 @@ fn the_builtin_library_prints_back_to_itself() {
 #[test]
 fn bad_markup_says_what_is_wrong() {
     let err = |s: &str| contexts::parse(s).unwrap_err();
-    assert_eq!(err(r#"<context name="k"><rule match="all" affords.cursor="move"/></context>"#), "unknown field affords.cursor (affords.select, affords.enter, affords.edit, affords.grips, affords.drag)");
+    assert_eq!(err(r#"<context name="k"><rule match="all" affords.cursor="move"/></context>"#), "unknown field affords.cursor (affords.select, affords.enter, affords.edit, affords.grips, affords.drag, affords.drives, affords.activate, affords.step, affords.axis)");
     assert!(err(r#"<context name="k"><rule match="all" sound.x="1"/></context>"#).starts_with("unknown domain in sound.x"));
     assert_eq!(err(r#"<context name="k"><rule match="all" affords.select="maybe"/></context>"#), "affords.select=\"maybe\": expected one of none, target, through, closed, window, inert");
     assert_eq!(err(r#"<context name="k"><rule match="type:widget" affords.select="none"/></context>"#), "unknown node type widget");
@@ -126,7 +126,7 @@ fn bad_context_markup_is_refused() {
     let set = Op::Set { id: node, path: "context_def.markup".parse().unwrap(), slot: Slot::Const(Value::Str("<context name=\"k\"><rule match=\"all\" affords.cursor=\"move\"/></context>".into())) };
     let err = store.apply(tx(vec![set])).unwrap_err().remove(0);
     assert_eq!(err.kind, ErrorKind::BadContext);
-    assert!(err.message.ends_with("unknown field affords.cursor (affords.select, affords.enter, affords.edit, affords.grips, affords.drag)"), "{}", err.message);
+    assert!(err.message.ends_with("unknown field affords.cursor (affords.select, affords.enter, affords.edit, affords.grips, affords.drag, affords.drives, affords.activate, affords.step, affords.axis)"), "{}", err.message);
 }
 
 #[test]
@@ -379,4 +379,48 @@ fn a_stacks_items_glide_when_layout_moves_them_and_only_with_a_clock() {
     reorder(&mut store, &items);
     assert_eq!((y(&store, items[0]), y(&store, items[2])), (10.0, 0.0));
     assert!(contexts::parse(r#"<context name="k"><rule match="all" motion.placement="out fast"/></context>"#).unwrap_err().starts_with("motion.placement=\"out fast\": expected none"));
+}
+
+fn named_nodes(store: &Store, name: &str) -> Vec<NodeId> {
+    let doc = store.document();
+    doc.nodes().filter(|n| n.is_live()).map(|n| n.id).filter(|&id| doc.get::<facet::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).as_deref() == Some(name)).collect()
+}
+
+#[test]
+fn a_definitions_part_declares_its_drag_for_every_instance_and_drives_through_its_binding() {
+    let mut store = Store::new();
+    let comp = composition(&mut store, "bench", "free");
+    let a = store.place_standard("meter", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let b = store.place_standard("meter", comp, [200.0, 0.0], Actor::Human).unwrap();
+    // The definition's own pivot (not an instance's expanded copy).
+    let pivots = named_nodes(&store, "pivot");
+    let def_pivot = *pivots.iter().find(|p| !p.is_expanded()).expect("the template's pivot");
+    let mut f = facet::Affords::default();
+    f.style = Slot::Const(Value::Str("drag: ring; drives: transform2d.rot".into()));
+    store.apply(tx(vec![Op::AddFacet { id: def_pivot, facet: f.wrap() }])).unwrap();
+    // Every instance's pivot now turns, by the definition's rule.
+    let r = Resolver::new(store.document(), store.contexts());
+    let instance_pivots: Vec<NodeId> = named_nodes(&store, "pivot").into_iter().filter(|p| p.is_expanded()).collect();
+    assert_eq!(instance_pivots.len(), 2);
+    for &p in &instance_pivots {
+        let chain = contexts::chain_of(store.document(), p);
+        let v = r.values(&chain, chain.len() - 1);
+        assert_eq!((v.get(Field::DRAG), v.get(Field::DRIVES)), ("ring", "transform2d.rot"));
+        assert_eq!(r.describe_source(&v, Field::DRAG), format!("inline on {p}"));
+    }
+    let _ = (a, b);
+    // A drive previews and commits the pivot's rotation through its
+    // binding: the meter's `in` follows (rot = -π + in / range · π).
+    let p = instance_pivots[0];
+    let rot: LeafPath = "transform2d.rot".parse().unwrap();
+    store.begin_gesture(&[p]);
+    store.preview_target(p, rot, Value::Number(-std::f64::consts::FRAC_PI_2)).unwrap();
+    store.commit_gesture("turn pivot", Actor::Human, 0).unwrap().unwrap();
+    let turned = store.resolved(p, rot).and_then(|v| v.as_f64()).unwrap();
+    assert!((turned + std::f64::consts::FRAC_PI_2).abs() < 1e-9, "{turned}");
+    // Bad style is refused, with the field.
+    let mut bad = facet::Affords::default();
+    bad.style = Slot::Const(Value::Str("drag: spin".into()));
+    let err = store.apply(tx(vec![Op::RemoveFacet { id: def_pivot, kind: FacetKind::Affords }, Op::AddFacet { id: def_pivot, facet: bad.wrap() }])).unwrap_err().remove(0);
+    assert_eq!(err.kind, ErrorKind::BadContext);
 }

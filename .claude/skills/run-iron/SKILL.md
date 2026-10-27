@@ -53,6 +53,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `focus.txt` | ~40 s |
 | `keys.txt` | ~30 s |
 | `sequence.txt` | ~30 s |
+| `controls.txt` | ~30 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -1438,11 +1439,11 @@ Text tool lit). Expected, minus screenshot, `nav` and `ready` lines:
 "<applied version=\"3\">\n  <table id=\"#3u\"/>\n</applied>"
 ["<context name=\"std:table\" for=\"type:table\">","<rule match=\"type:row\" affords.select=\"through\"/>"]
 ["#44"]
-["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"select\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\""]
+["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"select\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\""]
 "no textarea"
 "<applied version=\"4\">\n  <context id=\"#4A\"/>\n</applied>"
 ["<context id=\"#…\" name=\"std:table\">","<rule match=\"type:text\" affords.enter=\"edit\"/>","</context>"]
-["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"edit\" affords.enter.by=\"std:table rule 1 from #…\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\""]
+["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"edit\" affords.enter.by=\"std:table rule 1 from #…\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\""]
 [true,"113","113"]
 false
 false
@@ -1620,6 +1621,63 @@ applied "reorder text" (1 ops, Human) -> v8
 
 Native: `--test contexts`
 (`a_previewed_order_lays_the_stack_out_and_floats_the_dragged_item`).
+
+## Controls made of data (2026-10-27)
+
+`plans/specs/affordances.md` phase C, demo 3: plain nodes given behaviour by inline
+`affords` facets (`affords.style="drag: ring; drives: transform2d.rot"`, CSS-style;
+on a definition's template part it holds for every instance). A gesture drives one
+of the node's own leaves through its binding (`Store::preview_target`): a bound leaf
+moves its source, one that cannot follow is refused with a reason ("cannot follow").
+After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < controls.txt; cd -
+```
+
+In a fresh `kit` composition: a slider `level` (0.5); a needle whose rotation is
+bound to it (`value × π`), a `ring`; a bar whose height is bound to it (`value ×
+200`), a `track` along y; three texts that `toggle` italics, `step` their size by 4
+and `cycle` their alignment. Turning the needle a quarter turn sets the slider to
+1.00; dragging the bar's bottom up 50 sets it to 0.75; the clicks make italic, 28,
+center; the computed view names the inline facet; five undos restore everything.
+Expected, minus `nav` and `ready` lines:
+
+```
+{"enabled":false,"guides":[]}
+1
+"kit"
+true
+true
+undefined
+["0.50","false","24","left"]
+" style=\"drag: ring; drives: transform2d.rot; step: 0.2618\""
+["1.00","false","24","left"]
+["0.75","false","24","left"]
+["0.75","true","28","center"]
+["affords.drives=\"font.italic\" affords.drives.by=\"inline on #…\"","affords.activate=\"toggle\" affords.activate.by=\"inline on #…\""]
+["0.50","false","24","left"]
+applied "open demo scene" (298 ops, System) -> v1
+applied "model edit" (1 ops, Model) -> v2
+applied "model edit" (1 ops, Model) -> v3
+applied "model edit" (5 ops, Model) -> v4
+applied "turn transform2d.rot" (1 ops, Human) -> v5
+applied "set size.h" (1 ops, Human) -> v6
+applied "toggle font.italic" (1 ops, Human) -> v7
+applied "step font.size" (1 ops, Human) -> v8
+applied "cycle font.align" (1 ops, Human) -> v9
+applied "undo: cycle font.align" (1 ops, System) -> v10
+applied "undo: step font.size" (1 ops, System) -> v11
+applied "undo: toggle font.italic" (1 ops, System) -> v12
+applied "undo: set size.h" (1 ops, System) -> v13
+applied "undo: turn transform2d.rot" (1 ops, System) -> v14
+(no page errors)
+```
+
+Native: `--test contexts`
+(`a_definitions_part_declares_its_drag_for_every_instance_and_drives_through_its_binding`:
+a rule on the standard meter's pivot reaches both placed meters, and turning one
+moves its `in`).
 
 ## Free running and the Stats view (2026-10-18)
 

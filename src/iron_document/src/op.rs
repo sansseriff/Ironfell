@@ -392,6 +392,19 @@ pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Versio
     {
         crate::contexts::parse(&markup).map_err(|e| cx.err(ErrorKind::BadContext, format!("{c}: {e}")))?;
     }
+    let inline = match op {
+        Op::Set { id, path, .. } if path.facet == FacetKind::Affords => Some(*id),
+        Op::AddFacet { id, facet } if facet.kind() == FacetKind::Affords => Some(*id),
+        Op::Create { id, .. } if doc.facet(*id, FacetKind::Affords).is_some() => Some(*id),
+        _ => None,
+    };
+    if let Some(n) = inline
+        && let Some(f) = doc.get::<crate::facet::Affords>(n)
+    {
+        let scope = f.scope.constant().and_then(Value::as_str).unwrap_or("self").to_owned();
+        let style = f.style.constant().and_then(Value::as_str).unwrap_or("").to_owned();
+        crate::contexts::parse_style(&style, &scope).map_err(|e| cx.err(ErrorKind::BadContext, format!("{n}.affords: {e}")))?;
+    }
     let Op::Create { id, .. } = op else { return Ok(()) };
     if doc.live(*id).is_none() {
         return Ok(());

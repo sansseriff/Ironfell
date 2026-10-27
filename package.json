@@ -10,10 +10,12 @@
     "wasm:smallfast": "./build-wasm.sh webgpu && ./build-wasm.sh webgl2",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "check": "bun run protocol:check && tsc -p tsconfig.protocol.json && svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "native:ui": "vite build --mode native",
     "native:build": "bun run native:ui && cd src-native && bunx --bun @tauri-apps/cli@2 build --debug --target aarch64-apple-darwin --bundles app --no-sign -- --profile dev-opt --bin iron-native",
-    "native:run": "MACOSX_DEPLOYMENT_TARGET=14.0 cargo run -p iron-native --bin iron-native --profile dev-opt --target aarch64-apple-darwin"
+    "native:run": "MACOSX_DEPLOYMENT_TARGET=14.0 cargo run -p iron-native --bin iron-native --profile dev-opt --target aarch64-apple-darwin",
+    "protocol:generate": "python3 scripts/generate-ui-protocol.py",
+    "protocol:check": "python3 scripts/generate-ui-protocol.py --check"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",

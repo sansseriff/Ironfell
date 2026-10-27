@@ -46,7 +46,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`panels-and-session.md`](specs/panels-and-session.md) | Views, dock presenter, session tier, inspectors | Items 1–2 built; 3–5 open |
 | [`view-textures.md`](specs/view-textures.md) | Every view renders to its own texture | Done except the custom final pass and §4 tiling |
 | [`free-running.md`](specs/free-running.md) | When a view renders every frame: live sources, the run mode (auto / always / on demand), bubbling through embeds; the settings menu; the Stats composition that replaced the `bevy_ui` overlay | Approved and built 2026-10-18 |
-| [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phase 1 done (store ownership, one pointer state machine, the 3D gizmo); phase 2 shared document dispatch built 2026-10-26, typed protocol/subscriptions/lifecycle open; 4–5 in the render handoff |
+| [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phase 1 done (store ownership, one pointer state machine, the 3D gizmo); phase 2 done 2026-10-26 (typed protocol, shared input routing, lifecycle and scoped reads); 4–5 in the render handoff |
 | [`text.md`](specs/text.md) | Text nodes, fonts (catalog, on-demand loading, installed fonts natively), glyph rendering, editing, `fmt` readouts, the Text inspector | Scaffold done 2026-10-17; §9 lists what is open |
 | [`component-authoring.md`](specs/component-authoring.md) | Making components from the UI: mains, the port and empty tools, links and lines, the joint handle, the Library tab | Approved and built 2026-10-18 |
 | [`component-model.md`](specs/component-model.md) | Components: authored vs expanded instances, ports as the one interface, overrides, scope, libraries, render analysis; amends ECM §4, §6.1, §9 | Approved 2026-10-18; phases 0–4 done (the `Facet` rename; `in` ports replace parameters; linked instances, schema 7; overrides, edit translation, scope; anchors and empties; make component with nesting; plugging, mates and nested overrides). 5 waits on the project container, 6 is render-track work |
@@ -93,7 +93,9 @@ by `rendering/architecture.md`.
 `document-spine`, transferred from the `native-tauri` worktree at the user's request.
 The standalone composition probe passes dev/packaged checks; the packaged workspace
 passes 15 checks and the 100,000-runtime-entity concurrency fixture passes 17.
-Human input/display testing and comparison gates remain. A bounded experiment no longer waits
+The shared typed UI protocol, input dispatch, session lifecycle and scoped reads
+landed 2026-10-26; the rebuilt packaged workspace now passes 22 checks, including
+a real webview reload. Human input/display testing and comparison gates remain. A bounded experiment no longer waits
 for raster caching. Its work order is in `handoff-product.md` §4.1; the full port
 and other platforms remain unscheduled.
 

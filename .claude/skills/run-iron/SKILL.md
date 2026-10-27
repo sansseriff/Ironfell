@@ -49,12 +49,16 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `piston.txt` | ~1 min |
 | `snapping.txt` | ~30 s |
 | `layout.txt` | ~35 s |
-| `tables.txt` | ~45 s |
-| `document-calls.txt`, each browser runtime (`GPU=1`) | ~5 s |
+| `tables.txt` (`GPU=1`), warm | ~25 s |
+| `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
+| `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
+| `text-styles.txt` (`GPU=1`), warm | ~18 s |
+| shared-engine Rust unit suite (4 tests, native `dev-opt`), warm | ~8 s |
 | ⏱ dispatcher Rust unit test, cold native Bevy 0.20 graph (`dev-opt`) | ~3 min |
 | ⏱ `bun run native:build`, cold native Bevy/Tauri graph (`dev-opt`) | ~4 min |
 | `bun run native:build`, warm, after workspace test changes | ~21 s |
-| packaged native workspace self-test (19 checks) | ~15 s |
+| packaged native workspace self-test (22 checks, including reload) | ~20 s |
+| `appearance.ts` (DPR 1, warm) | ~30 s |
 | ⏱ `raster-pixels.txt` (with the Prussia import, then the meters) | ~1.5 min |
 | ⏱ `bench-instances.txt` | ~1.5 min |
 | `instance-pixels.txt` | ~1 min |
@@ -1461,9 +1465,10 @@ render-inspector expectation now records 8 retained nodes and 1 chunk in view.
 Canonical byte length and solver undo op counts can vary with floating-point
 settling; the run saved 59,350 bytes and the round trip remained equal.
 
-`bun run check` currently reports four font-catalog narrowing errors at
+At the consolidation checkpoint, `bun run check` reported four font-catalog narrowing errors at
 `TextSection.svelte:95–96` (an untouched component), plus ten warnings. The
-refactored files have no reported errors; `tsc -p tsconfig.node.json` passes.
+refactored files had no reported errors. These errors are fixed by the typed protocol
+checkpoint below; `tsc -p tsconfig.node.json` also passes.
 
 The rebuilt packaged native workspace passes 19/19 checks. Its idle check sets
 Stats to On demand first, since Stats is now a live composition. The first run
@@ -1475,3 +1480,68 @@ unchanged-state check, followed by its existing editing/undo/redo/lifecycle chec
 (19 total, or 21 with the runtime simulation fixture). The focused Rust dispatcher
 test can run with `cargo test -p ironfell --lib --features native --target
 aarch64-apple-darwin --profile dev-opt engine_dispatch::tests`.
+
+
+## Typed UI protocol, lifecycle and scoped reads (2026-10-26)
+
+The shared Rust `engine_protocol::Request` handles input/control and document
+messages on all hosts. Browser adapters keep surface/bootstrap/frame management
+and pointer-motion fast paths. A single `rustBridge.send_event_from_worker`
+callback carries the serialized Rust event union in both browser modes; native
+uses that event union on its channel. Fonts remain a host service.
+
+`bun run protocol:generate` regenerates named document commands and wire types
+from Rust. `bun run check` checks freshness, negative type fixtures, all frontend
+code and the Node config (zero errors, ten existing Svelte warnings).
+`bun test tests/document-api.test.ts tests/protocol-lifecycle.test.ts` runs seven
+fast tests for both transport kinds, schema retry, disposal/timeouts, stale
+sessions/results, coalescing, stable identities and selective live updates.
+
+`protocol-lifecycle.txt` checks actual UI read counts: changing the circle does
+not reread the square inspector or composition summaries, changing the square
+does, and history availability follows undo. It then leaves a request outstanding,
+switches worker → main → worker, checks disposal and stale-event rejection, and
+injects a runtime failure to verify teardown and restart. After a wasm rebuild:
+
+```sh
+cd .claude/skills/run-iron
+GPU=1 SIZE=1680x1000@1 bun run drive.ts < protocol-lifecycle.txt
+```
+
+Expected (excluding nav/ready, successful edit outcomes and the first boolean):
+
+```
+assertion passed
+assertion passed
+assertion passed
+assertion passed
+assertion passed
+"replacement settled pending work and rejected stale events"
+assertion passed
+assertion passed
+"worker restored"
+assertion passed
+"failed runtime detached and restarted"
+assertion passed
+(no page errors)
+```
+
+The engine emits authored/session/resolved revisions and explicit history state,
+coalesced once per frame. Consumers share scoped cached reads and release them
+when hidden or unmounted. Read interests prevent unobserved Stats changes from
+waking the shell. Whole-document reads use one authored-content interest rather
+than copying every node id into a UI subscription. Replies identify queued,
+applied or completed work; none promises that pixels have been presented.
+
+Rust verification: `cargo test -p ironfell --lib --features native --target
+aarch64-apple-darwin --profile dev-opt` (four tests). The native workspace fixture
+also reloads the actual webview while retaining the native world, checking saved
+state, existing undo availability and settled reads (22 checks; 24 with the
+simulation fixture). All 22 packaged native checks pass, as do the two mailbox tests. The final native
+package rebuild took 20 s warm; mailbox tests took 4 s and the
+workspace/reload fixture took 20 s. All four shared-engine Rust tests pass.
+The final full smoke took 210 s, main-thread document contracts 3 s, lifecycle
+10 s, text styles 18 s, tables 23 s, and appearance 29 s, all without page errors.
+`appearance.ts` now reads the current `facets` table instead of the obsolete
+`components` key; pixel and inspector assertions are unchanged. Evidence lives
+in `.agents/ui-protocol/` (gitignored).

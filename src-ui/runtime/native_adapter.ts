@@ -1,3 +1,5 @@
+import type { UiRequest, UiEvent } from './protocol';
+import { documentArguments } from './protocol.generated';
 import { makeDocumentApi } from '../model/api';
 import { applyEdit } from '../model/edit';
 import { ask } from '../model/agent';
@@ -10,7 +12,7 @@ export class NativeAdapter {
   private nativePointer = false;
   private generation = 0;
   private sequence = 0;
-  private pending: any[] = [];
+  private pending: UiRequest[] = [];
   private sending = false;
   private disposed = false;
   private requestId = -1;
@@ -31,10 +33,10 @@ export class NativeAdapter {
     }).catch((e: unknown) => this.fail(e));
   }
 
-  postMessage(data: any) {
+  postMessage(data: UiRequest) {
     if (this.disposed) return;
     if (data.ty === "mousemove" && this.nativePointer) return;
-    if (data.requestId >= 0 && !this.publicRequests.has(data.requestId)) {
+    if ('requestId' in data && data.requestId >= 0 && !this.publicRequests.has(data.requestId)) {
       const replies: Record<string, string> = { documentSave: 'documentSaved', documentLoad: 'documentLoaded', modelEdit: 'modelEditResult', modelAsk: 'modelAskResult' };
       const ty = replies[data.ty] ?? data.ty;
       const timer = setTimeout(() => { this.publicRequests.delete(data.requestId); this.emit({ty, requestId: data.requestId, ok:false, error:'native request timed out'}); }, data.ty === 'modelAsk' ? 120000 : 15000);
@@ -44,7 +46,7 @@ export class NativeAdapter {
       const operation = data.ty === 'modelEdit'
         ? applyEdit(this.documentApi(), data.xml, data.label)
         : ask(this.documentApi(), new AnthropicTransport(data.apiKey, data.model), data.instruction);
-      void operation.then((result) => this.receive({ ty: data.ty + 'Result', requestId: data.requestId, ok: result.ok, [data.ty === 'modelEdit' ? 'outcome' : 'result']: result }))
+      void operation.then((result) => this.receive({ ty: data.ty + 'Result', requestId: data.requestId, ok: result.ok, ack: data.ty === 'modelEdit' && result.ok ? 'applied' : 'completed', [data.ty === 'modelEdit' ? 'outcome' : 'result']: result }))
         .catch((e: unknown) => this.receive({ ty: data.ty + 'Result', requestId: data.requestId, ok: false, error: String(e) }));
       return;
     }
@@ -79,7 +81,8 @@ export class NativeAdapter {
       if (data.ok) query.resolve(data.text); else query.reject(new Error(data.error));
     } else this.emit(data);
   }
-  private query(fn: string, args: any[] = []): Promise<string> {
+  private query(fn: string, args: unknown[] = []): Promise<string> {
+    if (this.disposed) return Promise.reject(new Error('session disposed'));
     return new Promise((resolve, reject) => {
       const requestId = this.requestId--;
       const timer = setTimeout(() => { this.queries.delete(requestId); reject(new Error('native document call timed out')); }, 15000);
@@ -88,10 +91,11 @@ export class NativeAdapter {
     });
   }
   private documentApi() {
-    return makeDocumentApi((name, args) => this.query(name, args));
+    return makeDocumentApi(command => { const { fn, args } = documentArguments(command); return this.query(fn, args); });
   }
   private fail(error: unknown) {
     console.error('Native adapter failed', error);
+    this.emit({ty:'runtimeError', error:String(error)});
     this.dispose();
   }
   dispose() {

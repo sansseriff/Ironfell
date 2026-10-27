@@ -39,6 +39,7 @@ mod canvas_view;
 pub mod surface;
 pub mod engine_api;
 pub mod engine_dispatch;
+pub mod engine_protocol;
 pub mod host_events;
 mod host_services;
 

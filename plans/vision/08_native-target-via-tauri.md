@@ -1,8 +1,9 @@
 # A native target via Tauri
 
-**Status:** macOS experiment in progress, 2026-10-16. Standalone composition
-verified in dev and packaged builds; real shared-engine workspace passes the
-first automated native checks. Remaining feasibility gates are being tested. A full port and additional platforms
+**Status:** macOS experiment in progress, updated 2026-10-26. Standalone composition
+verified in dev and packaged builds; shared-engine workspace and typed UI
+protocol verified, with 22 packaged checks including webview reload. Remaining
+feasibility gates are open. A full port and additional platforms
 remain unscheduled. Work order lives in [`handoff-product.md`](../handoff-product.md)
 §4.1.
 **Created:** 2026-09-06. **Revised:** 2026-10-16 after source review and discussion
@@ -265,6 +266,23 @@ still allowing Rust-side desktop services; it is an optional control, not a
 substitute for the proposed native engine.
 
 ### Completion record
+
+- **2026-10-26 — typed UI protocol, shared input and lifecycle:** ordinary input
+  and control routing now lives in shared Rust `engine_protocol`, used by native
+  and both browser hosts. Named document command types and request/event types
+  are generated from Rust; native retains only transport, surfaces, scheduling
+  and host services. Scoped UI reads share caches, track independent revisions,
+  reject stale responses and release interests when hidden. Disposal/failure
+  settles outstanding calls and removes old input/text listeners. Engine replies
+  expose queued/applied/completed stages, without promising pixel presentation.
+  Both wasm builds, frontend checks (zero errors), seven JS tests, four core and
+  two mailbox Rust tests, the full smoke and text/table/appearance checks pass.
+  The rebuilt Bevy 0.20 / wgpu 30 packaged workspace passes **22/22** checks,
+  including real webview reload, canonical authored-state persistence, retained
+  undo availability and settled initial reads. Evidence: `.agents/ui-protocol/`.
+  The typed UI phase is complete; this does **not** close human display/input,
+  identical full parity trace, winit comparison, clipboard/assets or cost gates.
+
 
 - **2026-10-26 — shared document dispatch:** web and native now use the same
   `engine_dispatch::call` operation table, including save/load/view. Browser

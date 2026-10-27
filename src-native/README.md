@@ -63,8 +63,12 @@ A reload replaces the webview session while keeping the native authored document
 Web uses the same `engine_dispatch::call` table through its single wasm
 `document_call` export. All hosts use `makeDocumentApi(call)` for the model
 surface; argument construction and result decoding are shared. This consolidation
-does not yet provide typed command generation, scoped subscriptions or the full
-cross-runtime lifecycle contract.
+is followed by the typed protocol implementation: generated Rust-derived named
+commands, one shared input/control dispatcher, session/disposal guards and scoped
+UI reads. Hosts retain bootstrap, surfaces, scheduling and font/file services.
+The workspace self-test passes 22 checks, including an actual webview reload
+that retains the native authored state and undo history. Run `bun run protocol:generate` after changing Rust command/request/event signatures and
+`bun run check` to verify generated types and negative type fixtures.
 Bulk computational Model transport remains a separate, unimplemented proposal.
 
 See `plans/vision/08_native-target-via-tauri.md` for acceptance evidence, remaining

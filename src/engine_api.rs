@@ -9,6 +9,8 @@ use bevy::window::CursorMoved;
 /// A replacement host session keeps authored state but loses its old viewports
 /// and input ownership. Cancellation still runs through the ordinary tool system.
 pub fn reset_host_session(app: &mut WorkerApp) {
+    if let Some(mut changes) = app.world_mut().get_resource_mut::<crate::document_bridge::ui::UiChanges>() { changes.reset_reader(); }
+    if let Some(mut interests) = app.world_mut().get_resource_mut::<crate::document_bridge::ui::UiInterests>() { *interests = Default::default(); }
     let panels = app.world().resource::<Panels>().iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
     for id in panels { despawn_panel(app, id); }
     tool_key(app, "escape".into(), 0);

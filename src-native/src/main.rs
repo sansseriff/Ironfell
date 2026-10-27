@@ -257,12 +257,7 @@ impl Host {
                 }
                 continue;
             }
-            let mut value = serde_json::to_value(event).unwrap();
-            if value["ty"] == "convertQuestion" {
-                if let Some(text) = value["question"].as_str() {
-                    value["question"] = serde_json::from_str(text).unwrap_or(Value::Null);
-                }
-            }
+            let value = serde_json::to_value(event).unwrap();
             self.bridge.send(value);
         }
         if let Some(trace) = &self.pacing {

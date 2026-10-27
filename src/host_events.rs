@@ -10,9 +10,12 @@ pub enum EngineEvent {
     Hover { list: Vec<String> },
     Selection { list: Vec<String> },
     DocumentChanged { version: u32 },
+    /// UI read invalidation, coalesced at the end of a frame.
+    #[serde(rename_all = "camelCase")]
+    StateChanged { version: u32, session_version: u64, resolved_version: u64, nodes: Vec<String>, authored: bool, structure: bool, compositions: bool, reset: bool, can_undo: bool, can_redo: bool },
     Cursor { cursor: String },
     Tool { tool: String },
-    ConvertQuestion { question: String },
+    ConvertQuestion { question: serde_json::Value },
     Clipboard { text: String },
     /// Font files the engine wants, most needed first (plans/specs/text.md §4).
     Fonts { fonts: Vec<FontRequest> },
@@ -41,7 +44,7 @@ impl HostEvents {
     pub fn clipboard(&self,text:String) { self.push(EngineEvent::Clipboard { text }); }
     pub fn cursor(&self,cursor:String) { self.push(EngineEvent::Cursor { cursor }); }
     pub fn tool(&self,tool:String) { self.push(EngineEvent::Tool { tool }); }
-    pub fn convert_question(&self,question:String) { self.push(EngineEvent::ConvertQuestion { question }); }
+    pub fn convert_question(&self,question:String) { self.push(EngineEvent::ConvertQuestion { question: serde_json::from_str(&question).expect("engine conversion question is JSON") }); }
     pub fn document_changed(&self,version:u32) { self.push(EngineEvent::DocumentChanged { version }); }
     pub fn push(&self, event: EngineEvent) { self.0.lock().expect("engine outbox").push(event); }
     pub fn drain(&self) -> Vec<EngineEvent> { std::mem::take(&mut *self.0.lock().expect("engine outbox")) }

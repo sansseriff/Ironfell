@@ -50,7 +50,7 @@
   let catalog: FontCatalog | null = $state(null);
   $effect(() => {
     void doc.loadedFonts;
-    doc.call("fonts", []).then((c: FontCatalog) => (catalog = c)).catch(() => {});
+    doc.command({ op: 'fonts' }).then((c: FontCatalog) => (catalog = c)).catch(() => {});
   });
 
   const family = $derived(field("font", "family", "Inter", "str").text ?? "Inter");
@@ -71,7 +71,7 @@
   async function style(patch: Record<string, unknown>) {
     onError("");
     try {
-      const r = await doc.call("text_style", [node, JSON.stringify(patch)]);
+      const r = await doc.command({ op: 'text_style', node: node, patch: JSON.stringify(patch) });
       if (!r.ok) onError(r.error);
       refresh();
     } catch (e) { onError(String(e)); }
@@ -92,8 +92,8 @@
     return [ch(0), ch(2), ch(4), h.length >= 8 ? ch(6) : 1];
   }
 
-  const known = $derived(catalog?.families.find((f) => f.name.toLowerCase() === family.toLowerCase()));
-  const installed = $derived(!!catalog?.system.some((n) => n.toLowerCase() === family.toLowerCase()));
+  const known = $derived((catalog as FontCatalog | null)?.families.find((f) => f.name.toLowerCase() === family.toLowerCase()));
+  const installed = $derived(!!(catalog as FontCatalog | null)?.system.some((n) => n.toLowerCase() === family.toLowerCase()));
   const missing = $derived(!!catalog && !known && !installed);
   const weights = $derived.by(() => {
     const all = catalog?.weights ?? [{ weight: 400, name: "Regular" }];
@@ -118,7 +118,7 @@
   let expr = $state("");
   async function bind(text: string) {
     onError("");
-    const r = await doc.call("inspect_bind", [node, "text.content", text]);
+    const r = await doc.command({ op: 'inspect_bind', node: node, leaf: "text.content", expr: text });
     if (!r.ok) onError(r.error);
     else binding = false;
   }

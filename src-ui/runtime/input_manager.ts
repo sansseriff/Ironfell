@@ -1,8 +1,9 @@
+import type { UiRequest } from './protocol';
 import { oppositeVectorBackendUrl } from './variant_policy';
 import { beginCopy, canvasOwnsCopy, pastedFragment } from './clipboard';
 
 export interface InputPoster {
-    post(data: any): void;
+    post(data: UiRequest): void;
 }
 
 export interface InputManagerOptions {

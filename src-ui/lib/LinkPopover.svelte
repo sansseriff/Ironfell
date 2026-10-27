@@ -33,8 +33,8 @@
     if (!now) return;
     error = "";
     (async () => {
-      const part = await doc.call("inspect", [now.node]);
-      const port = await doc.call("inspect", [now.spec]);
+      const part = await doc.command({ op: 'inspect', node: now.node });
+      const port = await doc.command({ op: 'inspect', node: now.spec });
       portName = port?.name ?? now.spec;
       // The port's range: from zero to its default (or one), in its unit.
       const signal: string = port?.components?.find((x: any) => x.kind === "port")?.fields?.find((f: Field) => f.field === "signal")?.text ?? "0";
@@ -63,7 +63,7 @@
   async function link() {
     if (!drop || !leaf) return;
     const expr = `scale(${drop.spec}.port.signal, ${a}, ${b}, ${c}, ${d})`;
-    const r = await doc.call("inspect_bind", [drop.node, leaf, expr]);
+    const r = await doc.command({ op: 'inspect_bind', node: drop.node, leaf: leaf, expr: expr });
     if (!r.ok) {
       error = r.error;
       return;

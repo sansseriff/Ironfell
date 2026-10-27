@@ -1,3 +1,4 @@
+import type { UiRequest } from './protocol';
 /**
  * The hidden textarea behind canvas text editing (plans/specs/text.md §7),
  * Figma's technique: the engine draws the text, caret and selection; this
@@ -20,10 +21,11 @@ export class TextInputMirror {
   private el: HTMLTextAreaElement;
   private composing = false;
   private active = false;
+  private abort = new AbortController();
 
   constructor(
     private canvas: HTMLCanvasElement,
-    private post: (msg: any) => void,
+    private post: (msg: UiRequest) => void,
   ) {
     const el = document.createElement('textarea');
     el.setAttribute('aria-label', 'Text');
@@ -48,7 +50,7 @@ export class TextInputMirror {
     // Selection moves (arrows, Home/End within a line, Cmd+A) with no input.
     document.addEventListener('selectionchange', () => {
       if (this.active && document.activeElement === el && !this.composing) this.send();
-    });
+    }, { signal: this.abort.signal });
     el.addEventListener('keydown', (e) => this.onKey(e));
     // Clicks on the canvas would move focus to it; the engine handles them
     // and focus returns here.
@@ -125,6 +127,8 @@ export class TextInputMirror {
     // around the open edit. Stop the page's shortcut handler seeing it.
     e.stopPropagation();
   }
+
+  dispose() { this.abort.abort(); this.active = false; this.el.remove(); }
 
   /** Another field (the inspector) has focus: leave it there. */
   private otherInputFocused(): boolean {

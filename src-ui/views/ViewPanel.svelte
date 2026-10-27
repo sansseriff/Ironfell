@@ -12,7 +12,7 @@
   // The composition settings button, which toggles it, sits in the tab's
   // top right corner, over whichever half is there.
   import type { DockviewPanelApi } from "dockview-core";
-  import { onDestroy } from "svelte";
+  import { onDestroy, setContext } from "svelte";
   import BevyPanel from "../lib/BevyPanel.svelte";
   import CompositionSettings from "./html/CompositionSettings.svelte";
   import RenderInspector from "./html/RenderInspector.svelte";
@@ -31,6 +31,8 @@
     sub.dispose();
     params.dispose();
   });
+
+  setContext('iron-view-active', () => visible);
 
   const inspecting = $derived(spec.notation === "composition" && share !== undefined);
   const inspectId = $derived(`${id}.inspect`);

@@ -2,8 +2,8 @@
 
 **Status:** Phase 3 implemented (§13); phase 1 done 2026-10-15 in two passes (§4,
 "First pass", "Second pass": store ownership, one pointer state machine, the 3D
-gizmo, Alt-drag); phase 2 shared document dispatch built 2026-10-26, typed protocol
-and lifecycle/subscriptions open; phases 4 and 5 open
+gizmo, Alt-drag); phase 2 done 2026-10-26 (typed protocol, shared input routing, lifecycle
+and scoped reads); phases 4 and 5 open
 **Date:** 2026-10-13
 **Scope:** Adapt relevant patterns from `xiaoiver/infinite-canvas-tutorial` while
 preserving Iron's authored document, Bevy runtime, and Svelte host boundaries.
@@ -331,10 +331,10 @@ are removed. `makeDocumentApi(call)` supplies one model-facing implementation fo
 worker, main-thread and native, including query defaults, result decoding and
 per-instance schema caching; transports may return strings or promises.
 
-This is a prerequisite slice, not completion of phase 2. Requests still use
+At this first checkpoint (before the implementation below), requests still used
 string operation names and positional JSON arguments. Typed/generated commands,
 scoped subscriptions, query generations, the full disposal contract and explicit
-acknowledgment stages remain open.
+acknowledgment stages were still open.
 
 Validation: both wasm backends rebuilt; `document-calls.txt` passes in worker and
 main-thread modes (explicit dispatch errors, unchanged state on invalid calls,
@@ -348,6 +348,58 @@ Native build: 231 s cold, 21 s warm; dispatcher test: 178 s cold; native workspa
 `bun run check` reports four font-catalog narrowing errors in the untouched
 `TextSection.svelte:95–96` and ten warnings; no refactored-file errors.
 `tsc -p tsconfig.node.json` passes.
+
+### Typed protocol, lifecycle and scoped reads — done 2026-10-26
+
+- `engine_protocol::Request` and its dispatcher now own ordinary input/control
+  routing for all three runtimes. Worker/main-thread adapters retain bootstrap,
+  surfaces, frame scheduling, diagnostics and their pointer-motion fast paths.
+  `engine_message` replaces per-interaction wasm exports. Both browser hosts use
+  one outbound event decoder; native sends the same serialized `EngineEvent`s.
+- `scripts/generate-ui-protocol.py` derives named `DocumentCommand` payloads,
+  input wire types and outbound event types from Rust. It checks dispatcher
+  arity, argument order and signature types, failing on unsupported syntax/types.
+  `bun run check` rejects stale generated types and runs negative type fixtures.
+  UI/model code uses named command objects; raw string/positional dispatch is
+  confined to transport and the intentionally untyped `__iron.call` diagnostic.
+- `PendingRequests` bounds pending calls and settles them on replacement,
+  disposal, send failure or timeout. Session envelopes, transport disposal guards,
+  guarded async authoring and per-query generations prevent stale publication.
+  Restart also removes the old text mirror and its document selection listener.
+- `QuerySubscriptions` shares reads by query, coalesces invalidation, preserves
+  object identity when serialized results do not change, and discards late
+  results when a consumer leaves or changes query. Inspector, document markup,
+  counterpart and composition-list reads use it. Hidden HTML views retain UI
+  state but release their reads. Composition liveness polling remains open-menu
+  only, with generation guards, because producer availability is runtime state.
+- The engine publishes one change summary per frame, with touched/resolved node
+  ids, structural/composition flags, authored/session/resolved revisions and
+  explicit undo/redo availability. UI read interests suppress unobserved
+  resolved-only changes (notably Stats); no per-frame document transaction or
+  full-document UI mirror is introduced. Document history buttons consume the
+  explicit state. Session/revision counters are snapshots at notification time;
+  unobserved live changes do not require a shell notification.
+- Replies distinguish `queued` (notably load), `applied` and `completed`.
+  `applied` means the store accepted the transaction, not that its pixels have
+  been presented. No current caller requires a separate presentation promise.
+
+Validation so far: seven JS tests, four shared-engine Rust tests, worker/main-thread document
+contracts and a real browser runtime-replacement/scoped-read fixture pass.
+Frontend checking has zero errors and ten existing warnings; the font-catalog
+narrowing errors from the previous checkpoint are fixed. Both wasm backend builds, the full 210-second smoke, text styling/clipboard,
+tables and appearance pixel/inspector checks pass with no page errors. Two
+native mailbox tests and all 22 packaged native workspace checks pass, including
+an actual webview reload retaining authored state and existing undo history.
+The shared engine forces a fresh reader-state snapshot on native session
+replacement even when the authored version has not changed. Runtime failure
+removes input listeners and can be restarted cleanly. Evidence is in
+`.agents/ui-protocol/` (gitignored). The appearance fixture was updated from its
+obsolete `components` save-table name to `facets`; its assertions are unchanged.
+
+All phase 2 exit criteria below are exercised. Structural changes conservatively
+invalidate scoped reads; finer leaf-level invalidation and per-operation JSON
+result schemas can refine this implementation later. Native display, full trace,
+winit comparison and cost/host-service gates in vision 08 remain separate.
 
 ### Tutorial evidence and adaptation
 

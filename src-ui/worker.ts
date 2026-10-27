@@ -1,3 +1,5 @@
+import { installWasmEvents } from "./runtime/wasm_events";
+import type { UiRequest } from './runtime/protocol';
 // from bevy-in-web-worker https://github.com/jinleili/bevy-in-web-worker
 
 // The wasm-bindgen glue is loaded dynamically because it is per-target: the
@@ -7,7 +9,7 @@
 import { loadGlue, type Glue } from "./runtime/glue";
 import type { Backend } from "./runtime/backend_policy";
 import { CadenceProbe } from "./runtime/cadence_probe";
-import { modelAsk, modelEdit } from "./model";
+import { dispatchEngineMessage } from "./runtime/engine_messages";
 import { FontLoader } from "./runtime/font_loader";
 
 // Assigned before any FFI call; see the "wasmData" case below.
@@ -38,29 +40,7 @@ class IronWorker {
   );
 
   constructor() {
-    // Create a dedicated object for Rust FFI functions
-    const rustBridge = {
-      send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
-      send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
-      send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
-      send_tool_from_worker: (tool: string) => self.postMessage({ ty: "tool", tool }),
-      send_convert_from_worker: (question: string) => self.postMessage({ ty: "convertQuestion", question: JSON.parse(question) }),
-      send_cursor_from_worker: (cursor: string) => self.postMessage({ ty: "cursor", cursor }),
-      send_document_changed_from_worker: (version: number) => self.postMessage({ ty: "documentChanged", version }),
-      send_clipboard_from_worker: (text: string) => self.postMessage({ ty: "clipboard", text }),
-      send_text_edit_from_worker: (state: string) => self.postMessage({ ty: "textEdit", ...JSON.parse(state) }),
-      send_event_from_worker: (event: string) => self.postMessage(JSON.parse(event)),
-      send_fonts_from_worker: (fonts: string) => this.fonts.request(JSON.parse(fonts)),
-    };
-
-    // Make it globally accessible
-    (self as any).rustBridge = rustBridge;
-
-    // Expose the functions to the global scope so they're accessible from Wasm
-    (self as any).send_pick_from_worker = (pickList: any[]) => this.sendPickFromWorker(pickList);
-    (self as any).send_hover_from_worker = (list: any[]) => this.sendHoverFromWorker(list);
-    (self as any).send_selection_from_worker = (list: any[]) => this.sendSelectionFromWorker(list);
-
+    installWasmEvents(self, event => self.postMessage(event), requests => this.fonts.request(requests));
     // Initialize the worker
     this.initWasmInWorker();
   }
@@ -68,7 +48,8 @@ class IronWorker {
   private async initWasmInWorker() {
     // Listen for messages from the main thread
     self.onmessage = async (event) => {
-      let data = event.data;
+      const data: UiRequest = event.data;
+      try {
       switch (data.ty) {
 
         case "wasmData":
@@ -90,24 +71,12 @@ class IronWorker {
 
         case "init":
           console.log("creating worker app window (single full-window canvas)");
-          this.createWorkerAppWindow(data.canvas, data.devicePixelRatio);
+          this.createWorkerAppWindow(data.canvas as OffscreenCanvas, data.devicePixelRatio);
           break;
 
         case "resize":
           if (typeof data.dpr === "number" && this.appHandle !== BigInt(0)) glue.set_scale_factor(this.appHandle, data.dpr);
         this.canvasResize(data.width, data.height);
-          break;
-
-        case "setPanelViewport":
-          if (this.appHandle !== BigInt(0)) {
-            glue.set_panel_viewport(this.appHandle, data.id, data.kind, data.composition ?? "", data.x, data.y, data.w, data.h);
-          }
-          break;
-
-        case "despawnPanel":
-          if (this.appHandle !== BigInt(0)) {
-            glue.despawn_panel(this.appHandle, data.id);
-          }
           break;
 
         case "startRunning":
@@ -146,133 +115,6 @@ class IronWorker {
           this.hasMouseUpdate = true;
           break;
 
-        case "leftBtDown":
-          // The press lands where it happened, not at the last buffered move.
-          if (typeof data.x === "number") glue.left_bt_down_at(this.appHandle, data.x, data.y);
-          else glue.left_bt_down(this.appHandle);
-          break;
-
-        case "modifiers":
-          if (this.appHandle !== BigInt(0)) glue.set_modifiers(this.appHandle, data.m);
-          break;
-
-        case "toolKey":
-          if (this.appHandle !== BigInt(0)) glue.tool_key(this.appHandle, data.key, data.m);
-          break;
-
-        case "paste":
-          if (this.appHandle !== BigInt(0)) glue.clipboard_paste(this.appHandle, data.text);
-          break;
-
-        case "textInput":
-          if (this.appHandle !== BigInt(0)) glue.text_input(this.appHandle, data.text, data.anchor, data.focus);
-          break;
-
-        case "textMotion":
-          if (this.appHandle !== BigInt(0)) glue.text_motion(this.appHandle, data.motion, !!data.extend);
-          break;
-
-        case "textToggle":
-          if (this.appHandle !== BigInt(0)) glue.text_toggle(this.appHandle, data.what);
-          break;
-
-        case "theme":
-          if (this.appHandle !== BigInt(0)) glue.set_dark_mode(this.appHandle, !!data.dark);
-          break;
-
-        case "middleBt":
-          if (this.appHandle !== BigInt(0)) glue.middle_bt(this.appHandle, !!data.down);
-          break;
-
-        case "leftBtUp":
-          glue.left_bt_up(this.appHandle);
-          break;
-
-        case "mouseWheel":
-          if (this.appHandle !== BigInt(0)) {
-            glue.mouse_wheel(this.appHandle, data.dx, data.dy, data.mode);
-          }
-          break;
-
-        case "autoAnimation":
-          glue.set_auto_animation(this.appHandle, data.autoAnimation);
-          break;
-
-        case "keydown":
-          if (this.appHandle !== BigInt(0)) {
-            glue.key_down(this.appHandle, data.key);
-          }
-          break;
-
-        case "keyup":
-          if (this.appHandle !== BigInt(0)) {
-            glue.key_up(this.appHandle, data.key);
-          }
-          break;
-
-        // Editor history: the shell decided the shortcut; only the command arrives.
-        case "undo":
-          if (this.appHandle !== BigInt(0)) glue.undo(this.appHandle);
-          break;
-
-        case "redo":
-          if (this.appHandle !== BigInt(0)) glue.redo(this.appHandle);
-          break;
-
-        // Document: save, load, view. Each answers with the caller's requestId.
-        case "documentSave":
-          self.postMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_call(this.appHandle, "save", "[]") });
-          break;
-
-        case "solveBench":
-          self.postMessage({ ty: "solveBench", requestId: data.requestId, text: glue.solve_bench(data.iterations, data.repeats) });
-          break;
-
-        case "documentLoad":
-          try {
-            glue.document_call(this.appHandle, "load", JSON.stringify([data.text]));
-            self.postMessage({ ty: "documentLoaded", requestId: data.requestId, ok: true });
-          } catch (e) {
-            self.postMessage({ ty: "documentLoaded", requestId: data.requestId, ok: false, error: String(e) });
-          }
-          break;
-
-        // Document calls return serialized engine results (JSON, XML or text).
-        // The same Rust dispatch table serves web and native.
-        case "documentCall":
-          try {
-            const text = glue.document_call(this.appHandle, data.fn, JSON.stringify(data.args));
-            self.postMessage({ ty: "documentCall", requestId: data.requestId, ok: true, text });
-          } catch (e) {
-            self.postMessage({ ty: "documentCall", requestId: data.requestId, ok: false, error: String(e) });
-          }
-          break;
-
-        case "documentView":
-          try {
-            const text = glue.document_call(this.appHandle, "view", JSON.stringify([JSON.stringify(data.query)]));
-            self.postMessage({ ty: "documentView", requestId: data.requestId, ok: true, text });
-          } catch (e) {
-            self.postMessage({ ty: "documentView", requestId: data.requestId, ok: false, error: String(e) });
-          }
-          break;
-
-        // Model surface: apply an <edit> as the model, or ask a model for one.
-        case "modelEdit":
-          try {
-            const outcome = await modelEdit(glue, this.appHandle, data.xml, data.label);
-            self.postMessage({ ty: "modelEditResult", requestId: data.requestId, ok: outcome.ok, outcome });
-          } catch (e) {
-            self.postMessage({ ty: "modelEditResult", requestId: data.requestId, ok: false, error: String(e) });
-          }
-          break;
-
-        case "modelAsk":
-          modelAsk(glue, this.appHandle, data.instruction, { apiKey: data.apiKey, model: data.model })
-            .then((result) => self.postMessage({ ty: "modelAskResult", requestId: data.requestId, ok: result.ok, result }))
-            .catch((e) => self.postMessage({ ty: "modelAskResult", requestId: data.requestId, ok: false, error: String(e) }));
-          break;
-
         case "probeStats":
           self.postMessage({ ty: "probeStats", stats: this.probe.stats() });
           break;
@@ -282,8 +124,10 @@ class IronWorker {
           break;
 
         default:
+          await dispatchEngineMessage(glue, this.appHandle, data, reply => self.postMessage(reply));
           break;
       }
+      } catch (error) { self.postMessage({ty:'runtimeError', error:String(error)}); }
     };
   }
 
@@ -355,17 +199,6 @@ class IronWorker {
     }
   }
 
-  private sendPickFromWorker(pickList: any[]) {
-    self.postMessage({ ty: "pick", list: pickList });
-  }
-
-  private sendHoverFromWorker(list: any[]) {
-    self.postMessage({ ty: "hover", list });
-  }
-
-  private sendSelectionFromWorker(list: any[]) {
-    self.postMessage({ ty: "selection", list });
-  }
 
 }
 

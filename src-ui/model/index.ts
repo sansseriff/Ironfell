@@ -5,11 +5,12 @@
 import type { Glue } from '../runtime/glue';
 import { ask, type AskResult } from './agent';
 import { makeDocumentApi } from './api';
+import { documentArguments } from '../runtime/protocol.generated';
 import { applyEdit, type EditOutcome } from './edit';
 import { AnthropicTransport } from './transport';
 
-export async function modelEdit(glue: Glue, handle: bigint, xml: string, label?: string): Promise<EditOutcome> {
-  return applyEdit(makeDocumentApi((name, args) => glue.document_call(handle, name, JSON.stringify(args))), xml, label);
+export async function modelEdit(glue: Glue, handle: bigint, xml: string, label?: string, alive = () => true): Promise<EditOutcome> {
+  return applyEdit(makeDocumentApi(command => { if (!alive()) throw new Error('session disposed'); const { fn, args } = documentArguments(command); return glue.document_call(handle, fn, JSON.stringify(args)); }), xml, label);
 }
 
 export async function modelAsk(
@@ -17,7 +18,8 @@ export async function modelAsk(
   handle: bigint,
   instruction: string,
   opts: { apiKey: string; model?: string },
+  alive = () => true,
 ): Promise<AskResult> {
   const transport = new AnthropicTransport(opts.apiKey, opts.model);
-  return ask(makeDocumentApi((name, args) => glue.document_call(handle, name, JSON.stringify(args))), transport, instruction);
+  return ask(makeDocumentApi(command => { if (!alive()) throw new Error('session disposed'); const { fn, args } = documentArguments(command); return glue.document_call(handle, fn, JSON.stringify(args)); }), transport, instruction);
 }

@@ -52,7 +52,7 @@
   async function refresh() {
     if (!panel) return;
     try {
-      const r: Info = await doc.call("render_inspector", [panel]);
+      const r: Info = await doc.command({ op: 'render_inspector', panel: panel });
       info = r?.ok ? r : null;
     } catch {
       info = null;
@@ -82,7 +82,7 @@
   async function toggle(key: keyof typeof options) {
     if (!panel) return;
     options[key] = !options[key];
-    await doc.call("render_inspector_options", [panel, JSON.stringify({ [key]: options[key] })]);
+    await doc.command({ op: 'render_inspector_options', panel: panel, options: JSON.stringify({ [key]: options[key] }) });
   }
 </script>
 

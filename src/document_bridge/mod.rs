@@ -26,6 +26,7 @@ pub mod gas;
 mod highlight;
 pub mod liveness;
 mod materialize;
+pub(crate) mod ui;
 pub use materialize::EMPTY_HALF;
 pub mod nest;
 mod panel_views;
@@ -281,6 +282,8 @@ impl Plugin for DocumentPlugin {
             .init_resource::<Drawables>()
             .init_resource::<Modes>()
             .init_resource::<DocumentChanges>()
+            .init_resource::<ui::UiChanges>()
+            .init_resource::<ui::UiInterests>()
             .init_resource::<GeometryRevision>()
             .init_resource::<chunks::Chunks>()
             .init_resource::<inspector::InspectorOptions>()
@@ -333,7 +336,7 @@ impl Plugin for DocumentPlugin {
                     liveness::compute_liveness.after(nest::collect_embed_views),
                 ),
             )
-            .add_systems(Last, report_late_work);
+            .add_systems(Last, (report_late_work, ui::publish));
     }
 }
 
@@ -364,7 +367,7 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes): (ResMut<Drawables>, Res<Modes>),
+    (mut drawables, modes, mut ui): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>),
 ) {
     if pending.0.is_empty()
         && history.0.is_empty()
@@ -514,6 +517,7 @@ pub(crate) fn sync_document(
     if version != version_before {
         events.document_changed(version.0 as u32);
     }
+    ui.record(&store.0, &affected, structure);
     if affected.is_empty() {
         return;
     }

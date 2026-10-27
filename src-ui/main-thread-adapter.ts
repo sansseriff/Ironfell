@@ -1,3 +1,5 @@
+import { installWasmEvents } from "./runtime/wasm_events";
+import type { UiRequest, UiEvent } from './runtime/protocol';
 // Main-thread adapter: same message protocol as worker.ts, but every message is a
 // direct synchronous wasm call (no postMessage hop) — minimal input latency.
 // The wasm-bindgen glue is loaded dynamically because it is per-target: the
@@ -8,7 +10,7 @@ import { loadGlue, type Glue } from "./runtime/glue";
 import { FontLoader } from "./runtime/font_loader";
 import type { Backend } from "./runtime/backend_policy";
 import { CadenceProbe } from "./runtime/cadence_probe";
-import { modelAsk, modelEdit } from "./model";
+import { dispatchEngineMessage } from "./runtime/engine_messages";
 
 // Assigned before any FFI call; see the "wasmData" case below.
 let glue: Glue;
@@ -37,28 +39,7 @@ export class MainThreadAdapter {
   );
 
   constructor() {
-    // Create a dedicated object for Rust FFI functions
-    const rustBridge = {
-      send_pick_from_worker: (pickList: any[]) => this.sendPickFromWorker(pickList),
-      send_hover_from_worker: (list: any[]) => this.sendHoverFromWorker(list),
-      send_selection_from_worker: (list: any[]) => this.sendSelectionFromWorker(list),
-      send_tool_from_worker: (tool: string) => this.sendMessage({ ty: "tool", tool }),
-      send_convert_from_worker: (question: string) => this.sendMessage({ ty: "convertQuestion", question: JSON.parse(question) }),
-      send_cursor_from_worker: (cursor: string) => this.sendMessage({ ty: "cursor", cursor }),
-      send_document_changed_from_worker: (version: number) => this.sendMessage({ ty: "documentChanged", version }),
-      send_clipboard_from_worker: (text: string) => this.sendMessage({ ty: "clipboard", text }),
-      send_text_edit_from_worker: (state: string) => this.sendMessage({ ty: "textEdit", ...JSON.parse(state) }),
-      send_event_from_worker: (event: string) => this.sendMessage(JSON.parse(event)),
-      send_fonts_from_worker: (fonts: string) => this.fonts.request(JSON.parse(fonts)),
-    };
-
-    // Make it globally accessible
-    (window as any).rustBridge = rustBridge;
-
-    // Expose the functions to the global scope so they're accessible from Wasm.
-    (window as any).send_pick_from_worker = (pickList: any[]) => this.sendPickFromWorker(pickList);
-    (window as any).send_hover_from_worker = (list: any[]) => this.sendHoverFromWorker(list);
-    (window as any).send_selection_from_worker = (list: any[]) => this.sendSelectionFromWorker(list);
+    installWasmEvents(window, event => this.sendMessage(event), requests => this.fonts.request(requests));
   }
 
   // Simulate worker's onmessage interface
@@ -67,7 +48,7 @@ export class MainThreadAdapter {
   }
 
   // Simulate worker's postMessage interface
-  async postMessage(data: any, _transfer?: any[]) {
+  async postMessage(data: UiRequest, _transfer?: any[]) {
     if (this.disposed) return;
     switch (data.ty) {
       case "wasmData":
@@ -76,7 +57,9 @@ export class MainThreadAdapter {
         // same build, so the decision is made once by the caller.
         this.backend = data.backend as Backend;
         glue = await loadGlue(this.backend);
+        if (this.disposed) return;
         await glue.default(data.wasmData);
+        if (this.disposed) return;
         console.log(`WASM module initialized (${this.backend})`);
         // The app is built later, in "init": constructing it needs the canvas,
         // because the renderer picks its GPU adapter from the canvas's context.
@@ -86,24 +69,12 @@ export class MainThreadAdapter {
 
       case "init":
         console.log("creating main thread app window (single full-window canvas)");
-        this.createAppWindow(data.canvas, data.devicePixelRatio);
+        this.createAppWindow(data.canvas as HTMLCanvasElement, data.devicePixelRatio);
         break;
 
       case "resize":
         if (typeof data.dpr === "number" && this.appHandle !== BigInt(0)) glue.set_scale_factor(this.appHandle, data.dpr);
         this.canvasResize(data.width, data.height);
-        break;
-
-      case "setPanelViewport":
-        if (this.appHandle !== BigInt(0)) {
-          glue.set_panel_viewport(this.appHandle, data.id, data.kind, data.composition ?? "", data.x, data.y, data.w, data.h);
-        }
-        break;
-
-      case "despawnPanel":
-        if (this.appHandle !== BigInt(0)) {
-          glue.despawn_panel(this.appHandle, data.id);
-        }
         break;
 
       case "startRunning":
@@ -134,147 +105,6 @@ export class MainThreadAdapter {
         }
         break;
 
-      case "leftBtDown":
-        if (this.appHandle !== BigInt(0)) {
-          if (typeof data.x === "number") glue.left_bt_down_at(this.appHandle, data.x, data.y);
-          else glue.left_bt_down(this.appHandle);
-        }
-        break;
-
-      case "modifiers":
-        if (this.appHandle !== BigInt(0)) glue.set_modifiers(this.appHandle, data.m);
-        break;
-
-      case "toolKey":
-        if (this.appHandle !== BigInt(0)) glue.tool_key(this.appHandle, data.key, data.m);
-        break;
-
-      case "paste":
-        if (this.appHandle !== BigInt(0)) glue.clipboard_paste(this.appHandle, data.text);
-        break;
-
-      case "textInput":
-        if (this.appHandle !== BigInt(0)) glue.text_input(this.appHandle, data.text, data.anchor, data.focus);
-        break;
-
-      case "textMotion":
-        if (this.appHandle !== BigInt(0)) glue.text_motion(this.appHandle, data.motion, !!data.extend);
-        break;
-
-      case "textToggle":
-        if (this.appHandle !== BigInt(0)) glue.text_toggle(this.appHandle, data.what);
-        break;
-
-      case "theme":
-        if (this.appHandle !== BigInt(0)) glue.set_dark_mode(this.appHandle, !!data.dark);
-        break;
-
-      case "middleBt":
-        if (this.appHandle !== BigInt(0)) glue.middle_bt(this.appHandle, !!data.down);
-        break;
-
-      case "leftBtUp":
-        if (this.appHandle !== BigInt(0)) {
-          glue.left_bt_up(this.appHandle);
-        }
-        break;
-
-      case "mouseWheel":
-        if (this.appHandle !== BigInt(0)) {
-          glue.mouse_wheel(this.appHandle, data.dx, data.dy, data.mode);
-        }
-        break;
-
-      case "autoAnimation":
-        if (this.appHandle !== BigInt(0)) {
-          glue.set_auto_animation(this.appHandle, data.autoAnimation);
-        }
-        break;
-
-      case "keydown":
-        if (this.appHandle !== BigInt(0)) {
-          glue.key_down(this.appHandle, data.key);
-        }
-        break;
-
-      case "keyup":
-        if (this.appHandle !== BigInt(0)) {
-          glue.key_up(this.appHandle, data.key);
-        }
-        break;
-
-      // Editor history: the shell decided the shortcut; only the command arrives.
-      case "undo":
-        if (this.appHandle !== BigInt(0)) glue.undo(this.appHandle);
-        break;
-
-      case "redo":
-        if (this.appHandle !== BigInt(0)) glue.redo(this.appHandle);
-        break;
-
-      // Document: save, load, view. Each answers with the caller's requestId.
-      case "documentSave":
-        if (this.appHandle !== BigInt(0)) {
-          this.sendMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_call(this.appHandle, "save", "[]") });
-        }
-        break;
-
-      case "solveBench":
-        this.sendMessage({ ty: "solveBench", requestId: data.requestId, text: glue.solve_bench(data.iterations, data.repeats) });
-        break;
-
-      case "documentLoad":
-        if (this.appHandle !== BigInt(0)) {
-          try {
-            glue.document_call(this.appHandle, "load", JSON.stringify([data.text]));
-            this.sendMessage({ ty: "documentLoaded", requestId: data.requestId, ok: true });
-          } catch (e) {
-            this.sendMessage({ ty: "documentLoaded", requestId: data.requestId, ok: false, error: String(e) });
-          }
-        }
-        break;
-
-      // Document calls return serialized engine results (JSON, XML or text).
-      case "documentCall":
-        try {
-          const text = glue.document_call(this.appHandle, data.fn, JSON.stringify(data.args));
-          this.sendMessage({ ty: "documentCall", requestId: data.requestId, ok: true, text });
-        } catch (e) {
-          this.sendMessage({ ty: "documentCall", requestId: data.requestId, ok: false, error: String(e) });
-        }
-        break;
-
-      case "documentView":
-        if (this.appHandle !== BigInt(0)) {
-          try {
-            const text = glue.document_call(this.appHandle, "view", JSON.stringify([JSON.stringify(data.query)]));
-            this.sendMessage({ ty: "documentView", requestId: data.requestId, ok: true, text });
-          } catch (e) {
-            this.sendMessage({ ty: "documentView", requestId: data.requestId, ok: false, error: String(e) });
-          }
-        }
-        break;
-
-      // Model surface: apply an <edit> as the model, or ask a model for one.
-      case "modelEdit":
-        if (this.appHandle !== BigInt(0)) {
-          try {
-            const outcome = await modelEdit(glue, this.appHandle, data.xml, data.label);
-            this.sendMessage({ ty: "modelEditResult", requestId: data.requestId, ok: outcome.ok, outcome });
-          } catch (e) {
-            this.sendMessage({ ty: "modelEditResult", requestId: data.requestId, ok: false, error: String(e) });
-          }
-        }
-        break;
-
-      case "modelAsk":
-        if (this.appHandle !== BigInt(0)) {
-          modelAsk(glue, this.appHandle, data.instruction, { apiKey: data.apiKey, model: data.model })
-            .then((result) => this.sendMessage({ ty: "modelAskResult", requestId: data.requestId, ok: result.ok, result }))
-            .catch((e) => this.sendMessage({ ty: "modelAskResult", requestId: data.requestId, ok: false, error: String(e) }));
-        }
-        break;
-
       case "probeStats":
         this.sendMessage({ ty: "probeStats", stats: this.probe.stats() });
         break;
@@ -284,12 +114,13 @@ export class MainThreadAdapter {
         break;
 
       default:
+        await dispatchEngineMessage(glue, this.appHandle, data, reply => { if (!this.disposed) this.sendMessage(reply); }, () => !this.disposed && this.appHandle !== 0n);
         break;
     }
   }
 
-  private sendMessage(data: any) {
-    if (this.messageHandler) {
+  private sendMessage(data: UiEvent) {
+    if (!this.disposed && this.messageHandler) {
       // Simulate the MessageEvent structure
       this.messageHandler({ data });
     }
@@ -358,18 +189,6 @@ export class MainThreadAdapter {
       this.postedEnginePrepared = true;
       this.sendMessage({ ty: "enginePrepared" });
     }
-  }
-
-  private sendPickFromWorker(pickList: any[]) {
-    this.sendMessage({ ty: "pick", list: pickList });
-  }
-
-  private sendHoverFromWorker(list: any[]) {
-    this.sendMessage({ ty: "hover", list });
-  }
-
-  private sendSelectionFromWorker(list: any[]) {
-    this.sendMessage({ ty: "selection", list });
   }
 
   private releaseApp() {

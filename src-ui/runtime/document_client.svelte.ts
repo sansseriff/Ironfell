@@ -31,7 +31,11 @@
  *   await __iron.importSvg(text)   -> import SVG as a paste: {ok, cuts, nodes, anchors, definitions, references}; placed next frame
  *   await __iron.importSvg(text, {share: false}) -> the same with repeated pieces drawn out, no references
  */
+import { QuerySubscriptions } from './query_subscriptions';
+import { PendingRequests } from './pending_requests';
+import type { ClientRequest, RequestPayload, UiRequest, UiEvent } from './protocol';
 import { lastCopied } from './clipboard';
+import { documentArguments, type DocumentCommand } from './protocol.generated';
 
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
@@ -42,8 +46,6 @@ export interface ViewQuery {
   /** Instances whose derived insides to show (component-model.md §9). */
   expand?: string[];
 }
-
-type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
 
 /** The pointer's tools and their keys (Figma's). */
 export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text' | 'port' | 'empty' | 'table';
@@ -86,20 +88,31 @@ export class DocumentClient {
   /** A pending merge question from Link (ECM I5): the person picks the survivor. */
   question: any = $state(null);
 
-  private post: ((data: any) => void) | null = null;
-  private pending = new Map<number, Pending>();
-  private nextId = 1;
+  private post: ((data: UiRequest) => void) | null = null;
+  private pending = new PendingRequests();
+  private subscriptions = new QuerySubscriptions(command => this.request('documentCall', documentArguments(command)), interest => this.post?.({ty:'setUiInterest', ...interest}));
+  sessionVersion = $state(0);
+  resolvedVersion = $state(0);
+  canUndo = $state(false);
+  canRedo = $state(false);
+  generation = $state(0);
+  private sessionId = 0;
+  private viewGeneration = 0;
+  private counterpartGeneration = 0;
+  private stopCounterparts: (() => void) | null = null;
   /** A document to load once the next app has opened its demo: what a
    *  restart (the Settings view) carries over. */
   private carried: string | null = null;
   /** Whether `?stress=N` has been acted on (once per page). */
   private stressed = false;
 
-  init(post: (data: any) => void) {
+  init(post: (data: UiRequest) => void, sessionId: number) {
+    this.dispose();
+    this.sessionId = sessionId;
+    this.generation++;
+    this.pending.attach(sessionId);
     this.post = post;
     this.error = '';
-    for (const p of this.pending.values()) p.reject(new Error('session replaced'));
-    this.pending.clear();
     try {
       this.apiKey = localStorage.getItem('iron.anthropicKey') ?? '';
     } catch {
@@ -108,6 +121,8 @@ export class DocumentClient {
     (window as any).__iron = {
       // Diagnostic access to JSON-returning operations, including contract errors.
       call: (name: string, args: unknown[] = []) => this.call(name, args),
+      subscriptions: () => this.subscriptions.stats(),
+      protocolState: () => ({ generation: this.generation, pending: this.pending.size, session: this.sessionId, version: this.version, sessionVersion: this.sessionVersion, resolvedVersion: this.resolvedVersion, canUndo: this.canUndo, canRedo: this.canRedo }),
       save: () => this.save(),
       load: (text: string) => this.load(text),
       view: (q: ViewQuery) => this.request('documentView', { query: { scope: null, depth: null, ...q } }),
@@ -118,37 +133,37 @@ export class DocumentClient {
       selection: () => [...this.selection],
       hovered: () => [...this.hovered],
       link: (a: string, b: string, keep = '') => this.link(a, b, keep),
-      counterparts: (node: string) => this.call('counterparts', [node]),
-      focus: (node: string) => this.call('focus', [node]),
+      counterparts: (node: string) => this.command({ op: 'counterparts', node: node }),
+      focus: (node: string) => this.command({ op: 'focus', node: node }),
       toPath: (node: string, force = false) => this.toPath(node, force),
       convertQuestion: () => this.convertQuestion,
       // The selection as the store's session records it, with how each
       // node was reached (panel, chain).
-      session: () => this.call('selection', []),
+      session: () => this.command({ op: 'selection' }),
       // The render benchmark (roadmap stage H): a composition of `shapes`
       // shapes, and per-phase CPU timings (`src/perf.rs`).
-      stress: (shapes = 5000) => this.call('stress', [shapes]),
+      stress: (shapes = 5000) => this.command({ op: 'stress', shapes: shapes }),
       // The instance-cache benchmark: `n` dial meters, the first driven by
       // a slider (plans/specs/instance-cache.md phase 0).
-      meters: (n = 100) => this.call('meters', [n]),
-      spatial: (enabled = true) => this.call('spatial', [enabled]),
+      meters: (n = 100) => this.command({ op: 'meters', n: n }),
+      spatial: (enabled = true) => this.command({ op: 'spatial', enabled: enabled }),
       // Object snapping for the select tool (plans/specs/snapping.md).
-      snapping: (enabled = true) => this.call('snapping', [enabled]),
+      snapping: (enabled = true) => this.command({ op: 'snapping', enabled: enabled }),
       // Tables (plans/specs/layout-and-tables.md): make one from a spec
       // ({parent, x, y, rows, preset, header, label_col, emphasis, align}),
       // and edit one's structure ('add_row', 'merge', 'preset:boxed', …).
-      table: (spec: object) => this.call('table', [JSON.stringify(spec)]),
-      tableEdit: (table: string, verb: string, cells: string[] = []) => this.call('table_edit', [table, verb, JSON.stringify(cells)]),
-      timings: (reset = false) => this.call('timings', [reset]),
+      table: (spec: object) => this.command({ op: 'table', spec: JSON.stringify(spec) }),
+      tableEdit: (table: string, verb: string, cells: string[] = []) => this.command({ op: 'table_edit', table: table, verb: verb, cells: JSON.stringify(cells) }),
+      timings: (reset = false) => this.command({ op: 'timings', reset: reset }),
       // Raster tiles for cold chunks (render-cache.md §5); off draws live.
-      raster: (enabled = true, budgetMb = 0) => this.call('raster', [enabled, budgetMb]),
+      raster: (enabled = true, budgetMb = 0) => this.command({ op: 'raster', enabled: enabled, budget_mb: budgetMb }),
       // The runtime signal layer (vision 10 §4) and its host producers.
-      signals: () => this.call('signals', []),
-      producer: (name = 'gas', action = 'freeze') => this.call('producer', [name, action]),
+      signals: () => this.command({ op: 'signals' }),
+      producer: (name = 'gas', action = 'freeze') => this.command({ op: 'producer', name: name, action: action }),
       // Free running (free-running.md): a composition's run mode, by id or
       // name ('auto' | 'always' | 'on_demand'), and whether it is live.
-      runMode: (source: string, mode: string) => this.call('set_run_mode', [source, mode]),
-      compositionInfo: (source: string) => this.call('composition_info', [source]),
+      runMode: (source: string, mode: string) => this.command({ op: 'set_run_mode', source: source, mode: mode }),
+      compositionInfo: (source: string) => this.command({ op: 'composition_info', source: source }),
       exportSvg: async (scope = 'selection') => {
         const r = await this.exportSvg(scope);
         if (!r.ok) throw new Error(r.error);
@@ -164,6 +179,12 @@ export class DocumentClient {
       },
     };
   }
+
+  subscribe<T>(command: DocumentCommand, value: (result: T) => void, error?: (error: unknown) => void) {
+    return this.subscriptions.subscribe(command, value, error);
+  }
+  undo() { this.post?.({ ty: 'undo' }); }
+  redo() { this.post?.({ ty: 'redo' }); }
 
   setApiKey(key: string) {
     this.apiKey = key;
@@ -183,13 +204,13 @@ export class DocumentClient {
    *  Without `force` it refuses when that would cut a binding or a clip,
    *  and lists them in `cuts`. */
   async toPath(node: string, force = false): Promise<{ ok: boolean; cuts?: string[]; error?: string }> {
-    return this.call('to_path', [node, force]);
+    return this.command({ op: 'to_path', node: node, force: force });
   }
 
   /** SVG of a composition (id or name), a node, or `selection`, and what
    *  it could not carry (plans/specs/svg-import-export.md). */
   async exportSvg(scope: string): Promise<{ ok: boolean; svg?: string; cuts?: string[]; error?: string }> {
-    const r = await this.call('export_svg', [scope]);
+    const r = await this.command({ op: 'export_svg', scope: scope });
     for (const cut of r.cuts ?? []) console.info(`export SVG: ${cut}`);
     return r;
   }
@@ -200,7 +221,7 @@ export class DocumentClient {
     // Repeated pieces come in as references to definitions; `share: false`
     // draws every one out in full, the reference the sharing is checked
     // against (plans/specs/instance-cache.md phase D).
-    const r = await this.call(opts.share === false ? 'import_svg_flat' : 'import_svg', [text]);
+    const r = await this.command({ op: opts.share === false ? 'import_svg_flat' : 'import_svg', text });
     if (!r.ok) this.error = `import SVG: ${r.error}`;
     return r;
   }
@@ -228,18 +249,24 @@ export class DocumentClient {
 
   /** One model turn: view, prompt, apply. */
   async ask(instruction: string): Promise<any> {
+    const generation = this.generation;
     if (!this.apiKey) throw new Error('no API key set');
     this.asking = true;
     try {
       const result = await this.request('modelAsk', { instruction, apiKey: this.apiKey, model: this.modelName });
-      this.lastAsk = result;
+      if (generation === this.generation) this.lastAsk = result;
       return result;
     } finally {
-      this.asking = false;
+      if (generation === this.generation) this.asking = false;
     }
   }
 
-  /** One JSON-answering operation through the shared document dispatcher. */
+  /** Checked, named payloads at the shell boundary; positional FFI stays here. */
+  async command<T = any>(command: DocumentCommand): Promise<T> {
+    return JSON.parse(await this.request('documentCall', documentArguments(command)));
+  }
+
+  /** Diagnostic compatibility entry, intentionally checked by Rust at runtime. */
   async call(fn: string, args: unknown[]): Promise<any> {
     return JSON.parse(await this.request('documentCall', { fn, args }));
   }
@@ -247,14 +274,18 @@ export class DocumentClient {
   /** Link two pictures (ECM §7.2). A merge question is kept in `question`
    *  for the dialog and returned; answer it by calling again with `keep`. */
   async link(a: string, b: string, keep = ''): Promise<any> {
-    const r = await this.call('link', [a, b, keep, 'human']);
-    this.question = r.question ? { ...r.question, aNode: a, bNode: b } : null;
+    const generation = this.generation;
+    const r = await this.command({ op: 'link', a: a, b: b, keep: keep, actor: 'human' });
+    if (generation === this.generation) this.question = r.question ? { ...r.question, aNode: a, bNode: b } : null;
     return r;
   }
 
-  private async refreshCounterparts(): Promise<void> {
-    const first = this.selection[0];
-    this.counterparts = first ? await this.call('counterparts', [first]) : { entity: null, figures: [] };
+  private refreshCounterparts() {
+    this.stopCounterparts?.();
+    this.stopCounterparts = null;
+    const node = this.selection[0];
+    this.counterparts = { entity: null, figures: [] };
+    if (node) this.stopCounterparts = this.subscribe<typeof this.counterparts>({ op: 'counterparts', node }, result => { this.counterparts = result; });
   }
 
   /** Returns true if the message was one of ours. */
@@ -268,7 +299,8 @@ export class DocumentClient {
     this.loadedFonts = [...new Set([...this.loadedFonts, ...families])];
   }
 
-  handleMessage(data: any): boolean {
+  handleMessage(data: UiEvent): boolean {
+    if (!this.post || data.sessionId !== this.sessionId) return false;
     switch (data?.ty) {
       case 'selection':
         this.selection = (data.list ?? []).map(String);
@@ -276,6 +308,17 @@ export class DocumentClient {
         return true;
       case 'hover':
         this.hovered = (data.list ?? []).map(String);
+        return true;
+      case 'enginePrepared':
+        this.subscriptions.start();
+        return true;
+      case 'stateChanged':
+        this.version = data.version;
+        this.sessionVersion = data.sessionVersion;
+        this.resolvedVersion = data.resolvedVersion;
+        this.canUndo = data.canUndo;
+        this.canRedo = data.canRedo;
+        this.subscriptions.invalidate(data);
         return true;
       case 'documentChanged':
         this.version = data.version;
@@ -289,34 +332,24 @@ export class DocumentClient {
         if (!this.stressed) {
           this.stressed = true;
           const shapes = Number(new URLSearchParams(location.search).get('stress'));
-          if (shapes > 0) void this.call('stress', [shapes]);
+          if (shapes > 0) void this.command({ op: 'stress', shapes: shapes });
           const meters = Number(new URLSearchParams(location.search).get('meters'));
-          if (meters > 0) void this.call('meters', [meters]);
+          if (meters > 0) void this.command({ op: 'meters', n: meters });
         }
-        void this.refresh();
-        void this.refreshCounterparts();
         return true;
       case 'documentSaved':
       case 'documentLoaded':
       case 'documentView':
       case 'documentCall':
       case 'solveBench': {
-        const p = this.pending.get(data.requestId);
-        if (!p) return true;
-        this.pending.delete(data.requestId);
-        if (data.ok === false) p.reject(new Error(data.error ?? 'request failed'));
-        else p.resolve(data.text);
+        this.pending.settle(data.requestId, data.sessionId, 'text' in data ? data.text : undefined, 'error' in data ? data.error : undefined);
         return true;
       }
       case 'modelEditResult':
       case 'modelAskResult': {
         // Resolve with the structured outcome even on a rejected edit: the
         // failure markup is the useful part.
-        const p = this.pending.get(data.requestId);
-        if (!p) return true;
-        this.pending.delete(data.requestId);
-        if (data.error) p.reject(new Error(data.error));
-        else p.resolve(data.outcome ?? data.result);
+        this.pending.settle(data.requestId, data.sessionId, 'outcome' in data ? data.outcome : 'result' in data ? data.result : undefined, 'error' in data ? data.error : undefined);
         return true;
       }
       default:
@@ -324,23 +357,39 @@ export class DocumentClient {
     }
   }
 
-  private request(ty: string, payload: object): Promise<any> {
+  dispose() {
+    this.post = null;
+    this.pending.dispose();
+    this.stopCounterparts?.();
+    this.stopCounterparts = null;
+    this.subscriptions.dispose();
+    this.canUndo = false;
+    this.canRedo = false;
+    this.selection = [];
+    this.hovered = [];
+    this.counterparts = { entity: null, figures: [] };
+    this.question = null;
+    this.view = '';
+    this.viewGeneration++;
+    this.counterpartGeneration++;
+    this.generation++;
+    this.asking = false;
+  }
+
+  private request<T extends ClientRequest['ty']>(ty: T, payload: RequestPayload<T>): Promise<any> {
     if (!this.post) return Promise.reject(new Error('no session'));
-    const requestId = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject });
-      this.post!({ ty, requestId, ...payload });
-    });
+    return this.pending.request((requestId, sessionId) => this.post!({ ty, requestId, sessionId, ...payload } as UiRequest), ty === 'modelAsk' ? 120000 : 15000);
   }
 
   async refresh(): Promise<void> {
+    const generation = ++this.viewGeneration;
     try {
-      this.view = await this.request('documentView', {
+      const view = await this.request('documentView', {
         query: { scope: null, fidelity: this.fidelity, depth: this.depth },
       });
-      this.error = '';
+      if (generation === this.viewGeneration) { this.view = view; this.error = ''; }
     } catch (e) {
-      this.error = String(e);
+      if (generation === this.viewGeneration) this.error = String(e);
     }
   }
 
@@ -354,11 +403,12 @@ export class DocumentClient {
   }
 
   async load(text: string): Promise<void> {
+    const generation = this.generation;
     try {
       await this.request('documentLoad', { text });
-      this.error = '';
+      if (generation === this.generation) this.error = '';
     } catch (e) {
-      this.error = String(e);
+      if (generation === this.generation) this.error = String(e);
       throw e;
     }
   }

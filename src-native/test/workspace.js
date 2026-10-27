@@ -12,6 +12,17 @@
     await sleep(4000);
     check('shared workspace ready', !!window.__iron && !document.querySelector('.loading'));
     check('native canvas has no browser GPU context', document.getElementById('bevy-canvas').getContext('2d') != null);
+    const reloaded = sessionStorage.getItem('iron.native.protocol.reload');
+    if (reloaded) {
+      sessionStorage.removeItem('iron.native.protocol.reload');
+      const saved = JSON.parse(reloaded);
+      report.checks = saved.report.checks;
+      report.errors.push(...saved.report.errors);
+      check('webview reload retains authored document', await timed(__iron.save()) === saved.authored);
+      check('webview reload reports existing undo history', __iron.protocolState().canUndo === true, __iron.protocolState());
+      check('webview reload settles its initial reads', __iron.protocolState().pending === 0, __iron.protocolState());
+      await timed(__iron.load(saved.baseline));
+    } else {
     const baseline = await timed(__iron.save());
     check('real document loaded', baseline.length > 1000, baseline.length);
     for (const [name, args, expected] of [
@@ -67,6 +78,15 @@
     check('restore remains queryable', (await timed(__iron.view({fidelity:'skeleton'}))).includes('<'));
     check('no page errors', report.errors.length===0, report.errors);
     await timed(__iron.load(baseline));
+    await sleep(300);
+    const reloadEdit = await timed(__iron.edit('<edit><create id="$reload" type="rect" parent="#1" name="reload history fixture" x="30" y="30" w="20" h="20"/></edit>'));
+    if (!reloadEdit.ok) throw new Error(JSON.stringify(reloadEdit));
+    await sleep(200);
+    sessionStorage.setItem('iron.native.protocol.reload', JSON.stringify({report, baseline, authored: await timed(__iron.save())}));
+    location.reload();
+    return;
+    }
+
   } catch(e) { report.failure = String(e); }
   await core.invoke('native_test', {action:'report',report});
   await core.invoke('native_test', {action:'close'});

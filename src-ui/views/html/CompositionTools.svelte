@@ -17,6 +17,7 @@
   import Square from "@lucide/svelte/icons/square";
   import Table from "@lucide/svelte/icons/table";
   import Type from "@lucide/svelte/icons/type";
+  import { getContext } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { Tool } from "../../runtime/document_client.svelte";
   import type { ViewSpec } from "../views";
@@ -24,20 +25,18 @@
   let { spec }: { spec: ViewSpec } = $props();
 
   const doc = controllerManager.docClient;
+  const active = getContext<() => boolean>("iron-view-active") ?? (() => true);
 
   // Whether this view's composition is 2D, re-read as the document changes.
   let twoD = $state(false);
   $effect(() => {
-    void doc.version;
+    void doc.generation;
     const source = spec.source;
-    doc
-      .call("compositions", [])
-      .then((list: { id: string; name: string | null; dims: string }[]) => {
-        const c = list.find((c) => c.id === source || c.name === source);
-        // The Library tab is browsed and Stats is read, not drawn in.
-        twoD = c?.dims === "2d" && source !== "library" && source !== "stats";
-      })
-      .catch(() => (twoD = false));
+    if (!active()) return;
+    return doc.subscribe<{ id: string; name: string | null; dims: string }[]>({ op: 'compositions' }, list => {
+      const c = list.find(c => c.id === source || c.name === source);
+      twoD = c?.dims === "2d" && source !== "library" && source !== "stats";
+    }, () => { twoD = false; });
   });
 
   const SHAPES = [

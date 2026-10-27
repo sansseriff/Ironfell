@@ -21,7 +21,7 @@
   let build: BuildInfo | null = $state(null);
   $effect(() => {
     if (!controllerManager.isInitialized) return;
-    controllerManager.docClient.call("build_info", []).then((b: BuildInfo) => (build = b)).catch(() => (build = null));
+    controllerManager.docClient.command({ op: 'build_info' }).then((b: BuildInfo) => (build = b)).catch(() => (build = null));
   });
 
   const display = window.devicePixelRatio || 1;

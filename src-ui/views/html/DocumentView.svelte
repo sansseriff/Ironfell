@@ -1,6 +1,7 @@
 <script lang="ts">
   // The document as markup (source: document, notation: markup): the view
   // the model reads, with save and load. Runtime switches are in Settings.
+  import { getContext } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import Github from "../../lib/Github.svelte";
   import Select from "../../lib/ui/Select.svelte";
@@ -11,6 +12,7 @@
   void spec;
 
   const doc = controllerManager.docClient;
+  const active = getContext<() => boolean>("iron-view-active") ?? (() => true);
   let fileInput: HTMLInputElement | undefined = $state();
 
   async function onFile(event: Event) {
@@ -31,8 +33,15 @@
   let svgScope = $state("selection");
   let compositions: { id: string; name: string | null; dims: string }[] = $state([]);
   $effect(() => {
-    void doc.version;
-    if (controllerManager.isInitialized) void doc.call("compositions", []).then((list) => (compositions = list)).catch(() => {});
+    void doc.generation;
+    if (!active()) return;
+    return doc.subscribe<{ id: string; name: string | null; dims: string }[]>({ op: 'compositions' }, list => { compositions = list; });
+  });
+  $effect(() => {
+    void doc.generation;
+    const query_json = JSON.stringify({ scope: null, depth: doc.depth, fidelity: doc.fidelity });
+    if (!active()) return;
+    return doc.subscribe<string>({ op: 'view', query_json }, view => { doc.view = view; }, error => { doc.error = String(error); });
   });
   const scopeItems = $derived([
     { value: "selection", label: "selection" },
@@ -53,6 +62,8 @@
   {:else}
     <div class="row">
       <button onclick={() => doc.download()}>Save</button>
+      <button onclick={() => doc.undo()} disabled={!doc.canUndo}>Undo</button>
+      <button onclick={() => doc.redo()} disabled={!doc.canRedo}>Redo</button>
       <button onclick={() => fileInput?.click()}>Load</button>
       <input type="file" accept=".json,application/json,.svg,image/svg+xml" bind:this={fileInput} hidden onchange={onFile} />
       <label class="small">
@@ -63,7 +74,7 @@
           items={[{ value: "skeleton", label: "skeleton" }, { value: "summary", label: "summary" }, { value: "full", label: "full" }]}
           onChange={(v) => {
             doc.fidelity = v;
-            doc.refresh();
+
           }}
         />
       </label>

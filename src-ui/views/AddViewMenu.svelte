@@ -17,7 +17,7 @@
   async function opened(now: boolean) {
     if (!now) return;
     try {
-      compositions = await controllerManager.docClient.call("compositions", []);
+      compositions = await controllerManager.docClient.command({ op: 'compositions' });
     } catch {
       compositions = [];
     }
@@ -43,7 +43,7 @@
    *  its tab: the one already open, or a new one here. */
   async function stress(shapes: number) {
     open = false;
-    await controllerManager.docClient.call("stress", [shapes]);
+    await controllerManager.docClient.command({ op: 'stress', shapes: shapes });
     const existing = api.getPanel("stress");
     if (existing) {
       existing.api.setActive();

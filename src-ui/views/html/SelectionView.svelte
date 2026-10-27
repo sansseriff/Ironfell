@@ -2,6 +2,7 @@
   // The session's selection (source: selection): what is picked, Link and
   // Show in, and Link's merge question. The seed of the inspector
   // (plans/specs/panels-and-session.md).
+  import { getContext } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import Plus from "@lucide/svelte/icons/plus";
   import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
@@ -22,6 +23,7 @@
   void spec;
 
   const doc = controllerManager.docClient;
+  const active = getContext<() => boolean>("iron-view-active") ?? (() => true);
 
   // Linking and Show in (ECM §7.2). Link takes the two picked pictures
   // (shift-click adds the second); a merge question opens the dialog.
@@ -42,7 +44,7 @@
   async function makeComponent() {
     makeError = "";
     try {
-      const r = await doc.call("make_component", [JSON.stringify(doc.selection), "component"]);
+      const r = await doc.command({ op: 'make_component', ids: JSON.stringify(doc.selection), name: "component" });
       if (!r.ok) makeError = r.error;
     } catch (e) { makeError = String(e); }
   }
@@ -62,19 +64,21 @@
   let strokeAnchor: HTMLDivElement | undefined = $state();
   async function refresh() {
     const node = doc.selection[0];
-    const request = ++generation;
+    const request = ++generation, session = doc.generation;
     if (!node) { inspected = null; return; }
     try {
-      const r = await doc.call("inspect", [node]);
-      if (request === generation && doc.selection[0] === node) inspected = r;
-    } catch (e) { if (request === generation) setError = String(e); }
+      const r = await doc.command({ op: 'inspect', node: node });
+      if (request === generation && session === doc.generation && doc.selection[0] === node) inspected = r;
+    } catch (e) { if (request === generation && session === doc.generation) setError = String(e); }
   }
   let previousNode: string | undefined;
   $effect(() => {
-    void doc.version;
+    void doc.generation;
     const node = doc.selection[0];
+    generation++;
     if (previousNode !== node) { previousNode = node; separateCorners = false; inspected = null; setError = ""; }
-    void refresh();
+    if (!node || !active()) return;
+    return doc.subscribe<Inspected>({ op: 'inspect', node }, r => { inspected = r; }, e => { setError = String(e); });
   });
   const titles: Record<string, string> = { transform2d: "Position", size: "Layout", radius: "Dimensions", appearance: "Appearance", fill: "Fill", gradient: "Gradient", stroke: "Stroke", corners: "Corner radius", arc: "Arc", shadow: "Drop shadow", group_clip: "Clip content", layout: "Auto layout", layout_item: "In layout", table: "Table style", rules: "Lines" };
   const order = ["transform2d", "size", "radius", "layout", "layout_item", "appearance", "corners", "arc", "group_clip", "fill", "gradient", "stroke", "shadow"];
@@ -112,7 +116,7 @@
     const node = target ?? inspected.node;
     setError = "";
     try {
-      const r = await doc.call("inspect_patch", [node, JSON.stringify({ values, remove, label })]);
+      const r = await doc.command({ op: 'inspect_patch', node: node, patch: JSON.stringify({ values, remove, label }) });
       if (!r.ok) setError = r.error;
       await refresh();
     } catch (e) { setError = String(e); }
@@ -123,7 +127,7 @@
     if (!inspected?.component) return;
     setError = "";
     try {
-      const r = await doc.call("detach", [inspected.component.entity]);
+      const r = await doc.command({ op: 'detach', entity: inspected.component.entity });
       if (!r.ok) setError = r.error;
       await refresh();
     } catch (e) { setError = String(e); }
@@ -134,7 +138,7 @@
     if (!inspected?.table) return;
     setError = "";
     try {
-      const r = await doc.call("table_edit", [inspected.table, verb, JSON.stringify(doc.selection)]);
+      const r = await doc.command({ op: 'table_edit', table: inspected.table, verb: verb, cells: JSON.stringify(doc.selection) });
       if (!r.ok) setError = r.error;
       await refresh();
     } catch (e) { setError = String(e); }
@@ -148,7 +152,7 @@
   async function author(verb: string, args: Record<string, unknown>) {
     setError = "";
     try {
-      const r = await doc.call("author", [verb, JSON.stringify(args)]);
+      const r = await doc.command({ op: 'author', verb: verb, args: JSON.stringify(args) });
       if (!r.ok) setError = r.error;
       await refresh();
       return r;
@@ -164,7 +168,7 @@
     if (!inspected) return;
     setError = "";
     try {
-      const r = await doc.call("component", [inspected.node, kind, add]);
+      const r = await doc.command({ op: 'component', node: inspected.node, kind: kind, add: add });
       if (!r.ok) setError = `${kind}: ${r.error}`;
       await refresh();
     } catch (e) { setError = String(e); }
@@ -179,7 +183,7 @@
     <button onclick={makeComponent} disabled={doc.selection.length === 0} title="Make a component: shapes become a new definition shown by its main; instances become one component holding them">Make component</button>
     <button onclick={() => author("wrap", { ids: doc.selection })} disabled={doc.selection.length === 0} title="Wrap the selection in an empty at its centre (⌘⌥G)">Wrap in empty</button>
     {#each showIn as f (f.node)}
-      <button onclick={() => doc.call("focus", [f.node])}>Show in {f.name ?? f.composition} ▸</button>
+      <button onclick={() => doc.command({ op: 'focus', node: f.node })}>Show in {f.name ?? f.composition} ▸</button>
     {/each}
   </div>
   {#if linkError}<p class="error">{linkError}</p>{/if}

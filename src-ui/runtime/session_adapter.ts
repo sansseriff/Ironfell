@@ -1,3 +1,4 @@
+import type { UiRequest, UiEvent } from './protocol';
 import { pixelRatio } from './settings.svelte';
 import { AdapterBridge } from './adapter_bridge';
 import type { Backend } from './backend_policy';
@@ -23,10 +24,13 @@ export interface PanelRectMsg {
  * Messages that arrive before the engine is prepared are coalesced (latest canvas
  * size, latest rect per panel id) and flushed on `enginePrepared`.
  */
+let nextSessionId = 1;
+
 export class SessionAdapter {
+  readonly id = nextSessionId++;
   readonly mode: RuntimeMode;
   private bridge: AdapterBridge | null = null;
-  private messageHandler: ((msg: any) => void) | null = null;
+  private messageHandler: ((msg: UiEvent) => void) | null = null;
   private workerIsReady = false;
   private enginePrepared = false;
   private disposed = false;
@@ -39,13 +43,13 @@ export class SessionAdapter {
     this.mode = mode;
   }
 
-  onMessage(handler: (msg: any) => void): void {
+  onMessage(handler: (msg: UiEvent) => void): void {
     this.messageHandler = handler;
   }
 
-  post(data: any, transfer?: any[]): void {
-    if (!this.bridge) return;
-    this.bridge.post(data, transfer as any);
+  post(data: UiRequest, transfer?: any[]): void {
+    if (!this.bridge || this.disposed) throw new Error('session disposed');
+    this.bridge.post({ ...data, sessionId: this.id }, transfer as any);
   }
 
   isPrepared(): boolean {
@@ -68,7 +72,8 @@ export class SessionAdapter {
     this.bridge.setHandler((data: any) => this.handleBridgeMessage(data));
     this.pendingInit = { canvas, dpr: pixelRatio() };
     if (import.meta.env.MODE !== 'native' && this.mode !== 'native') {
-      void import('./wasm_loader').then(({ WasmLoader }) => new WasmLoader().sendToAdapter(this.bridge!, backend)).catch(e => console.error('WASM send failed', e));
+      const bridge = this.bridge;
+      void import('./wasm_loader').then(({ WasmLoader }) => { if (!this.disposed) return new WasmLoader().sendToAdapter(bridge, backend); }).catch(e => { if (!this.disposed) { this.messageHandler?.({ty:'runtimeError', error:String(e), sessionId:this.id}); } });
     }
   }
 
@@ -117,12 +122,13 @@ export class SessionAdapter {
 
   dispose(): void {
     if (this.disposed) return;
-    this.disposed = true;
     try { this.stop(); } catch { }
     // Release the Bevy app (main mode frees GPU resources in-place; the worker is
     // torn down with terminate() inside bridge.dispose()).
     try { this.post({ ty: 'releaseApp' }); } catch { }
     try { this.bridge?.dispose(); } catch { }
+    this.disposed = true;
+    this.messageHandler = null;
     this.bridge = null;
     this.workerIsReady = false;
     this.enginePrepared = false;
@@ -131,7 +137,10 @@ export class SessionAdapter {
     this.pendingInit = null;
   }
 
-  private handleBridgeMessage(data: any) {
+  private handleBridgeMessage(data: UiEvent) {
+    if (this.disposed) return;
+    data = { ...data, sessionId: this.id };
+    if (data.ty === 'runtimeError') { const handler = this.messageHandler; this.dispose(); handler?.(data); return; }
     if (data?.ty === 'workerIsReady') {
       this.workerIsReady = true;
       this.postInit();

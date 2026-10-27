@@ -28,29 +28,31 @@
     { id: "on_demand", label: "On demand", hint: "Renders on input; live parts pause" },
   ];
 
+  let queryGeneration = 0;
   async function refresh() {
+    const request = ++queryGeneration, generation = doc.generation, source = spec.source;
     try {
-      const r: Info = await doc.call("composition_info", [spec.source]);
-      info = r?.ok ? r : null;
+      const r: Info = await doc.command({ op: 'composition_info', source: spec.source });
+      if (request === queryGeneration && generation === doc.generation && source === spec.source) info = r?.ok ? r : null;
     } catch {
-      info = null;
+      if (request === queryGeneration && generation === doc.generation) info = null;
     }
   }
 
   // Liveness changes without a document version (a producer starts or is
   // frozen), so re-read while the menu is open as well as on each version.
   $effect(() => {
-    void doc.version;
+    void doc.generation;
     void spec.source;
     refresh();
   });
   const poll = setInterval(() => {
     if (open) refresh();
   }, 500);
-  onDestroy(() => clearInterval(poll));
+  onDestroy(() => { queryGeneration++; clearInterval(poll); });
 
   async function set(run: Run) {
-    await doc.call("set_run_mode", [spec.source, run]);
+    await doc.command({ op: 'set_run_mode', source: spec.source, mode: run });
     await refresh();
   }
 

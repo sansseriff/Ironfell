@@ -55,7 +55,7 @@
     onError("");
     const s = { node, leaf: f.leaf, origin: draft, x: e.clientX, token: 0, options: JSON.stringify({ channel, leaves: scrubLeaves }), failed: false, queue: Promise.resolve() };
     session = s;
-    s.queue = doc.call("inspect_scrub", [s.node, s.leaf, "begin", 0, 0, s.options]).then((r) => {
+    s.queue = doc.command({ op: 'inspect_scrub', node: s.node, leaf: s.leaf, phase: "begin", token: 0, value: 0, options: s.options }).then((r) => {
       if (!r.ok) throw new Error(r.error);
       s.token = r.token;
     }).catch((e) => { s.failed = true; onError(String(e)); });
@@ -72,7 +72,7 @@
     const value = draft / factor;
     s.queue = s.queue.then(async () => {
       if (s.failed) return;
-      const r = await doc.call("inspect_scrub", [s.node, s.leaf, "move", s.token, value, s.options]);
+      const r = await doc.command({ op: 'inspect_scrub', node: s.node, leaf: s.leaf, phase: "move", token: s.token, value: value, options: s.options });
       if (!r.ok) { s.failed = true; onError(r.error); }
     }).catch((e) => { s.failed = true; onError(String(e)); });
   }
@@ -83,7 +83,7 @@
     // Keep the displayed preview until the backend acknowledges the commit.
     s.queue.then(async () => {
       if (s.token) {
-        const r = await doc.call("inspect_scrub", [s.node, s.leaf, cancel || s.failed ? "cancel" : "commit", s.token, 0, s.options]);
+        const r = await doc.command({ op: 'inspect_scrub', node: s.node, leaf: s.leaf, phase: cancel || s.failed ? "cancel" : "commit", token: s.token, value: 0, options: s.options });
         if (!r.ok && !s.failed) onError(r.error);
       }
     }).catch((e) => onError(String(e))).finally(() => { if (!session) dragging = false; onRefresh(); });

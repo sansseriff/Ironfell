@@ -74,7 +74,7 @@
     const want = shown.slice(first, first + Math.ceil(list.clientHeight / rowH) + 10).filter((r) => r.installed && !previews[r.name] && !asked.has(r.name)).map((r) => r.name);
     if (!want.length) return;
     want.forEach((n) => asked.add(n));
-    doc.call("font_previews", [want]).then((p: Record<string, Preview>) => (previews = { ...previews, ...p })).catch(() => {});
+    doc.command({ op: 'font_previews', names: want }).then((p: Record<string, Preview>) => (previews = { ...previews, ...p })).catch(() => {});
   }
   $effect(() => {
     void shown;

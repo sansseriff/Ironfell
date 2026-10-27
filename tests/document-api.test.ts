@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { documentArguments } from '../src-ui/runtime/protocol.generated';
 import { makeDocumentApi } from '../src-ui/model/api';
 
 for (const asynchronous of [false, true]) {
   test(`model API over ${asynchronous ? 'asynchronous native' : 'synchronous wasm'} transport`, async () => {
     const calls: [string, unknown[]][] = [];
-    const api = makeDocumentApi((name, args) => {
+    const api = makeDocumentApi(command => {
+      const { fn: name, args } = documentArguments(command);
       calls.push([name, args]);
       const result = name === 'view' ? '<document version="12"/>'
         : JSON.stringify(name === 'schema' ? { types: [] } : { ok: true });
@@ -38,7 +40,8 @@ for (const asynchronous of [false, true]) {
 
 test('schema failure can be retried; transport errors and transaction rejection survive decoding', async () => {
   let attempts = 0;
-  const api = makeDocumentApi((name) => {
+  const api = makeDocumentApi(command => {
+    const name = command.op;
     if (name === 'schema' && ++attempts === 1) throw new Error('disconnected');
     if (name === 'selection') return Promise.reject(new Error('session disposed'));
     return JSON.stringify(name === 'schema' ? { types: [] } : { ok: false, errors: [{ kind: 'stale' }] });

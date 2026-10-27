@@ -1,0 +1,31 @@
+# Shared request/lifecycle and selective read checks in the real workspace.
+nav
+ready
+dclick 540 460
+sleep 250
+eval (()=>{const key=JSON.stringify({op:'inspect',node:'#M'});window.inspectorReadKey=key;window.inspectorReads=__iron.subscriptions().reads[key];window.compositionReads=__iron.subscriptions().reads[JSON.stringify({op:'compositions'})];if(!window.inspectorReads)throw new Error('square inspector is not subscribed');return __iron.protocolState().canUndo})()
+eval __iron.edit('<edit><set id="#N" fill.color="#ff0000"/></edit>')
+sleep 300
+assert __iron.subscriptions().reads[window.inspectorReadKey]===window.inspectorReads
+assert __iron.subscriptions().reads[JSON.stringify({op:'compositions'})]===window.compositionReads
+eval __iron.edit('<edit><set id="#M" fill.color="#00ff00"/></edit>')
+sleep 300
+assert __iron.subscriptions().reads[window.inspectorReadKey]>window.inspectorReads
+assert __iron.protocolState().canUndo===true
+key Meta+z
+sleep 250
+assert __iron.protocolState().canRedo===true
+eval (async()=>{const {controllerManager:c}=await import(performance.getEntriesByType('resource').find(e=>e.name.includes('/controller-manager.svelte.ts')).name);const old=__iron.protocolState().session;const pending=c.docClient.request('probeReset',{}).then(()=>{throw new Error('request unexpectedly completed')},e=>String(e));await c.switchMode('main');const reason=await pending;if(!reason.includes('disposed'))throw new Error(reason);c.docClient.handleMessage({ty:'selection',list:['#zz'],sessionId:old});if(c.docClient.selection.includes('#zz'))throw new Error('stale selection published');return 'replacement settled pending work and rejected stale events'})()
+ready
+sleep 300
+assert __iron.protocolState().pending===0
+assert document.querySelectorAll('textarea[aria-label="Text"]').length<=1
+eval (async()=>{const {controllerManager:c}=await import(performance.getEntriesByType('resource').find(e=>e.name.includes('/controller-manager.svelte.ts')).name);await c.switchMode('worker');return 'worker restored'})()
+ready
+sleep 300
+assert __iron.protocolState().pending===0
+eval (async()=>{const {controllerManager:c}=await import(performance.getEntriesByType('resource').find(e=>e.name.includes('/controller-manager.svelte.ts')).name);c.manager.session.handleBridgeMessage({ty:'runtimeError',error:'fixture failure'});if(c.docClient.pending.size)throw new Error('failure left pending requests');await c.restart();return 'failed runtime detached and restarted'})()
+ready
+sleep 300
+assert __iron.protocolState().pending===0
+errors

@@ -1,5 +1,4 @@
 use crate::bevy_app::init_app;
-use crate::panels::{PanelRect, Panels};
 use crate::{ActivityControl, WorkerApp, canvas_view::*};
 use bevy::app::PluginsState;
 use bevy::ecs::system::SystemState;
@@ -7,72 +6,17 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use wasm_bindgen::prelude::*;
 
-// Import Bevy's input types that your FFI functions will create events for
-use bevy::input::{
-    ButtonState,                                            // Added ButtonState
-    keyboard::{Key, KeyCode as BevyKeyCode, KeyboardInput}, // Added Key, BevyKeyCode, KeyboardInput, NativeKey
-    mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
-};
-use bevy::window::CursorMoved; // CursorMoved is used in mouse_move
-
-// pub struct MyMouseWheelEvent {
-//     pub delta_x: f32,
-//     pub delta_y: f32,
-//     pub unit: MouseScrollUnit,
-// }
-// impl Event for MyMouseWheelEvent {}
+use bevy::window::CursorMoved;
 
 #[wasm_bindgen]
 extern "C" {
-    fn alert(s: &str);
     /// 在 app 初始化完成前，info! 无法使用，打印日志得用它
     #[wasm_bindgen(js_namespace = console)]
     pub(crate) fn log(s: &str);
 
-    /// 发送 pick 列表
-    ///
-    /// 从 worker 环境发送
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_pick_from_worker(list: js_sys::Array);
-    // New outbound helpers (implemented in JS worker) for hover & selection changes
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_hover_from_worker(list: js_sys::Array);
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_selection_from_worker(list: js_sys::Array);
-    /// The document's version advanced (a transaction, undo, redo, or load
-    /// applied). The shell re-reads whatever views it shows.
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_document_changed_from_worker(version: u32);
-    /// The canvas cursor the select tool wants: a CSS cursor name, or
-    /// `rotate:<degrees>` for the shell's rotation cursor.
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_cursor_from_worker(cursor: String);
-    /// The active tool changed (`select`, `pen`): the shell's toolbar.
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_tool_from_worker(tool: String);
-    /// Editing a shape's points would cut bindings or clips
-    /// (`iron_document::shape`): JSON `{node, type, cuts}` for the shell to
-    /// ask about; a yes calls `document_to_path` with `force`.
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_convert_from_worker(question: String);
-    /// The answer to a Cmd+C or Cmd+X: the copied fragment's text
-    /// (`iron_document::copy`), or empty when nothing was copied. The shell
-    /// is waiting on it to finish its clipboard write.
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_clipboard_from_worker(text: String);
-    /// Font files to fetch, as JSON `[{family, file}]`, most needed first.
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_fonts_from_worker(fonts: String);
-    /// The text editor's state for the host's textarea, as JSON.
-    #[wasm_bindgen(js_namespace = rustBridge)]
-    pub(crate) fn send_text_edit_from_worker(state: String);
     /// Any other event, as its JSON (`ty` names it): the host posts it on.
     #[wasm_bindgen(js_namespace = rustBridge)]
     pub(crate) fn send_event_from_worker(event: String);
-}
-
-fn event_json(event: &crate::host_events::EngineEvent) -> serde_json::Value {
-    serde_json::to_value(event).unwrap_or_default()
 }
 
 #[wasm_bindgen]
@@ -231,39 +175,9 @@ pub fn release_app(ptr: u64) {
 }
 
 #[wasm_bindgen]
-pub fn set_panel_viewport(ptr: u64, id: String, kind: String, composition: String, x: f32, y: f32, w: f32, h: f32) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::set_panel_viewport(app, id, kind, composition, x, y, w, h)
-}
-
-#[wasm_bindgen]
-pub fn despawn_panel(ptr: u64, id: String) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::despawn_panel(app, id)
-}
-
-#[wasm_bindgen]
-pub fn set_mouse_position(ptr: u64, x: f32, y: f32) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::set_mouse_position(app, x, y)
-}
-
-#[wasm_bindgen]
 pub fn mouse_move(ptr: u64, x: f32, y: f32) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
     crate::engine_api::mouse_move(app, x, y)
-}
-
-#[wasm_bindgen]
-pub fn mouse_wheel(ptr: u64, delta_x: f32, delta_y: f32, delta_mode: u32) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::mouse_wheel(app, delta_x, delta_y, delta_mode)
-}
-
-#[wasm_bindgen]
-pub fn set_dark_mode(ptr: u64, dark: bool) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::set_dark_mode(app, dark)
 }
 
 #[wasm_bindgen]
@@ -272,46 +186,15 @@ pub fn set_scale_factor(ptr: u64, scale_factor: f32) {
     crate::engine_api::set_scale_factor(app, scale_factor)
 }
 
+/// Shared semantic input/control routing. Surface and frame ownership stay in the host.
 #[wasm_bindgen]
-pub fn left_bt_down(ptr: u64) {
+pub fn engine_message(ptr: u64, message_json: String) -> Result<String, JsValue> {
+    if ptr == 0 { return Err(JsValue::from_str("engine is not attached")); }
+    let request = serde_json::from_str(&message_json)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::left_bt_down(app)
-}
-
-#[wasm_bindgen]
-pub fn left_bt_down_at(ptr: u64, x: f32, y: f32) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::left_bt_down_at(app, x, y)
-}
-
-#[wasm_bindgen]
-pub fn left_bt_up(ptr: u64) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::left_bt_up(app)
-}
-
-#[wasm_bindgen]
-pub fn right_bt_down(ptr: u64) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::right_bt_down(app)
-}
-
-#[wasm_bindgen]
-pub fn right_bt_up(ptr: u64) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::right_bt_up(app)
-}
-
-#[wasm_bindgen]
-pub fn middle_bt(ptr: u64, down: bool) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::middle_bt(app, down)
-}
-
-#[wasm_bindgen]
-pub fn set_auto_animation(ptr: u64, needs_animate: u32) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::set_auto_animation(app, needs_animate)
+    let (reply, _) = crate::engine_protocol::dispatch(app, request);
+    serde_json::to_string(&reply).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Document operations share the same dispatcher as the native host.
@@ -323,60 +206,6 @@ pub fn document_call(ptr: u64, name: String, args_json: String) -> Result<String
     crate::engine_dispatch::call(app, &name, &args).map_err(|e| JsValue::from_str(&e))
 }
 
-/// A style shortcut in a text edit (`bold`, `italic`, `underline`, `strike`).
-#[wasm_bindgen]
-pub fn text_toggle(ptr: u64, what: String) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::text_toggle(app, what)
-}
-
-#[wasm_bindgen]
-pub fn undo(ptr: u64) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::undo(app)
-}
-
-#[wasm_bindgen]
-pub fn redo(ptr: u64) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::redo(app)
-}
-
-#[wasm_bindgen]
-pub fn set_modifiers(ptr: u64, bits: u8) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::set_modifiers(app, bits)
-}
-
-#[wasm_bindgen]
-pub fn tool_key(ptr: u64, key: String, bits: u8) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::tool_key(app, key, bits)
-}
-
-#[wasm_bindgen]
-pub fn clipboard_paste(ptr: u64, text: String) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::clipboard_paste(app, text)
-}
-
-#[wasm_bindgen]
-pub fn key_down(ptr: u64, key: String) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::key_down(app, key)
-}
-
-#[wasm_bindgen]
-pub fn key_up(ptr: u64, key: String) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::key_up(app, key)
-}
-
-#[wasm_bindgen]
-pub fn solve_bench(iterations: u32, repeats: u32) -> String {
-    crate::engine_api::solve_bench(iterations, repeats)
-}
-
 /// A font file's bytes, fetched by the host after an `EngineEvent::Fonts`
 /// (plans/specs/text.md §4). Returns the family names it registered. Fonts
 /// are a process resource, so no app handle is needed.
@@ -385,43 +214,9 @@ pub fn register_font(bytes: Vec<u8>) -> String {
     iron_text::engine().register(bytes).join(", ")
 }
 
-/// The host's textarea changed: the whole draft and its selection, in
-/// UTF-16 offsets (`bevy_app::text_tool`).
-#[wasm_bindgen]
-pub fn text_input(ptr: u64, text: String, anchor: u32, focus: u32) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::text_input(app, text, anchor, focus)
-}
-
-/// A caret motion only the canvas layout knows (`up`, `down`, `home`, `end`).
-#[wasm_bindgen]
-pub fn text_motion(ptr: u64, motion: String, extend: bool) {
-    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
-    crate::engine_api::text_motion(app, motion, extend)
-}
-
-/// The font catalog as JSON, for the picker.
-#[wasm_bindgen]
-pub fn font_catalog() -> String {
-    iron_text::catalog::to_json()
-}
-
 /// Deliver engine-owned Rust events through the existing wasm callbacks.
 fn flush_events(app: &mut WorkerApp) {
-    use crate::host_events::EngineEvent;
-    let events=app.world().resource::<crate::host_events::HostEvents>().drain();
-    for event in events {
-        match event {
-            EngineEvent::Hover { list } => send_hover_from_worker(list.into_iter().map(JsValue::from).collect()),
-            EngineEvent::Selection { list } => send_selection_from_worker(list.into_iter().map(JsValue::from).collect()),
-            EngineEvent::DocumentChanged { version } => send_document_changed_from_worker(version),
-            EngineEvent::Cursor { cursor } => send_cursor_from_worker(cursor),
-            EngineEvent::Tool { tool } => send_tool_from_worker(tool),
-            EngineEvent::ConvertQuestion { question } => send_convert_from_worker(question),
-            EngineEvent::Clipboard { text } => send_clipboard_from_worker(text),
-            EngineEvent::TextEdit { .. } => send_text_edit_from_worker(serde_json::to_string(&event_json(&event)).unwrap_or_default()),
-            EngineEvent::Fonts { fonts } => send_fonts_from_worker(serde_json::to_string(&fonts).unwrap_or_default()),
-            EngineEvent::LinkDrop { .. } => send_event_from_worker(serde_json::to_string(&event_json(&event)).unwrap_or_default()),
-        }
+    for event in app.world().resource::<crate::host_events::HostEvents>().drain() {
+        send_event_from_worker(serde_json::to_string(&event).expect("engine event is serializable"));
     }
 }

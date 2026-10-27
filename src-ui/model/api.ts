@@ -2,6 +2,7 @@
  * The model surface shared by browser and native hosts. Transports return
  * serialized engine results; this factory owns their arguments and decoding.
  */
+import type { DocumentCommand } from '../runtime/protocol.generated';
 import type { Schema } from './schema';
 
 export interface SolverSummary {
@@ -75,29 +76,28 @@ export interface LinkResult {
 }
 
 /** A host supplies only transport; operation names and decoding live here. */
-export type DocumentCall = (name: string, args: unknown[]) => MaybePromise<string>;
+export type DocumentCall = (command: DocumentCommand) => MaybePromise<string>;
 
 export function makeDocumentApi(call: DocumentCall): DocumentApi {
   let schema: Promise<Schema> | null = null;
-  const json = async <T>(name: string, args: unknown[] = []): Promise<T> =>
-    JSON.parse(await call(name, args));
+  const json = async <T>(command: DocumentCommand): Promise<T> => JSON.parse(await call(command));
   return {
-    schema: () => (schema ??= json<Schema>('schema').catch(error => {
+    schema: () => (schema ??= json<Schema>({ op: 'schema' }).catch(error => {
       schema = null;
       throw error;
     })),
-    view: q => call('view', [JSON.stringify({ scope: null, depth: null, ...q })]),
+    view: q => call({ op: 'view', query_json: JSON.stringify({ scope: null, depth: null, ...q }) }),
     version: async () => {
-      const text = await call('view', [JSON.stringify({ scope: null, fidelity: 'skeleton', depth: 0 })]);
+      const text = await call({ op: 'view', query_json: JSON.stringify({ scope: null, fidelity: 'skeleton', depth: 0 }) });
       return Number(text.match(/version="(\d+)"/)?.[1] ?? 0);
     },
-    nextIds: n => json('next_ids', [n]),
-    nextRelationIds: n => json('next_relation_ids', [n]),
-    place: (parent, after, count) => json('place', [parent, after, count]),
-    apply: (tx, expect) => json('apply', [JSON.stringify(tx), expect]),
-    link: (a, b, keep, actor) => json('link', [a, b, keep, actor]),
-    selection: () => json('selection'),
-    importSvg: (text, parent, x, y, actor) => json('import_svg_at', [text, parent, x, y, actor]),
-    table: spec => json('table', [spec]),
+    nextIds: n => json({ op: 'next_ids', n }),
+    nextRelationIds: n => json({ op: 'next_relation_ids', n }),
+    place: (parent, after, count) => json({ op: 'place', parent, after, count }),
+    apply: (tx, expect) => json({ op: 'apply', transaction_json: JSON.stringify(tx), expect_version: expect }),
+    link: (a, b, keep, actor) => json({ op: 'link', a, b, keep, actor }),
+    selection: () => json({ op: 'selection' }),
+    importSvg: (text, parent, x, y, actor) => json({ op: 'import_svg_at', text, parent, x, y, actor }),
+    table: spec => json({ op: 'table', spec }),
   };
 }

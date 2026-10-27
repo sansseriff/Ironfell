@@ -1,3 +1,4 @@
+import type { UiEvent } from './runtime/protocol';
 import { isNativeHost } from './runtime/native_host';
 import { pixelRatio, watchPixelRatio } from './runtime/settings.svelte';
 import { onThemeChange, theme } from './runtime/theme.svelte';
@@ -141,6 +142,9 @@ export class PanelManager {
 
     // 1. Detach input from the old canvas.
     this.input.dispose();
+    this.docClient.dispose();
+    this.textInput?.dispose();
+    this.textInput = null;
 
     // 2. Dispose old session (stops RAF; main mode releases the Bevy app; worker terminates).
     this.session?.dispose();
@@ -156,6 +160,9 @@ export class PanelManager {
 
   dispose(): void {
     this.input.dispose();
+    this.docClient.dispose();
+    this.textInput?.dispose();
+    this.textInput = null;
     this.session?.dispose();
     this.session = null;
     if (this.windowResizeHandler) {
@@ -177,8 +184,8 @@ export class PanelManager {
   private startSession(): void {
     const session = new SessionAdapter(this.mode);
     this.session = session;
-    session.onMessage((data) => this.handleSessionMessage(data));
-    this.docClient.init((data: any) => session.post(data));
+    session.onMessage((data) => { if (this.session === session) this.handleSessionMessage(data); });
+    this.docClient.init(data => session.post(data), session.id);
     session.attachCanvas(this.canvas!, this.backend);
     session.resizeCanvas(...this.canvasPhysicalSize(), pixelRatio());
     this.syncAllPanels();
@@ -189,9 +196,10 @@ export class PanelManager {
     (window as any).__probeReset = () => this.session?.post({ ty: 'probeReset' });
   }
 
-  private handleSessionMessage(data: any): void {
+  private handleSessionMessage(data: UiEvent): void {
     switch (data?.ty) {
       case 'enginePrepared':
+        this.docClient.handleMessage(data);
         this.isInitialized = true;
         this.loadingInProgress = false;
         // Deterministic post-init sync: canvas size + all panel rects (the session
@@ -210,6 +218,18 @@ export class PanelManager {
       case 'clipboard':
         copied(data.text ?? '');
         break;
+      case 'runtimeError':
+        this.input.dispose();
+        this.textInput?.dispose();
+        this.textInput = null;
+        this.session = null;
+        this.isInitialized = false;
+        this.docClient.error = data.error;
+        this.docClient.dispose();
+        this.loadingInProgress = false;
+        this.onInitialized?.();
+        break;
+      case 'stateChanged':
       case 'documentChanged':
       case 'documentSaved':
       case 'documentLoaded':
@@ -224,7 +244,7 @@ export class PanelManager {
         this.docClient.handleMessage(data);
         break;
       case 'tool':
-        this.docClient.tool = data.tool;
+        this.docClient.tool = data.tool as import('./runtime/document_client.svelte').Tool;
         break;
       case 'convertQuestion':
         this.docClient.convertQuestion = data.question;

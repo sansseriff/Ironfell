@@ -1464,12 +1464,17 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     let mut size = Size::default();
     size.w = n(220.0);
     size.h = n(120.0);
+    // The card reads its own interaction state: it lights while hovered.
+    let mut card_fill = Fill::default();
+    card_fill.color = Slot::Const(Value::Color([0.95, 0.55, 0.2, 1.0]));
+    card_fill.opacity = bound(format!("{}.interaction.hovered ? 1 : 0.45", ids[2]));
+    let card_fill = card_fill.wrap();
     let mut title = words("Pitch", 40.0);
     title.push(at(60.0, 120.0).wrap());
     phase(&mut scratch, vec![
-        caption(ids[0], pitch, 0, 60.0, 24.0, "The pitch notation's own tools (Move, Text, Table; B for a table) and an inspector of\nPosition, Text and Fill only, from one context in this document. Compare the toolbar with Main's."),
+        caption(ids[0], pitch, 0, 60.0, 24.0, "The pitch notation's own tools (Move, Text, Table; B for a table) and an inspector of\nPosition, Text and Fill only, from one context in this document. Compare the toolbar with Main's.\nThe card lights while hovered: its fill reads its own interaction state."),
         Op::Create { id: ids[1], ty: ty("text"), parent: Some(pitch), order: key(1), facets: title },
-        Op::Create { id: ids[2], ty: ty("rect"), parent: Some(pitch), order: key(2), facets: vec![at(60.0, 200.0).wrap(), size.wrap(), paint([0.95, 0.55, 0.2, 1.0]), named("card")] },
+        Op::Create { id: ids[2], ty: ty("rect"), parent: Some(pitch), order: key(2), facets: vec![at(60.0, 200.0).wrap(), size.wrap(), card_fill, named("card"), iron_document::facet::Interaction::default().wrap()] },
     ])?;
 
     // Dials.
@@ -1509,5 +1514,47 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         caption(ids[9], dials, 9, 60.0, 90.0, "level"),
     ])?;
     let _ = ids[10];
+
+    // Data (affordances.md demo 4): one dataset, three sliders, shown as a
+    // table of bound readouts and as bars bound to it. Drag a bar's top and
+    // its cell follows; type a number in a cell and its bar moves (typed
+    // words invert through their `fmt` binding onto the slider).
+    let data = scratch.document().next_id();
+    let op = composition(&scratch, data, "data", "free");
+    phase(&mut scratch, vec![op])?;
+    let names = ["north", "east", "south"];
+    let values = [0.4, 0.7, 0.55];
+    let ids = scratch.document().next_ids(4);
+    let mut ops = vec![caption(ids[0], data, 0, 60.0, 16.0, "One dataset, two pictures: drag a bar's top and its cell follows; double-click the table,\nthen a cell, and type a number: its bar moves. The sliders are the data.")];
+    for (i, (name, v)) in names.iter().zip(values).enumerate() {
+        let mut s = Slider::default();
+        s.value = n(v);
+        let f = vec![at(60.0, 70.0 + 40.0 * i as f64).wrap(), s.wrap(), named(name)];
+        ops.push(Op::Create { id: ids[1 + i], ty: ty("slider"), parent: Some(data), order: key(1 + i as u32), facets: f });
+    }
+    phase(&mut scratch, ops)?;
+    let sliders = [ids[1], ids[2], ids[3]];
+    let mut rows = vec![vec!["Region".to_owned(), "Value".to_owned()]];
+    for (name, s) in names.iter().zip(sliders) {
+        rows.push(vec![name.to_string(), format!("{{= fmt({s}.slider.value * 100, 0)}}")]);
+    }
+    let spec = table::Spec { rows, preset: table::Preset::Light, header: 1, label_col: true, emphasis: None, align: vec![] };
+    let (ops, _) = table::create_ops(scratch.document(), Some(data), key(4), [60.0, 220.0], &spec)?;
+    phase(&mut scratch, ops)?;
+    let ids = scratch.document().next_ids(6);
+    let mut ops = Vec::new();
+    for (i, (name, s)) in names.iter().zip(sliders).enumerate() {
+        let x = 420.0 + 70.0 * i as f64;
+        let mut place = at(x, 0.0);
+        place.y = bound(format!("380 - {s}.slider.value * 250"));
+        let mut sz = Size::default();
+        sz.w = n(44.0);
+        sz.h = bound(format!("{s}.slider.value * 250"));
+        ops.push(Op::Create { id: ids[i], ty: ty("rect"), parent: Some(data), order: key(5 + i as u32), facets: vec![place.wrap(), sz.wrap(), paint([0.19, 0.44, 0.82, 1.0]), named(&format!("{name} bar")), affords("drag: track; axis: -y; drives: size.h")] });
+    }
+    for (i, name) in names.iter().enumerate() {
+        ops.push(caption(ids[3 + i], data, 8 + i as u32, 424.0 + 70.0 * i as f64, 390.0, name));
+    }
+    phase(&mut scratch, ops)?;
     Ok(iron_document::TransactionInput { label: "open showcase".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: out, exact: false })
 }

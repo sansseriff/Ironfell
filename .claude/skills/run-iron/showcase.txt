@@ -13,11 +13,37 @@ shot showcase-outline
 tab Pitch
 sleep 800
 eval [...document.querySelectorAll('.toolbar')].filter(e=>e.offsetParent).map(e=>[...e.querySelectorAll('button.tool')].map(b=>b.title))
+eval window.card = async () => { const all = await __iron.view({fidelity:'skeleton', depth: 0}); const p = all.match(/<composition id="(#\w+)" name="pitch"/)[1]; const v = await __iron.view({fidelity:'full', scope: p}); return Number(v.match(/<rect[^>]*name="card"[^>]* opacity="([\d.]+)"/)[1]); }
+eval card()
+pmove pitch 150 260
+sleep 600
+eval card()
 shot showcase-pitch
 tab Dials
 sleep 800
 eval (async()=>{const all=await __iron.view({fidelity:'skeleton', depth: 0}); const d=all.match(/<composition id="(#\w+)" name="dials"/)[1]; const v=await __iron.view({fidelity:'full', scope: d}); const id=v.match(/<rect id="(#\w+)" name="needle"/)[1]; return (await __iron.computed(id)).text.split('\n').filter(l=>/drag|drives/.test(l)).map(l=>l.trim().replace(/#\w+/, '#…'))})()
 shot showcase-dials
+tab Data
+sleep 800
+eval window.north = async () => { const all = await __iron.view({fidelity:'skeleton', depth: 0}); const d = all.match(/<composition id="(#\w+)" name="data"/)[1]; const v = await __iron.view({fidelity:'full', scope: d}); return [Number(v.match(/<slider[^>]*name="north"[^>]* value="([\d.]+)"/)[1]).toFixed(2), v.split('\n').map(l=>l.trim()).find(l=>l.startsWith('north'))]; }
+eval north()
+# A bar's top dragged up 50: the data, and the table's cell, follow.
+pdrag data 442 284 442 234 8
+sleep 600
+eval north()
+# Typed into the cell: the bar follows (the words invert onto the slider).
+pclick data 100 290
+sleep 600
+pdouble data 173 275
+sleep 800
+pdouble data 173 275
+sleep 1000
+eval (() => { const t = document.querySelector('textarea[aria-label="Text"]'); if (!t) return 'no textarea'; t.value = '90'; t.setSelectionRange(2, 2); t.dispatchEvent(new Event('input')); return t.value; })()
+sleep 600
+key Escape
+sleep 800
+eval north()
+shot showcase-data
 logs applied|rejected|panicked
 errors
 quit

@@ -54,7 +54,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `keys.txt` | ~30 s |
 | `sequence.txt` | ~30 s |
 | `controls.txt` | ~30 s |
-| `showcase.txt` | ~20 s |
+| `showcase.txt` | ~30 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -1490,7 +1490,7 @@ only Position and Fill, while a click in Main (on the scene's embed, `#15`) show
 
 ```
 [["Move (V)","Rectangle (R)","Pen (P)","Text (T)"]]
-["<computed view=\"viewer\">","palette.tools=\"select rect|ellipse|table|empty pen text\" palette.tools.by=\"std:free-2d rule 9\"","keys.tools=\"v:select p:pen r:rect o:ellipse t:text\" keys.tools.by=\"std:free-2d rule 9\"","inspector.sections=\"main port component table position text layout appearance fill stroke effects other add\" inspector.sections.by=\"std:free-2d rule 9\"","</computed>"]
+["<computed view=\"viewer\">","palette.tools=\"select rect|ellipse|table|empty pen text\" palette.tools.by=\"std:free-2d rule 9\"","keys.tools=\"v:select p:pen r:rect o:ellipse t:text\" keys.tools.by=\"std:free-2d rule 9\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"main port component table position text layout appearance fill stroke effects other add\" inspector.sections.by=\"std:free-2d rule 9\"","</computed>"]
 undefined
 [[],"select rect|ellipse|table|empty pen text"]
 clicked button[title^="Make a component"]
@@ -1500,7 +1500,7 @@ true
 true
 "deck"
 [["Move (V)","Rectangle (R)","Pen (P)","Text (T)"],["Move (V)","Text (T)","Table (B)"]]
-["<computed view=\"deck\">","palette.tools=\"select text table\" palette.tools.by=\"deck rule 1 from #…\"","keys.tools=\"v:select t:text b:table\" keys.tools.by=\"deck rule 1 from #…\"","inspector.sections=\"position fill\" inspector.sections.by=\"deck rule 1 from #…\"","</computed>"]
+["<computed view=\"deck\">","palette.tools=\"select text table\" palette.tools.by=\"deck rule 1 from #…\"","keys.tools=\"v:select t:text b:table\" keys.tools.by=\"deck rule 1 from #…\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"position fill\" inspector.sections.by=\"deck rule 1 from #…\"","</computed>"]
 ["Table","Table (B)"]
 ["Table","Table (B)"]
 ["Rectangle (R)"]
@@ -1686,7 +1686,11 @@ The app's own URL adds three tabs after the demo scene, one transaction "open
 showcase" (`document_bridge::demo::showcase`): **Outline** (a notation whose texts
 edit on entering: a table's cell takes words on the first double-click; a column
 stack to drag, glide and Alt+arrow), **Pitch** (a notation with its own palette, keys
-and inspector sections) and **Dials** (controls made of inline `affords` facets).
+and inspector sections, and a card lit by its own interaction state), **Dials**
+(controls made of inline `affords` facets) and **Data** (demo 4: three sliders shown
+as a table of bound readouts and as bars; dragging a bar's top sets the data, 0.40 to
+0.60, and typing 90 into its cell sets it to 0.90, the words inverting through their
+`fmt` binding while the binding stays).
 `drive.ts`'s default URL carries `showcase=0`, so every other script's ids follow the
 demo scene as before; this script navigates without it. A saved layout from before
 2026-10-27 lacks the tabs: open `?layout=default` or use the Document view's **Reset
@@ -1705,10 +1709,21 @@ tab Outline
 [["Move (V)","Rectangle (R)","Pen (P)","Text (T)"]]
 tab Pitch
 [["Move (V)","Text (T)","Table (B)"]]
+undefined
+0.45
+1
 tab Dials
 ["affords.drag=\"ring\" affords.drag.by=\"inline on #…\"","affords.drives=\"transform2d.rot\" affords.drives.by=\"inline on #…\""]
+tab Data
+undefined
+["0.40","north  | {= fmt(#4Z.slider.value * 100, 0)}"]
+["0.60","north  | {= fmt(#4Z.slider.value * 100, 0)}"]
+"90"
+["0.90","north  | {= fmt(#4Z.slider.value * 100, 0)}"]
 applied "open demo scene" (298 ops, System) -> v1
-applied "open showcase" (40 ops, System) -> v2
+applied "open showcase" (64 ops, System) -> v2
+applied "set size.h" (1 ops, Human) -> v3
+applied "edit text" (1 ops, Human) -> v4
 (no page errors)
 ```
 

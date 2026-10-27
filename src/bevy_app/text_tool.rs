@@ -175,13 +175,15 @@ pub fn utf16_of(s: &str, byte: usize) -> u32 {
 }
 
 /// Whether a node's words can be typed: its context says editing it means
-/// its words (`affords.edit="text"`), and its content is a constant.
+/// its words (`affords.edit="text"`), and its content is a constant, or is
+/// bound so that typed words invert onto a source (a readout of
+/// `fmt(level * 100, 0)`: typing 75 sets the level to 0.75).
 fn editable(store: &iron_document::Store, id: NodeId) -> bool {
     let doc = store.document();
     let chain = iron_document::contexts::chain_of(doc, id);
     !chain.is_empty()
-        && iron_document::contexts::Resolver::new(doc, store.contexts()).get(&chain, chain.len() - 1, iron_document::contexts::Field::EDIT) == "text"
-        && doc.leaf(id, content_path()).is_some_and(|s| s.expr().is_none())
+        && store.resolver().get(&chain, chain.len() - 1, iron_document::contexts::Field::EDIT) == "text"
+        && doc.leaf(id, content_path()).is_some_and(|s| s.expr().is_none() || !store.handle(id, content_path()).is_locked())
         && store.reactive().signal(iron_document::Leaf { node: id, path: content_path() }).is_none()
 }
 
@@ -515,6 +517,17 @@ fn finish_edit(text: &mut TextTool, store: &mut iron_document::Store, gestures: 
         return;
     }
     let label = "edit text".to_owned();
+    // Bound words: the draft was shown on the words themselves; what is
+    // written is the source their binding reads, through its handle.
+    if store.document().leaf(edit.id, content_path()).is_some_and(|s| s.expr().is_some()) {
+        store.unpreview(edit.id, content_path());
+        if let Err(why) = store.preview_target(edit.id, content_path(), Value::Str(edit.draft.clone())) {
+            warn!("{}: {why}", edit.id);
+            gestures.0.push(GestureRequest::Cancel);
+            sel.selected = vec![edit.id];
+            return;
+        }
+    }
     gestures.0.push(match edit.created {
         Some(v) => GestureRequest::CommitMerged("add text".into(), v),
         None => GestureRequest::Commit(label),

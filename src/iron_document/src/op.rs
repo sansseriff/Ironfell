@@ -518,6 +518,13 @@ fn check_binding(
             return Err(cx.err(ErrorKind::UnknownPath, format!("binding reads {dep}, but {} has no such argument", dep.node)));
         }
     }
+    // Interaction state is presentation: it may drive how a node looks,
+    // never what the document holds (affordances.md §8.1).
+    if expr.deps().iter().any(|d| d.path.facet == FacetKind::Interaction)
+        && !matches!(target.path.facet, FacetKind::Appearance | FacetKind::Fill | FacetKind::Gradient | FacetKind::Stroke | FacetKind::Shadow)
+    {
+        return Err(cx.err(ErrorKind::OutOfScope, format!("{target} reads interaction state, which may drive only how a node looks (appearance, fill, gradient, stroke, shadow)")));
+    }
     if doc.binding_cycles(target, expr) {
         return Err(cx.err(ErrorKind::Cycle, format!("binding {target} would depend on itself")));
     }

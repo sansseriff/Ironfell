@@ -212,6 +212,9 @@ pub struct Store {
     /// clock turns it on (`set_motion`): a document read without one sees
     /// where things are, never part-way.
     motion: Motion,
+    /// Nodes' interaction states, as the host last reported them (session;
+    /// read by rules that match `state:`).
+    interaction: BTreeMap<NodeId, Vec<&'static str>>,
     /// What the last expansion could not derive (component-model.md §3).
     expansion_problems: Vec<String>,
     /// The gesture whose previews are in the overlay (`gesture`).
@@ -309,6 +312,7 @@ impl Store {
             contexts: None,
             layout_preview: None,
             motion: Motion::default(),
+            interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             gesture: None,
             ended: None,
@@ -809,6 +813,14 @@ impl Store {
         self.resolve_physics();
     }
 
+    /// Withdraw one leaf's preview (it reads as the document again).
+    pub fn unpreview(&mut self, id: NodeId, path: LeafPath) {
+        let leaf = Leaf { node: id, path };
+        self.drivers.remove(&leaf);
+        self.reactive.unpreview(&self.doc, leaf);
+        self.resolve_physics();
+    }
+
     /// How a gesture on this leaf would be realised right now: directly, by
     /// inverting a linear binding onto its one constant source, or not at
     /// all (see `handle`).
@@ -1129,6 +1141,26 @@ impl Store {
         }
         self.signal_stamp += 1;
         self.reactive.publish(&self.doc, ProducerId::LAYOUT, values, self.signal_stamp);
+    }
+
+    /// A resolver over this document's contexts that sees nodes'
+    /// interaction states.
+    pub fn resolver(&self) -> contexts::Resolver<'_> {
+        contexts::Resolver { doc: &self.doc, lib: self.contexts(), states: Some(&self.interaction) }
+    }
+
+    /// The nodes that are hovered, selected, pressed or dragged now, as the
+    /// host sees them. Returns whether anything changed.
+    pub fn set_interaction(&mut self, states: BTreeMap<NodeId, Vec<&'static str>>) -> bool {
+        if self.interaction == states {
+            return false;
+        }
+        self.interaction = states;
+        true
+    }
+
+    pub fn interaction(&self) -> &BTreeMap<NodeId, Vec<&'static str>> {
+        &self.interaction
     }
 
     pub fn motion_enabled(&self) -> bool {

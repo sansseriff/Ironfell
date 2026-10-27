@@ -424,3 +424,94 @@ fn a_definitions_part_declares_its_drag_for_every_instance_and_drives_through_it
     let err = store.apply(tx(vec![Op::RemoveFacet { id: def_pivot, kind: FacetKind::Affords }, Op::AddFacet { id: def_pivot, facet: bad.wrap() }])).unwrap_err().remove(0);
     assert_eq!(err.kind, ErrorKind::BadContext);
 }
+
+#[test]
+fn interaction_state_drives_looks_only_and_rules_can_match_it() {
+    let mut store = Store::new();
+    let id = store.document().next_id();
+    let mut fill = facet::Fill::default();
+    fill.opacity = Slot::Bound(Expr::parse(&format!("{id}.interaction.hovered ? 1 : 0.4")).unwrap());
+    store.apply(tx(vec![Op::Create { id, ty: TypeId::lookup("rect").unwrap(), parent: None, order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap(), fill.wrap(), facet::Interaction::default().wrap()] }])).unwrap();
+    let opacity = |s: &Store| s.resolved(id, "fill.opacity".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
+    assert_eq!(opacity(&store), 0.4);
+    // The host publishes the state: the look follows, the document does not change.
+    let version = store.document().version();
+    let producer = store.register_producer("interaction");
+    store.publish(producer, std::collections::BTreeMap::from([(Leaf { node: id, path: "interaction.hovered".parse().unwrap() }, Value::Bool(true))]));
+    assert_eq!((opacity(&store), store.document().version()), (1.0, version));
+    // State may not drive what the document holds.
+    let set = Op::Set { id, path: "transform2d.x".parse().unwrap(), slot: Slot::Bound(Expr::parse(&format!("{id}.interaction.hovered ? 10 : 0")).unwrap()) };
+    let err = store.apply(tx(vec![set])).unwrap_err().remove(0);
+    assert_eq!(err.kind, ErrorKind::OutOfScope);
+    // Rules match a node's state through the store's resolver.
+    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="std:free-2d"><rule match="type:rect state:selected" affords.grips="box"/><rule match="type:rect" affords.grips=""/></context>"#).unwrap();
+    store.apply(tx(ops)).unwrap();
+    // Later rules win: the unconditional one, after, clears it; order the other way.
+    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="std:free-2d"><rule match="type:rect" affords.grips=""/><rule match="type:rect state:selected" affords.grips="box shape"/></context>"#).unwrap();
+    store.apply(tx(ops)).unwrap();
+    assert_eq!(store.resolver().get(&[id], 0, Field::GRIPS), "");
+    store.set_interaction(std::collections::BTreeMap::from([(id, vec!["selected"])]));
+    assert_eq!(store.resolver().get(&[id], 0, Field::GRIPS), "box shape");
+}
+
+#[test]
+fn a_views_tolerances_are_context_data() {
+    let mut store = Store::new();
+    let world = composition(&mut store, "touch", "touch");
+    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="touch" extends="std:free-2d"><rule match="view" tolerance.hit="2.5" tolerance.slop="8"/></context>"#).unwrap();
+    store.apply(tx(ops)).unwrap();
+    let r = store.resolver();
+    let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
+    assert_eq!((v.get(Field::HIT), v.get(Field::SLOP), v.get(Field::DOUBLE_CLICK)), ("2.5", "8", "400"));
+    assert!(contexts::parse(r#"<context name="k"><rule match="view" tolerance.hit="big"/></context>"#).unwrap_err().contains("expected a number"));
+}
+
+#[test]
+fn typing_into_a_readout_edits_what_it_reads() {
+    let mut store = Store::new();
+    let ids = store.document().next_ids(3);
+    let (s, cell, power) = (ids[0], ids[1], ids[2]);
+    let mut slider = facet::Slider::default();
+    slider.value = Slot::Const(Value::Number(0.5));
+    let readout = |id: NodeId, e: String| {
+        let mut t = facet::Text::default();
+        t.content = Slot::Bound(Expr::parse(&e).unwrap());
+        Op::Create { id, ty: TypeId::lookup("text").unwrap(), parent: None, order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), t.wrap(), facet::Font::default().wrap()] }
+    };
+    store.apply(tx(vec![
+        Op::Create { id: s, ty: TypeId::lookup("slider").unwrap(), parent: None, order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), slider.wrap()] },
+        readout(cell, format!("fmt({s}.slider.value * 100, 0)")),
+        readout(power, format!("fmt({s}.slider.value * 20 mW, \"mW\", 1)")),
+    ])).unwrap();
+    let content: LeafPath = "text.content".parse().unwrap();
+    let value = |st: &Store| st.resolved(s, "slider.value".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
+    assert!(!store.handle(cell, content).is_locked());
+    store.set_through_handle(cell, content, Value::Str("75".into()), "type", Actor::Human, 0).unwrap();
+    assert!((value(&store) - 0.75).abs() < 1e-9);
+    // A plain number takes the unit the words are formatted in; a unit may be typed.
+    store.set_through_handle(power, content, Value::Str("4".into()), "type", Actor::Human, 0).unwrap();
+    assert!((value(&store) - 0.2).abs() < 1e-9, "{}", value(&store));
+    store.set_through_handle(power, content, Value::Str("0.012 W".into()), "type", Actor::Human, 0).unwrap();
+    assert!((value(&store) - 0.6).abs() < 1e-9, "{}", value(&store));
+    assert!(store.set_through_handle(cell, content, Value::Str("lots".into()), "type", Actor::Human, 0).unwrap_err().contains("is not a number"));
+}
+
+#[test]
+fn a_context_facet_names_a_containers_context() {
+    let mut store = Store::new();
+    let ids = store.document().next_ids(3);
+    let (g, a, b) = (ids[0], ids[1], ids[2]);
+    let mut named = facet::ContextOf::default();
+    named.name = Slot::Const(Value::Str("palette".into()));
+    store.apply(tx(vec![
+        Op::Create { id: g, ty: TypeId::lookup("group").unwrap(), parent: None, order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), named.wrap()] },
+        Op::Create { id: a, ty: TypeId::lookup("rect").unwrap(), parent: Some(g), order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap()] },
+        Op::Create { id: b, ty: TypeId::lookup("rect").unwrap(), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap()] },
+    ])).unwrap();
+    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="palette"><rule match="children" affords.drag="none" affords.activate="toggle" affords.drives="appearance.opacity"/></context>"#).unwrap();
+    store.apply(tx(ops)).unwrap();
+    let r = store.resolver();
+    // The group's children take the named context's rules; a rect elsewhere does not.
+    assert_eq!((r.get(&[g, a], 1, Field::DRAG), r.get(&[g, a], 1, Field::ACTIVATE)), ("none".into(), "toggle".into()));
+    assert_eq!(r.get(&[b], 0, Field::DRAG), "point");
+}

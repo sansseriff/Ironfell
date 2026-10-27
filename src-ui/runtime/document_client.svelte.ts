@@ -165,6 +165,8 @@ export class DocumentClient {
       computed: (node: string) => this.command({ op: 'computed', node: node }),
       contexts: () => this.command({ op: 'contexts' }),
       viewContext: (panel: string) => this.command({ op: 'view_context', panel: panel }),
+      // The contexts showcase's tabs (added at start unless `?showcase=0`).
+      showcase: () => this.command({ op: 'showcase' }),
       timings: (reset = false) => this.command({ op: 'timings', reset: reset }),
       // Raster tiles for cold chunks (render-cache.md §5); off draws live.
       raster: (enabled = true, budgetMb = 0) => this.command({ op: 'raster', enabled: enabled, budget_mb: budgetMb }),

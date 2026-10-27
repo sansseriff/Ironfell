@@ -295,6 +295,16 @@ impl Reactive {
         }
     }
 
+    /// Drop one leaf's preview; it falls back to the document.
+    pub fn unpreview(&mut self, doc: &Document, leaf: Leaf) {
+        if self.overlay.remove(&leaf).is_some() {
+            if let Some(v) = self.read(doc, leaf) {
+                self.note(leaf, v);
+            }
+            self.invalidate(doc, [leaf]);
+        }
+    }
+
     /// Drop every preview; values fall back to the document.
     pub fn clear_overlay(&mut self, doc: &Document) {
         let leaves: Vec<Leaf> = self.overlay.keys().copied().collect();

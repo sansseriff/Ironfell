@@ -111,7 +111,7 @@ impl ActiveTool {
     }
 }
 
-use crate::bevy_app::tolerances::{DOUBLE_CLICK, SLOP};
+use crate::bevy_app::tolerances::DOUBLE_CLICK;
 /// Grip sizes, CSS px (times [`crate::Dpr`] for window px), Figma's: a
 /// corner's reach, an edge's, how far outside a corner rotation reaches, and
 /// the drawn corner square.
@@ -593,6 +593,18 @@ pub(crate) struct Sequence {
     axis: usize,
 }
 
+impl SelectTool {
+    /// Whether a press is held (a click or a drag).
+    pub(crate) fn pressing(&self) -> bool {
+        !matches!(self.gesture, Gesture::Idle)
+    }
+
+    /// Whether the selection is being dragged (moved, driven, reordered).
+    pub(crate) fn dragging(&self) -> bool {
+        matches!(self.gesture, Gesture::Edit(_) | Gesture::Sequence(_) | Gesture::Drive(_))
+    }
+}
+
 /// A reorder of the one selected item, if its context says a drag moves it
 /// in sequence among its container's items.
 fn sequence_drag(geo: &Geo, view: &PanelView, mine: &[&Reach], start: Point) -> Option<Sequence> {
@@ -782,7 +794,7 @@ fn wrap(a: f64) -> f64 {
 impl Geo<'_> {
     /// What the contexts say about nodes (plans/specs/contexts.md).
     pub(crate) fn contexts(&self) -> Resolver<'_> {
-        Resolver::new(self.store.document(), self.store.contexts())
+        self.store.resolver()
     }
 
     /// Whether the node a chain ends at offers `grip` (`affords.grips`).
@@ -1773,9 +1785,11 @@ pub fn select_tool_system(
     v3d: Views3d,
     mut clipboard: ResMut<Clipboard>,
     origin: Res<crate::document_bridge::DocumentOrigin>,
-    (pen, mut edit): (Res<crate::bevy_app::pen::PenTool>, ResMut<PathEdit>),
+    (pen, mut edit, focus): (Res<crate::bevy_app::pen::PenTool>, ResMut<PathEdit>, Res<crate::bevy_app::view_focus::ViewFocus>),
 ) {
     let tool = &mut *tool;
+    // The hovered view's tolerances (`tolerance.*`, its focus context).
+    let tol = focus.tolerances(hits.panel.as_deref());
     let ToolDoc { mut store, mut gestures, mut pending, mut history, map, spatial, drawables, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
     // What the last paste or duplicate made becomes the selection once it
     // exists (its reach is found below, like any selection made elsewhere).
@@ -1832,7 +1846,7 @@ pub fn select_tool_system(
         // free-canvas meanings below.
         let navigates = matches!(key.as_str(), "arrowleft" | "arrowright" | "arrowup" | "arrowdown" | "tab" | "enter") && matches!(tool.gesture, Gesture::Idle) && edit.reach.is_none() && reaches.len() == 1;
         let action = navigates
-            .then(|| interaction::key(&Resolver::new(doc, store.0.contexts()), &reaches[0].chain, &key, shift, m & MOD_ALT != 0, &|t| store.0.table_grid(t).map(|g| g.cells.clone())))
+            .then(|| interaction::key(&store.0.resolver(), &reaches[0].chain, &key, shift, m & MOD_ALT != 0, &|t| store.0.table_grid(t).map(|g| g.cells.clone())))
             .flatten();
         if let Some(action) = action {
             match action {
@@ -1883,7 +1897,7 @@ pub fn select_tool_system(
             // Enter edits a lone node's points where its context says editing
             // means points: a path's at once, a rect's or an ellipse's once
             // it is a path.
-            "enter" if !shift && edit.reach.is_none() && reaches.len() == 1 && doc.facet(reaches[0].node(), iron_document::FacetKind::PathShape).is_some() && Resolver::new(doc, store.0.contexts()).get(&reaches[0].chain, reaches[0].chain.len() - 1, Field::EDIT) == "points" => {
+            "enter" if !shift && edit.reach.is_none() && reaches.len() == 1 && doc.facet(reaches[0].node(), iron_document::FacetKind::PathShape).is_some() && store.0.resolver().get(&reaches[0].chain, reaches[0].chain.len() - 1, Field::EDIT) == "points" => {
                 expand_points(&store.0, &mut pending, reaches[0].node());
                 *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
             }
@@ -1892,7 +1906,7 @@ pub fn select_tool_system(
                 let mut up: Vec<Reach> = Vec::new();
                 for r in &reaches {
                     // Up past any `through` node (a row, to its table).
-                    let n = interaction::up(&Resolver::new(doc, store.0.contexts()), &r.chain);
+                    let n = interaction::up(&store.0.resolver(), &r.chain);
                     if r.chain.len() > 1 {
                         let p = Reach { panel: r.panel.clone(), chain: r.chain[..n].to_vec() };
                         if !up.contains(&p) {
@@ -1902,13 +1916,13 @@ pub fn select_tool_system(
                 }
                 set_selection(&mut sel, tool, up);
             }
-            "enter" if reaches.len() == 1 && iron_document::shape::convertible(&store.0, reaches[0].node()) && Resolver::new(doc, store.0.contexts()).get(&reaches[0].chain, reaches[0].chain.len() - 1, Field::EDIT) == "points" => {
+            "enter" if reaches.len() == 1 && iron_document::shape::convertible(&store.0, reaches[0].node()) && store.0.resolver().get(&reaches[0].chain, reaches[0].chain.len() - 1, Field::EDIT) == "points" => {
                 if edit_as_path(&store.0, &mut pending, reaches[0].node(), &events) {
                     *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
                 }
             }
             "enter" => {
-                let cx = Resolver::new(doc, store.0.contexts());
+                let cx = store.0.resolver();
                 let down: Vec<Reach> = reaches.iter().flat_map(|r| children(&cx, r)).collect();
                 if !down.is_empty() {
                     set_selection(&mut sel, tool, down);
@@ -1962,7 +1976,7 @@ pub fn select_tool_system(
                         (v.panel.clone(), Vec::new(), nest::panel_roots(doc, v))
                     }
                 };
-                let cx = Resolver::new(doc, store.0.contexts());
+                let cx = store.0.resolver();
                 let all = roots
                     .into_iter()
                     .map(|n| {
@@ -2250,7 +2264,7 @@ pub fn select_tool_system(
         let view = hits.panel.as_deref().and_then(|p| views.get(p)).cloned();
         let reaches = selected_reaches(&sel, tool);
         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
-        let double = tool.last_press.is_some_and(|(t, p)| now - t <= DOUBLE_CLICK.0 && p.distance(pointer.screen) <= DOUBLE_CLICK.1);
+        let double = tool.last_press.is_some_and(|(t, p)| now - t <= tol.double_click && p.distance(pointer.screen) <= DOUBLE_CLICK.1);
         tool.last_press = Some((now, pointer.screen));
         'press: {
             let Some(view) = view else { break 'press };
@@ -2422,7 +2436,7 @@ pub fn select_tool_system(
                         v
                     };
                     let boxed = geo.boxed(&mine);
-                    let grip = grip_at(view.affine() * frame, screen, boxed && geo.resizable(&resize_parts), boxed && geo.rotatable(&rotate_parts), k);
+                    let grip = grip_at(view.affine() * frame, screen, boxed && geo.resizable(&resize_parts), boxed && geo.rotatable(&rotate_parts), k * tol.hit);
                     let ids: Vec<NodeId> = mine.iter().map(|r| r.node()).collect();
                     let start = doc_point(&view);
                     match grip {
@@ -2517,7 +2531,7 @@ pub fn select_tool_system(
             let deep = mods(MOD_META);
             let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
             let inside_box = view.dims == Dims::Two
-                && geo.selection_frame(&movers(&reaches, &view.panel)).is_some_and(|f| matches!(grip_at(view.affine() * f, screen, false, false, k), Some(Grip::Body)));
+                && geo.selection_frame(&movers(&reaches, &view.panel)).is_some_and(|f| matches!(grip_at(view.affine() * f, screen, false, false, k * tol.hit), Some(Grip::Body)));
 
             let Some((chain, source)) = top else {
                 // Empty canvas: drag the selection from inside its box, or
@@ -2554,7 +2568,7 @@ pub fn select_tool_system(
                 }
             }
             // A double-click on a selected node enters it.
-            let dbl = tool.last_click.is_some_and(|(t, p, id)| now - t <= DOUBLE_CLICK.0 && p.distance(pointer.screen) <= DOUBLE_CLICK.1 && id == chain[k]);
+            let dbl = tool.last_click.is_some_and(|(t, p, id)| now - t <= tol.double_click && p.distance(pointer.screen) <= DOUBLE_CLICK.1 && id == chain[k]);
             if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
                 k = interaction::enter(&cx, &chain, k);
                 tool.last_click = None;
@@ -2735,7 +2749,7 @@ pub fn select_tool_system(
         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
         // A press that has travelled becomes its drag.
         if let Gesture::Press { panel, start, then } = &tool.gesture
-            && pointer.screen.distance(*start) > SLOP
+            && pointer.screen.distance(*start) > focus.tolerances(Some(panel)).slop
             && let Some(view) = views.get(panel).cloned()
         {
             let p0 = view.affine().inverse() * Point::new(start.x as f64, start.y as f64);
@@ -3051,7 +3065,7 @@ pub fn select_tool_system(
                 && let Some(frame) = cached.frame
             {
                 let f = view.affine() * frame;
-                let grip = grip_at(f, screen, cached.resizable, cached.rotatable, k);
+                let grip = grip_at(f, screen, cached.resizable, cached.rotatable, k * tol.hit);
                 on_grip = matches!(grip, Some(Grip::Resize(..) | Grip::Rotate(..)));
                 if !space {
                     cursor = cursor_for(f, grip);

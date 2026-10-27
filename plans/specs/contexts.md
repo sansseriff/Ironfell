@@ -1,6 +1,6 @@
 # Contexts: Iron's behaviour as data (master plan)
 
-**Status:** §5 steps 0–4 built 2026-10-26/27 (4 in part), step 5 in part, step 6 (affordances C) in its core; the rest proposed. The user supports the direction ("I'm not afraid of
+**Status:** §5 steps 0–6 built 2026-10-26/27 (4 in its first part; `track` along a path deferred); chrome (step 7) next; the rest proposed. The user supports the direction ("I'm not afraid of
 thinking big on this topic. Now is the time in this program to have these overarching
 ideas"). Nothing built. This plan owns the shared foundation and the order of work;
 domain specs own their detail: [`affordances.md`](affordances.md) (interaction and
@@ -417,9 +417,17 @@ behaviour-neutral refactor before anything shows.
    removes it; demo 1 apart from Figma's lifted item). Deviation from
    `affordances.md` §8.2: the eased value is published, so picking and bounds lag
    with drawing for the glide's 160 ms (it keeps the render caches and damage
-   correct for free). **Still to do in B:** readable interaction state
-   (`state:hovered` rules), `ring`, `activate` (toggle, step, choose), tolerances
-   as data.
+   correct for free). *Finished 2026-10-27:* **interaction state**, readable two
+   ways (affordances.md §8.1): the store holds which nodes are hovered, selected,
+   pressed or dragged (the app reports them, `bevy_app/interaction.rs`), so rules
+   match `state:`; and an opt-in `interaction` facet whose leaves the host publishes
+   (`interaction.hovered` …), so bindings read it, only to drive how a node looks
+   (appearance, fill, gradient, stroke, shadow; anything else is refused
+   `out_of_scope`); the Pitch card lights while hovered (`hovered ? 1 : 0.45`, the
+   expression language's ternary). **Tolerances** are view fields
+   (`tolerance.slop`, `tolerance.double_click` in ms, `tolerance.hit` scaling grips'
+   reach), resolved with the palette and read by the select tool for the view it
+   works in. `ring` and `activate` landed with C.
 6. **`affordances.md` C**: document contexts (decide open question 1 here), `notation`
    resolving to a context, definition rules, the inline facet. Demos 3–4.
    *Done 2026-10-27, demo 3 and the core of C:* the inline `affords` facet (`style`,
@@ -443,6 +451,17 @@ behaviour-neutral refactor before anything shows.
    readable state), `track` along a path, and demo 4 (a table and charts of one
    dataset, edited from either side: a bar drag already edits bound data; typing in a
    bound cell needs an inverse for formatted text).
+   *Finished 2026-10-27:* a `context` facet names a container's context outright
+   (`context.name`), in place of the one its type carries. **Demo 4** (Data tab):
+   three sliders shown as a table of bound readouts and as bars; a bar's drag edits
+   the data, and typing in a cell does too, because words bound to `fmt(x, …)`,
+   `str(x)` or `sci(x, …)` now invert through the number (`handle.rs`: typed text
+   parsed, a plain number taking the format's unit), so the text tool edits such a
+   cell and its commit writes the source, the binding kept. **Deferred:** `track`
+   along a path. A bead on a path has no leaf of its own holding its parameter (a
+   plain node has none; a component instance's `args` would), and its bound x and y
+   are not linear in anything, so §5.4's own-leaf rule refuses it; it comes with a
+   component demo that gives the bead an input.
 7. **`chrome.md`** C1–C5.
 8. **A schematic notation** (13), with what it needs: snapping settings (6), domain
    libraries (10), parts as data (11), the wire tool. §6's demo.

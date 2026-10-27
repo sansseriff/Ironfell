@@ -61,6 +61,12 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
         return Handle::Direct;
     };
     let inlined = inline(doc, reactive, expr);
+    // Words that show a number (`fmt(x, "mW", 2)`, `str(x)`) invert through
+    // the number: typing in a readout edits what it reads.
+    let inlined = match (&inlined, leaf.path.kind()) {
+        (Expr::Call(f, args), ValueKind::Str) if matches!(f.as_str(), "fmt" | "str" | "sci") && !args.is_empty() => args[0].clone(),
+        _ => inlined,
+    };
     let read = |l: Leaf| reactive.read(doc, l);
     // Candidates: constant number leaves the (inlined) expression reads.
     // Clip-driven and non-number leaves are knowns for the drag.
@@ -202,7 +208,10 @@ pub fn resolve_target(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Va
     match handle(doc, reactive, leaf) {
         Handle::Direct => Ok((leaf, clamp_to_bounds(doc, reactive, leaf, value))),
         Handle::Linear { source, a, b } => {
-            let y = magnitude(&value).ok_or_else(|| format!("{leaf}: a linear handle takes a number or quantity, got {}", value.kind().name()))?;
+            let y = match &value {
+                Value::Str(text) => typed_number(doc, reactive, leaf, text).ok_or_else(|| format!("{leaf}: \"{text}\" is not a number"))?,
+                v => magnitude(v).ok_or_else(|| format!("{leaf}: a linear handle takes a number or quantity, got {}", v.kind().name()))?,
+            };
             // The source keeps its own kind: a quantity stays one, in SI.
             // Held to its bounds, so whatever reads it stops where it does.
             let x = (y - b) / a;
@@ -217,6 +226,25 @@ pub fn resolve_target(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Va
             Ok((source, v))
         }
         Handle::Locked(reason) => Err(reason),
+    }
+}
+
+/// The number typed into words that show one: plain (`12.5`), or with a
+/// unit (`5 mW`), a plain number taking the unit the words are formatted in
+/// (`fmt(x, "mW", 2)`). In SI for a quantity, as a linear handle works.
+fn typed_number(doc: &Document, reactive: &Reactive, leaf: Leaf, text: &str) -> Option<f64> {
+    let text = text.trim();
+    let unit = reactive.expr_of(leaf).or_else(|| doc.leaf(leaf.node, leaf.path).and_then(|s| s.expr())).and_then(|e| match e {
+        Expr::Call(f, args) if f == "fmt" => match args.get(1) {
+            Some(Expr::Lit(Value::Str(u))) => Some(u.clone()),
+            _ => None,
+        },
+        _ => None,
+    });
+    match (text.parse::<f64>(), unit) {
+        (Ok(n), Some(u)) => Value::parse_quantity(&format!("{n} {u}")).ok().as_ref().and_then(magnitude),
+        (Ok(n), None) => Some(n),
+        (Err(_), _) => Value::parse_quantity(text).ok().as_ref().and_then(magnitude),
     }
 }
 

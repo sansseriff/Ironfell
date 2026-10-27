@@ -236,6 +236,7 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
         (
             view_focus::route_tool_keys.before(select::navigate_views),
             view_focus::view_focus_system.after(select::select_tool_system),
+            interaction::publish_interaction_state.after(select::sync_session_selection).before(GestureSystems),
         ),
     );
     app.add_systems(

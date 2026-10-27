@@ -550,6 +550,25 @@ facets! {
         scope: Enum = Value::Enum("self".to_owned()) => ["self", "children"],
     }
 
+    /// The context a container carries for its children and itself, by name
+    /// (affordances.md §4.3): a document context (or a built-in one) in place
+    /// of the one its type would carry.
+    ContextOf / "context" => ContextOf { name: Str = Value::Str(String::new()) }
+
+    /// A node's interaction state, readable by its bindings (affordances.md
+    /// §8.1): the host publishes it while the node is hovered, selected,
+    /// pressed or dragged; the authored values stay `false`, and nothing of
+    /// it is saved but the facet. A binding reading it may drive only how a
+    /// node looks (appearance, fill, gradient, stroke, shadow), so hovering
+    /// never edits the document. Opt-in: a node without it has no state to
+    /// read, and costs nothing.
+    Interaction / "interaction" => Interaction {
+        hovered: Bool = Value::Bool(false),
+        selected: Bool = Value::Bool(false),
+        pressed: Bool = Value::Bool(false),
+        dragged: Bool = Value::Bool(false),
+    }
+
     /// A document's own context (plans/specs/contexts.md §2.2), in the
     /// markup the built-in ones are written in: `<context name="…">` holding
     /// `<rule …/>`s. One whose name is a built-in context's (`std:table`)

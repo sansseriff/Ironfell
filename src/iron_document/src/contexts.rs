@@ -134,6 +134,9 @@ pub const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec { domain: "palette", name: "tools", view: true, kind: Kind::Tools, options: &[""], doc: "a view's tools, in order; a|b share one slot (match=\"view\")" },
     FieldSpec { domain: "keys", name: "tools", view: true, kind: Kind::Keys, options: &[""], doc: "a view's tool keys, key:tool pairs (match=\"view\")" },
+    FieldSpec { domain: "tolerance", name: "slop", view: true, kind: Kind::Number, options: &["3"], doc: "window px a press may travel and still be a click (match=\"view\")" },
+    FieldSpec { domain: "tolerance", name: "double_click", view: true, kind: Kind::Number, options: &["400"], doc: "ms between two clicks that make a double-click (match=\"view\")" },
+    FieldSpec { domain: "tolerance", name: "hit", view: true, kind: Kind::Number, options: &["1"], doc: "how far grips and handles reach, times their usual size (match=\"view\"; a touch context's is larger)" },
     FieldSpec {
         domain: "inspector",
         name: "sections",
@@ -176,7 +179,10 @@ impl Field {
     pub const PLACEMENT: Field = Field(12);
     pub const PALETTE: Field = Field(13);
     pub const KEYS: Field = Field(14);
-    pub const SECTIONS: Field = Field(15);
+    pub const SLOP: Field = Field(15);
+    pub const DOUBLE_CLICK: Field = Field(16);
+    pub const HIT: Field = Field(17);
+    pub const SECTIONS: Field = Field(18);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]
@@ -376,6 +382,10 @@ impl Library {
     /// names its type (and, if it says, a leaf's value).
     fn for_node(&self, doc: &Document, id: NodeId) -> Option<usize> {
         let ty = doc.live(id)?.ty;
+        // A `context` facet names the container's context outright.
+        if let Some(name) = doc.get::<crate::facet::ContextOf>(id).and_then(|c| c.name.constant().and_then(|v| v.as_str()).map(str::to_owned)).filter(|n| !n.is_empty()) {
+            return self.get(&name);
+        }
         self.contexts.iter().position(|c| {
             c.for_types.contains(&ty)
                 && c.for_leaf.as_ref().is_none_or(|(leaf, values)| {
@@ -457,11 +467,14 @@ pub fn print_context(c: &Context) -> String {
 pub struct Resolver<'a> {
     pub doc: &'a Document,
     pub lib: &'a Library,
+    /// Nodes' interaction states (`hovered`, `selected`, …), for rules that
+    /// match `state:`; none without a host.
+    pub states: Option<&'a std::collections::BTreeMap<NodeId, Vec<&'static str>>>,
 }
 
 impl<'a> Resolver<'a> {
     pub fn new(doc: &'a Document, lib: &'a Library) -> Self {
-        Resolver { doc, lib }
+        Resolver { doc, lib, states: None }
     }
 
     /// The values of `chain[i]`, where `chain` is the path of containers a
@@ -471,17 +484,18 @@ impl<'a> Resolver<'a> {
         let Some(node) = self.doc.live(chain[i]) else { return v };
         let ty = node.ty;
         let container = self.container(chain, i);
+        let states: &[&str] = self.states.and_then(|s| s.get(&chain[i])).map_or(&[], |v| v.as_slice());
         // 1. The notation's context, for the node's type.
         if let Some(c) = self.notation_of(chain[i]) {
-            self.apply(&mut v, c, Some(ty), &[], |p| p == Position::All || (p == Position::Children && container.is_none()));
+            self.apply(&mut v, c, Some(ty), states, |p| p == Position::All || (p == Position::Children && container.is_none()));
         }
         // 2. Its own context's rules for itself.
         if let Some(c) = self.lib.for_node(self.doc, chain[i]) {
-            self.apply(&mut v, c, Some(ty), &[], |p| p == Position::All || p == Position::Own);
+            self.apply(&mut v, c, Some(ty), states, |p| p == Position::All || p == Position::Own);
         }
         // 3. Its direct container's rules for its children.
         if let Some(c) = container.and_then(|n| self.lib.for_node(self.doc, n)) {
-            self.apply(&mut v, c, Some(ty), &[], |p| p == Position::All || p == Position::Children);
+            self.apply(&mut v, c, Some(ty), states, |p| p == Position::All || p == Position::Children);
         }
         // 4. Inline exceptions (`affords` facets): its container's for its
         //    children, then its own.

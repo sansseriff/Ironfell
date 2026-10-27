@@ -20,6 +20,7 @@ use crate::host_events::{EngineEvent, HostEvents};
 pub struct Offer {
     pub palette: String,
     pub keys: String,
+    pub tolerances: crate::bevy_app::tolerances::Tolerances,
 }
 
 #[derive(Resource, Default)]
@@ -40,6 +41,13 @@ struct Stamp {
     text: Option<(NodeId, String)>,
     points: Option<String>,
     views: Vec<(String, Option<NodeId>)>,
+}
+
+impl ViewFocus {
+    /// A view's tolerances (the defaults for a view not yet focused).
+    pub fn tolerances(&self, panel: Option<&str>) -> crate::bevy_app::tolerances::Tolerances {
+        panel.and_then(|p| self.views.iter().find(|(v, ..)| v == p)).map(|(_, _, o)| o.tolerances).unwrap_or_default()
+    }
 }
 
 /// Turn plain letter keys into tool picks (`tool:<id>`) through the keymap
@@ -128,8 +136,10 @@ pub fn view_focus_system(
         }
         let f = Focus { world, scope, states };
         let v = r.view_values(&f);
-        let offer = Offer { palette: v.get(Field::PALETTE).to_owned(), keys: v.get(Field::KEYS).to_owned() };
-        if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| *o != offer) {
+        let num = |f: Field, d: f64| v.get(f).parse::<f64>().unwrap_or(d);
+        let tolerances = crate::bevy_app::tolerances::Tolerances { slop: num(Field::SLOP, 3.0) as f32, double_click: num(Field::DOUBLE_CLICK, 400.0) / 1000.0, hit: num(Field::HIT, 1.0) };
+        let offer = Offer { palette: v.get(Field::PALETTE).to_owned(), keys: v.get(Field::KEYS).to_owned(), tolerances };
+        if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&o.palette, &o.keys) != (&offer.palette, &offer.keys)) {
             events.push(EngineEvent::Focus { panel: view.panel.clone(), palette: offer.palette.clone(), keys: offer.keys.clone() });
         }
         next.push((view.panel.clone(), f, offer));

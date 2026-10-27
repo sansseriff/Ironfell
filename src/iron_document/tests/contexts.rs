@@ -515,3 +515,19 @@ fn a_context_facet_names_a_containers_context() {
     assert_eq!((r.get(&[g, a], 1, Field::DRAG), r.get(&[g, a], 1, Field::ACTIVATE)), ("none".into(), "toggle".into()));
     assert_eq!(r.get(&[b], 0, Field::DRAG), "point");
 }
+
+#[test]
+fn every_field_constant_names_its_field() {
+    let named = [
+        (Field::SELECT, "affords.select"), (Field::ENTER, "affords.enter"), (Field::EDIT, "affords.edit"), (Field::LIT, "chrome.lit"),
+        (Field::SNAP_TARGET, "snap.target"), (Field::GRIPS, "affords.grips"), (Field::DRAG, "affords.drag"), (Field::DRIVES, "affords.drives"),
+        (Field::ACTIVATE, "affords.activate"), (Field::STEP, "affords.step"), (Field::AXIS, "affords.axis"), (Field::NAV, "keys.nav"),
+        (Field::PLACEMENT, "motion.placement"), (Field::PALETTE, "palette.tools"), (Field::KEYS, "keys.tools"), (Field::SLOP, "tolerance.slop"),
+        (Field::DOUBLE_CLICK, "tolerance.double_click"), (Field::HIT, "tolerance.hit"), (Field::SECTIONS, "inspector.sections"),
+        (Field::HANDLE, "chrome.handle"), (Field::ACCENT, "chrome.accent"), (Field::GRIP, "chrome.grip"), (Field::GRIP_SHAPE, "chrome.grip_shape"), (Field::HOVER, "chrome.hover"),
+    ];
+    for (f, path) in named {
+        assert_eq!(f.path(), path);
+    }
+    assert_eq!(named.len(), contexts::FIELDS.len(), "a field without a constant here");
+}

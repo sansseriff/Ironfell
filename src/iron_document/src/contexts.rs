@@ -39,6 +39,8 @@ pub enum Kind {
     Leaf,
     /// A number.
     Number,
+    /// A colour, `#rrggbb` or `#rrggbbaa`.
+    Color,
 }
 
 /// A declared transition, parsed (`motion.placement="out 160 layout"`).
@@ -94,7 +96,7 @@ pub const FIELDS: &[FieldSpec] = &[
     },
     FieldSpec { domain: "affords", name: "enter", view: false, kind: Kind::Choice, options: &["select", "edit"], doc: "what entering this node from its container does: select it, or start its edit" },
     FieldSpec { domain: "affords", name: "edit", view: false, kind: Kind::Choice, options: &["none", "text", "points"], doc: "what editing in place means: its words, or its points" },
-    FieldSpec { domain: "chrome", name: "lit", view: false, kind: Kind::Choice, options: &["shape", "frame"], doc: "how a selected or hovered node lights: its outline, or its frame" },
+    FieldSpec { domain: "chrome", name: "lit", view: false, kind: Kind::Choice, options: &["shape", "frame", "none"], doc: "how a selected or hovered node lights: its outline, its frame, or not at all" },
     FieldSpec { domain: "snap", name: "target", view: false, kind: Kind::Choice, options: &["no", "yes"], doc: "whether a moving selection snaps to it" },
     FieldSpec {
         domain: "affords",
@@ -145,6 +147,11 @@ pub const FIELDS: &[FieldSpec] = &[
         options: &["main port component table position text layout appearance fill stroke effects other add"],
         doc: "the inspector's sections for a selection in this view, in order; each still shows only where its facets are (match=\"view\")",
     },
+    FieldSpec { domain: "chrome", name: "handle", view: false, kind: Kind::Choice, options: &["none", "dot"], doc: "a control part's own handle, shown at its origin while it or its container is selected or hovered (chrome.md §5)" },
+    FieldSpec { domain: "chrome", name: "accent", view: true, kind: Kind::Color, options: &["#0d99ffff"], doc: "the colour of selection boxes, grips, outlines and handles (match=\"view\")" },
+    FieldSpec { domain: "chrome", name: "grip", view: true, kind: Kind::Number, options: &["8"], doc: "a selection box's grip size, CSS px (match=\"view\")" },
+    FieldSpec { domain: "chrome", name: "grip_shape", view: true, kind: Kind::Choice, options: &["square", "round"], doc: "a selection box's grips (match=\"view\")" },
+    FieldSpec { domain: "chrome", name: "hover", view: true, kind: Kind::Choice, options: &["on", "off"], doc: "whether hovering lights things (off for touch, where nothing hovers; match=\"view\")" },
 ];
 
 /// The inspector's sections (contexts.md §2.7): rich widgets the shell draws,
@@ -183,6 +190,11 @@ impl Field {
     pub const DOUBLE_CLICK: Field = Field(16);
     pub const HIT: Field = Field(17);
     pub const SECTIONS: Field = Field(18);
+    pub const HANDLE: Field = Field(19);
+    pub const ACCENT: Field = Field(20);
+    pub const GRIP: Field = Field(21);
+    pub const GRIP_SHAPE: Field = Field(22);
+    pub const HOVER: Field = Field(23);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]
@@ -866,6 +878,11 @@ fn rule(attrs: Vec<(String, String)>) -> Result<Rule, String> {
                     v.parse::<crate::facet::LeafPath>().map_err(|e| format!("{k}=\"{v}\": {e}"))?;
                 }
                 Val::Text(Arc::from(v.as_str()))
+            }
+            Kind::Color => {
+                let hex = v.trim().strip_prefix('#').filter(|h| (h.len() == 6 || h.len() == 8) && h.chars().all(|c| c.is_ascii_hexdigit()));
+                hex.ok_or_else(|| format!("{k}=\"{v}\": expected a colour, #rrggbb or #rrggbbaa"))?;
+                Val::Text(Arc::from(v.trim()))
             }
             Kind::Number => {
                 v.trim().parse::<f64>().ok().filter(|n| n.is_finite()).ok_or_else(|| format!("{k}=\"{v}\": expected a number"))?;

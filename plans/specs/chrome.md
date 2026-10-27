@@ -20,6 +20,34 @@ the Library tab (a session composition); [vision 02](../vision/02_substrate-mode
 §9 (editors as artifacts: "the control surface and the state it tunes are the same
 kind of thing").
 
+**Revision (2026-10-27, building it):** chrome is data in two layers before it is
+nodes. *Choices and looks* are context fields read by the existing overlay drawer:
+node fields `chrome.lit` (`shape`, `frame`, `none`) and `chrome.handle` (`dot`: a
+control part shows its own handle while it or its container is selected or
+hovered), and view fields `chrome.accent` (colour), `chrome.grip` (px),
+`chrome.grip_shape` (`square`, `round`) and `chrome.hover` (`on`, `off`), whose
+defaults reproduce today's look exactly. Handles' availability is already data
+(`affords.grips`, `affords.drives`, `tolerance.hit`). This delivers §8's demos 2–4
+(a part's own handle, restyling by a context, touch) without making chrome session
+nodes: those change on every hover frame, and the overlay is today a cheap retained
+layer (hover-sweep 1.3 ms) that a per-frame node churn through the store, graph and
+render caches would put at risk. Chrome as picture nodes (definitions a model can
+restyle in geometry, picking over chrome as stacking, §4) stays the later step, once
+a notation needs chrome whose shape (not only colour and size) differs: the
+schematic's terminal dots and bend handles (§8 demo 1, with `contexts.md` §5 step 8).
+
+**Progress:** the fields are registered (`contexts.rs`, with a test that every
+`Field` constant names its field). **Next:** `view_focus` resolves the view tokens
+into `Offer`; `draw_select_overlay` reads them (accent for box, grips, frames and
+lit outlines only when overridden, so the default stays pixel-identical; grip size
+and shape; hover off skips hover frames, hovered outlines and hover chips;
+`chrome.lit="none"` skips a node in `SelectionGeometryCache::lit`; `chrome.handle`
+dots); the showcase gets Pitch restyled (orange, round grips), a touch-like Outline
+(no hover, 14 px grips, `tolerance.hit` 2) and the Dials needle's pivot dot; a
+driver script `chrome.txt`; the full guard set; then the HTML guide the user asked
+for (plans/guide2 style: everything done in this change and the app's architecture,
+with diagrams).
+
 ---
 
 ## 0. Decisions at a glance (proposed)

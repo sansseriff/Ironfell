@@ -316,20 +316,20 @@ pub fn dispatch(app: &mut ironfell::WorkerApp, request: Request) -> (Option<Valu
             None
         }
         DocumentSave { request_id } => Some(
-            json!({"ty":"documentSaved","requestId":request_id,"text":api::document_save(app)}),
+            json!({"ty":"documentSaved","requestId":request_id,"text":ironfell::engine_dispatch::call(app, "save", &[]).expect("save has no arguments")}),
         ),
         DocumentLoad { request_id, text } => {
             edge = true;
             Some(reply(
                 "documentLoaded",
                 request_id,
-                api::document_load(app, text).map(|_| String::new()),
+                ironfell::engine_dispatch::call(app, "load", &[Value::String(text)]),
             ))
         }
         DocumentView { request_id, query } => Some(reply(
             "documentView",
             request_id,
-            api::document_view(app, query.to_string()),
+            ironfell::engine_dispatch::call(app, "view", &[Value::String(query.to_string())]),
         )),
         DocumentCall {
             request_id,

@@ -1,9 +1,7 @@
 /**
- * What the model surface needs from the document, wherever the wasm lives.
- * Every method is a thin wrapper over one FFI call; the worker and the
- * main-thread adapter both implement it with `makeDocumentApi`.
+ * The model surface shared by browser and native hosts. Transports return
+ * serialized engine results; this factory owns their arguments and decoding.
  */
-import type { Glue } from '../runtime/glue';
 import type { Schema } from './schema';
 
 export interface SolverSummary {
@@ -76,22 +74,30 @@ export interface LinkResult {
   question?: { a: EntitySummary; b: EntitySummary; port_collisions: string[] };
 }
 
-export function makeDocumentApi(glue: Glue, handle: bigint): DocumentApi {
-  let schema: Schema | null = null;
+/** A host supplies only transport; operation names and decoding live here. */
+export type DocumentCall = (name: string, args: unknown[]) => MaybePromise<string>;
+
+export function makeDocumentApi(call: DocumentCall): DocumentApi {
+  let schema: Promise<Schema> | null = null;
+  const json = async <T>(name: string, args: unknown[] = []): Promise<T> =>
+    JSON.parse(await call(name, args));
   return {
-    schema: () => (schema ??= JSON.parse(glue.document_schema())),
-    view: (q) => glue.document_view(handle, JSON.stringify({ scope: null, depth: null, ...q })),
-    version: () => {
-      const m = glue.document_view(handle, JSON.stringify({ scope: null, fidelity: 'skeleton', depth: 0 })).match(/version="(\d+)"/);
-      return m ? Number(m[1]) : 0;
+    schema: () => (schema ??= json<Schema>('schema').catch(error => {
+      schema = null;
+      throw error;
+    })),
+    view: q => call('view', [JSON.stringify({ scope: null, depth: null, ...q })]),
+    version: async () => {
+      const text = await call('view', [JSON.stringify({ scope: null, fidelity: 'skeleton', depth: 0 })]);
+      return Number(text.match(/version="(\d+)"/)?.[1] ?? 0);
     },
-    nextIds: (n) => JSON.parse(glue.document_next_ids(handle, n)),
-    nextRelationIds: (n) => JSON.parse(glue.document_next_relation_ids(handle, n)),
-    place: (parent, after, count) => JSON.parse(glue.document_place(handle, parent, after, count)),
-    apply: (tx, expect) => JSON.parse(glue.document_apply(handle, JSON.stringify(tx), expect)),
-    link: (a, b, keep, actor) => JSON.parse((glue as any).document_link(handle, a, b, keep, actor)),
-    selection: () => JSON.parse((glue as any).document_selection(handle)),
-    importSvg: (text, parent, x, y, actor) => JSON.parse((glue as any).document_import_svg_at(handle, text, parent, x, y, actor)),
-    table: (spec) => JSON.parse((glue as any).document_table(handle, spec)),
+    nextIds: n => json('next_ids', [n]),
+    nextRelationIds: n => json('next_relation_ids', [n]),
+    place: (parent, after, count) => json('place', [parent, after, count]),
+    apply: (tx, expect) => json('apply', [JSON.stringify(tx), expect]),
+    link: (a, b, keep, actor) => json('link', [a, b, keep, actor]),
+    selection: () => json('selection'),
+    importSvg: (text, parent, x, y, actor) => json('import_svg_at', [text, parent, x, y, actor]),
+    table: spec => json('table', [spec]),
   };
 }

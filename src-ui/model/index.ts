@@ -9,7 +9,7 @@ import { applyEdit, type EditOutcome } from './edit';
 import { AnthropicTransport } from './transport';
 
 export async function modelEdit(glue: Glue, handle: bigint, xml: string, label?: string): Promise<EditOutcome> {
-  return applyEdit(makeDocumentApi(glue, handle), xml, label);
+  return applyEdit(makeDocumentApi((name, args) => glue.document_call(handle, name, JSON.stringify(args))), xml, label);
 }
 
 export async function modelAsk(
@@ -19,5 +19,5 @@ export async function modelAsk(
   opts: { apiKey: string; model?: string },
 ): Promise<AskResult> {
   const transport = new AnthropicTransport(opts.apiKey, opts.model);
-  return ask(makeDocumentApi(glue, handle), transport, instruction);
+  return ask(makeDocumentApi((name, args) => glue.document_call(handle, name, JSON.stringify(args))), transport, instruction);
 }

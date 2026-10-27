@@ -1,5 +1,5 @@
 /**
- * The registry schema as `document_schema()` returns it: the one source for
+ * The registry schema as `schema` returns it: the one source for
  * the manifest, attribute resolution, and value coercion.
  */
 export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'enum' | 'ref' | 'quantity' | 'record' | 'any';

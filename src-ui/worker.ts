@@ -221,7 +221,7 @@ class IronWorker {
 
         // Document: save, load, view. Each answers with the caller's requestId.
         case "documentSave":
-          self.postMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_save(this.appHandle) });
+          self.postMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_call(this.appHandle, "save", "[]") });
           break;
 
         case "solveBench":
@@ -230,18 +230,18 @@ class IronWorker {
 
         case "documentLoad":
           try {
-            glue.document_load(this.appHandle, data.text);
+            glue.document_call(this.appHandle, "load", JSON.stringify([data.text]));
             self.postMessage({ ty: "documentLoaded", requestId: data.requestId, ok: true });
           } catch (e) {
             self.postMessage({ ty: "documentLoaded", requestId: data.requestId, ok: false, error: String(e) });
           }
           break;
 
-        // Document calls that answer with JSON (link, counterparts, focus):
-        // `document_<fn>(handle, ...args)`.
+        // Document calls return serialized engine results (JSON, XML or text).
+        // The same Rust dispatch table serves web and native.
         case "documentCall":
           try {
-            const text = (glue as any)[`document_${data.fn}`](this.appHandle, ...data.args);
+            const text = glue.document_call(this.appHandle, data.fn, JSON.stringify(data.args));
             self.postMessage({ ty: "documentCall", requestId: data.requestId, ok: true, text });
           } catch (e) {
             self.postMessage({ ty: "documentCall", requestId: data.requestId, ok: false, error: String(e) });
@@ -250,7 +250,7 @@ class IronWorker {
 
         case "documentView":
           try {
-            const text = glue.document_view(this.appHandle, JSON.stringify(data.query));
+            const text = glue.document_call(this.appHandle, "view", JSON.stringify([JSON.stringify(data.query)]));
             self.postMessage({ ty: "documentView", requestId: data.requestId, ok: true, text });
           } catch (e) {
             self.postMessage({ ty: "documentView", requestId: data.requestId, ok: false, error: String(e) });

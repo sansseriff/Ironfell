@@ -215,7 +215,7 @@ export class MainThreadAdapter {
       // Document: save, load, view. Each answers with the caller's requestId.
       case "documentSave":
         if (this.appHandle !== BigInt(0)) {
-          this.sendMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_save(this.appHandle) });
+          this.sendMessage({ ty: "documentSaved", requestId: data.requestId, text: glue.document_call(this.appHandle, "save", "[]") });
         }
         break;
 
@@ -226,7 +226,7 @@ export class MainThreadAdapter {
       case "documentLoad":
         if (this.appHandle !== BigInt(0)) {
           try {
-            glue.document_load(this.appHandle, data.text);
+            glue.document_call(this.appHandle, "load", JSON.stringify([data.text]));
             this.sendMessage({ ty: "documentLoaded", requestId: data.requestId, ok: true });
           } catch (e) {
             this.sendMessage({ ty: "documentLoaded", requestId: data.requestId, ok: false, error: String(e) });
@@ -234,10 +234,10 @@ export class MainThreadAdapter {
         }
         break;
 
-      // Document calls that answer with JSON (link, counterparts, focus).
+      // Document calls return serialized engine results (JSON, XML or text).
       case "documentCall":
         try {
-          const text = (glue as any)[`document_${data.fn}`](this.appHandle, ...data.args);
+          const text = glue.document_call(this.appHandle, data.fn, JSON.stringify(data.args));
           this.sendMessage({ ty: "documentCall", requestId: data.requestId, ok: true, text });
         } catch (e) {
           this.sendMessage({ ty: "documentCall", requestId: data.requestId, ok: false, error: String(e) });
@@ -247,7 +247,7 @@ export class MainThreadAdapter {
       case "documentView":
         if (this.appHandle !== BigInt(0)) {
           try {
-            const text = glue.document_view(this.appHandle, JSON.stringify(data.query));
+            const text = glue.document_call(this.appHandle, "view", JSON.stringify([JSON.stringify(data.query)]));
             this.sendMessage({ ty: "documentView", requestId: data.requestId, ok: true, text });
           } catch (e) {
             this.sendMessage({ ty: "documentView", requestId: data.requestId, ok: false, error: String(e) });

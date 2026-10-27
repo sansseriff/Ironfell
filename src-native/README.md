@@ -60,6 +60,11 @@ queued serialized payload. Pointer moves coalesce only when adjacent, preserving
 button/key boundaries. Native channels carry engine events/replies; invocation
 acknowledges enqueueing, not document completion. Request IDs carry completion.
 A reload replaces the webview session while keeping the native authored document.
+Web uses the same `engine_dispatch::call` table through its single wasm
+`document_call` export. All hosts use `makeDocumentApi(call)` for the model
+surface; argument construction and result decoding are shared. This consolidation
+does not yet provide typed command generation, scoped subscriptions or the full
+cross-runtime lifecycle contract.
 Bulk computational Model transport remains a separate, unimplemented proposal.
 
 See `plans/vision/08_native-target-via-tauri.md` for acceptance evidence, remaining

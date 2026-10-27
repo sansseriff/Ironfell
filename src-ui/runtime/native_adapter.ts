@@ -1,4 +1,4 @@
-import type { DocumentApi } from '../model/api';
+import { makeDocumentApi } from '../model/api';
 import { applyEdit } from '../model/edit';
 import { ask } from '../model/agent';
 import { AnthropicTransport } from '../model/transport';
@@ -87,21 +87,8 @@ export class NativeAdapter {
       this.postMessage({ ty: 'documentCall', requestId, fn, args });
     });
   }
-  private documentApi(): DocumentApi {
-    const json = async (fn: string, args: any[] = []) => JSON.parse(await this.query(fn, args));
-    return {
-      schema: () => json('schema'),
-      view: q => this.query('view', [JSON.stringify({ scope: null, depth: null, ...q })]),
-      version: async () => Number((await this.query('view', [JSON.stringify({ scope: null, fidelity: 'skeleton', depth: 0 })])).match(/version="(\d+)"/)?.[1] ?? 0),
-      nextIds: n => json('next_ids', [n]),
-      nextRelationIds: n => json('next_relation_ids', [n]),
-      place: (parent, after, count) => json('place', [parent, after, count]),
-      apply: (tx, version) => json('apply', [JSON.stringify(tx), version]),
-      link: (a, b, keep, actor) => json('link', [a, b, keep, actor]),
-      selection: () => json('selection'),
-      importSvg: (text, parent, x, y, actor) => json('import_svg_at', [text, parent, x, y, actor]),
-      table: spec => json('table', [spec]),
-    };
+  private documentApi() {
+    return makeDocumentApi((name, args) => this.query(name, args));
   }
   private fail(error: unknown) {
     console.error('Native adapter failed', error);

@@ -36,7 +36,7 @@ Verified on macOS (Apple Silicon) on 2026-09-18 and on a Linux cloud container
 
 ## Typical durations
 
-Wall-clock on the Apple Silicon dev machine, from timed runs on 2026-10-22. Per
+Wall-clock on the Apple Silicon dev machine, from timed runs on 2026-10-22 and 2026-10-26. Per
 AGENTS.md, check in with the user before running a step marked ⏱ (over a minute).
 
 | step | typical time |
@@ -50,6 +50,11 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `snapping.txt` | ~30 s |
 | `layout.txt` | ~35 s |
 | `tables.txt` | ~45 s |
+| `document-calls.txt`, each browser runtime (`GPU=1`) | ~5 s |
+| ⏱ dispatcher Rust unit test, cold native Bevy 0.20 graph (`dev-opt`) | ~3 min |
+| ⏱ `bun run native:build`, cold native Bevy/Tauri graph (`dev-opt`) | ~4 min |
+| `bun run native:build`, warm, after workspace test changes | ~21 s |
+| packaged native workspace self-test (19 checks) | ~15 s |
 | ⏱ `raster-pixels.txt` (with the Prussia import, then the meters) | ~1.5 min |
 | ⏱ `bench-instances.txt` | ~1.5 min |
 | `instance-pixels.txt` | ~1 min |
@@ -432,7 +437,7 @@ tab Library
 ["slider level 18","laser power 18 mW"]
 tab Controls
 "controls"
-["Render inspector watching controls","Chunks","1 0 in view","Nodes","25"]
+["Render inspector watching controls","Chunks","1 1 in view","Nodes","8"]
 applied "open demo scene" (298 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
@@ -1423,3 +1428,50 @@ the ball) before Esc climbs out, the toolbar reads `"Pen (P)"` after P, the
 bend reads `oy="-63.4"`, and the rounded rectangle's corners read 30. The old
 values came from driver-paced drags that stopped short and a double-click
 that did not land.
+
+## Shared document dispatch (2026-10-26)
+
+Web worker, main-thread wasm and native now use `engine_dispatch::call` for
+all document operations. Web exports only `document_call(handle, name, args_json)`;
+`makeDocumentApi(call)` builds the model surface over either a synchronous or an
+asynchronous transport. This does not complete the typed UI protocol project.
+
+Fast transport-factory tests: `bun test tests/document-api.test.ts` (3 tests).
+After rebuilding wasm and starting Vite, run the real browser contract in both
+modes, from `.claude/skills/run-iron`:
+
+```sh
+GPU=1 SIZE=1680x1000@1 bun run drive.ts < document-calls.txt
+GPU=1 SIZE=1680x1000@1 URL='http://localhost:5173/Ironfell/?gfx=webgl2&contractRuntime=main' bun run drive.ts < document-calls.txt
+```
+
+The fixture sets the runtime in Settings, reloads, rejects unknown operations,
+wrong arity and wrong argument types without changing authored state, applies an
+edit, verifies atomic rejection, then loads both original and edited states and
+checks canonical saves. Expected after nav/ready/runtime lines:
+
+```
+["unknown document operation","expected 1 arguments","argument 0"]
+"apply/reject/save/load pass"
+(no page errors)
+```
+
+Full `smoke.txt` was rerun after consolidation: exit 0, no page errors. The
+render-inspector expectation now records 8 retained nodes and 1 chunk in view.
+Canonical byte length and solver undo op counts can vary with floating-point
+settling; the run saved 59,350 bytes and the round trip remained equal.
+
+`bun run check` currently reports four font-catalog narrowing errors at
+`TextSection.svelte:95–96` (an untouched component), plus ten warnings. The
+refactored files have no reported errors; `tsc -p tsconfig.node.json` passes.
+
+The rebuilt packaged native workspace passes 19/19 checks. Its idle check sets
+Stats to On demand first, since Stats is now a live composition. The first run
+correctly found continuous rendering with Stats left on Auto; that is expected
+product behavior, and the test setup has been updated.
+
+The native workspace self-test exercises the same three dispatch errors and
+unchanged-state check, followed by its existing editing/undo/redo/lifecycle checks
+(19 total, or 21 with the runtime simulation fixture). The focused Rust dispatcher
+test can run with `cargo test -p ironfell --lib --features native --target
+aarch64-apple-darwin --profile dev-opt engine_dispatch::tests`.

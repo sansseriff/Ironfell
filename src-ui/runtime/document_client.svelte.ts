@@ -106,6 +106,8 @@ export class DocumentClient {
       // storage unavailable; the key is entered per session
     }
     (window as any).__iron = {
+      // Diagnostic access to JSON-returning operations, including contract errors.
+      call: (name: string, args: unknown[] = []) => this.call(name, args),
       save: () => this.save(),
       load: (text: string) => this.load(text),
       view: (q: ViewQuery) => this.request('documentView', { query: { scope: null, depth: null, ...q } }),
@@ -237,7 +239,7 @@ export class DocumentClient {
     }
   }
 
-  /** One JSON-answering document FFI call (`document_<fn>`). */
+  /** One JSON-answering operation through the shared document dispatcher. */
   async call(fn: string, args: unknown[]): Promise<any> {
     return JSON.parse(await this.request('documentCall', { fn, args }));
   }

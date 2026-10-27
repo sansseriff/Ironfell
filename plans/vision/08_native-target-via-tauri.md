@@ -266,6 +266,22 @@ substitute for the proposed native engine.
 
 ### Completion record
 
+- **2026-10-26 — shared document dispatch:** web and native now use the same
+  `engine_dispatch::call` operation table, including save/load/view. Browser
+  worker and main-thread adapters use a single `document_call` wasm export;
+  individual document exports are removed. Native and web model authoring share
+  `makeDocumentApi(call)` instead of maintaining separate operation wrappers.
+  Phase 2's typed protocol, subscriptions and lifecycle work remains open; see
+  `infinite-canvas-architecture-patterns.md` §5. Both wasm builds, focused
+  worker/main-thread contracts, the full run-iron smoke, three factory tests and
+  the Rust dispatcher test pass. The rebuilt packaged native workspace passes
+  19/19 checks, including the four new dispatch/error-atomicity checks; its idle
+  check now puts the live Stats composition on demand. Frontend checking reports
+  four font-catalog narrowing errors in untouched `TextSection.svelte`, with no
+  errors in refactored files. Evidence: `.agents/document-dispatch/` (gitignored).
+  These results do not close the display, full parity-trace or cost gates.
+
+
 - **2026-10-16 — composition and shared-engine slice:** native host in `src-native/`
   uses Tauri 2.11.6 / Tao 0.35.3 / Wry 0.55.1, the existing Bevy 0.19.1 /
   wgpu 29.0.4 renderer, and an NSView `CADisplayLink` on the OS main thread.

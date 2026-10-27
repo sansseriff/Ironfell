@@ -2,7 +2,8 @@
 
 **Status:** Phase 3 implemented (§13); phase 1 done 2026-10-15 in two passes (§4,
 "First pass", "Second pass": store ownership, one pointer state machine, the 3D
-gizmo, Alt-drag); phases 2, 4 and 5 open
+gizmo, Alt-drag); phase 2 shared document dispatch built 2026-10-26, typed protocol
+and lifecycle/subscriptions open; phases 4 and 5 open
 **Date:** 2026-10-13
 **Scope:** Adapt relevant patterns from `xiaoiver/infinite-canvas-tutorial` while
 preserving Iron's authored document, Bevy runtime, and Svelte host boundaries.
@@ -319,6 +320,34 @@ every document edit, `Edit(Manip)` (`bevy_app/manipulate.rs`):
   but the drag plane is fixed at the press.
 
 ## 5. Phase 2 — Typed UI protocol, subscriptions, and lifecycle
+
+### Shared dispatch checkpoint (2026-10-26)
+
+The command-list consolidation is implemented: web's single
+`web_ffi::document_call` and native dispatch use `engine_dispatch::call` for
+operation lookup and argument validation. Save/load/view retain their existing
+shell message shapes but also delegate to that table. Per-operation wasm exports
+are removed. `makeDocumentApi(call)` supplies one model-facing implementation for
+worker, main-thread and native, including query defaults, result decoding and
+per-instance schema caching; transports may return strings or promises.
+
+This is a prerequisite slice, not completion of phase 2. Requests still use
+string operation names and positional JSON arguments. Typed/generated commands,
+scoped subscriptions, query generations, the full disposal contract and explicit
+acknowledgment stages remain open.
+
+Validation: both wasm backends rebuilt; `document-calls.txt` passes in worker and
+main-thread modes (explicit dispatch errors, unchanged state on invalid calls,
+apply/reject and canonical save/load). Full run-iron smoke exits 0 with no page
+errors. Three transport-factory tests and the Rust dispatcher test pass. The
+rebuilt packaged native workspace passes 19/19 checks. Its idle check now puts
+Stats on demand, as required since the free-running Stats composition landed.
+Native build: 231 s cold, 21 s warm; dispatcher test: 178 s cold; native workspace:
+15 s. Evidence is in `.agents/document-dispatch/` (gitignored).
+
+`bun run check` reports four font-catalog narrowing errors in the untouched
+`TextSection.svelte:95–96` and ten warnings; no refactored-file errors.
+`tsc -p tsconfig.node.json` passes.
 
 ### Tutorial evidence and adaptation
 

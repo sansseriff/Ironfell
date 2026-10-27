@@ -11,6 +11,7 @@ fn argument<T:DeserializeOwned>(args:&[Value],index:usize)->Result<T,String>{
 }
 pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
     Ok(match name {
+        "load" => { arity(args,1)?; crate::engine_api::document_load(app,argument::<String>(args,0)?)?; String::new() },
         "save" => { arity(args,0)?; crate::engine_api::document_save(app) },
         "view" => { arity(args,1)?; crate::engine_api::document_view(app,argument::<String>(args,0)?)? },
         "apply" => { arity(args,2)?; crate::engine_api::document_apply(app,argument::<String>(args,0)?,argument::<u32>(args,1)?) },
@@ -57,4 +58,27 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "font_previews" => { arity(args,1)?; crate::engine_api::font_previews(argument::<Vec<String>>(args,0)?) },
         _=>return Err(format!("unknown document operation: {name}")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::prelude::*;
+    use serde_json::json;
+
+    #[test]
+    fn invalid_dispatch_is_explicit_and_does_not_touch_the_world() {
+        let mut engine = App::new();
+        let window = engine.world_mut().spawn_empty().id();
+        let mut app = WorkerApp::new(engine, window);
+        assert_eq!(call(&mut app, "missing", &[]).unwrap_err(), "unknown document operation: missing");
+        assert_eq!(call(&mut app, "next_ids", &[]).unwrap_err(), "expected 1 arguments, got 0");
+        assert!(call(&mut app, "next_ids", &[json!("wrong type")]).unwrap_err().starts_with("argument 0:"));
+        assert!(call(&mut app, "apply", &[json!("{}"), json!(-1)]).unwrap_err().starts_with("argument 1:"));
+        assert!(call(&mut app, "load", &[json!("not json")]).is_err());
+        // No document store is installed: bad arguments must be rejected before
+        // an operation can access it. A valid process-level read still works.
+        let schema: Value = serde_json::from_str(&call(&mut app, "schema", &[]).unwrap()).unwrap();
+        assert!(schema.is_object());
+    }
 }

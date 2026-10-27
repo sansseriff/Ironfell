@@ -123,12 +123,16 @@ pub(crate) struct SnapSession {
     /// Guides are drawn as lines with crosses (a move), or as the crosses
     /// alone (a resize, Figma's).
     pub lines: bool,
+    /// The view's grid (`snap.grid`), and the lead mover's origin at the
+    /// press, panel document px: a move puts that origin on the grid, in
+    /// place of object snapping.
+    pub grid: Option<(f64, Point)>,
 }
 
 impl SnapSession {
     pub fn new(start: kurbo::Rect, boxes: Vec<kurbo::Rect>, own: Vec<kurbo::Rect>, reach: f64) -> Self {
         let targets = iron_spatial::snap::Targets::new(boxes.iter().copied());
-        Self { start, boxes, own, targets, reach, guides: Vec::new(), lines: true }
+        Self { start, boxes, own, targets, reach, guides: Vec::new(), lines: true, grid: None }
     }
 
     /// The originals are targets while copies of them are dragged.
@@ -397,7 +401,16 @@ impl Manip {
                 }
                 if let Some(s) = &mut d.snap {
                     s.guides.clear();
-                    if !snap_bypassed(mods) && !s.targets.is_empty() {
+                    if let Some((g, origin)) = s.grid.filter(|_| !snap_bypassed(mods)) {
+                        let to = origin + v;
+                        let on = Point::new((to.x / g).round() * g, (to.y / g).round() * g);
+                        if axes[0] {
+                            v.x += on.x - to.x;
+                        }
+                        if axes[1] {
+                            v.y += on.y - to.y;
+                        }
+                    } else if !snap_bypassed(mods) && !s.targets.is_empty() {
                         let snap = s.targets.snap(s.start + v, s.reach / zoom_of(&d.view), axes);
                         v += snap.delta;
                         s.guides = snap.guides;

@@ -674,7 +674,14 @@ pub fn check_scope(doc: &Document, op: &Op) -> Result<(), String> {
                 }
             }
             None => {
+                // A port, and a port's place on the picture (an anchor's
+                // derived position: wires bind to it, schematic.md §1), are
+                // the instance's interface; the rest is its inside.
+                let place = doc.facet(dep.node, crate::facet::FacetKind::Anchor).is_some()
+                    && dep.path.facet == crate::facet::FacetKind::Anchor
+                    && matches!(dep.path.field, "wx" | "wy" | "wrot");
                 if let Some((owner, _)) = dep.node.expanded_parts()
+                    && !place
                     && !doc.live(dep.node).is_some_and(|n| n.ty.name() == "port")
                 {
                     return Err(format!("{node} reads {dep}, inside instance {owner}; read one of its ports, or give its definition an `out` port for this"));

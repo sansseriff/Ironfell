@@ -11,13 +11,21 @@
   // reports which tool is active. A view whose palette is empty (a 3D one)
   // has no toolbar.
   import { DropdownMenu } from "bits-ui";
+  import ArrowDownToLine from "@lucide/svelte/icons/arrow-down-to-line";
+  import AudioWaveform from "@lucide/svelte/icons/audio-waveform";
+  import BatteryMedium from "@lucide/svelte/icons/battery-medium";
+  import Cable from "@lucide/svelte/icons/cable";
   import Check from "@lucide/svelte/icons/check";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Circle from "@lucide/svelte/icons/circle";
   import CircleDot from "@lucide/svelte/icons/circle-dot";
+  import CircleArrowUp from "@lucide/svelte/icons/circle-arrow-up";
   import Crosshair from "@lucide/svelte/icons/crosshair";
+  import Gauge from "@lucide/svelte/icons/gauge";
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
+  import Pause from "@lucide/svelte/icons/pause";
   import PenTool from "@lucide/svelte/icons/pen-tool";
+  import RectangleHorizontal from "@lucide/svelte/icons/rectangle-horizontal";
   import Square from "@lucide/svelte/icons/square";
   import Table from "@lucide/svelte/icons/table";
   import Type from "@lucide/svelte/icons/type";
@@ -38,13 +46,24 @@
     table: { label: "Table", icon: Table },
     port: { label: "Port", icon: CircleDot },
     empty: { label: "Empty", icon: Crosshair },
+    // The schematic's (schematic.md §3): the wire, and placing each
+    // standard part (`place:<key>`).
+    wire: { label: "Wire", icon: Cable },
+    "place:resistor": { label: "Resistor", icon: RectangleHorizontal },
+    "place:capacitor": { label: "Capacitor", icon: Pause },
+    "place:inductor": { label: "Inductor", icon: AudioWaveform },
+    "place:vsource": { label: "Voltage source", icon: BatteryMedium },
+    "place:isource": { label: "Current source", icon: CircleArrowUp },
+    "place:ground": { label: "Ground", icon: ArrowDownToLine },
+    "place:probe": { label: "Probe", icon: Gauge },
   };
 
   const offer = $derived(doc.focus[panel]);
   // The library and the Stats view show their own content, not a world to draw in.
   const shown = $derived(!!offer?.palette && spec.source !== "library" && spec.source !== "stats");
   const slots = $derived((offer?.palette ?? "").split(/\s+/).filter(Boolean).map((slot) => slot.split("|").filter((t) => t in TOOLS)).filter((s) => s.length));
-  const keyOf = $derived(Object.fromEntries((offer?.keys ?? "").split(/\s+/).filter(Boolean).map((p) => p.split(":")).map(([k, t]) => [t, k.toUpperCase()])));
+  // `key:tool`, where a tool may hold colons itself (`r:place:resistor`).
+  const keyOf = $derived(Object.fromEntries((offer?.keys ?? "").split(/\s+/).filter(Boolean).map((p) => [p.slice(p.indexOf(":") + 1), p.slice(0, p.indexOf(":")).toUpperCase()])));
   const title = (tool: string) => (keyOf[tool] ? `${TOOLS[tool].label} (${keyOf[tool]})` : TOOLS[tool].label);
 
   // A shared slot shows the tool last used from it.

@@ -231,9 +231,16 @@ pub fn plug_ops(doc: &Document, a: NodeId, b: NodeId, held: Option<NodeId>, id: 
 /// The mates connections imply (§4.3): for every connection between two
 /// rigid anchors on different bodies in one composition, a `mate` between
 /// the bodies at the anchors, named by the connection.
-pub fn implied_mates(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>) -> Vec<ConstraintInfo> {
+pub fn implied_mates(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, lib: &crate::contexts::Library) -> Vec<ConstraintInfo> {
     let spec = constraint::spec("mate").expect("declared kind");
     let anchors = port_anchors(doc, read);
+    // Whether an anchor's context lets a connection hold it (`plug.mate`):
+    // a schematic's wires join pins without moving parts.
+    let resolver = crate::contexts::Resolver::new(doc, lib);
+    let mates = |anchor: NodeId| {
+        let chain = crate::contexts::chain_of(doc, anchor);
+        chain.is_empty() || resolver.get(&chain, chain.len() - 1, crate::contexts::Field::MATE) != "no"
+    };
     let mut out = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for a in anchors.iter().filter(|a| !a.follow && !a.sealed) {
@@ -242,7 +249,7 @@ pub fn implied_mates(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>) -> Ve
             continue;
         }
         let Some(b) = anchors.iter().find(|b| b.outer == partner && !b.follow && !b.sealed && b.composition == a.composition) else { continue };
-        if a.body == b.body {
+        if a.body == b.body || !mates(a.anchor) || !mates(b.anchor) {
             continue;
         }
         let operand = |role: &'static str, x: &PortAnchor| -> Option<Operand> {

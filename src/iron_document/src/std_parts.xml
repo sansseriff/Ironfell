@@ -1,0 +1,107 @@
+<!-- Iron's standard electrical parts (plans/specs/schematic.md §2): parts as
+     data. Each is a definition: inputs (`in`, an instance's arguments),
+     pins (`electrical` ports: across in volts, through in amps, positive
+     into the part), behaviour as equations over them, and a schematic
+     symbol drawn on a 10 px grid with every pin on a grid point. Names in
+     expressions are the part's own: a pin's `a.across` and `a.through`, an
+     input by its name. Labels stay upright on a turned part, at `turned`
+     (from the origin, on the sheet) when it stands on end, unless they turn
+     `with` it. Embedded and read-only; a document gets a copy on first
+     placement. -->
+
+<part key="resistor" name="Resistor" prefix="R">
+  <in name="R" value="1 kΩ"/>
+  <pin name="a" x="-30" y="0" face="left"/>
+  <pin name="b" x="30" y="0" face="right"/>
+  <equation lhs="a.through + b.through" rhs="0 A"/>
+  <equation lhs="a.across - b.across" rhs="R * a.through"/>
+  <symbol>
+    <path d="M-30 0 H-18 L-15 -6 L-9 6 L-3 -6 L3 6 L9 -6 L15 6 L18 0 H30"/>
+    <label x="-12" y="-24" turned="12,-16" text="{designator}"/>
+    <label x="-12" y="10" turned="12,-2" text="{fmt(R)}"/>
+  </symbol>
+</part>
+
+<part key="capacitor" name="Capacitor" prefix="C">
+  <in name="C" value="100 nF"/>
+  <pin name="a" x="-30" y="0" face="left"/>
+  <pin name="b" x="30" y="0" face="right"/>
+  <!-- A DC operating point: no current through the plates. -->
+  <equation lhs="a.through" rhs="0 A"/>
+  <equation lhs="b.through" rhs="0 A"/>
+  <symbol>
+    <path d="M-30 0 H-4 M-4 -12 V12 M4 -12 V12 M4 0 H30"/>
+    <label x="-12" y="-30" turned="18,-16" text="{designator}"/>
+    <label x="-12" y="14" turned="18,-2" text="{fmt(C)}"/>
+  </symbol>
+</part>
+
+<part key="inductor" name="Inductor" prefix="L">
+  <in name="L" value="10 µH"/>
+  <pin name="a" x="-30" y="0" face="left"/>
+  <pin name="b" x="30" y="0" face="right"/>
+  <!-- A DC operating point: a short. -->
+  <equation lhs="a.through + b.through" rhs="0 A"/>
+  <equation lhs="a.across - b.across" rhs="0 V"/>
+  <symbol>
+    <path d="M-30 0 H-20 C-20 -8 -10 -8 -10 0 C-10 -8 0 -8 0 0 C0 -8 10 -8 10 0 C10 -8 20 -8 20 0 H30"/>
+    <label x="-12" y="-26" turned="14,-16" text="{designator}"/>
+    <label x="-12" y="6" turned="14,-2" text="{fmt(L)}"/>
+  </symbol>
+</part>
+
+<part key="vsource" name="Voltage source" prefix="V">
+  <in name="V" value="5 V"/>
+  <pin name="p" x="0" y="-30" face="up"/>
+  <pin name="n" x="0" y="30" face="down"/>
+  <equation lhs="p.through + n.through" rhs="0 A"/>
+  <equation lhs="p.across - n.across" rhs="V"/>
+  <symbol>
+    <circle x="0" y="0" r="16"/>
+    <path d="M0 -30 V-16 M0 16 V30 M-4 -7 H4 M0 -11 V-3 M-4 8 H4"/>
+    <label x="22" y="-16" turned="-14,-38" text="{designator}"/>
+    <label x="22" y="0" turned="-14,-24" text="{fmt(V)}"/>
+  </symbol>
+</part>
+
+<part key="isource" name="Current source" prefix="I">
+  <in name="I" value="1 mA"/>
+  <pin name="p" x="0" y="-30" face="up"/>
+  <pin name="n" x="0" y="30" face="down"/>
+  <!-- I flows out of p into the circuit, and back in at n. -->
+  <equation lhs="p.through" rhs="-I"/>
+  <equation lhs="n.through" rhs="I"/>
+  <symbol>
+    <circle x="0" y="0" r="16"/>
+    <path d="M0 -30 V-16 M0 16 V30 M0 9 V-9 M-5 -3 L0 -9 L5 -3"/>
+    <label x="22" y="-16" turned="-14,-38" text="{designator}"/>
+    <label x="22" y="0" turned="-14,-24" text="{fmt(I)}"/>
+  </symbol>
+</part>
+
+<part key="ground" name="Ground" prefix="GND">
+  <pin name="g" x="0" y="0" face="up"/>
+  <equation lhs="g.across" rhs="0 V"/>
+  <symbol>
+    <path d="M0 0 V10 M-12 10 H12 M-7 15 H7 M-2 20 H2"/>
+  </symbol>
+</part>
+
+<!-- A T in a wire: one pin, any number of wires on it. -->
+<part key="junction" name="Junction" prefix="J">
+  <pin name="j" x="0" y="0" face="right"/>
+  <equation lhs="j.through" rhs="0 A"/>
+  <symbol>
+    <dot x="0" y="0" r="3"/>
+  </symbol>
+</part>
+
+<!-- Shows the voltage of the net it touches; draws no current. -->
+<part key="probe" name="Probe" prefix="P">
+  <pin name="t" x="0" y="0" face="down"/>
+  <equation lhs="t.through" rhs="0 A"/>
+  <symbol>
+    <path d="M0 0 L8 -8 H60 V-28 H8 V-8"/>
+    <label x="12" y="-25" turn="with" text="{fmt(t.across, &quot;V&quot;, 3)}"/>
+  </symbol>
+</part>

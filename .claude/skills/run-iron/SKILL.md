@@ -56,6 +56,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `controls.txt` | ~30 s |
 | `showcase.txt` | ~30 s |
 | `chrome.txt` | ~30 s |
+| `schematic.txt` | ~40 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -1441,11 +1442,11 @@ Text tool lit). Expected, minus screenshot, `nav` and `ready` lines:
 "<applied version=\"3\">\n  <table id=\"#3u\"/>\n</applied>"
 ["<context name=\"std:table\" for=\"type:table\">","<rule match=\"type:row\" affords.select=\"through\"/>"]
 ["#44"]
-["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"select\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\""]
+["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"select\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\"","affords.delete=\"self\""]
 "no textarea"
 "<applied version=\"4\">\n  <context id=\"#4A\"/>\n</applied>"
 ["<context id=\"#…\" name=\"std:table\">","<rule match=\"type:text\" affords.enter=\"edit\"/>","</context>"]
-["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"edit\" affords.enter.by=\"std:table rule 1 from #…\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\""]
+["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"edit\" affords.enter.by=\"std:table rule 1 from #…\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\"","affords.delete=\"self\""]
 [true,"113","113"]
 false
 false
@@ -1491,7 +1492,7 @@ only Position and Fill, while a click in Main (on the scene's embed, `#15`) show
 
 ```
 [["Move (V)","Rectangle (R)","Pen (P)","Text (T)"]]
-["<computed view=\"viewer\">","palette.tools=\"select rect|ellipse|table|empty pen text\" palette.tools.by=\"std:free-2d rule 9\"","keys.tools=\"v:select p:pen r:rect o:ellipse t:text\" keys.tools.by=\"std:free-2d rule 9\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"main port component table position text layout appearance fill stroke effects other add\" inspector.sections.by=\"std:free-2d rule 9\"","chrome.accent=\"#0d99ffff\"","chrome.grip=\"8\"","chrome.grip_shape=\"square\"","chrome.hover=\"on\"","</computed>"]
+["<computed view=\"viewer\">","palette.tools=\"select rect|ellipse|table|empty pen text\" palette.tools.by=\"std:free-2d rule 9\"","keys.tools=\"v:select p:pen r:rect o:ellipse t:text\" keys.tools.by=\"std:free-2d rule 9\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"main port component table position text layout appearance fill stroke effects other add\" inspector.sections.by=\"std:free-2d rule 9\"","chrome.accent=\"#0d99ffff\"","chrome.grip=\"8\"","chrome.grip_shape=\"square\"","chrome.hover=\"on\"","snap.grid=\"0\"","chrome.component=\"on\"","</computed>"]
 undefined
 [[],"select rect|ellipse|table|empty pen text"]
 clicked button[title^="Make a component"]
@@ -1501,7 +1502,7 @@ true
 true
 "deck"
 [["Move (V)","Rectangle (R)","Pen (P)","Text (T)"],["Move (V)","Text (T)","Table (B)"]]
-["<computed view=\"deck\">","palette.tools=\"select text table\" palette.tools.by=\"deck rule 1 from #…\"","keys.tools=\"v:select t:text b:table\" keys.tools.by=\"deck rule 1 from #…\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"position fill\" inspector.sections.by=\"deck rule 1 from #…\"","chrome.accent=\"#…\"","chrome.grip=\"8\"","chrome.grip_shape=\"square\"","chrome.hover=\"on\"","</computed>"]
+["<computed view=\"deck\">","palette.tools=\"select text table\" palette.tools.by=\"deck rule 1 from #…\"","keys.tools=\"v:select t:text b:table\" keys.tools.by=\"deck rule 1 from #…\"","tolerance.slop=\"3\"","tolerance.double_click=\"400\"","tolerance.hit=\"1\"","inspector.sections=\"position fill\" inspector.sections.by=\"deck rule 1 from #…\"","chrome.accent=\"#…\"","chrome.grip=\"8\"","chrome.grip_shape=\"square\"","chrome.hover=\"on\"","snap.grid=\"0\"","chrome.component=\"on\"","</computed>"]
 ["Table","Table (B)"]
 ["Table","Table (B)"]
 ["Rectangle (R)"]
@@ -1722,14 +1723,15 @@ undefined
 "90"
 ["0.90","north  | {= fmt(#4a.slider.value * 100, 0)}"]
 applied "open demo scene" (298 ops, System) -> v1
-applied "open showcase" (65 ops, System) -> v2
+applied "open showcase" (176 ops, System) -> v2
 applied "set size.h" (1 ops, Human) -> v3
 applied "edit text" (1 ops, Human) -> v4
 (no page errors)
 ```
 
 Outline's chrome is touch-like (no hover light, 14 px grips reaching twice as far)
-and Pitch's orange with round grips, from their contexts' view rules.
+and Pitch's orange with round grips, from their contexts' view rules. A fifth tab,
+**Circuit**, holds a divider in the schematic notation (`schematic.txt`).
 
 ## Chrome as data (2026-10-27)
 
@@ -1770,6 +1772,61 @@ applied "context" (1 ops, Model) -> v2
 applied "model edit" (1 ops, Model) -> v3
 applied "model edit" (4 ops, Model) -> v4
 applied "context" (1 ops, Model) -> v5
+(no page errors)
+```
+
+## Schematics (2026-10-27)
+
+`schematic.txt` (plans/specs/schematic.md): the Circuit tab, a divider in the
+`schematic` notation built from the parts library (`std_parts.xml`) and wired pin to
+pin, solved as one network. The slider sets R2 and the probe follows; R, Space and a
+click place a turned resistor on the 10 px grid; W and three clicks wire it (one
+"wire" transaction, the corner tidied); dragging the part moves it on the grid with
+its wire rubber-banding; four undos. Then a probe wired onto a wire splits it at a
+junction (J1) in one transaction; Delete on R2 takes its wires (`affords.delete=
+"subject"`); a model's `<circuit>` edit places and wires a second divider and answers
+with the netlist (`__iron.netlist`). After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < schematic.txt; cd -
+```
+
+Inspect `screenshots/schematic-wired.png`, `schematic-moved.png`,
+`schematic-junction.png` and `schematic-model.png`. Expected, minus `nav`, `ready`
+and screenshot lines:
+
+```
+tab Circuit
+[["Move (V)","Wire (W)","Resistor (R)","Voltage source (E)","Ground (G)","Probe (P)","Text (T)"]]
+undefined
+undefined
+undefined
+undefined
+"6 V"
+["0.25","4.5 V"]
+"<use name=\"R3\" x=\"500\" y=\"320\" rot=\"1.5707963267948966\" sx=\"1\" sy=\"1\" notation=\"schematic\" count=\"6\">"
+[6,"500,290 300,290 300,250"]
+["540,340","540,310 300,310 300,250"]
+[5,false,"6 V"]
+"* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\nR2 N2 0 2 kΩ\n* P1 probes N2\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 6 V"
+[7,"9 V",true]
+[5,true]
+"<applied version=\"14\">\n  <circuit>placed V9 R8 R9 GND9 P9; 5 wires</circuit>\n</applied>\n<netlist sheet=\"circuit\">\n* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V\n</netlist>"
+"* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V"
+applied "open demo scene" (298 ops, System) -> v1
+applied "open showcase" (176 ops, System) -> v2
+applied "set slider" (1 ops, Human) -> v3
+applied "place resistor" (9 ops, Human) -> v4
+applied "wire" (9 ops, Human) -> v5
+applied "move use" (2 ops, Human) -> v6
+applied "undo: move use" (2 ops, System) -> v7
+applied "undo: wire" (9 ops, System) -> v8
+applied "undo: place resistor" (9 ops, System) -> v9
+applied "undo: set slider" (1 ops, System) -> v10
+applied "place probe" (3 ops, Human) -> v11
+applied "wire" (37 ops, Human) -> v12
+applied "delete use" (6 ops, Human) -> v13
+applied "circuit" (68 ops, Model) -> v14
 (no page errors)
 ```
 

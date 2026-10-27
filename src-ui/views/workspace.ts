@@ -37,6 +37,7 @@ function defaultLayout(api: DockviewApi) {
     ['pitch', 'Pitch'],
     ['dials', 'Dials'],
     ['data', 'Data'],
+    ['circuit', 'Circuit'],
   ]) {
     view(id, title, { source: id, notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' }, { inactive: true });
   }

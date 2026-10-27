@@ -94,19 +94,26 @@ pub enum ActiveTool {
     Empty,
     /// Placing a table (`author_tool`; layout-and-tables.md §5.1).
     Table,
+    /// Wiring pins together (`schematic_tool`; schematic.md §4).
+    Wire,
+    /// Placing a part, by its key in the parts library (`schematic_tool`).
+    Place(&'static str),
 }
 
 impl ActiveTool {
-    pub fn name(self) -> &'static str {
+    /// Its id in palettes and keymaps (`place:resistor`).
+    pub fn name(self) -> String {
         match self {
-            ActiveTool::Select => "select",
-            ActiveTool::Pen => "pen",
-            ActiveTool::Rect => "rect",
-            ActiveTool::Ellipse => "ellipse",
-            ActiveTool::Text => "text",
-            ActiveTool::Port => "port",
-            ActiveTool::Empty => "empty",
-            ActiveTool::Table => "table",
+            ActiveTool::Select => "select".into(),
+            ActiveTool::Pen => "pen".into(),
+            ActiveTool::Rect => "rect".into(),
+            ActiveTool::Ellipse => "ellipse".into(),
+            ActiveTool::Text => "text".into(),
+            ActiveTool::Port => "port".into(),
+            ActiveTool::Empty => "empty".into(),
+            ActiveTool::Table => "table".into(),
+            ActiveTool::Wire => "wire".into(),
+            ActiveTool::Place(key) => format!("place:{key}"),
         }
     }
 }
@@ -2067,12 +2074,21 @@ pub fn select_tool_system(
                 edit.point = None;
             }
             "delete" | "backspace" => {
-                let ops: Vec<Op> = sel
-                    .selected
-                    .iter()
-                    .filter(|&&id| !sel.selected.iter().any(|&o| o != id && doc.descendants(o).contains(&id)))
-                    .map(|&id| Op::Delete { id })
-                    .collect();
+                // What deleting removes is the context's (`affords.delete`):
+                // the node, or what it figures (a schematic's part and its
+                // wires, `parts::delete_subject_ops`).
+                let cx = store.0.resolver();
+                let mut ops: Vec<Op> = Vec::new();
+                for &id in sel.selected.iter().filter(|&&id| !sel.selected.iter().any(|&o| o != id && doc.descendants(o).contains(&id))) {
+                    let chain = iron_document::contexts::chain_of(doc, id);
+                    let subject = !chain.is_empty() && cx.get(&chain, chain.len() - 1, Field::DELETE) == "subject";
+                    let more = if subject { iron_document::parts::delete_subject_ops(doc, id) } else { vec![Op::Delete { id }] };
+                    for op in more {
+                        if !ops.contains(&op) {
+                            ops.push(op);
+                        }
+                    }
+                }
                 if ops.is_empty() {
                     continue;
                 }
@@ -2312,6 +2328,7 @@ pub fn select_tool_system(
             // before the box's grips (a pin sits on the box's edge).
             if *active == ActiveTool::Select
                 && view.dims == Dims::Two
+                && focus.chrome(&view.panel).component
                 && let [r] = movers(&reaches, &view.panel)[..]
                 && let Some(pin) = crate::bevy_app::links::pin_at(&crate::bevy_app::links::pins_of(&geo, &view, r, k), screen, k).cloned()
             {
@@ -2787,7 +2804,18 @@ pub fn select_tool_system(
                             Some((r.node(), inv, geo.world(r.node()).inverse() * (inv * p0)))
                         })
                         .collect();
-                    let snap = if tool.snap_off { None } else { snap_session(&geo, &view, &mine, k) };
+                    let mut snap = if tool.snap_off { None } else { snap_session(&geo, &view, &mine, k) };
+                    // On a grid (`snap.grid`), the lead mover's origin lands
+                    // on it instead.
+                    let grid = focus.grid(&view.panel);
+                    if grid > 0.0
+                        && let Some(lead) = mine.first()
+                        && let Some(space) = geo.space(&lead.chain)
+                    {
+                        let origin = space * geo.world(lead.node()) * Point::ORIGIN;
+                        let s = snap.get_or_insert_with(|| manipulate::SnapSession::new(Rect::ZERO, Vec::new(), Vec::new(), 0.0));
+                        s.grid = Some((grid, origin));
+                    }
                     store.0.begin_gesture(&ids);
                     for (id, inv, anchor) in grabs {
                         let h = store.0.begin_drag(id, [anchor.x, anchor.y]);
@@ -3490,7 +3518,7 @@ pub fn draw_select_overlay(
     views: Res<PanelViews>,
     store: Res<DocumentStore>,
     drawables: Res<crate::document_bridge::Drawables>,
-    (pen, shapes, edit, text_tool): (Res<crate::bevy_app::pen::PenTool>, Res<crate::bevy_app::shape_tool::ShapeTool>, Res<PathEdit>, Res<crate::bevy_app::text_tool::TextTool>),
+    (pen, shapes, edit, text_tool, schematic): (Res<crate::bevy_app::pen::PenTool>, Res<crate::bevy_app::shape_tool::ShapeTool>, Res<PathEdit>, Res<crate::bevy_app::text_tool::TextTool>, Res<crate::bevy_app::schematic_tool::SchematicTool>),
     active: Res<ActiveTool>,
     geometry_revision: Res<crate::document_bridge::GeometryRevision>,
     mut geometry_cache: ResMut<SelectionGeometryCache>,
@@ -3551,7 +3579,7 @@ pub fn draw_select_overlay(
                     Some((peniko::Color::new(c), 2.0 * k, (to_screen * *a) * path.clone()))
                 }
                 LitShape::Frame(f) => {
-                    let c = m.chain.last().and_then(|&n| component_tint(geo.doc(), n)).unwrap_or(blue);
+                    let c = m.chain.last().filter(|_| chrome.component).and_then(|&n| component_tint(geo.doc(), n)).unwrap_or(blue);
                     Some((c, if m.selected { 1.0 } else { 1.5 } * k, (to_screen * *f) * square.clone()))
                 }
             })
@@ -3592,9 +3620,10 @@ pub fn draw_select_overlay(
         let cached = geometry_cache.selection(&geo, &o.panel, &mine, stamp, true);
         // A component's frames are violet, and it wears its chip, while it
         // is selected or hovered.
-        let hover_tint = hover.and_then(|h| component_tint(geo.doc(), h.node())).unwrap_or(blue);
+        let hover_tint = hover.filter(|_| chrome.component).and_then(|h| component_tint(geo.doc(), h.node())).unwrap_or(blue);
         let box_tint = match &mine[..] {
             [] => blue,
+            [_, ..] if !chrome.component => blue,
             [first, rest @ ..] => match component_tint(geo.doc(), first.node()) {
                 Some(c) if rest.iter().all(|r| component_tint(geo.doc(), r.node()) == Some(c)) => c,
                 _ => blue,
@@ -3602,7 +3631,8 @@ pub fn draw_select_overlay(
         };
         let mut chips: Vec<(Point, bool, String)> = Vec::new();
         for r in mine.iter().copied().chain(hover.filter(|h| h.panel == o.panel)) {
-            if let Some((main, name)) = component_of(geo.doc(), r.node())
+            if chrome.component
+                && let Some((main, name)) = component_of(geo.doc(), r.node())
                 && let Some(f) = geo.frame(&r.chain)
                 && !chips.iter().any(|c| c.2 == name && c.1 == main && (to_screen * f).transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)).origin() == c.0)
             {
@@ -3770,6 +3800,9 @@ pub fn draw_select_overlay(
                     }
                     anchor(b, start, true);
                 }
+                // A part being placed, a pin about to be wired, a wire in
+                // progress.
+                crate::bevy_app::schematic_tool::draw(b, &schematic, *active, &o.panel, to_screen, k, blue);
                 // The box the rectangle or ellipse tool is dragging out.
                 if let Some(press) = shapes.press.as_ref().filter(|p| p.panel == o.panel)
                     && let Some(r) = press.rect
@@ -3862,6 +3895,7 @@ pub fn draw_select_overlay(
                         }
                     };
                     if let [r] = &mine[..]
+                        && chrome.component
                         && !matches!(tool.gesture, Gesture::Edit(_))
                     {
                         for (a, bb, link) in crate::bevy_app::links::lines_of(&geo, view, r, k) {

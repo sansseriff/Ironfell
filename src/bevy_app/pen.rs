@@ -193,7 +193,7 @@ pub fn pen_tool_system(
     }
     keys.0 = rest;
     if *shown != Some(*active) {
-        events.tool(active.name().into());
+        events.tool(active.name());
         *shown = Some(*active);
     }
     if *active != ActiveTool::Pen {

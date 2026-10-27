@@ -54,3 +54,23 @@
   <rule match="self" keys.nav="list-y"/>
   <rule match="children" affords.drag="sequence" motion.placement="out 160 layout"/>
 </context>
+
+<!-- An electrical schematic (schematic.md §3), in the spirit of a basic
+     Altium: parts placed on a 10 px grid, wired pin to pin. Built-ins do
+     not chain, so it states its own selection rules. -->
+<context name="std:schematic">
+  <rule match="type:use|text|path|group|empty|rect|ellipse|slider" affords.select="target" affords.drag="point" snap.target="yes"/>
+  <rule match="type:slider" affords.drag="track"/>
+  <!-- A symbol does not stretch; words and drawn shapes do. -->
+  <rule match="type:text|rect|ellipse" affords.grips="box"/>
+  <rule match="type:use|group|empty" chrome.lit="frame"/>
+  <rule match="type:text" affords.edit="text"/>
+  <!-- A wire's corners edit as a path's points. -->
+  <rule match="type:path" affords.edit="points"/>
+  <!-- Deleting a part's symbol deletes the part and its wires; deleting a
+       wire deletes the connection it draws. -->
+  <rule match="type:use|path" affords.delete="subject"/>
+  <!-- A connection joins pins; it does not pull parts together. -->
+  <rule match="all" plug.mate="no"/>
+  <rule match="view" palette.tools="select wire place:resistor|place:capacitor|place:inductor place:vsource|place:isource place:ground place:probe text" keys.tools="v:select w:wire r:place:resistor c:place:capacitor l:place:inductor e:place:vsource i:place:isource g:place:ground p:place:probe t:text" snap.grid="10" chrome.component="off" inspector.sections="main component position text other"/>
+</context>

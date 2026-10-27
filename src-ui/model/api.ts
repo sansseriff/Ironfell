@@ -50,6 +50,12 @@ export interface DocumentApi {
   /** Write one context's markup into the document (plans/specs/contexts.md
    *  §2.2): it replaces a document context of the same name, or is added. */
   context(markup: string): MaybePromise<{ ok: boolean; version?: number; context?: string; error?: string }>;
+  /** Place and wire parts from a `<circuit>` (plans/specs/schematic.md §5),
+   *  as one history entry. */
+  circuit(markup: string): MaybePromise<{ ok: boolean; version?: number; summary?: string; error?: string }>;
+  /** A schematic sheet's netlist, SPICE-like, with each net's solved
+   *  voltage; `sheet` is a composition's id or name. */
+  netlist(sheet: string): MaybePromise<{ ok: boolean; netlist?: string; error?: string }>;
 }
 
 export interface ImportSvgResult {
@@ -103,5 +109,7 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
     importSvg: (text, parent, x, y, actor) => json({ op: 'import_svg_at', text, parent, x, y, actor }),
     table: spec => json({ op: 'table', spec }),
     context: markup => json({ op: 'context', markup }),
+    circuit: markup => json({ op: 'circuit', markup }),
+    netlist: sheet => json({ op: 'netlist', sheet }),
   };
 }

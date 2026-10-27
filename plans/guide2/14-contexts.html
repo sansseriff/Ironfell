@@ -289,32 +289,32 @@ pub enum Kind {
 516
 517
 518
-519</pre><pre class="src"><code class="language-rust">pub fn values(&amp;self, chain: &amp;[NodeId], i: usize) -&gt; Values {
-    let mut v = Values::default();
-    let Some(node) = self.doc.live(chain[i]) else { return v };
-    let ty = node.ty;
-    let container = self.container(chain, i);
-    let states: &amp;[&amp;str] = self.states.and_then(|s| s.get(&amp;chain[i])).map_or(&amp;[], |v| v.as_slice());
-    // 1. The notation&#x27;s context, for the node&#x27;s type.
-    if let Some(c) = self.notation_of(chain[i]) {
-        self.apply(&amp;mut v, c, Some(ty), states, |p| p == Position::All || (p == Position::Children &amp;&amp; container.is_none()));
+519</pre><pre class="src"><code class="language-rust">}
+
+impl&lt;&#x27;a&gt; Resolver&lt;&#x27;a&gt; {
+    pub fn new(doc: &amp;&#x27;a Document, lib: &amp;&#x27;a Library) -&gt; Self {
+        Resolver { doc, lib, states: None }
     }
-    // 2. Its own context&#x27;s rules for itself.
-    if let Some(c) = self.lib.for_node(self.doc, chain[i]) {
-        self.apply(&amp;mut v, c, Some(ty), states, |p| p == Position::All || p == Position::Own);
-    }
-    // 3. Its direct container&#x27;s rules for its children.
-    if let Some(c) = container.and_then(|n| self.lib.for_node(self.doc, n)) {
-        self.apply(&amp;mut v, c, Some(ty), states, |p| p == Position::All || p == Position::Children);
-    }
-    // 4. Inline exceptions (`affords` facets): its container&#x27;s for its
-    //    children, then its own.
-    if let Some(c) = container {
-        self.apply_inline(&amp;mut v, c, &quot;children&quot;);
-    }
-    self.apply_inline(&amp;mut v, chain[i], &quot;self&quot;);
-    v
-}</code></pre></div></div></figure>
+
+    /// The values of `chain[i]`, where `chain` is the path of containers a
+    /// view reaches it through (embeds and instances included).
+    pub fn values(&amp;self, chain: &amp;[NodeId], i: usize) -&gt; Values {
+        let mut v = Values::default();
+        let Some(node) = self.doc.live(chain[i]) else { return v };
+        let ty = node.ty;
+        let container = self.container(chain, i);
+        let states: &amp;[&amp;str] = self.states.and_then(|s| s.get(&amp;chain[i])).map_or(&amp;[], |v| v.as_slice());
+        // 1. The notation&#x27;s context, for the node&#x27;s type.
+        if let Some(c) = self.notation_of(chain[i]) {
+            self.apply(&amp;mut v, c, Some(ty), states, |p| p == Position::All || (p == Position::Children &amp;&amp; container.is_none()));
+        }
+        // 2. Its own context&#x27;s rules for itself.
+        if let Some(c) = self.lib.for_node(self.doc, chain[i]) {
+            self.apply(&amp;mut v, c, Some(ty), states, |p| p == Position::All || p == Position::Own);
+        }
+        // 3. Its direct container&#x27;s rules for its children.
+        if let Some(c) = container.and_then(|n| self.lib.for_node(self.doc, n)) {
+            self.apply(&amp;mut v, c, Some(ty), states, |p| p == Position::All || p == Position::Children);</code></pre></div></div></figure>
 <p><code>__iron.computed(id)</code> (and the model's <code>computed</code> read) prints the result with provenance, so “why does this cell edit on double-click?” has an answer you can read:</p>
 <figure class="plainfig"><figcaption>__iron.computed on a table cell after contexts.txt's override (first lines; rules count from 1)</figcaption><pre class="plain"><code class="language-plaintext">affords.select=&quot;target&quot; affords.select.by=&quot;std:free-2d rule 1&quot;
 affords.enter=&quot;edit&quot; affords.enter.by=&quot;std:table rule 1 from #…&quot;
@@ -370,7 +370,8 @@ affords.drives=&quot;&quot;</code></pre></figure>
 1110
 1111
 1112
-1113</pre><pre class="src"><code class="language-rust">/// Merge the document&#x27;s `context` nodes over the built-in library when
+1113</pre><pre class="src"><code class="language-rust">
+/// Merge the document&#x27;s `context` nodes over the built-in library when
 /// their markup changed (contexts.md §2.2).
 fn resolve_contexts(&amp;mut self) {
     let ty = TypeId::lookup(&quot;context&quot;).expect(&quot;registered&quot;);
@@ -385,8 +386,7 @@ fn resolve_contexts(&amp;mut self) {
     } else if self.contexts.as_ref().is_none_or(|(m, _)| *m != markups) {
         let lib = contexts::Library::with_document(&amp;markups);
         self.contexts = Some((markups, lib));
-    }
-}</code></pre></div></div></figure>
+    }</code></pre></div></div></figure>
 <p>The inline style is CSS-like: <code>field: value</code> pairs separated by semicolons, an unqualified name meaning <code>affords.</code>, a qualified one any node field (<code>chrome.handle: dot</code>). It parses into an ordinary rule with an <code>INLINE</code> source.</p>
 
 <h2 id="press"><span class="sec">14.7</span>What the select tool asks</h2>
@@ -477,7 +477,14 @@ pub fn target(r: &amp;Resolver, chain: &amp;[NodeId], open: &amp;dyn Fn(usize) -
 543
 544
 545
-546</pre><pre class="src"><code class="language-rust">    label: String,
+546</pre><pre class="src"><code class="language-rust">    /// so far, unwrapped; a track&#x27;s direction (unit) and leaf units per px.
+    origin: Point,
+    last: f64,
+    turned: f64,
+    dir: kurbo::Vec2,
+    per_px: f64,
+    step: f64,
+    label: String,
 }
 
 /// What a press on a control does, if a node on the hit&#x27;s chain (deepest
@@ -488,14 +495,7 @@ enum Control {
     Drive(Drive),
     Activate { id: NodeId, leaf: LeafPath, kind: String, step: f64 },
 }
-
-fn control_at(geo: &amp;Geo, view: &amp;PanelView, chain: &amp;[NodeId], k: usize, start: Point) -&gt; Option&lt;Control&gt; {
-    let cx = geo.contexts();
-    for j in (k..chain.len()).rev() {
-        let v = cx.values(chain, j);
-        let drives = v.get(Field::DRIVES);
-        if drives.is_empty() {
-            continue;</code></pre></div></div></figure>
+</code></pre></div></div></figure>
 <p>The same mechanism gave <strong>demo 4</strong>, the Data tab: three sliders shown as a table of readouts (<code>{= fmt(#s.slider.value * 100, 0)}</code>) and as bars. A bar's drag drives its bound height; typing into a readout cell edits the slider, because words bound to <code>fmt</code>, <code>str</code> or <code>sci</code> now invert through their number (<code>handle.rs</code>, <code>typed_number</code>: the typed text is parsed, a plain number taking the format's unit). The binding stays.</p>
 <div class="box edge"><span class="tab">Rough edge</span><p><code>track</code> along a <em>path</em> (a bead on a wire) is deferred: a plain node has no leaf of its own holding its parameter, and its bound x and y are not linear in anything, so the own-leaf rule refuses it. It arrives with a component whose instance has an input to drive.</p></div>
 
@@ -537,23 +537,23 @@ fn control_at(geo: &amp;Geo, view: &amp;PanelView, chain: &amp;[NodeId], k: usiz
 183
 184
 185
-186</pre><pre class="src"><code class="language-rust">let f = Focus { world, scope, states };
+186</pre><pre class="src"><code class="language-rust">let mut states = Vec::new();
+if text.edit.as_ref().is_some_and(|e| e.panel == view.panel) {
+    states.push(&quot;editing-text&quot;);
+}
+if edit.reach.as_ref().is_some_and(|r| r.panel == view.panel) {
+    states.push(&quot;editing-points&quot;);
+}
+if world.is_some_and(|w| doc.children(w).iter().any(|&amp;c| iron_document::expand::main_definition(doc, c).is_some())) {
+    states.push(&quot;main&quot;);
+}
+let f = Focus { world, scope, states };
 let v = r.view_values(&amp;f);
 let num = |f: Field, d: f64| v.get(f).parse::&lt;f64&gt;().unwrap_or(d);
 let tolerances = crate::bevy_app::tolerances::Tolerances { slop: num(Field::SLOP, 3.0) as f32, double_click: num(Field::DOUBLE_CLICK, 400.0) / 1000.0, hit: num(Field::HIT, 1.0) };
 let accent = v.get(Field::ACCENT);
 let chrome = Chrome {
-    // The registry&#x27;s default is the box&#x27;s blue; only another colour
-    // replaces the built-in blues, so the default look is unchanged.
-    accent: (accent != Field::ACCENT.spec().options[0]).then(|| hex(accent)).flatten(),
-    grip: num(Field::GRIP, 8.0),
-    round: v.get(Field::GRIP_SHAPE) == &quot;round&quot;,
-    hover: v.get(Field::HOVER) != &quot;off&quot;,
-};
-let offer = Offer { palette: v.get(Field::PALETTE).to_owned(), keys: v.get(Field::KEYS).to_owned(), tolerances, chrome };
-if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&amp;o.palette, &amp;o.keys) != (&amp;offer.palette, &amp;offer.keys)) {
-    events.push(EngineEvent::Focus { panel: view.panel.clone(), palette: offer.palette.clone(), keys: offer.keys.clone() });
-}</code></pre></div></div></figure>
+    // The registry&#x27;s default is the box&#x27;s blue; only another colour</code></pre></div></div></figure>
 <p>Plain letter keys no longer mean anything in the shell. <code>route_tool_keys</code> turns a letter into <code>tool:&lt;id&gt;</code> through the keymap of the view under the pointer (or the last one it was over), and drops a letter that view does not bind. So in the Pitch tab, <kbd>B</kbd> makes a table and <kbd>R</kbd> does nothing, while in Main <kbd>R</kbd> is the rectangle: same app, different data.</p>
 
 <h2 id="keys"><span class="sec">14.9</span>Keys, reordering and motion</h2>
@@ -594,7 +594,8 @@ if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&
 1217
 1218
 1219
-1220</pre><pre class="src"><code class="language-rust">fn start_motion(&amp;mut self, values: &amp;BTreeMap&lt;Leaf, Value&gt;) {
+1220</pre><pre class="src"><code class="language-rust">/// it. A dragged item floating at the pointer does not ease.
+fn start_motion(&amp;mut self, values: &amp;BTreeMap&lt;Leaf, Value&gt;) {
     let (xp, yp): (LeafPath, LeafPath) = (&quot;transform2d.x&quot;.parse().expect(&quot;declared leaf&quot;), &quot;transform2d.y&quot;.parse().expect(&quot;declared leaf&quot;));
     let shown = self.reactive.published_by(ProducerId::LAYOUT);
     let num = |m: &amp;BTreeMap&lt;Leaf, Value&gt;, node: NodeId, path: LeafPath| m.get(&amp;Leaf { node, path }).and_then(|v| v.as_f64());
@@ -614,8 +615,7 @@ if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&
         let declared = contexts::Resolver::new(&amp;self.doc, self.contexts()).get(&amp;chain, chain.len() - 1, contexts::Field::PLACEMENT);
         let Some(m) = contexts::motion(&amp;declared).filter(|m| matches!(m.when, &quot;any&quot; | &quot;layout&quot;) &amp;&amp; m.ms &gt; 0.0) else { continue };
         self.motion.anims.insert(node, Anim { from: [sx, sy], to: [tx, ty], t0: self.motion.clock, ms: m.ms, ease: m.ease });
-    }
-}</code></pre></div></div></figure>
+    }</code></pre></div></div></figure>
 <div class="box edge"><span class="tab">Rough edge</span><p>Motion publishes the <em>eased</em> placements through the layout producer, so for the 160 ms of a glide picking sees where an item is drawn, not where it will land. Fine for a glide; a slow declared transition would make clicks during it land on the moving item.</p></div>
 
 <h2 id="state"><span class="sec">14.10</span>Interaction state</h2>
@@ -700,7 +700,10 @@ if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&
 42
 43
 44
-45</pre><pre class="src"><code class="language-rust">/// How a view&#x27;s chrome looks (`chrome.*`, plans/specs/chrome.md&#x27;s revision):
+45</pre><pre class="src"><code class="language-rust">    pub grid: f64,
+}
+
+/// How a view&#x27;s chrome looks (`chrome.*`, plans/specs/chrome.md&#x27;s revision):
 /// the overlay drawer reads it. The defaults are today&#x27;s look.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Chrome {
@@ -712,13 +715,10 @@ pub struct Chrome {
     pub round: bool,
     /// Whether hovering lights anything.
     pub hover: bool,
+    /// Whether instances wear their authoring chrome (`chrome.component`).
+    pub component: bool,
 }
-
-impl Default for Chrome {
-    fn default() -&gt; Self {
-        Chrome { accent: None, grip: 8.0, round: false, hover: true }
-    }
-}</code></pre></div></div></figure>
+</code></pre></div></div></figure>
 <p><code>chrome.txt</code> checks the look by counting pixels: a driver command, <code>tint</code>, screenshots a box of a panel and counts pixels near a colour. Orange grip (22 px) and no blue; the pivot dot (24); the hovered outline lit (60), then 0 after the context adds <code>chrome.hover="off"</code>.</p>
 <div class="box edge"><span class="tab">Rough edge</span><p>Path points, ports, guides, empties' markers, component chips, the marquee and tool previews keep their built-in colours. <code>chrome.hover="off"</code> stops hover from <em>lighting</em>, not from being tracked: the interaction state still says <code>hovered</code>. A part's handle dot is looked for among a lit container's first 64 children, and which chains are dotted is cached by document version, chains and interaction states: the first version resolved them every frame and cost 0.7 ms a frame with a 10k group hovered, which the same-day A/B benchmark caught.</p></div>
 
@@ -733,13 +733,76 @@ impl Default for Chrome {
     <tr><td>Data</td><td>drag a bar; type a number into its cell</td><td>bars <code>track</code> along −y; readouts invert through <code>fmt</code></td><td><code>showcase</code></td></tr>
   </tbody>
 </table></div>
+<p>The <strong>Circuit</strong> tab (§14.13) shows a divider in the schematic notation: drag the slider and watch the probe; press R, then click; press W and click pin, corner, pin; drag a part and its wires follow. Its script is <code>schematic.txt</code>.</p>
 <p>Every script is in <code>.claude/skills/run-iron/</code> with its expected output in <code>SKILL.md</code>; <code>tests/contexts.rs</code> (23 tests) covers the store side natively.</p>
 
-<h2 id="next"><span class="sec">14.13</span>What is not done, and what comes next</h2>
+<h2 id="schematic"><span class="sec">14.13</span>A first full notation: the schematic</h2>
+<p>Step 8 put everything above to work in one notation: an electrical schematic, in the spirit of a basic Altium (<code>plans/specs/schematic.md</code>). It needed almost nothing new in the document model, because ports already meant what an electrical terminal means. A port of kind <code>electrical</code> is an across/through pair (volts, amps); a connection joins two; every port joined by connections is one net, and Part 9's network solve already makes across values equal and through values sum to zero on each. A part is a definition whose behaviour is equations over its pins.</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 300" role="img" aria-label="The schematic's data. In the library, a part definition (resistor): an input R, pins a and b (electrical port specs), two equations, and a schematic template with the symbol and an anchor empty per pin. In the model, the entity R1 with derived ports a and b; a connection joins R1.b to R2.a. On the sheet, R1's use draws the template, with derived anchors whose anchor.wx and wy are the pins' positions; the wire is a path that figures the connection, its first and last points bound to those anchors. The network solve reads the ports and equations and publishes volts and amps; a probe's label reads its pin.">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="280" height="200" rx="6" class="box-fill"/>
+  <text class="t-b" x="24" y="32">Library: part definition</text>
+  <text class="t-mono-s" x="24" y="54">resistor (std_parts.xml)</text>
+  <text class="t-mono-s" x="24" y="72">  in R = 1 kΩ, designator</text>
+  <text class="t-mono-s" x="24" y="90">  pin a, pin b  (electrical)</text>
+  <text class="t-mono-s" x="24" y="108">  a.through + b.through = 0 A</text>
+  <text class="t-mono-s" x="24" y="126">  a.across − b.across = R·a.through</text>
+  <text class="t-mono-s" x="24" y="144">  template "schematic":</text>
+  <text class="t-mono-s" x="24" y="162">    zigzag path, labels,</text>
+  <text class="t-mono-s" x="24" y="180">    anchor empties at the pins</text>
+  <rect x="320" y="10" width="280" height="200" rx="6" class="s-store"/>
+  <text class="t-b" x="334" y="32">Model: what it is</text>
+  <rect x="334" y="44" width="110" height="60" rx="4" class="box-fill"/><text class="t-mono-s" x="344" y="64">entity R1</text><text class="t-xs" x="344" y="80">ports a, b</text><text class="t-xs" x="344" y="94">(derived)</text>
+  <rect x="476" y="44" width="110" height="60" rx="4" class="box-fill"/><text class="t-mono-s" x="486" y="64">entity R2</text><text class="t-xs" x="486" y="80">ports a, b</text>
+  <rect x="380" y="132" width="160" height="40" rx="4" class="hl"/><text class="t-mono-s" x="390" y="156">connection R1.b–R2.a</text>
+  <line x1="420" y1="104" x2="440" y2="130" class="ln" marker-end="url(#m7)"/><line x1="530" y1="104" x2="500" y2="130" class="ln" marker-end="url(#m7)"/>
+  <rect x="630" y="10" width="280" height="200" rx="6" class="s-ctx"/>
+  <text class="t-b" x="644" y="32">Sheet: how it is drawn</text>
+  <rect x="644" y="44" width="110" height="60" rx="4" class="box-fill"/><text class="t-mono-s" x="654" y="64">use of R1</text><text class="t-xs" x="654" y="80">symbol, and anchor</text><text class="t-xs" x="654" y="94">b: anchor.wx, wy</text>
+  <rect x="644" y="132" width="250" height="60" rx="4" class="hl"/><text class="t-mono-s" x="654" y="152">path "wire" figures</text><text class="t-mono-s" x="654" y="168">  the connection; ends bound</text><text class="t-mono-s" x="654" y="184">  x = {= #use/b.anchor.wx}</text>
+  <line x1="700" y1="104" x2="700" y2="130" class="ln" marker-end="url(#m7)"/>
+  <line x1="642" y1="162" x2="542" y2="152" class="ln-accent" marker-end="url(#m7)"/>
+  <line x1="290" y1="110" x2="332" y2="76" class="ln-dim" marker-end="url(#m7)"/><line x1="290" y1="170" x2="642" y2="80" class="ln-dim" marker-end="url(#m7)"/>
+  <rect x="10" y="230" width="900" height="56" rx="6" class="band"/>
+  <text class="t-b" x="24" y="252">Store::solve_network</text>
+  <text class="t-xs" x="24" y="272">every electrical port's across and through are unknowns; each net's two rules plus every entity's equations; solved and published, so a probe's label (fmt(t.across)) shows its net's volts</text>
+</svg>
+<figcaption>Meaning and picture stay apart, as everywhere in Iron: the connection is the electrical fact; the wire is one drawing of it, bound to where the pins are, so it follows a part by the graph alone.</figcaption>
+</figure>
+<p>What the notation itself changes is all context data, in <code>std:schematic</code>:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Field</th><th>In a schematic</th><th>Mechanism that reads it</th></tr></thead>
+  <tbody>
+    <tr><td><code>palette.tools</code>, <code>keys.tools</code></td><td><code>select wire place:resistor|… text</code>; W, R, C, L, E, I, G, P</td><td>toolbar; <code>schematic_tool.rs</code> (placement with Space to turn; the wire tool)</td></tr>
+    <tr><td><code>snap.grid</code></td><td>10</td><td>placement, wire clicks, moves (<code>SnapSession::grid</code>)</td></tr>
+    <tr><td><code>plug.mate</code></td><td>no: a wire joins pins, it does not pull parts together</td><td><code>plug::implied_mates</code></td></tr>
+    <tr><td><code>affords.delete</code></td><td>subject: deleting a symbol deletes the part and its wires</td><td>the Delete key, <code>parts::delete_subject_ops</code></td></tr>
+    <tr><td><code>chrome.component</code></td><td>off: no violet frame, chip or input pins on parts</td><td>the overlay drawer</td></tr>
+  </tbody>
+</table></div>
+<p>The parts library is markup (<code>std_parts.xml</code>), embedded and read-only like the built-in contexts, so a part's whole meaning reads in a dozen lines; a document gets a copy on first placement. A model writes circuits with one verb and reads them back as a netlist:</p>
+<figure class="plainfig"><figcaption>A model's &lt;circuit&gt; edit, and the netlist that answers it</figcaption><pre class="plain"><code class="language-plaintext">&amp;lt;edit&amp;gt;&amp;lt;circuit sheet=&quot;circuit&quot;&amp;gt;
+  &amp;lt;place part=&quot;vsource&quot; name=&quot;V9&quot; x=&quot;620&quot; y=&quot;380&quot; V=&quot;5 V&quot;/&amp;gt;
+  &amp;lt;place part=&quot;resistor&quot; name=&quot;R8&quot; x=&quot;720&quot; y=&quot;320&quot; R=&quot;10 kΩ&quot;/&amp;gt;
+  &amp;lt;place part=&quot;resistor&quot; name=&quot;R9&quot; x=&quot;800&quot; y=&quot;380&quot; rot=&quot;90&quot; R=&quot;10 kΩ&quot;/&amp;gt;
+  &amp;lt;place part=&quot;ground&quot; name=&quot;GND9&quot; x=&quot;620&quot; y=&quot;460&quot;/&amp;gt;
+  &amp;lt;wire from=&quot;V9.p&quot; to=&quot;R8.a&quot; via=&quot;620,320&quot;/&amp;gt;
+  &amp;lt;wire from=&quot;R8.b&quot; to=&quot;R9.a&quot;/&amp;gt; …
+&amp;lt;/circuit&amp;gt;&amp;lt;/edit&amp;gt;
+
+V9 N3 0 5 V
+R8 N3 N4 10 kΩ
+R9 N4 0 10 kΩ
+.end
+* N4 = 2.5 V</code></pre></figure>
+<div class="box edge"><span class="tab">Rough edge</span><p>DC only (capacitors open, inductors short); transient analysis belongs with time-domain signals. A turned part's labels are kept upright by overrides written at placement, so turning a placed part later leaves them as they were. The model's <code>&lt;delete&gt;</code> removes only what it names; the subject rule is the Delete key's.</p></div>
+
+<h2 id="next"><span class="sec">14.14</span>What is not done, and what comes next</h2>
 <div class="table-wrap"><table>
   <thead><tr><th>Piece</th><th>State</th></tr></thead>
   <tbody>
-    <tr><td>A schematic notation (contexts.md step 8)</td><td>Next: snapping settings, domain libraries, parts as data, a wire tool; §6's demo of a notation changing the whole editor. It is also where chrome nodes (§§2–7 of chrome.md) earn their place: terminal dots and bend handles differ in shape, not only colour.</td></tr>
+    <tr><td>The schematic's later items</td><td>Snapping to pins while dragging, ERC (unconnected pins as gentle warnings), a grid drawn in the view, transient analysis; pins as chrome nodes (§§2–7 of chrome.md), where terminal dots and bend handles differ in shape, not only colour.</td></tr>
     <tr><td>Inspector sections as data</td><td>Ordered and hidden by a field; the sections themselves are still Svelte blocks.</td></tr>
     <tr><td>Track along a path</td><td>Deferred to a component demo (§14.7).</td></tr>
     <tr><td>Affordances D</td><td>Drop targets, regions, modes, 3D: when a demo needs them.</td></tr>

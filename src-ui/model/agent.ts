@@ -23,7 +23,12 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
   // The model view first (what things are and where each is drawn, ECM §11),
   // then the tree, which also holds what no composition does (the library,
   // timelines, loose roots).
-  const view = `${await api.view({ fidelity: 'full', relation: 'model' })}\n${await api.view({ fidelity: 'full' })}`;
+  const tree = await api.view({ fidelity: 'full' });
+  // Each schematic sheet's netlist too: what is wired to what, and the
+  // solved voltages (plans/specs/schematic.md §5).
+  const sheets = [...tree.matchAll(/<composition id="[^"]+" name="([^"]+)" notation="schematic"/g)].map((m) => m[1]);
+  const netlists = (await Promise.all(sheets.map((s) => api.netlist(s)))).filter((n) => n.ok).map((n) => `<netlist>\n${n.netlist}\n</netlist>`);
+  const view = [await api.view({ fidelity: 'full', relation: 'model' }), tree, ...netlists].join('\n');
   // What the person has selected, so "this" and "the selected one" resolve.
   const picked = await api.selection();
   const selection = picked.length

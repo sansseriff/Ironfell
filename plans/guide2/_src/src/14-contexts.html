@@ -291,13 +291,76 @@ affords.drives=""</raw>
     <tr><td>Data</td><td>drag a bar; type a number into its cell</td><td>bars <code>track</code> along −y; readouts invert through <code>fmt</code></td><td><code>showcase</code></td></tr>
   </tbody>
 </table></div>
+<p>The <strong>Circuit</strong> tab (§14.13) shows a divider in the schematic notation: drag the slider and watch the probe; press R, then click; press W and click pin, corner, pin; drag a part and its wires follow. Its script is <code>schematic.txt</code>.</p>
 <p>Every script is in <code>.claude/skills/run-iron/</code> with its expected output in <code>SKILL.md</code>; <code>tests/contexts.rs</code> (23 tests) covers the store side natively.</p>
 
-<h2 id="next"><span class="sec">14.13</span>What is not done, and what comes next</h2>
+<h2 id="schematic"><span class="sec">14.13</span>A first full notation: the schematic</h2>
+<p>Step 8 put everything above to work in one notation: an electrical schematic, in the spirit of a basic Altium (<code>plans/specs/schematic.md</code>). It needed almost nothing new in the document model, because ports already meant what an electrical terminal means. A port of kind <code>electrical</code> is an across/through pair (volts, amps); a connection joins two; every port joined by connections is one net, and Part 9's network solve already makes across values equal and through values sum to zero on each. A part is a definition whose behaviour is equations over its pins.</p>
+<figure class="diagram">
+<svg viewBox="0 0 920 300" role="img" aria-label="The schematic's data. In the library, a part definition (resistor): an input R, pins a and b (electrical port specs), two equations, and a schematic template with the symbol and an anchor empty per pin. In the model, the entity R1 with derived ports a and b; a connection joins R1.b to R2.a. On the sheet, R1's use draws the template, with derived anchors whose anchor.wx and wy are the pins' positions; the wire is a path that figures the connection, its first and last points bound to those anchors. The network solve reads the ports and equations and publishes volts and amps; a probe's label reads its pin.">
+  <defs><marker id="m7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <rect x="10" y="10" width="280" height="200" rx="6" class="box-fill"/>
+  <text class="t-b" x="24" y="32">Library: part definition</text>
+  <text class="t-mono-s" x="24" y="54">resistor (std_parts.xml)</text>
+  <text class="t-mono-s" x="24" y="72">  in R = 1 kΩ, designator</text>
+  <text class="t-mono-s" x="24" y="90">  pin a, pin b  (electrical)</text>
+  <text class="t-mono-s" x="24" y="108">  a.through + b.through = 0 A</text>
+  <text class="t-mono-s" x="24" y="126">  a.across − b.across = R·a.through</text>
+  <text class="t-mono-s" x="24" y="144">  template "schematic":</text>
+  <text class="t-mono-s" x="24" y="162">    zigzag path, labels,</text>
+  <text class="t-mono-s" x="24" y="180">    anchor empties at the pins</text>
+  <rect x="320" y="10" width="280" height="200" rx="6" class="s-store"/>
+  <text class="t-b" x="334" y="32">Model: what it is</text>
+  <rect x="334" y="44" width="110" height="60" rx="4" class="box-fill"/><text class="t-mono-s" x="344" y="64">entity R1</text><text class="t-xs" x="344" y="80">ports a, b</text><text class="t-xs" x="344" y="94">(derived)</text>
+  <rect x="476" y="44" width="110" height="60" rx="4" class="box-fill"/><text class="t-mono-s" x="486" y="64">entity R2</text><text class="t-xs" x="486" y="80">ports a, b</text>
+  <rect x="380" y="132" width="160" height="40" rx="4" class="hl"/><text class="t-mono-s" x="390" y="156">connection R1.b–R2.a</text>
+  <line x1="420" y1="104" x2="440" y2="130" class="ln" marker-end="url(#m7)"/><line x1="530" y1="104" x2="500" y2="130" class="ln" marker-end="url(#m7)"/>
+  <rect x="630" y="10" width="280" height="200" rx="6" class="s-ctx"/>
+  <text class="t-b" x="644" y="32">Sheet: how it is drawn</text>
+  <rect x="644" y="44" width="110" height="60" rx="4" class="box-fill"/><text class="t-mono-s" x="654" y="64">use of R1</text><text class="t-xs" x="654" y="80">symbol, and anchor</text><text class="t-xs" x="654" y="94">b: anchor.wx, wy</text>
+  <rect x="644" y="132" width="250" height="60" rx="4" class="hl"/><text class="t-mono-s" x="654" y="152">path "wire" figures</text><text class="t-mono-s" x="654" y="168">  the connection; ends bound</text><text class="t-mono-s" x="654" y="184">  x = {= #use/b.anchor.wx}</text>
+  <line x1="700" y1="104" x2="700" y2="130" class="ln" marker-end="url(#m7)"/>
+  <line x1="642" y1="162" x2="542" y2="152" class="ln-accent" marker-end="url(#m7)"/>
+  <line x1="290" y1="110" x2="332" y2="76" class="ln-dim" marker-end="url(#m7)"/><line x1="290" y1="170" x2="642" y2="80" class="ln-dim" marker-end="url(#m7)"/>
+  <rect x="10" y="230" width="900" height="56" rx="6" class="band"/>
+  <text class="t-b" x="24" y="252">Store::solve_network</text>
+  <text class="t-xs" x="24" y="272">every electrical port's across and through are unknowns; each net's two rules plus every entity's equations; solved and published, so a probe's label (fmt(t.across)) shows its net's volts</text>
+</svg>
+<figcaption>Meaning and picture stay apart, as everywhere in Iron: the connection is the electrical fact; the wire is one drawing of it, bound to where the pins are, so it follows a part by the graph alone.</figcaption>
+</figure>
+<p>What the notation itself changes is all context data, in <code>std:schematic</code>:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Field</th><th>In a schematic</th><th>Mechanism that reads it</th></tr></thead>
+  <tbody>
+    <tr><td><code>palette.tools</code>, <code>keys.tools</code></td><td><code>select wire place:resistor|… text</code>; W, R, C, L, E, I, G, P</td><td>toolbar; <code>schematic_tool.rs</code> (placement with Space to turn; the wire tool)</td></tr>
+    <tr><td><code>snap.grid</code></td><td>10</td><td>placement, wire clicks, moves (<code>SnapSession::grid</code>)</td></tr>
+    <tr><td><code>plug.mate</code></td><td>no: a wire joins pins, it does not pull parts together</td><td><code>plug::implied_mates</code></td></tr>
+    <tr><td><code>affords.delete</code></td><td>subject: deleting a symbol deletes the part and its wires</td><td>the Delete key, <code>parts::delete_subject_ops</code></td></tr>
+    <tr><td><code>chrome.component</code></td><td>off: no violet frame, chip or input pins on parts</td><td>the overlay drawer</td></tr>
+  </tbody>
+</table></div>
+<p>The parts library is markup (<code>std_parts.xml</code>), embedded and read-only like the built-in contexts, so a part's whole meaning reads in a dozen lines; a document gets a copy on first placement. A model writes circuits with one verb and reads them back as a netlist:</p>
+<raw title="A model's &lt;circuit&gt; edit, and the netlist that answers it">&lt;edit&gt;&lt;circuit sheet="circuit"&gt;
+  &lt;place part="vsource" name="V9" x="620" y="380" V="5 V"/&gt;
+  &lt;place part="resistor" name="R8" x="720" y="320" R="10 kΩ"/&gt;
+  &lt;place part="resistor" name="R9" x="800" y="380" rot="90" R="10 kΩ"/&gt;
+  &lt;place part="ground" name="GND9" x="620" y="460"/&gt;
+  &lt;wire from="V9.p" to="R8.a" via="620,320"/&gt;
+  &lt;wire from="R8.b" to="R9.a"/&gt; …
+&lt;/circuit&gt;&lt;/edit&gt;
+
+V9 N3 0 5 V
+R8 N3 N4 10 kΩ
+R9 N4 0 10 kΩ
+.end
+* N4 = 2.5 V</raw>
+<div class="box edge"><span class="tab">Rough edge</span><p>DC only (capacitors open, inductors short); transient analysis belongs with time-domain signals. A turned part's labels are kept upright by overrides written at placement, so turning a placed part later leaves them as they were. The model's <code>&lt;delete&gt;</code> removes only what it names; the subject rule is the Delete key's.</p></div>
+
+<h2 id="next"><span class="sec">14.14</span>What is not done, and what comes next</h2>
 <div class="table-wrap"><table>
   <thead><tr><th>Piece</th><th>State</th></tr></thead>
   <tbody>
-    <tr><td>A schematic notation (contexts.md step 8)</td><td>Next: snapping settings, domain libraries, parts as data, a wire tool; §6's demo of a notation changing the whole editor. It is also where chrome nodes (§§2–7 of chrome.md) earn their place: terminal dots and bend handles differ in shape, not only colour.</td></tr>
+    <tr><td>The schematic's later items</td><td>Snapping to pins while dragging, ERC (unconnected pins as gentle warnings), a grid drawn in the view, transient analysis; pins as chrome nodes (§§2–7 of chrome.md), where terminal dots and bend handles differ in shape, not only colour.</td></tr>
     <tr><td>Inspector sections as data</td><td>Ordered and hidden by a field; the sections themselves are still Svelte blocks.</td></tr>
     <tr><td>Track along a path</td><td>Deferred to a component demo (§14.7).</td></tr>
     <tr><td>Affordances D</td><td>Drop targets, regions, modes, 3D: when a demo needs them.</td></tr>

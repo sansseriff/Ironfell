@@ -1,0 +1,92 @@
+# The schematic notation (plans/specs/schematic.md): the Circuit tab, a
+# divider (V1 9 V, R1 1 kΩ, R2 = slider × 4 kΩ) built from the parts
+# library and wired pin to pin, solved as one network. The probe reads 6 V;
+# the slider down to a quarter makes R2 1 kΩ and the probe 4.5 V. R arms the
+# resistor tool, Space turns it, a click places R3 on the grid; W arms the
+# wire tool, and three clicks (R3's pin a, a corner, R2's pin b) wire them:
+# one transaction, the corner tidied away. Dragging R3 moves it on the grid
+# and its wire follows, the corner keeping both legs straight. Four undos
+# put everything back. Then a probe P2 wired from its pin onto the top wire
+# splits that wire at a junction (one transaction) and reads 9 V; Delete on
+# R2 takes its two wires with it; a model's <circuit> edit draws a second
+# divider in one transaction; the netlist reads it all.
+nav http://localhost:5173/Ironfell/?gfx=webgl2
+ready
+sleep 1500
+tab Circuit
+sleep 1000
+eval [...document.querySelectorAll('.toolbar')].filter(e=>e.offsetParent).map(e=>[...e.querySelectorAll('button.tool')].map(b=>b.title))
+eval window.model = async () => { const top = await __iron.view({fidelity:'skeleton', depth: 0}); return __iron.view({fidelity:'full', scope: top.match(/<model id="([^"]+)"/)[1]}); }
+eval window.volts = async (name) => ((await model()).match(new RegExp('<entity id="[^"]+" name="' + name + '"[\\s\\S]*?kind="electrical"[^>]*across="([^"]*)"')) || [])[1]
+eval window.sheet = async () => { const top = await __iron.view({fidelity:'skeleton', depth: 0}); return __iron.view({fidelity:'full', scope: top.match(/<composition id="([^"]+)" name="circuit"/)[1]}); }
+eval window.wires = async () => [...(await sheet()).matchAll(/<path id="[^"]+" name="wire"[\s\S]*?<\/path>/g)].map(m => [...m[0].matchAll(/<point id="[^"]+" x="([-\d.]+)"[^>]* y="([-\d.]+)"/g)].map(p => `${Math.round(p[1])},${Math.round(p[2])}`).join(' '))
+eval volts('P1')
+pdrag circuit 520 211 470 211 8
+sleep 800
+eval (async()=>[(await sheet()).match(/<slider [^>]*name="R2"[^>]*value="([\d.]+)"/)[1], await volts('P1')])()
+pmove circuit 500 320
+sleep 300
+key r
+sleep 300
+key Space
+sleep 200
+pclick circuit 503 318
+sleep 600
+key Escape
+sleep 300
+eval (async()=>(await sheet()).match(/<use id="[^"]+" name="R3"[^>]*>/)[0].replace(/ id="[^"]+"/, ''))()
+key w
+sleep 300
+pclick circuit 500 290
+sleep 300
+pclick circuit 400 290
+sleep 300
+pclick circuit 300 250
+sleep 800
+key Escape
+sleep 200
+key Escape
+sleep 300
+eval (async()=>[(await wires()).length, (await wires()).at(-1)])()
+shot schematic-wired
+pdrag circuit 506 320 546 341 10
+sleep 800
+eval (async()=>[(await sheet()).match(/<use id="[^"]+" name="R3" x="([-\d.]+)" y="([-\d.]+)"/).slice(1).join(','), (await wires()).at(-1)])()
+shot schematic-moved
+key Meta+z
+key Meta+z
+key Meta+z
+key Meta+z
+sleep 800
+eval (async()=>[(await wires()).length, /name="R3"/.test(await sheet()), await volts('P1')])()
+eval (async()=>(await __iron.netlist('circuit')).netlist)()
+pmove circuit 160 130
+sleep 300
+key p
+sleep 300
+pclick circuit 160 130
+sleep 600
+key Escape
+sleep 300
+key w
+sleep 300
+pclick circuit 160 130
+sleep 300
+pclick circuit 162 161
+sleep 800
+key Escape
+sleep 200
+eval (async()=>[(await wires()).length, await volts('P2'), /name="J1"/.test(await sheet())])()
+shot schematic-junction
+pclick circuit 306 220
+sleep 600
+key Delete
+sleep 800
+eval (async()=>[(await wires()).length, /name="R2"/.test(await sheet())])()
+eval (async()=>{const r=await __iron.edit(`<edit><circuit sheet="circuit">\n<place part="vsource" name="V9" x="620" y="380" V="5 V"/>\n<place part="resistor" name="R8" x="720" y="320" R="10 kΩ"/>\n<place part="resistor" name="R9" x="800" y="380" rot="90" R="10 kΩ"/>\n<place part="ground" name="GND9" x="620" y="460"/>\n<place part="probe" name="P9" x="800" y="290"/>\n<wire from="V9.p" to="R8.a" via="620,320"/>\n<wire from="R8.b" to="R9.a"/>\n<wire from="R9.b" to="V9.n" via="800,420"/>\n<wire from="V9.n" to="GND9.g"/>\n<wire from="R9.a" to="P9.t"/>\n</circuit></edit>`); return r.ok ? r.summary : r.failure})()
+sleep 800
+eval (async()=>(await __iron.netlist('circuit')).netlist)()
+shot schematic-model
+logs applied|rejected|panicked|not settle
+errors
+quit

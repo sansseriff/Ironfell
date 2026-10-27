@@ -127,11 +127,11 @@ fn is_free(doc: &Document, reactive: &crate::graph::Reactive, leaf: Leaf) -> boo
 /// Group the document's constraints into clusters. `Err` when a constraint
 /// is malformed (callers validate first) or when bindings and clusters form
 /// a cycle.
-pub fn clusters(doc: &Document, reactive: &crate::graph::Reactive) -> Result<Clusters, String> {
+pub fn clusters(doc: &Document, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library) -> Result<Clusters, String> {
     let read = |l: Leaf| reactive.read(doc, l);
     let all: Vec<ConstraintInfo> = constraint::all(doc, &read)?
         .into_iter()
-        .chain(crate::plug::implied_mates(doc, &read))
+        .chain(crate::plug::implied_mates(doc, &read, lib))
         .filter(|c| c.enabled && c.nodes().all(|n| doc.is_live(n)))
         .collect();
     if all.is_empty() {

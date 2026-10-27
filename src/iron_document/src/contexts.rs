@@ -152,6 +152,10 @@ pub const FIELDS: &[FieldSpec] = &[
     FieldSpec { domain: "chrome", name: "grip", view: true, kind: Kind::Number, options: &["8"], doc: "a selection box's grip size, CSS px (match=\"view\")" },
     FieldSpec { domain: "chrome", name: "grip_shape", view: true, kind: Kind::Choice, options: &["square", "round"], doc: "a selection box's grips (match=\"view\")" },
     FieldSpec { domain: "chrome", name: "hover", view: true, kind: Kind::Choice, options: &["on", "off"], doc: "whether hovering lights things (off for touch, where nothing hovers; match=\"view\")" },
+    FieldSpec { domain: "plug", name: "mate", view: false, kind: Kind::Choice, options: &["yes", "no"], doc: "whether a connection between this rigid port anchor and another holds the two parts together (a plug), or only joins them (a wire; schematic.md §1)" },
+    FieldSpec { domain: "snap", name: "grid", view: true, kind: Kind::Number, options: &["0"], doc: "the grid placement, wiring and moves round to, px; 0 for none (match=\"view\")" },
+    FieldSpec { domain: "affords", name: "delete", view: false, kind: Kind::Choice, options: &["self", "subject"], doc: "what deleting it removes: itself, or what it figures (an entity, with every figure of it and the connections on its ports; a connection, with its figures)" },
+    FieldSpec { domain: "chrome", name: "component", view: true, kind: Kind::Choice, options: &["on", "off"], doc: "whether a component instance wears its authoring chrome: the violet frame, its chip, and its input pins for linking (match=\"view\")" },
 ];
 
 /// The inspector's sections (contexts.md §2.7): rich widgets the shell draws,
@@ -160,7 +164,7 @@ pub const SECTIONS: &[&str] = &["main", "port", "component", "table", "position"
 
 /// The tools the engine has: mechanisms a palette arranges and a keymap
 /// reaches.
-pub const TOOLS: &[&str] = &["select", "pen", "rect", "ellipse", "text", "table", "port", "empty"];
+pub const TOOLS: &[&str] = &["select", "pen", "rect", "ellipse", "text", "table", "port", "empty", "wire"];
 
 /// The states a rule may match: a node's interaction state (affordances.md
 /// §8.1; nothing sets these yet) and a view's focus (§2.7).
@@ -195,6 +199,10 @@ impl Field {
     pub const GRIP: Field = Field(21);
     pub const GRIP_SHAPE: Field = Field(22);
     pub const HOVER: Field = Field(23);
+    pub const MATE: Field = Field(24);
+    pub const GRID: Field = Field(25);
+    pub const DELETE: Field = Field(26);
+    pub const COMPONENT: Field = Field(27);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]
@@ -407,10 +415,11 @@ impl Library {
         })
     }
 
-    /// `std:free-2d` for a 2D world, `std:3d` for a 3D one; a notation that
-    /// names a context in the library is that context.
+    /// A notation's context: one the library names after it (a document's
+    /// `pitch`), else the built-in `std:<notation>` (`std:schematic`), else
+    /// `std:free-2d` for a 2D world and `std:3d` for a 3D one.
     fn notation(&self, notation: &str, three_d: bool) -> Option<usize> {
-        self.get(notation).or_else(|| self.get(if three_d { "std:3d" } else { "std:free-2d" }))
+        self.get(notation).or_else(|| self.get(&format!("std:{notation}"))).or_else(|| self.get(if three_d { "std:3d" } else { "std:free-2d" }))
     }
 
     /// Where a value came from, for views: `std:table rule 1`.
@@ -860,7 +869,13 @@ fn rule(attrs: Vec<(String, String)>) -> Result<Rule, String> {
                 format!("unknown field {k} ({})", known.join(", "))
             }
         })?;
-        let tool = |t: &str| if TOOLS.contains(&t) { Ok(()) } else { Err(format!("{k}=\"{v}\": unknown tool {t} ({})", TOOLS.join(", "))) };
+        // A placement tool names what it places: `place:<part>`.
+        let tool = |t: &str| match t.strip_prefix("place:") {
+            Some(part) if crate::parts::find(part).is_some() => Ok(()),
+            Some(part) => Err(format!("{k}=\"{v}\": no part {part} to place")),
+            None if TOOLS.contains(&t) => Ok(()),
+            None => Err(format!("{k}=\"{v}\": unknown tool {t} ({}, or place:<part>)", TOOLS.join(", "))),
+        };
         let val = match f.spec().kind {
             Kind::Choice => Val::Choice(f.spec().options.iter().position(|o| *o == v).ok_or_else(|| format!("{k}=\"{v}\": expected one of {}", f.spec().options.join(", ")))? as u8),
             Kind::Tools => {
@@ -924,7 +939,7 @@ fn types(s: &str) -> Result<Vec<TypeId>, String> {
     s.split('|').map(|t| TypeId::lookup(t).ok_or_else(|| format!("unknown node type {t}"))).collect()
 }
 
-fn attributes(s: &str) -> Result<Vec<(String, String)>, String> {
+pub(crate) fn attributes(s: &str) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
     let mut rest = s.trim();
     while !rest.is_empty() {

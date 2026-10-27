@@ -12,6 +12,7 @@ pub(crate) mod select;
 mod pen;
 mod shape_tool;
 mod author_tool;
+pub(crate) mod schematic_tool;
 pub(crate) mod links;
 pub(crate) mod text_tool;
 pub(crate) mod scene3d;
@@ -237,6 +238,8 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
             view_focus::route_tool_keys.before(select::navigate_views),
             view_focus::view_focus_system.after(select::select_tool_system),
             interaction::publish_interaction_state.after(select::sync_session_selection).before(GestureSystems),
+            // The schematic's placement and wire tools (schematic.md §4).
+            schematic_tool::schematic_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
         ),
     );
     app.add_systems(
@@ -353,6 +356,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<pen::PenTool>();
     app.init_resource::<shape_tool::ShapeTool>();
     app.init_resource::<text_tool::TextTool>();
+    app.init_resource::<schematic_tool::SchematicTool>();
     app.init_resource::<select::ShellModifiers>();
     app.init_resource::<select::ToolKeys>();
     app.init_resource::<view_focus::ViewFocus>();

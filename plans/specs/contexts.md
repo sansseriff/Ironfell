@@ -1,6 +1,6 @@
 # Contexts: Iron's behaviour as data (master plan)
 
-**Status:** §5 steps 0–7 built 2026-10-26/27 (4 in its first part; `track` along a path deferred; 7 as `chrome.md`'s revision, chrome as context fields the overlay reads, not yet chrome nodes); a schematic notation (step 8) next; the rest proposed. The user supports the direction ("I'm not afraid of
+**Status:** §5 steps 0–8 built 2026-10-26/27 (4 in its first part; `track` along a path deferred; 7 as `chrome.md`'s revision, chrome as context fields the overlay reads, not yet chrome nodes; 8 as [`schematic.md`](schematic.md)); state machines (step 9) next; the rest proposed. The user supports the direction ("I'm not afraid of
 thinking big on this topic. Now is the time in this program to have these overarching
 ideas"). Nothing built. This plan owns the shared foundation and the order of work;
 domain specs own their detail: [`affordances.md`](affordances.md) (interaction and
@@ -482,6 +482,13 @@ behaviour-neutral refactor before anything shows.
    frame p50 0.3 ms, changed frame 1.8 ms, at 1k and 10k).
 8. **A schematic notation** (13), with what it needs: snapping settings (6), domain
    libraries (10), parts as data (11), the wire tool. §6's demo.
+   *Done 2026-10-27* ([`schematic.md`](schematic.md) §7): `std:schematic` with its
+   palette (wire and `place:<part>` tools), keymap, `snap.grid`, `plug.mate="no"`,
+   `affords.delete="subject"` and `chrome.component="off"`; parts as markup
+   (`std_parts.xml`) becoming definitions; the wire tool with rubber-banding and
+   junctions; live DC values through the existing network solve; the model's
+   `<circuit>` and `netlist`; the Circuit tab. Not done from §6: snapping to pins
+   while dragging, pins as chrome nodes, a part's icon from its own symbol.
 9. **State machines** (14), on motion's primitives; workspace defaults (12) whenever
    panels-and-session needs them.
 

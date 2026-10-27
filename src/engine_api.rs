@@ -679,6 +679,41 @@ pub fn document_context(app: &mut WorkerApp, markup: String) -> String {
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
+/// Place and wire parts from a model's `<circuit>` (schematic.md §5), as
+/// one history entry (`parts::circuit_ops`).
+pub fn document_circuit(app: &mut WorkerApp, markup: String) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let (ops, summary) = iron_document::parts::circuit_ops(&store.0, &markup)?;
+        let applied = store.0
+            .apply(iron_document::TransactionInput { label: "circuit".into(), actor: iron_document::Actor::Model, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
+            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "summary": summary}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// A sheet's netlist, SPICE-like, with each net's solved voltage
+/// (schematic.md §5; `parts::netlist`). `sheet` is a composition's id or
+/// name.
+pub fn document_netlist(app: &mut WorkerApp, sheet: String) -> String {
+    let run = || -> Result<serde_json::Value, String> {
+        let store = app.world().get_resource::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let doc = store.0.document();
+        let id = match sheet.parse::<iron_document::NodeId>() {
+            Ok(id) if sheet.starts_with('#') => id,
+            _ => doc
+                .nodes_of_type(iron_document::TypeId::lookup("composition").expect("registered"))
+                .find(|&c| doc.is_live(c) && doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(sheet.as_str()))
+                .ok_or_else(|| format!("no composition named {sheet}"))?,
+        };
+        Ok(serde_json::json!({"ok": true, "netlist": iron_document::parts::netlist(&store.0, id)}))
+    };
+    run().unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
 /// What the contexts resolve for a node, each value with the rule that set
 /// it (contexts.md §2.6), through the node's own containers.
 pub fn document_computed(app: &mut WorkerApp, node: String) -> String {

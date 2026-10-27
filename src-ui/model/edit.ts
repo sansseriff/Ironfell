@@ -19,6 +19,7 @@
  *   <edit><link-figures a="#l" b="#Q" keep="#v"/></edit>   (alone: the store builds it)
  *   <edit><import-svg to="#4" x="100" y="50"><svg …>…</svg></import-svg></edit>   (alone too)
  *   <edit><table to="#4" x="80" y="400" preset="light">a | b\n1 | 2</table></edit>   (alone too)
+ *   <edit><circuit sheet="circuit"><place part="resistor" x="200" y="100"/>…</circuit></edit>   (alone too)
  */
 import { XMLParser } from 'fast-xml-parser';
 import type { ApplyResult, DocumentApi, SolverSummary } from './api';
@@ -353,6 +354,20 @@ async function context(api: DocumentApi, markup: string): Promise<EditOutcome> {
   return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <context id="${r.context}"/>\n</applied>` };
 }
 
+/** `<circuit sheet="…">` (plans/specs/schematic.md §5): parts placed and
+ *  wired on a schematic sheet, computed by the store as one transaction.
+ *  Alone in its edit. The answer carries the sheet's netlist, so the model
+ *  reads back what it built. */
+const CIRCUIT = /^\s*<edit(?:\s[^>]*)?>\s*(<circuit[\s>][\s\S]*<\/circuit>)\s*<\/edit>\s*$/;
+
+async function circuit(api: DocumentApi, markup: string): Promise<EditOutcome> {
+  const r = await api.circuit(markup);
+  if (!r.ok) return { ok: false, failure: failed(await api.version(), [{ op: 0, kind: 'circuit', message: r.error ?? 'circuit failed' }]) };
+  const sheet = markup.match(/<circuit[^>]*\ssheet="([^"]*)"/)?.[1] ?? '';
+  const net = await api.netlist(sheet);
+  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <circuit>${r.summary}</circuit>\n</applied>${net.ok ? `\n<netlist sheet="${sheet}">\n${net.netlist}\n</netlist>` : ''}` };
+}
+
 /** Parse and apply one edit as the model, answering in the model's terms. */
 export async function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): Promise<EditOutcome> {
   const link = xml.match(LINK_FIGURES);
@@ -366,6 +381,11 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
   if (ctx) return context(api, ctx[1]);
   if (/<context[\s/>]/.test(xml)) {
     return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<context> must be the only verb in its <edit>' }]) };
+  }
+  const circ = xml.match(CIRCUIT);
+  if (circ) return circuit(api, circ[1]);
+  if (/<circuit[\s/>]/.test(xml)) {
+    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<circuit> must be the only verb in its <edit>' }]) };
   }
   const tbl = xml.match(TABLE);
   if (tbl) return table(api, tbl[1] ?? '', tbl[2]);

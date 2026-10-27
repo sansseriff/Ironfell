@@ -40,6 +40,7 @@ pub mod handle;
 pub mod id;
 pub mod op;
 pub mod order;
+pub mod parts;
 pub mod port;
 pub mod registry;
 pub mod serial;
@@ -341,7 +342,7 @@ impl Store {
     fn rebuild_clusters(&mut self) {
         // A malformed document (which `apply` refuses) or a cycle leaves the
         // last good clusters; `post_apply` reports the error.
-        if let Ok(c) = solve::clusters(&self.doc, &self.reactive) {
+        if let Ok(c) = solve::clusters(&self.doc, &self.reactive, self.contexts()) {
             self.clusters = c;
         }
     }
@@ -1303,7 +1304,10 @@ impl Store {
                     }
                 }
             }
-            let options = iron_solve::Options { max_iterations: 100, ..Default::default() };
+            // A network is a set of equations, not a drag: nothing should
+            // stay where it was at the expense of an equation (the weak
+            // rows stalled a kΩ–mA circuit short of the tolerance).
+            let options = iron_solve::Options { max_iterations: 100, least_change: false, ..Default::default() };
             iron_solve::solve(&problem, &options)
         };
         if solution.status != iron_solve::Status::Converged {
@@ -1652,7 +1656,7 @@ impl Store {
             let read = |l: Leaf| self.reactive.read(&self.doc, l);
             constraint::validate_all(&self.doc, &read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
         }
-        let clusters = solve::clusters(&self.doc, &self.reactive).map_err(|m| err(ErrorKind::Cycle, m))?;
+        let clusters = solve::clusters(&self.doc, &self.reactive, self.contexts()).map_err(|m| err(ErrorKind::Cycle, m))?;
         self.clusters = clusters.clone();
         if clusters.list.is_empty() {
             return Ok(None);

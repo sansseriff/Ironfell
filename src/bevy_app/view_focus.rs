@@ -22,6 +22,9 @@ pub struct Offer {
     pub keys: String,
     pub tolerances: crate::bevy_app::tolerances::Tolerances,
     pub chrome: Chrome,
+    /// The grid placement, wiring and moves round to, px (`snap.grid`; 0
+    /// for none).
+    pub grid: f64,
 }
 
 /// How a view's chrome looks (`chrome.*`, plans/specs/chrome.md's revision):
@@ -36,11 +39,13 @@ pub struct Chrome {
     pub round: bool,
     /// Whether hovering lights anything.
     pub hover: bool,
+    /// Whether instances wear their authoring chrome (`chrome.component`).
+    pub component: bool,
 }
 
 impl Default for Chrome {
     fn default() -> Self {
-        Chrome { accent: None, grip: 8.0, round: false, hover: true }
+        Chrome { accent: None, grip: 8.0, round: false, hover: true, component: true }
     }
 }
 
@@ -75,6 +80,11 @@ impl ViewFocus {
     /// A view's tolerances (the defaults for a view not yet focused).
     pub fn tolerances(&self, panel: Option<&str>) -> crate::bevy_app::tolerances::Tolerances {
         panel.and_then(|p| self.views.iter().find(|(v, ..)| v == p)).map(|(_, _, o)| o.tolerances).unwrap_or_default()
+    }
+
+    /// A view's grid, px (`snap.grid`; 0 for none).
+    pub fn grid(&self, panel: &str) -> f64 {
+        self.views.iter().find(|(v, ..)| v == panel).map_or(0.0, |(_, _, o)| o.grid)
     }
 
     /// A view's chrome (the defaults for a view not yet focused).
@@ -179,8 +189,9 @@ pub fn view_focus_system(
             grip: num(Field::GRIP, 8.0),
             round: v.get(Field::GRIP_SHAPE) == "round",
             hover: v.get(Field::HOVER) != "off",
+            component: v.get(Field::COMPONENT) != "off",
         };
-        let offer = Offer { palette: v.get(Field::PALETTE).to_owned(), keys: v.get(Field::KEYS).to_owned(), tolerances, chrome };
+        let offer = Offer { palette: v.get(Field::PALETTE).to_owned(), keys: v.get(Field::KEYS).to_owned(), tolerances, chrome, grid: num(Field::GRID, 0.0).max(0.0) };
         if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&o.palette, &o.keys) != (&offer.palette, &offer.keys)) {
             events.push(EngineEvent::Focus { panel: view.panel.clone(), palette: offer.palette.clone(), keys: offer.keys.clone() });
         }

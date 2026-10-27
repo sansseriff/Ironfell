@@ -22,6 +22,8 @@ export type DocumentCommand =
   | { op: 'view_context'; panel: string }
   | { op: 'showcase' }
   | { op: 'contexts' }
+  | { op: 'circuit'; markup: string }
+  | { op: 'netlist'; sheet: string }
   | { op: 'table_edit'; table: string; verb: string; cells: string }
   | { op: 'link'; a: string; b: string; keep: string; actor: string }
   | { op: 'counterparts'; node: string }
@@ -76,6 +78,8 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'view_context': return { fn: command.op, args: [command.panel] };
     case 'showcase': return { fn: command.op, args: [] };
     case 'contexts': return { fn: command.op, args: [] };
+    case 'circuit': return { fn: command.op, args: [command.markup] };
+    case 'netlist': return { fn: command.op, args: [command.sheet] };
     case 'table_edit': return { fn: command.op, args: [command.table, command.verb, command.cells] };
     case 'link': return { fn: command.op, args: [command.a, command.b, command.keep, command.actor] };
     case 'counterparts': return { fn: command.op, args: [command.node] };

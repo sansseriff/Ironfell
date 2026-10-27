@@ -226,11 +226,11 @@ pub fn definition_ops(key: &str, library: NodeId, order: OrderKey, first: u64) -
     Ok((d.ops, def))
 }
 
-fn root_of(doc: &Document, ty_: &str) -> Option<NodeId> {
+pub(crate) fn root_of(doc: &Document, ty_: &str) -> Option<NodeId> {
     doc.roots().iter().copied().find(|&r| !r.is_session() && doc.live(r).is_some_and(|n| n.ty.name() == ty_))
 }
 
-fn after_last(doc: &Document, parent: Option<NodeId>) -> OrderKey {
+pub(crate) fn after_last(doc: &Document, parent: Option<NodeId>) -> OrderKey {
     let kids: Vec<NodeId> = match parent {
         Some(p) => doc.children(p).to_vec(),
         None => doc.roots().to_vec(),

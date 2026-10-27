@@ -1557,5 +1557,44 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         ops.push(caption(ids[3 + i], data, 8 + i as u32, 424.0 + 70.0 * i as f64, 390.0, name));
     }
     phase(&mut scratch, ops)?;
+
+    // Circuit (schematic.md): a divider in the schematic notation, its parts
+    // from the parts library, wired pin to pin, solved live; a probe reads
+    // its middle and a slider sets R2.
+    let circuit = scratch.document().next_id();
+    let op = composition(&scratch, circuit, "circuit", "schematic");
+    phase(&mut scratch, vec![op])?;
+    let ids = scratch.document().next_ids(1);
+    phase(&mut scratch, vec![caption(ids[0], circuit, 0, 60.0, 16.0, "A schematic notation: W wires pin to pin (click a pin, click corners, click a pin; Space flips the elbow),\nR C L E I G P place parts (Space turns them), all on a 10 px grid. The probe reads the divider's middle\nfrom the network solve; drag the slider to change R2, or a part to see its wires follow.")])?;
+    let mut placed = Vec::new();
+    for (key, x, y, turns) in [("vsource", 120.0, 220.0, 0.0), ("resistor", 220.0, 160.0, 0.0), ("resistor", 300.0, 220.0, 1.0), ("ground", 120.0, 300.0, 0.0), ("probe", 250.0, 130.0, 0.0)] {
+        let part = iron_document::parts::find(key).ok_or("no such part")?;
+        let (ops, p) = iron_document::parts::place_ops(scratch.document(), part, circuit, [x, y], turns * std::f64::consts::FRAC_PI_2, None)?;
+        phase(&mut scratch, ops)?;
+        placed.push(p);
+    }
+    let [v1, r1, r2, gnd, probe] = placed[..] else { unreachable!() };
+    let pins = iron_document::parts::pins_on(&scratch, circuit);
+    let end = |p: iron_document::parts::Placed, name: &str| -> Result<(iron_document::parts::End, [f64; 2]), String> {
+        let pin = iron_document::parts::pin(scratch.document(), p.entity, name).ok_or("no pin")?;
+        pins.iter().find(|(e, _)| e.pin == pin).copied().ok_or_else(|| "pin not drawn".to_owned())
+    };
+    let wires = [(end(v1, "p")?, end(r1, "a")?, true), (end(r1, "b")?, end(r2, "a")?, false), (end(r2, "b")?, end(v1, "n")?, false), (end(v1, "n")?, end(gnd, "g")?, false), (end(r1, "b")?, end(probe, "t")?, false)];
+    for ((a, pa), (b, pb), vertical_first) in wires {
+        let mut pts = vec![pa];
+        pts.extend(iron_document::parts::elbow(pa, pb, vertical_first));
+        pts.push(pb);
+        let (ops, _) = iron_document::parts::wire_ops(scratch.document(), circuit, a, b, &pts)?;
+        phase(&mut scratch, ops)?;
+    }
+    let s = scratch.document().next_ids(2);
+    let mut level = Slider::default();
+    level.value = n(0.5);
+    phase(&mut scratch, vec![
+        Op::Create { id: s[0], ty: ty("slider"), parent: Some(circuit), order: key(20), facets: vec![at(420.0, 200.0).wrap(), level.wrap(), named("R2")] },
+        caption(s[1], circuit, 21, 420.0, 230.0, "R2 = slider × 4 kΩ"),
+        Op::Set { id: r2.entity, path: "args.R".parse().expect("argument"), slot: bound(format!("{}.slider.value * 4 kΩ", s[0])) },
+        Op::Set { id: v1.entity, path: "args.V".parse().expect("argument"), slot: Slot::Const(Value::parse_quantity("9 V").expect("quantity")) },
+    ])?;
     Ok(iron_document::TransactionInput { label: "open showcase".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: out, exact: false })
 }

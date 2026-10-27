@@ -78,6 +78,30 @@ CONTEXTS  (how things behave: data, not code)
   Fields:
 ${contextFields}
 
+SCHEMATICS  (a composition with notation="schematic")
+  Parts are components from a parts library: resistor (R, pins a b), capacitor (C, a b),
+  inductor (L, a b), vsource (V, pins p n), isource (I, p n; I flows out of p), ground
+  (pin g, 0 V), probe (pin t, shows its net's voltage), junction (pin j, a T in a wire).
+  Pins are electrical ports; a connection between two is a wire, and every pin joined
+  by wires is one net, solved live (DC: capacitors open, inductors short). The netlist
+  of each sheet comes with the view. Draw or extend one, alone in its <edit>:
+    <edit><circuit sheet="circuit">
+      <place part="vsource" name="V1" x="120" y="220" V="9 V"/>
+      <place part="resistor" name="R1" x="220" y="160" R="1 kΩ"/>
+      <place part="resistor" name="R2" x="300" y="220" rot="90" R="2 kΩ"/>
+      <place part="ground" x="120" y="300"/>
+      <wire from="V1.p" to="R1.a" via="120,160"/>
+      <wire from="R1.b" to="R2.a"/>
+    </circuit></edit>
+  x, y is a part's origin, on the 10 px grid; a resistor's pins sit 30 px left and right of
+  it (a source's 30 px above and below), turned with rot (90, 180, 270). name is the
+  designator (R1; next free if left out); other attributes set inputs. A wire joins
+  designator.pin to designator.pin through via corners, then one elbow (horizontal first);
+  every leg must be horizontal or vertical. Parts placed before may be wired by name.
+  The answer carries the sheet's netlist. Change a value with <set id="#entity"
+  args.R="4.7 kΩ"/>. To remove a part, <delete> its use, its entity, and each
+  connection on its pins with that connection's wire path, in one <edit>.
+
 VALUES
   numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or
   0,1.5,0; enums by name (easing: linear ease_in ease_out ease_in_out; host: canvas dom;

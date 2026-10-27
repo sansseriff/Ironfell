@@ -33,6 +33,7 @@
  *   await __iron.computed('#a')    -> #a's resolved behaviour, each value with its rule (contexts.md §2.6): {values, text}
  *   await __iron.contexts()        -> the built-in contexts (`std:*`) in their markup
  *   await __iron.viewContext('viewer') -> a view's focus (world, scope, states), palette and keys, each with its rule
+ *   await __iron.netlist('circuit') -> a schematic sheet's netlist, SPICE-like, with each net's voltage
  */
 import { QuerySubscriptions } from './query_subscriptions';
 import { PendingRequests } from './pending_requests';
@@ -51,7 +52,7 @@ export interface ViewQuery {
 }
 
 /** The pointer's tools and their keys (Figma's). */
-export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text' | 'port' | 'empty' | 'table';
+export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text' | 'port' | 'empty' | 'table' | 'wire' | `place:${string}`;
 
 export class DocumentClient {
   view = $state('');
@@ -165,6 +166,8 @@ export class DocumentClient {
       computed: (node: string) => this.command({ op: 'computed', node: node }),
       contexts: () => this.command({ op: 'contexts' }),
       viewContext: (panel: string) => this.command({ op: 'view_context', panel: panel }),
+      // Schematics (plans/specs/schematic.md): a sheet's netlist.
+      netlist: (sheet: string) => this.command({ op: 'netlist', sheet: sheet }),
       // The contexts showcase's tabs (added at start unless `?showcase=0`).
       showcase: () => this.command({ op: 'showcase' }),
       timings: (reset = false) => this.command({ op: 'timings', reset: reset }),

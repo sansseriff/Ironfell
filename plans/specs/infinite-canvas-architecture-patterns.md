@@ -401,6 +401,23 @@ invalidate scoped reads; finer leaf-level invalidation and per-operation JSON
 result schemas can refine this implementation later. Native display, full trace,
 winit comparison and cost/host-service gates in vision 08 remain separate.
 
+### Browser host cleanup — done 2026-10-26
+
+`BrowserRuntime` now owns the browser hosts' shared bootstrap, instance-local
+wasm glue reference, canvas setup/resize, readiness, RAF start/stop, teardown,
+font/event delivery and diagnostics. `main-thread-adapter.ts` (6 lines) and
+`worker.ts` (10 lines) are transport wrappers. Including the shared runtime,
+the browser host implementation shrank from 419 to 187 lines. The unused
+`frameFlag` gate and its counters are removed (the gate was always true).
+Worker motion remains latest-sample-at-frame; main-thread motion remains
+synchronous. Frame failures use the same runtime-error teardown path.
+
+Frontend checking, seven JS tests, native frontend bundling, real runtime
+replacement/failure checks and main-thread document contracts pass. The full
+static-preview smoke passes in 210 s with no page errors and unchanged semantic
+output. Web and native frontend builds pass. No Rust or native-host behavior
+changed. Evidence is in `.agents/browser-runtime-cleanup/` (gitignored).
+
 ### Tutorial evidence and adaptation
 
 - [createCanvasStore](https://github.com/xiaoiver/infinite-canvas-tutorial/blob/ef879525f47cfdf2c4cab6366039cba41694d0fc/packages/react/src/store.ts#L49) retains unchanged node snapshots and gives mounted owners `claim`, `attach`, and `release` lifecycles.

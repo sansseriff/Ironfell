@@ -23,7 +23,7 @@ export class AdapterBridge {
             (this.adapter as Worker).onmessageerror = () => this.handler?.({ ty:'runtimeError', error:'worker message could not be decoded' });
         } else {
             this.adapter = new MainThreadAdapter();
-            (this.adapter as MainThreadAdapter).onmessage = (e: any) => this.handler?.(e.data);
+            (this.adapter as MainThreadAdapter).onmessage = (e) => this.handler?.(e.data);
         }
     }
 

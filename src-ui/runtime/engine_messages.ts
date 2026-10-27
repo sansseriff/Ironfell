@@ -5,10 +5,10 @@ import type { Glue } from './glue';
 import { modelAsk, modelEdit } from '../model';
 
 export async function dispatchEngineMessage(
-  glue: Glue, handle: bigint, data: UiRequest, emit: (reply: UiEvent) => void, alive = () => true,
+  glue: Glue | null, handle: bigint, data: UiRequest, emit: (reply: UiEvent) => void, alive = () => true,
 ): Promise<void> {
   try {
-    if (handle === 0n) throw new Error('engine is not attached');
+    if (!glue || handle === 0n) throw new Error('engine is not attached');
     if (data.ty === 'modelEdit') {
       const outcome = await modelEdit(glue, handle, data.xml, data.label, alive);
       emit({ ty: 'modelEditResult', requestId: data.requestId, ok: outcome.ok, outcome, ack: outcome.ok ? 'applied' : 'completed' });

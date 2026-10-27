@@ -1545,3 +1545,20 @@ The final full smoke took 210 s, main-thread document contracts 3 s, lifecycle
 `appearance.ts` now reads the current `facets` table instead of the obsolete
 `components` key; pixel and inspector assertions are unchanged. Evidence lives
 in `.agents/ui-protocol/` (gitignored).
+
+
+### Browser runtime cleanup — done 2026-10-26
+
+The worker and main-thread entry points now delegate browser lifecycle work to
+`runtime/browser_runtime.ts`. Main-thread pointer motion is still immediate;
+worker motion is sampled at a frame. Dead frame-gate counters are gone, and
+frame errors stop RAF and enter the existing runtime-error path.
+
+`bun run check`, the seven JS tests, `protocol-lifecycle.txt`, main-thread
+`document-calls.txt`, and web/native frontend bundling pass. A dev-server smoke
+lost its page-scoped `shapeView` helper midway (no page errors); a static-preview
+run with the required SVG fixture copied under `dist/` passes in 210 s with no
+page errors and unchanged semantic output. Web and native frontend builds pass.
+The seven JS tests and zero-error frontend check pass. Rust and wasm artifacts
+are unchanged; no Rust rebuild is needed for this cleanup. Evidence is in
+`.agents/browser-runtime-cleanup/` (gitignored).

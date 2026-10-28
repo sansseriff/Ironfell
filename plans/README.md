@@ -69,6 +69,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`architecture.md`](rendering/architecture.md) | How 2D rendering works now, what Vello can retain, the decisions, caching contracts and acceptance tests |
 | [`render-benchmark.md`](rendering/render-benchmark.md) | In-app measurements and protocol; raw runs in [`benchmarks/`](rendering/benchmarks/) |
 | [`renderer-sanity-checks.md`](rendering/renderer-sanity-checks.md) | Build/DPR pitfalls, Canvas2D/ThorVG/standalone Vello controls, renderer-family experiments (§10) |
+| [`native-frame-pacing.md`](rendering/native-frame-pacing.md) | Native (macOS) frame loop: where input-to-display latency comes from, what helped and what didn't, measurement traps, open questions |
 
 ## 5. Archive (do not build from these)
 

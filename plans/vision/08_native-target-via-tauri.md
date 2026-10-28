@@ -414,6 +414,11 @@ substitute for the proposed native engine.
 
 #### Native latency controls (2026-10-27)
 
+> **Synthesis:** [`rendering/native-frame-pacing.md`](../rendering/native-frame-pacing.md)
+> collects the conclusions of this and the following latency sections (frame loop,
+> latency sources, what helped and what didn't, traps). The sections below are the
+> dated record; earlier ones are superseded where later ones say so.
+
 **Implemented and native validation complete.** User requested an isolated
 worktree from the last commit, excluding the context/affordance work in the main
 checkout. Branch `native-latency`, `.agents/worktrees/native-latency`, base

@@ -423,7 +423,8 @@ impl Manip {
                     if let DragMode::Cluster(cluster) = &h.mode {
                         // CS phase 3 exit 9: the budget is 2 ms per frame.
                         let ms = t0.elapsed().as_secs_f64() * 1e3;
-                        info!(
+                        debug!(
+                            target: "iron_debug",
                             "solve: cluster {cluster}, {} vars, {} iterations, {} evaluations, {ms:.2} ms{}",
                             report.vars,
                             report.iterations,
@@ -663,7 +664,7 @@ pub(crate) fn hand_off(
         let handle = store.begin_drag(id, [local.x, local.y]);
         if let DragMode::Locked(reasons) = &handle.mode {
             for r in reasons {
-                info!("{id} locked for this drag: {r}");
+                debug!(target: "iron_debug", "{id} locked for this drag: {r}");
             }
             return None;
         }
@@ -671,7 +672,7 @@ pub(crate) fn hand_off(
         return Some(Manip::Plane { handle, mapping, press: pointer.screen, ty });
     };
     if let Handle::Locked(reason) = store.handle(id, leaf("transform3d.pos")) {
-        info!("{id}.transform3d.pos locked for this drag: {reason}");
+        debug!(target: "iron_debug", "{id}.transform3d.pos locked for this drag: {reason}");
         return None;
     }
     let (_, cam, cam_tf, rect, to_camera) = cameras.get(camera).ok()?;

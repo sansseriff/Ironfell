@@ -19,6 +19,7 @@ pub(crate) mod scene3d;
 mod timeline;
 mod ui_panels;
 mod alpha_stress;
+mod latency_film;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
@@ -76,6 +77,15 @@ pub const CANVAS_DARK: Color = Color::srgb_u8(0x12, 0x13, 0x14);
 /// Render every frame (`?bevy=always`): render on demand off, for comparing
 /// frame pacing and latency against it on a real display.
 pub const VARIANT_ALWAYS_RENDER: u32 = 1 << 6;
+/// Native latency comparison: render on the host thread, retaining parallel ECS.
+/// Ignored by browser builds, which do not use a render thread.
+pub const VARIANT_SYNC_RENDER: u32 = 1 << 7;
+/// Show the engine's event log (`?bevy=debuglog`): DEBUG lines on the
+/// `iron_debug` target, e.g. `applied …` transactions, `redraw (…)` rebuilds,
+/// per-frame `solve:` and drag locks, which the run-iron scripts read. Off by
+/// default: several lines per frame while dragging. Native: set
+/// RUST_LOG=info,iron_debug=debug.
+pub const VARIANT_DEBUG_LOG: u32 = 1 << 8;
 
 /// Build the app around an already-created canvas.
 ///
@@ -138,10 +148,21 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
     // own canvas bootstrap.
     let mut default_plugins = default_plugins.build();
 
+    #[cfg(feature = "native")]
+    if variant_flags & VARIANT_SYNC_RENDER != 0 {
+        default_plugins = default_plugins
+            .disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>();
+    }
+
     // Perf-grid cell B2 (`?bevy=nolog`): LogPlugin installs tracing-wasm on the web,
     // which emits performance.mark/measure for every system span every frame.
     if no_log {
         default_plugins = default_plugins.disable::<bevy::log::LogPlugin>();
+    } else if variant_flags & VARIANT_DEBUG_LOG != 0 {
+        default_plugins = default_plugins.set(bevy::log::LogPlugin {
+            filter: format!("{},iron_debug=debug", bevy::log::DEFAULT_FILTER),
+            ..default()
+        });
     }
 
     if empty {
@@ -212,6 +233,9 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
     // --- STEP 4: UI panels + remaining Update systems -------------------------
     app.add_systems(Update, ui_panels::render_ui_panels);
     app.add_systems(PostUpdate, crate::panels::sync_panel_vector_views);
+    app.add_systems(PostUpdate, latency_film::draw
+        .after(select::draw_select_overlay)
+        .after(crate::panels::sync_panel_vector_views));
 
     // --- STEP 5: input/picking/interaction pipelines --------------------------
     app.add_systems(

@@ -1,0 +1,386 @@
+{
+  "date": "2026-10-27",
+  "baseCommit": "65157a1",
+  "worktree": "native-latency",
+  "hardware": "Apple M5, 60 Hz display, macOS 27.2 as reported by Metal HUD",
+  "method": "Same small filming fixture, forced continuous rendering, scripted engine pointer positions; no GPU readback during HUD timing reports. Each completed HUD report covers five seconds. Frame CPU traces span longer intervals and must not be added directly to these report averages.",
+  "metricDefinition": "Apple Metal HUD Present Delay: presentDrawable call to reported display presentation. Not physical input-to-photon or LCD pixel response.",
+  "sources": [
+    "https://developer.apple.com/documentation/xcode/understanding-metal-performance-hud-metrics",
+    "https://developer.apple.com/documentation/xcode/customizing-metal-performance-hud"
+  ],
+  "reports": [
+    {
+      "case": "detached-sync-late",
+      "source": ".agents/latency/hud-reports/detached-sync-late.html",
+      "sha256": "8e919eb6956f5fb8d4aac1ae7486907086c23ab4574563522117690e3686ad4c",
+      "frames": 300,
+      "durationSeconds": 5.0,
+      "metrics": {
+        "FPS": {
+          "average": "60",
+          "last": "60",
+          "min": "30",
+          "max": "60"
+        },
+        "Frame Interval": {
+          "average": "16.72ms",
+          "last": "16.67ms",
+          "min": "16.67ms",
+          "max": "33.33ms"
+        },
+        "Present Delay": {
+          "average": "35.81ms",
+          "last": "35.76ms",
+          "min": "19.03ms",
+          "max": "38.62ms"
+        },
+        "Command Buffer CPU": {
+          "average": "0.88ms",
+          "last": "0.79ms",
+          "min": "0.54ms",
+          "max": "25.45ms"
+        },
+        "Command Buffer GPU": {
+          "average": "2.71ms",
+          "last": "3.34ms",
+          "min": "0.78ms",
+          "max": "11.11ms"
+        }
+      },
+      "nativePresentation": {
+        "metal": {
+          "contentsScale": 2.0,
+          "displaySyncEnabled": true,
+          "drawableSize": [
+            2560.0,
+            1636.0
+          ],
+          "maximumDrawableCount": 3,
+          "presentsWithTransaction": false
+        },
+        "screenMaximumFps": 60,
+        "titlebarTransparent": false,
+        "windowAlpha": 1.0,
+        "windowOpaque": true
+      },
+      "layerProbe": {
+        "motion": true,
+        "panel": [
+          0.0,
+          316.0,
+          2560.0,
+          1320.0
+        ],
+        "spriteOffsetCss": -192,
+        "vectorOffsetCss": 96,
+        "webview": "detached",
+        "webviewState": {
+          "attached": false,
+          "fixedNativeViewport": [
+            0.0,
+            0.0,
+            1280.0,
+            818.0
+          ],
+          "hidden": false
+        }
+      }
+    },
+    {
+      "case": "overlay-sync-display-immediate",
+      "source": ".agents/latency/hud-reports/overlay-sync-display-immediate.html",
+      "sha256": "18e0fbddee0a9bb6ef7c3da01ffa6b01ace7c49a65904e59c53ad0a25d21bf74",
+      "frames": 300,
+      "durationSeconds": 5.0,
+      "metrics": {
+        "FPS": {
+          "average": "60",
+          "last": "60",
+          "min": "60",
+          "max": "60"
+        },
+        "Frame Interval": {
+          "average": "16.67ms",
+          "last": "16.67ms",
+          "min": "16.65ms",
+          "max": "16.69ms"
+        },
+        "Present Delay": {
+          "average": "46.38ms",
+          "last": "45.42ms",
+          "min": "35.01ms",
+          "max": "47.60ms"
+        },
+        "Command Buffer CPU": {
+          "average": "0.77ms",
+          "last": "1.14ms",
+          "min": "0.46ms",
+          "max": "1.74ms"
+        },
+        "Command Buffer GPU": {
+          "average": "2.22ms",
+          "last": "2.57ms",
+          "min": "1.97ms",
+          "max": "2.95ms"
+        }
+      },
+      "nativePresentation": {
+        "metal": {
+          "contentsScale": 2.0,
+          "displaySyncEnabled": false,
+          "drawableSize": [
+            2560.0,
+            1636.0
+          ],
+          "maximumDrawableCount": 3,
+          "presentsWithTransaction": false
+        },
+        "screenMaximumFps": 60,
+        "titlebarTransparent": false,
+        "windowAlpha": 1.0,
+        "windowOpaque": true
+      },
+      "layerProbe": {
+        "motion": true,
+        "panel": [
+          0.0,
+          316.0,
+          2560.0,
+          1320.0
+        ],
+        "spriteOffsetCss": -192,
+        "vectorOffsetCss": 96,
+        "webview": "overlay",
+        "webviewState": {
+          "attached": true,
+          "fixedNativeViewport": null,
+          "hidden": false
+        }
+      }
+    },
+    {
+      "case": "overlay-sync-late-two-drawables",
+      "source": ".agents/latency/hud-reports/overlay-sync-late-two-drawables.html",
+      "sha256": "c7a0baa6f5721128040ae23c7c5f3ca9338767e9a4ac0cedcc76b56b2d1386a2",
+      "frames": 300,
+      "durationSeconds": 5.0,
+      "metrics": {
+        "FPS": {
+          "average": "60",
+          "last": "60",
+          "min": "60",
+          "max": "60"
+        },
+        "Frame Interval": {
+          "average": "16.67ms",
+          "last": "16.67ms",
+          "min": "16.67ms",
+          "max": "16.67ms"
+        },
+        "Present Delay": {
+          "average": "30.57ms",
+          "last": "30.55ms",
+          "min": "27.14ms",
+          "max": "31.76ms"
+        },
+        "Command Buffer CPU": {
+          "average": "0.90ms",
+          "last": "0.80ms",
+          "min": "0.41ms",
+          "max": "3.42ms"
+        },
+        "Command Buffer GPU": {
+          "average": "2.60ms",
+          "last": "2.74ms",
+          "min": "1.66ms",
+          "max": "4.91ms"
+        }
+      },
+      "nativePresentation": {
+        "metal": {
+          "contentsScale": 2.0,
+          "displaySyncEnabled": true,
+          "drawableSize": [
+            2560.0,
+            1636.0
+          ],
+          "maximumDrawableCount": 2,
+          "presentsWithTransaction": false
+        },
+        "screenMaximumFps": 60,
+        "titlebarTransparent": false,
+        "windowAlpha": 1.0,
+        "windowOpaque": true
+      },
+      "layerProbe": {
+        "motion": true,
+        "panel": [
+          0.0,
+          316.0,
+          2560.0,
+          1320.0
+        ],
+        "spriteOffsetCss": -192,
+        "vectorOffsetCss": 96,
+        "webview": "overlay",
+        "webviewState": {
+          "attached": true,
+          "fixedNativeViewport": null,
+          "hidden": false
+        }
+      }
+    },
+    {
+      "case": "overlay-sync-late",
+      "source": ".agents/latency/hud-reports/overlay-sync-late.html",
+      "sha256": "0e18def257048d7280183679df15df3dfbd6fa641365173b44c989e8fdfeeb55",
+      "frames": 295,
+      "durationSeconds": 5.0,
+      "metrics": {
+        "FPS": {
+          "average": "59",
+          "last": "60",
+          "min": "30",
+          "max": "60"
+        },
+        "Frame Interval": {
+          "average": "16.95ms",
+          "last": "16.67ms",
+          "min": "16.67ms",
+          "max": "33.34ms"
+        },
+        "Present Delay": {
+          "average": "40.60ms",
+          "last": "42.39ms",
+          "min": "17.09ms",
+          "max": "48.22ms"
+        },
+        "Command Buffer CPU": {
+          "average": "1.23ms",
+          "last": "0.86ms",
+          "min": "0.46ms",
+          "max": "35.37ms"
+        },
+        "Command Buffer GPU": {
+          "average": "2.72ms",
+          "last": "2.07ms",
+          "min": "0.89ms",
+          "max": "13.60ms"
+        }
+      },
+      "nativePresentation": {
+        "metal": {
+          "contentsScale": 2.0,
+          "displaySyncEnabled": true,
+          "drawableSize": [
+            2560.0,
+            1636.0
+          ],
+          "maximumDrawableCount": 3,
+          "presentsWithTransaction": false
+        },
+        "screenMaximumFps": 60,
+        "titlebarTransparent": false,
+        "windowAlpha": 1.0,
+        "windowOpaque": true
+      },
+      "layerProbe": {
+        "motion": true,
+        "panel": [
+          0.0,
+          316.0,
+          2560.0,
+          1320.0
+        ],
+        "spriteOffsetCss": -192,
+        "vectorOffsetCss": 96,
+        "webview": "overlay",
+        "webviewState": {
+          "attached": true,
+          "fixedNativeViewport": null,
+          "hidden": false
+        }
+      }
+    }
+  ],
+  "gpuReadbackControls": [
+    {
+      "case": "overlay-pipelined-display",
+      "checks": 12,
+      "passed": 12,
+      "maxSpriteVectorDifferencePx": 0.0,
+      "unavailableReadbacks": 0,
+      "seconds": 5.24
+    },
+    {
+      "case": "overlay-sync-late",
+      "checks": 12,
+      "passed": 12,
+      "maxSpriteVectorDifferencePx": 0.0,
+      "unavailableReadbacks": 0,
+      "seconds": 3.93
+    },
+    {
+      "case": "hidden-pipelined-display",
+      "checks": 12,
+      "passed": 12,
+      "maxSpriteVectorDifferencePx": 0.0,
+      "unavailableReadbacks": 0,
+      "seconds": 3.95
+    },
+    {
+      "case": "hidden-sync-late",
+      "checks": 12,
+      "passed": 12,
+      "maxSpriteVectorDifferencePx": 0.0,
+      "unavailableReadbacks": 0,
+      "seconds": 3.88
+    },
+    {
+      "case": "detached-pipelined-display",
+      "checks": 12,
+      "passed": 12,
+      "maxSpriteVectorDifferencePx": 0.0,
+      "unavailableReadbacks": 0,
+      "seconds": 3.91
+    },
+    {
+      "case": "detached-sync-late",
+      "checks": 12,
+      "passed": 12,
+      "maxSpriteVectorDifferencePx": 0.0,
+      "unavailableReadbacks": 0,
+      "seconds": 3.98
+    }
+  ],
+  "observations": [
+    {
+      "case": "overlay-pipelined-display",
+      "source": "CUA-inspected live HUD only; report did not complete",
+      "presentDelayRollingMs": 45.79,
+      "gpuRollingMs": 2.33,
+      "composition": "Composited"
+    },
+    {
+      "case": "overlay-sync-display-immediate",
+      "source": "CUA-inspected live HUD plus completed report",
+      "composition": "Direct",
+      "displaySyncEnabled": false
+    }
+  ],
+  "limitations": [
+    "Exploratory single-session measurements, not randomized repeated trials. OS/HUD instrumentation and background workload may affect numbers.",
+    "No completed saved HUD report for pipelined/display or sync/display FIFO; exclude these cases from quantitative report comparisons.",
+    "An early detached run changed viewport height from 1636 to 1700; excluded. Final detached control freezes 2560x1636 before removing the webview.",
+    "Some pipelined surface screenshot readbacks are fully transparent; unavailable captures are excluded/retried, not counted as stale imagery. Readback tests force continuous rendering and are not timing captures.",
+    "Queue-completion callbacks include device polling delay and are not GPU or presentation timestamps.",
+    "Standalone winit/Bevy comparative latency and CAMetalDisplayLink external-drawable integration have not been measured. The later standalone control is built; no speedup or 3D latency result is inferred."
+  ],
+  "conclusions": [
+    "The Vello reference and a direct Bevy sprite show the same requested sample in valid controlled GPU readbacks; no extra Vello frame was observed.",
+    "Tens of milliseconds of post-submit delay remain with a detached webview and with native display sync disabled.",
+    "Fewer drawables reduce reported post-submit delay but increase CPU acquisition waits; end-to-end input improvement is not established.",
+    "The sync/late CPU timing improvement does not establish lower displayed drag latency; scheduling against CADisplayLink targets does not by itself control the drawable presentation queue."
+  ]
+}

@@ -11,6 +11,7 @@ pub struct NativeSurface {
     view: Retained<NSView>,
     webview: Retained<NSView>,
     parent: Retained<NSView>,
+    probe_frame: std::cell::Cell<Option<objc2_foundation::NSRect>>,
 }
 impl NativeSurface {
     /// Called only from Tauri's supported with_webview callback on the OS main thread.
@@ -53,12 +54,25 @@ impl NativeSurface {
                 view,
                 webview,
                 parent,
+                probe_frame: std::cell::Cell::new(None),
             },
             raw,
         ))
     }
     pub fn view(&self) -> &NSView {
         &self.view
+    }
+    /// Diagnostic only: keep the native surface and its parent unchanged.
+    pub fn probe_webview(&self, mode: &str) -> serde_json::Value {
+        if mode != "overlay" { self.probe_frame.set(Some(self.view.frame())); }
+        match mode {
+            "hidden" => self.webview.setHidden(true),
+            "detached" => self.webview.removeFromSuperview(),
+            "overlay" => {},
+            _ => unreachable!(),
+        }
+        serde_json::json!({"attached":unsafe {self.webview.superview()}.is_some(), "hidden":self.webview.isHidden(),
+            "fixedNativeViewport":self.probe_frame.get().map(|r|[r.origin.x,r.origin.y,r.size.width,r.size.height])})
     }
     pub fn presentation(&self) -> serde_json::Value {
         let window = self.view.window().unwrap();
@@ -97,7 +111,7 @@ impl NativeSurface {
                 layer.setContentsScale(scale);
             }
         }
-        let frame = content_frame(&self.webview, &self.parent);
+        let frame = self.probe_frame.get().unwrap_or_else(||content_frame(&self.webview, &self.parent));
         if self.view.frame() != frame {
             println!("IRON_SURFACE_FRAME {:?} -> {:?}", self.view.frame(), frame);
             self.view.setFrame(frame);

@@ -1,0 +1,820 @@
+{
+  "baseCommit": "65157a1",
+  "date": "2026-10-27",
+  "stage": "Native GUI validation complete; initial and final CPU experiments retained separately.",
+  "machine": {
+    "os": "macOS 27.2",
+    "gpu": "Apple M5 / Metal",
+    "displayHz": 60,
+    "drawableSize": [
+      2560,
+      1636
+    ],
+    "profile": "dev-opt",
+    "bevy": "0.20.0",
+    "wgpu": "30.0.1"
+  },
+  "limits": [
+    "CPU present return is not GPU completion or displayed pixels.",
+    "Exploratory single runs, first five seconds discarded; development machine was not otherwise isolated.",
+    "Forced continuous rendering of the default workspace, with Main and Stats visible; not a measured drag or event-to-photon workload.",
+    "Final captures used the completed overshoot-compensated scheduler with the console unlocked and process-scoped caffeinate assertions.",
+    "Initial 2.63 ms synchronous-only median did not repeat; use finalCases for the current comparison.",
+    "No input-to-photon, GPU-completion, 120 Hz, or cross-display measurement was made."
+  ],
+  "cases": [
+    {
+      "name": "display-pipelined",
+      "schema": 2,
+      "steadyTicks": 1201,
+      "renderedTicks": 1201,
+      "matchedSubmissions": 1201,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "2",
+        "renderMode": "pipelined",
+        "pacing": "display",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.657,
+        "p50": 16.666,
+        "p95": 16.676,
+        "max": 22.695
+      },
+      "tickMs": {
+        "p05": 1.794,
+        "p50": 2.757,
+        "p95": 6.607,
+        "max": 22.664
+      },
+      "acquireMs": {
+        "p05": 9.94,
+        "p50": 14.376,
+        "p95": 16.03,
+        "max": 23.254
+      },
+      "render_submitMs": {
+        "p05": 0.316,
+        "p50": 0.516,
+        "p95": 1.359,
+        "max": 7.086
+      },
+      "scheduledWaitMs": {
+        "p05": 0.0,
+        "p50": 0.001,
+        "p95": 0.002,
+        "max": 0.004
+      },
+      "timerOvershootMs": null,
+      "steadyCallbackSpanSeconds": 20.0,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 18.14,
+        "p50": 18.936,
+        "p95": 22.78,
+        "max": 38.962
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 18.141,
+        "p50": 18.938,
+        "p95": 22.781,
+        "max": 38.963
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 1201,
+      "cpuDeadlineSamples": 1201,
+      "cpuHeadroomMs": {
+        "p05": -6.723,
+        "p50": -2.871,
+        "p95": -2.068,
+        "max": -1.655
+      }
+    },
+    {
+      "name": "display-sync",
+      "schema": 2,
+      "steadyTicks": 1201,
+      "renderedTicks": 1201,
+      "matchedSubmissions": 1201,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "2",
+        "renderMode": "sync",
+        "pacing": "display",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.655,
+        "p50": 16.667,
+        "p95": 16.679,
+        "max": 16.757
+      },
+      "tickMs": {
+        "p05": 2.034,
+        "p50": 2.673,
+        "p95": 4.53,
+        "max": 6.08
+      },
+      "acquireMs": {
+        "p05": 0.038,
+        "p50": 0.052,
+        "p95": 0.097,
+        "max": 0.13
+      },
+      "render_submitMs": {
+        "p05": 0.271,
+        "p50": 0.358,
+        "p95": 0.676,
+        "max": 1.364
+      },
+      "scheduledWaitMs": {
+        "p05": 0.0,
+        "p50": 0.001,
+        "p95": 0.003,
+        "max": 0.005
+      },
+      "timerOvershootMs": null,
+      "steadyCallbackSpanSeconds": 20.0,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 2.003,
+        "p50": 2.629,
+        "p95": 4.478,
+        "max": 6.034
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 2.004,
+        "p50": 2.63,
+        "p95": 4.479,
+        "max": 6.038
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 0,
+      "cpuDeadlineSamples": 1201,
+      "cpuHeadroomMs": {
+        "p05": 11.573,
+        "p50": 13.448,
+        "p95": 14.077,
+        "max": 14.691
+      }
+    },
+    {
+      "name": "late-pipelined",
+      "schema": 2,
+      "steadyTicks": 1165,
+      "renderedTicks": 1165,
+      "matchedSubmissions": 1165,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "2",
+        "renderMode": "pipelined",
+        "pacing": "late",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.655,
+        "p50": 16.666,
+        "p95": 16.679,
+        "max": 153.444
+      },
+      "tickMs": {
+        "p05": 0.893,
+        "p50": 1.839,
+        "p95": 3.537,
+        "max": 153.037
+      },
+      "acquireMs": {
+        "p05": 0.013,
+        "p50": 0.032,
+        "p95": 0.05,
+        "max": 2.109
+      },
+      "render_submitMs": {
+        "p05": 0.104,
+        "p50": 0.239,
+        "p95": 0.883,
+        "max": 115.785
+      },
+      "scheduledWaitMs": {
+        "p05": 0.003,
+        "p50": 9.495,
+        "p95": 11.383,
+        "max": 12.485
+      },
+      "timerOvershootMs": {
+        "p05": 0.137,
+        "p50": 0.984,
+        "p95": 1.056,
+        "max": 1.203
+      },
+      "steadyCallbackSpanSeconds": 19.656,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 1.514,
+        "p50": 3.423,
+        "p95": 5.787,
+        "max": 197.039
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 3.447,
+        "p50": 12.899,
+        "p95": 15.246,
+        "max": 197.04
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 29,
+      "cpuDeadlineSamples": 1165,
+      "cpuHeadroomMs": {
+        "p05": 0.807,
+        "p50": 3.142,
+        "p95": 12.647,
+        "max": 15.042
+      }
+    },
+    {
+      "name": "late-sync",
+      "schema": 2,
+      "steadyTicks": 1184,
+      "renderedTicks": 1184,
+      "matchedSubmissions": 1184,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "2",
+        "renderMode": "sync",
+        "pacing": "late",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.658,
+        "p50": 16.667,
+        "p95": 16.676,
+        "max": 67.605
+      },
+      "tickMs": {
+        "p05": 1.181,
+        "p50": 1.911,
+        "p95": 5.845,
+        "max": 67.572
+      },
+      "acquireMs": {
+        "p05": 0.013,
+        "p50": 0.022,
+        "p95": 0.048,
+        "max": 6.272
+      },
+      "render_submitMs": {
+        "p05": 0.08,
+        "p50": 0.132,
+        "p95": 0.423,
+        "max": 5.463
+      },
+      "scheduledWaitMs": {
+        "p05": 0.003,
+        "p50": 10.188,
+        "p95": 13.364,
+        "max": 13.64
+      },
+      "timerOvershootMs": null,
+      "steadyCallbackSpanSeconds": 19.997,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 1.157,
+        "p50": 1.88,
+        "p95": 5.729,
+        "max": 67.534
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 1.727,
+        "p50": 13.225,
+        "p95": 15.228,
+        "max": 67.537
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 27,
+      "cpuDeadlineSamples": 1184,
+      "cpuHeadroomMs": {
+        "p05": 0.894,
+        "p50": 2.845,
+        "p95": 14.334,
+        "max": 14.922
+      }
+    }
+  ],
+  "finalCases": [
+    {
+      "name": "display-pipelined",
+      "schema": 2,
+      "steadyTicks": 1201,
+      "renderedTicks": 1201,
+      "matchedSubmissions": 1201,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "2",
+        "renderMode": "pipelined",
+        "pacing": "display",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.656,
+        "p50": 16.667,
+        "p95": 16.678,
+        "max": 16.726
+      },
+      "tickMs": {
+        "p05": 1.777,
+        "p50": 2.021,
+        "p95": 2.694,
+        "max": 15.355
+      },
+      "acquireMs": {
+        "p05": 14.225,
+        "p50": 14.969,
+        "p95": 15.286,
+        "max": 19.695
+      },
+      "render_submitMs": {
+        "p05": 0.313,
+        "p50": 0.379,
+        "p95": 0.617,
+        "max": 2.792
+      },
+      "scheduledWaitMs": {
+        "p05": 0.001,
+        "p50": 0.002,
+        "p95": 0.003,
+        "max": 0.009
+      },
+      "timerOvershootMs": null,
+      "steadyCallbackSpanSeconds": 20.0,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 18.116,
+        "p50": 18.32,
+        "p95": 18.874,
+        "max": 31.14
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 18.117,
+        "p50": 18.321,
+        "p95": 18.876,
+        "max": 31.143
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 1201,
+      "cpuDeadlineSamples": 1201,
+      "cpuHeadroomMs": {
+        "p05": -2.818,
+        "p50": -2.257,
+        "p95": -2.04,
+        "max": -1.824
+      }
+    },
+    {
+      "name": "display-sync",
+      "schema": 2,
+      "steadyTicks": 1201,
+      "renderedTicks": 1201,
+      "matchedSubmissions": 1201,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "2",
+        "renderMode": "sync",
+        "pacing": "display",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.226,
+        "p50": 16.669,
+        "p95": 17.093,
+        "max": 17.546
+      },
+      "tickMs": {
+        "p05": 16.191,
+        "p50": 16.63,
+        "p95": 17.038,
+        "max": 17.503
+      },
+      "acquireMs": {
+        "p05": 13.094,
+        "p50": 14.116,
+        "p95": 14.525,
+        "max": 14.956
+      },
+      "render_submitMs": {
+        "p05": 0.309,
+        "p50": 0.359,
+        "p95": 0.621,
+        "max": 1.094
+      },
+      "scheduledWaitMs": {
+        "p05": 0.001,
+        "p50": 0.001,
+        "p95": 0.003,
+        "max": 0.009
+      },
+      "timerOvershootMs": null,
+      "steadyCallbackSpanSeconds": 20.0,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 16.145,
+        "p50": 16.58,
+        "p95": 16.983,
+        "max": 17.457
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 16.148,
+        "p50": 16.582,
+        "p95": 16.985,
+        "max": 17.458
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 1201,
+      "cpuDeadlineSamples": 1201,
+      "cpuHeadroomMs": {
+        "p05": -2.782,
+        "p50": -2.286,
+        "p95": -2.025,
+        "max": -1.763
+      }
+    },
+    {
+      "name": "late-pipelined",
+      "schema": 2,
+      "steadyTicks": 1201,
+      "renderedTicks": 1201,
+      "matchedSubmissions": 1201,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "2",
+        "renderMode": "pipelined",
+        "pacing": "late",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.122,
+        "p50": 16.665,
+        "p95": 17.213,
+        "max": 27.85
+      },
+      "tickMs": {
+        "p05": 16.079,
+        "p50": 16.611,
+        "p95": 17.145,
+        "max": 27.822
+      },
+      "acquireMs": {
+        "p05": 14.201,
+        "p50": 14.958,
+        "p95": 15.551,
+        "max": 26.059
+      },
+      "render_submitMs": {
+        "p05": 0.219,
+        "p50": 0.365,
+        "p95": 0.646,
+        "max": 4.754
+      },
+      "scheduledWaitMs": {
+        "p05": 0.002,
+        "p50": 0.006,
+        "p95": 0.014,
+        "max": 0.036
+      },
+      "timerOvershootMs": null,
+      "steadyCallbackSpanSeconds": 19.999,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 32.222,
+        "p50": 32.897,
+        "p95": 33.403,
+        "max": 43.965
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 32.232,
+        "p50": 32.903,
+        "p95": 33.407,
+        "max": 43.969
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 1201,
+      "cpuDeadlineSamples": 1201,
+      "cpuHeadroomMs": {
+        "p05": -19.507,
+        "p50": -18.942,
+        "p95": -18.349,
+        "max": -17.995
+      }
+    },
+    {
+      "name": "late-sync",
+      "schema": 2,
+      "steadyTicks": 1201,
+      "renderedTicks": 1201,
+      "matchedSubmissions": 1201,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "2",
+        "renderMode": "sync",
+        "pacing": "late",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.659,
+        "p50": 16.667,
+        "p95": 16.675,
+        "max": 17.186
+      },
+      "tickMs": {
+        "p05": 2.373,
+        "p50": 4.249,
+        "p95": 7.588,
+        "max": 13.448
+      },
+      "acquireMs": {
+        "p05": 0.04,
+        "p50": 0.052,
+        "p95": 0.103,
+        "max": 1.876
+      },
+      "render_submitMs": {
+        "p05": 0.259,
+        "p50": 0.347,
+        "p95": 1.6,
+        "max": 6.076
+      },
+      "scheduledWaitMs": {
+        "p05": 5.114,
+        "p50": 6.338,
+        "p95": 7.335,
+        "max": 7.845
+      },
+      "timerOvershootMs": {
+        "p05": 0.068,
+        "p50": 0.661,
+        "p95": 0.826,
+        "max": 0.882
+      },
+      "steadyCallbackSpanSeconds": 20.001,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 2.334,
+        "p50": 4.19,
+        "p95": 7.547,
+        "max": 13.368
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 8.206,
+        "p50": 10.494,
+        "p95": 14.067,
+        "max": 17.096
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 9,
+      "cpuDeadlineSamples": 1201,
+      "cpuHeadroomMs": {
+        "p05": 2.006,
+        "p50": 5.6,
+        "p95": 7.893,
+        "max": 11.066
+      }
+    }
+  ],
+  "drawablePoolCases": [
+    {
+      "name": "display-sync-latency1",
+      "schema": 2,
+      "steadyTicks": 1197,
+      "renderedTicks": 1197,
+      "matchedSubmissions": 1197,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "1",
+        "renderMode": "sync",
+        "pacing": "display",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 16.537,
+        "p50": 16.667,
+        "p95": 16.813,
+        "max": 44.181
+      },
+      "tickMs": {
+        "p05": 1.558,
+        "p50": 3.686,
+        "p95": 16.789,
+        "max": 44.144
+      },
+      "acquireMs": {
+        "p05": 0.035,
+        "p50": 0.053,
+        "p95": 15.022,
+        "max": 17.135
+      },
+      "render_submitMs": {
+        "p05": 0.208,
+        "p50": 0.328,
+        "p95": 0.77,
+        "max": 10.207
+      },
+      "scheduledWaitMs": {
+        "p05": 0.0,
+        "p50": 0.001,
+        "p95": 0.001,
+        "max": 0.002
+      },
+      "timerOvershootMs": null,
+      "steadyCallbackSpanSeconds": 20.0,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 1.52,
+        "p50": 3.573,
+        "p95": 16.739,
+        "max": 44.097
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 1.52,
+        "p50": 3.574,
+        "p95": 16.74,
+        "max": 44.098
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 243,
+      "cpuDeadlineSamples": 1197,
+      "cpuHeadroomMs": {
+        "p05": -2.02,
+        "p50": 12.536,
+        "p95": 14.577,
+        "max": 14.793
+      }
+    },
+    {
+      "name": "late-sync-latency1",
+      "schema": 2,
+      "steadyTicks": 1199,
+      "renderedTicks": 1199,
+      "matchedSubmissions": 1199,
+      "settings": {
+        "presentMode": "fifo",
+        "frameLatency": "1",
+        "renderMode": "sync",
+        "pacing": "late",
+        "marginMs": 2.0
+      },
+      "callbackIntervalMs": {
+        "p05": 14.473,
+        "p50": 16.713,
+        "p95": 18.616,
+        "max": 33.685
+      },
+      "tickMs": {
+        "p05": 9.896,
+        "p50": 11.535,
+        "p95": 14.723,
+        "max": 27.709
+      },
+      "acquireMs": {
+        "p05": 5.251,
+        "p50": 7.823,
+        "p95": 10.609,
+        "max": 22.803
+      },
+      "render_submitMs": {
+        "p05": 0.274,
+        "p50": 0.369,
+        "p95": 1.429,
+        "max": 7.609
+      },
+      "scheduledWaitMs": {
+        "p05": 1.834,
+        "p50": 5.063,
+        "p95": 6.741,
+        "max": 9.425
+      },
+      "timerOvershootMs": {
+        "p05": 0.095,
+        "p50": 0.481,
+        "p95": 0.73,
+        "max": 1.033
+      },
+      "steadyCallbackSpanSeconds": 19.984,
+      "comparisonWarnings": [],
+      "missingSubmissions": 0,
+      "hostToCpuPresentReturnMs": {
+        "p05": 9.841,
+        "p50": 11.468,
+        "p95": 14.632,
+        "max": 27.648
+      },
+      "callbackToCpuPresentReturnMs": {
+        "p05": 14.397,
+        "p50": 16.618,
+        "p95": 18.513,
+        "max": 33.542
+      },
+      "inputReceiptToCpuPresentReturnMs": null,
+      "cpuDeadlineMisses": 1199,
+      "cpuDeadlineSamples": 1199,
+      "cpuHeadroomMs": {
+        "p05": -4.835,
+        "p50": -2.499,
+        "p95": -1.673,
+        "max": -0.19
+      }
+    }
+  ],
+  "guiValidation": {
+    "syncLateWorkspace": {
+      "checks": 23,
+      "passed": 23
+    },
+    "additionalRuns": [
+      {
+        "name": "display-pipelined",
+        "seconds": 21.24,
+        "checks": 23,
+        "passed": 23,
+        "failure": null
+      },
+      {
+        "name": "display-sync",
+        "seconds": 23.2,
+        "checks": 23,
+        "passed": 23,
+        "failure": null
+      },
+      {
+        "name": "late-pipelined",
+        "seconds": 18.75,
+        "checks": 23,
+        "passed": 23,
+        "failure": null
+      },
+      {
+        "name": "simulation-pipelined",
+        "seconds": 14.97,
+        "checks": 25,
+        "passed": 25,
+        "failure": null
+      },
+      {
+        "name": "simulation-sync",
+        "seconds": 15.0,
+        "checks": 25,
+        "passed": 25,
+        "failure": null
+      }
+    ],
+    "sparseTrace": {
+      "hostTicks": 723,
+      "renderedFrames": 460,
+      "matchedSubmissions": 460,
+      "missingSubmissions": 0
+    },
+    "manualNativeInput": {
+      "shape": "#l",
+      "before": [
+        520,
+        590
+      ],
+      "afterDrag": [
+        600,
+        640
+      ],
+      "afterKeyboardUndo": [
+        520,
+        590
+      ]
+    }
+  },
+  "concurrency": {
+    "pipelined": {
+      "documentSpeeds": [
+        0,
+        50
+      ],
+      "ecsParallelIntervals": 437,
+      "entities": 100000,
+      "renderSimulationOverlapIntervals": 9
+    },
+    "sync": {
+      "documentSpeeds": [
+        0,
+        50
+      ],
+      "ecsParallelIntervals": 435,
+      "entities": 100000,
+      "renderSimulationOverlapIntervals": 0
+    }
+  }
+}

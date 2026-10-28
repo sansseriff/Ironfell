@@ -5,6 +5,9 @@
   import ConvertDialog from "./lib/ConvertDialog.svelte";
   import LinkPopover from "./lib/LinkPopover.svelte";
   import { controllerManager } from "./controller-manager.svelte";
+  import LatencyFilm from "./lib/LatencyFilm.svelte";
+
+  const filming = new URLSearchParams(location.search).get('latencyFilm') === '1';
 
   let canvasEl: HTMLCanvasElement;
 
@@ -33,7 +36,11 @@
 
   <!-- HTML UI layer floats above; only interactive elements re-enable pointer events -->
   <div class="ui-layer">
-    <Workspace />
+    {#if filming}
+      <LatencyFilm />
+    {:else}
+      <Workspace />
+    {/if}
   </div>
 
   <ConvertDialog />

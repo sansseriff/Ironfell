@@ -14,6 +14,9 @@ import { settings } from './settings.svelte';
  *                      pacing and latency on a real display
  *   ?bevy=alpha        add the alpha-blending stress fixture; combine as
  *                      ?bevy=alpha,classic to run that variant with classic
+ *   ?bevy=debuglog     show the engine's event log (DEBUG `iron_debug` lines:
+ *                      applied transactions, redraws, solves, drag locks),
+ *                      which the run-iron scripts read; off by default
  * No param = the normal Vello Hybrid app.
  */
 export function variantFlagsFromUrl(): number {
@@ -29,6 +32,7 @@ export function variantFlagsFromUrl(): number {
     const classic = parts.includes('classic') || (!parts.includes('hybrid') && settings.renderer === 'classic');
     if (classic) flags |= 32; // VARIANT_CLASSIC_BACKEND
     if (parts.includes('always')) flags |= 64; // VARIANT_ALWAYS_RENDER
+    if (parts.includes('debuglog')) flags |= 256; // VARIANT_DEBUG_LOG
     return flags;
 }
 

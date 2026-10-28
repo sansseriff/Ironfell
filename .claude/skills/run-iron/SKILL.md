@@ -55,9 +55,21 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `text-styles.txt` (`GPU=1`), warm | ~18 s |
 | shared-engine Rust unit suite (4 tests, native `dev-opt`), warm | ~8 s |
 | ⏱ dispatcher Rust unit test, cold native Bevy 0.20 graph (`dev-opt`) | ~3 min |
-| ⏱ `bun run native:build`, cold native Bevy/Tauri graph (`dev-opt`) | ~4 min |
+| ⏱ `bun run native:build`, cold native Bevy/Tauri graph (`dev-opt`) | ~6 min (6m 04s in a fresh worktree, 2026-10-27) |
 | `bun run native:build`, warm, after workspace test changes | ~21 s |
-| packaged native workspace self-test (22 checks, including reload) | ~20 s |
+| `bun run native:build`, warm, after native Rust / plugin-selection changes | ~20–45 s |
+| native Rust bin tests, warm (2 mailbox + 5 frame-budget checks) | ~3 s |
+| ⏱ first standalone Bevy/winit dependency build | ~3 min |
+| standalone Bevy control rebuild, warm | ~2 s |
+| ⏱ `cargo build -p iron-native`, warm, after adding a native dependency (objc2-core-video) | ~2 min (2m 02s, 2026-10-27) |
+| five-second Metal HUD report of the host via System Events (`.agents/latency/standalone-hud/capture-host.sh`) | ~25 s |
+| native CPU pacing capture, with unlocked screen | ~25 s plus startup |
+| packaged native workspace self-test (23 checks, including reload/mode) | ~19–23 s |
+| packaged native filming self-test (14 checks, warm) | ~4 s |
+| `validate-layers.py`, six native GPU readback controls | ~25 s when drawables are available |
+| five-second Metal HUD report, including startup/menu/countdown | ~15–30 s |
+| `latency-film.ts`, three runtime/DPR configurations per backend | ~10–15 s |
+| `check-latency-film.py`, six screenshots | ~2 s |
 | `appearance.ts` (DPR 1, warm) | ~30 s |
 | ⏱ `raster-pixels.txt` (with the Prussia import, then the meters) | ~1.5 min |
 | ⏱ `bench-instances.txt` | ~1.5 min |
@@ -115,6 +127,24 @@ artifact is level 1 and the helper does not enable SIMD for it; it can make the
 link alone does not identify the build. Do not publish development timings as
 renderer ceilings. The 2026-10-13 sanity investigation intentionally leaves the
 optimized artifacts served for the owner; a normal build replaces them.
+
+## Engine event log (DEBUG)
+
+Since 2026-10-27 the engine's per-action and per-frame log lines are DEBUG on
+the `iron_debug` tracing target, off by default, so normal runs stay quiet:
+`applied …` transactions and their `… re-solved` cause lines, `loaded document`,
+`nothing to Undo/Redo`, `redraw (…)` 2D-layer rebuilds, per-frame `solve:`
+lines, and `locked for this drag` / `dragged through cluster`. Turn them on:
+
+- **Web:** add `debuglog` to the `bevy=` URL parameter (`?bevy=debuglog`, or
+  `?bevy=views,debuglog` alongside other variants). `drive.ts`'s default URL
+  includes it, so `smoke.txt` and the other scripts see these lines; keep it
+  when overriding `URL=`. Without it, `logs applied|…` checks print nothing.
+- **Native:** `RUST_LOG=info,iron_debug=debug bun run native:adaptive` (any
+  native script). `RUST_LOG` replaces the default filter, so keep `info`.
+
+Warnings (`rejected`, `differs from Bevy`, `drawn a frame late`) and one-off
+INFO lines (startup, copy/paste/import results) are unaffected.
 
 ## Run (agent path)
 
@@ -623,7 +653,8 @@ one op more; that is the under-converged solve noted in
 Any `locked for this drag` line names an axis the drag held still and why;
 any `differs from Bevy` line means the store's world transform disagrees
 with the entity's and is a bug. Every rebuild of the 2D layer logs one
-`redraw (<reason>): N of M nodes changed [ids]; damage x0,y0–x1,y1` line:
+`redraw (<reason>): N of M nodes changed [ids]; damage x0,y0–x1,y1` line (see
+"Engine event log" for turning it on):
 the reason is `document` (the reconciler's changed-node set, with
 `, structure` when the tree's shape changed), `panel layout`, or
 `selection`, `embedded view`, `new view` or `spatial projection`; damage
@@ -1562,3 +1593,175 @@ page errors and unchanged semantic output. Web and native frontend builds pass.
 The seven JS tests and zero-error frontend check pass. Rust and wasm artifacts
 are unchanged; no Rust rebuild is needed for this cleanup. Evidence is in
 `.agents/browser-runtime-cleanup/` (gitignored).
+
+### Native latency experiments — 2026-10-27
+
+`bun run native:low-latency` selects `IRON_NATIVE_RENDER_MODE=sync` and
+`IRON_NATIVE_PACING=late` (parallel ECS retained, FIFO/2, three drawables). Ordinary
+`native:run` defaults remain pipelined/display. `bun run native:baseline` explicitly
+selects that original scheduling in the same binary for human A/B testing. Save
+and use the same document/view/window size; run one instance at a time.
+For independent comparisons, set
+both controls explicitly before `bun run native:run`. The late timer's margin
+is `IRON_NATIVE_PACING_MARGIN_MS`, default 2 ms, accepted range 0.25–8 ms.
+See `src-native/README.md` for capture commands.
+
+The native workspace fixture verifies the requested render mode against the actual
+render-thread state. Expected totals: **23 ordinary checks**, **25 with the 100k
+simulation fixture**. All four mode combinations pass the workspace fixture;
+pipelined/display and sync/late both pass the simulation fixture. The sync run
+retains parallel ECS and has zero render/simulation overlap. Editing, canonical
+reload, idle, resize, minimize/restore, JavaScript-stall independence and actual
+webview reload pass. Do not enable `IRON_NATIVE_ALWAYS_RENDER` for the idle check.
+Real native pointer dragging and keyboard undo were also inspected successfully.
+
+Keep the macOS console **unlocked** and the test window visible. A locked/asleep
+screen can suspend view-backed callbacks and webview timers; a visible NSWindow
+flag alone is insufficient. `caffeinate -d -u <test binary>` is a process-scoped
+sleep assertion, not an unlock operation. Do not count a capture with few/no
+callbacks as a valid timing comparison. Trace schema 2 carries host frame IDs
+across skipped renders; analysis warns about too-few callbacks or missing CPU
+submissions. A final sparse trace matches all 460 submissions across 723 host
+updates. CPU present return is not display scanout.
+
+Seven native Rust tests (two mailbox, five budget), four shared-engine tests,
+seven JS tests and three Python analysis tests pass. Both browser backends and
+the native package compile; frontend checking has zero errors and ten existing
+warnings. The full production-preview smoke on isolated port 5185 passes in
+212 s with no page errors and unchanged semantic expectations. Native workspace
+runs take 19–23 s; each 100k fixture took 15 s.
+
+Final continuous-workspace timing: normal pipelined/display CPU present-return
+p50/p95 18.32/18.87 ms; sync/late 4.19/7.55 ms, acquisition p95 0.10 ms, nine CPU
+target misses out of 1201 steady frames. Sync alone's earlier 2.63 ms median did
+not repeat (16.58 ms in the final capture). A two-drawable pool worsened tails;
+retain three. Full results and limits: vision 08's “Native latency controls” and
+`plans/rendering/benchmarks/native-latency-2026-10-27.json`. Evidence is in the
+latency worktree's `.agents/latency/`. Mouse-to-photon, 120 Hz and multi-display
+measurements remain open; these checks do not close the native latency gate.
+
+
+### Optical filming scene — 2026-10-27
+
+Apply this skill when building or checking the opt-in filming scene. From the
+worktree root, `bun run native:film` opens sync/late and `bun run native:film:baseline`
+opens pipelined/display. Browser URLs append `latencyFilm=1`. Normal workspace
+launches are unchanged. Usage/recording protocol: `src-native/README.md`, “Filming
+visible pointer delay”. Keep the cursor visible, grab the yellow square at its
+centre and move horizontally; cyan/magenta centres are offset −96/+96 CSS px.
+Continuous defaults off. Reset after resize/display-scale changes.
+
+Browser integration uses the worktree server and real Playwright pointer input:
+
+```sh
+cd .claude/skills/run-iron
+URL='http://127.0.0.1:5185/Ironfell/?gfx=webgl2' bun latency-film.ts
+URL='http://127.0.0.1:5185/Ironfell/?gfx=webgpu' bun latency-film.ts
+cd ../../..
+python3 .claude/skills/run-iron/check-latency-film.py
+```
+
+Each backend prints three passing runtime/DPR cases (worker 1×, worker 2×, main 1×).
+Checks cover single fixture, target/guide alignment, normal drag/undo, always/auto,
+exported actual backend, reload and reset with no page errors. Pixel checking prints
+six `all three target centres/offsets pass` lines after both backends. Images and
+manifests live under `.agents/latency/`; run from the indicated directory because
+the browser script's output path is relative to it.
+
+After native packaging, run each preset separately with `IRON_NATIVE_FILM=1` and
+`IRON_NATIVE_SELF_TEST=1` on the packaged binary. Set `IRON_NATIVE_RENDER_MODE` and
+`IRON_NATIVE_PACING` explicitly to sync/late or pipelined/display; keep the screen
+unlocked (use process-scoped `caffeinate -d -u` if needed). The app auto-exits and
+prints `IRON_NATIVE_TEST` with **14 checks, all pass, errors: []**. It verifies the
+native pointer path, actual render mode/caption, normal transaction edits, CSS-sized
+fixture and qualified reset leaves, guide alignment, no duplicates, run modes and
+actual webview reload preserving the target ID/canonical document.
+
+The ordinary production-preview full smoke still passes with its existing semantic
+expectations and `(no page errors)` (211 s in the filming-mode run). Both backends
+and native package compile; frontend check remains zero errors/ten existing warnings.
+These are functional/pixel checks, not measured optical latency. Setup export records
+camera sampling rate but does not calculate a photon-latency value.
+
+
+### Native layer / presentation controls — 2026-10-27
+
+`bun run native:film:layers` adds a green native Bevy sprite at −192 CSS px on
+the final window camera, bypassing Vello. `native:film:detached` removes WKWebView
+after fixture setup, freezing the native drawable rectangle first. Use unheld
+cursor motion in the detached case; HTML button ownership is absent. Restart to
+restore the webview. Both shortcuts select pipelined/display; use
+`IRON_NATIVE_LAYER_PROBE=1 bun run native:film` for sync/late. Normal app launch
+is unchanged. Idle marker updates do not dirty unchanged sprite/visibility state.
+
+After native packaging, run `python3 src-native/test/validate-layers.py` from the
+worktree root. Expected: six cases (overlay/hidden/detached × pipelined/display
+or sync/late), **12 available GPU readbacks passing per case**, zero difference
+between corrected direct-sprite and Vello marker input positions. It checks actual
+attachment/hidden state and rejects any native viewport resize after detachment.
+These correctness controls force continuous rendering and scripted pointer positions.
+Capture windows temporarily stay above other apps, then close. Keep the screen
+unlocked. Fully transparent surface readbacks are recorded as unavailable and
+retried; they do not establish a stale frame or a successful check. Fewer than
+12 available captures fails the suite. Readback/PNG work perturbs frame timing.
+
+For presentation timing, omit readback and use the process-local Metal HUD flags
+in `src-native/README.md`. Show `presentdelay`, not just CPU frame time. Generate a
+five-second report using the HUD menu; set `MTL_HUD_REPORT_URL` to a writable path.
+`MTL_HUD_LOG_ENABLED=1` is the current logging flag (the old
+`MTL_HUD_LOGGING_ENABLED` spelling did not enable it). Save reports beneath
+`.agents/latency/hud-reports/`, with matching `present-<case>.log` native logs.
+`python3 src-native/test/analyze-presentation.py` extracts metrics and source hashes
+into `plans/rendering/benchmarks/native-presentation-2026-10-27.json`.
+
+Completed reports: sync/late FIFO/2 with overlay **40.60 ms** average Present Delay,
+webview detached **35.81 ms**, FIFO/1 (two drawables) **30.57 ms**; sync/display with
+native display sync disabled **46.38 ms**. GPU averages are **2.22–2.72 ms**. These
+are separate five-second exploratory captures, not randomized repeated trials.
+The smaller queue also increases CPU acquisition waits. Live HUD showed Composited
+with the webview removed, and Direct in the VSync-off control; neither removal nor
+VSync off eliminated the long post-submit wait. Pipelined/display and sync/display
+FIFO report attempts did not produce completed saved reports and are excluded from
+quantitative report comparisons. The baseline's live HUD observation is recorded
+separately. No absolute input-to-photon or 3D/standalone-Bevy result is inferred.
+
+Optional `IRON_NATIVE_GPU_DONE_TRACE=1` adds queue completion callback receipt to
+CPU traces. Receipt can wait for device polling: it is not a GPU timestamp or actual
+presentation feedback. Early detached measurements that changed the viewport from
+2560×1636 to 2560×1700 were excluded; the diagnostic now freezes the original view.
+Owning record: vision 08, “Native layer / presentation controls”.
+
+
+Final control validation: **72/72** GPU captures in 24.89 s, zero unavailable
+readbacks, zero corrected sprite/Vello position difference, all attachment/viewport
+checks pass. The native package builds; seven Rust tests and frontend checking
+(zero errors, ten existing warnings) pass. Ordinary native workspace **23/23**
+and native filming **14/14** regressions pass in 18.44/2.99 s. No new full browser
+smoke is claimed for these native controls; the prior filming-mode full smoke passes.
+
+The native filming suite also passes 14/14 with the direct Bevy sprite enabled.
+
+
+### Standalone Bevy/winit control — 2026-10-27
+
+`bun run native:standalone` runs the isolated Cargo project in
+`src/iron_latency_probe`. It enables native winit in its own workspace, not the
+shared Iron workspace, and reuses the worktree target cache with the same dev-opt
+profile. Its dependency graph has no Tauri, Vello or Iron engine. Use the ordinary
+pipelined/FIFO default first; `IRON_BEVY_RENDER_MODE=sync` is an optional comparison.
+
+Expected startup `IRON_BEVY_PROBE`: runner `Bevy DefaultPlugins / winit`,
+`renderThreadEnabled:true`, `presentMode:Fifo`, logical size `[1280,818]`, physical
+size `[2560,1636]`, DPR 2 on the tested screen, requested maximum frame latency null
+(backend default). Green diamond follows the pointer at −192 logical px; yellow
+48 logical px square drags, R resets. Keep only one comparison app running and match
+the hosted control's continuous-rendering setting to the focused Bevy app.
+
+`bundle-macos.sh` in that project creates the minimal macOS app wrapper under
+`.agents/latency/standalone/` around the same executable, for native GUI automation.
+The unbundled executable works normally but has no bundle ID in the app inventory.
+Input trace (`IRON_BEVY_INPUT_TRACE=1`) is observational and off by default. It
+records original OS event timestamp, monitor receipt and PostUpdate, plus cursor,
+button and target state. Live validation shows held target motion and release;
+these input ages are not presentation/photon measurements. No hosted-versus-standalone
+latency conclusion is claimed yet. Details: the standalone project's README.

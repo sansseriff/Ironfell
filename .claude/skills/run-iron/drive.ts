@@ -10,8 +10,11 @@ import { chromium, type Browser, type Page } from "playwright-core";
 import { mkdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-// URL=… overrides it, e.g. to run the smoke script with ?bevy=views.
-const DEFAULT_URL = process.env.URL ?? "http://localhost:5173/Ironfell/?gfx=webgl2";
+// URL=… overrides it, e.g. to run the smoke script with ?bevy=views. Keep
+// `debuglog` in an override's `bevy=` list (`?bevy=views,debuglog`): the
+// event lines the expected outputs include (`applied …`, `redraw (…)`,
+// `solve:`, drag locks) are DEBUG and off without it.
+const DEFAULT_URL = process.env.URL ?? "http://localhost:5173/Ironfell/?gfx=webgl2&bevy=debuglog";
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const SHOTS = new URL("./screenshots/", import.meta.url).pathname;
 mkdirSync(SHOTS, { recursive: true });

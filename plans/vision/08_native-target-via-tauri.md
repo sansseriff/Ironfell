@@ -1,6 +1,6 @@
 # A native target via Tauri
 
-**Status:** macOS experiment in progress, updated 2026-10-26. Standalone composition
+**Status:** macOS experiment in progress, updated 2026-10-27. Standalone composition
 verified in dev and packaged builds; shared-engine workspace and typed UI
 protocol verified, with 22 packaged checks including webview reload. Remaining
 feasibility gates are open. A full port and additional platforms
@@ -411,6 +411,340 @@ substitute for the proposed native engine.
   The opaque-backing build passes the 15 workspace and 17 simulation checks again
   (`.agents/native-pacing-final-workspace.log`, `native-pacing-final-simulation.log`),
   including the final FIFO/2 defaults and explicit Metal layer.
+
+#### Native latency controls (2026-10-27)
+
+**Implemented and native validation complete.** User requested an isolated
+worktree from the last commit, excluding the context/affordance work in the main
+checkout. Branch `native-latency`, `.agents/worktrees/native-latency`, base
+`65157a1`. Work followed render-pipeline comparison → deadline pacing → Metal
+display-link integration review.
+
+- `VARIANT_SYNC_RENDER` disables only Bevy's `PipelinedRenderingPlugin` on native.
+  `IRON_NATIVE_RENDER_MODE=sync` selects it; parallel ECS is retained.
+- `IRON_NATIVE_PACING=late` opts into target-aware host scheduling. A rolling p95
+  CPU budget (excluding drawable-acquisition backpressure), the latest workload,
+  a 2 ms configurable margin and adaptive timer-overshoot compensation determine
+  when work starts. A one-shot main-run-loop timer lets AppKit receive newer
+  pointer events during the wait. Startup, idle recovery, refresh transitions and
+  overload run immediately. The next callback replaces an overdue pending timer;
+  pause and shutdown cancel it. There is no main-thread spin or sleep.
+- `bun run native:low-latency` selects **sync + late**, retaining FIFO/2 (three
+  drawables) and render on demand. Ordinary `native:run` keeps pipelined/display
+  defaults. Both environment controls remain available for independent comparison.
+- Pacing trace schema 2 copies actual host frame IDs through extraction. Sparse
+  rendering can join input receipt/work start to the correct CPU submission.
+  Planned/actual starts, acquisition, CPU present return and callback targets are
+  recorded. Analysis exposes missing submissions, timer overshoot and target
+  headroom, and warns about captures with too few callbacks. These are CPU times,
+  not GPU completion or displayed pixels. AppKit receipt also excludes mouse
+  hardware/OS delivery delay.
+
+Final 25-second captures used Apple M5 / Metal, macOS 27.2, Bevy 0.20, wgpu 30.0.1,
+dev-opt, 60 Hz, 2560×1636, default workspace/Main and Stats, forced continuous
+rendering; discard the first five seconds. Console unlocked, process-scoped
+`caffeinate`, captures sequential and builds stopped; the development machine was
+not otherwise isolated. All steady rendered frames match their CPU submissions.
+Raw evidence is in the worktree's `.agents/latency/`; the durable summary is
+[`native-latency-2026-10-27.json`](../rendering/benchmarks/native-latency-2026-10-27.json).
+
+| Scheduling / render mode | Drawables | Steady frames | Update start → CPU present return p50 / p95 (ms) | Acquire p95 (ms) | Work-start delay p50 (ms) |
+|---|---:|---:|---:|---:|---:|
+| Display / pipelined | 3 | 1201 | 18.32 / 18.87 | 15.29 | 0.00 |
+| Display / sync | 3 | 1201 | 16.58 / 16.98 | 14.53 | 0.00 |
+| Late / pipelined | 3 | 1201 | 32.90 / 33.40 | 15.55 | 0.01 |
+| **Late / sync (preset)** | **3** | **1201** | **4.19 / 7.55** | **0.10** | **6.34** |
+| Display / sync | 2 | 1197 | 3.57 / 16.74 | 15.02 | 0.00 |
+| Late / sync | 2 | 1199 | 11.47 / 14.63 | 10.61 | 5.06 |
+
+The combined sync/late mode performed best in this repeat. Sync alone had an
+initial exploratory 2.63 ms median that **did not repeat**; disabling pipelining
+alone does not reliably avoid drawable backpressure. Those initial captures are
+retained separately in the summary. Late/pipelined did not delay once its budget
+included the render-thread handoff wait, and showed much larger update-to-submit
+latency in this run; the shortcut therefore selects both sync and late. Reducing
+the drawable pool worsened tails, so it remains at three.
+
+The preset maintained a 16.667 ms median callback interval (p95 16.675 ms), with
+0.10 ms p95 acquisition and 0.83 ms p95 timer overshoot. Nine of 1201 CPU
+submissions returned after the callback's target; target headroom p05 was 2.01 ms.
+This does not establish GPU headroom, queue occupancy or mouse-to-photon latency.
+A heavy scene, 120 Hz and multiple displays still need measurement before
+changing normal launch defaults.
+
+[`bevy_framepace`](https://github.com/aevyrie/bevy_framepace) informed the
+sleep-before-input/oversleep-compensation idea. Its winit monitor lookup and
+render-cleanup limiter are not installed in the Tauri host. No dependency or
+Bevy 0.20 plugin fork was needed.
+
+`CAMetalDisplayLink` was reviewed after the first two experiments. Apple's
+[update carries a drawable and deadline](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/update)
+and its [preferred frame latency](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/preferredframelatency)
+can request one or two frames. The pinned wgpu Metal surface acquires internally
+with `CAMetalLayer::nextDrawable`, and its HAL surface texture's drawable is
+private. Wiring only the callback would acquire two different drawables. A proper
+surface/external-target integration must own rendering, presentation and feedback;
+that deeper path is not implemented. No swizzling, extra presentation loop or
+engine fork was added.
+
+Verification:
+
+- **23/23 workspace checks in all four render/pacing combinations**, including
+  canonical reload, input/undo/redo, actual webview reload, idle zero-submission,
+  resize, minimize/restore and native updates during a JavaScript stall.
+- **25/25 checks with 100,000 runtime entities in both pipelined/display and
+  sync/late.** Parallel ECS overlap intervals: 437 / 435; render/simulation overlap:
+  9 / 0 respectively. Both read authored speed 50 through the shared store.
+- Sparse trace: 723 steady host updates, 460 rendered frames, all 460 CPU
+  submissions matched, including frames after idle skips.
+- A real CUA-driven native pointer drag moved rect `#l` from (520,590) to
+  (600,640); keyboard undo restored (520,590), inspected in the native inspector.
+- Base native package compiled in 6m 04s; warm native rebuilds took 17–43 s.
+  Seven native Rust, four shared-engine, seven JS and three Python analysis tests
+  pass, as does standalone composition-probe compilation. The separate cold
+  shared-engine feature graph took 2m 48s.
+- Both browser backends compile (WebGPU 2m 41s, WebGL2 2m 15s); frontend checking
+  has zero errors and ten existing warnings. Web/native bundling passes. Full
+  production-preview smoke on isolated port 5185 passes in 212 s with no page
+  errors and unchanged semantic expectations.
+
+Earlier GUI attempts were interrupted by a locked console and excluded. After
+user unlock, the final suites and captures completed. Diagnostic launches expose
+and center their own window once; normal launches do not change window behavior.
+No source from the concurrent context work was included. The existing displayed
+input-latency and broader native feasibility gates remain open.
+
+Human follow-up: the user reports composition split-handle resizing may feel
+faster, but dragging 2D shapes does not seem to have changed latency. This is
+subjective feedback, not a controlled A/B result, and it does not confirm an
+input-to-photon improvement. The recorded CPU captures used continuous default
+workspace rendering rather than a shape-drag workload. `bun run native:baseline`
+now explicitly selects the original pipelined/display scheduling in the same
+binary for comparison with `native:low-latency`. Actual pointer receipt → tool
+preview → presentation during a drag remains the next measurement to investigate.
+
+
+**Filming diagnostic implemented, 2026-10-27:** `native:film` selects sync/late;
+`native:film:baseline` selects pipelined/display. Browser `?latencyFilm=1` exposes
+the same Svelte scene. Three distinct targets share a horizontal guide: a cyan
+DOM-event ring at −96 CSS px, a magenta render-only engine cross at +96 CSS px,
+and a yellow ordinary document rectangle dragged through the normal tool/store
+path. The OS cursor remains visible. Fixture creation/reset are transactions;
+native webview reload reuses the live fixture without extra document operations.
+The reserved composition does not replace the existing authored document.
+
+Continuous rendering is optional and defaults to the ordinary on-demand behavior.
+Reset preserves the mounted panel and aligns a 48 CSS px target after resize/DPR
+changes. Export setup records the actual build/backend, mode label, viewport,
+DPR/render scale, target colours/offsets and camera sampling rate. Instructions
+call for centre-grab horizontal motion and identical display/window settings.
+This enables optical comparison relative to the cursor; absolute input-to-photon
+still requires a physical reference. No video analysis or photon measurement has
+been performed or inferred from software clocks.
+
+Validation: **14/14 packaged native filming checks in both sync/late and
+pipelined/display**, covering qualified reset ops, target/guide alignment, scale,
+run-mode transitions and reload identity/canonical preservation. Browser integration
+passes WebGPU and WebGL2 in worker DPR 1/2 and main-thread DPR 1: real pointer
+drag/undo, reset, reload, metadata and no page errors. Pixel checks locate all three
+markers and verify their centres/offsets in all six screenshots. Both wasm builds,
+production UI and native package compile; frontend check has zero errors (the same
+ten existing warnings), seven JS tests pass, and ordinary full smoke passes in
+211 s with no page errors. The corrected native filming preview was relaunched
+for human recording. Usage and repeatable checks are in `src-native/README.md`
+and the run-iron skill; optical latency and cross-display behavior remain open.
+
+
+**Native layer / presentation controls, 2026-10-27:** The user's OBS recordings and
+subjective drag comparison show no consistent benefit from sync/late. The diagnostic
+now adds a green ordinary Bevy sprite directly to the final window camera (−192 CSS
+px) alongside the Vello cross (+96). Native controls can hide or detach WKWebView
+once the film scene is ready. Detachment freezes the drawable rectangle: an early
+run accidentally grew from 2560×1636 to 2560×1700, and was excluded. Authored state
+and button ownership remain in the shared engine/UI; use unheld motion when the
+webview is absent. The probes are opt-in; normal native defaults remain unchanged.
+
+Valid GPU-output checks show the direct sprite and Vello reference containing the
+same requested pointer sample, with no extra frame of Vello staleness observed.
+The automated control suite covers overlay/hidden/detached × pipelined/display or
+sync/late, 12 available readbacks per case, with fixed viewport and actual view
+attachment checks. Scripted positions make old imagery distinguishable. Empty
+transparent readbacks are unavailable evidence and retried; readback work is used
+for correctness, never timing. These capture windows are temporarily above other
+apps to avoid occlusion. Native sprite changes preserve idle change detection.
+
+Apple's Metal HUD exposes the missing downstream measurement: Present Delay from
+`presentDrawable` to reported display presentation. Completed five-second reports:
+
+| Native control | Mean Present Delay | Mean GPU work |
+|---|---:|---:|
+| Sync/late, FIFO/2, WKWebView overlay | 40.60 ms | 2.72 ms |
+| Sync/late, FIFO/2, WKWebView detached | 35.81 ms | 2.71 ms |
+| Sync/late, FIFO/1, two drawables | 30.57 ms | 2.60 ms |
+| Sync/display, display sync disabled | 46.38 ms | 2.22 ms |
+
+The two-drawable trace has CPU acquisition median/p95 5.60/8.15 ms and update-start
+→ CPU present-return median/p95 8.45/11.77 ms: reducing downstream delay can move
+waiting back into acquisition before freshly sampled input is rendered. This does
+not establish an end-to-end improvement. These are separate exploratory runs under
+HUD instrumentation, not repeated randomized trials; trace intervals are longer
+than report intervals, so do not add their percentile values to report averages.
+
+The HUD still reported Composited after detaching WKWebView. The VSync-off control
+confirmed `displaySyncEnabled=false`, reported Direct, and retained a long present
+delay. Thus neither vector rasterization alone nor overlapping HTML alone explains
+the observed delay. A shared presentation queue / frame scheduling interaction is
+the leading hypothesis. A fast CPU-present-return is insufficient: the current
+CADisplayLink pacer estimates CPU work against a display target, but does not own
+the presentation queue or use a display-link-supplied Metal drawable.
+
+The native baseline's live HUD showed roughly 46 ms present delay, but attempts to
+save pipelined/display and sync/display FIFO reports did not complete; these cases
+are excluded from quantitative report comparisons. No failure is inferred from a
+missing report. No physical input-to-photon, standalone winit/Bevy, 3D or
+CAMetalDisplayLink external-drawable integration result is claimed. The raw reports
+are in the worktree's `.agents/latency/hud-reports/`; metrics, hashes, controls and
+limitations are preserved in
+[`native-presentation-2026-10-27.json`](../rendering/benchmarks/native-presentation-2026-10-27.json).
+Usage and verification are in the native README and run-iron skill.
+
+
+Final verification of these controls: native package build, zero-error frontend
+checking (ten existing warnings), seven native Rust tests, 23 ordinary packaged
+workspace checks and 14 filming checks pass. The final six-case GPU readback matrix
+passes **72/72**, with zero unavailable readbacks and zero sprite/Vello position
+difference; attachment and fixed-viewport checks pass. The matrix took 24.89 s;
+workspace/film regressions took 18.44/2.99 s. Ordinary browser full smoke was already
+passing after the filming scene implementation; this follow-up changes native-only
+controls plus an opt-in filming legend and does not claim a new browser smoke run.
+
+
+**Standalone Bevy control built, 2026-10-27:** `src/iron_latency_probe` is an isolated
+Cargo workspace using the same Bevy 0.20 version and dev-opt optimization profile,
+with `DefaultPlugins` and Bevy's standard winit runner. Its dependency graph excludes
+Tauri, Vello and Iron's engine/document crates. Isolation prevents winit feature
+unification into the hosted engine; the shared target directory avoids another
+large build cache. `bun run native:standalone` builds/runs the regular executable.
+A minimal macOS app wrapper adds metadata around the same binary for GUI control.
+
+The green follower matches the host's −192 logical-pixel offset. A normal Bevy
+sprite supplies a yellow 48-pixel draggable target and R resets it. Startup reports
+confirm actual pipelined rendering, FIFO and matching 1280×818 logical / 2560×1636
+backing dimensions at DPR 2. Native build and GUI startup pass; observed input logs
+confirm held-button target movement and release. Optional observational AppKit
+tracing records original NSEvent timestamp → monitor receipt → PostUpdate, preserving
+input-delivery age that monitor-receipt-only timing misses. Trace is off by default.
+The running validation copy has tracing enabled. Human / optical A/B latency against
+the hosted version remains to be measured; this is a control, not a proven speedup.
+
+
+#### Vsync-timed presentation (`late-fifo`), 2026-10-27
+
+Found in the standalone probe (`src/iron_latency_probe`, README has every table) and
+ported to the host. Stock Bevy's ≈48 ms Metal HUD present delay is scheduling, not
+vsync: it renders as soon as a drawable frees (just after a vsync), so the frame
+waits almost a refresh before the compositor's pickup. Display-sync-off modes
+reached ≈5–7 ms but flip mid-scan and tear heavily in the probe's sweeping-bar
+scene, so they are rejected. `CAMetalDisplayLink` (frame latency 1) sets its
+deadline two refreshes before presentation (≈35 ms present→glass) and its latency
+grew in use; rejected.
+
+`IRON_NATIVE_PACING=late-fifo` (`bun run native:late-fifo`: sync render, frame
+latency 1) starts each frame so that it presents a 5 ms margin
+(`IRON_NATIVE_PACING_MARGIN_MS`) before a vsync taken from a `CVDisplayLink` on its
+own thread; a main-thread `CADisplayLink`'s timestamps jumped whenever that thread
+was busy. `MTLDrawable.presentedTime` feedback (`present_feedback.rs`; nextDrawable
+wrapped since wgpu keeps drawables private) drains FIFO backlogs: at one present
+per refresh one late frame otherwise leaves every later frame queued, ratcheting
+latency up a refresh at a time (observed 30 → 47 ms before the drain). When
+present→glass stays 0.6 refresh above its recent floor for three frames, one
+refresh is skipped. `IRON_NATIVE_PRESENT_TRACE=1` prints the feedback.
+
+Host, filming scene with scripted motion and forced continuous rendering, one
+3840×2160 60 Hz display, five-second HUD reports:
+
+| Host mode | Present Delay |
+|---|---:|
+| `native:baseline` (pipelined/display, FIFO/2) | 61.43 ms |
+| `native:low-latency` (sync/late, FIFO/2) | 36.49 ms |
+| `native:late-fifo` | 23.08 ms |
+| `late-fifo`, 7 ms margin | 24.82 ms |
+| `late-fifo`, WKWebView detached | 23.77 ms |
+| standalone probe `late-fifo`, 4–6 ms margin | 21.99–23.94 ms |
+
+The WKWebView overlay adds no measurable present delay in this mode. A drain
+repeats one frame; 5 drains in ≈480 traced frames at the default margin, 4 in ≈960
+at 7 ms. Present Delay excludes input delivery and panel response. The user judged
+the standalone `late-fifo` scene smooth and its latency good; the host has not had
+a human A/B yet. A/B commands: `native:late-fifo` against
+`native:standalone:late-fifo` / `native:standalone:motion` / `native:standalone:stock`.
+
+##### GPU-aware budget and the 3D view (2026-10-27, later)
+
+The user saw hiccups flying in the 3D view under `late-fifo`. Findings:
+
+- **Stalls weren't CPU.** A 24 s trace with the 3D camera strafing on `Time`
+  (`IRON_NATIVE_3D_MOTION=1`) had tick work p99 6.3 ms (max 9.1), start-timer
+  lateness ≤ 1.7 ms and no main-thread stalls. Most missed refreshes had presented
+  on time and still reached glass a refresh late: GPU work finishing after the
+  compositor's pickup, which a CPU-only budget can't see.
+- **GPU completion is measurable.** `gpu_timing.rs` wraps the Metal queue's
+  `commandBuffer` / `commandBufferWithUnretainedReferences` (wgpu keeps buffers
+  private) and records each buffer's `GPUEndTime`. A frame's GPU finish is the
+  latest end among its buffers, excluding wgpu's present-only buffer, whose
+  completion tracks drawable scheduling. The `late-fifo` budget now runs from tick
+  start to GPU finish (`IRON_NATIVE_GPU_BUDGET=0` reverts to CPU present), and its
+  margin (initial 4 ms, 2–8 ms) widens by 1 ms when a frame whose GPU finished
+  before `vsync − margin` still lands half a refresh later than the run's median
+  offset, and narrows 0.01 ms per on-time frame. When work + margin exceeds 90% of
+  a refresh it starts at the display callback instead (graceful degradation).
+- **Bevy `Time` follows the planned vsync** in `late-fifo`
+  (`IRON_NATIVE_FRAME_CLOCK=wall` reverts). Wall-clock steps already matched the
+  display interval in > 98% of frames, so this made no measurable difference.
+- **Measurement trap:** launches without a diagnostic flag keep the window's
+  remembered position; after unplugging a monitor it was at x = −2144, off screen.
+  Runs from that state are discarded. `hud-host.sh` sets a pacing-trace path, which
+  centers and shows the window.
+
+Visible window, 3D strafe, ≈30 s per case (present trace) plus a five-second HUD
+report (`.agents/latency/standalone-hud/`):
+
+| Scene / mode | HUD Present Delay | Frames held 2 refreshes |
+|---|---:|---:|
+| light 3D, `native:baseline` | 44.96 ms | 0 / 1800 |
+| light 3D, `late-fifo`, CPU budget | 23.26 ms | 31 / 1680 (22 drains) |
+| light 3D, `late-fifo`, GPU budget | 21.11 ms | 1 / 1800 |
+| 10,000 spheres, `native:baseline` | 43.53 ms | 0 / 1800 |
+| 10,000 spheres, `late-fifo`, CPU budget | 26.98 ms | 4 / 1800 |
+| 10,000 spheres, `late-fifo`, GPU budget | 26.91 ms | 2 / 2160 |
+
+The 10,000-sphere scene (`IRON_NATIVE_3D_LOAD=10000`, eight shared materials) is
+CPU-heavy: ≈3.5 ms GPU but ≈20 ms tick→GPU finish, so it ran in the degraded
+start-at-callback mode and still beat stock by ≈16 ms. A GPU-bound scene (heavy
+fragment work) has not been measured. No human A/B of the GPU-aware build yet.
+
+##### Adaptive pacing: low latency only while dragging (2026-10-27, later)
+
+Just-in-time presentation removes the queue that absorbs frame-time spikes, so the
+remaining rare misses show as repeated frames (2D pan: roughly one per 3–6 s,
+uneven between runs; not WKWebView-related: overlaid 5/1800 vs detached 10/1320).
+Stock pacing shows none in the same tests because its queue hides them, at about
+twice the present delay. Planned skips from slightly late display callbacks are
+fixed (start now when the shortfall fits half the reserve, ≤ 4 ms).
+
+`IRON_NATIVE_PACING=adaptive` (`bun run native:adaptive`: sync render, frame
+latency 2) uses `late-fifo` while the user is dragging and display pacing (stock's
+queue) otherwise. Dragging is the left button held or any document gesture
+(`active_gesture()`), so it needs no tool or context knowledge; flying and
+space-free panning stay smooth. Entering a drag skips presents (≤ 3) until the
+queued frames have reached the display, counted from acquired vs shown drawables;
+at mousedown nothing has moved, so the skips don't show. Bevy's pipelined
+rendering cannot be toggled at runtime, so adaptive runs sync render throughout.
+
+Synthetic test (2D pan running throughout, seven 2 s drags): present→glass p50
+20–24 ms while dragging, ≈ 28–29 ms otherwise; 9 repeats in ≈ 600 dragging frames
+of which ≈ 7 are the entry skips (visible only because the pan kept moving), ≈ 1
+in ≈ 1300 other frames. No human A/B yet.
 
 #### Feasibility gate status and adapter inventory (2026-10-16)
 

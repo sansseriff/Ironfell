@@ -131,4 +131,6 @@ pub mod order {
     /// Alpha stress fixture (`?bevy=alpha`), drawn above everything else.
     pub const ALPHA_STRESS_STATIC: i32 = 70;
     pub const ALPHA_STRESS_ANIMATED: i32 = 71;
+    /// Opt-in filming panel's render-only pointer marker.
+    pub const LATENCY_FILM: i32 = 80;
 }

@@ -401,7 +401,8 @@ pub(crate) fn sync_document(
         *origin = DocumentOrigin::fresh();
         synced.0 = store.0.document().version();
         affected.extend(store.0.document().live_nodes().map(|n| n.id));
-        info!(
+        debug!(
+            target: "iron_debug",
             "loaded document v{} ({} live nodes)",
             store.0.document().version().0,
             affected.len()
@@ -447,7 +448,7 @@ pub(crate) fn sync_document(
             HistoryOp::Redo => store.0.redo(now),
         };
         match result {
-            None => info!("nothing to {op:?}"),
+            None => debug!(target: "iron_debug", "nothing to {op:?}"),
             Some(Ok(_)) => {}
             Some(Err(errors)) => {
                 for e in errors {
@@ -456,14 +457,16 @@ pub(crate) fn sync_document(
             }
         }
     }
-    // Everything the log gained since the last sync, whoever applied it.
+    // Everything the log gained since the last sync, whoever applied it. These
+    // event lines are DEBUG on `iron_debug` (`?bevy=debuglog` / RUST_LOG).
     for tx in store.0.history().log().filter(|tx| tx.version > synced.0) {
-        info!("applied {:?} ({} ops, {:?}) -> v{}", tx.label, tx.ops.len(), tx.actor, tx.version.0);
+        debug!(target: "iron_debug", "applied {:?} ({} ops, {:?}) -> v{}", tx.label, tx.ops.len(), tx.actor, tx.version.0);
         if let Some(s) = &tx.solver {
             // The cause line the model hears (CS §9.1): who drove what, which
             // clusters re-solved; inferred values are on demand, never pushed.
             let list = |ids: &[NodeId]| ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
-            info!(
+            debug!(
+                target: "iron_debug",
                 "{:?} by {:?}: cluster {} re-solved; moved {} node(s): {}{}",
                 tx.label,
                 tx.actor,

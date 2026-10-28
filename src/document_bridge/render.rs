@@ -403,7 +403,10 @@ pub fn render_document_layer(
         // Only views that show none of it: nothing rebuilt, nothing to say.
         return;
     }
-    info!(
+    // One line per rebuilt frame: DEBUG on the `iron_debug` target, shown by
+    // `?bevy=debuglog` (web) or RUST_LOG=info,iron_debug=debug (native).
+    debug!(
+        target: "iron_debug",
         "redraw ({reason}{}): {} of {drawn} nodes changed [{}]; damage {damage}",
         if changed.structure { ", structure" } else { "" },
         changed.nodes.len(),

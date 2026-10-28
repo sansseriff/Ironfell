@@ -53,12 +53,15 @@
     __probe(); await sleep(200); const before = window.__lastProbeStats;
     const start = performance.now(); while(performance.now()-start < 1500) {}
     __probe(); await sleep(200); const after = window.__lastProbeStats;
-    check('native engine survives JS stall', after.frames-before.frames > 30 && after.renderThreadEnabled, {beforeFrames:before.frames,afterFrames:after.frames});
+    check('native engine survives JS stall', after.frames-before.frames > 30, {beforeFrames:before.frames,afterFrames:after.frames});
+    check('requested render mode active', after.renderThreadEnabled === (after.requestedRenderMode === 'pipelined'), {requested:after.requestedRenderMode,renderThreadEnabled:after.renderThreadEnabled});
     if (after.simulation) {
       const {spans,...summary}=after.simulation;
       check('runtime population and authored parameter', summary.entities===100000 && summary.documentSpeeds.includes(50), summary);
       check('parallel ECS execution', summary.ecsParallelIntervals>0, summary.ecsParallelIntervals);
-      check('render thread overlaps simulation', summary.renderSimulationOverlapIntervals>0, summary.renderSimulationOverlapIntervals);
+      check('render/simulation overlap matches mode', after.renderThreadEnabled
+        ? summary.renderSimulationOverlapIntervals>0 : summary.renderSimulationOverlapIntervals===0,
+        summary.renderSimulationOverlapIntervals);
       await core.invoke('native_test', {action:'trace',report:after.simulation});
     } else {
       // Stats is a live composition since free-running.md landed. Disable its

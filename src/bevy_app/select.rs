@@ -2514,10 +2514,10 @@ pub fn select_tool_system(
                         match &h.mode {
                             DragMode::Locked(reasons) | DragMode::Axes { locked: reasons, .. } => {
                                 for why in reasons {
-                                    info!("{id} locked for this drag: {why}");
+                                    debug!(target: "iron_debug", "{id} locked for this drag: {why}");
                                 }
                             }
-                            DragMode::Cluster(c) => info!("{id} dragged through cluster {c}"),
+                            DragMode::Cluster(c) => debug!(target: "iron_debug", "{id} dragged through cluster {c}"),
                         }
                         if !h.is_locked() {
                             drags.push((h, inv));

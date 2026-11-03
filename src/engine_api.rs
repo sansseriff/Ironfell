@@ -2172,6 +2172,25 @@ pub fn timeline_axis(app: &mut WorkerApp, fields: String) -> String {
     })
 }
 
+/// "Animate change" (timeline.md §6, phase 4): the last transaction's
+/// number, vector and colour changes to the selection (to whatever it
+/// changed, with nothing selected) become clips from the old value to the
+/// new, starting at the playhead, and the authored values go back: one
+/// transaction. `{"ok", "version", "clips", "at"}`, or why there is nothing
+/// to do.
+pub fn animate_change(app: &mut WorkerApp, actor: String) -> String {
+    narrative_run(app, |store| {
+        // The timeline's own pieces (session nodes) are not what changed:
+        // with only those selected, animate whatever the change touched.
+        let nodes: Vec<iron_document::NodeId> = store.selection().into_iter().map(|(id, _)| id).filter(|id| !id.is_session()).collect();
+        let at = store.time();
+        let ops = iron_document::timeline_view::animate_change_ops(store, &nodes, at)?;
+        let clips = ops.iter().filter(|op| matches!(op, iron_document::Op::Create { ty, .. } if ty.name() == "clip")).count();
+        let version = narrative_apply(store, "animate change", &actor, ops)?;
+        Ok(serde_json::json!({"ok": true, "version": version, "clips": clips, "at": at}))
+    })
+}
+
 /// Nodes a mention can name (the `#` menu): live, named, not session or
 /// derived, whose name contains `query` (case-insensitive), at most 20,
 /// best first. `{"ok", "targets": [{"id", "name", "type", "composition"}]}`.

@@ -24,6 +24,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "narrative_write" => { arity(args,4)?; crate::engine_api::narrative_write(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },
         "narrative_rewrite" => { arity(args,3)?; crate::engine_api::narrative_rewrite(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "timeline_axis" => { arity(args,1)?; crate::engine_api::timeline_axis(app,argument::<String>(args,0)?) },
+        "animate_change" => { arity(args,1)?; crate::engine_api::animate_change(app,argument::<String>(args,0)?) },
         "clock_read" => { arity(args,0)?; crate::engine_api::clock_read(app) },
         "clock_set" => { arity(args,1)?; crate::engine_api::clock_set(app,argument::<String>(args,0)?) },
         "narrative_probe" => { arity(args,2)?; crate::engine_api::narrative_probe(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },

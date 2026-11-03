@@ -464,3 +464,77 @@ pub fn fit(store: &mut Store, width: f64) -> Result<(), String> {
     let (_, ops) = axis_ops(store, 0.0, pps)?;
     store.apply_session(ops).map_err(|e| e.message)
 }
+
+/// How long a clip "Animate change" makes lasts, seconds.
+pub const ANIMATE_DUR: f64 = 1.0;
+
+/// "Animate change" (timeline.md §6, creating clips explicitly): the last
+/// transaction's constant `Set`s of number, vector and colour leaves on
+/// `nodes` (on every content node it touched, when `nodes` is empty) become
+/// clips from the old value to the new, starting at `at` and lasting
+/// [`ANIMATE_DUR`], and each leaf's authored value goes back to the old
+/// one. The ops of one transaction; a `timeline` root is made when the
+/// document has none. `Err` says why there is nothing to animate.
+pub fn animate_change_ops(store: &Store, nodes: &[NodeId], at: f64) -> Result<Vec<Op>, String> {
+    use crate::value::ValueKind as K;
+    let doc = store.document();
+    let tx = store.history().past().last().ok_or("nothing to animate: no change yet")?;
+    // The last write to each leaf, and its value before the transaction.
+    let mut changes: Vec<(NodeId, LeafPath, Value, Value)> = Vec::new();
+    for op in &tx.ops {
+        let Op::Set { id, path, slot: Slot::Const(new) } = op else { continue };
+        if id.is_session() || id.is_expanded() || !doc.is_live(*id) || (!nodes.is_empty() && !nodes.contains(id)) {
+            continue;
+        }
+        if !matches!(new.kind(), K::Number | K::Quantity | K::Vec2 | K::Vec3 | K::Color) {
+            continue;
+        }
+        // Undo applies the inverse in reverse, so its first write to the
+        // leaf is the value the transaction started from.
+        let old = tx.inverse.iter().find_map(|inv| match inv {
+            Op::Set { id: i, path: p, slot: Slot::Const(v) } if i == id && p == path => Some(v.clone()),
+            _ => None,
+        });
+        let Some(old) = old else { continue };
+        if old == *new {
+            continue;
+        }
+        match changes.iter_mut().find(|c| c.0 == *id && c.1 == *path) {
+            Some(c) => c.3 = new.clone(),
+            None => changes.push((*id, *path, old, new.clone())),
+        }
+    }
+    if changes.is_empty() {
+        return Err(format!("nothing to animate: \"{}\" changed no number, vector or colour of the selection", tx.label));
+    }
+    let mut ops = Vec::new();
+    let timeline = match doc.nodes_of_type(ty("timeline")).find(|t| !t.is_session()) {
+        Some(t) => t,
+        None => {
+            let id = doc.next_ids(1)[0];
+            let order = doc.roots().iter().filter(|r| !r.is_session()).last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
+            ops.push(Op::Create { id, ty: ty("timeline"), parent: None, order, facets: vec![named("main")] });
+            id
+        }
+    };
+    let skip = ops.len();
+    let ids = doc.next_ids(skip + changes.len()).into_iter().skip(skip).collect::<Vec<_>>();
+    let rels = doc.next_relation_ids(changes.len());
+    let mut order = doc.children(timeline).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |o| OrderKey::after(&o));
+    for (((node, path, old, new), clip), rel) in changes.into_iter().zip(ids).zip(rels) {
+        let mut timing = crate::facet::Timing::default();
+        timing.start = Slot::Const(Value::Number(at));
+        timing.dur = Slot::Const(Value::Number(ANIMATE_DUR));
+        timing.easing = Slot::Const(Value::Enum("ease_in_out".into()));
+        let mut c = crate::facet::Clip::default();
+        c.prop = Slot::Const(Value::Str(path.to_string()));
+        c.from = Slot::Const(old.clone());
+        c.to = Slot::Const(new);
+        let label = format!("{} {}", name_of(store, node).unwrap_or_else(|| doc.live(node).map_or("node", |n| n.ty.name()).to_owned()), path.field);
+        ops.push(Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: order.clone(), facets: vec![timing.wrap(), c.wrap(), named(&label)] });
+        ops.push(Op::Link { rel: Relation { id: rel, from: clip, to: node, rel: RelKind::Animates, data: BTreeMap::new() } });
+        ops.push(Op::Set { id: node, path, slot: Slot::Const(old) });
+        order = OrderKey::after(&order);
+    }
+    Ok(ops)
+}

@@ -232,3 +232,27 @@ fn the_loop_band_follows_the_clock() {
     assert_eq!(x_of(&store, band), 260.0);
     assert_eq!(store.resolved(band, path("size.w")).unwrap(), Value::Number(150.0));
 }
+
+#[test]
+fn animate_change_turns_the_last_edit_into_a_clip() {
+    let Scene { mut store, rect, .. } = scene();
+    store.set_time(4.0);
+    store.apply(tx("move rect", vec![Op::Set { id: rect, path: path("transform2d.y"), slot: num(80.0) }])).unwrap();
+    let ops = timeline_view::animate_change_ops(&store, &[rect], store.time()).unwrap();
+    store.apply(tx("animate change", ops)).unwrap();
+    assert_eq!(store.document().leaf(rect, path("transform2d.y")).unwrap().constant(), Some(&Value::Number(0.0)), "the authored value went back");
+    store.set_time(4.0);
+    assert_eq!(store.resolved(rect, path("transform2d.y")).unwrap(), Value::Number(0.0), "at the start the clip holds the old value");
+    store.set_time(5.0);
+    assert_eq!(store.resolved(rect, path("transform2d.y")).unwrap(), Value::Number(80.0), "after a second, the new one");
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let rows: usize = store.document().children(comp).iter().filter(|&&k| store.document().get::<Name>(k).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).is_some_and(|s| s.starts_with("property "))).count();
+    assert_eq!(rows, 2, "the rect has an x row and now a y row");
+    // One undo takes the whole thing back.
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(store.document().leaf(rect, path("transform2d.y")).unwrap().constant(), Some(&Value::Number(80.0)));
+    // Nothing of the selection changed: it says so.
+    let Scene { clip, .. } = scene();
+    assert!(timeline_view::animate_change_ops(&store, &[clip], 0.0).is_err());
+}

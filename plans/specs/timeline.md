@@ -380,3 +380,23 @@ revisited; none is expensive to change.
   above. Phases 4 (Animate change, editing an end at the playhead) and 5 (seekable
   endpoints) are not started.
 
+### Phase 4, first part: Animate change (2026-11-03)
+
+- **`timeline_view::animate_change_ops(store, nodes, at)`**: the last transaction's
+  constant `Set`s of number, quantity, vector and colour leaves on `nodes` (on every
+  content node it touched when `nodes` is empty) become clips from the old value (its
+  inverse's first write to the leaf) to the new, starting at `at`, 1 s, `ease_in_out`,
+  named "<node> <field>", each linked by `animates`; the authored value is set back to
+  the old one, all in one transaction. A `timeline` root is made when the document has
+  none. `Err` says why there is nothing to animate.
+- **Engine call** `animate_change(actor)`: the selection (session nodes, such as the
+  timeline's own readouts, ignored) at the playhead; `{ok, version, clips, at}`.
+- **UI.** The transport's Animate change button and `K` ("key it", captured anywhere
+  but a text field; no tool uses K). A note over the transport reports the clips made,
+  or the reason.
+- **Tests.** `tests/timeline_view.rs` 8 (animate change: the clip samples old then new,
+  the authored value goes back, the timeline gains a row, one undo, nothing to animate);
+  `timeline.txt` moves the ellipse at 1 s, presses K, checks 1 s and 2 s, and undoes.
+- **Not yet:** editing an end at the playhead (§6, way 2), the canvas context menu
+  entry, phase 5 (seekable endpoints).
+

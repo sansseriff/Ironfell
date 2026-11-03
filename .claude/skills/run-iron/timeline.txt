@@ -68,5 +68,18 @@ eval (async()=>{await new Promise(r=>setTimeout(r,300));const a=await __iron.cal
 pwheel timeline 700 160 120 0 1 100
 eval (async()=>{await new Promise(r=>setTimeout(r,300));const a=await __iron.call('timeline_axis',['{}']);return 'panned: t0 '+a.t0.toFixed(2)})()
 shot timeline-navigated
+# Phase 4, Animate change: with the playhead at 1 s, move the ellipse
+# (#N, x 160) to 400, then K. The change becomes a clip from 1 s to 2 s and
+# the authored x goes back to 160; at 2 s it reads 400. One undo takes the
+# animation back and leaves the move (x 400, the demo's 2 clips).
+eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:1,playing:false})]);const r=await __iron.edit('<edit><set id="#N" x="400"/></edit>');return 'moved: '+r.ok})()
+pmove viewer 500 300
+key k
+sleep 500
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const clip=[...v.matchAll(/<clip[^>]*>/g)].map(m=>m[0]).find(c=>c.includes('transform2d.x')&&c.includes('from="160"'));const e=v.match(/<ellipse id="#N"[^>]*>/)[0];return 'clip: '+(clip?clip.match(/start="[^"]*" dur="[^"]*"/)[0]+' '+clip.match(/from="[^"]*" to="[^"]*"/)[0]:'none')+'; ellipse at the playhead '+e.match(/ x="[^"]*"/)[0]+'; note: '+document.querySelector('.transport .note')?.textContent})()
+eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:2})]);await new Promise(r=>setTimeout(r,300));const v=await __iron.view({fidelity:'full'});return 'at 2 s the ellipse'+v.match(/<ellipse id="#N"[^>]*>/)[0].match(/ x="[^"]*"/)[0]})()
+key Meta+z
+sleep 400
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const n=[...v.matchAll(/<clip[^>]*>/g)].length;return 'undone: '+n+' clips; ellipse'+v.match(/<ellipse id="#N"[^>]*>/)[0].match(/ x="[^"]*"/)[0]})()
 logs applied
 errors

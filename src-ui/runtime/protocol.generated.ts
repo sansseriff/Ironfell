@@ -13,6 +13,7 @@ export type DocumentCommand =
   | { op: 'narrative_write'; source: string; after: string; markdown: string; actor: string }
   | { op: 'narrative_rewrite'; block: string; markdown: string; actor: string }
   | { op: 'timeline_axis'; fields: string }
+  | { op: 'animate_change'; actor: string }
   | { op: 'clock_read' }
   | { op: 'clock_set'; fields: string }
   | { op: 'narrative_probe'; node: string; action: string }
@@ -86,6 +87,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'narrative_write': return { fn: command.op, args: [command.source, command.after, command.markdown, command.actor] };
     case 'narrative_rewrite': return { fn: command.op, args: [command.block, command.markdown, command.actor] };
     case 'timeline_axis': return { fn: command.op, args: [command.fields] };
+    case 'animate_change': return { fn: command.op, args: [command.actor] };
     case 'clock_read': return { fn: command.op, args: [] };
     case 'clock_set': return { fn: command.op, args: [command.fields] };
     case 'narrative_probe': return { fn: command.op, args: [command.node, command.action] };

@@ -6,13 +6,16 @@
   // the readout seeks. With the pointer over the timeline its keys are the
   // transport's: Space plays and pauses, Home and End go to 0 and to the
   // last clip's end, ← and → step a frame (1/30 s; with Shift, 1 s), I and
-  // O set the loop's ends at the playhead, F fits the clips.
+  // O set the loop's ends at the playhead, F fits the clips. K ("key it",
+  // from anywhere but a text field) is Animate change: the last change to
+  // the selection becomes clips from the playhead (timeline.md §6).
   import { onDestroy } from "svelte";
   import Play from "@lucide/svelte/icons/play";
   import Pause from "@lucide/svelte/icons/pause";
   import SkipBack from "@lucide/svelte/icons/skip-back";
   import Repeat from "@lucide/svelte/icons/repeat";
   import Maximize from "@lucide/svelte/icons/maximize-2";
+  import DiamondPlus from "@lucide/svelte/icons/diamond-plus";
   import { controllerManager } from "../../controller-manager.svelte";
   import Button from "../../lib/ui/Button.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
@@ -66,6 +69,17 @@
     const r = area();
     if (r) doc.command({ op: "timeline_axis", fields: JSON.stringify({ fit: r.width * devicePixelRatio }) });
   }
+  let note = $state("");
+  let noteTimer: ReturnType<typeof setTimeout> | undefined;
+  function say(text: string) {
+    note = text;
+    clearTimeout(noteTimer);
+    noteTimer = setTimeout(() => (note = ""), 3500);
+  }
+  async function animateChange() {
+    const r = await doc.command<{ ok: boolean; clips?: number; at?: number; error?: string }>({ op: "animate_change", actor: "human" });
+    say(r.ok ? `Animated: ${r.clips} clip${r.clips === 1 ? "" : "s"} from ${(r.at ?? 0).toFixed(2)} s` : (r.error ?? "Nothing to animate"));
+  }
   function toggleLoop() {
     if (looping) set({ loop_in: 0, loop_out: 0 });
     else set({ loop_in: 0, loop_out: clock.end });
@@ -73,9 +87,16 @@
   // Captured before the engine's own key handling, and only with the
   // pointer over the timeline and no text field focused.
   const onKey = (e: KeyboardEvent) => {
-    if (!over || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (e.key.toLowerCase() === "k" && !e.shiftKey) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      void animateChange();
+      return;
+    }
+    if (!over) return;
     const step = e.shiftKey ? 1 : FRAME;
     const actions: Record<string, () => void> = {
       " ": toggle,
@@ -123,6 +144,7 @@
   <IconButton icon={clock.playing ? Pause : Play} label={clock.playing ? "Pause" : "Play"} title={clock.playing ? "Pause (Space)" : "Play (Space)"} large onclick={toggle} />
   <IconButton icon={Repeat} label="Loop" title={looping ? "Loop off" : "Loop every clip (I, O set its ends)"} large pressed={looping} onPressedChange={toggleLoop} />
   <IconButton icon={Maximize} label="Fit" title="Fit the clips (F)" large onclick={fit} />
+  <IconButton icon={DiamondPlus} label="Animate change" title="Animate change (K): the last change to the selection becomes a clip from the playhead" large onclick={animateChange} data-action="animate-change" />
   {#if editing}
     <!-- svelte-ignore a11y_autofocus -->
     <TextInput
@@ -149,6 +171,7 @@
     >
   {/if}
   <span class="end">/ {fmt(clock.end)}</span>
+  {#if note}<span class="note" role="status">{note}</span>{/if}
 </div>
 
 <style>
@@ -175,6 +198,19 @@
   }
   .transport :global(button.time) {
     cursor: text;
+  }
+  .note {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    padding: 4px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--bg);
+    box-shadow: var(--menu-shadow);
+    color: var(--fg);
+    font-size: 12px;
+    white-space: nowrap;
   }
   .end {
     font-size: 12px;

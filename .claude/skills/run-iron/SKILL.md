@@ -60,7 +60,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `scopes.txt` | ~15 s |
 | `scope-menu.txt` | ~20 s |
 | `narrative.txt` | ~25 s |
-| `timeline.txt` | ~25 s |
+| `timeline.txt` | ~30 s |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1 min |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
@@ -1084,7 +1084,7 @@ artifacts, which this skill does not run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-246 tests pass (verified 2026-11-03 after timeline phase 3's first part
+247 tests pass (verified 2026-11-03 after timeline phase 4's Animate change
 extended `tests/timeline_view.rs`; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
@@ -2048,10 +2048,17 @@ it (`to`, from x + 4), at y 102.
 - **Wheel**: horizontal pans time (`axis.t0`), vertical scrolls the rows,
   Ctrl/Cmd zooms `axis.pps` about the pointer. Shift+1 fits, as F does.
 - **Transport** (`TimelineTransport.svelte`): back to 0, play/pause, loop (all
-  clips), fit, the time (click to type and seek), the end.
+  clips), fit, **Animate change** (`[data-action=animate-change]`, or `K` from
+  anywhere but a text field), the time (click to type and seek), the end.
+- **Animate change** (phase 4): the last transaction's number, vector and
+  colour changes to the selection (session nodes ignored; none selected: all it
+  touched) become clips from the old value to the new, starting at the playhead,
+  1 s, ease in-out, and the authored values go back: one "animate change"
+  transaction. A note over the transport says how many clips, or why none.
 - **Engine calls**: `clock_read()` → `{ok, id, t, playing, rate, loop_in, loop_out,
   end}`; `clock_set(json)`; `timeline_axis(json)`, `{"fit": width}` or `{"pan",
-  "zoom", "at"}`, → `{ok, t0, pps}` (`'{}'` reads).
+  "zoom", "at"}`, → `{ok, t0, pps}` (`'{}'` reads); `animate_change(actor)` →
+  `{ok, version, clips, at}`.
 
 `timeline.txt`. Expected, minus `nav`, `ready`, `key`, `sleep` and `screenshot`
 lines:
@@ -2068,6 +2075,10 @@ lines:
 "loop 1.033 to 2.033, at 2.033"
 "fitted: t0 0, pps 284.0"
 "panned: t0 0.42"
+"moved: true"
+"clip: start=\"1\" dur=\"1\" from=\"160\" to=\"400\"; ellipse at the playhead  x=\"160\"; note: Animated: 1 clip from 1.00 s"
+"at 2 s the ellipse x=\"400\""
+"undone: 2 clips; ellipse x=\"400\""
 applied "open demo scene" (298 ops, System) -> v1
 applied "open showcase" (189 ops, System) -> v2
 applied "retime slide" (1 ops, Human) -> v3
@@ -2076,6 +2087,9 @@ applied "trim slide" (1 ops, Human) -> v5
 applied "undo: trim slide" (1 ops, System) -> v6
 applied "edit text" (1 ops, Human) -> v7
 applied "undo: edit text" (1 ops, System) -> v8
+applied "model edit" (1 ops, Model) -> v9
+applied "animate change" (3 ops, Human) -> v10
+applied "undo: animate change" (3 ops, System) -> v11
 (no page errors)
 ```
 

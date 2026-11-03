@@ -400,3 +400,44 @@ revisited; none is expensive to change.
 - **Not yet:** editing an end at the playhead (§6, way 2), the canvas context menu
   entry, phase 5 (seekable endpoints).
 
+### Press semantics as data, and the ruler (2026-11-03)
+
+Asked for by the user: static pieces were selectable and draggable, with selection
+chrome; the ruler should be taller with bigger labels and, as in After Effects, a
+press and drag anywhere on it should move the playhead, while below it presses reach
+the clips.
+
+- **Role groups.** The generator puts every piece in one of six groups, bottom to
+  top: `backdrop` (background, grid), `tracks` (segments and their labels), `values`
+  (end readouts), `headers` (header column, row names), `ruler` (bar, loop band,
+  ticks, tick labels, the grip) and `overlay` (the playhead's line). Each group has a
+  `context` facet naming a built-in context, and those contexts' `children` rules are
+  the whole of the timeline's press behaviour: `std:timeline-static` (no target),
+  `std:timeline-tracks` (segments select, drag and trim; labels inert),
+  `std:timeline-values` (select and edit as text, no drag), `std:timeline-ruler` (the
+  scrub control) and `std:timeline-overlay` (inert). The groups are `window`s, not
+  `through`: a `through` node is passed over when a node's container context is found,
+  so its `children` rules would never apply. `std:timeline` keeps only the view's
+  offers. Reconcile now keys nodes at any depth and reparents a kept node whose group
+  changed.
+- **Two pointer values made real.** `affords.select="inert"` was declared and unused:
+  the picker now drops inert hits, so a press or a hover reaches what is under it.
+  `affords.select="none"` *declared by a rule* (not merely unlisted) now blocks a
+  press and only clears the selection, so the header column also hides segments
+  scrolled under it. No other context declares either value.
+- **The `track` facet** (`value`, `origin`, `scale`): with `affords.drag="track"`, a
+  node that has one maps the pointer absolutely, `origin + x · scale` along
+  `affords.axis`, so the press itself sets the value and a drag scrubs (a `Drive` with
+  `jump`). The ruler group's `value` is bound to `clock.t`, `origin` to
+  `t0 − label_w / pps`, `scale` to `1 / pps`; inversion writes the clock as a session
+  preview, so scrubbing is never an edit. This is the spec's `affords.press="jump"`
+  (§7) expressed with existing fields plus one facet; a slider could become a node
+  with a `track`.
+- **The ruler**: 40 px tall (was 24), labels 13 px (were 10), minor ticks at a fifth
+  of the major spacing, a 14 px grip.
+- **Tests.** `tests/timeline_view.rs` 9 (each piece's affordances from its group's
+  context; the ruler's track maps local x to time and writes the clock without
+  history); `timeline.txt` presses the ruler away from the grip, checks that header
+  clicks select nothing, a label click selects its segment and a tick-label click
+  moves the playhead.
+

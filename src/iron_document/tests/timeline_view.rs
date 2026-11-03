@@ -84,10 +84,27 @@ fn add_bar(store: &mut Store, view: NodeId, expr: &str) -> NodeId {
 
 fn node_named(store: &Store, comp: NodeId, key: &str) -> NodeId {
     let doc = store.document();
-    *doc.children(comp)
-        .iter()
-        .find(|&&k| doc.get::<Name>(k).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(key))
-        .unwrap_or_else(|| panic!("no {key}"))
+    let mut stack = doc.children(comp).to_vec();
+    while let Some(k) = stack.pop() {
+        if doc.get::<Name>(k).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(key) {
+            return k;
+        }
+        stack.extend(doc.children(k).iter().copied());
+    }
+    panic!("no {key}")
+}
+
+fn names_under(store: &Store, comp: NodeId) -> Vec<String> {
+    let doc = store.document();
+    let mut out = Vec::new();
+    let mut stack = doc.children(comp).to_vec();
+    while let Some(k) = stack.pop() {
+        if let Some(n) = doc.get::<Name>(k).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) {
+            out.push(n.to_owned());
+        }
+        stack.extend(doc.children(k).iter().copied());
+    }
+    out
 }
 
 fn build(store: &mut Store, last: &mut Option<(NodeId, timeline_view::Plan)>) -> NodeId {
@@ -105,7 +122,8 @@ fn the_timeline_is_built_from_the_clips() {
     assert_eq!(x_of(&store, seg), 260.0, "label_w + start * pps");
     assert_eq!(store.resolved(seg, path("size.w")).unwrap(), Value::Number(200.0));
     assert!(store.document().relations_from(seg).any(|r| r.rel == RelKind::Projects && r.to == clip), "a segment projects its clip");
-    let rows: Vec<String> = store.document().children(comp).iter().filter_map(|&k| store.document().get::<Name>(k).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned)).filter(|k| k.starts_with("object") || k.starts_with("property")).collect();
+    let mut rows: Vec<String> = names_under(&store, comp).into_iter().filter(|k| k.starts_with("object") || k.starts_with("property")).collect();
+    rows.sort();
     assert_eq!(rows, vec![format!("object {rect}"), format!("property {rect} transform2d.x")]);
     assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_none(), "nothing changed, nothing regenerated");
     assert!(!store.save().contains("segment"), "the timeline is session state");
@@ -136,13 +154,13 @@ fn the_static_pieces_do_not_move_and_the_playhead_scrubs() {
     let Scene { mut store, rect, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    for key in ["background", "header", "ruler", "tick 1", "tick label 1", &format!("object {rect}")] {
+    for key in ["background", "header", "ruler bar", "tick 1", "tick label 1", &format!("object {rect}")] {
         let id = node_named(&store, comp, key);
         assert!(matches!(store.begin_drag(id, [0.0, 0.0]).mode, DragMode::Locked(_)), "{key} is locked");
     }
     let grip = node_named(&store, comp, "playhead grip");
     let past = store.history().past().len();
-    let h = store.begin_drag(grip, [6.0, 0.0]);
+    let h = store.begin_drag(grip, [7.0, 0.0]);
     store.drag_to(&h, [360.0, 0.0]);
     assert_eq!(store.time(), 2.0);
     assert_eq!(x_of(&store, rect), 200.0, "the clip samples at the dragged playhead");
@@ -247,7 +265,7 @@ fn animate_change_turns_the_last_edit_into_a_clip() {
     assert_eq!(store.resolved(rect, path("transform2d.y")).unwrap(), Value::Number(80.0), "after a second, the new one");
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    let rows: usize = store.document().children(comp).iter().filter(|&&k| store.document().get::<Name>(k).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).is_some_and(|s| s.starts_with("property "))).count();
+    let rows: usize = names_under(&store, comp).iter().filter(|s| s.starts_with("property ")).count();
     assert_eq!(rows, 2, "the rect has an x row and now a y row");
     // One undo takes the whole thing back.
     store.undo(0).unwrap().unwrap();
@@ -255,4 +273,43 @@ fn animate_change_turns_the_last_edit_into_a_clip() {
     // Nothing of the selection changed: it says so.
     let Scene { clip, .. } = scene();
     assert!(timeline_view::animate_change_ops(&store, &[clip], 0.0).is_err());
+}
+
+#[test]
+fn what_each_piece_affords_is_its_groups_context() {
+    use iron_document::contexts::{chain_of, Field};
+    let Scene { mut store, rect, clip, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let values = |key: &str| {
+        let id = node_named(&store, comp, key);
+        let chain = chain_of(store.document(), id);
+        store.resolver().values(&chain, chain.len() - 1)
+    };
+    let segment = values(&format!("segment {clip} {rect}"));
+    assert!(segment.selectable() && segment.is(Field::DRAG, "point") && segment.has(Field::GRIPS, "box"), "a segment selects, drags and trims");
+    for key in ["background", "header", "grid 1", &format!("object {rect}")] {
+        let v = values(key);
+        assert!(v.is(Field::SELECT, "none") && v.source(Field::SELECT).is_some(), "{key} is declared no target");
+    }
+    for key in [format!("segment label {clip} {rect}"), "playhead".to_owned()] {
+        assert!(values(&key).is(Field::SELECT, "inert"), "{key} is transparent to the pointer");
+    }
+    let to = values(&format!("to {clip} {rect}"));
+    assert!(to.selectable() && to.is(Field::EDIT, "text") && to.is(Field::DRAG, "none"), "an end value edits, never drags");
+    // The ruler group is the scrub control: a track whose value is the clock.
+    let ruler = node_named(&store, comp, "ruler bar");
+    let ruler_group = store.document().live(ruler).unwrap().parent.unwrap();
+    let chain = chain_of(store.document(), ruler_group);
+    let v = store.resolver().values(&chain, chain.len() - 1);
+    assert!(v.is(Field::DRAG, "track") && v.get(Field::DRIVES) == "track.value");
+    for key in ["ruler bar", "tick 3", "tick label 1", "playhead grip"] {
+        assert!(!values(key).selectable(), "{key} is part of the ruler, not a target");
+    }
+    let n = |f: &str| store.resolved(ruler_group, path(f)).and_then(|v| v.as_f64()).unwrap();
+    // Local x 360 is 2 s at the default axis (label_w 160, 100 px/s).
+    assert_eq!(n("track.origin") + 360.0 * n("track.scale"), 2.0);
+    store.preview_target(ruler_group, path("track.value"), Value::Number(2.0)).unwrap();
+    assert_eq!(store.time(), 2.0, "the track's value is the playhead");
+    assert!(store.commit_gesture("scrub", Actor::Human, 0).is_none(), "scrubbing is not an edit");
 }

@@ -18,7 +18,7 @@
 
 use crate::document::{RelKind, Relation};
 use crate::expr::Expr;
-use crate::facet::{Axis, Composition, Corners, Facet, FacetKind, Fill, Font, LeafPath, LeafStruct, Name, Size, Text, Transform2d};
+use crate::facet::{Axis, Composition, ContextOf, Corners, Facet, FacetKind, Fill, Font, LeafPath, LeafStruct, Name, Size, Text, Track, Transform2d};
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::order::OrderKey;
@@ -33,7 +33,7 @@ pub const TIMELINE: &str = "timeline";
 pub const NOTATION: &str = "timeline";
 
 /// The ruler's height and a row's, in document px.
-pub const RULER_H: f64 = 24.0;
+pub const RULER_H: f64 = 40.0;
 pub const ROW_H: f64 = 22.0;
 const SEG_H: f64 = 16.0;
 /// How far the background, header and lines reach, in px.
@@ -164,7 +164,20 @@ struct Want {
     facets: Vec<Facet>,
     /// A `projects` relation to what it stands for.
     projects: Option<NodeId>,
+    /// The role group it is in (a key), or the composition.
+    parent: Option<&'static str>,
 }
+
+/// The role groups, bottom to top, and the built-in context each names
+/// (std_contexts.xml): what their children afford is that data.
+const GROUPS: [(&str, &str); 6] = [
+    ("backdrop", "std:timeline-static"),
+    ("tracks", "std:timeline-tracks"),
+    ("values", "std:timeline-values"),
+    ("headers", "std:timeline-static"),
+    ("ruler", "std:timeline-ruler"),
+    ("overlay", "std:timeline-overlay"),
+];
 
 fn bound(e: &str) -> Slot {
     Slot::Bound(Expr::parse(e).unwrap_or_else(|err| panic!("timeline binding {e:?}: {err}")))
@@ -231,7 +244,8 @@ const PLAYHEAD: [f32; 4] = [1.0, 0.6, 0.2, 1.0];
 const LOOP: [f32; 4] = [1.0, 0.6, 0.2, 0.22];
 const VALUE: [f32; 4] = [0.75, 0.82, 1.0, 1.0];
 
-/// Every node the plan draws, bottom to top.
+/// Every node the plan draws: the role groups, bottom to top, each with its
+/// pieces in drawing order.
 fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let ax = |f: &str| format!("{comp}.axis.{f}");
     let (lw, t0, pps) = (ax("label_w"), ax("t0"), ax("pps"));
@@ -239,32 +253,47 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let at = |e: &str| format!("{lw} + ({e} - {t0}) * {pps}");
     // The static pieces reach well past any panel, so the view reads as
     // one surface however it is sized or scrolled.
-    let height = FAR;
-    let h = lit(height);
-    let mut out = Vec::new();
-    let mut push = |key: String, ty_name: &str, facets: Vec<Facet>, projects: Option<NodeId>| {
+    let h = lit(FAR);
+    let clock = plan.clock;
+    let mut by: BTreeMap<&'static str, Vec<Want>> = BTreeMap::new();
+    let mut push = |group: &'static str, key: String, ty_name: &str, facets: Vec<Facet>, projects: Option<NodeId>| {
         let mut facets = facets;
         facets.push(named(&key));
-        out.push(Want { key, ty: ty(ty_name), facets, projects });
+        by.entry(group).or_default().push(Want { key, ty: ty(ty_name), facets, projects, parent: Some(group) });
     };
     let width = at(&lit(plan.end));
-    push("background".into(), "rect", vec![place("0", "0"), sized(&lit(FAR), &h), paint(BG)], None);
-    push("ruler".into(), "rect", vec![place(&lw, "0"), sized(&format!("({}) - {lw}", width), &lit(RULER_H)), paint(RULER)], None);
-    // The loop range, a band on the ruler: no width when there is no loop.
-    let clock = plan.clock;
-    push("loop".into(), "rect", vec![place(&at(&format!("{clock}.clock.loop_in")), "0"), sized(&format!("max({clock}.clock.loop_out - {clock}.clock.loop_in, 0) * {pps}"), &lit(RULER_H)), paint(LOOP)], None);
+
+    // Backdrop and grid.
+    push("backdrop", "background".into(), "rect", vec![place("0", "0"), sized(&lit(FAR), &h), paint(BG)], None);
     let ticks = (plan.end / plan.tick).round() as usize;
     for k in 0..=ticks {
-        let t = k as f64 * plan.tick;
-        let x = at(&lit(t));
-        push(format!("grid {k}"), "rect", vec![place(&x, &lit(RULER_H)), sized("1", &lit(height - RULER_H)), paint(GRID)], None);
-        push(format!("tick {k}"), "rect", vec![place(&x, &lit(RULER_H - 6.0)), sized("1", "6"), paint(TICK)], None);
-        let text = if plan.tick < 1.0 { format!("{t:.1}s") } else { format!("{t}s") };
-        let mut f = vec![place(&format!("{x} + 3"), "4")];
-        f.extend(words(&text, 10.0, 400.0));
-        f.push(paint(DIM));
-        push(format!("tick label {k}"), "text", f, None);
+        let x = at(&lit(k as f64 * plan.tick));
+        push("backdrop", format!("grid {k}"), "rect", vec![place(&x, &lit(RULER_H)), sized("1", &lit(FAR - RULER_H)), paint(GRID)], None);
     }
+
+    // The ruler: a track laying the clock's time along it (std:timeline-
+    // ruler), so a press anywhere on it moves the playhead there.
+    push("ruler", "ruler bar".into(), "rect", vec![place(&lw, "0"), sized(&format!("({}) - {lw}", width), &lit(RULER_H)), paint(RULER)], None);
+    push("ruler", "loop".into(), "rect", vec![place(&at(&format!("{clock}.clock.loop_in")), "0"), sized(&format!("max({clock}.clock.loop_out - {clock}.clock.loop_in, 0) * {pps}"), &lit(RULER_H)), paint(LOOP)], None);
+    const MINOR: usize = 5;
+    for k in 0..=ticks * MINOR {
+        let t = k as f64 * plan.tick / MINOR as f64;
+        let x = at(&lit(t));
+        let major = k % MINOR == 0;
+        let len = if major { 12.0 } else { 5.0 };
+        push("ruler", format!("tick {k}"), "rect", vec![place(&x, &lit(RULER_H - len)), sized("1", &lit(len)), paint(if major { TICK } else { DIM })], None);
+        if major {
+            let text = if plan.tick < 1.0 { format!("{t:.1}s") } else { format!("{t}s") };
+            let mut f = vec![place(&format!("{x} + 4"), "7")];
+            f.extend(words(&text, 13.0, 500.0));
+            f.push(paint(LABEL));
+            push("ruler", format!("tick label {}", k / MINOR), "text", f, None);
+        }
+    }
+    let head = at(&format!("{clock}.clock.t"));
+    push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 7"), "3"), sized("14", &lit(RULER_H - 10.0)), rounded(3.0), paint(PLAYHEAD)], None);
+
+    // Rows: headers on the left, segments and their end values along time.
     let mut y = RULER_H + 4.0;
     let mut labels = Vec::new();
     for o in &plan.objects {
@@ -281,12 +310,11 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 let start = if s.offset == 0.0 { format!("{}.timing.start", s.clip) } else { format!("{}.timing.start + {}", s.clip, lit(s.offset)) };
                 let x = at(&start);
                 let colour = if plan.errors.contains(&s.clip) { ERROR } else { SEGMENT };
-                let key = format!("segment {} {}", s.clip, o.target);
-                push(key.clone(), "rect", vec![place(&x, &lit(y + 3.0)), sized(&format!("{}.timing.dur * {pps}", s.clip), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
+                push("tracks", format!("segment {} {}", s.clip, o.target), "rect", vec![place(&x, &lit(y + 3.0)), sized(&format!("{}.timing.dur * {pps}", s.clip), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
                 let mut f = vec![place(&format!("{x} + 6"), &lit(y + 4.0))];
                 f.extend(words(&s.label, 11.0, 500.0));
                 f.push(paint([1.0, 1.0, 1.0, 0.95]));
-                push(format!("segment label {} {}", s.clip, o.target), "text", f, Some(s.clip));
+                push("tracks", format!("segment label {} {}", s.clip, o.target), "text", f, Some(s.clip));
                 // The ends' values, as readouts that invert: typing in one
                 // edits the clip's `from` or `to` (timeline.md §5).
                 if s.numeric {
@@ -299,26 +327,41 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                         font.size = Slot::Const(Value::Number(10.0));
                         font.align = Slot::Const(Value::Enum(align.into()));
                         font.tabular = Slot::Const(Value::Bool(true));
-                        let mut affords = crate::facet::Affords::default();
-                        affords.style = Slot::Const(Value::Str("edit: text".into()));
-                        let f = vec![place(&x, &lit(y + 5.0)), t.wrap(), font.wrap(), sized("60", "14"), paint(VALUE), affords.wrap()];
-                        push(format!("{end} {} {}", s.clip, o.target), "text", f, Some(s.clip));
+                        let f = vec![place(&x, &lit(y + 5.0)), t.wrap(), font.wrap(), sized("60", "14"), paint(VALUE)];
+                        push("values", format!("{end} {} {}", s.clip, o.target), "text", f, Some(s.clip));
                     }
                 }
             }
             y += ROW_H;
         }
     }
-    push("header".into(), "rect", vec![place("0", "0"), sized(&lw, &h), paint(HEADER)], None);
+    push("headers", "header".into(), "rect", vec![place("0", "0"), sized(&lw, &h), paint(HEADER)], None);
     for (key, x, y, text, size, weight, colour) in labels {
         let mut f = vec![place(&lit(x), &lit(y + 3.0))];
         f.extend(words(&text, size, weight));
         f.push(paint(colour));
-        push(key, "text", f, None);
+        push("headers", key, "text", f, None);
     }
-    let head = at(&format!("{}.clock.t", plan.clock));
-    push("playhead".into(), "rect", vec![place(&format!("{head} - 1"), "0"), sized("2", &h), paint(PLAYHEAD)], None);
-    push("playhead grip".into(), "rect", vec![place(&format!("{head} - 6"), "2"), sized("12", &lit(RULER_H - 6.0)), rounded(3.0), paint(PLAYHEAD)], None);
+    // The playhead's line, over everything and transparent to the pointer.
+    push("overlay", "playhead".into(), "rect", vec![place(&format!("{head} - 1"), "0"), sized("2", &h), paint(PLAYHEAD)], None);
+
+    let mut out = Vec::new();
+    for (group, context) in GROUPS {
+        let mut c = ContextOf::default();
+        c.name = Slot::Const(Value::Str(context.into()));
+        let mut facets = vec![named(group), c.wrap()];
+        if group == "ruler" {
+            // The clock's time along the ruler: local x means
+            // `t0 + (x - label_w) / pps`.
+            let mut track = Track::default();
+            track.value = bound(&format!("{clock}.clock.t"));
+            track.origin = bound(&format!("{t0} - {lw} / {pps}"));
+            track.scale = bound(&format!("1 / {pps}"));
+            facets.push(track.wrap());
+        }
+        out.push(Want { key: group.into(), ty: ty("group"), facets, projects: None, parent: None });
+        out.extend(by.remove(group).unwrap_or_default());
+    }
     out
 }
 
@@ -342,12 +385,15 @@ pub fn reconcile(store: &Store, plan: &Plan) -> Vec<Op> {
         }
     };
     let wants = wants(plan, comp);
+    // Every generated node, at any depth, by its key.
     let mut have: BTreeMap<String, NodeId> = BTreeMap::new();
     if existing.is_some() {
-        for &k in doc.children(comp) {
+        let mut stack: Vec<NodeId> = doc.children(comp).to_vec();
+        while let Some(k) = stack.pop() {
             if let Some(key) = name_of(store, k) {
                 have.insert(key, k);
             }
+            stack.extend(doc.children(k).iter().copied());
         }
     }
     let fresh = wants.iter().filter(|w| !have.get(&w.key).is_some_and(|&id| doc.live(id).is_some_and(|n| n.ty == w.ty))).count();
@@ -361,12 +407,23 @@ pub fn reconcile(store: &Store, plan: &Plan) -> Vec<Op> {
             ops.push(Op::Delete { id });
         }
     }
-    let mut order = OrderKey::first();
+    // A node's id once known, by key: groups come before their pieces.
+    let mut placed: BTreeMap<String, NodeId> = BTreeMap::new();
+    let mut orders: BTreeMap<Option<&'static str>, OrderKey> = BTreeMap::new();
     for w in wants {
+        let parent = match w.parent {
+            Some(g) => *placed.get(g).expect("a group before its pieces"),
+            None => comp,
+        };
+        let order = orders.get(&w.parent).map_or_else(OrderKey::first, OrderKey::after);
+        orders.insert(w.parent, order.clone());
         let kept = have.get(&w.key).copied().filter(|&id| doc.live(id).is_some_and(|n| n.ty == w.ty));
         match kept {
             Some(id) => {
-                if doc.live(id).is_some_and(|n| n.order != order) {
+                placed.insert(w.key.clone(), id);
+                if doc.live(id).is_some_and(|n| n.parent != Some(parent)) {
+                    ops.push(Op::Reparent { id, parent: Some(parent), order: order.clone() });
+                } else if doc.live(id).is_some_and(|n| n.order != order) {
                     ops.push(Op::Reorder { id, order: order.clone() });
                 }
                 for f in w.facets {
@@ -386,14 +443,14 @@ pub fn reconcile(store: &Store, plan: &Plan) -> Vec<Op> {
             }
             None => {
                 let id = ids.next().expect("an id per new node");
-                ops.push(Op::Create { id, ty: w.ty, parent: Some(comp), order: order.clone(), facets: w.facets });
+                placed.insert(w.key.clone(), id);
+                ops.push(Op::Create { id, ty: w.ty, parent: Some(parent), order: order.clone(), facets: w.facets });
                 if let Some(to) = w.projects {
                     let rel = rel_ids.next().expect("a relation id per link");
                     ops.push(Op::Link { rel: Relation { id: rel, from: id, to, rel: RelKind::Projects, data: BTreeMap::new() } });
                 }
             }
         }
-        order = OrderKey::after(&order);
     }
     ops
 }
@@ -416,7 +473,7 @@ pub fn sync(store: &mut Store, last: &mut Option<(NodeId, Plan)>) -> Result<Opti
     let mut touched = Vec::new();
     for op in &ops {
         match op {
-            Op::Create { id, .. } | Op::Delete { id } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::Reorder { id, .. } => touched.push(*id),
+            Op::Create { id, .. } | Op::Delete { id } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::Reorder { id, .. } | Op::Reparent { id, .. } => touched.push(*id),
             _ => {}
         }
     }

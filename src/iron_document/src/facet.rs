@@ -444,6 +444,17 @@ facets! {
         label_w: Number = Value::Number(160.0),
     }
 
+    /// A value laid along a node (timeline.md §7): with `affords.drag=
+    /// "track"`, the pointer at local `x` (along `affords.axis`) means
+    /// `origin + x · scale`, so a press jumps `value` there and a drag
+    /// scrubs it, as a slider's does. `value` is usually bound, and moves its
+    /// source: a timeline's ruler is a track whose value is the clock's `t`.
+    Track / "track" => Track {
+        value: Number = Value::Number(0.0),
+        origin: Number = Value::Number(0.0),
+        scale: Number = Value::Number(1.0),
+    }
+
     /// One block of a narrative (narrative-panel.md §7.1): a paragraph, a
     /// heading of `level`, a list item, a quote, code, or a view block that
     /// shows the composition `show` (an id or a name), framing `focus` (a

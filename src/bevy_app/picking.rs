@@ -104,6 +104,11 @@ pub fn pick_document_2d_system(
     if let Some((_, z, _)) = &walk.embed {
         out.retain(|h| h.z > *z);
     }
+    // What its context makes inert is transparent to the pointer: a press
+    // or a hover reaches what is under it (a label over a timeline segment,
+    // a grid line, a backdrop; contexts.md, timeline.md §7).
+    let resolver = store.0.resolver();
+    out.retain(|h| h.chain.is_empty() || !resolver.values(&h.chain, h.chain.len() - 1).is(iron_document::contexts::Field::SELECT, "inert"));
     sort_hits(&mut out);
     if let Some((k, _, chain)) = walk.embed {
         hits.embed = Some(k);

@@ -533,6 +533,9 @@ pub(crate) struct Drive {
     per_px: f64,
     step: f64,
     label: String,
+    /// A node with a `track` facet maps the pointer to a value absolutely:
+    /// the press itself sets `v0` (timeline.md §7, a ruler scrubbing).
+    jump: bool,
 }
 
 /// What a press on a control does, if a node on the hit's chain (deepest
@@ -574,6 +577,23 @@ fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Po
         let along = linear(m)(unit);
         let a0 = (start - origin).atan2();
         let verb = if drag == "ring" { "turn" } else { "set" };
+        // A `track` facet lays its value along the node: the pointer's
+        // local position along the axis is `origin + x · scale`.
+        let track = |f: &str| LeafPath::new(iron_document::FacetKind::Track, f).ok().and_then(|p| geo.store.resolved(id, p)).and_then(|x| x.as_f64());
+        let absolute = (drag == "track").then(|| Some((track("origin")?, track("scale")?))).flatten();
+        let (v0, per_px, jump) = match absolute {
+            Some((o, scale)) => {
+                let local = m.inverse() * start;
+                let x = match v.get(Field::AXIS) {
+                    "y" => local.y,
+                    "-x" => -local.x,
+                    "-y" => -local.y,
+                    _ => local.x,
+                };
+                (o + x * scale, scale / along.hypot().max(1e-9), true)
+            }
+            None => (v0, 1.0 / along.hypot().max(1e-9), false),
+        };
         return Some(Control::Drive(Drive {
             view: view.clone(),
             id,
@@ -585,9 +605,10 @@ fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Po
             last: a0,
             turned: 0.0,
             dir: along.normalize(),
-            per_px: 1.0 / along.hypot().max(1e-9),
+            per_px,
             step,
             label: format!("{verb} {}", drives),
+            jump,
         }));
     }
     None
@@ -2608,6 +2629,10 @@ pub fn select_tool_system(
                         Handle::Locked(why) => info!("{} cannot follow: {why}", d.id),
                         _ => {
                             store.0.begin_gesture(&[d.id]);
+                            // A track jumps to the press, then scrubs.
+                            if d.jump && let Err(why) = store.0.preview_target(d.id, d.leaf, Value::Number(d.v0)) {
+                                info!("{} cannot follow: {why}", d.id);
+                            }
                             tool.gesture = Gesture::Drive(d);
                             break 'press;
                         }
@@ -2616,6 +2641,19 @@ pub fn select_tool_system(
                         tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Activate { id, leaf, kind, step } };
                         break 'press;
                     }
+                }
+            }
+            // A node its context declares not a target (`affords.select=
+            // "none"` in a rule, not merely unlisted) blocks the press and
+            // only clears the selection (a timeline's backdrop and row
+            // headers, timeline.md §7).
+            {
+                let v = cx.values(&chain, k);
+                if v.is(Field::SELECT, "none") && v.source(Field::SELECT).is_some() && view.dims == Dims::Two {
+                    if !shift {
+                        set_selection(&mut sel, tool, Vec::new());
+                    }
+                    break 'press;
                 }
             }
             // A double-click on a selected node enters it.

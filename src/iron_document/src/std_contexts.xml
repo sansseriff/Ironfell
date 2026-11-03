@@ -56,18 +56,56 @@
 </context>
 
 <!-- The timeline (timeline.md §7), a session composition generated from the
-     clips (`timeline_view`). Its pieces are bound: a segment's x to its
-     clip's start, its y to a literal, so a drag retimes the clip and moves
-     only in time; the playhead to the clock; the ruler, ticks and headers to
-     nothing free, so they stay put. A segment's box grips trim it: its
-     width is `dur · pps` and its height a literal, so the right edge
-     changes `dur` and the left `start` and `dur` (`affords.grips="ends"`,
-     the two edges only, is the spec's; the box stands in). End values are
-     readouts that edit as text (their inline `affords`). No snapping yet. -->
+     clips (`timeline_view`). Its pieces are grouped by role, and each group
+     names the context below that says what its children afford, so nothing
+     in it is special-cased: what can be pressed, dragged or selected is this
+     data. The groups are windows, not `through`: their content selects
+     directly, and they stay the container their children's rules come
+     from. The view's own offers are here; built-ins do not chain. -->
 <context name="std:timeline">
-  <rule match="type:rect|text" affords.select="target" affords.drag="point"/>
-  <rule match="type:rect" affords.grips="box"/>
   <rule match="view" palette.tools="select" keys.tools="v:select" chrome.component="off" inspector.sections="main position other"/>
+</context>
+
+<!-- Backdrop, grid, row headers: drawn, never targets. `none` declared here
+     blocks the pointer and only clears the selection, so the header column
+     hides the segments scrolled under it from presses too. -->
+<context name="std:timeline-static">
+  <rule match="self" affords.select="window" chrome.lit="none"/>
+  <rule match="children" affords.select="none" chrome.lit="none" snap.target="no"/>
+</context>
+
+<!-- The playhead's line, over everything: inert, transparent to the
+     pointer, so a press reaches the clip or the ruler under it. -->
+<context name="std:timeline-overlay">
+  <rule match="self" affords.select="window" chrome.lit="none"/>
+  <rule match="children" affords.select="inert" chrome.lit="none" snap.target="no"/>
+</context>
+
+<!-- The ruler, After Effects' and Premiere's: a press anywhere on it puts
+     the playhead there and a drag scrubs. The group is a track (its `track`
+     facet lays the clock's time along it); its pieces are not targets, so
+     the press reaches the group's control. -->
+<context name="std:timeline-ruler">
+  <rule match="self" affords.select="none" affords.drag="track" affords.drives="track.value" chrome.lit="none"/>
+  <rule match="children" affords.select="none" chrome.lit="none" snap.target="no"/>
+</context>
+
+<!-- Segments: a press selects one, a drag retimes it (its x is bound to the
+     clip's start and its y to a literal, so it moves only in time), its box
+     grips trim it (width `dur · pps`; `affords.grips="ends"`, the two edges
+     only, is the spec's, the box stands in). A segment's label is inert, so
+     a press on the words is a press on the segment. -->
+<context name="std:timeline-tracks">
+  <rule match="self" affords.select="window" chrome.lit="none"/>
+  <rule match="children type:rect" affords.select="target" affords.drag="point" affords.grips="box" snap.target="no"/>
+  <rule match="children type:text" affords.select="inert" chrome.lit="none"/>
+</context>
+
+<!-- A clip's end values: readouts that select and edit as text (typing
+     edits the clip, through the readout's binding); they do not drag. -->
+<context name="std:timeline-values">
+  <rule match="self" affords.select="window" chrome.lit="none"/>
+  <rule match="children" affords.select="target" affords.edit="text" affords.drag="none" snap.target="no"/>
 </context>
 
 <!-- An electrical schematic (schematic.md §3), in the spirit of a basic

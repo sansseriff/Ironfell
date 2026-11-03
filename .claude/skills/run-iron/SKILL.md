@@ -253,7 +253,6 @@ redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
 ["<ellipse id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<ellipse id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
-#… locked for this drag: #….transform2d.y is bound and reads no free leaf
 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 "<applied version=\"14\">\n  <solver clusters=\"#V\" moved=\"#Y #Z #a\"/>\n  <unmet leaf=\"#a.transform2d.x\" requested=\"900\" solved=\"619.99…\">constrained by cluster #V: the constraints allow 619.99… at most</unmet>\n</applied>"
@@ -289,7 +288,6 @@ applied "undo: move rect" (2 ops, System) -> v5
 applied "redo: move rect" (2 ops, System) -> v6
 applied "set slider" (1 ops, Human) -> v7
 applied "move rect" (2 ops, Human) -> v8
-#… locked for this drag: #….transform2d.y is bound and reads no free leaf
 applied "model edit" (2 ops, Model) -> v9
 applied "move ellipse" (2 ops, Human) -> v10
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
@@ -2031,13 +2029,22 @@ notation: 'composition'}`); the old Bevy timeline panel is gone. Rows by object,
 then property; a segment per clip and target, its x bound to
 `label_w + (start − t0)·pps` on the composition's `axis`, its y to a literal; the
 playhead and its grip bound to the session clock's `t`. Layout in document px from
-the panel's top-left, before any pan or zoom: `label_w` 160, ruler 24 tall, rows 22
-apart from y 28, so the grip is at (160 + t·100, 10) and the demo's segments are at
-y 53 (spin, torus rot) and y 97 (slide, square x, 210–410). A numeric clip's ends
-show as readouts left of the segment (`from`, right-aligned in 60 px) and just past
-it (`to`, from x + 4), at y 102.
+the panel's top-left, before any pan or zoom: `label_w` 160, ruler 40 tall (13 px
+labels, minor ticks), rows 22 apart from y 44, so time t is at x 160 + t·100 and
+the demo's segments are at
+y 69 (spin, torus rot) and y 113–129 (slide, square x, 210–410). A numeric clip's
+ends show as readouts left of the segment (`from`, right-aligned in 60 px) and just
+past it (`to`, from x + 4), at y 115.
 
-- **Drag** the grip: scrubs (a session op, no transaction). **Drag** a segment:
+- **What can be pressed is data**: the generator puts each piece in a role group
+  (`backdrop`, `tracks`, `values`, `headers`, `ruler`, `overlay`), and each group
+  names a built-in context (`std:timeline-static`, `-tracks`, `-values`, `-ruler`,
+  `-overlay`) whose `children` rules say what its pieces afford. Backdrop, grid
+  and row headers are declared no target (a click clears the selection); segment
+  labels and the playhead's line are `inert`, transparent to the pointer.
+- **Press anywhere on the ruler** (y 0–40): the playhead jumps there and a drag
+  scrubs (the ruler group is a `track` whose value is the clock's `t`; a session
+  op, no transaction). Below the ruler presses reach the clips. **Drag** a segment:
   "retime slide". **Select** a segment and drag a box grip: "trim slide" (the right
   edge changes `dur`, the left `start` and `dur`). **Select** a readout and press
   Enter to type a value ("edit text" on the clip's `from`/`to`; a double-click does
@@ -2068,6 +2075,10 @@ lines:
 "scrubbed to 2.60 s; square drawn at x 700; version 2"
 "slide: start=\"1.5\"; version 3"
 "after undo slide: start=\"0.5\""
+"segment selected true"
+"{\"header click selects\":[]}"
+"label click selects the segment: true"
+"tick label click: playhead at 4.05, selection kept true"
 "playing true, advanced true; paused true"
 "trimmed slide: start=\"0.5\" dur 3.000"
 "typed: slide to=\"650\""
@@ -2093,19 +2104,18 @@ applied "undo: animate change" (3 ops, System) -> v11
 (no page errors)
 ```
 
-A new icon in `TimelineTransport.svelte` makes Vite re-optimise once: the first run
-after it shows `TypeError: Cannot read properties of undefined (reading 'call')` in
-`CompositionTools.svelte` and later steps go wrong. Rerun.
+`TypeError: Cannot read properties of undefined (reading 'call')` mid-run, with
+steps going wrong after it, was Vite re-optimising dependencies and reloading the
+page. `vite.config.ts` now lists the two pages' entries and `bits-ui` in
+`optimizeDeps` and excludes `@lucide/svelte` (icons are deep imports, AGENTS.md),
+so a new icon no longer causes it; a new npm dependency still might. Rerun.
 
 `cargo test … --test clock` (phase 1: the clock, the axis rule) and `--test
 timeline_view` (the generator: rows, segments projecting their clips, retiming by
 drag without regenerating, the static pieces locked, the playhead scrubbing, keyed
 reconcile, end values typed into the clip, pan/zoom/fit without history, the loop
-band) cover the store side. The smoke's scrub step drags the grip to 3 s, and
-logs one `locked for this drag: ….transform2d.y is bound and reads no free leaf`
-for the grip's y (intended: the timeline moves only in time). Its id (`#…` in the
-expected block) is a session id, which moves whenever the timeline generates a
-different number of nodes (`#JMAIjqw` on 2026-11-03).
+band, each piece's affordances from its group's context, the ruler's track)
+cover the store side. The smoke's scrub step presses the ruler and drags to 3 s.
 
 ## Free running and the Stats view (2026-10-18)
 

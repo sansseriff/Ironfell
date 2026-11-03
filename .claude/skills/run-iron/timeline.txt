@@ -9,26 +9,40 @@ ready
 sleep 1000
 eval (async()=>{const c=await __iron.call('clock_read',[]);return 'clock at '+c.t+', playing '+c.playing+', last clip ends at '+c.end})()
 shot timeline-start
-# Scrub: the grip sits at label_w (160) + t * 100 px; drag it to 2.6 s.
-pdrag timeline 160 10 420 10
+# The ruler (40 px tall) is a track: a press anywhere on it puts the
+# playhead there (label_w 160 + t * 100 px), and a drag scrubs. Press at
+# 1.4 s, away from the grip, and drag to 2.6 s.
+pdrag timeline 300 20 420 20
 sleep 300
 eval (async()=>{const c=await __iron.call('clock_read',[]);const v=await __iron.view({fidelity:'full'});const x=v.match(/name="square" x="([0-9.]+)"/);return 'scrubbed to '+c.t.toFixed(2)+' s; square drawn at x '+(x?x[1]:'?')+'; version '+__iron.protocolState().version})()
-# Retime: the slide segment (row 4, 0.5 s to 2.5 s) moves 1 s later.
-pdrag timeline 300 105 400 105
+# Retime: the slide segment (row 4, y 113-129, 0.5 s to 2.5 s) moves 1 s
+# later. Below the ruler a press reaches the clips, not the playhead.
+pdrag timeline 300 121 400 121
 sleep 400
 eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/);return 'slide: '+(m?m[0].match(/start="[^"]*"/)[0]:'?')+'; version '+__iron.protocolState().version})()
 shot timeline-retimed
 key Meta+z
 sleep 400
 eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/);return 'after undo slide: '+(m?m[0].match(/start="[^"]*"/)[0]:'?')})()
+# What can be pressed is the groups' contexts: the row headers and backdrop
+# are no targets (a click clears the selection), a segment's label is inert
+# (a click on its words selects the segment), and a click on a tick label is
+# a click on the ruler (the playhead jumps there; nothing is selected).
+eval (()=>{sessionStorage.setItem('segment',__iron.selection()[0]);return 'segment selected '+(__iron.selection().length===1)})()
+pclick timeline 40 150
+eval JSON.stringify({'header click selects':__iron.selection()})
+pclick timeline 228 121
+eval 'label click selects the segment: '+(__iron.selection()[0]===sessionStorage.getItem('segment'))
+pclick timeline 565 15
+eval (async()=>{await new Promise(r=>setTimeout(r,200));const c=await __iron.call('clock_read',[]);return 'tick label click: playhead at '+c.t.toFixed(2)+', selection kept '+(__iron.selection()[0]===sessionStorage.getItem('segment'))})()
 # Play from the start; the clock advances, then pause.
 eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:0})]);[...document.querySelectorAll('.transport button')].find(b=>b.ariaLabel==='Play').click();await new Promise(r=>setTimeout(r,700));const c=await __iron.call('clock_read',[]);[...document.querySelectorAll('.transport button')].find(b=>b.ariaLabel==='Pause').click();await new Promise(r=>setTimeout(r,200));const d=await __iron.call('clock_read',[]);return 'playing '+c.playing+', advanced '+(c.t>0.3)+'; paused '+!d.playing})()
 # Phase 3. Trim: select the slide segment and drag its bottom-right grip
 # 1 s later (dur 2 -> 3; the height is a literal, so only the width
 # moves); the square lights in Main while the segment is selected
 # (cross-view, through `projects`). Undo.
-pclick timeline 300 105
-pdrag timeline 410 113 510 113
+pclick timeline 300 121
+pdrag timeline 410 129 510 129
 sleep 400
 eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/)[0];return 'trimmed slide: '+m.match(/start="[^"]*"/)[0]+' dur '+Number(m.match(/dur="([^"]*)"/)[1]).toFixed(3)})()
 shot timeline-trimmed
@@ -36,7 +50,7 @@ key Meta+z
 sleep 300
 # An end value is a readout: select the "to" (just past the segment's
 # end), Enter edits it, and typing sets the clip's `to`. Undo.
-pclick timeline 440 109
+pclick timeline 440 122
 sleep 300
 key Enter
 sleep 300

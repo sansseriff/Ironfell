@@ -1,11 +1,13 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { fileURLToPath } from 'node:url'
-import preload from "vite-plugin-preload";
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
-  plugins: [preload(), svelte()],
+  // No preload plugin: it put every chunk (the app, the engine's glue) in
+  // index.html, so the scopes page fetched the engine it exists to avoid
+  // (scopes.md §10.2). The app's dynamic import preloads its own chunks.
+  plugins: [svelte()],
   base: mode === 'native' ? './' : '/Ironfell/', // Updated to match the actual repository name
   root: '.',
   build: {
@@ -17,6 +19,13 @@ export default defineConfig(({ mode }) => ({
       ...(mode === 'native' ? [{ find: /^\.\/adapter_bridge$/, replacement: fileURLToPath(new URL('./src-ui/runtime/native_bridge.ts', import.meta.url)) }] : []),
       { find: 'src', replacement: '/src-ui' }
     ]
+  },
+  // The two pages (src-ui/route.ts) are dynamic imports, so Vite's dev
+  // server finds their dependencies late and reloads the page to
+  // re-optimise, mid-script for the driver. Listing them up front avoids it.
+  optimizeDeps: {
+    entries: ['index.html', 'src-ui/App.svelte', 'src-ui/ScopesPage.svelte'],
+    include: ['bits-ui', 'dockview-core'],
   },
   // Ensure WASM files are treated as assets
   assetsInclude: ['**/*.wasm'],

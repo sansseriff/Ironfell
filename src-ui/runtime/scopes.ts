@@ -84,22 +84,46 @@ export class Scopes {
   private lockName(id: string) { return `iron-scope-${id}`; }
 
   /**
-   * Open the last scope, or, with none, let `prepare` finish the demo and
-   * make a scope of it. `'opened'` means the document now comes from
-   * storage, so the caller adds nothing to it.
+   * Open what the page's URL names (`route.ts`): a stored scope, a new one
+   * (`demo`: let `prepare` finish the demo the engine opened, and make a
+   * scope of it; `empty`: the empty template), or the last scope (with
+   * none, a new demo). `'opened'` means the document now comes from
+   * storage, so the caller adds nothing to it; `'missing'` that the scope
+   * named does not exist (nothing was opened).
    */
-  boot(prepare: () => Promise<void>, name = 'Demo'): Promise<'opened' | 'created'> {
+  boot(prepare: () => Promise<void>, target: { open: string } | { create: 'empty' | 'demo' } | { last: true } = { last: true }): Promise<'opened' | 'created' | 'missing'> {
     return this.serial(async () => {
       this.paused = false;
-      const last = await this.storage.last();
-      const stored = last ? await this.storage.read(last) : null;
+      if ('create' in target) {
+        if (target.create === 'empty') {
+          const { snapshot } = await this.engine.call('scope_template', ['empty']);
+          await this.adopt(snapshot, 'Untitled');
+        } else {
+          await prepare();
+          await this.createFromOpen('Demo');
+        }
+        return 'created' as const;
+      }
+      const id = 'open' in target ? target.open : await this.storage.last();
+      const stored = id ? await this.storage.read(id) : null;
       if (stored) {
         await this.openStored(stored);
         return 'opened' as const;
       }
+      if ('open' in target) return 'missing' as const;
       await prepare();
-      await this.createFromOpen(name);
+      await this.createFromOpen('Demo');
       return 'created' as const;
+    });
+  }
+
+  /** Leave the open scope (to the scopes page): everything written and
+   *  folded into a snapshot, the lock given back. */
+  close(): Promise<void> {
+    return this.serial(async () => {
+      await this.leave();
+      this.current = null;
+      this.emit();
     });
   }
 
@@ -380,3 +404,83 @@ export class Scopes {
     this.emit();
   }
 }
+
+/**
+ * The scopes page's operations (route.ts, scopes.md §10.2): storage only, no
+ * engine, so the page loads without the wasm. A scope opened in another tab
+ * holds its Web Lock, and is not deleted from here. Making a scope from a
+ * template and exporting one with unreplayed log need the engine: the page
+ * opens the app for those (`?new=`, `?export`).
+ */
+export class ScopeLibrary {
+  constructor(private storage: ScopeStorage, private locks: ScopeLocks | null) {}
+
+  /** Every stored scope, most recently modified first, with its size. */
+  async list(): Promise<(ScopeMeta & { bytes: number })[]> {
+    const metas = await this.storage.list();
+    const out = await Promise.all(metas.map(async m => ({ ...m, bytes: await this.storage.size(m.id) })));
+    return out.sort((a, b) => b.modified - a.modified);
+  }
+
+  estimate() {
+    return this.storage.estimate();
+  }
+
+  async rename(id: string, name: string): Promise<void> {
+    const trimmed = name.trim();
+    const meta = (await this.storage.list()).find(m => m.id === id);
+    if (!meta || !trimmed || trimmed === meta.name) return;
+    await this.storage.writeMeta({ ...meta, name: trimmed, modified: Date.now() });
+  }
+
+  /** Whether another tab has the scope open. */
+  async busy(id: string): Promise<boolean> {
+    if (!this.locks) return false;
+    const release = await this.locks.acquire(`iron-scope-${id}`, () => {});
+    if (!release) return true;
+    release();
+    return false;
+  }
+
+  async remove(id: string): Promise<void> {
+    if (await this.busy(id)) throw new Error('open in another tab: close it there first');
+    await this.storage.remove(id);
+  }
+
+  /** A saved document (an export, a `.json`) as a new scope; its id is
+   *  assigned when the app opens it (`scope_open`). Returns the new id. */
+  async importText(text: string, name: string): Promise<string> {
+    let version: number;
+    try {
+      JSON.parse(text);
+      version = snapshotVersion(text);
+    } catch {
+      throw new Error('not an Iron document');
+    }
+    const id = newScopeId();
+    const now = Date.now();
+    await this.storage.create({ id, name, created: now, modified: now }, text, version);
+    return id;
+  }
+
+  /** A copy under a new id: the newest snapshot, then its log as one
+   *  segment. Returns the new id. */
+  async duplicate(id: string): Promise<string> {
+    const stored = await this.storage.read(id);
+    if (!stored) throw new Error(`no scope ${id}`);
+    const copy = newScopeId();
+    const now = Date.now();
+    await this.storage.create({ id: copy, name: `${stored.meta.name} copy`, created: now, modified: now }, stored.snapshot, stored.version);
+    if (stored.log.length) await this.storage.append(copy, stored.version + 1, stored.log.join('\n') + '\n');
+    return copy;
+  }
+
+  /** The scope as a saved document, when its snapshot is all of it (no log
+   *  since); `null` when the engine must replay the log first. */
+  async exportText(id: string): Promise<{ name: string; text: string } | null> {
+    const stored = await this.storage.read(id);
+    if (!stored) throw new Error(`no scope ${id}`);
+    return stored.log.length ? null : { name: stored.meta.name, text: stored.snapshot };
+  }
+}
+

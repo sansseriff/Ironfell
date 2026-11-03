@@ -2,7 +2,7 @@
 # duplicate, export, import and delete, through the menu at the left of the
 # top-left tab bar and through `__iron.scopes`. Starts with empty OPFS (a
 # fresh browser context), so the first page makes the Demo scope.
-nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog&scope=last
 ready
 eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const a=await __iron.edit('<edit><create id="$m" type="rect" parent="#1" name="marker" x="40" y="40" w="60" h="40" color="#2266ff"/></edit>');if(!a.ok)throw new Error(JSON.stringify(a));sessionStorage.setItem('demo',__iron.scope().current.id);return 'opened '+__iron.scope().current.name+', marked'})()
 clickel [data-scope-menu]
@@ -27,7 +27,14 @@ clickel [data-scope-menu]
 sleep 300
 eval (async()=>{const f=document.querySelector('.scope-popover input.name');f.focus();f.value='Lab bench';f.dispatchEvent(new Event('input',{bubbles:true}));f.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));for(let i=0;i<50&&__iron.scope().current.name!=='Lab bench';i++)await new Promise(r=>setTimeout(r,50));return 'renamed in the menu: '+__iron.scope().current.name+'; trigger shows '+document.querySelector('[data-scope-menu] .scope-name').textContent})()
 key Escape
-nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog&scope=last
 ready
 eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const l=await __iron.scopes.list();return 'reload opens '+__iron.scope().current.name+'; stored '+JSON.stringify(l.map(s=>s.name).sort())})()
+# "All scopes" closes the scope (written, its lock given back) and goes to
+# the scopes page, which loads no engine.
+clickel [data-scope-menu]
+sleep 300
+clickel [data-action=all-scopes]
+sleep 1500
+eval (async()=>{for(let i=0;i<100&&!document.querySelector('[data-scopes-page] [data-scope]');i++)await new Promise(r=>setTimeout(r,50));const rows=[...document.querySelectorAll('[data-scopes-page] [data-scope]')];return 'scopes page lists '+JSON.stringify(rows.map(r=>r.querySelector('.name').textContent))+'; none held '+!document.querySelector('[data-scopes-page] .busy')+'; engine loaded '+(typeof __iron!=='undefined')})()
 errors

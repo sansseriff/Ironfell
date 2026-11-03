@@ -362,3 +362,49 @@ Deviations and choices:
 Tests: `tests/scopes.test.ts` (9, two new: the menu's actions; deleting a scope open in
 another tab); `.claude/skills/run-iron/scope-menu.txt`.
 
+### 10.2 The scopes page (2026-11-03)
+
+Asked for by the user: a page listing the scopes, separate from the editor, which loads
+the engine only once a scope is chosen (as a project picker does).
+
+- **Two pages in one SPA**, routed by the query (`src-ui/route.ts`). The app is plain
+  Vite + Svelte, not SvelteKit; a migration was discussed and deferred, and query
+  routing keeps static hosting under `/Ironfell/` and the native build unchanged.
+  `main.ts` mounts `ScopesPage.svelte` or `App.svelte`, each a dynamic import, so the
+  scopes page fetches neither the engine's code nor its wasm.
+- **URLs.** No scope: the scopes page. `?scope=<id>`: the app on that scope (gone: back
+  to the page). `?scope=last`: the last one, or a new demo (the old boot, kept for
+  scripts and bookmarks). `?new=demo|empty`: make one. `&export`: download it once
+  open. The address follows the open scope (`replaceState`), so a reload or a copied
+  link reopens it. Ephemeral pages (`?demo`, the benchmarks, the native build, no OPFS)
+  are always the app, as before. Other parameters carry over between the pages.
+- **`ScopeLibrary`** (`scopes.ts`) is the page's storage-only half: list with sizes,
+  rename, delete (refused while another tab holds the scope's Web Lock, which the row
+  shows), import (`.json`, the id assigned when the app opens it), duplicate (the
+  snapshot plus its log as one segment) and export (the snapshot, when there is no log
+  since; otherwise the page opens the app with `&export`, which replays and downloads).
+  Making a scope from a template needs the engine (`scope_template`), so *New* and *New
+  demo* open the app with `?new=`.
+- **`Scopes.boot`** takes the URL's target; **`Scopes.close`** writes, compacts and
+  releases the open scope. The in-app menu's **All scopes** uses it before going to the
+  page. The in-app menu keeps its list for switching without leaving the editor.
+- **Look**: Bits UI (Button, DropdownMenu, AlertDialog) with the shared `Button`,
+  `TextInput` and Inspector styles, Lucide icons.
+- **Warming the engine** (asked for by the user): once the page is idle,
+  `warm_engine.ts` picks the backend (`chooseBackend`), fetches and compiles its wasm
+  (`prefetchWasm`, a one-shot slot in `wasm_loader.ts`; `compileStreaming` with a
+  buffered fallback) and imports the app's code. Opening a scope from the page swaps
+  to the app in place (`openApp`: `pushState`, unmount, mount), so the next
+  `WasmLoader` posts the compiled `WebAssembly.Module` (cloned, not transferred) and
+  the worker only instantiates it; the wasm is fetched once. Back from the app reloads
+  the page, since the engine cannot be torn down in place. Skipped under Save-Data.
+  `vite-plugin-preload` was removed: it put every chunk in `index.html`, so the page
+  would have fetched the whole app up front. Measured in dev on localhost, the gain is
+  within noise (the download is free there); on a real connection it is the wasm's
+  download (about 4.6 MB brotli shipped) and its compile.
+
+Tests: `tests/scopes.test.ts` (11: boot targets and `close`; the library's operations);
+`scopes.txt` now starts on the empty page and opens a scope from it; `scope-menu.txt`
+ends with All scopes; `narrative.txt`'s reloads use `&scope=last`.
+
+

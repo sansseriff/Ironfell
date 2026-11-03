@@ -37,11 +37,11 @@ eval (async()=>{const p=__narrative.get('lesson');p.mode('authoring');const n=p.
 eval (async()=>{const el=[...document.querySelectorAll('.nb-mention')].find(e=>e.textContent==='shadow');await __iron.edit(`<edit><delete id="${el.dataset.target}"/></edit>`);for(let i=0;i<60&&!document.querySelector('.nb-stale');i++)await new Promise(r=>setTimeout(r,50));return 'stale mentions: '+JSON.stringify([...document.querySelectorAll('.nb-stale')].map(e=>e.textContent))})()
 eval (async()=>{const r=await __iron.call('narrative_markdown',['lesson']);return 'markdown: '+r.markdown.split('\n').filter(l=>l.startsWith('The :e[square]')).map(l=>l.replace(/#[0-9A-Za-z]+/g,'#ID').slice(0,60))[0]})()
 # Durable: in a saved scope (no `&demo`), an edit survives a reload.
-nav http://localhost:5173/Ironfell/?gfx=webgl2&bevy=debuglog
+nav http://localhost:5173/Ironfell/?gfx=webgl2&bevy=debuglog&scope=last
 ready
 tab Lesson
 eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const p=__narrative.get('lesson');for(let i=0;i<60&&p.status().blocks<2;i++)await new Promise(r=>setTimeout(r,50));const v=p.editor().view;const end=v.state.doc.child(0).nodeSize-1;v.dispatch(v.state.tr.insertText(' (kept)',end));await p.flush();await __iron.flush();return 'typed in scope '+__iron.scope().current.name})()
-nav http://localhost:5173/Ironfell/?gfx=webgl2&bevy=debuglog
+nav http://localhost:5173/Ironfell/?gfx=webgl2&bevy=debuglog&scope=last
 ready
 eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));let r;for(let i=0;i<100;i++){r=await __iron.call('narrative_read',['lesson']);if(r.ok)break;await new Promise(r=>setTimeout(r,50))}return 'after reload the heading reads '+JSON.stringify(r.blocks[0].text)})()
 errors

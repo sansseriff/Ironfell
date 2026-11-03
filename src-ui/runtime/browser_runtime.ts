@@ -39,7 +39,7 @@ export class BrowserRuntime {
       case 'wasmData':
         this.glue = await loadGlue(data.backend);
         if (this.disposed) return;
-        await this.glue.default(data.wasmData);
+        await this.glue.default({ module_or_path: data.wasmData });
         if (this.disposed) return;
         this.variantFlags = data.variantFlags >>> 0;
         this.emit({ ty: 'workerIsReady' });

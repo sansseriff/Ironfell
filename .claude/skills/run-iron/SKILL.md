@@ -1870,9 +1870,21 @@ applied "circuit" (68 ops, Model) -> v14
 
 ## Scopes: durable documents (2026-11-02)
 
-plans/specs/scopes.md phases 1–2. **Without `&demo` the app keeps its
-document**: boot opens the last scope from OPFS (or, with none, makes a scope
-of the demo after the showcase is added), every committed transaction is written
+plans/specs/scopes.md phases 1–2 and §10.2. **Two pages, routed by the query**
+(`src-ui/route.ts`): with no scope in the URL the page is the **scopes page**
+(`ScopesPage.svelte`, `[data-scopes-page]`), which reads OPFS and loads no
+engine, no wasm and no `__iron`; `?scope=<id>` opens the app on that scope (one
+that is gone goes back to the page), `?scope=last` on the last one (with none, a
+new demo), `?new=demo` / `?new=empty` makes one, and `&export` downloads the
+scope once open. The address follows the open scope (`history.replaceState`),
+so a reload reopens it. Once idle, the scopes page **warms the engine**
+(`runtime/warm_engine.ts`): it fetches and compiles the wasm for the backend
+the browser will use and imports the app's code; opening a scope from the page
+swaps to the app in place (`openApp` in `main.ts`, `pushState`), so the engine
+takes the compiled module rather than fetching (Back reloads the page). In dev
+against localhost this barely shows (click to open ~1.6–2.1 s warm, ~1.2–2.6 s
+cold); the saving is the download and compile on a real connection. **Without `&demo` the app keeps its
+document**: every committed transaction is written
 to the scope's log in batches (~500 ms, and at once when the tab is hidden), and
 a reload replays it. `?demo`, `?stress=`, `?meters=`, the native build and a
 browser without OPFS keep the old behaviour: an unsaved demo. **Every scripted
@@ -1880,31 +1892,42 @@ URL carries `&demo`** (drive.ts's default too), so scripts see the demo, not the
 last scope; each driver run also starts with empty OPFS, being a fresh browser
 context. In a normal browser, a page without `&demo` opens what you left, and
 DevTools → Application → Storage → "Clear site data" forgets it. `__iron.scope()`
-shows the open scope; `await __iron.flush()` writes now.
+shows the open scope; `await __iron.flush()` writes now. Scripts that need a
+stored scope navigate with `&scope=last`; the driver's `click` matches visible
+text, so the page's controls are clicked with `clickel <selector>`.
 
-`scopes.txt`: create, edit, undo, reload (the edit is kept, the undone one stays
-undone, undo starts empty, same scope id), an edit with no flush survives a
-reload, then `&demo` opens unsaved. After a build, with Vite up:
+`scopes.txt`: the empty scopes page (no engine), New demo, edit, undo, reload
+(the edit is kept, the undone one stays undone, undo starts empty, same scope
+id), an edit with no flush survives a reload, the page lists the scope and opens
+it, then `&demo` opens unsaved. After a build, with Vite up:
 
 ```sh
 cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < scopes.txt; cd -
 ```
 
-Expected, minus `nav` and `ready` lines:
+Expected, minus `nav`, `ready` and `clicked` lines:
 
 ```
-"created Demo"
+"scopes page: No scopes yet.; engine loaded false"
+"wasm prefetched on the scopes page: true"
+"app opened in place; wasm fetched 1 time(s)"
+"created Demo; address names it true"
 "edited"
 "flushed at v4"
 "reopened at v4, edit kept, undone kept undone, nothing to undo"
 "edited, waited"
 "batch written without a flush, reopened at v5"
+"listed [\"Demo\"], the same scope true"
+"opened from the page: true"
 "&demo: unsaved demo"
 (no page errors)
 ```
 
 Segments, compaction, a gap in the feed, a failed replay, two tabs and an engine
-restart are covered by `bun test tests/scopes.test.ts` (9 tests, a fake engine);
+restart, the URL's boot targets and the page's storage-only operations
+(`ScopeLibrary`: list, rename, duplicate with its log, import, export, delete
+refused while another tab holds the lock) are covered by `bun test
+tests/scopes.test.ts` (11 tests, a fake engine);
 the Rust side (ids, schema 9, snapshot + log replay equals live through undo and
 redo, the feed's gap) by `tests/scopes.rs` in `iron_document`.
 
@@ -1941,8 +1964,16 @@ rename, and the driver API for the rest. Expected, minus `nav`, `ready`,
 "deleted the open one; menu closed: true; now Demo copy; stored [\"Demo\",\"Demo copy\"]"
 "renamed in the menu: Lab bench; trigger shows Lab bench"
 "reload opens Lab bench; stored [\"Demo\",\"Lab bench\"]"
+"scopes page lists [\"Lab bench\",\"Demo\"]; none held true; engine loaded false"
 (no page errors)
 ```
+
+The menu's **All scopes** (`[data-action=all-scopes]`) writes and compacts the
+open scope, gives its lock back and goes to the scopes page. The page itself:
+New, New demo and Import at the top; each scope a row (click to open) with a
+menu for Open, Rename (in place), Duplicate, Export .json and Delete… (a
+confirmation dialog; refused while another tab has it open, which the row
+says). New and an Export whose log needs replaying open the app to do it.
 
 The menu shifts the top-left group's tabs right; the smoke is unchanged by it.
 

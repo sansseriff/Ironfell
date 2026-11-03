@@ -4,7 +4,7 @@
 // `scope_assign`); the Rust side is tests/scopes.rs in iron_document.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Scopes, type ScopeEngine, type ScopeLocks } from '../src-ui/runtime/scopes';
+import { ScopeLibrary, Scopes, type ScopeEngine, type ScopeLocks } from '../src-ui/runtime/scopes';
 import { MemoryScopeStorage } from '../src-ui/runtime/scope_storage';
 
 /** A store: a version, the scope it names, and a horizon-bounded log. */
@@ -284,4 +284,61 @@ test('a scope open in another tab cannot be deleted from here', async () => {
   await tabB.create('demo');
   await assert.rejects(tabB.remove(a), /another tab/);
   assert.ok(await storage.read(a), 'still there');
+});
+
+test('the app opens the scope its URL names, a new one, or says the scope is missing', async () => {
+  const storage = new MemoryScopeStorage();
+  const engine = new FakeEngine();
+  const first = new Scopes(engine, storage, null);
+  assert.equal(await first.boot(async () => {}, { create: 'empty' }), 'created');
+  const a = id(first);
+  await first.close();
+  assert.equal(first.state().current, null, 'closed: back to the scopes page');
+  const second = new Scopes(engine, storage, null);
+  assert.equal(await second.boot(async () => {}, { create: 'demo' }), 'created');
+  const b = id(second);
+  assert.notEqual(a, b);
+  const third = new Scopes(new FakeEngine(), storage, null);
+  assert.equal(await third.boot(async () => {}, { open: a }), 'opened');
+  assert.equal(id(third), a, 'the named scope, not the last one');
+  const fourth = new Scopes(new FakeEngine(), storage, null);
+  assert.equal(await fourth.boot(async () => {}, { open: 'NOSUCHSCOPE' }), 'missing');
+  assert.equal(fourth.state().current, null);
+});
+
+test('the scopes page lists, renames, duplicates, imports, exports and deletes without an engine', async () => {
+  const storage = new MemoryScopeStorage();
+  const locks = sharedLocks();
+  const engine = new FakeEngine();
+  engine.apply(3);
+  const app = new Scopes(engine, storage, locks());
+  await app.boot(async () => {});
+  const a = id(app);
+  engine.apply(2);
+  await app.flush(); // two transactions in the log, past the snapshot
+  const library = new ScopeLibrary(storage, locks());
+  assert.deepEqual((await library.list()).map(m => m.name), ['Demo']);
+  assert.equal(await library.busy(a), true, 'the app holds it');
+  await assert.rejects(library.remove(a), /another tab/);
+  assert.equal(await library.exportText(a), null, 'its log needs the engine to replay');
+
+  const copy = await library.duplicate(a);
+  const stored = await storage.read(copy);
+  assert.equal(stored!.meta.name, 'Demo copy');
+  assert.equal(stored!.log.length, 2, 'the log came along');
+  const next = new FakeEngine();
+  const reopened = new Scopes(next, storage, null);
+  await reopened.boot(async () => {}, { open: copy });
+  assert.equal(next.version, 5, 'the copy replays to where the original was');
+
+  const imported = await library.importText(await new FakeEngine().save(), 'Imported');
+  await library.rename(imported, '  Notes ');
+  assert.equal((await library.list()).find(m => m.id === imported)!.name, 'Notes');
+  assert.ok((await library.exportText(imported))!.text.includes('"version": 0'), 'a scope with no log exports its snapshot');
+  await assert.rejects(library.importText('not json', 'x'), /not an Iron document/);
+
+  await app.close();
+  assert.equal(await library.busy(a), false, 'closing gives the lock back');
+  await library.remove(a);
+  assert.deepEqual((await library.list()).map(m => m.name).sort(), ['Demo copy', 'Notes']);
 });

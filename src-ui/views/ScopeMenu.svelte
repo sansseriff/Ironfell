@@ -10,6 +10,8 @@
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Trash from "@lucide/svelte/icons/trash-2";
   import Database from "@lucide/svelte/icons/database";
+  import LayoutGrid from "@lucide/svelte/icons/layout-grid";
+  import { scopesUrl } from "../route";
   import { controllerManager } from "../controller-manager.svelte";
   import Button from "../lib/ui/Button.svelte";
   import TextInput from "../lib/ui/TextInput.svelte";
@@ -123,6 +125,18 @@
             </div>
           {:else}
             <div class="body">
+              <Button
+                variant="outline"
+                small
+                class="all-scopes"
+                data-action="all-scopes"
+                disabled={busy}
+                title="Close this scope and go to the scopes page"
+                onclick={() => act(async () => {
+                  await doc.scopes!.close();
+                  location.href = scopesUrl();
+                })}><LayoutGrid size={13} strokeWidth={1.75} />All scopes</Button
+              >
               <TextInput
                 class="name"
                 aria-label="Scope name"
@@ -255,6 +269,9 @@
   .error {
     margin: 0;
     color: var(--danger);
+  }
+  .body :global(.all-scopes) {
+    align-self: flex-start;
   }
   .body :global(.take-over) {
     align-self: flex-start;

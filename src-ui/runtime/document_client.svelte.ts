@@ -50,16 +50,11 @@ import type { ClientRequest, RequestPayload, UiRequest, UiEvent } from './protoc
 import { lastCopied } from './clipboard';
 import { documentArguments, type DocumentCommand } from './protocol.generated';
 import { Scopes, webLocks, type ScopeState } from './scopes';
-import { OpfsScopeStorage, opfsAvailable } from './scope_storage';
+import { OpfsScopeStorage } from './scope_storage';
+import { persistent, scopesUrl, showScope, target } from '../route';
 import { isNativeHost } from './native_host';
 
 /** Whether this page keeps its document (scopes.md D11). */
-function persistent(): boolean {
-  const q = new URLSearchParams(location.search);
-  if (q.has('demo') || Number(q.get('stress')) > 0 || Number(q.get('meters')) > 0) return false;
-  return !isNativeHost() && opfsAvailable();
-}
-
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
 export interface ViewQuery {
@@ -151,7 +146,8 @@ export class DocumentClient {
     this.scopes?.pause();
     if (this.scopes && !this.pageHooks) {
       this.pageHooks = true;
-      this.scopes.onChange = state => { this.scope = state; };
+      // The address names the open scope, so a reload reopens it.
+      this.scopes.onChange = state => { this.scope = state; if (state.current) showScope(state.current.id); };
       // Write the last batch when the tab is hidden or closed (§4.2).
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void this.scopes!.flush(); });
       window.addEventListener('pagehide', () => void this.scopes!.flush());
@@ -418,7 +414,21 @@ export class DocumentClient {
           };
           // Boot (scopes.md D11): open the last scope, or make one of the
           // demo. An opened scope already holds the showcase.
-          if (this.scopes) void this.scopes.boot(showcase).catch(e => { console.error('[scopes] boot failed', e); this.error = String(e); });
+          // Boot (scopes.md D11, §10.2): open the scope the URL names
+          // (route.ts); one that no longer exists goes back to the scopes
+          // page. `&export` downloads it once open (the scopes page's
+          // Export, for a scope whose log needs replaying).
+          if (this.scopes) {
+            // Read before the boot rewrites the address to the open scope.
+            const exporting = new URLSearchParams(location.search).has('export');
+            void this.scopes
+              .boot(showcase, target())
+              .then(r => {
+                if (r === 'missing') location.replace(scopesUrl());
+                else if (exporting) void this.download();
+              })
+              .catch(e => { console.error('[scopes] boot failed', e); this.error = String(e); });
+          }
           else void showcase();
         }
         return true;

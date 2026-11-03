@@ -4,7 +4,9 @@ import type { EditOutcome } from '../model/edit';
 import type { AskResult } from '../model/agent';
 export type UiRequest = (Exclude<EngineRequest, { ty: 'resize' }> |
   { ty: 'resize'; width: number; height: number; dpr: number } |
-  { ty: 'wasmData'; backend: Backend; wasmData: ArrayBuffer; variantFlags: number } |
+  // The artifact's bytes (transferred), or the module compiled ahead of time
+  // on the scopes page (`prefetchWasm`; structured-cloned, not transferred).
+  { ty: 'wasmData'; backend: Backend; wasmData: ArrayBuffer | WebAssembly.Module; variantFlags: number } |
   { ty: 'init'; canvas: HTMLCanvasElement | OffscreenCanvas; devicePixelRatio: number } |
   { ty: 'modelEdit'; requestId: number; xml: string; label?: string } |
   { ty: 'modelAsk'; requestId: number; instruction: string; apiKey: string; model: string }

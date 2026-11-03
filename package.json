@@ -44,6 +44,12 @@
     "@lucide/svelte": "^1.57.0",
     "bits-ui": "^2.19.5",
     "dockview-core": "^8.5.1",
-    "fast-xml-parser": "^5.11.1"
+    "fast-xml-parser": "^5.11.1",
+    "prosemirror-commands": "^1.7.2",
+    "prosemirror-inputrules": "^1.5.1",
+    "prosemirror-keymap": "^1.2.3",
+    "prosemirror-model": "^1.25.12",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.42.9"
   }
 }

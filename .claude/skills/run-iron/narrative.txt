@@ -1,0 +1,47 @@
+# The narrative panel (plans/specs/narrative-panel.md): the demo's Lesson
+# tab (part of the showcase, so this script keeps it: no `showcase=0`).
+# Typing is one transaction per pause and Cmd+Z undoes it through the store;
+# `#` mentions; live values follow the document; a view block shows its
+# composition; the three layout modes; a model edit is marked for review and
+# reverts; a deleted target leaves a stale mention; markdown out.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&bevy=debuglog
+ready
+sleep 1000
+tab Lesson
+sleep 800
+eval (async()=>{const p=__narrative.get('lesson');for(let i=0;i<60&&p.status().blocks<2;i++)await new Promise(r=>setTimeout(r,50));const s=p.status();const vals=[...document.querySelectorAll('.nb-value')].map(e=>e.textContent);const chips=[...document.querySelectorAll('.nb-mention')].map(e=>e.textContent);return s.blocks+' blocks, mode '+p.mode()+'; values '+JSON.stringify(vals)+'; mentions '+JSON.stringify(chips)})()
+# Type at the end of the first paragraph: one transaction after the pause.
+eval (async()=>{const e=__narrative.get('lesson').editor();const v=e.view;let end=0;v.state.doc.forEach((n,p,i)=>{if(i===1)end=p+n.nodeSize-1});const tr=v.state.tr.insertText(' Added by typing.',end);tr.setSelection(v.state.selection.constructor.near(tr.doc.resolve(end+17)));v.dispatch(tr);v.focus();const before=__iron.protocolState().version;await new Promise(r=>setTimeout(r,900));const r=await __iron.call('narrative_read',['lesson']);return 'typed; store has it: '+r.blocks[1].text.endsWith('Added by typing.')+'; versions advanced by '+(__iron.protocolState().version-before)})()
+key Meta+z
+eval (async()=>{for(let i=0;i<60;i++){const r=await __iron.call('narrative_read',['lesson']);if(!r.blocks[1].text.includes('Added by typing'))break;await new Promise(r=>setTimeout(r,50))}await new Promise(r=>setTimeout(r,300));const r=await __iron.call('narrative_read',['lesson']);const shown=__narrative.get('lesson').editor().view.state.doc.child(1).textContent;return 'Cmd+Z: store undone '+!r.blocks[1].text.includes('Added by typing')+', editor undone '+!shown.includes('Added by typing')})()
+# A mention through the # menu.
+eval (async()=>{const e=__narrative.get('lesson').editor();const v=e.view;const n=v.state.doc.child(0);const end=n.nodeSize-1;v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.near(v.state.doc.resolve(end))));v.focus();v.dispatch(v.state.tr.insertText(' with the #squa'));for(let i=0;i<60&&!document.querySelector('.mentions button');i++)await new Promise(r=>setTimeout(r,50));return 'menu offers '+JSON.stringify([...document.querySelectorAll('.mentions button span:first-child')].map(b=>b.textContent).slice(0,3))})()
+key Enter
+eval (async()=>{await new Promise(r=>setTimeout(r,900));const r=await __iron.call('narrative_read',['lesson']);const b=r.blocks[0];const m=b.marks.find(m=>m.type==='mention');return 'heading now '+JSON.stringify(b.text)+'; mention of '+(m?m.label:'none')})()
+# Hovering a mention lights its node in the canvas.
+eval (async()=>{const el=[...document.querySelectorAll('.nb-mention')].find(e=>e.textContent==='shadow');el.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}));await new Promise(r=>setTimeout(r,400));const h=__iron.hovered();el.dispatchEvent(new MouseEvent('mouseout',{bubbles:true}));await new Promise(r=>setTimeout(r,300));return 'hover lights '+JSON.stringify(h)+' ('+el.dataset.target+'); after: '+JSON.stringify(__iron.hovered())})()
+# A live value follows the document.
+eval (async()=>{const id=document.querySelector('.nb-value').dataset.target.split('.')[0];await __iron.edit(`<edit><set id="${id}" x="612"/></edit>`);for(let i=0;i<60&&document.querySelector('.nb-value').textContent!=='612';i++)await new Promise(r=>setTimeout(r,50));return 'x is now shown as '+document.querySelector('.nb-value').textContent})()
+# A view block shows its composition.
+eval (async()=>{[...document.querySelectorAll('.nb-view-header')].find(b=>b.textContent.includes('pendulum')).click();await new Promise(r=>setTimeout(r,300));return 'active tab: '+__dock.activePanel?.id+'; panel shows '+__narrative.get('lesson').status().shown})()
+tab Lesson
+# The three modes.
+eval (async()=>{const p=__narrative.get('lesson');const out=[];for(const m of ['hybrid','exploration','authoring']){p.mode(m);await new Promise(r=>setTimeout(r,150));out.push(m+': editor '+(document.querySelector('.narrative .scroll:not(.hidden)')?'shown':'hidden')+', outline '+(document.querySelector('.narrative .outline')?'shown':'hidden')+', target "'+p.status().target.split(',')[0]+'"')}return out.join('; ')})()
+# A model edit is marked for review, then reverted.
+eval (async()=>{const p=__narrative.get('lesson');const r=await __iron.call('narrative_read',['lesson']);const after=r.blocks[2].id;await p.askWith(`<edit><write narrative="lesson" after="${after}">A paragraph the model wrote about :e[the torus]{${document.querySelector('.nb-mention:last-of-type')?.dataset.target ?? '#1'}}.</write></edit>`,'add a paragraph');const t=p.turns().at(-1);const marked=document.querySelectorAll('.nb-changed').length;return 'model turn ok '+t.ok+', changed '+t.changed.length+' block(s), marked '+marked})()
+shot narrative-review
+eval (async()=>{const p=__narrative.get('lesson');p.mode('hybrid');await new Promise(r=>setTimeout(r,200));return 'hybrid'})()
+shot narrative-hybrid
+eval (async()=>{const p=__narrative.get('lesson');p.mode('authoring');const n=p.turns().length-1;await p.revert(n);await new Promise(r=>setTimeout(r,300));const r=await __iron.call('narrative_read',['lesson']);return 'reverted: '+p.turns().at(-1).reviewed+'; model paragraph gone '+!r.blocks.some(b=>b.text.startsWith('A paragraph the model wrote'))})()
+# Deleting a mentioned node leaves its mention stale.
+eval (async()=>{const el=[...document.querySelectorAll('.nb-mention')].find(e=>e.textContent==='shadow');await __iron.edit(`<edit><delete id="${el.dataset.target}"/></edit>`);for(let i=0;i<60&&!document.querySelector('.nb-stale');i++)await new Promise(r=>setTimeout(r,50));return 'stale mentions: '+JSON.stringify([...document.querySelectorAll('.nb-stale')].map(e=>e.textContent))})()
+eval (async()=>{const r=await __iron.call('narrative_markdown',['lesson']);return 'markdown: '+r.markdown.split('\n').filter(l=>l.startsWith('The :e[square]')).map(l=>l.replace(/#[0-9A-Za-z]+/g,'#ID').slice(0,60))[0]})()
+# Durable: in a saved scope (no `&demo`), an edit survives a reload.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&bevy=debuglog
+ready
+tab Lesson
+eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const p=__narrative.get('lesson');for(let i=0;i<60&&p.status().blocks<2;i++)await new Promise(r=>setTimeout(r,50));const v=p.editor().view;const end=v.state.doc.child(0).nodeSize-1;v.dispatch(v.state.tr.insertText(' (kept)',end));await p.flush();await __iron.flush();return 'typed in scope '+__iron.scope().current.name})()
+nav http://localhost:5173/Ironfell/?gfx=webgl2&bevy=debuglog
+ready
+eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));let r;for(let i=0;i<100;i++){r=await __iron.call('narrative_read',['lesson']);if(r.ok)break;await new Promise(r=>setTimeout(r,50))}return 'after reload the heading reads '+JSON.stringify(r.blocks[0].text)})()
+errors

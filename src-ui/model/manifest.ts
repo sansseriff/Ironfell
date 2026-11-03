@@ -233,6 +233,19 @@ TIME
   its target through <link from="#clip" to="#target" rel="animates"/>. A leaf may be
   bound or animated, not both.
 
+NARRATIVES
+  A <narrative id="#N" name="…"> in the view is flowing text: each block's first line
+  starts [#B] (its id), then markdown. Inline: **strong**, *em*, \`code\`, [words](url),
+  :e[words]{#id} (a mention: words that point at a node), :val{#id.facet.field unit=mm
+  digits=1} (a live value, shown formatted). Blocks: paragraphs, # headings, - items,
+  1. items, > quotes, \`\`\` code, ::view[caption]{show=composition focus=#node} (shows a
+  composition when read). Write with narrative verbs, in an <edit> of their own:
+    <edit><write narrative="#N" after="#B">New paragraph with :e[the laser]{#4}.</write></edit>
+    <edit><rewrite block="#B">The block's new text.</rewrite></edit>
+  after="end" appends; after="" puts it first. Rewriting with nothing deletes the block.
+  Escape <, > and & in the markdown as XML text. If REQUEST says where the cursor is,
+  write there unless it names another place.
+
 If an <edit-failed> block comes back, fix exactly what it names and send one new
 <edit> with the version it reports.`;
 }

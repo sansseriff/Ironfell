@@ -151,6 +151,20 @@ fn node(
         writeln!(out, "{indent}</table>").expect("string write");
         return;
     }
+    // A narrative reads as markdown, each block's first line tagged with its
+    // id (narrative-panel.md §4): what the model edits with `<write>` and
+    // `<rewrite>`. Its blocks as nodes are shown when it is expanded.
+    if n.ty.name() == "narrative" && q.fidelity != Fidelity::Skeleton && !q.expand.contains(&id) {
+        attrs.retain(|(k, _)| k == "id" || k == "name");
+        attrs.push(("count".into(), doc.children(id).len().to_string()));
+        write_open(out, &indent, "narrative", &attrs);
+        out.push_str(">\n");
+        for line in crate::narrative::to_markdown(doc, id, true).lines() {
+            writeln!(out, "{indent}  {}", escape(line)).expect("string write");
+        }
+        writeln!(out, "{indent}</narrative>").expect("string write");
+        return;
+    }
     // A document's context reads as the markup it is written in
     // (contexts.md §2.3), the same a model writes and `std:*` is read in.
     if n.ty.name() == "context" && q.fidelity != Fidelity::Skeleton {

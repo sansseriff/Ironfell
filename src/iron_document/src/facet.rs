@@ -422,6 +422,27 @@ facets! {
         to: Any = Value::Number(1.0),
     }
 
+    /// One block of a narrative (narrative-panel.md §7.1): a paragraph, a
+    /// heading of `level`, a list item, a quote, code, or a view block that
+    /// shows the composition `show` (an id or a name), framing `focus` (a
+    /// node, optional) when clicked or scrolled to.
+    Block / "block" => Block {
+        kind: Enum = Value::Enum("paragraph".to_owned()) => ["paragraph", "heading", "bullet", "ordered", "quote", "code", "view"],
+        level: Number = Value::Number(1.0),
+        show: Str = Value::Str(String::new()),
+        focus: Str = Value::Str(String::new()),
+    }
+
+    /// A block's words and their marks (narrative-panel.md §7.1). `marks`
+    /// is JSON, `[{"type":"mention","start":0,"end":5,"target":"#4"}]`,
+    /// offsets in UTF-16 code units of `text`: `mention` (a node), `value`
+    /// (an atom over one U+FFFC; `target` a leaf, `fmt` optional), `strong`,
+    /// `em`, `code`, `link` (`href`).
+    RichText / "richtext" => RichText {
+        text: Str = Value::Str(String::new()),
+        marks: Str = Value::Str(String::new()),
+    }
+
     /// A geometric relationship with no direction (constraint-system.md §4.1).
     /// Operands are `constrains` relations. `value` is a distance or angle
     /// for the kinds that use one, and may be bound: a driving dimension.

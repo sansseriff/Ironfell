@@ -349,6 +349,20 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // A narrative (narrative-panel.md): flowing text whose blocks refer to
+    // the scope's nodes. Never drawn on a canvas; its panel is HTML.
+    TypeSpec {
+        name: "narrative",
+        facets: &[(K::Name, false)],
+        default_host: Host::Dom,
+        children: ChildPolicy::Only(&["block"]),
+    },
+    TypeSpec {
+        name: "block",
+        facets: &[(K::Block, true), (K::RichText, true)],
+        default_host: Host::Dom,
+        children: ChildPolicy::None,
+    },
     TypeSpec {
         name: "timeline",
         facets: &[(K::Name, false)],

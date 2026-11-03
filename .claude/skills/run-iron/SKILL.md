@@ -59,6 +59,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `schematic.txt` | ~40 s |
 | `scopes.txt` | ~15 s |
 | `scope-menu.txt` | ~20 s |
+| `narrative.txt` | ~25 s |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1 min |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
@@ -1080,9 +1081,8 @@ artifacts, which this skill does not run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-226 tests pass (verified 2026-11-02 after scopes added `tests/scopes.rs` and the
-old-schema migration tests were removed; ~1 min
-warm), minus the two platform-precision tests noted above on Linux. The host target is required because
+234 tests pass (verified 2026-11-03 after the narrative panel added
+`tests/narrative.rs` and `narrative::tests`; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
@@ -1942,6 +1942,51 @@ rename, and the driver API for the rest. Expected, minus `nav`, `ready`,
 ```
 
 The menu shifts the top-left group's tabs right; the smoke is unchanged by it.
+
+## The narrative panel (2026-11-03)
+
+plans/specs/narrative-panel.md §8. A narrative is a `narrative` root of `block`
+nodes (`block` and `richtext` facets); the **Lesson** tab (Document group) is a
+`narrative` view of the demo's `lesson`, which is part of the showcase, so a
+`showcase=0` page (every other script) shows "No narrative named lesson" with a
+New button instead. The panel is ProseMirror (`src-ui/narrative/`): typing is one
+`narrative_edit` transaction per 400 ms pause, Cmd+Z is the store's undo, `#`
+opens a mention menu, live values are atoms, a view block's header (or scrolling
+it to the top, "follow views") shows its composition, and the bar switches
+Authoring / Hybrid / Exploration. A model turn's changed blocks are marked with
+Show / Keep / Revert. Driver: `__narrative.get('lesson')` →
+`{editor(), mode(m?), flush(), askWith(xml, text), turns(), keep(i), revert(i),
+status()}`; engine calls `narrative_list/read/edit/create/markdown/write/rewrite/
+values/targets/probe` through `__iron.call`.
+
+`narrative.txt` (no `showcase=0`, so ids differ from other scripts; masked
+below as `#ID`). Expected, minus `nav`, `ready`, `tab`, `key` and `screenshot`
+lines:
+
+```
+"12 blocks, mode authoring; values [\"500\",\"0.40\"]; mentions [\"square\",\"shadow\",\"level\",\"torus\"]"
+"typed; store has it: true; versions advanced by 1"
+"Cmd+Z: store undone true, editor undone true"
+"menu offers [\"square\"]"
+"heading now \"A tour of the demo with the square \"; mention of square"
+"hover lights [\"#U\"] (#U); after: []"
+"x is now shown as 612"
+"active tab: pendulum; panel shows pendulum"
+"hybrid: editor shown, outline hidden, target \"Writes at the cursor\"; exploration: editor hidden, outline shown, target \"Conversation only\"; authoring: editor shown, outline hidden, target \"Writes at the cursor\""
+"model turn ok true, changed 1 block(s), marked 1"
+"hybrid"
+"reverted: reverted; model paragraph gone true"
+"stale mentions: [\"shadow\"]"
+"markdown: The :e[square]{#ID} sits at x = :val{#ID.transform2d.x digit"
+"typed in scope Demo"
+"after reload the heading reads \"A tour of the demo (kept)\""
+(no page errors)
+```
+
+`bun test tests/narrative.test.ts` covers block ↔ editor conversion and the
+block diff; `cargo test … --test narrative` and `narrative::tests` the store
+side (edits as one transaction, undo, save/load, the span index and stale
+mentions, markdown both ways, the model view).
 
 ## Free running and the Stats view (2026-10-18)
 

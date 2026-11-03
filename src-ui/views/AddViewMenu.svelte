@@ -13,6 +13,7 @@
 
   let open = $state(false);
   let compositions: { id: string; name: string | null; dims: string }[] = $state([]);
+  let narratives: { id: string; name: string }[] = $state([]);
 
   async function opened(now: boolean) {
     if (!now) return;
@@ -20,6 +21,12 @@
       compositions = await controllerManager.docClient.command({ op: 'compositions' });
     } catch {
       compositions = [];
+    }
+    try {
+      const r = await controllerManager.docClient.command<{ ok: boolean; narratives: { id: string; name: string }[] }>({ op: 'narrative_list' });
+      narratives = r.ok ? r.narratives : [];
+    } catch {
+      narratives = [];
     }
   }
 
@@ -70,6 +77,14 @@
               {titleOf(c.name ?? c.id)} <span class="ui-hint">{c.dims}</span>
             </DropdownMenu.Item>
           {/each}
+        </DropdownMenu.Group>
+        <DropdownMenu.Separator class="ui-menu-separator" />
+        <DropdownMenu.Group>
+          <DropdownMenu.GroupHeading class="ui-menu-heading">Narratives</DropdownMenu.GroupHeading>
+          {#each narratives as n (n.id)}
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(titleOf(n.name || n.id), { source: n.name || n.id, notation: "narrative" })}>{titleOf(n.name || n.id)}</DropdownMenu.Item>
+          {/each}
+          <DropdownMenu.Item class="ui-menu-item" onSelect={() => add("Notes", { source: "notes", notation: "narrative" })}>New narrative… <span class="ui-hint">notes</span></DropdownMenu.Item>
         </DropdownMenu.Group>
         <DropdownMenu.Separator class="ui-menu-separator" />
         <DropdownMenu.Group>

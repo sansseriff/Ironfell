@@ -56,6 +56,11 @@ export interface DocumentApi {
   /** A schematic sheet's netlist, SPICE-like, with each net's solved
    *  voltage; `sheet` is a composition's id or name. */
   netlist(sheet: string): MaybePromise<{ ok: boolean; netlist?: string; error?: string }>;
+  /** Insert markdown's blocks into a narrative after a block (`''`: first,
+   *  `'end'`: last), as one history entry (plans/specs/narrative-panel.md §4). */
+  narrativeWrite(source: string, after: string, markdown: string): MaybePromise<{ ok: boolean; version?: number; blocks?: string[]; error?: string }>;
+  /** Replace one narrative block with markdown's blocks (none: delete it). */
+  narrativeRewrite(block: string, markdown: string): MaybePromise<{ ok: boolean; version?: number; blocks?: string[]; error?: string }>;
 }
 
 export interface ImportSvgResult {
@@ -111,5 +116,7 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
     context: markup => json({ op: 'context', markup }),
     circuit: markup => json({ op: 'circuit', markup }),
     netlist: sheet => json({ op: 'netlist', sheet }),
+    narrativeWrite: (source, after, markdown) => json({ op: 'narrative_write', source, after, markdown, actor: 'model' }),
+    narrativeRewrite: (block, markdown) => json({ op: 'narrative_rewrite', block, markdown, actor: 'model' }),
   };
 }

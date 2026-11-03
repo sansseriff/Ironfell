@@ -13,7 +13,7 @@ import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
 import type { ViewSpec } from './views';
 
-const STORAGE_KEY = 'iron.workspace.v6';
+const STORAGE_KEY = 'iron.workspace.v7';
 
 /** The layout to start from: the main viewer with each composition in a
  *  tab beside it, HTML views left and right, the timeline across the bottom.
@@ -56,6 +56,9 @@ function defaultLayout(api: DockviewApi) {
   view('stats', 'Stats', { source: 'stats', notation: 'composition' }, { referencePanel: 'timeline', direction: 'right' }, { initialWidth: 360 });
   view('document', 'Document', { source: 'document', notation: 'markup' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
   view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
+  // The demo's narrative (plans/specs/narrative-panel.md), part of the
+  // showcase: with `?showcase=0` it offers to make one.
+  view('lesson', 'Lesson', { source: 'lesson', notation: 'narrative' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
   // The standard components (component-authoring.md §6): a view onto the
   // session's library composition; drag one onto a canvas to place it.
   view('library', 'Library', { source: 'library', notation: 'composition' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
@@ -195,4 +198,31 @@ export function resetWorkspace() {
     current.clear();
     defaultLayout(current);
   }
+}
+
+/** Show the composition `source` (a name or id): its open view becomes the
+ *  active tab, or a new view opens beside the main viewer. A narrative's
+ *  view block does this (plans/specs/narrative-panel.md §1). Returns the
+ *  view's id, or null with no workspace. */
+export function showComposition(source: string): string | null {
+  if (!current || !source) return null;
+  const existing = current.panels.find((p) => {
+    const spec = (p.params as { spec?: ViewSpec } | undefined)?.spec;
+    return spec?.notation === 'composition' && spec.source === source;
+  });
+  if (existing) {
+    existing.api.setActive();
+    return existing.id;
+  }
+  const spec: ViewSpec = { source, notation: 'composition' };
+  let id = source.replace(/[^a-zA-Z0-9_-]/g, '') || 'view';
+  for (let i = 2; current.getPanel(id); i++) id = `${source.replace(/[^a-zA-Z0-9_-]/g, '')}-${i}`;
+  const viewer = current.getPanel('viewer');
+  current.addPanel({ id, component: 'view', title: source[0].toUpperCase() + source.slice(1), params: { spec }, position: viewer ? { referencePanel: 'viewer', direction: 'within' } : undefined });
+  return id;
+}
+
+/** The views onto narratives (their sources), for the driver. */
+export function openNarratives(): string[] {
+  return (current?.panels ?? []).map((p) => (p.params as { spec?: ViewSpec } | undefined)?.spec).filter((s): s is ViewSpec => s?.notation === 'narrative').map((s) => s.source);
 }

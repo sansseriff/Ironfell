@@ -1596,7 +1596,50 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         Op::Set { id: r2.entity, path: "args.R".parse().expect("argument"), slot: bound(format!("{}.slider.value * 4 kΩ", s[0])) },
         Op::Set { id: v1.entity, path: "args.V".parse().expect("argument"), slot: Slot::Const(Value::parse_quantity("9 V").expect("quantity")) },
     ])?;
+    // A narrative about the demo (narrative-panel.md): mentions, live values
+    // and view blocks over the scene, the pendulum and the assembly.
+    if let Some(md) = lesson_markdown(scratch.document()) {
+        let blocks = iron_document::narrative::parse_markdown(&md);
+        let (_, ops) = iron_document::narrative::create_ops(scratch.document(), "lesson", &blocks);
+        phase(&mut scratch, ops)?;
+    }
     Ok(iron_document::TransactionInput { label: "open showcase".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: out, exact: false })
+}
+
+/// The demo's lesson, naming its nodes by id; `None` if the demo scene is
+/// not there (a document without it gets no lesson).
+fn lesson_markdown(doc: &iron_document::Document) -> Option<String> {
+    let named = |want: &str, ty: &str| -> Option<NodeId> {
+        doc.nodes_of_type(TypeId::lookup(ty)?).find(|&id| doc.live(id).is_some() && doc.get::<DocName>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).as_deref() == Some(want))
+    };
+    let square = named("square", "rect")?;
+    let shadow = named("shadow", "rect")?;
+    let level = named("level", "slider")?;
+    let torus = named("torus", "mesh")?;
+    let lines = [
+        "# A tour of the demo".to_owned(),
+        String::new(),
+        "This lesson is a **narrative**: text stored as blocks in the document, whose words can point at things in the scene. Hover a highlighted name to light up what it refers to; ⌘-click it to select it.".to_owned(),
+        String::new(),
+        "::view[The scene]{show=scene}".to_owned(),
+        String::new(),
+        format!("The :e[square]{{{square}}} sits at x = :val{{{square}.transform2d.x digits=0}}. Its :e[shadow]{{{shadow}}} is bound to it, so dragging either moves both, and the number here follows."),
+        String::new(),
+        format!("The :e[level]{{{level}}} slider reads :val{{{level}.slider.value digits=2}}; the bars beside it are bound to that value."),
+        String::new(),
+        "::view[The pendulum]{show=pendulum}".to_owned(),
+        String::new(),
+        "## In three dimensions".to_owned(),
+        String::new(),
+        "::view[The assembly]{show=assembly}".to_owned(),
+        String::new(),
+        format!("The :e[torus]{{{torus}}} spins on the timeline. Scroll a view block to the top of this panel, or click its header, to show its composition."),
+        String::new(),
+        "- Type anywhere: each pause is one undoable step.".to_owned(),
+        "- Type `#` to mention something by name.".to_owned(),
+        "- Ask the model to write at the cursor, below.".to_owned(),
+    ];
+    Some(lines.join("\n"))
 }
 
 /// A new scope's starting document as snapshot text (`engine_api::

@@ -3231,7 +3231,7 @@ pub fn select_tool_system(
             }
         }
     }
-    let hovered = tool.hover.as_ref().map(Reach::node);
+    let hovered = tool.hover.as_ref().map(Reach::node).or(sel.probe);
     if sel.hovered != hovered {
         sel.hovered = hovered;
     }

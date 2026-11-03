@@ -94,7 +94,7 @@ fn draws(ty: &str) -> bool {
 /// A template child that is part of the picture: authored, live, and not
 /// bookkeeping (an override, a constraint).
 fn part_node(doc: &Document, n: NodeId) -> bool {
-    !n.is_expanded() && doc.live(n).is_some_and(|x| !matches!(x.ty.name(), "override" | "constraint" | "clip" | "timeline"))
+    !n.is_expanded() && doc.live(n).is_some_and(|x| !matches!(x.ty.name(), "override" | "constraint" | "clip" | "timeline" | "narrative" | "block"))
 }
 
 /// Follows the graph from an instance's copies to its inputs, memoised per

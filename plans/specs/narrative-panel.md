@@ -1,8 +1,7 @@
 # The narrative panel (outline)
 
-**Status:** Outline, 2026-11-02. Not a plan yet: it sets out the shape and the
-decisions to make, to be expanded into a spec after [`scopes.md`](scopes.md) settles
-identity. Nothing is approved and no code exists.
+**Status:** Outline 2026-11-02; **decisions taken by best guess 2026-11-03** (§7), with
+the user away, and **built 2026-11-03** (§8).
 **Background:** [`../notes/narrative-layer-and-storage-primitives.md`](../notes/narrative-layer-and-storage-primitives.md)
 §5 (text as the surface, the formalisation ladder, how text is stored) and §6 (moves,
 the narrative clock). Canvas text, drawn by the engine, is a different thing and stays
@@ -182,3 +181,91 @@ author has selected.
    Should small off-cursor fixes (a unit, a typo) apply directly?
 8. **How a linked view appears** when the narrative panel drives a composition (note
    §6.5): the frame, the breadcrumb, and the link toggle's place.
+
+## 7. Decisions (best guesses, 2026-11-03)
+
+The user asked for best guesses on §6 and for the build to proceed. Each is cheap to
+revisit.
+
+1. **Syntax: generic directives** (`:e[words]{#id}`, `:val{#id.facet.field fmt="…"}`,
+   `::view{show=name focus=#id}`), as the note sketches; remark-directive parses them.
+   MyST stays possible: the store holds marks, not syntax.
+2. **Plain ProseMirror**, no TipTap: the schema is small and every behaviour (sync,
+   undo through the store, chips) is custom anyway.
+3. **Its own notation**, `narrative`, in the view registry. Source: the narrative's
+   name or id. It opens from "+" like a composition.
+4. **Mentions are marks over the author's words**; a mention whose words are the
+   entity's name reads as a chip. **Live values are inline atoms** (their text is
+   derived, so it cannot be typed into).
+5. **One transaction per block per pause** (400 ms), as the outline said.
+6. **LLM, first:** chat beside (option 1) and **ask in place** (option 2), both landing
+   as **reviewable changes**: the blocks a model turn changed are marked, each with
+   Keep and Revert, rather than full tracked changes inside the text.
+7. **The cursor rule** as §4.2 proposes; small off-cursor fixes are not special-cased.
+8. **A linked view** is shown by the view block itself (highlighted while its
+   composition is the one shown); the frame and breadcrumb of note §6.5 wait for moves.
+
+### 7.1 Storage
+
+- **Types.** `narrative` (a root; children: `block`) and `block` (no children).
+- **Facets.** `block { kind, level, show, focus }`: `kind` is `paragraph`, `heading`,
+  `bullet`, `ordered`, `quote`, `code` or `view`; `level` a heading's; `show` and
+  `focus` a view block's composition and optional node to frame. `richtext { text,
+  marks }`: `marks` is JSON, `[{"type":"mention","start":0,"end":5,"target":"#4"}]`,
+  as `text.runs` already is. Offsets count UTF-16 code units (what the editor counts).
+  Types: `mention` (`target` a node), `value` (an atom: one U+FFFC in `text`; `target`
+  a leaf, `fmt` optional), `strong`, `em`, `code`, `link` (`href`).
+- **The span index** is computed from the marks on demand (`narrative::mentions`):
+  target → (block, mark). A mention whose target is not live is **stale**, shown struck
+  through, as stale overrides are.
+- **Limit:** targets inside a JSON string are not remapped by copy and paste between
+  documents, and the validator does not see them; a relation per mark is the cleaner
+  form once collaboration needs it.
+
+## 8. Built (2026-11-03)
+
+Phases 1–5 of §5 in a first form, on the §7 decisions.
+
+- **Store (`iron_document`).** Types `narrative` and `block`; facets `block` and
+  `richtext` (§7.1). `narrative.rs`: read blocks; `plan` turns block edits
+  (`insert` with a key, `set`, `delete`, `move`, `after` naming an id or an earlier
+  key) into ops, one transaction, with order keys between neighbours; the span index
+  (`references`, `references_to`, stale when the target is gone); markdown out
+  (`to_markdown`, `block_markdown`, `inline_markdown`) and in (`parse_markdown`,
+  `parse_inline`) with generic directives; `value_expr`. The model's view prints a
+  narrative as markdown, each block's first line `[#B] `. `narrative` and `block`
+  are structural (never drawn, not copied, not loose roots). Tests:
+  `tests/narrative.rs` (5) and `narrative::tests` (3).
+- **Engine calls.** `narrative_list`, `narrative_read` (with each target's label and
+  staleness), `narrative_edit`, `narrative_create`, `narrative_markdown`,
+  `narrative_write` and `narrative_rewrite` (the model's verbs), `narrative_values`
+  (keyed by expression), `narrative_targets` (the `#` menu), `narrative_probe`
+  (hover and select from HTML; `SelectionState::probe` keeps a hover lit while the
+  canvas hovers nothing).
+- **Panel (`src-ui/narrative/`, `views/html/NarrativeView.svelte`).** The
+  `narrative` notation; a Lesson tab in the default layout (layout key v7) and
+  "Narratives" in the "+" menu. ProseMirror schema (`code_block` for the store's
+  `code`, since a mark is called `code`), conversion with UTF-16 offsets
+  (`convert.ts`, tested in `tests/narrative.test.ts`), the block diff (a longest
+  increasing run of kept blocks stays; the rest move; split blocks and `~n`
+  temporary ids are new), and `editor.ts`: debounced flush, read-and-reconcile on
+  every document change (in place when the block list is unchanged, whole document
+  otherwise, the cursor kept by block and offset), Cmd+Z through the store, input
+  rules (`# `, `- `, `1. `, `> `, ```` ``` ````), Backspace at a block's start makes a
+  paragraph, the `#` menu (its keys before every keymap), chips and stale mentions as
+  decorations, value atoms and view blocks as node views.
+- **Modes** (§4.1): Authoring, Hybrid, Exploration, per view (kept in
+  `localStorage`); Exploration shows an outline of headings and view blocks.
+- **The model.** `<write narrative after>` and `<rewrite block>` in `edit.ts` (in an
+  `<edit>` of their own); the manifest's NARRATIVES section; the composer adds where
+  the cursor is (block, heading, selection) to the request (§4.2), or says
+  "conversation only". A turn's changed blocks are marked; Revert applies the
+  inverse block edits as one transaction.
+- **Demo.** The showcase adds `lesson`, a tour of the demo with mentions, two live
+  values and three view blocks.
+
+Not built: tracked changes inside a block's text (the review is per block); margin
+comments, intent blocks and `@iron` lines (§4 options 3–5); `:go` moves and the
+narrative clock beyond scroll-to-top; mark targets as relations (§7.1's limit);
+remapping targets on paste between documents.
+

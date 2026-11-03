@@ -5,6 +5,16 @@ export type DocumentCommand =
   | { op: 'scope_open'; id: string; snapshot: string; log: (string)[] }
   | { op: 'scope_assign'; id: string }
   | { op: 'scope_template'; kind: string }
+  | { op: 'narrative_list' }
+  | { op: 'narrative_read'; source: string }
+  | { op: 'narrative_edit'; source: string; edits: string; label: string; actor: string }
+  | { op: 'narrative_create'; name: string; markdown: string; actor: string }
+  | { op: 'narrative_markdown'; source: string }
+  | { op: 'narrative_write'; source: string; after: string; markdown: string; actor: string }
+  | { op: 'narrative_rewrite'; block: string; markdown: string; actor: string }
+  | { op: 'narrative_probe'; node: string; action: string }
+  | { op: 'narrative_targets'; query: string }
+  | { op: 'narrative_values'; source: string }
   | { op: 'scope_log'; since: number }
   | { op: 'view'; query_json: string }
   | { op: 'apply'; transaction_json: string; expect_version: number }
@@ -65,6 +75,16 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'scope_open': return { fn: command.op, args: [command.id, command.snapshot, command.log] };
     case 'scope_assign': return { fn: command.op, args: [command.id] };
     case 'scope_template': return { fn: command.op, args: [command.kind] };
+    case 'narrative_list': return { fn: command.op, args: [] };
+    case 'narrative_read': return { fn: command.op, args: [command.source] };
+    case 'narrative_edit': return { fn: command.op, args: [command.source, command.edits, command.label, command.actor] };
+    case 'narrative_create': return { fn: command.op, args: [command.name, command.markdown, command.actor] };
+    case 'narrative_markdown': return { fn: command.op, args: [command.source] };
+    case 'narrative_write': return { fn: command.op, args: [command.source, command.after, command.markdown, command.actor] };
+    case 'narrative_rewrite': return { fn: command.op, args: [command.block, command.markdown, command.actor] };
+    case 'narrative_probe': return { fn: command.op, args: [command.node, command.action] };
+    case 'narrative_targets': return { fn: command.op, args: [command.query] };
+    case 'narrative_values': return { fn: command.op, args: [command.source] };
     case 'scope_log': return { fn: command.op, args: [command.since] };
     case 'view': return { fn: command.op, args: [command.query_json] };
     case 'apply': return { fn: command.op, args: [command.transaction_json, command.expect_version] };

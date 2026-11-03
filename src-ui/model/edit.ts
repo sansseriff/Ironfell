@@ -20,6 +20,8 @@
  *   <edit><import-svg to="#4" x="100" y="50"><svg …>…</svg></import-svg></edit>   (alone too)
  *   <edit><table to="#4" x="80" y="400" preset="light">a | b\n1 | 2</table></edit>   (alone too)
  *   <edit><circuit sheet="circuit"><place part="resistor" x="200" y="100"/>…</circuit></edit>   (alone too)
+ *   <edit><write narrative="#N" after="#B">markdown</write>…</edit>   (narrative verbs, only with each other)
+ *   <edit><rewrite block="#B">markdown</rewrite></edit>
  */
 import { XMLParser } from 'fast-xml-parser';
 import type { ApplyResult, DocumentApi, SolverSummary } from './api';
@@ -368,8 +370,43 @@ async function circuit(api: DocumentApi, markup: string): Promise<EditOutcome> {
   return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <circuit>${r.summary}</circuit>\n</applied>${net.ok ? `\n<netlist sheet="${sheet}">\n${net.netlist}\n</netlist>` : ''}` };
 }
 
+/** `<write narrative after>` and `<rewrite block>` (plans/specs/narrative-
+ *  panel.md §4): markdown with directives into a narrative, each verb one
+ *  history entry. They may be several in one edit, but only with each other;
+ *  the body is markdown, its `<`, `>` and `&` escaped as XML text. */
+const NARRATIVE_VERB = /<(write|rewrite)(\s[^>]*)?>([\s\S]*?)<\/\1>/g;
+const ONLY_NARRATIVE = /^\s*<edit(?:\s[^>]*)?>\s*(?:<(?:write|rewrite)(?:\s[^>]*)?>[\s\S]*?<\/(?:write|rewrite)>\s*)+<\/edit>\s*$/;
+
+async function narrativeVerbs(api: DocumentApi, xml: string): Promise<EditOutcome> {
+  const unescape = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  const lines: string[] = [];
+  let version = await api.version();
+  let i = 0;
+  for (const m of xml.matchAll(NARRATIVE_VERB)) {
+    const attrs: Record<string, string> = {};
+    for (const a of (m[2] ?? '').matchAll(/([\w.-]+)="([^"]*)"/g)) attrs[a[1]] = a[2];
+    const body = unescape(m[3].replace(/^\n/, '').replace(/\n\s*$/, ''));
+    const r = m[1] === 'write'
+      ? attrs.narrative
+        ? await api.narrativeWrite(attrs.narrative, attrs.after ?? 'end', body)
+        : { ok: false, error: '<write> needs narrative="#N" (and after="#B", or after="end")' }
+      : attrs.block
+        ? await api.narrativeRewrite(attrs.block, body)
+        : { ok: false, error: '<rewrite> needs block="#B"' };
+    if (!r.ok) return { ok: false, failure: failed(version, [{ op: i, kind: m[1], message: r.error ?? `${m[1]} failed` }]) };
+    version = r.version ?? version;
+    lines.push(`  <${m[1]} blocks="${(r.blocks ?? []).join(' ')}"/>`);
+    i++;
+  }
+  return { ok: true, version, summary: `<applied version="${version}">\n${lines.join('\n')}\n</applied>` };
+}
+
 /** Parse and apply one edit as the model, answering in the model's terms. */
 export async function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): Promise<EditOutcome> {
+  if (ONLY_NARRATIVE.test(xml)) return narrativeVerbs(api, xml);
+  if (/<(?:write|rewrite)[\s>]/.test(xml)) {
+    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<write> and <rewrite> go in an <edit> of their own (narrative verbs only)' }]) };
+  }
   const link = xml.match(LINK_FIGURES);
   if (link) return linkFigures(api, link[1]);
   if (/<link-figures[\s/>]/.test(xml)) {

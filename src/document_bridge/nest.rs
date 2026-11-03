@@ -71,7 +71,7 @@ pub fn panel_roots(doc: &Document, view: &PanelView) -> Vec<NodeId> {
 /// 2D nodes outside every composition: what the viewer draws besides its
 /// composition.
 pub fn loose_roots(doc: &Document) -> Vec<NodeId> {
-    let structural = ["composition", "model", "library", "timeline", "session"].map(|t| TypeId::lookup(t).expect("registered"));
+    let structural = ["composition", "model", "library", "timeline", "session", "narrative"].map(|t| TypeId::lookup(t).expect("registered"));
     doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !structural.contains(&n.ty))).collect()
 }
 

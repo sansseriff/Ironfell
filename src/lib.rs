@@ -321,6 +321,10 @@ pub struct SelectionState {
     /// In pick order: shift-click adds, so a Link knows its two figures.
     pub selected: Vec<iron_document::NodeId>,
     pub hovered: Option<iron_document::NodeId>,
+    /// A hover from outside the canvas (a narrative's mention, through
+    /// `engine_api::narrative_probe`): lit while the pointer hovers nothing
+    /// on the canvas.
+    pub probe: Option<iron_document::NodeId>,
 }
 
 // Marker for a composite vector group (single VelloScene acting as many shapes)

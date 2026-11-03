@@ -1877,3 +1877,270 @@ pub fn document_render_inspector_options(app: &mut WorkerApp, panel: String, opt
     serde_json::json!({"ok": true, "tint": o.tint, "dim": o.dim, "outlines": o.outlines, "tiles": o.tiles}).to_string()
 }
 
+
+// ---- narratives (plans/specs/narrative-panel.md) ----------------------------
+
+fn narrative_run(app: &mut WorkerApp, run: impl FnOnce(&mut iron_document::Store) -> Result<serde_json::Value, String>) -> String {
+    let result = match app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() {
+        Some(mut store) => run(&mut store.0),
+        None => Err("document bridge not installed".into()),
+    };
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        activity.remaining_frames = 10;
+    }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+fn narrative_actor(actor: &str) -> iron_document::Actor {
+    if actor == "model" { iron_document::Actor::Model } else { iron_document::Actor::Human }
+}
+
+fn narrative_apply(store: &mut iron_document::Store, label: &str, actor: &str, ops: Vec<iron_document::Op>) -> Result<u64, String> {
+    if ops.is_empty() {
+        return Ok(store.document().version().0);
+    }
+    let applied = store
+        .apply(iron_document::TransactionInput { label: label.into(), actor: narrative_actor(actor), ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
+        .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+    Ok(applied.version.0)
+}
+
+fn narrative_source(store: &iron_document::Store, source: &str) -> Result<iron_document::NodeId, String> {
+    iron_document::narrative::find(store.document(), source).ok_or_else(|| format!("no narrative {source:?}"))
+}
+
+/// The narratives in the document: `{"ok", "narratives": [{"id", "name", "blocks"}]}`.
+pub fn narrative_list(app: &mut WorkerApp) -> String {
+    narrative_run(app, |store| {
+        let doc = store.document();
+        let list: Vec<_> = iron_document::narrative::narratives(doc)
+            .into_iter()
+            .map(|n| serde_json::json!({"id": n.to_string(), "name": iron_document::narrative::name(doc, n), "blocks": doc.children(n).len()}))
+            .collect();
+        Ok(serde_json::json!({"ok": true, "narratives": list}))
+    })
+}
+
+/// One narrative's blocks for the panel: `{"ok", "id", "name", "version",
+/// "blocks": [{"id", "kind", "level", "show", "focus", "text", "marks"}]}`.
+/// Each mention and value mark also carries its target's `label` (name,
+/// else type) and `stale` (the target is gone).
+pub fn narrative_read(app: &mut WorkerApp, source: String) -> String {
+    narrative_run(app, |store| {
+        let n = narrative_source(store, &source)?;
+        let doc = store.document();
+        let label = |t: iron_document::NodeId| -> String {
+            match doc.live(t) {
+                None => String::new(),
+                Some(node) => doc
+                    .get::<iron_document::facet::Name>(t)
+                    .and_then(|nm| nm.text.constant().and_then(|v| v.as_str().map(str::to_owned)))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| node.ty.name().to_owned()),
+            }
+        };
+        let blocks: Vec<serde_json::Value> = iron_document::narrative::blocks(doc, n)
+            .into_iter()
+            .map(|(id, c)| {
+                let mut v = serde_json::to_value(&c).expect("block serialises");
+                v["id"] = serde_json::json!(id.to_string());
+                if let Some(marks) = v["marks"].as_array_mut() {
+                    for m in marks.iter_mut() {
+                        if let Some(t) = m["target"].as_str().and_then(iron_document::narrative::target_node) {
+                            m["label"] = serde_json::json!(label(t));
+                            m["stale"] = serde_json::json!(!doc.is_live(t));
+                        }
+                    }
+                }
+                v
+            })
+            .collect();
+        Ok(serde_json::json!({"ok": true, "id": n.to_string(), "name": iron_document::narrative::name(doc, n), "version": doc.version().0, "blocks": blocks}))
+    })
+}
+
+/// Apply block edits (`narrative::Edit`, JSON list) as one transaction:
+/// `{"ok", "version", "minted": {key: id}}`.
+pub fn narrative_edit(app: &mut WorkerApp, source: String, edits: String, label: String, actor: String) -> String {
+    narrative_run(app, |store| {
+        let n = narrative_source(store, &source)?;
+        let edits: Vec<iron_document::narrative::Edit> = serde_json::from_str(&edits).map_err(|e| format!("edits: {e}"))?;
+        let planned = iron_document::narrative::plan(store.document(), n, &edits)?;
+        let label = if label.is_empty() { "edit narrative".to_owned() } else { label };
+        let version = narrative_apply(store, &label, &actor, planned.ops)?;
+        let minted: serde_json::Map<String, serde_json::Value> = planned.minted.into_iter().map(|(k, v)| (k, serde_json::json!(v.to_string()))).collect();
+        Ok(serde_json::json!({"ok": true, "version": version, "minted": minted}))
+    })
+}
+
+/// A new narrative named `name` holding `markdown`'s blocks: `{"ok", "id", "version"}`.
+pub fn narrative_create(app: &mut WorkerApp, name: String, markdown: String, actor: String) -> String {
+    narrative_run(app, |store| {
+        let mut blocks = iron_document::narrative::parse_markdown(&markdown);
+        if blocks.is_empty() {
+            blocks.push(iron_document::narrative::BlockContent::default());
+        }
+        let (id, ops) = iron_document::narrative::create_ops(store.document(), &name, &blocks);
+        let version = narrative_apply(store, &format!("add narrative {name}"), &actor, ops)?;
+        Ok(serde_json::json!({"ok": true, "id": id.to_string(), "version": version}))
+    })
+}
+
+/// A narrative as markdown (export): `{"ok", "name", "markdown"}`.
+pub fn narrative_markdown(app: &mut WorkerApp, source: String) -> String {
+    narrative_run(app, |store| {
+        let n = narrative_source(store, &source)?;
+        Ok(serde_json::json!({"ok": true, "name": iron_document::narrative::name(store.document(), n), "markdown": iron_document::narrative::to_markdown(store.document(), n, false)}))
+    })
+}
+
+/// Insert `markdown`'s blocks after `after` (a block id; empty: at the
+/// start; `"end"`: at the end), one transaction: the model's `<write>`.
+/// `{"ok", "version", "blocks": [ids]}`.
+pub fn narrative_write(app: &mut WorkerApp, source: String, after: String, markdown: String, actor: String) -> String {
+    narrative_run(app, |store| {
+        use iron_document::narrative::{self, Edit};
+        let n = narrative_source(store, &source)?;
+        let mut prev = match after.as_str() {
+            "" => None,
+            "end" => store.document().children(n).last().map(|b| b.to_string()),
+            a => Some(a.to_owned()),
+        };
+        let mut edits = Vec::new();
+        for (i, block) in narrative::parse_markdown(&markdown).into_iter().enumerate() {
+            let key = format!("w{i}");
+            edits.push(Edit::Insert { key: key.clone(), after: prev.clone(), block });
+            prev = Some(key);
+        }
+        if edits.is_empty() {
+            return Err("nothing to write: the markdown has no blocks".into());
+        }
+        let planned = narrative::plan(store.document(), n, &edits)?;
+        let ids: Vec<String> = (0..edits.len()).map(|i| planned.minted[&format!("w{i}")].to_string()).collect();
+        let version = narrative_apply(store, if actor == "model" { "model: write" } else { "write" }, &actor, planned.ops)?;
+        Ok(serde_json::json!({"ok": true, "version": version, "blocks": ids}))
+    })
+}
+
+/// Replace block `block` with `markdown`'s blocks (none: delete it), one
+/// transaction: the model's `<rewrite>`. `{"ok", "version", "blocks": [ids]}`.
+pub fn narrative_rewrite(app: &mut WorkerApp, block: String, markdown: String, actor: String) -> String {
+    narrative_run(app, |store| {
+        use iron_document::narrative::{self, Edit};
+        let id = block.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
+        let n = store.document().live(id).and_then(|b| b.parent).filter(|p| narrative::narratives(store.document()).contains(p)).ok_or_else(|| format!("{block} is not a narrative block"))?;
+        let parsed = narrative::parse_markdown(&markdown);
+        let mut edits = Vec::new();
+        let mut ids = Vec::new();
+        let mut prev = block.clone();
+        for (i, b) in parsed.into_iter().enumerate() {
+            if i == 0 {
+                edits.push(Edit::Set { id: block.clone(), block: b });
+                ids.push(block.clone());
+            } else {
+                let key = format!("r{i}");
+                edits.push(Edit::Insert { key: key.clone(), after: Some(prev.clone()), block: b });
+                prev = key.clone();
+                ids.push(key);
+            }
+        }
+        if edits.is_empty() {
+            edits.push(Edit::Delete { id: block.clone() });
+        }
+        let planned = narrative::plan(store.document(), n, &edits)?;
+        let ids: Vec<String> = ids.into_iter().map(|k| planned.minted.get(&k).map_or(k, |v| v.to_string())).collect();
+        let version = narrative_apply(store, if actor == "model" { "model: rewrite" } else { "rewrite" }, &actor, planned.ops)?;
+        Ok(serde_json::json!({"ok": true, "version": version, "blocks": ids}))
+    })
+}
+
+/// Every live value in a narrative, formatted, keyed by the expression it
+/// shows (`narrative::value_expr`): `{"ok", "values": {expr: text}, "errors": {expr: message}}`.
+pub fn narrative_values(app: &mut WorkerApp, source: String) -> String {
+    narrative_run(app, |store| {
+        use iron_document::narrative;
+        let n = narrative_source(store, &source)?;
+        let mut values = serde_json::Map::new();
+        let mut errors = serde_json::Map::new();
+        for (b, c) in narrative::blocks(store.document(), n) {
+            let _ = b;
+            for m in c.marks.iter().filter(|m| m.kind == "value") {
+                let Some(key) = narrative::value_expr(m) else { continue };
+                if values.contains_key(&key) || errors.contains_key(&key) {
+                    continue;
+                }
+                let result = Some(key.clone())
+                    .ok_or_else(|| "no target".to_owned())
+                    .and_then(|e| iron_document::Expr::parse(&e).map_err(|e| e.to_string()))
+                    .and_then(|e| e.eval(&|l| store.resolved(l.node, l.path)).map_err(|e| e.to_string()));
+                match result {
+                    Ok(v) => {
+                        values.insert(key, serde_json::json!(v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())));
+                    }
+                    Err(e) => {
+                        errors.insert(key, serde_json::json!(e));
+                    }
+                }
+            }
+        }
+        Ok(serde_json::json!({"ok": true, "values": values, "errors": errors}))
+    })
+}
+
+/// Cross-probe from HTML (a narrative's mention): `action` `hover` lights
+/// `node` and its counterparts in every composition, `unhover` clears it,
+/// `select` selects it (ECM §7.2). `{"ok"}`.
+pub fn narrative_probe(app: &mut WorkerApp, node: String, action: String) -> String {
+    let id = if node.is_empty() { None } else { node.parse::<iron_document::NodeId>().ok() };
+    let live = id.filter(|&id| app.world().get_resource::<crate::document_bridge::DocumentStore>().is_some_and(|s| s.0.document().is_live(id)));
+    if let Some(mut sel) = app.world_mut().get_resource_mut::<crate::SelectionState>() {
+        match action.as_str() {
+            "hover" => {
+                sel.probe = live;
+                sel.hovered = live;
+            }
+            "unhover" => {
+                sel.probe = None;
+                sel.hovered = None;
+            }
+            "select" => sel.selected = live.into_iter().collect(),
+            _ => return serde_json::json!({"ok": false, "error": format!("unknown probe action {action:?}")}).to_string(),
+        }
+    }
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        activity.remaining_frames = 10;
+    }
+    serde_json::json!({"ok": live.is_some() || action == "unhover"}).to_string()
+}
+
+/// Nodes a mention can name (the `#` menu): live, named, not session or
+/// derived, whose name contains `query` (case-insensitive), at most 20,
+/// best first. `{"ok", "targets": [{"id", "name", "type", "composition"}]}`.
+pub fn narrative_targets(app: &mut WorkerApp, query: String) -> String {
+    narrative_run(app, |store| {
+        let doc = store.document();
+        let q = query.to_lowercase();
+        let skip = ["block", "narrative", "session", "selection", "port_spec", "template", "override", "constraint", "contour", "point"];
+        let mut hits: Vec<(usize, String, iron_document::NodeId)> = Vec::new();
+        for node in doc.nodes() {
+            let id = node.id;
+            if id.is_session() || id.is_expanded() || node.tombstoned.is_some() || skip.contains(&node.ty.name()) {
+                continue;
+            }
+            let Some(name) = doc.get::<iron_document::facet::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).filter(|n| !n.is_empty()) else { continue };
+            let lower = name.to_lowercase();
+            let Some(at) = lower.find(&q) else { continue };
+            hits.push((at * 1000 + name.len(), name, id));
+        }
+        hits.sort();
+        let targets: Vec<_> = hits
+            .into_iter()
+            .take(20)
+            .map(|(_, name, id)| {
+                let comp = iron_document::composition::composition_of(doc, id).and_then(|c| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))));
+                serde_json::json!({"id": id.to_string(), "name": name, "type": doc.live(id).map(|n| n.ty.name()), "composition": comp})
+            })
+            .collect();
+        Ok(serde_json::json!({"ok": true, "targets": targets}))
+    })
+}

@@ -441,7 +441,7 @@ impl Scene {
             i += 1;
             stack.extend(doc.children(id).iter().rev().copied());
         }
-        let structural = ["composition", "model", "library", "timeline", "session"].map(|t| TypeId::lookup(t).expect("registered"));
+        let structural = ["composition", "model", "library", "timeline", "session", "narrative"].map(|t| TypeId::lookup(t).expect("registered"));
         // 2D compositions' children, then loose 2D roots.
         let mut top: Vec<(Option<NodeId>, Vec<NodeId>)> = Vec::new();
         for c in composition::compositions(doc) {

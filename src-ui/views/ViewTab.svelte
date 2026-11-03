@@ -9,6 +9,7 @@
   import FileCode from "@lucide/svelte/icons/file-code";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import Bot from "@lucide/svelte/icons/bot";
+  import BookOpen from "@lucide/svelte/icons/book-open";
   import Settings from "@lucide/svelte/icons/settings";
   import X from "@lucide/svelte/icons/x";
   import type { Notation } from "./views";
@@ -21,6 +22,7 @@
     markup: FileCode,
     selection: SlidersHorizontal,
     conversation: Bot,
+    narrative: BookOpen,
     settings: Settings,
   };
   const Icon = $derived(notation ? ICONS[notation] : Shapes);

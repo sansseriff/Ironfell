@@ -3,7 +3,7 @@
  * a view, a window onto something in the document drawn in some notation.
  *
  *   source    what it is a view of: a composition (id or name), the timeline
- *             root, the document, the session's selection
+ *             root, the document, the session's selection, a narrative
  *   notation  how it is drawn
  *
  * A notation decides which part of the view the canvas draws (its Rust panel
@@ -19,8 +19,9 @@ import SelectionView from './html/SelectionView.svelte';
 import ModelView from './html/ModelView.svelte';
 import SettingsView from './html/SettingsView.svelte';
 import CompositionTools from './html/CompositionTools.svelte';
+import NarrativeView from './html/NarrativeView.svelte';
 
-export type Notation = 'composition' | 'timeline' | 'markup' | 'selection' | 'conversation' | 'settings';
+export type Notation = 'composition' | 'timeline' | 'markup' | 'selection' | 'conversation' | 'narrative' | 'settings';
 
 export interface ViewSpec {
   source: string;
@@ -41,6 +42,9 @@ export const NOTATIONS: Record<Notation, NotationDef> = {
   markup: { label: 'Document', html: DocumentView },
   selection: { label: 'Inspector', html: SelectionView },
   conversation: { label: 'Model', html: ModelView },
+  // Flowing text over the scope (plans/specs/narrative-panel.md): source is
+  // the narrative's name or id.
+  narrative: { label: 'Narrative', html: NarrativeView },
   settings: { label: 'Settings', html: SettingsView },
 };
 

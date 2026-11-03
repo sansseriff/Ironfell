@@ -51,6 +51,7 @@ pub mod standard;
 pub mod sym;
 pub mod text;
 pub mod layout;
+pub mod narrative;
 pub mod table;
 pub mod time;
 pub mod units;

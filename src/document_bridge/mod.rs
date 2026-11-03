@@ -42,7 +42,7 @@ mod text;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
-use iron_document::{Document, NodeId, Op, Store, TransactionInput};
+use iron_document::{NodeId, Op, Store, TransactionInput};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use highlight::{Highlights, update_highlights};
@@ -87,6 +87,13 @@ pub struct DocumentOrigin(pub String);
 impl DocumentOrigin {
     pub fn fresh() -> DocumentOrigin {
         DocumentOrigin(crate::host_services::origin_token())
+    }
+
+    /// A scope's documents share its id as their origin (scopes.md §3), so
+    /// a fragment copied before a reload, or in another tab on the same
+    /// scope, keeps its references. Without a scope, a fresh token.
+    pub fn for_scope(scope: Option<iron_document::ScopeId>) -> DocumentOrigin {
+        scope.map_or_else(DocumentOrigin::fresh, |s| DocumentOrigin(format!("scope:{s}")))
     }
 }
 
@@ -168,11 +175,11 @@ pub enum GestureRequest {
 #[derive(Resource, Default)]
 pub struct GestureRequests(pub Vec<GestureRequest>);
 
-/// A document to replace the current one, already parsed and validated by
-/// the FFI. Applied by the sync before that frame's transactions; history is
-/// discarded with the old document.
+/// A store to replace the current one, already parsed, validated and (for
+/// a scope) replayed by the FFI. Applied by the sync before that frame's
+/// transactions; history is discarded with the old document.
 #[derive(Resource, Default)]
-pub struct PendingLoad(pub Option<Document>);
+pub struct PendingLoad(pub Option<Store>);
 
 /// What the reconciler rewrote since the 2D layer last drew: the nodes, and
 /// whether the tree's shape (hence painter order) changed. Both reconcile
@@ -388,7 +395,7 @@ pub(crate) fn sync_document(
     let mut affected: BTreeSet<NodeId> = BTreeSet::new();
     let mut structure = false;
     let version_before = synced.0;
-    if let Some(doc) = load.0.take() {
+    if let Some(loaded) = load.0.take() {
         geometry_revision.touch_all();
         structure = true;
         // Everything materialised belongs to the old document. Tear it all
@@ -399,8 +406,8 @@ pub(crate) fn sync_document(
             }
         }
         drawables.0.clear();
-        store.0 = Store::with_document(doc);
-        *origin = DocumentOrigin::fresh();
+        store.0 = loaded;
+        *origin = DocumentOrigin::for_scope(store.0.scope());
         synced.0 = store.0.document().version();
         affected.extend(store.0.document().live_nodes().map(|n| n.id));
         debug!(

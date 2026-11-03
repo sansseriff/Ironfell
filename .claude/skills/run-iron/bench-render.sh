@@ -50,7 +50,7 @@ for N in ${COUNTS[@]}; do
     # at (60, 100), both at zoom 1 and pan 0 (stress.rs). (600, 50) is empty
     # canvas above the field at both zooms, so idle and pan measure no hover.
     cat > "$SCRIPT" <<EOS
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=$N
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default&stress=$N
 ready
 $PRELUDE
 sleep 4000

@@ -15,7 +15,7 @@
 # Build PROFILE=wasm-bench; run with
 #   GPU=1 UNTHROTTLED=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < bench-instances.txt
 # and read the `measure` lines (changed_frame, display_list, encode, bake).
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&meters=100
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default&meters=100
 ready
 sleep 4000
 tab Meters

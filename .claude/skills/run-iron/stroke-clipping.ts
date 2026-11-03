@@ -14,7 +14,7 @@ const wait=()=>page.waitForTimeout(600);
 const view=()=>page.evaluate(()=>(window as any).__iron.view({fidelity:'full'}));
 const edit=async(xml:string)=>{const r=await page.evaluate(x=>(window as any).__iron.edit(x),xml);assert(r.ok, JSON.stringify(r));await wait();};
 try{
-await page.goto('http://localhost:5173/Ironfell/?gfx=webgl2&layout=default');await page.waitForSelector('.loading',{state:'detached',timeout:180000});await page.waitForFunction(async () => !!(window as any).__iron && (await (window as any).__iron.view({fidelity:'full'})).includes('name="controls"'), {timeout:180000});await page.waitForTimeout(1000);
+await page.goto('http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default');await page.waitForSelector('.loading',{state:'detached',timeout:180000});await page.waitForFunction(async () => !!(window as any).__iron && (await (window as any).__iron.view({fidelity:'full'})).includes('name="controls"'), {timeout:180000});await page.waitForTimeout(1000);
 const v=await view(),parent=v.match(/<composition id="([^"]+)" name="controls"/)[1];
 await edit(`<edit>
 <create id="$source" type="composition" name="stroke bounds source" dims="2d"/>

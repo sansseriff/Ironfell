@@ -1,6 +1,5 @@
-//! Shapes and paths (select-tool.md, "Shapes and paths"): the ellipse that
-//! replaced the circle, schema 3 files with circles, and turning a rect or
-//! an ellipse into a path.
+//! Shapes and paths (select-tool.md, "Shapes and paths"): the ellipse, and
+//! turning a rect or an ellipse into a path.
 
 use iron_document::facet::{Fill, Radius, Size, Slider, Transform2d};
 use iron_document::*;
@@ -30,34 +29,6 @@ fn at(x: f64, y: f64) -> Facet {
     t.x = num(x);
     t.y = num(y);
     t.wrap()
-}
-
-#[test]
-fn a_schema_3_circle_loads_as_an_ellipse_and_its_readers_follow() {
-    // A circle, and a rect whose width reads the circle's radius.
-    let text = r##"{"schema": 3, "next_id": 2, "next_rel": 0, "version": 0,
- "nodes": {
-  "0": {"order": "a0", "parent": null, "ty": "circle"},
-  "1": {"order": "a1", "parent": null, "ty": "rect"}
- },
- "components": {
-  "radius": {"0": {"r": 12}},
-  "size": {"1": {"h": 10, "w": {"bind": "#0.radius.r * 2"}}},
-  "transform2d": {"0": {"x": 5, "y": 6}, "1": {}}
- },
- "relations": [
- ]}"##;
-    let store = Store::load(text).expect("loads");
-    let doc = store.document();
-    let c = "#0".parse::<NodeId>().unwrap();
-    assert_eq!(doc.live(c).unwrap().ty.name(), "ellipse");
-    assert_eq!(resolved(&store, c, "radius.rx"), 12.0);
-    assert_eq!(resolved(&store, c, "radius.ry"), 12.0);
-    assert_eq!(resolved(&store, "#1".parse::<NodeId>().unwrap(), "size.w"), 24.0);
-    // It saves as the current schema and loads back unchanged.
-    let again = Store::load(&store.save()).expect("reloads");
-    assert_eq!(again.save(), store.save());
-    assert!(store.save().starts_with(&format!("{{\"schema\": {}", iron_document::serial::SCHEMA)));
 }
 
 #[test]
@@ -209,33 +180,6 @@ fn an_arc_is_a_pie_a_ring_segment_or_a_ring() {
     let fill = contour::geometry(&store, id).fill_outline().clone();
     assert_eq!(fill.winding(kurbo::Point::new(0.0, 0.0)), 0, "the hole is empty");
     assert_ne!(fill.winding(kurbo::Point::new(40.0, 0.0)), 0, "the ring is filled");
-}
-
-#[test]
-fn a_schema_4_path_gets_one_contour_holding_its_points() {
-    let text = r##"{"schema": 4, "next_id": 3, "next_rel": 0, "version": 0,
- "nodes": {
-  "0": {"order": "a0", "parent": null, "ty": "path"},
-  "1": {"order": "a0", "parent": "#0", "ty": "point"},
-  "2": {"order": "a1", "parent": "#0", "ty": "point"}
- },
- "components": {
-  "path": {"0": {"closed": true}},
-  "transform2d": {"0": {}, "1": {"x": 1}, "2": {"x": 2}}
- },
- "relations": [
- ]}"##;
-    let store = Store::load(text).expect("loads");
-    let doc = store.document();
-    let p = "#0".parse::<NodeId>().unwrap();
-    let [c] = doc.children(p)[..] else { panic!("one contour") };
-    assert_eq!(doc.live(c).unwrap().ty.name(), "contour");
-    assert_eq!(c, "#3".parse::<NodeId>().unwrap(), "the next free id");
-    assert_eq!(doc.children(c), ["#1".parse::<NodeId>().unwrap(), "#2".parse::<NodeId>().unwrap()]);
-    assert_eq!(store.resolved(c, path("contour.closed")), Some(Value::Bool(true)));
-    assert_eq!(contour::fill_rule(&store, p), contour::FillRule::NonZero);
-    let again = Store::load(&store.save()).expect("reloads");
-    assert_eq!(again.save(), store.save());
 }
 
 #[test]

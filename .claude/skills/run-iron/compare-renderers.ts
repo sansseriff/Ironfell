@@ -26,7 +26,7 @@ try {
 if(mode==='capture') {
  mkdirSync(resolve(artifacts,'fixtures'),{recursive:true});
  for(const count of counts) {
-  await page.goto(`http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=${count}`);
+  await page.goto(`http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default&stress=${count}`);
   await page.waitForSelector('.loading',{state:'detached',timeout:180000});
   await page.waitForFunction(()=>!!(window as any).__iron);
   await page.waitForTimeout(500);

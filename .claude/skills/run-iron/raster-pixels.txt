@@ -7,7 +7,7 @@
 # for 100 dial meters drawn from shared tiles. Compare with
 #   python3 raster-pixels.py screenshots 380 36 940 744
 # Run with GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@1.
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default
 ready
 tab Controls
 sleep 600
@@ -119,7 +119,7 @@ eval __iron.raster(true).then(() => 'raster')
 eval __iron.timings(false).then(t => { const { views, ...r } = t.raster; return r; })
 # Component instances drawn from shared tiles (instance-cache.md phase C):
 # 100 dial meters, one driven by a slider, scrubbed and settled.
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&meters=100
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default&meters=100
 ready
 sleep 3000
 tab Meters

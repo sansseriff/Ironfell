@@ -16,7 +16,7 @@ import { inflateSync } from "node:zlib";
 // event lines the expected outputs include (`applied …`, `redraw (…)`,
 // `solve:`, drag locks) are DEBUG and off without it.
 // `showcase=0`: no contexts showcase, so scripts' ids follow the demo scene's.
-const DEFAULT_URL = process.env.URL ?? "http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog";
+const DEFAULT_URL = process.env.URL ?? "http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog";
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const SHOTS = new URL("./screenshots/", import.meta.url).pathname;
 mkdirSync(SHOTS, { recursive: true });

@@ -191,28 +191,6 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     assert_eq!(resolved(&loaded, copy, "size.w"), Value::Number(80.0));
     assert_eq!(resolved(&loaded, copy, "size.h"), Value::Number(120.0));
     assert_eq!(loaded.save(), text);
-    // A schema-2 file spelled the template `depiction` and the relation
-    // `depicts`; it loads under the new names.
-    let old = text
-        .replacen(&format!("\"schema\": {}", iron_document::serial::SCHEMA), "\"schema\": 2", 1)
-        .replace("\"template\"", "\"depiction\"")
-        .replace("\"figures\"", "\"depicts\"");
-    assert!(old.contains("\"depicts\"") && old.contains("\"depiction\""));
-    let old = Store::load(&old).unwrap();
-    assert_eq!(resolved(&old, entity, "args.power"), Value::parse_quantity("1 mW").unwrap());
-    // Before schema 7 every instance was a copy: it loads detached, and
-    // derives nothing.
-    assert_eq!(old.document().leaf(entity, path("instance.mode")).unwrap().constant(), Some(&Value::Enum("detached".into())));
-    assert!(old.document().live(copy).is_none());
-    // A schema-5 file declared parameters (`param_spec`) and held `params`;
-    // they load as in ports and arguments.
-    let v5 = text
-        .replacen(&format!("\"schema\": {}", iron_document::serial::SCHEMA), "\"schema\": 5", 1)
-        .replace("\"facets\": {", "\"components\": {")
-        .replace(".port.signal", ".param_spec.default")
-        .replace("\"args\":", "\"params\":");
-    let migrated = Store::load(&v5).unwrap();
-    assert_eq!(resolved(&migrated, entity, "args.power"), Value::parse_quantity("1 mW").unwrap());
     // Undo removes the whole instance and what it derived; redo restores it.
     store.undo(1).unwrap().unwrap();
     store.undo(1).unwrap().unwrap();

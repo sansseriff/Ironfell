@@ -220,16 +220,122 @@ pub fn document_save(app: &mut WorkerApp) -> String {
 }
 
 pub fn document_load(app: &mut WorkerApp, text: String) -> Result<(), String> {
-    let doc = iron_document::serial::load(&text).map_err(|e| String::from(&e.to_string()))?;
+    let store = iron_document::Store::load(&text).map_err(|e| String::from(&e.to_string()))?;
+    install(app, store)
+}
+
+/// Queue `store` to replace the current one at the next sync.
+fn install(app: &mut WorkerApp, store: iron_document::Store) -> Result<(), String> {
     let mut load = app
         .world_mut()
         .get_resource_mut::<crate::document_bridge::PendingLoad>()
         .ok_or_else(|| String::from("document bridge not installed"))?;
-    load.0 = Some(doc);
+    load.0 = Some(store);
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
     Ok(())
+}
+
+fn scope_id(id: &str) -> Result<iron_document::ScopeId, String> {
+    id.parse().map_err(|e: iron_document::id::IdParseError| e.to_string())
+}
+
+/// Open a scope (plans/specs/scopes.md §4.3): load its snapshot, replay the
+/// logged transactions newer than it in order, name it `id`, and start with
+/// empty history. A transaction that fails stops the replay and keeps what
+/// loaded; the reply says where, so the host can set the rest aside.
+/// `{"version", "replayed", "skipped", "failed": null | {"index", "message"}}`,
+/// `index` counting `log` lines.
+pub fn scope_open(app: &mut WorkerApp, id: String, snapshot: String, log: Vec<String>) -> Result<String, String> {
+    let id = scope_id(&id)?;
+    let mut store = iron_document::Store::load(&snapshot).map_err(|e| e.to_string())?;
+    let (mut replayed, mut skipped, mut failed) = (0usize, 0usize, serde_json::Value::Null);
+    for (index, line) in log.iter().enumerate() {
+        let tx: iron_document::Transaction = match serde_json::from_str(line) {
+            Ok(t) => t,
+            Err(e) => {
+                failed = serde_json::json!({"index": index, "message": format!("unreadable: {e}")});
+                break;
+            }
+        };
+        let current = store.document().version();
+        if tx.version <= current {
+            skipped += 1;
+            continue;
+        }
+        if tx.version != current.next() {
+            failed = serde_json::json!({"index": index, "message": format!("version {} follows {}", tx.version.0, current.0)});
+            break;
+        }
+        if let Err(errors) = store.replay(&tx) {
+            let message = errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ");
+            failed = serde_json::json!({"index": index, "message": message});
+            break;
+        }
+        replayed += 1;
+    }
+    store.clear_history();
+    store.set_scope(Some(id));
+    let version = store.document().version().0;
+    install(app, store)?;
+    Ok(serde_json::json!({"version": version, "replayed": replayed, "skipped": skipped, "failed": failed}).to_string())
+}
+
+/// Name the current document's scope (`""`: none), as creating a scope from
+/// what is open does. Applies to a load still waiting for the next sync,
+/// if there is one, since that is what will be open.
+pub fn scope_assign(app: &mut WorkerApp, id: String) -> Result<String, String> {
+    let scope = if id.is_empty() { None } else { Some(scope_id(&id)?) };
+    let reply = serde_json::json!({"scope": scope.map(|s| s.to_string())}).to_string();
+    let world = app.world_mut();
+    if let Some(mut load) = world.get_resource_mut::<crate::document_bridge::PendingLoad>()
+        && let Some(store) = load.0.as_mut()
+    {
+        store.set_scope(scope);
+        return Ok(reply);
+    }
+    let mut store = world
+        .get_resource_mut::<crate::document_bridge::DocumentStore>()
+        .ok_or_else(|| String::from("document bridge not installed"))?;
+    store.0.set_scope(scope);
+    if let Some(mut origin) = world.get_resource_mut::<crate::document_bridge::DocumentOrigin>() {
+        *origin = crate::document_bridge::DocumentOrigin::for_scope(scope);
+    }
+    Ok(reply)
+}
+
+/// The durable log's feed (scopes.md §4.2): the open scope's committed
+/// transactions after `since`, one JSON line each.
+/// `{"scope", "version", "pending", "gap", "ndjson", "count"}`. `pending`: a
+/// load has not yet been installed, so ask again after `documentChanged`.
+/// `gap`: the history horizon dropped some, so write a snapshot instead.
+pub fn scope_log(app: &mut WorkerApp, since: u64) -> Result<String, String> {
+    let world = app.world();
+    if world
+        .get_resource::<crate::document_bridge::PendingLoad>()
+        .is_some_and(|l| l.0.is_some())
+    {
+        return Ok(serde_json::json!({"pending": true}).to_string());
+    }
+    let store = &world
+        .get_resource::<crate::document_bridge::DocumentStore>()
+        .ok_or_else(|| String::from("document bridge not installed"))?
+        .0;
+    let scope = store.scope().map(|s| s.to_string());
+    let version = store.document().version().0;
+    let (gap, ndjson, count) = match store.log_since(iron_document::Version(since)) {
+        None => (true, String::new(), 0),
+        Some(txs) => {
+            let mut out = String::new();
+            for t in &txs {
+                out.push_str(&serde_json::to_string(t).map_err(|e| e.to_string())?);
+                out.push('\n');
+            }
+            (false, out, txs.len())
+        }
+    };
+    Ok(serde_json::json!({"pending": false, "scope": scope, "version": version, "gap": gap, "ndjson": ndjson, "count": count}).to_string())
 }
 
 pub fn document_view(app: &mut WorkerApp, query_json: String) -> Result<String, String> {

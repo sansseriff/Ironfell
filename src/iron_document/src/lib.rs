@@ -64,7 +64,7 @@ pub use geom::{Affine2, Affine3};
 pub use gesture::{GestureId, GestureStatus};
 pub use graph::{ProducerId, ResolvedChange, Signal};
 pub use handle::Handle;
-pub use id::{NodeId, RelationId, Version};
+pub use id::{NodeId, RelationId, ScopeId, Version};
 pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
 pub use order::OrderKey;
 pub use registry::{ChildPolicy, Host, TypeId, TypeSpec};
@@ -1814,5 +1814,46 @@ impl Store {
     /// A store over a loaded document, with empty history.
     pub fn load(text: &str) -> Result<Store, LoadError> {
         serial::load(text).map(Store::with_document)
+    }
+
+    // ---- Scopes (plans/specs/scopes.md) ---------------------------------
+
+    /// The scope this store's document is, if it has been given one.
+    pub fn scope(&self) -> Option<ScopeId> {
+        self.doc.scope()
+    }
+
+    /// Name the scope (scopes.md §3). Identity metadata, not content: not an
+    /// op, not in history, and it does not bump the version. It is written
+    /// in the next save's header.
+    pub fn set_scope(&mut self, scope: Option<ScopeId>) {
+        self.doc.set_scope(scope);
+    }
+
+    /// Forget undo, redo and the log, keeping the document (scopes.md §4.3).
+    /// Opening a scope replays its log onto the snapshot, which pushes every
+    /// replayed transaction onto the undo stack; a reopened scope starts
+    /// with nothing to undo, as any editor's freshly opened file does.
+    pub fn clear_history(&mut self) {
+        self.history.past.clear();
+        self.history.future.clear();
+        self.history.log.clear();
+    }
+
+    /// The logged transactions after `version`, oldest first, for the
+    /// durable log's feed (scopes.md §4.2). `None` when the log no longer
+    /// reaches back that far (the horizon dropped some): the caller cannot
+    /// append, and must write a fresh snapshot instead.
+    pub fn log_since(&self, version: Version) -> Option<Vec<&Transaction>> {
+        if self.doc.version() <= version {
+            return Some(Vec::new());
+        }
+        let first = self.history.log.front()?;
+        // Versions are consecutive across the log, so the first one after
+        // `version` must still be in it.
+        if first.version.0 > version.0 + 1 {
+            return None;
+        }
+        Some(self.history.log.iter().filter(|t| t.version > version).collect())
     }
 }

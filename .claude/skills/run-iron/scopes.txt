@@ -1,0 +1,22 @@
+# Durable scopes (plans/specs/scopes.md phase 2): without `&demo` the page opens
+# the last scope from OPFS, or makes one of the demo. Edit, undo, reload: the
+# edit is there, the undone one is not, undo starts empty, and the scope id is
+# the same. Then `&demo` opens the unsaved demo. Each run starts with empty
+# OPFS (a fresh browser context).
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog
+ready
+eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const s=__iron.scope();if(!s.current||s.storage!=='opfs'||s.readOnly)throw new Error(JSON.stringify(s));sessionStorage.setItem('scope',s.current.id);return 'created '+s.current.name})()
+eval (async()=>{const a=await __iron.edit('<edit><create id="$kept" type="rect" parent="#1" name="persisted" x="50" y="50" w="80" h="60" color="#ff2200"/></edit>');const b=await __iron.edit('<edit><create id="$gone" type="rect" parent="#1" name="undone" x="90" y="90" w="40" h="40"/></edit>');if(!a.ok||!b.ok)throw new Error(JSON.stringify([a,b]));__iron.undo();return 'edited'})()
+eval (async()=>{for(let i=0;i<100&&(await __iron.view({fidelity:'full'})).includes('name="undone"');i++)await new Promise(r=>setTimeout(r,50));const v=await __iron.view({fidelity:'full'});if(v.includes('name="undone"')||!v.includes('name="persisted"'))throw new Error('undo did not happen');await __iron.flush();return 'flushed at v'+__iron.protocolState().version})()
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog
+ready
+eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));for(let i=0;i<100&&!(await __iron.view({fidelity:'full'})).includes('name="persisted"');i++)await new Promise(r=>setTimeout(r,50));const s=__iron.scope();const v=await __iron.view({fidelity:'full'});const p=__iron.protocolState();if(s.current?.id!==sessionStorage.getItem('scope'))throw new Error('another scope: '+JSON.stringify(s));if(!v.includes('name="persisted"')||v.includes('name="undone"'))throw new Error('the edit did not survive');if(p.canUndo)throw new Error('undo should start empty');return 'reopened at v'+p.version+', edit kept, undone kept undone, nothing to undo'})()
+# No flush: the batch timer (~500 ms) writes it.
+eval (async()=>{const a=await __iron.edit('<edit><create id="$b" type="rect" parent="#1" name="batched" x="10" y="10" w="20" h="20"/></edit>');if(!a.ok)throw new Error(JSON.stringify(a));await new Promise(r=>setTimeout(r,1500));return 'edited, waited'})()
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog
+ready
+eval (async()=>{for(let i=0;i<100&&!(await __iron.view({fidelity:'full'})).includes('name="batched"');i++)await new Promise(r=>setTimeout(r,50));const v=await __iron.view({fidelity:'full'});if(!v.includes('name="batched"')||!v.includes('name="persisted"'))throw new Error('the batch was not written');return 'batch written without a flush, reopened at v'+__iron.protocolState().version})()
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog
+ready
+eval (async()=>{await new Promise(r=>setTimeout(r,500));const s=__iron.scope();const v=await __iron.view({fidelity:'full'});if(s.storage!=='off'||s.current||v.includes('name="persisted"'))throw new Error(JSON.stringify(s));return '&demo: unsaved demo'})()
+errors

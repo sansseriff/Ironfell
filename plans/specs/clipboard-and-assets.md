@@ -120,6 +120,8 @@ The worker has no `navigator.clipboard`, and the store lives in the worker.
 
 ## 6. The project container (decide before phase 4)
 
+**Superseded 2026-11-02 by [`scopes.md`](scopes.md)**, which decides each item below.
+
 Assets, cross-document paste and saving the workspace all need the same decision:
 
 - **No durable project exists.** The app boots into the demo on every reload, and

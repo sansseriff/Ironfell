@@ -57,6 +57,9 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `showcase.txt` | ~30 s |
 | `chrome.txt` | ~30 s |
 | `schematic.txt` | ~40 s |
+| `scopes.txt` | ~15 s |
+| `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1 min |
+| `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -735,7 +738,7 @@ cd -
 
 | command | what it does |
 |---|---|
-| `nav [url]` | open the app; default `http://localhost:5173/Ironfell/?gfx=webgl2` |
+| `nav [url]` | open the app; default `http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog` (`&demo`: an unsaved demo, not the last scope; plans/specs/scopes.md D11) |
 | `ready` | wait until the `.loading` overlay leaves the DOM and the frame loop is cycling (cadence probe frame count advancing between polls), then read the viewer panel rect. About 6 s under SwiftShader |
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
 | `move x y`, `down [button]`, `up [button]`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels; `down right` … `up right` around `move`s orbits a 3D panel's camera |
@@ -1076,9 +1079,9 @@ artifacts, which this skill does not run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-130 tests pass (35 unit, 95 integration; verified 2026-10-17 after vision 10
-phase 4 added `tests/signals.rs`, minus the two platform-precision tests noted
-above on Linux). The host target is required because
+226 tests pass (verified 2026-11-02 after scopes added `tests/scopes.rs` and the
+old-schema migration tests were removed; ~1 min
+warm), minus the two platform-precision tests noted above on Linux. The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
@@ -1861,6 +1864,46 @@ applied "circuit" (68 ops, Model) -> v14
 (no page errors)
 ```
 
+## Scopes: durable documents (2026-11-02)
+
+plans/specs/scopes.md phases 1–2. **Without `&demo` the app keeps its
+document**: boot opens the last scope from OPFS (or, with none, makes a scope
+of the demo after the showcase is added), every committed transaction is written
+to the scope's log in batches (~500 ms, and at once when the tab is hidden), and
+a reload replays it. `?demo`, `?stress=`, `?meters=`, the native build and a
+browser without OPFS keep the old behaviour: an unsaved demo. **Every scripted
+URL carries `&demo`** (drive.ts's default too), so scripts see the demo, not the
+last scope; each driver run also starts with empty OPFS, being a fresh browser
+context. In a normal browser, a page without `&demo` opens what you left, and
+DevTools → Application → Storage → "Clear site data" forgets it. `__iron.scope()`
+shows the open scope; `await __iron.flush()` writes now.
+
+`scopes.txt`: create, edit, undo, reload (the edit is kept, the undone one stays
+undone, undo starts empty, same scope id), an edit with no flush survives a
+reload, then `&demo` opens unsaved. After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < scopes.txt; cd -
+```
+
+Expected, minus `nav` and `ready` lines:
+
+```
+"created Demo"
+"edited"
+"flushed at v4"
+"reopened at v4, edit kept, undone kept undone, nothing to undo"
+"edited, waited"
+"batch written without a flush, reopened at v5"
+"&demo: unsaved demo"
+(no page errors)
+```
+
+Segments, compaction, a gap in the feed, a failed replay, two tabs and an engine
+restart are covered by `bun test tests/scopes.test.ts` (7 tests, a fake engine);
+the Rust side (ids, schema 9, snapshot + log replay equals live through undo and
+redo, the feed's gap) by `tests/scopes.rs` in `iron_document`.
+
 ## Free running and the Stats view (2026-10-18)
 
 `plans/specs/free-running.md`. The Stats view right of the timeline is the
@@ -1902,7 +1945,7 @@ modes, from `.claude/skills/run-iron`:
 
 ```sh
 GPU=1 SIZE=1680x1000@1 bun run drive.ts < document-calls.txt
-GPU=1 SIZE=1680x1000@1 URL='http://localhost:5173/Ironfell/?gfx=webgl2&contractRuntime=main' bun run drive.ts < document-calls.txt
+GPU=1 SIZE=1680x1000@1 URL='http://localhost:5173/Ironfell/?gfx=webgl2&demo&contractRuntime=main' bun run drive.ts < document-calls.txt
 ```
 
 The fixture sets the runtime in Settings, reloads, rejects unknown operations,

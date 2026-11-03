@@ -4,7 +4,7 @@
 # copy it to .agents/tmp/big.svg first. Build PROFILE=wasm-bench; run with
 #   GPU=1 UNTHROTTLED=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < bench-large-svg.txt
 # and read the `measure` lines (changed_frame, display_list, extract, encode).
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default
 ready
 tab Controls
 sleep 600

@@ -7,7 +7,7 @@
 
 use crate::facet::{Facet, FacetKind, LeafPath, LeafStruct};
 use crate::expr::{Expr, Leaf};
-use crate::id::{NodeId, RelationId, Version};
+use crate::id::{NodeId, RelationId, ScopeId, Version};
 use crate::order::OrderKey;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value};
@@ -97,6 +97,9 @@ pub struct Document {
     next_session_id: u64,
     next_session_rel: u64,
     version: Version,
+    /// Which scope this document is (scopes.md §3). Identity metadata, not
+    /// content: set by the store, saved in the header, never an op.
+    scope: Option<ScopeId>,
 
     // Derived. Rebuilt incrementally by the mutators, wholesale by `reindex`.
     // Only live nodes appear in these.
@@ -121,6 +124,15 @@ impl Document {
 
     pub fn version(&self) -> Version {
         self.version
+    }
+
+    /// The scope this document belongs to, once it has been given one.
+    pub fn scope(&self) -> Option<ScopeId> {
+        self.scope
+    }
+
+    pub(crate) fn set_scope(&mut self, scope: Option<ScopeId>) {
+        self.scope = scope;
     }
 
     /// The id the next `create` will be given. Peek only; nothing is reserved

@@ -1,5 +1,5 @@
 # Indexed/reference exact hit chains and rendered pixels. Physical offsets.
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default
 ready
 pmove viewer 540 460
 eval __iron.spatial(false)
@@ -139,7 +139,7 @@ shot spatial-embeds-reference
 eval __iron.spatial(true)
 sleep 500
 shot spatial-embeds-indexed
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1000
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default&stress=1000
 ready
 eval (async () => { const text = await __iron.view({fidelity:'full'}); window.__spatialField = text.match(/<group id="([^"]+)" name="field"/)?.[1]; window.__spatialSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; return [window.__spatialField,window.__spatialSample]; })()
 pmove stress 60 100

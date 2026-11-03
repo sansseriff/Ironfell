@@ -309,3 +309,79 @@ mod tests {
         assert_eq!("r7".parse::<RelationId>().unwrap(), r);
     }
 }
+
+/// A scope's identity (plans/specs/scopes.md §3): 128 random bits, written as
+/// 26 characters of Crockford base32 (`0-9`, `A-Z` without `I L O U`). It
+/// names the store, its op log and its history; a reference into another
+/// scope is `(ScopeId, NodeId)`. The id is generated outside this crate (the
+/// shell has a random source; this crate needs none) and is identity
+/// metadata, not content: setting it is not an op.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ScopeId(u128);
+
+const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+impl ScopeId {
+    pub const fn from_u128(raw: u128) -> ScopeId {
+        ScopeId(raw)
+    }
+    pub const fn as_u128(self) -> u128 {
+        self.0
+    }
+}
+
+impl fmt::Display for ScopeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 26 digits of 5 bits is 130 bits; the top digit holds the top 3.
+        let mut buf = [0u8; 26];
+        for (i, b) in buf.iter_mut().enumerate() {
+            let shift = 5 * (25 - i);
+            *b = CROCKFORD[((self.0 >> shift) & 31) as usize];
+        }
+        f.write_str(std::str::from_utf8(&buf).expect("ascii"))
+    }
+}
+
+impl fmt::Debug for ScopeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ScopeId({self})")
+    }
+}
+
+impl FromStr for ScopeId {
+    type Err = IdParseError;
+    /// Case-insensitive, and reads `I L O` as `1 1 0` as Crockford asks.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bad = || IdParseError(s.to_owned());
+        if s.len() != 26 {
+            return Err(bad());
+        }
+        let mut raw: u128 = 0;
+        for (i, c) in s.bytes().enumerate() {
+            let c = match c.to_ascii_uppercase() {
+                b'I' | b'L' => b'1',
+                b'O' => b'0',
+                c => c,
+            };
+            let d = CROCKFORD.iter().position(|&a| a == c).ok_or_else(bad)? as u128;
+            if i == 0 && d > 7 {
+                return Err(bad());
+            }
+            raw = (raw << 5) | d;
+        }
+        Ok(ScopeId(raw))
+    }
+}
+
+impl Serialize for ScopeId {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ScopeId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}

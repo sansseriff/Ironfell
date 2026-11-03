@@ -1,5 +1,5 @@
 # Stationary pointer picking and invalidation. Physical panel offsets at zoom 1.
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default&stress=1
 ready
 eval (async () => { const doc = JSON.parse(await __iron.save()); const text = await __iron.view({fidelity:'full'}); window.__pickSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; window.__pickField = text.match(/<group id="([^"]+)" name="field"/)?.[1]; const parent = doc.nodes[window.__pickSample].parent; const others = Object.entries(doc.nodes).filter(([id,n]) => n.parent === parent && id !== window.__pickSample); if (others.length) await __iron.edit('<edit>' + others.map(([id]) => '<delete id="'+id+'"/>').join('') + '</edit>'); return [window.__pickField,window.__pickSample]; })()
 pmove stress 60 100

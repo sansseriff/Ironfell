@@ -10,7 +10,7 @@
 # splits that wire at a junction (one transaction) and reads 9 V; Delete on
 # R2 takes its two wires with it; a model's <circuit> edit draws a second
 # divider in one transaction; the netlist reads it all.
-nav http://localhost:5173/Ironfell/?gfx=webgl2
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo
 ready
 sleep 1500
 tab Circuit

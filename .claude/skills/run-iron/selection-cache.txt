@@ -1,7 +1,7 @@
 # Cached selection geometry: idle reuse, descendant edits, history, same-version
 # document replacement. Run on GPU at DPR 1 or 2:
 # GPU=1 PANEL_PIXELS=physical SIZE=1600x1000@1 bun run drive.ts < selection-cache.txt
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1000
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default&stress=1000
 ready
 eval (async () => { const text = await __iron.view({fidelity:'full'}); window.__cacheField = text.match(/<group id="([^"]+)" name="field"/)?.[1]; window.__cacheSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; return [window.__cacheField, window.__cacheSample]; })()
 pclick stress 60 100
@@ -40,7 +40,7 @@ sleep 400
 assert (async () => (await __iron.timings(true)).phases.overlay_geometry.n === 0)()
 # Fresh zoom-1 fixture: prove the physical offsets hit the slider and sample
 # at both DPRs. This checks the benchmark's coordinate correction as well.
-nav http://localhost:5173/Ironfell/?gfx=webgl2&layout=default&stress=1000
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default&stress=1000
 ready
 eval (async () => { const text = await __iron.view({fidelity:'full'}); window.__cacheSlider = text.match(/<slider id="([^"]+)" name="spin"/)?.[1]; window.__cacheSample = text.match(/<rect id="([^"]+)" name="sample"/)?.[1]; return window.__cacheSlider; })()
 pmove stress 40 42

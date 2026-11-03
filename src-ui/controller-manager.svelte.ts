@@ -72,7 +72,10 @@ class ControllerManagerClass {
   async restart(): Promise<void> {
     if (this.loadingInProgress) return;
     let carry: string | null = null;
-    if (this.isInitialized) {
+    if (this.isInitialized && this.docClient.scopes?.active) {
+      // The new engine reopens the scope from storage; write it first.
+      await this.docClient.scopes.flush().catch(() => {});
+    } else if (this.isInitialized) {
       try {
         carry = await this.docClient.save();
       } catch {

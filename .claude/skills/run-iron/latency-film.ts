@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 const out = '../../../.agents/latency';
 mkdirSync(out,{recursive:true});
 const browser = await chromium.launch({ executablePath:process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:['--use-angle=metal','--enable-gpu','--ignore-gpu-blocklist','--no-sandbox'] });
-const url = new URL(process.env.URL ?? 'http://127.0.0.1:5185/Ironfell/?gfx=webgl2');
+const url = new URL(process.env.URL ?? 'http://127.0.0.1:5185/Ironfell/?gfx=webgl2&demo');
 url.searchParams.set('latencyFilm','1');
 const backend=url.searchParams.get('gfx') ?? 'auto';
 const images: unknown[]=[];

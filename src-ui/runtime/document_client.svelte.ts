@@ -34,12 +34,29 @@
  *   await __iron.contexts()        -> the built-in contexts (`std:*`) in their markup
  *   await __iron.viewContext('viewer') -> a view's focus (world, scope, states), palette and keys, each with its rule
  *   await __iron.netlist('circuit') -> a schematic sheet's netlist, SPICE-like, with each net's voltage
+ *   __iron.scope()                 -> the open scope (plans/specs/scopes.md): {current, readOnly, notice, storage}
+ *   await __iron.flush()           -> write the open scope's pending transactions now
+ *   __iron.undo()                  -> undo, as Cmd+Z does
+ *
+ * Scopes persist to OPFS unless the page is ephemeral: `?demo` (the driver
+ * adds it), `?stress=` or `?meters=`, the native build, or no OPFS. Then the
+ * demo opens unsaved, as before scopes.
  */
 import { QuerySubscriptions } from './query_subscriptions';
 import { PendingRequests } from './pending_requests';
 import type { ClientRequest, RequestPayload, UiRequest, UiEvent } from './protocol';
 import { lastCopied } from './clipboard';
 import { documentArguments, type DocumentCommand } from './protocol.generated';
+import { Scopes, webLocks, type ScopeState } from './scopes';
+import { OpfsScopeStorage, opfsAvailable } from './scope_storage';
+import { isNativeHost } from './native_host';
+
+/** Whether this page keeps its document (scopes.md D11). */
+function persistent(): boolean {
+  const q = new URLSearchParams(location.search);
+  if (q.has('demo') || Number(q.get('stress')) > 0 || Number(q.get('meters')) > 0) return false;
+  return !isNativeHost() && opfsAvailable();
+}
 
 export type Fidelity = 'skeleton' | 'summary' | 'full';
 
@@ -112,6 +129,15 @@ export class DocumentClient {
   private carried: string | null = null;
   /** Whether `?stress=N` has been acted on (once per page). */
   private stressed = false;
+  /** Whether this session's engine has sent its first `documentChanged`. */
+  private sessionStarted = false;
+  /** The open scope, kept durable; null on an ephemeral page. One per page,
+   *  across engine restarts. */
+  readonly scopes: Scopes | null = persistent()
+    ? new Scopes({ call: (fn, args) => this.call(fn, args), save: () => this.save() }, new OpfsScopeStorage(), webLocks())
+    : null;
+  scope: ScopeState = $state({ current: null, readOnly: false, notice: '', storage: 'off' });
+  private pageHooks = false;
 
   init(post: (data: UiRequest) => void, sessionId: number) {
     this.dispose();
@@ -119,6 +145,15 @@ export class DocumentClient {
     this.generation++;
     this.pending.attach(sessionId);
     this.post = post;
+    this.sessionStarted = false;
+    this.scopes?.pause();
+    if (this.scopes && !this.pageHooks) {
+      this.pageHooks = true;
+      this.scopes.onChange = state => { this.scope = state; };
+      // Write the last batch when the tab is hidden or closed (§4.2).
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void this.scopes!.flush(); });
+      window.addEventListener('pagehide', () => void this.scopes!.flush());
+    }
     this.error = '';
     try {
       this.apiKey = localStorage.getItem('iron.anthropicKey') ?? '';
@@ -132,6 +167,9 @@ export class DocumentClient {
       protocolState: () => ({ generation: this.generation, pending: this.pending.size, session: this.sessionId, version: this.version, sessionVersion: this.sessionVersion, resolvedVersion: this.resolvedVersion, canUndo: this.canUndo, canRedo: this.canRedo }),
       save: () => this.save(),
       load: (text: string) => this.load(text),
+      scope: () => this.scopes?.state() ?? this.scope,
+      flush: () => this.scopes?.flush(),
+      undo: () => this.undo(),
       view: (q: ViewQuery) => this.request('documentView', { query: { scope: null, depth: null, ...q } }),
       edit: (xml: string, label?: string) => this.edit(xml, label),
       ask: (instruction: string) => this.ask(instruction),
@@ -334,14 +372,21 @@ export class DocumentClient {
         this.resolvedVersion = data.resolvedVersion;
         this.canUndo = data.canUndo;
         this.canRedo = data.canRedo;
+        this.scopes?.changed(data.version);
         this.subscriptions.invalidate(data);
         return true;
-      case 'documentChanged':
+      case 'documentChanged': {
         this.version = data.version;
+        this.scopes?.changed(data.version);
+        const first = !this.sessionStarted;
+        this.sessionStarted = true;
         if (this.carried !== null) {
           const text = this.carried;
           this.carried = null;
           void this.load(text);
+        } else if (first && this.scopes?.active) {
+          // A settings restart: the new engine reopens the scope.
+          void this.scopes.reopen();
         }
         // `?stress=N`: add the benchmark composition once the demo scene
         // exists (its tab is in the default layout, src-ui/views/workspace.ts).
@@ -354,9 +399,16 @@ export class DocumentClient {
           // The contexts showcase (plans/specs/contexts.md): its outline,
           // pitch and dials tabs. `?showcase=0` leaves it out (the driver does,
           // so its scripts' ids stay those after the demo scene).
-          if (new URLSearchParams(location.search).get('showcase') !== '0') void this.command({ op: 'showcase' });
+          const showcase = async () => {
+            if (new URLSearchParams(location.search).get('showcase') !== '0') await this.command({ op: 'showcase' });
+          };
+          // Boot (scopes.md D11): open the last scope, or make one of the
+          // demo. An opened scope already holds the showcase.
+          if (this.scopes) void this.scopes.boot(showcase).catch(e => { console.error('[scopes] boot failed', e); this.error = String(e); });
+          else void showcase();
         }
         return true;
+      }
       case 'documentSaved':
       case 'documentLoaded':
       case 'documentView':
@@ -451,6 +503,8 @@ export class DocumentClient {
       await this.importSvg(text);
       return;
     }
-    await this.load(text);
+    // A saved document opens as a new scope (scopes.md D4).
+    if (this.scopes) await this.scopes.importText(text, file.name.replace(/\.json$/i, ''));
+    else await this.load(text);
   }
 }

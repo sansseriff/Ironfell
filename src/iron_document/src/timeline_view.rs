@@ -33,11 +33,13 @@ pub const TIMELINE: &str = "timeline";
 pub const NOTATION: &str = "timeline";
 
 /// The ruler's height and a row's, in document px.
-pub const RULER_H: f64 = 40.0;
+pub const RULER_H: f64 = 80.0;
 pub const ROW_H: f64 = 22.0;
 const SEG_H: f64 = 16.0;
 /// How far the background, header and lines reach, in px.
 const FAR: f64 = 8000.0;
+/// The ruler's labels, px.
+const LABEL_PX: f64 = 23.0;
 /// Ticks are about this far apart at the current zoom, in px.
 const TICK_PX: f64 = 80.0;
 
@@ -165,15 +167,14 @@ struct Want {
     /// A `projects` relation to what it stands for.
     projects: Option<NodeId>,
     /// The role group it is in (a key), or the composition.
-    parent: Option<&'static str>,
+    parent: Option<String>,
 }
 
 /// The role groups, bottom to top, and the built-in context each names
 /// (std_contexts.xml): what their children afford is that data.
-const GROUPS: [(&str, &str); 6] = [
+const GROUPS: [(&str, &str); 5] = [
     ("backdrop", "std:timeline-static"),
     ("tracks", "std:timeline-tracks"),
-    ("values", "std:timeline-values"),
     ("headers", "std:timeline-static"),
     ("ruler", "std:timeline-ruler"),
     ("overlay", "std:timeline-overlay"),
@@ -259,8 +260,10 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let mut push = |group: &'static str, key: String, ty_name: &str, facets: Vec<Facet>, projects: Option<NodeId>| {
         let mut facets = facets;
         facets.push(named(&key));
-        by.entry(group).or_default().push(Want { key, ty: ty(ty_name), facets, projects, parent: Some(group) });
+        by.entry(group).or_default().push(Want { key, ty: ty(ty_name), facets, projects, parent: Some(group.to_owned()) });
     };
+    // A piece inside a bar (its parent is the bar's key).
+    let mut bars: Vec<Want> = Vec::new();
     let width = at(&lit(plan.end));
 
     // Backdrop and grid.
@@ -280,18 +283,19 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
         let t = k as f64 * plan.tick / MINOR as f64;
         let x = at(&lit(t));
         let major = k % MINOR == 0;
-        let len = if major { 12.0 } else { 5.0 };
+        let len = if major { 22.0 } else { 9.0 };
         push("ruler", format!("tick {k}"), "rect", vec![place(&x, &lit(RULER_H - len)), sized("1", &lit(len)), paint(if major { TICK } else { DIM })], None);
         if major {
             let text = if plan.tick < 1.0 { format!("{t:.1}s") } else { format!("{t}s") };
-            let mut f = vec![place(&format!("{x} + 4"), "7")];
-            f.extend(words(&text, 13.0, 500.0));
+            let mut f = vec![place(&format!("{x} + 6"), "14")];
+            f.extend(words(&text, LABEL_PX, 500.0));
             f.push(paint(LABEL));
             push("ruler", format!("tick label {}", k / MINOR), "text", f, None);
         }
     }
     let head = at(&format!("{clock}.clock.t"));
-    push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 7"), "3"), sized("14", &lit(RULER_H - 10.0)), rounded(3.0), paint(PLAYHEAD)], None);
+    // The playhead's head, low on the ruler under the labels.
+    push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 8"), &lit(RULER_H - 30.0)), sized("16", "26"), rounded(4.0), paint(PLAYHEAD)], None);
 
     // Rows: headers on the left, segments and their end values along time.
     let mut y = RULER_H + 4.0;
@@ -310,16 +314,29 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 let start = if s.offset == 0.0 { format!("{}.timing.start", s.clip) } else { format!("{}.timing.start + {}", s.clip, lit(s.offset)) };
                 let x = at(&start);
                 let colour = if plan.errors.contains(&s.clip) { ERROR } else { SEGMENT };
-                push("tracks", format!("segment {} {}", s.clip, o.target), "rect", vec![place(&x, &lit(y + 3.0)), sized(&format!("{}.timing.dur * {pps}", s.clip), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
-                let mut f = vec![place(&format!("{x} + 6"), &lit(y + 4.0))];
+                // The bar: one target for its clip (std:timeline-tracks),
+                // at the clip's start and `dur · pps` wide, so a drag
+                // retimes it and its ends trim it. Its pieces sit inside.
+                let bar = format!("bar {} {}", s.clip, o.target);
+                let width = format!("{}.timing.dur * {pps}", s.clip);
+                let mut bc = ContextOf::default();
+                bc.name = Slot::Const(Value::Str("std:timeline-bar".into()));
+                push("tracks", bar.clone(), "group", vec![place(&x, &lit(y + 3.0)), sized(&width, &lit(SEG_H)), bc.wrap()], Some(s.clip));
+                let mut piece = |key: String, ty_name: &str, mut facets: Vec<Facet>| {
+                    facets.push(named(&key));
+                    bars.push(Want { key, ty: ty(ty_name), facets, projects: None, parent: Some(bar.clone()) });
+                };
+                piece(format!("segment {} {}", s.clip, o.target), "rect", vec![place("0", "0"), sized(&width, &lit(SEG_H)), rounded(4.0), paint(colour)]);
+                let mut f = vec![place("6", "1")];
                 f.extend(words(&s.label, 11.0, 500.0));
                 f.push(paint([1.0, 1.0, 1.0, 0.95]));
-                push("tracks", format!("segment label {} {}", s.clip, o.target), "text", f, Some(s.clip));
-                // The ends' values, as readouts that invert: typing in one
-                // edits the clip's `from` or `to` (timeline.md §5).
+                piece(format!("segment label {} {}", s.clip, o.target), "text", f);
+                // The ends' values, readouts that invert: typing in one edits
+                // the clip's `from` or `to` (timeline.md §5). Inside the bar
+                // they are reached by entering it (a double-click), and their
+                // inline `affords` makes them editable targets there.
                 if s.numeric {
-                    let end_x = at(&format!("{start} + {}.timing.dur", s.clip));
-                    for (end, x, align) in [("from", format!("{x} - 64"), "right"), ("to", format!("{end_x} + 4"), "left")] {
+                    for (end, x, align) in [("from", "(0 - 64)".to_owned(), "right"), ("to", format!("{width} + 4"), "left")] {
                         let mut t = Text::default();
                         t.content = bound(&format!("fmt({}.clip.{end}, 0)", s.clip));
                         t.sizing = Slot::Const(Value::Enum("fixed".into()));
@@ -327,8 +344,9 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                         font.size = Slot::Const(Value::Number(10.0));
                         font.align = Slot::Const(Value::Enum(align.into()));
                         font.tabular = Slot::Const(Value::Bool(true));
-                        let f = vec![place(&x, &lit(y + 5.0)), t.wrap(), font.wrap(), sized("60", "14"), paint(VALUE)];
-                        push("values", format!("{end} {} {}", s.clip, o.target), "text", f, Some(s.clip));
+                        let mut affords = crate::facet::Affords::default();
+                        affords.style = Slot::Const(Value::Str("select: target; edit: text; drag: none".into()));
+                        piece(format!("{end} {} {}", s.clip, o.target), "text", vec![place(&x, "2"), t.wrap(), font.wrap(), sized("60", "14"), paint(VALUE), affords.wrap()]);
                     }
                 }
             }
@@ -360,7 +378,12 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
             facets.push(track.wrap());
         }
         out.push(Want { key: group.into(), ty: ty("group"), facets, projects: None, parent: None });
-        out.extend(by.remove(group).unwrap_or_default());
+        for w in by.remove(group).unwrap_or_default() {
+            let key = w.key.clone();
+            out.push(w);
+            // A bar's pieces right after it.
+            out.extend(bars.iter().filter(|p| p.parent.as_deref() == Some(key.as_str())).map(|p| Want { key: p.key.clone(), ty: p.ty, facets: p.facets.clone(), projects: None, parent: p.parent.clone() }));
+        }
     }
     out
 }
@@ -401,22 +424,27 @@ pub fn reconcile(store: &Store, plan: &Plan) -> Vec<Op> {
     let links: Vec<_> = wants.iter().filter(|w| w.projects.is_some()).collect();
     let mut rel_ids = doc.next_session_relation_ids(links.len()).into_iter();
     let wanted: BTreeSet<&str> = wants.iter().map(|w| w.key.as_str()).collect();
-    for (key, &id) in &have {
-        let keep = wanted.contains(key.as_str()) && wants.iter().any(|w| &w.key == key && doc.live(id).is_some_and(|n| n.ty == w.ty));
-        if !keep {
+    let doomed: Vec<NodeId> = have
+        .iter()
+        .filter(|(key, id)| !(wanted.contains(key.as_str()) && wants.iter().any(|w| &w.key == *key && doc.live(**id).is_some_and(|n| n.ty == w.ty))))
+        .map(|(_, &id)| id)
+        .collect();
+    // Deleting a group deletes its pieces: delete only the outermost.
+    for &id in &doomed {
+        if !doomed.iter().any(|&o| o != id && doc.is_ancestor(o, id)) {
             ops.push(Op::Delete { id });
         }
     }
     // A node's id once known, by key: groups come before their pieces.
     let mut placed: BTreeMap<String, NodeId> = BTreeMap::new();
-    let mut orders: BTreeMap<Option<&'static str>, OrderKey> = BTreeMap::new();
+    let mut orders: BTreeMap<Option<String>, OrderKey> = BTreeMap::new();
     for w in wants {
-        let parent = match w.parent {
+        let parent = match &w.parent {
             Some(g) => *placed.get(g).expect("a group before its pieces"),
             None => comp,
         };
         let order = orders.get(&w.parent).map_or_else(OrderKey::first, OrderKey::after);
-        orders.insert(w.parent, order.clone());
+        orders.insert(w.parent.clone(), order.clone());
         let kept = have.get(&w.key).copied().filter(|&id| doc.live(id).is_some_and(|n| n.ty == w.ty));
         match kept {
             Some(id) => {

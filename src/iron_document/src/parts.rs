@@ -819,9 +819,15 @@ pub fn pins_on(store: &crate::Store, sheet: NodeId) -> Vec<(End, [f64; 2])> {
 /// "subject"`: what it figures, and everything that only means something
 /// with it. An entity takes every figure of it, and every connection on its
 /// ports with their figures (a part's wires); a connection takes its
-/// figures. A figure of nothing is only itself.
+/// figures. A node that projects content (timeline.md) takes that. A figure
+/// of nothing is only itself.
 pub fn delete_subject_ops(doc: &crate::document::Document, figure: NodeId) -> Vec<Op> {
     use crate::document::RelKind;
+    // A session node that stands for content (a timeline bar `projects` its
+    // clip) deletes that; the session view regenerates without it.
+    if let Some(subject) = doc.relations_from(figure).find(|r| r.rel == RelKind::Projects).map(|r| r.to).filter(|&s| doc.is_live(s)) {
+        return vec![Op::Delete { id: subject }];
+    }
     let figures_of = |subject: NodeId| -> Vec<NodeId> { doc.relations_to(subject).filter(|r| r.rel == RelKind::Figures && doc.is_live(r.from)).map(|r| r.from).collect() };
     let Some(subject) = doc.relations_from(figure).find(|r| r.rel == RelKind::Figures).map(|r| r.to).filter(|&s| doc.is_live(s)) else {
         return vec![Op::Delete { id: figure }];

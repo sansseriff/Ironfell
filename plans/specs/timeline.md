@@ -441,3 +441,29 @@ the clips.
   clicks select nothing, a label click selects its segment and a tick-label click
   moves the playhead.
 
+### Bars as one target; ends, delete; a bigger ruler (2026-11-03)
+
+Asked for by the user: the parts of a bar (rect, label, end values) were separately
+selectable and deletable; a bar should select and delete as a whole, deleting its clip.
+
+- **A bar is a group** (`bar <clip> <target>` in `tracks`), placed at the clip's start
+  and sized `dur · pps` (its own `size` facet), holding its rect, label and end values,
+  and `projects` its clip. `std:timeline-tracks` makes bars targets that drag, trim by
+  `ends` and delete their `subject`; `std:timeline-bar` makes the rect a part (declared
+  no target) and the label inert; the end values say inline that they are editable
+  targets, reached by entering the bar. The `values` group is gone.
+- **`affords.grips="ends"`** (new word): the selection shows two edge handles, and a drag
+  on one writes the node's own `transform2d.x` and `size.w` (an `Ends` gesture), which
+  invert to the clip's `start` and `dur`; the right end keeps `start`, the left keeps the
+  end. A group with its own size and no layout now frames at that size.
+- **Delete follows `projects`**: `parts::delete_subject_ops` deletes what a session node
+  projects; the timeline regenerates without the bar, and undo brings both back.
+  Reconcile deletes only the outermost of the nodes that go.
+- **Press rules, generally**: a double-click enters only into a target, and a press on a
+  declared non-target part of an entered target selects that target.
+- **The ruler** is 80 px tall with 23 px labels (75% larger), longer ticks, and a 26 px
+  playhead head low on it.
+- **Tests.** `tests/timeline_view.rs` 10 (a bar trims by its ends and deleting it deletes
+  the clip, then undo); `timeline.txt` selects the bar from its words, trims by the end,
+  enters the bar to type a value, and deletes and restores the clip.
+

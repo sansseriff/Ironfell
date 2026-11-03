@@ -1082,8 +1082,8 @@ artifacts, which this skill does not run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-247 tests pass (verified 2026-11-03 after timeline phase 4's Animate change
-extended `tests/timeline_view.rs`; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
+249 tests pass (verified 2026-11-03 after the timeline's bars became groups,
+`tests/timeline_view.rs` 10; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
@@ -2029,20 +2029,25 @@ notation: 'composition'}`); the old Bevy timeline panel is gone. Rows by object,
 then property; a segment per clip and target, its x bound to
 `label_w + (start − t0)·pps` on the composition's `axis`, its y to a literal; the
 playhead and its grip bound to the session clock's `t`. Layout in document px from
-the panel's top-left, before any pan or zoom: `label_w` 160, ruler 40 tall (13 px
-labels, minor ticks), rows 22 apart from y 44, so time t is at x 160 + t·100 and
-the demo's segments are at
-y 69 (spin, torus rot) and y 113–129 (slide, square x, 210–410). A numeric clip's
-ends show as readouts left of the segment (`from`, right-aligned in 60 px) and just
-past it (`to`, from x + 4), at y 115.
+the panel's top-left, before any pan or zoom: `label_w` 160, ruler 80 tall (23 px
+labels, minor ticks, the playhead's head low on it), rows 22 apart from y 84, so
+time t is at x 160 + t·100 and the demo's bars are at
+y 109–125 (spin, torus rot) and y 153–169 (slide, square x, 210–410). Each bar is
+one group (`bar <clip> <target>`, its x the clip's start, its `size.w` `dur·pps`)
+holding its rect, label and end values: `from` right-aligned before it, `to` just
+past it (x + 4).
 
 - **What can be pressed is data**: the generator puts each piece in a role group
-  (`backdrop`, `tracks`, `values`, `headers`, `ruler`, `overlay`), and each group
-  names a built-in context (`std:timeline-static`, `-tracks`, `-values`, `-ruler`,
-  `-overlay`) whose `children` rules say what its pieces afford. Backdrop, grid
+  (`backdrop`, `tracks`, `headers`, `ruler`, `overlay`), and each group names a
+  built-in context (`std:timeline-static`, `-tracks`, `-ruler`, `-overlay`; a bar
+  names `std:timeline-bar`) whose `children` rules say what its pieces afford. A
+  bar is one target: a click anywhere on it selects it, a drag retimes, its two
+  ends trim (`affords.grips="ends"`), and Delete deletes its clip
+  (`affords.delete="subject"` follows `projects`). Its end values are reached by
+  entering the bar (double-click), then Enter types. Backdrop, grid
   and row headers are declared no target (a click clears the selection); segment
   labels and the playhead's line are `inert`, transparent to the pointer.
-- **Press anywhere on the ruler** (y 0–40): the playhead jumps there and a drag
+- **Press anywhere on the ruler** (y 0–80): the playhead jumps there and a drag
   scrubs (the ruler group is a `track` whose value is the clock's `t`; a session
   op, no transaction). Below the ruler presses reach the clips. **Drag** a segment:
   "retime slide". **Select** a segment and drag a box grip: "trim slide" (the right
@@ -2075,13 +2080,15 @@ lines:
 "scrubbed to 2.60 s; square drawn at x 700; version 2"
 "slide: start=\"1.5\"; version 3"
 "after undo slide: start=\"0.5\""
-"segment selected true"
+"bar selected true"
 "{\"header click selects\":[]}"
-"label click selects the segment: true"
+"label click selects the bar: true"
 "tick label click: playhead at 4.05, selection kept true"
 "playing true, advanced true; paused true"
 "trimmed slide: start=\"0.5\" dur 3.000"
 "typed: slide to=\"650\""
+"after delete: slide clip gone"
+"after undo: slide clip back"
 "End then a frame back: 3.967"
 "loop 1.033 to 2.033, at 2.033"
 "fitted: t0 0, pps 284.0"
@@ -2098,9 +2105,11 @@ applied "trim slide" (1 ops, Human) -> v5
 applied "undo: trim slide" (1 ops, System) -> v6
 applied "edit text" (1 ops, Human) -> v7
 applied "undo: edit text" (1 ops, System) -> v8
-applied "model edit" (1 ops, Model) -> v9
-applied "animate change" (3 ops, Human) -> v10
-applied "undo: animate change" (3 ops, System) -> v11
+applied "delete slide" (1 ops, Human) -> v9
+applied "undo: delete slide" (1 ops, System) -> v10
+applied "model edit" (1 ops, Model) -> v11
+applied "animate change" (3 ops, Human) -> v12
+applied "undo: animate change" (3 ops, System) -> v13
 (no page errors)
 ```
 

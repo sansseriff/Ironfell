@@ -118,7 +118,7 @@ fn the_timeline_is_built_from_the_clips() {
     let mut last = None;
     let comp = build(&mut store, &mut last);
     assert!(comp.is_session());
-    let seg = node_named(&store, comp, &format!("segment {clip} {rect}"));
+    let seg = node_named(&store, comp, &format!("bar {clip} {rect}"));
     assert_eq!(x_of(&store, seg), 260.0, "label_w + start * pps");
     assert_eq!(store.resolved(seg, path("size.w")).unwrap(), Value::Number(200.0));
     assert!(store.document().relations_from(seg).any(|r| r.rel == RelKind::Projects && r.to == clip), "a segment projects its clip");
@@ -134,7 +134,7 @@ fn dragging_a_segment_retimes_its_clip() {
     let Scene { mut store, rect, clip, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    let seg = node_named(&store, comp, &format!("segment {clip} {rect}"));
+    let seg = node_named(&store, comp, &format!("bar {clip} {rect}"));
     let h = store.begin_drag(seg, [0.0, 0.0]);
     match &h.mode {
         DragMode::Axes { free, .. } => assert_eq!(*free, [true, false], "segments move only in time"),
@@ -160,7 +160,7 @@ fn the_static_pieces_do_not_move_and_the_playhead_scrubs() {
     }
     let grip = node_named(&store, comp, "playhead grip");
     let past = store.history().past().len();
-    let h = store.begin_drag(grip, [7.0, 0.0]);
+    let h = store.begin_drag(grip, [8.0, 0.0]);
     store.drag_to(&h, [360.0, 0.0]);
     assert_eq!(store.time(), 2.0);
     assert_eq!(x_of(&store, rect), 200.0, "the clip samples at the dragged playhead");
@@ -173,7 +173,7 @@ fn regeneration_keeps_what_survives() {
     let Scene { mut store, rect, clip, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    let seg = node_named(&store, comp, &format!("segment {clip} {rect}"));
+    let seg = node_named(&store, comp, &format!("bar {clip} {rect}"));
     // A second clip on the rect, on another property.
     let ids = store.document().next_ids(1);
     let timeline = store.document().live(clip).unwrap().parent.unwrap();
@@ -192,8 +192,8 @@ fn regeneration_keeps_what_survives() {
         ))
         .unwrap();
     assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_some());
-    assert_eq!(node_named(&store, comp, &format!("segment {clip} {rect}")), seg, "the old segment kept its id");
-    let second = node_named(&store, comp, &format!("segment {} {rect}", ids[0]));
+    assert_eq!(node_named(&store, comp, &format!("bar {clip} {rect}")), seg, "the old bar kept its id");
+    let second = node_named(&store, comp, &format!("bar {} {rect}", ids[0]));
     assert_eq!(x_of(&store, second), 460.0);
     // Deleting the clip removes its segment.
     store.apply(tx("delete", vec![Op::Delete { id: ids[0] }])).unwrap();
@@ -209,7 +209,7 @@ fn an_end_value_types_into_the_clip() {
     let comp = build(&mut store, &mut last);
     let to = node_named(&store, comp, &format!("to {clip} {rect}"));
     assert_eq!(store.resolved(to, path("text.content")).unwrap(), Value::Str("300".into()));
-    assert_eq!(x_of(&store, to), 160.0 + 300.0 + 4.0, "just past the segment's end");
+    assert_eq!(x_of(&store, to), 200.0 + 4.0, "just past the bar's end, in the bar");
     store.preview_target(to, path("text.content"), Value::Str("650".into())).unwrap();
     store.commit_gesture("set to", Actor::Human, 0).unwrap().unwrap();
     assert_eq!(store.document().leaf(clip, path("clip.to")).unwrap().constant(), Some(&Value::Number(650.0)));
@@ -220,7 +220,7 @@ fn the_axis_pans_zooms_and_fits_without_history() {
     let Scene { mut store, rect, clip, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    let seg = node_named(&store, comp, &format!("segment {clip} {rect}"));
+    let seg = node_named(&store, comp, &format!("bar {clip} {rect}"));
     let past = store.history().past().len();
     // Zoom in 2x about x = 360 (t = 2 s): 2 s stays at 360, the clip's
     // start (1 s) moves from 260 to 160.
@@ -286,9 +286,9 @@ fn what_each_piece_affords_is_its_groups_context() {
         let chain = chain_of(store.document(), id);
         store.resolver().values(&chain, chain.len() - 1)
     };
-    let segment = values(&format!("segment {clip} {rect}"));
-    assert!(segment.selectable() && segment.is(Field::DRAG, "point") && segment.has(Field::GRIPS, "box"), "a segment selects, drags and trims");
-    for key in ["background", "header", "grid 1", &format!("object {rect}")] {
+    let bar = values(&format!("bar {clip} {rect}"));
+    assert!(bar.selectable() && bar.is(Field::DRAG, "point") && bar.has(Field::GRIPS, "ends") && bar.is(Field::DELETE, "subject"), "a bar selects, drags, trims by its ends and deletes its clip");
+    for key in ["background", "header", "grid 1", &format!("object {rect}"), &format!("segment {clip} {rect}")] {
         let v = values(key);
         assert!(v.is(Field::SELECT, "none") && v.source(Field::SELECT).is_some(), "{key} is declared no target");
     }
@@ -296,7 +296,7 @@ fn what_each_piece_affords_is_its_groups_context() {
         assert!(values(&key).is(Field::SELECT, "inert"), "{key} is transparent to the pointer");
     }
     let to = values(&format!("to {clip} {rect}"));
-    assert!(to.selectable() && to.is(Field::EDIT, "text") && to.is(Field::DRAG, "none"), "an end value edits, never drags");
+    assert!(to.selectable() && to.is(Field::EDIT, "text") && to.is(Field::DRAG, "none"), "an end value, entered from its bar, edits and never drags");
     // The ruler group is the scrub control: a track whose value is the clock.
     let ruler = node_named(&store, comp, "ruler bar");
     let ruler_group = store.document().live(ruler).unwrap().parent.unwrap();
@@ -312,4 +312,32 @@ fn what_each_piece_affords_is_its_groups_context() {
     store.preview_target(ruler_group, path("track.value"), Value::Number(2.0)).unwrap();
     assert_eq!(store.time(), 2.0, "the track's value is the playhead");
     assert!(store.commit_gesture("scrub", Actor::Human, 0).is_none(), "scrubbing is not an edit");
+}
+
+#[test]
+fn a_bar_trims_by_its_ends_and_deleting_it_deletes_the_clip() {
+    let Scene { mut store, rect, clip, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let bar = node_named(&store, comp, &format!("bar {clip} {rect}"));
+    // The right end: width 200 -> 300 is dur 2 -> 3.
+    store.preview_target(bar, path("size.w"), Value::Number(300.0)).unwrap();
+    store.commit_gesture("trim slide", Actor::Human, 0).unwrap().unwrap();
+    assert_eq!(store.document().leaf(clip, path("timing.dur")).unwrap().constant(), Some(&Value::Number(3.0)));
+    // The left end, 1 s later: x 260 -> 360 and width 300 -> 200, the
+    // right end staying: start 1 -> 2, dur 3 -> 2.
+    store.preview_target(bar, path("transform2d.x"), Value::Number(360.0)).unwrap();
+    store.preview_target(bar, path("size.w"), Value::Number(200.0)).unwrap();
+    store.commit_gesture("trim slide", Actor::Human, 0).unwrap().unwrap();
+    let n = |f: &str| store.document().leaf(clip, path(f)).unwrap().constant().cloned();
+    assert_eq!((n("timing.start"), n("timing.dur")), (Some(Value::Number(2.0)), Some(Value::Number(2.0))));
+    // Deleting the bar is deleting the clip; the timeline drops the bar.
+    let ops = iron_document::parts::delete_subject_ops(store.document(), bar);
+    assert_eq!(ops, vec![Op::Delete { id: clip }]);
+    store.apply(tx("delete clip", ops)).unwrap();
+    timeline_view::sync(&mut store, &mut last).unwrap();
+    assert!(!store.document().is_live(bar));
+    store.undo(0).unwrap().unwrap();
+    timeline_view::sync(&mut store, &mut last).unwrap();
+    assert!(names_under(&store, comp).contains(&format!("bar {clip} {rect}")), "undo brings the clip and its bar back");
 }

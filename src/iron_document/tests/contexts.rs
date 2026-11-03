@@ -248,7 +248,7 @@ fn grips_and_drags_come_from_the_context() {
     store.apply(tx(ops)).unwrap();
     let r = Resolver::new(store.document(), store.contexts());
     assert_eq!(r.values(&[t], 0).get(Field::GRIPS), "");
-    assert_eq!(contexts::parse(r#"<context name="k"><rule match="all" affords.grips="box handles"/></context>"#).unwrap_err(), "affords.grips=\"box handles\": unknown word handles (box, shape)");
+    assert_eq!(contexts::parse(r#"<context name="k"><rule match="all" affords.grips="box handles"/></context>"#).unwrap_err(), "affords.grips=\"box handles\": unknown word handles (box, shape, ends)");
 }
 
 #[test]

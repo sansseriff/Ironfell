@@ -102,9 +102,9 @@ pub const FIELDS: &[FieldSpec] = &[
         domain: "affords",
         name: "grips",
         view: false,
-        kind: Kind::Words(&["box", "shape"]),
+        kind: Kind::Words(&["box", "shape", "ends"]),
         options: &[""],
-        doc: "the handles a selected node offers: box (resize and rotate), shape (a rect's corner radii, an ellipse's arc)",
+        doc: "the handles a selected node offers: box (resize and rotate), shape (a rect's corner radii, an ellipse's arc), ends (its two horizontal edges, which write its own x and size.w: a timeline bar's trim)",
     },
     FieldSpec {
         domain: "affords",
@@ -154,7 +154,7 @@ pub const FIELDS: &[FieldSpec] = &[
     FieldSpec { domain: "chrome", name: "hover", view: true, kind: Kind::Choice, options: &["on", "off"], doc: "whether hovering lights things (off for touch, where nothing hovers; match=\"view\")" },
     FieldSpec { domain: "plug", name: "mate", view: false, kind: Kind::Choice, options: &["yes", "no"], doc: "whether a connection between this rigid port anchor and another holds the two parts together (a plug), or only joins them (a wire; schematic.md §1)" },
     FieldSpec { domain: "snap", name: "grid", view: true, kind: Kind::Number, options: &["0"], doc: "the grid placement, wiring and moves round to, px; 0 for none (match=\"view\")" },
-    FieldSpec { domain: "affords", name: "delete", view: false, kind: Kind::Choice, options: &["self", "subject"], doc: "what deleting it removes: itself, or what it figures (an entity, with every figure of it and the connections on its ports; a connection, with its figures)" },
+    FieldSpec { domain: "affords", name: "delete", view: false, kind: Kind::Choice, options: &["self", "subject"], doc: "what deleting it removes: itself, or what it figures (an entity, with every figure of it and the connections on its ports; a connection, with its figures) or projects (a timeline bar's clip)" },
     FieldSpec { domain: "chrome", name: "component", view: true, kind: Kind::Choice, options: &["on", "off"], doc: "whether a component instance wears its authoring chrome: the violet frame, its chip, and its input pins for linking (match=\"view\")" },
 ];
 

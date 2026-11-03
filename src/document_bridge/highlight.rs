@@ -44,7 +44,7 @@ pub fn lit(doc: &Document, picked: impl IntoIterator<Item = NodeId>) -> BTreeSet
             out.extend(doc.relations_from(p.to).filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to)).map(|r| r.to));
         }
         for a in doc.relations_to(node).filter(|r| r.rel == RelKind::Animates) {
-            out.extend(doc.relations_to(a.from).filter(|r| r.rel == RelKind::Projects && doc.live(r.from).is_some_and(|n| n.ty.name() == "rect")).map(|r| r.from));
+            out.extend(doc.relations_to(a.from).filter(|r| r.rel == RelKind::Projects && doc.is_live(r.from)).map(|r| r.from));
         }
     }
     out

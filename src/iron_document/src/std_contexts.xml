@@ -90,22 +90,23 @@
   <rule match="children" affords.select="none" chrome.lit="none" snap.target="no"/>
 </context>
 
-<!-- Segments: a press selects one, a drag retimes it (its x is bound to the
-     clip's start and its y to a literal, so it moves only in time), its box
-     grips trim it (width `dur · pps`; `affords.grips="ends"`, the two edges
-     only, is the spec's, the box stands in). A segment's label is inert, so
-     a press on the words is a press on the segment. -->
+<!-- Bars: each is one target for its clip. A press selects it, a drag
+     retimes it (its x is bound to the clip's start and its y to a literal,
+     so it moves only in time), its two ends trim it (`ends`: the edges
+     write its own x and width, `dur · pps`), and deleting it deletes the
+     clip it projects (`subject`). -->
 <context name="std:timeline-tracks">
   <rule match="self" affords.select="window" chrome.lit="none"/>
-  <rule match="children type:rect" affords.select="target" affords.drag="point" affords.grips="box" snap.target="no"/>
-  <rule match="children type:text" affords.select="inert" chrome.lit="none"/>
+  <rule match="children" affords.select="target" affords.drag="point" affords.grips="ends" affords.delete="subject" chrome.lit="frame" snap.target="no"/>
 </context>
 
-<!-- A clip's end values: readouts that select and edit as text (typing
-     edits the clip, through the readout's binding); they do not drag. -->
-<context name="std:timeline-values">
-  <rule match="self" affords.select="window" chrome.lit="none"/>
-  <rule match="children" affords.select="target" affords.edit="text" affords.drag="none" snap.target="no"/>
+<!-- Inside a bar: its rect and label are parts, not targets (entering the
+     bar does not stop on them; the label is transparent to the pointer).
+     Its end values say otherwise inline: they are reached by entering the
+     bar (a double-click) and edit as text. -->
+<context name="std:timeline-bar">
+  <rule match="children type:rect" affords.select="none" chrome.lit="none" snap.target="no"/>
+  <rule match="children type:text" affords.select="inert" chrome.lit="none" snap.target="no"/>
 </context>
 
 <!-- An electrical schematic (schematic.md §3), in the spirit of a basic

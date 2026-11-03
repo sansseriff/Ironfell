@@ -311,6 +311,9 @@ struct SelectionGeometry {
     frames: Vec<Affine>,
     resizable: bool,
     rotatable: bool,
+    /// One node offering `ends` (`affords.grips`): its two horizontal edges
+    /// trim it, writing its own x and width (a timeline bar).
+    ends: bool,
 }
 
 impl SelectionGeometryCache {
@@ -344,13 +347,14 @@ impl SelectionGeometryCache {
                     known
                 }
             } && frame.is_some() && geo.boxed(items);
+            let ends = frame.is_some() && matches!(items, [one] if geo.offers(&one.chain, "ends"));
             // Rotation writes the selected roots, unlike group resizing.
             let rotatable = frame.is_some() && geo.boxed(items) && !items.is_empty() && items.iter()
                 .filter(|r| geo.space(&r.chain).is_some() && geo.local_box(r.node()).is_some())
                 .all(|r| geo.free(r.node(), "transform2d.rot"));
             self.selection.insert(panel.to_owned(), CachedSelection {
                 stamp, after_propagation, reaches: items.iter().map(|r| (*r).clone()).collect(),
-                geometry: SelectionGeometry { frame, frames, resizable, rotatable },
+                geometry: SelectionGeometry { frame, frames, resizable, rotatable, ends },
             });
         }
         &self.selection.get(panel).expect("cached selection").geometry
@@ -514,6 +518,33 @@ enum Gesture {
     /// turned (`ring`) or slid (`track` along `axis`), through the leaf's
     /// binding (affordances.md §5.2, §5.4).
     Drive(Drive),
+    /// A trim by one of a node's `ends` (`affords.grips`): its own x and
+    /// width, through their bindings (a timeline bar's clip start and
+    /// duration, timeline.md §6).
+    Ends(Ends),
+}
+
+pub(crate) struct Ends {
+    view: PanelView,
+    id: NodeId,
+    /// The left edge (x and width change, the right edge stays) or the right.
+    left: bool,
+    /// Where the press was, panel document px, and the node's x and width
+    /// then.
+    start: Point,
+    x0: f64,
+    w0: f64,
+    label: String,
+}
+
+/// Which of a frame's two horizontal edges `p` (window px) is on: 0 (left),
+/// 1 (right), or neither.
+fn ends_at(frame: Affine, p: Point, k: f64) -> Option<f64> {
+    [0.0, 1.0].into_iter().find(|&u| {
+        let (a, b) = (frame * Point::new(u, 0.0), frame * Point::new(u, 1.0));
+        let t = ((p - a).dot(b - a) / (b - a).hypot2().max(1e-9)).clamp(0.0, 1.0);
+        kurbo::Line::new(a, b).eval(t).distance(p) <= EDGE_HIT * 1.4 * k
+    })
 }
 
 pub(crate) struct Drive {
@@ -646,7 +677,7 @@ impl SelectTool {
 
     /// Whether the selection is being dragged (moved, driven, reordered).
     pub(crate) fn dragging(&self) -> bool {
-        matches!(self.gesture, Gesture::Edit(_) | Gesture::Sequence(_) | Gesture::Drive(_))
+        matches!(self.gesture, Gesture::Edit(_) | Gesture::Sequence(_) | Gesture::Drive(_) | Gesture::Ends(_))
     }
 }
 
@@ -1039,6 +1070,10 @@ impl Geo<'_> {
                 let t = nest::reference(doc, id)?;
                 Some((self.spatial.group_content(t)?.geometry, Kind::Group))
             }
+            // A group with its own size (no layout, which sizes it) is a
+            // frame of that size: a timeline bar, whose readouts hang
+            // outside it.
+            "group" if self.has(id, K::Size) && !self.has(id, K::Layout) && let (Some(w), Some(h)) = (self.num(id, "size.w"), self.num(id, "size.h")) => Some((Rect::new(0.0, 0.0, w, h), Kind::Group)),
             "group" | "use" if self.spatial.enabled => Some((self.spatial.group_content(id)?.geometry, Kind::Group)),
             "group" | "use" => {
                 let inv = self.world(id).inverse();
@@ -1944,7 +1979,7 @@ pub fn select_tool_system(
                         }
                     }
                     Gesture::Sequence(_) => store.0.set_layout_preview(None),
-                    Gesture::Drive(_) => store.0.cancel_gesture(),
+                    Gesture::Drive(_) | Gesture::Ends(_) => store.0.cancel_gesture(),
                     _ => {}
                 }
                 tool.marquee = None;
@@ -2125,7 +2160,7 @@ pub fn select_tool_system(
                 if ops.is_empty() {
                     continue;
                 }
-                let label = format!("delete {}", type_label(doc, &sel.selected));
+                let label = projected_label(doc, &sel.selected, "delete").unwrap_or_else(|| format!("delete {}", type_label(doc, &sel.selected)));
                 pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
                 set_selection(&mut sel, tool, Vec::new());
             }
@@ -2507,6 +2542,20 @@ pub fn select_tool_system(
                         }
                         v
                     };
+                    // A node offering `ends`: its edges trim it.
+                    if let [r] = mine[..]
+                        && geo.offers(&r.chain, "ends")
+                        && let Some(u) = ends_at(view.affine() * frame, screen, k * tol.hit)
+                    {
+                        let id = r.node();
+                        let n = |f: &str| geo.store.resolved(id, leaf(f)).and_then(|v| v.as_f64());
+                        if let (Some(x0), Some(w0)) = (n("transform2d.x"), n("size.w")) {
+                            let label = projected_label(geo.doc(), &[id], "trim").unwrap_or_else(|| format!("trim {}", type_label(geo.doc(), &[id])));
+                            store.0.begin_gesture(&[id]);
+                            tool.gesture = Gesture::Ends(Ends { view: view.clone(), id, left: u == 0.0, start: doc_point(&view), x0, w0, label });
+                            break 'press;
+                        }
+                    }
                     let boxed = geo.boxed(&mine);
                     let grip = grip_at(view.affine() * frame, screen, boxed && geo.resizable(&resize_parts), boxed && geo.rotatable(&rotate_parts), k * tol.hit);
                     let ids: Vec<NodeId> = mine.iter().map(|r| r.node()).collect();
@@ -2650,16 +2699,29 @@ pub fn select_tool_system(
             {
                 let v = cx.values(&chain, k);
                 if v.is(Field::SELECT, "none") && v.source(Field::SELECT).is_some() && view.dims == Dims::Two {
-                    if !shift {
-                        set_selection(&mut sel, tool, Vec::new());
+                    // A part of a target that was entered (a bar's rect, with
+                    // one of its end values selected): the target it is part
+                    // of takes the press.
+                    match (0..k).rev().find(|&j| matches!(cx.values(&chain, j).get(Field::SELECT), "target" | "closed")) {
+                        Some(j) => k = j,
+                        None => {
+                            if !shift {
+                                set_selection(&mut sel, tool, Vec::new());
+                            }
+                            break 'press;
+                        }
                     }
-                    break 'press;
                 }
             }
             // A double-click on a selected node enters it.
             let dbl = tool.last_click.is_some_and(|(t, p, id)| now - t <= tol.double_click && p.distance(pointer.screen) <= DOUBLE_CLICK.1 && id == chain[k]);
             if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
-                k = interaction::enter(&cx, &chain, k);
+                // Entering stops only on a target: a timeline bar's rect is
+                // a part of it, its end values are targets.
+                let inner = interaction::enter(&cx, &chain, k);
+                if cx.values(&chain, inner).selectable() {
+                    k = inner;
+                }
                 tool.last_click = None;
                 // Entering may start the node's edit, as its context says
                 // (a document's `std:table` override: a cell's words).
@@ -2815,6 +2877,7 @@ pub fn select_tool_system(
         Gesture::Marquee { view, .. } => follow(view),
         Gesture::Sequence(q) => follow(&mut q.view),
         Gesture::Drive(d) => follow(&mut d.view),
+        Gesture::Ends(e) => follow(&mut e.view),
         Gesture::Edit(m) => m.view_mut().is_some_and(follow),
         _ => false,
     };
@@ -2975,6 +3038,21 @@ pub fn select_tool_system(
                     info!("{} cannot follow: {why}", d.id);
                 }
             }
+            Gesture::Ends(e) => {
+                let at = e.view.affine().inverse() * screen;
+                let dx = at.x - e.start.x;
+                // Never narrower than a few px: the edge does not cross over.
+                let w = if e.left { e.w0 - dx } else { e.w0 + dx }.max(4.0);
+                let mut writes = vec![("size.w", w)];
+                if e.left {
+                    writes.push(("transform2d.x", e.x0 + (e.w0 - w)));
+                }
+                for (path, v) in writes {
+                    if let Err(why) = store.0.preview_target(e.id, leaf(path), Value::Number(v)) {
+                        info!("{} cannot follow: {why}", e.id);
+                    }
+                }
+            }
             // The item lands among the others where its centre passes their
             // midpoints; the store lays the container out so.
             Gesture::Sequence(q) => {
@@ -3133,6 +3211,7 @@ pub fn select_tool_system(
             }
             Gesture::Marquee { .. } => tool.marquee = None,
             Gesture::Drive(d) => gestures.0.push(GestureRequest::Commit(d.label)),
+            Gesture::Ends(e) => gestures.0.push(GestureRequest::Commit(e.label)),
             // Dropped where it started: nothing to write.
             Gesture::Sequence(q) => {
                 store.0.set_layout_preview(None);
@@ -3165,7 +3244,10 @@ pub fn select_tool_system(
                 && let Some(frame) = cached.frame
             {
                 let f = view.affine() * frame;
-                let grip = grip_at(f, screen, cached.resizable, cached.rotatable, k * tol.hit);
+                let grip = match cached.ends.then(|| ends_at(f, screen, k * tol.hit)).flatten() {
+                    Some(u) => Some(Grip::Resize(u, 0.5)),
+                    None => grip_at(f, screen, cached.resizable, cached.rotatable, k * tol.hit),
+                };
                 on_grip = matches!(grip, Some(Grip::Resize(..) | Grip::Rotate(..)));
                 if !space {
                     cursor = cursor_for(f, grip);
@@ -3748,11 +3830,24 @@ pub fn draw_select_overlay(
                     } else {
                         Rect::from_center_size(Point::ORIGIN, (chrome.grip * k, chrome.grip * k)).to_path(0.1)
                     };
-                    for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
-                        let c = f * Point::new(u, v);
-                        let at = Affine::translate(c.to_vec2()) * Affine::rotate(angle);
-                        b.fill(at, fill, grip.clone());
-                        b.stroke(at, thin.clone(), box_tint, grip.clone());
+                    if cached.ends {
+                        // Two edge handles, the height of the box (a timeline
+                        // bar's trim, `affords.grips="ends"`).
+                        let h = (f * Point::new(0.0, 1.0) - f * Point::new(0.0, 0.0)).hypot();
+                        let handle = kurbo::RoundedRect::from_rect(Rect::from_center_size(Point::ORIGIN, (4.0 * k, h + 4.0 * k)), 2.0 * k).to_path(0.1);
+                        for u in [0.0, 1.0] {
+                            let c = f * Point::new(u, 0.5);
+                            let at = Affine::translate(c.to_vec2()) * Affine::rotate(angle);
+                            b.fill(at, fill, handle.clone());
+                            b.stroke(at, thin.clone(), box_tint, handle.clone());
+                        }
+                    } else {
+                        for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+                            let c = f * Point::new(u, v);
+                            let at = Affine::translate(c.to_vec2()) * Affine::rotate(angle);
+                            b.fill(at, fill, grip.clone());
+                            b.stroke(at, thin.clone(), box_tint, grip.clone());
+                        }
                     }
                 }
                 for &at in &part_dots {

@@ -339,11 +339,44 @@ revisited; none is expensive to change.
   and its tab icon. The layout key is `iron.workspace.v8`.
 - **Tests.** `tests/timeline_view.rs` (4); `timeline.txt`; the smoke's scrub step drags
   the grip to 3 s (the torus reads `rot="0,4.88…,0"`).
-- **Found on the way, not yet verified:** a selected segment shows the box grips, and
-  its width is `dur·pps`, so dragging the right edge should change `dur` by inversion
-  and the left edge `start` and `dur`. Phase 3 checks these and replaces the box with
-  `affords.grips="ends"`.
-- **Not yet (phase 3):** Space and the other transport keys, `view.nav` (scroll pans
-  the camera today, not the axis), snapping, end values and easing curves, the error
-  mark in the header, the loop band, cross-view selection through `projects`.
+
+### Phase 3, first part (2026-11-03)
+
+- **Trim.** `std:timeline` gives rects `affords.grips="box"`: a segment's width is
+  `dur·pps` and its height a literal, so the right edge changes `dur` and the left edge
+  `start` and `dur` by inversion ("trim slide"). The spec's `affords.grips="ends"` (only
+  the two horizontal edges) is not built; the box stands in, its vertical grips inert.
+- **End values.** A numeric clip shows `fmt(from, 0)` right-aligned before its segment
+  and `fmt(to, 0)` after it, text with an inline `affords` of `edit: text`. Readouts
+  invert through the number (`handle.rs`), so typing edits the clip. Select one and
+  press Enter; a double-click does not yet enter it (the text tool's double-click test
+  misses fixed-size text here; not investigated).
+- **Errors.** An object whose clips are in error shows `⚠` and the error colour in its
+  header row, as its segments already did.
+- **The loop band**, on the ruler, bound to `loop_in`/`loop_out` (no width without a
+  loop). The transport's loop button loops every clip or turns the loop off; I and O
+  set its ends at the playhead.
+- **Keys.** The transport listens in the capture phase while the pointer is over the
+  timeline and no text field has focus: Space, Home, End, ← and → (1/30 s; Shift, 1 s),
+  I, O, F. It applies clock writes locally first, so keys faster than a round trip
+  compose. This stands in for `std:timeline`'s `keys.tools`, which name tools, not
+  actions.
+- **Navigation.** `timeline_view::navigate` (pan by px, zoom about a point) and `fit`,
+  as session ops on the composition's axis; `navigate_views` routes the wheel there
+  when the view shows the timeline (horizontal pans time, vertical scrolls the rows,
+  Ctrl/Cmd zooms; Shift+1 fits), and the `timeline_axis` engine call serves the
+  transport's F and fit button. This is keyed on the view showing the timeline
+  composition, not yet a `view.nav` context field. Ticks follow the zoom
+  (regenerated), and the ruler reaches a wide panel past `t0`.
+- **Cross-view highlighting.** `highlight::lit` follows `projects`: a selected or
+  hovered segment lights what its clip animates in every view, and a selected
+  animated node lights its segments.
+- **Tests.** `tests/timeline_view.rs` 7 (an end value typed into the clip; pan, zoom
+  and fit without history; the loop band); `timeline.txt` extended to trim, type,
+  keys, fit and pan.
+- **Not yet:** snapping (`snap.targets`), easing curves in segments, a press on the
+  ruler jumping the playhead (`affords.press="jump"`), selection following `projects`
+  to the clip in the inspector, the error reason in the probe, and the double-click
+  above. Phases 4 (Animate change, editing an end at the playhead) and 5 (seekable
+  endpoints) are not started.
 

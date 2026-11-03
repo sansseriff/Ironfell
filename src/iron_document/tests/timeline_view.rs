@@ -183,3 +183,52 @@ fn regeneration_keeps_what_survives() {
     assert!(!store.document().is_live(second));
     let _ = Axis::default();
 }
+
+#[test]
+fn an_end_value_types_into_the_clip() {
+    let Scene { mut store, rect, clip, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let to = node_named(&store, comp, &format!("to {clip} {rect}"));
+    assert_eq!(store.resolved(to, path("text.content")).unwrap(), Value::Str("300".into()));
+    assert_eq!(x_of(&store, to), 160.0 + 300.0 + 4.0, "just past the segment's end");
+    store.preview_target(to, path("text.content"), Value::Str("650".into())).unwrap();
+    store.commit_gesture("set to", Actor::Human, 0).unwrap().unwrap();
+    assert_eq!(store.document().leaf(clip, path("clip.to")).unwrap().constant(), Some(&Value::Number(650.0)));
+}
+
+#[test]
+fn the_axis_pans_zooms_and_fits_without_history() {
+    let Scene { mut store, rect, clip, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let seg = node_named(&store, comp, &format!("segment {clip} {rect}"));
+    let past = store.history().past().len();
+    // Zoom in 2x about x = 360 (t = 2 s): 2 s stays at 360, the clip's
+    // start (1 s) moves from 260 to 160.
+    timeline_view::navigate(&mut store, 0.0, -(2f64.ln()), 360.0).unwrap();
+    assert!((x_of(&store, seg) - 160.0).abs() < 1e-9, "{}", x_of(&store, seg));
+    assert!((store.resolved(seg, path("size.w")).unwrap().as_f64().unwrap() - 400.0).abs() < 1e-9);
+    // Pan 100 px later: 0.5 s at 200 px/s.
+    timeline_view::navigate(&mut store, 100.0, 0.0, 0.0).unwrap();
+    assert!((x_of(&store, seg) - 60.0).abs() < 1e-9, "{}", x_of(&store, seg));
+    timeline_view::fit(&mut store, 1184.0).unwrap();
+    assert_eq!(store.resolved(comp, path("axis.t0")).unwrap(), Value::Number(0.0));
+    assert_eq!(store.resolved(comp, path("axis.pps")).unwrap(), Value::Number(1000.0 / 3.0), "3 s of clips in 1000 px");
+    assert_eq!(store.history().past().len(), past, "navigation is not an edit");
+    // A zoom changes the tick spacing, so the ruler regenerates.
+    assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_some());
+}
+
+#[test]
+fn the_loop_band_follows_the_clock() {
+    let Scene { mut store, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let band = node_named(&store, comp, "loop");
+    assert_eq!(store.resolved(band, path("size.w")).unwrap(), Value::Number(0.0), "no loop, no band");
+    let clock = store.clock().unwrap();
+    store.apply_session(vec![Op::Set { id: clock, path: path("clock.loop_in"), slot: num(1.0) }, Op::Set { id: clock, path: path("clock.loop_out"), slot: num(2.5) }]).unwrap();
+    assert_eq!(x_of(&store, band), 260.0);
+    assert_eq!(store.resolved(band, path("size.w")).unwrap(), Value::Number(150.0));
+}

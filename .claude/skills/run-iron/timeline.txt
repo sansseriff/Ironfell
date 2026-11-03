@@ -23,5 +23,50 @@ sleep 400
 eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/);return 'after undo slide: '+(m?m[0].match(/start="[^"]*"/)[0]:'?')})()
 # Play from the start; the clock advances, then pause.
 eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:0})]);[...document.querySelectorAll('.transport button')].find(b=>b.ariaLabel==='Play').click();await new Promise(r=>setTimeout(r,700));const c=await __iron.call('clock_read',[]);[...document.querySelectorAll('.transport button')].find(b=>b.ariaLabel==='Pause').click();await new Promise(r=>setTimeout(r,200));const d=await __iron.call('clock_read',[]);return 'playing '+c.playing+', advanced '+(c.t>0.3)+'; paused '+!d.playing})()
+# Phase 3. Trim: select the slide segment and drag its bottom-right grip
+# 1 s later (dur 2 -> 3; the height is a literal, so only the width
+# moves); the square lights in Main while the segment is selected
+# (cross-view, through `projects`). Undo.
+pclick timeline 300 105
+pdrag timeline 410 113 510 113
+sleep 400
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/)[0];return 'trimmed slide: '+m.match(/start="[^"]*"/)[0]+' dur '+Number(m.match(/dur="([^"]*)"/)[1]).toFixed(3)})()
+shot timeline-trimmed
+key Meta+z
+sleep 300
+# An end value is a readout: select the "to" (just past the segment's
+# end), Enter edits it, and typing sets the clip's `to`. Undo.
+pclick timeline 440 109
+sleep 300
+key Enter
+sleep 300
+key Meta+a
+key 6
+key 5
+key 0
+key Escape
+sleep 400
+eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'typed: slide '+v.match(/<clip[^>]*name="slide"[^>]*>/)[0].match(/to="[^"]*"/)[0]})()
+key Meta+z
+sleep 300
+# The transport's keys, with the pointer over the timeline: End, a frame
+# back, Home, I and O for the loop's ends, F to fit.
+pmove timeline 700 160
+key End
+key ArrowLeft
+eval (async()=>{await new Promise(r=>setTimeout(r,300));const c=await __iron.call('clock_read',[]);return 'End then a frame back: '+c.t.toFixed(3)})()
+key Home
+key ArrowRight
+key Shift+ArrowRight
+key i
+key Shift+ArrowRight
+key o
+eval (async()=>{await new Promise(r=>setTimeout(r,300));const c=await __iron.call('clock_read',[]);return 'loop '+c.loop_in.toFixed(3)+' to '+c.loop_out.toFixed(3)+', at '+c.t.toFixed(3)})()
+key f
+eval (async()=>{await new Promise(r=>setTimeout(r,300));const a=await __iron.call('timeline_axis',['{}']);return 'fitted: t0 '+a.t0+', pps '+a.pps.toFixed(1)})()
+# Wheel: horizontal pans time (t0), Ctrl zooms about the pointer.
+pwheel timeline 700 160 120 0 1 100
+eval (async()=>{await new Promise(r=>setTimeout(r,300));const a=await __iron.call('timeline_axis',['{}']);return 'panned: t0 '+a.t0.toFixed(2)})()
+shot timeline-navigated
 logs applied
 errors

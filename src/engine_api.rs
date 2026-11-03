@@ -2152,6 +2152,26 @@ pub fn clock_set(app: &mut WorkerApp, fields: String) -> String {
     })
 }
 
+/// Navigate the timeline's time axis (timeline.md §6), as session ops:
+/// `{"fit": width}` fits every clip into `width` document px;
+/// `{"pan": dx, "zoom": z, "at": x}` pans by `dx` px and zooms by `z` (log,
+/// positive out) about document x `at`. `{"ok", "t0", "pps"}` after.
+pub fn timeline_axis(app: &mut WorkerApp, fields: String) -> String {
+    narrative_run(app, |store| {
+        use iron_document::timeline_view as tv;
+        let v: serde_json::Value = serde_json::from_str(&fields).map_err(|e| format!("timeline_axis: {e}"))?;
+        let n = |k: &str| v.get(k).and_then(|x| x.as_f64());
+        if let Some(w) = n("fit") {
+            tv::fit(store, w)?;
+        } else {
+            tv::navigate(store, n("pan").unwrap_or(0.0), n("zoom").unwrap_or(0.0), n("at").unwrap_or(0.0))?;
+        }
+        let comp = tv::find(store).ok_or("no timeline composition")?;
+        let read = |f: &str| iron_document::facet::LeafPath::new(iron_document::facet::FacetKind::Axis, f).ok().and_then(|p| store.resolved(comp, p)).and_then(|v| v.as_f64());
+        Ok(serde_json::json!({"ok": true, "t0": read("t0"), "pps": read("pps")}))
+    })
+}
+
 /// Nodes a mention can name (the `#` menu): live, named, not session or
 /// derived, whose name contains `query` (case-insensitive), at most 20,
 /// best first. `{"ok", "targets": [{"id", "name", "type", "composition"}]}`.

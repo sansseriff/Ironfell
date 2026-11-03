@@ -59,10 +59,14 @@
      clips (`timeline_view`). Its pieces are bound: a segment's x to its
      clip's start, its y to a literal, so a drag retimes the clip and moves
      only in time; the playhead to the clock; the ruler, ticks and headers to
-     nothing free, so they stay put. No grips, no editing, no snapping yet
-     (phase 3: `affords.grips="ends"`, `snap.targets`, `view.nav`). -->
+     nothing free, so they stay put. A segment's box grips trim it: its
+     width is `dur · pps` and its height a literal, so the right edge
+     changes `dur` and the left `start` and `dur` (`affords.grips="ends"`,
+     the two edges only, is the spec's; the box stands in). End values are
+     readouts that edit as text (their inline `affords`). No snapping yet. -->
 <context name="std:timeline">
   <rule match="type:rect|text" affords.select="target" affords.drag="point"/>
+  <rule match="type:rect" affords.grips="box"/>
   <rule match="view" palette.tools="select" keys.tools="v:select" chrome.component="off" inspector.sections="main position other"/>
 </context>
 

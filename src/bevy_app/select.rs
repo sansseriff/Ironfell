@@ -1700,6 +1700,18 @@ fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, rea
     Some(copy::Placement { parent, beside: false, offset, share_entities: share })
 }
 
+/// A gesture's label when the nodes stand for clips (timeline segments
+/// `projects` them, timeline.md §6): "retime slide", "trim clips". `None`
+/// for ordinary nodes.
+fn projected_label(doc: &iron_document::Document, ids: &[NodeId], verb: &str) -> Option<String> {
+    let clips: Vec<NodeId> = ids.iter().filter_map(|&id| doc.relations_from(id).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to)).collect();
+    match clips.as_slice() {
+        [] => None,
+        [clip] => Some(format!("{verb} {}", doc.get::<iron_document::facet::Name>(*clip).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("clip"))),
+        _ => Some(format!("{verb} clips")),
+    }
+}
+
 fn type_label(doc: &iron_document::Document, nodes: &[NodeId]) -> String {
     match nodes {
         [one] => doc.live(*one).map(|n| n.ty.name().to_owned()).unwrap_or_else(|| "node".into()),
@@ -2480,7 +2492,7 @@ pub fn select_tool_system(
                     let start = doc_point(&view);
                     match grip {
                         Some(Grip::Resize(u, v)) => {
-                            let label = format!("resize {}", type_label(geo.doc(), &ids));
+                            let label = projected_label(geo.doc(), &ids, "trim").unwrap_or_else(|| format!("resize {}", type_label(geo.doc(), &ids)));
                             let nodes: Vec<NodeId> = resize_parts.iter().map(|p| p.id).collect();
                             // A rotated box's edges are not on the axes: no snapping.
                             let snap = (!tool.snap_off && manipulate::axis_aligned(frame)).then(|| snap_session(&geo, &view, &mine, k)).flatten().map(|mut s| {
@@ -2801,14 +2813,7 @@ pub fn select_tool_system(
                     let mine = movers(&reaches, &view.panel);
                     let mut drags = Vec::new();
                     let ids: Vec<NodeId> = mine.iter().map(|r| r.node()).collect();
-                    // A timeline segment stands for its clip (timeline.md §6):
-                    // moving it retimes the clip.
-                    let projected: Vec<NodeId> = ids.iter().filter_map(|&id| geo.doc().relations_from(id).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to)).collect();
-                    let label = match projected.as_slice() {
-                        [clip] => format!("retime {}", geo.doc().get::<iron_document::facet::Name>(*clip).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("clip")),
-                        [] => format!("move {}", type_label(geo.doc(), &ids)),
-                        _ => "retime clips".to_owned(),
-                    };
+                    let label = projected_label(geo.doc(), &ids, "retime").unwrap_or_else(|| format!("move {}", type_label(geo.doc(), &ids)));
                     let grabs: Vec<(NodeId, Affine, Point)> = mine
                         .iter()
                         .filter_map(|r| {
@@ -4026,12 +4031,37 @@ pub fn navigate_views(
     sel: Res<crate::SelectionState>,
     mut keys: ResMut<ToolKeys>,
     mut cameras: ResMut<crate::document_bridge::ViewCameras>,
-    store: Res<DocumentStore>,
+    mut store: ResMut<DocumentStore>,
     spatial: Res<crate::document_bridge::SpatialScene>,
     drawables: Res<crate::document_bridge::Drawables>,
 ) {
     let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
+    // The timeline (timeline.md §6) navigates time on its axis, so text
+    // and corners never stretch: the wheel's horizontal part pans `t0`,
+    // Ctrl/Cmd zooms `pps` about the pointer, and only the rows scroll.
+    let timeline = iron_document::timeline_view::find(&store.0);
     if let Some(view) = under
+        && scroll.delta != Vec2::ZERO
+        && timeline.is_some()
+        && view.composition == timeline
+    {
+        let px = match scroll.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => scroll.delta * 16.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta,
+        };
+        let camera = cameras.0.entry(view.panel.clone()).or_default();
+        let at = ((pointer.screen.x - view.rect.x - camera.pan.x) / camera.zoom) as f64;
+        let result = if pointer.modifiers.ctrl || pointer.modifiers.meta {
+            iron_document::timeline_view::navigate(&mut store.0, 0.0, scroll.zoom as f64, at)
+        } else {
+            let d = if pointer.modifiers.shift && px.x == 0.0 { Vec2::new(px.y, 0.0) } else { px };
+            camera.pan.y = (camera.pan.y - d.y).min(0.0);
+            if d.x != 0.0 { iron_document::timeline_view::navigate(&mut store.0, (d.x / camera.zoom) as f64, 0.0, at) } else { Ok(()) }
+        };
+        if let Err(e) = result {
+            warn!("timeline navigation: {e}");
+        }
+    } else if let Some(view) = under
         && scroll.delta != Vec2::ZERO
     {
         let px = match scroll.unit {
@@ -4068,6 +4098,14 @@ pub fn navigate_views(
         let centre = Vec2::new(view.rect.x, view.rect.y) + size * 0.5;
         let camera = cameras.0.entry(view.panel.clone()).or_default();
         let at_centre = (size * 0.5 - camera.pan) / camera.zoom;
+        // Fitting the timeline fits its clips in time (`F`, Shift+1).
+        if key == "zoomfit" && timeline.is_some() && view.composition == timeline {
+            if let Err(e) = iron_document::timeline_view::fit(&mut store.0, (size.x / camera.zoom) as f64) {
+                warn!("timeline fit: {e}");
+            }
+            camera.pan = Vec2::ZERO;
+            continue;
+        }
         match key.as_str() {
             "zoomfit" | "zoomsel" => {
                 let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };

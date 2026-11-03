@@ -73,6 +73,9 @@ pub struct Segment {
     pub clip: NodeId,
     pub offset: f64,
     pub label: String,
+    /// Whether the clip's ends are numbers, shown (and typed) as readouts
+    /// at the segment's ends.
+    pub numeric: bool,
 }
 
 fn ty(n: &str) -> TypeId {
@@ -135,7 +138,8 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
                 }
             };
             let o = &mut objects[i];
-            let segment = Segment { clip, offset, label: label.clone() };
+            let numeric = doc.get::<crate::facet::Clip>(clip).is_some_and(|c| [&c.from, &c.to].iter().all(|s| s.constant().is_some_and(|v| matches!(v.kind(), crate::value::ValueKind::Number | crate::value::ValueKind::Quantity))));
+            let segment = Segment { clip, offset, label: label.clone(), numeric };
             match o.props.iter_mut().find(|p| p.prop == prop) {
                 Some(p) => p.segments.push(segment),
                 None => o.props.push(Prop { prop: prop.clone(), segments: vec![segment] }),
@@ -143,10 +147,13 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
         }
     }
     let pps = comp.and_then(|c| number(store, c, FacetKind::Axis, "pps")).unwrap_or(100.0);
+    let t0 = comp.and_then(|c| number(store, c, FacetKind::Axis, "t0")).unwrap_or(0.0);
     let errors = store.time_errors().keys().copied().filter(|c| clips.contains(c)).collect();
-    // The ruler's extent grows in 5 s steps, past the last clip's end, so
-    // most retimes leave the structure alone.
-    let end = ((end / 5.0).ceil() * 5.0 + 5.0).max(10.0);
+    // The ruler's extent grows in 5 s steps, past the last clip's end and
+    // a wide panel's worth past the left edge, so most retimes and pans
+    // leave the structure alone.
+    let seen = t0 + 2400.0 / pps.max(1.0);
+    let end = ((end.max(seen) / 5.0).ceil() * 5.0 + 5.0).max(10.0);
     Plan { clock, objects, end, tick: tick_for(pps), errors }
 }
 
@@ -221,6 +228,8 @@ const DIM: [f32; 4] = [0.6, 0.6, 0.64, 1.0];
 const SEGMENT: [f32; 4] = [0.3, 0.55, 0.95, 1.0];
 const ERROR: [f32; 4] = [0.9, 0.3, 0.3, 1.0];
 const PLAYHEAD: [f32; 4] = [1.0, 0.6, 0.2, 1.0];
+const LOOP: [f32; 4] = [1.0, 0.6, 0.2, 0.22];
+const VALUE: [f32; 4] = [0.75, 0.82, 1.0, 1.0];
 
 /// Every node the plan draws, bottom to top.
 fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
@@ -241,6 +250,9 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let width = at(&lit(plan.end));
     push("background".into(), "rect", vec![place("0", "0"), sized(&lit(FAR), &h), paint(BG)], None);
     push("ruler".into(), "rect", vec![place(&lw, "0"), sized(&format!("({}) - {lw}", width), &lit(RULER_H)), paint(RULER)], None);
+    // The loop range, a band on the ruler: no width when there is no loop.
+    let clock = plan.clock;
+    push("loop".into(), "rect", vec![place(&at(&format!("{clock}.clock.loop_in")), "0"), sized(&format!("max({clock}.clock.loop_out - {clock}.clock.loop_in, 0) * {pps}"), &lit(RULER_H)), paint(LOOP)], None);
     let ticks = (plan.end / plan.tick).round() as usize;
     for k in 0..=ticks {
         let t = k as f64 * plan.tick;
@@ -256,7 +268,11 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let mut y = RULER_H + 4.0;
     let mut labels = Vec::new();
     for o in &plan.objects {
-        labels.push((format!("object {}", o.target), 8.0, y, o.label.clone(), 12.0, 600.0, LABEL));
+        // A clip in error marks its object's row (the reason is in the
+        // clip's probe).
+        let bad = o.props.iter().flat_map(|p| &p.segments).any(|s| plan.errors.contains(&s.clip));
+        let (text, colour) = if bad { (format!("⚠ {}", o.label), ERROR) } else { (o.label.clone(), LABEL) };
+        labels.push((format!("object {}", o.target), 8.0, y, text, 12.0, 600.0, colour));
         y += ROW_H;
         for p in &o.props {
             let short = p.prop.rsplit('.').next().unwrap_or(&p.prop).to_owned();
@@ -271,6 +287,24 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 f.extend(words(&s.label, 11.0, 500.0));
                 f.push(paint([1.0, 1.0, 1.0, 0.95]));
                 push(format!("segment label {} {}", s.clip, o.target), "text", f, Some(s.clip));
+                // The ends' values, as readouts that invert: typing in one
+                // edits the clip's `from` or `to` (timeline.md §5).
+                if s.numeric {
+                    let end_x = at(&format!("{start} + {}.timing.dur", s.clip));
+                    for (end, x, align) in [("from", format!("{x} - 64"), "right"), ("to", format!("{end_x} + 4"), "left")] {
+                        let mut t = Text::default();
+                        t.content = bound(&format!("fmt({}.clip.{end}, 0)", s.clip));
+                        t.sizing = Slot::Const(Value::Enum("fixed".into()));
+                        let mut font = Font::default();
+                        font.size = Slot::Const(Value::Number(10.0));
+                        font.align = Slot::Const(Value::Enum(align.into()));
+                        font.tabular = Slot::Const(Value::Bool(true));
+                        let mut affords = crate::facet::Affords::default();
+                        affords.style = Slot::Const(Value::Str("edit: text".into()));
+                        let f = vec![place(&x, &lit(y + 5.0)), t.wrap(), font.wrap(), sized("60", "14"), paint(VALUE), affords.wrap()];
+                        push(format!("{end} {} {}", s.clip, o.target), "text", f, Some(s.clip));
+                    }
+                }
             }
             y += ROW_H;
         }
@@ -392,4 +426,41 @@ pub fn sync(store: &mut Store, last: &mut Option<(NodeId, Plan)>) -> Result<Opti
     let comp = find(store).ok_or("the timeline composition was not built")?;
     *last = Some((comp, plan));
     Ok(Some(touched))
+}
+
+/// Zoom limits for the axis, px per second.
+pub const PPS: (f64, f64) = (4.0, 4000.0);
+
+fn axis_ops(store: &Store, t0: f64, pps: f64) -> Result<(NodeId, Vec<Op>), String> {
+    let comp = find(store).ok_or("no timeline composition")?;
+    let set = |f: &str, v: f64| Op::Set { id: comp, path: LeafPath::new(FacetKind::Axis, f).expect("axis field"), slot: Slot::Const(Value::Number(v)) };
+    Ok((comp, vec![set("t0", t0.max(0.0)), set("pps", pps.clamp(PPS.0, PPS.1))]))
+}
+
+/// Navigate the timeline's time axis (timeline.md §6): pan by `dx` document
+/// px (positive moves later), and zoom by `zoom` (log scale, positive zooms
+/// out) keeping the time under document x `at` where it is. Session ops:
+/// how a view is looked at is never an edit.
+pub fn navigate(store: &mut Store, dx: f64, zoom: f64, at: f64) -> Result<(), String> {
+    let Some(comp) = find(store) else { return Ok(()) };
+    let read = |f: &str, d: f64| number(store, comp, FacetKind::Axis, f).unwrap_or(d);
+    let (t0, pps, lw) = (read("t0", 0.0), read("pps", 100.0), read("label_w", 160.0));
+    let under = t0 + (at - lw) / pps;
+    let next = (pps * (-zoom).exp()).clamp(PPS.0, PPS.1);
+    let t0 = under - (at - lw) / next + dx / next;
+    let (_, ops) = axis_ops(store, t0, next)?;
+    store.apply_session(ops).map_err(|e| e.message)
+}
+
+/// Fit every clip into `width` document px of the view (`F`): the axis
+/// starts at 0, and the last clip's end sits a little short of the edge.
+pub fn fit(store: &mut Store, width: f64) -> Result<(), String> {
+    let Some(comp) = find(store) else { return Ok(()) };
+    let lw = number(store, comp, FacetKind::Axis, "label_w").unwrap_or(160.0);
+    let doc = store.document();
+    let field = |id: NodeId, f: &str| number(store, id, FacetKind::Timing, f).unwrap_or(0.0);
+    let end = doc.nodes_of_type(ty("clip")).filter(|c| !c.is_session()).map(|c| field(c, "start") + field(c, "dur")).fold(0.0, f64::max);
+    let pps = (width - lw - 24.0).max(40.0) / end.max(1.0);
+    let (_, ops) = axis_ops(store, 0.0, pps)?;
+    store.apply_session(ops).map_err(|e| e.message)
 }

@@ -609,14 +609,23 @@ impl Store {
         self.fingers.retain(|f| !(f.node == h.node && f.anchor == h.anchor));
     }
 
+    /// The playhead: the session clock's `t` as read (a gesture's preview
+    /// of it counts), timeline.md §4.1.
     pub fn time(&self) -> f64 {
         self.time
     }
 
-    /// Move the playhead. Every clip is resampled; leaves whose animated
-    /// value moved are reported like any other resolved change.
+    /// Move the playhead: a session op on the clock's `t` (the clock is
+    /// created when missing), so it is never saved or undone. Every clip is
+    /// resampled; leaves whose animated value moved are reported like any
+    /// other resolved change.
     pub fn set_time(&mut self, t: f64) {
+        // Taken first, so the op's own sync finds nothing to do and the
+        // resample below runs once.
         self.time = t;
+        if let Ok(c) = self.ensure_clock() {
+            let _ = self.apply_session(vec![Op::Set { id: c, path: clock_path("t"), slot: Slot::Const(Value::Number(t)) }]);
+        }
         self.resample();
         if !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
@@ -627,6 +636,52 @@ impl Store {
     /// Clips that could not be sampled at the current time, by clip node.
     pub fn time_errors(&self) -> &std::collections::BTreeMap<NodeId, String> {
         &self.time_errors
+    }
+
+    /// The session clock every timeline view shares (timeline.md §4.1).
+    pub fn clock(&self) -> Option<NodeId> {
+        self.live_of_type("clock")
+    }
+
+    /// The session clock, created (with the session root, if that is
+    /// missing too) at the current time when there is none.
+    pub fn ensure_clock(&mut self) -> Result<NodeId, ApplyError> {
+        if let Some(c) = self.clock() {
+            return Ok(c);
+        }
+        let ty = |n: &str| TypeId::lookup(n).expect("registered");
+        let mut ops = Vec::new();
+        let root = match self.live_of_type("session") {
+            Some(r) => r,
+            None => {
+                let r = self.doc.next_session_ids(1)[0];
+                ops.push(Op::Create { id: r, ty: ty("session"), parent: None, order: OrderKey::first(), facets: vec![] });
+                r
+            }
+        };
+        let id = *self.doc.next_session_ids(ops.len() + 1).last().expect("one id");
+        let mut clock = FacetKind::Clock.default_facet();
+        let _ = clock.set("t", Slot::Const(Value::Number(self.time)));
+        let last = self.doc.live_nodes().filter(|n| n.parent == Some(root)).map(|n| n.order.clone()).max();
+        let order = last.map_or_else(OrderKey::first, |o| OrderKey::after(&o));
+        ops.push(Op::Create { id, ty: ty("clock"), parent: Some(root), order, facets: vec![clock] });
+        self.apply_session(ops)?;
+        Ok(id)
+    }
+
+    /// Follow the clock: when its `t` as read moved from the playhead the
+    /// clips were last sampled at, resample. True when it did; callers
+    /// re-solve.
+    fn sync_clock(&mut self) -> bool {
+        let Some(c) = self.clock() else { return false };
+        let leaf = Leaf { node: c, path: clock_path("t") };
+        let Some(Value::Number(t)) = self.reactive.read(&self.doc, leaf) else { return false };
+        if t == self.time || !t.is_finite() {
+            return false;
+        }
+        self.time = t;
+        self.resample();
+        true
     }
 
     fn resample(&mut self) {
@@ -809,6 +864,7 @@ impl Store {
         let leaf = Leaf { node: id, path };
         self.drivers.insert(leaf);
         self.reactive.preview(&self.doc, leaf, value);
+        self.sync_clock();
         if !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
         }
@@ -820,6 +876,9 @@ impl Store {
         let leaf = Leaf { node: id, path };
         self.drivers.remove(&leaf);
         self.reactive.unpreview(&self.doc, leaf);
+        if self.sync_clock() && !self.clusters.list.is_empty() {
+            self.resolve_clusters_live();
+        }
         self.resolve_physics();
     }
 
@@ -890,6 +949,13 @@ impl Store {
         self.drivers.clear();
         self.fingers.clear();
         self.reactive.clear_overlay(&self.doc);
+        // A previewed playhead goes back to the clock's own `t`.
+        if self.sync_clock() {
+            if !self.clusters.list.is_empty() {
+                self.resolve_clusters_live();
+            }
+            self.resolve_physics();
+        }
         if let Some(g) = self.gesture.take() {
             self.ended = Some((g.id, status));
         }
@@ -1024,6 +1090,12 @@ impl Store {
         }
         let adds = added.into_iter().map(|((id, _), comp)| Op::AddFacet { id, facet: comp });
         ops = adds.chain(ops).collect();
+        // Leaves of session nodes (the clock's `t`, a timeline's axis) are
+        // session ops: never in history (timeline.md §4.1).
+        let (session, ops): (Vec<Op>, Vec<Op>) = ops.into_iter().partition(|op| matches!(op, Op::Set { id, .. } | Op::AddFacet { id, .. } if id.is_session()));
+        if !session.is_empty() {
+            let _ = self.apply_session(session);
+        }
         if ops.is_empty() {
             self.cancel_gesture();
             return None;
@@ -1078,12 +1150,27 @@ impl Store {
                     return Err(e);
                 }
             }
-            structural |= matches!(op, Op::Create { .. } | Op::Delete { .. });
+            structural |= match op {
+                Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Reparent { .. } => true,
+                Op::Set { id, path, slot } => slot.expr().is_some() || self.reactive.is_bound(Leaf { node: *id, path: *path }),
+                _ => false,
+            };
         }
         if structural {
             self.reactive.rebuild(&self.doc);
+        } else {
+            let changed: Vec<Leaf> = ops.iter().filter_map(|op| match op { Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }), _ => None }).collect();
+            if !changed.is_empty() {
+                self.reactive.invalidate(&self.doc, changed);
+            }
         }
         self.session_version += 1;
+        if self.sync_clock() {
+            if !self.clusters.list.is_empty() {
+                self.resolve_clusters_live();
+            }
+            self.resolve_physics();
+        }
         Ok(())
     }
 
@@ -1858,3 +1945,9 @@ impl Store {
         Some(self.history.log.iter().filter(|t| t.version > version).collect())
     }
 }
+
+/// A field of the `clock` facet.
+fn clock_path(field: &str) -> LeafPath {
+    LeafPath::new(FacetKind::Clock, field).expect("a clock field")
+}
+

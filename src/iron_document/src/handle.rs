@@ -69,12 +69,15 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
     };
     let read = |l: Leaf| reactive.read(doc, l);
     // Candidates: constant number leaves the (inlined) expression reads.
-    // Clip-driven and non-number leaves are knowns for the drag.
+    // Clip-driven and non-number leaves are knowns for the drag, and so is
+    // how the view is looked at: an `axis` facet's pan and zoom
+    // (timeline.md §4.2).
     let free: Vec<Leaf> = inlined
         .deps()
         .into_iter()
         .filter(|d| {
             !reactive.is_driven(*d)
+                && d.path.facet != crate::facet::FacetKind::Axis
                 && doc.leaf(d.node, d.path).and_then(|s| s.constant()).is_some_and(|v| matches!(v.kind(), ValueKind::Number | ValueKind::Quantity))
         })
         .collect();

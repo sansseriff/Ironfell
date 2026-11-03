@@ -20,6 +20,7 @@
 //!   are re-examined.
 
 pub mod chunks;
+pub mod clock;
 mod demo;
 pub use demo::{showcase, template_snapshot};
 pub mod inspector;
@@ -319,7 +320,7 @@ impl Plugin for DocumentPlugin {
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking. Producers publish first, so
             // their signals reconcile with everything else this frame.
-            .add_systems(PreUpdate, (gas::step_and_publish, stats::step_and_publish, motion::advance, text::refresh_text, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
+            .add_systems(PreUpdate, (gas::step_and_publish, stats::step_and_publish, motion::advance, clock::advance, text::refresh_text, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
             .add_systems(Update, materialize::assign_mesh_materials)
             .add_systems(
                 PostUpdate,

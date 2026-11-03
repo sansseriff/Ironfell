@@ -50,7 +50,7 @@ use FacetKind as K;
 static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "group",
-        facets: &[(K::Name, false), (K::Transform2d, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false)],
+        facets: &[(K::Name, false), (K::Transform2d, false), (K::Axis, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -264,7 +264,7 @@ static TYPES: &[TypeSpec] = &[
         name: "session",
         facets: &[(K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["selection"]),
+        children: ChildPolicy::Only(&["selection", "clock"]),
     },
     // One viewer's selection: `selects` relations to the selected nodes,
     // in pick order.
@@ -274,10 +274,17 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
+    // The playhead every timeline view shares (timeline.md §4.1).
+    TypeSpec {
+        name: "clock",
+        facets: &[(K::Clock, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     // One diagram (ECM §5, §7): a root whose subtree one panel shows.
     TypeSpec {
         name: "composition",
-        facets: &[(K::Name, true), (K::Composition, true)],
+        facets: &[(K::Name, true), (K::Composition, true), (K::Axis, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -311,7 +318,7 @@ static TYPES: &[TypeSpec] = &[
     // with an `anchor`, where a port sits on a picture.
     TypeSpec {
         name: "empty",
-        facets: &[(K::Transform2d, true), (K::Anchor, false), (K::Name, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false)],
+        facets: &[(K::Transform2d, true), (K::Axis, false), (K::Anchor, false), (K::Name, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },

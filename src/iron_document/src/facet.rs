@@ -422,6 +422,28 @@ facets! {
         to: Any = Value::Number(1.0),
     }
 
+    /// The playhead (timeline.md §4.1): the time clips are sampled at, and
+    /// whether it advances with wall time, at `rate`, looping between
+    /// `loop_in` and `loop_out` (equal: no loop). A session node's, so
+    /// scrubbing is never saved and never undone.
+    Clock / "clock" => Clock {
+        t: Number = Value::Number(0.0),
+        playing: Bool = Value::Bool(false),
+        rate: Number = Value::Number(1.0),
+        loop_in: Number = Value::Number(0.0),
+        loop_out: Number = Value::Number(0.0),
+    }
+
+    /// How a projection is being looked at along one axis (timeline.md
+    /// §4.2): `t0` at the left edge, `pps` units per second (pixels per
+    /// unit), `label_w` the header column's width. A drag holds these
+    /// fixed: it edits what a view shows, never how it is looked at.
+    Axis / "axis" => Axis {
+        t0: Number = Value::Number(0.0),
+        pps: Number = Value::Number(100.0),
+        label_w: Number = Value::Number(160.0),
+    }
+
     /// One block of a narrative (narrative-panel.md §7.1): a paragraph, a
     /// heading of `level`, a list item, a quote, code, or a view block that
     /// shows the composition `show` (an id or a name), framing `focus` (a

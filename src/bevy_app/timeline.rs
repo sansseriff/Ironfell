@@ -16,10 +16,11 @@ impl Plugin for TimelinePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TimelineState>()
             .add_systems(Startup, setup_timeline_scenes)
-            // The playhead is a runtime source of the store: pushed before the
-            // document sync so clip samples land in the same frame.
-            .add_systems(PreUpdate, (scrub_timeline, push_time_to_store.after(scrub_timeline)).before(sync_document))
-            .add_systems(Update, (update_timeline_view, render_timeline_grid));
+            // The playhead is the store's session clock (timeline.md §4.1):
+            // scrubbed before the document sync so clip samples land in the
+            // same frame. The player is `document_bridge::clock`.
+            .add_systems(PreUpdate, scrub_timeline.before(sync_document))
+            .add_systems(Update, render_timeline_grid);
     }
 }
 
@@ -29,8 +30,6 @@ pub struct TimelineState {
     pub zoom: f64,
     pub offset: f64,
     pub duration: f64,
-    pub current_time: f64,
-    pub playing: bool,
 }
 
 impl Default for TimelineState {
@@ -39,8 +38,6 @@ impl Default for TimelineState {
             zoom: 1.0,
             offset: 0.0,
             duration: 30.0, // 30 seconds default
-            current_time: 0.0,
-            playing: false,
         }
     }
 }
@@ -69,7 +66,8 @@ const ROW_TOP: f64 = 14.0;
 pub fn scrub_timeline(
     pointer: Res<crate::PointerState>,
     panels: Res<Panels>,
-    mut timeline: ResMut<TimelineState>,
+    timeline: Res<TimelineState>,
+    mut store: ResMut<DocumentStore>,
 ) {
     if !pointer.buttons.left {
         return;
@@ -79,16 +77,8 @@ pub fn scrub_timeline(
         return;
     }
     let t = ((pointer.screen.x - rect.x) as f64 / rect.w as f64 * timeline.duration).clamp(0.0, timeline.duration);
-    if (timeline.current_time - t).abs() > 1e-6 {
-        timeline.current_time = t;
-        timeline.playing = false;
-    }
-}
-
-/// Mirror the panel's playhead into the store, which resamples every clip.
-pub fn push_time_to_store(timeline: Res<TimelineState>, mut store: ResMut<DocumentStore>) {
-    if (store.0.time() - timeline.current_time).abs() > 1e-9 {
-        store.0.set_time(timeline.current_time);
+    if (store.0.time() - t).abs() > 1e-6 {
+        let _ = crate::document_bridge::clock::set(&mut store.0, &[("playing", iron_document::Value::Bool(false)), ("t", iron_document::Value::Number(t))]);
     }
 }
 
@@ -116,18 +106,6 @@ fn setup_timeline_scenes(mut commands: Commands) {
         VectorLayer::screen(order::TIMELINE_PLAYHEAD).in_view(view),
         TimelinePlayheadLayer,
     ));
-}
-
-/// Update timeline view based on current state
-pub fn update_timeline_view(mut timeline: ResMut<TimelineState>, time: Res<Time>) {
-    // Update current time if playing
-    if timeline.playing {
-        timeline.current_time += time.delta_secs_f64();
-        if timeline.current_time > timeline.duration {
-            timeline.current_time = timeline.duration;
-            timeline.playing = false; // Stop at end
-        }
-    }
 }
 
 /// Render the timeline background, grid and playhead into the timeline panel rect.
@@ -248,7 +226,7 @@ pub fn render_timeline_grid(
     if let Ok(mut list) = playhead.single_mut() {
         list.rebuild(|b| {
             b.clipped(kurbo::Affine::IDENTITY, clip, |b| {
-                let playhead_x: f64 = left + (timeline.current_time / time_per_pixel);
+                let playhead_x: f64 = left + (store.0.time() / time_per_pixel);
                 b.stroke(
                     kurbo::Affine::IDENTITY,
                     kurbo::Stroke::new(3.0),

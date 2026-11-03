@@ -23,6 +23,8 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "narrative_markdown" => { arity(args,1)?; crate::engine_api::narrative_markdown(app,argument::<String>(args,0)?) },
         "narrative_write" => { arity(args,4)?; crate::engine_api::narrative_write(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },
         "narrative_rewrite" => { arity(args,3)?; crate::engine_api::narrative_rewrite(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
+        "clock_read" => { arity(args,0)?; crate::engine_api::clock_read(app) },
+        "clock_set" => { arity(args,1)?; crate::engine_api::clock_set(app,argument::<String>(args,0)?) },
         "narrative_probe" => { arity(args,2)?; crate::engine_api::narrative_probe(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "narrative_targets" => { arity(args,1)?; crate::engine_api::narrative_targets(app,argument::<String>(args,0)?) },
         "narrative_values" => { arity(args,1)?; crate::engine_api::narrative_values(app,argument::<String>(args,0)?) },

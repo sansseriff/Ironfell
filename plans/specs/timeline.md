@@ -274,3 +274,40 @@ revisited; none is expensive to change.
 5. **Frame steps are 1/30 s**, a constant in the player.
 6. **"Animate change"** is a button in the timeline's toolbar (HTML over the view, as the
    composition settings button is) and a key, `K` ("key it"), in canvas views.
+
+## 11. Done
+
+### Phase 1 (2026-11-03)
+
+- **The clock.** `clock` facet and type in `iron_document`; the session root's children
+  are now `selection` and `clock`. `Store::clock()` finds it, `ensure_clock()` creates it
+  (and the session root) at the current time. `set_time(t)` writes `clock.t` as a
+  session op; `time()` is the `t` the clips were last sampled at, which follows the
+  clock as read, so a gesture previewing `clock.t` scrubs and Esc puts it back
+  (`sync_clock`, run after session ops, previews, unpreviews and gesture ends).
+- **Session ops re-evaluate.** `apply_session` used to rebuild the reactive graph only for
+  creates and deletes; a session `Set` now invalidates its dependents (or rebuilds when it
+  changes a binding), so anything bound to a session leaf follows it.
+- **Gestures on session leaves.** `commit_gesture` splits the driven leaves of session
+  nodes into `apply_session`; the rest is the transaction. Dragging a playhead line bound
+  to `clock.t` therefore commits no transaction.
+- **The axis.** `axis` facet, allowed on `group`, `empty` and `composition`. `handle.rs`
+  treats its leaves as knowns, so a bar at `label_w + (start − t0)·pps` inverts to the
+  clip's `start`.
+- **The player.** `document_bridge/clock.rs`: while `playing`, advance by
+  `Δwall · rate`, wrap in a loop range, otherwise stop at the end of the last clip; the
+  compositions of animated nodes are live sources meanwhile. The old timeline panel
+  (`bevy_app/timeline.rs`, until phase 2 replaces it) scrubs by writing the clock and
+  draws `store.time()`.
+- **Engine calls.** `clock_read()` → `{ok, id, t, playing, rate, loop_in, loop_out, end}`;
+  `clock_set(json)` sets any of those fields.
+- **Tests.** `tests/clock.rs`: a session op resamples; a binding reading `clock.t`
+  follows it (and panning the axis moves it); a drag on a bar retimes the clip with the
+  axis held, and undoes; dragging the playhead scrubs without history, and Esc restores
+  it; the clock is not saved and not undone.
+- **Not yet.** A content binding can read the session clock, but the reference is to a
+  session id, which is not stable across a reload. Phase 2's bindings live in the
+  session composition, so this does not matter there; a content binding on the clock
+  (the narrative's later concern) needs a stable name, e.g. a `clock()` function in the
+  expression language.
+

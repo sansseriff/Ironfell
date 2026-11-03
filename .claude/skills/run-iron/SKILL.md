@@ -45,7 +45,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ `build.sh` (both backends), warm | ~1.5 min |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
 | ⏱ `build.sh` cold | ~5 min |
-| ⏱ full `smoke.txt` (`GPU=1`) | ~3.5 min |
+| ⏱ full `smoke.txt` (`GPU=1`) | ~3.5–4 min (3m 54s, 2026-11-03) |
 | `piston.txt` | ~1 min |
 | `snapping.txt` | ~30 s |
 | `layout.txt` | ~35 s |
@@ -1081,8 +1081,8 @@ artifacts, which this skill does not run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-234 tests pass (verified 2026-11-03 after the narrative panel added
-`tests/narrative.rs` and `narrative::tests`; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
+239 tests pass (verified 2026-11-03 after timeline phase 1 added
+`tests/clock.rs`; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`

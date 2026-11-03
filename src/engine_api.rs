@@ -2113,6 +2113,45 @@ pub fn narrative_probe(app: &mut WorkerApp, node: String, action: String) -> Str
     serde_json::json!({"ok": live.is_some() || action == "unhover"}).to_string()
 }
 
+/// The playhead (timeline.md §4.1): `{"ok", "id", "t", "playing", "rate",
+/// "loop_in", "loop_out", "end"}`, `end` where the last clip ends. `id` is
+/// empty until something creates the clock.
+pub fn clock_read(app: &mut WorkerApp) -> String {
+    narrative_run(app, |store| {
+        use crate::document_bridge::clock;
+        let n = |f: &str| clock::read(store, f).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        Ok(serde_json::json!({
+            "ok": true,
+            "id": store.clock().map(|c| c.to_string()).unwrap_or_default(),
+            "t": store.time(),
+            "playing": clock::playing(store),
+            "rate": if store.clock().is_some() { n("rate") } else { 1.0 },
+            "loop_in": n("loop_in"),
+            "loop_out": n("loop_out"),
+            "end": clock::end_of_clips(store),
+        }))
+    })
+}
+
+/// Set clock fields from JSON (`{"t": 1.5, "playing": true}`): session
+/// ops, never saved or undone. The clock is created when missing.
+pub fn clock_set(app: &mut WorkerApp, fields: String) -> String {
+    narrative_run(app, |store| {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&fields).map_err(|e| format!("clock_set: {e}"))?;
+        let mut out: Vec<(&str, iron_document::Value)> = Vec::new();
+        for (k, v) in &map {
+            let value = match (k.as_str(), v) {
+                ("playing", serde_json::Value::Bool(b)) => iron_document::Value::Bool(*b),
+                ("t" | "rate" | "loop_in" | "loop_out", serde_json::Value::Number(x)) => iron_document::Value::Number(x.as_f64().unwrap_or(0.0)),
+                _ => return Err(format!("clock_set: bad field {k} = {v}")),
+            };
+            out.push((k.as_str(), value));
+        }
+        crate::document_bridge::clock::set(store, &out)?;
+        Ok(serde_json::json!({"ok": true, "t": store.time()}))
+    })
+}
+
 /// Nodes a mention can name (the `#` menu): live, named, not session or
 /// derived, whose name contains `query` (case-insensitive), at most 20,
 /// best first. `{"ok", "targets": [{"id", "name", "type", "composition"}]}`.

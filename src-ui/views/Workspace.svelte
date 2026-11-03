@@ -74,6 +74,11 @@
   .dock :global(.dv-tabs-container) {
     padding: 0 10px;
   }
+  /* The scope menu (ScopeMenu.svelte) sits before the tabs and keeps its
+     width; the tabs scroll instead. */
+  .dock :global(.dv-pre-actions-container) {
+    flex: none;
+  }
   .dock :global(.dv-tab) {
     position: relative;
     padding: 0;

@@ -58,6 +58,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `chrome.txt` | ~30 s |
 | `schematic.txt` | ~40 s |
 | `scopes.txt` | ~15 s |
+| `scope-menu.txt` | ~20 s |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1 min |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
@@ -1900,9 +1901,47 @@ Expected, minus `nav` and `ready` lines:
 ```
 
 Segments, compaction, a gap in the feed, a failed replay, two tabs and an engine
-restart are covered by `bun test tests/scopes.test.ts` (7 tests, a fake engine);
+restart are covered by `bun test tests/scopes.test.ts` (9 tests, a fake engine);
 the Rust side (ids, schema 9, snapshot + log replay equals live through undo and
 redo, the feed's gap) by `tests/scopes.rs` in `iron_document`.
+
+### The scope menu (2026-11-03)
+
+Phase 3: the button at the left of the top-left tab bar (the open scope's
+name; `[data-scope-menu]`) opens a popover with the name, editable in place
+(Enter or blur), **New** (an empty `main` composition), **New demo**,
+**Duplicate**, **Import…** (a `.json`, as a new scope), **Export** (a download
+named after the scope), the stored scopes newest first with sizes (click to
+open; the bin asks once, then deletes; deleting the open scope opens the most
+recent other, or a new empty one), and the site's storage use. A read-only tab
+shows "Open here instead". On an ephemeral page (`&demo`) it says the page is
+not saved. The same actions are `__iron.scopes.{list, create(kind, name),
+open(id), rename(name), duplicate(), remove(id), exportText(),
+importText(text, name), takeOver()}`; `scope_template(kind)` builds a new
+scope's document in a fresh store.
+
+`scope-menu.txt` drives each action, through the menu for New, delete and
+rename, and the driver API for the rest. Expected, minus `nav`, `ready`,
+`clicked`, `screenshot` and `sleep` lines:
+
+```
+"opened Demo, marked"
+"menu lists [\"Demo\"]"
+"New: Untitled, empty main composition"
+"renamed; stored [\"Notes\",\"Demo\"]"
+"opened Demo, marker back: true"
+"duplicated: Demo copy, new id true, marker true"
+"exported Demo copy (schema 9), imported as Imported"
+"deleted Notes; stored [\"Demo\",\"Demo copy\",\"Imported\"]"
+"open: Imported; menu marks Imported; name field Imported"
+"first click asks: Delete?"
+"deleted the open one; menu closed: true; now Demo copy; stored [\"Demo\",\"Demo copy\"]"
+"renamed in the menu: Lab bench; trigger shows Lab bench"
+"reload opens Lab bench; stored [\"Demo\",\"Lab bench\"]"
+(no page errors)
+```
+
+The menu shifts the top-left group's tabs right; the smoke is unchanged by it.
 
 ## Free running and the Stats view (2026-10-18)
 

@@ -36,6 +36,8 @@
  *   await __iron.netlist('circuit') -> a schematic sheet's netlist, SPICE-like, with each net's voltage
  *   __iron.scope()                 -> the open scope (plans/specs/scopes.md): {current, readOnly, notice, storage}
  *   await __iron.flush()           -> write the open scope's pending transactions now
+ *   await __iron.scopes.list()     -> stored scopes with sizes; also create(kind?, name?), open(id), rename(name),
+ *                                     duplicate(), remove(id), exportText(), importText(text, name), takeOver()
  *   __iron.undo()                  -> undo, as Cmd+Z does
  *
  * Scopes persist to OPFS unless the page is ephemeral: `?demo` (the driver
@@ -169,6 +171,18 @@ export class DocumentClient {
       load: (text: string) => this.load(text),
       scope: () => this.scopes?.state() ?? this.scope,
       flush: () => this.scopes?.flush(),
+      // The scope menu's actions (scopes.md §6), for the driver.
+      scopes: {
+        list: () => this.scopes?.list() ?? Promise.resolve([]),
+        create: (kind: 'empty' | 'demo' = 'empty', name?: string) => this.scopes?.create(kind, name),
+        open: (id: string) => this.scopes?.open(id),
+        rename: (name: string) => this.scopes?.rename(name),
+        duplicate: () => this.scopes?.duplicate(),
+        remove: (id: string) => this.scopes?.remove(id),
+        exportText: () => this.scopes?.exportText(),
+        importText: (text: string, name: string) => this.scopes?.importText(text, name),
+        takeOver: () => this.scopes?.takeOver(),
+      },
       undo: () => this.undo(),
       view: (q: ViewQuery) => this.request('documentView', { query: { scope: null, depth: null, ...q } }),
       edit: (xml: string, label?: string) => this.edit(xml, label),
@@ -485,13 +499,14 @@ export class DocumentClient {
     }
   }
 
-  /** Save to a download named iron-document.json. */
+  /** Save to a download, named after the open scope (Export in the scope
+   *  menu), or iron-document.json on an ephemeral page. */
   async download(): Promise<void> {
-    const text = await this.save();
+    const { name, text } = this.scopes ? await this.scopes.exportText() : { name: 'iron-document', text: await this.save() };
     const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'iron-document.json';
+    a.download = `${name.replace(/[^\w.-]+/g, '-') || 'iron-document'}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }

@@ -21,7 +21,7 @@
 
 pub mod chunks;
 mod demo;
-pub use demo::showcase;
+pub use demo::{showcase, template_snapshot};
 pub mod inspector;
 pub mod gas;
 mod highlight;

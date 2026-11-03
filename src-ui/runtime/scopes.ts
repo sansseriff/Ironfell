@@ -139,21 +139,98 @@ export class Scopes {
 
   /** Open a saved document as a new scope (D4): it gets a fresh id. */
   importText(text: string, name: string): Promise<void> {
+    return this.serial(() => this.adopt(text, name));
+  }
+
+  // ---- the scope menu (§6) ---------------------------------------------
+
+  /** Every stored scope, most recently modified first, with its size. */
+  async list(): Promise<(ScopeMeta & { bytes: number })[]> {
+    const metas = await this.storage.list();
+    const out = await Promise.all(metas.map(async m => ({ ...m, bytes: await this.storage.size(m.id) })));
+    return out.sort((a, b) => b.modified - a.modified);
+  }
+
+  estimate() {
+    return this.storage.estimate();
+  }
+
+  /** A new scope from a template (`scope_template`): `empty` or `demo`. */
+  create(kind: 'empty' | 'demo', name = kind === 'demo' ? 'Demo' : 'Untitled'): Promise<void> {
     return this.serial(async () => {
+      const { snapshot } = await this.engine.call('scope_template', [kind]);
+      await this.adopt(snapshot, name);
+    });
+  }
+
+  /** Switch to a stored scope: the open one is written and compacted first. */
+  open(id: string): Promise<void> {
+    return this.serial(async () => {
+      if (this.current?.id === id) return;
+      const stored = await this.storage.read(id);
+      if (!stored) throw new Error(`no scope ${id}`);
       await this.leave();
-      const id = newScopeId();
-      const r = await this.engine.call('scope_open', [id, text, []]);
-      const now = Date.now();
-      const meta: ScopeMeta = { id, name, created: now, modified: now };
-      await this.storage.create(meta, text, r.version);
-      await this.storage.setLast(id);
-      this.release = (await this.locks?.acquire(this.lockName(id), () => this.lost())) ?? null;
-      this.current = meta;
-      this.readOnly = false;
-      this.notice = '';
-      this.persisted = r.version;
-      this.logCount = this.logBytes = 0;
+      await this.openStored(stored);
+    });
+  }
+
+  rename(name: string): Promise<void> {
+    return this.serial(async () => {
+      const trimmed = name.trim();
+      if (!this.current || this.readOnly || !trimmed || trimmed === this.current.name) return;
+      this.current = { ...this.current, name: trimmed, modified: Date.now() };
+      await this.storage.writeMeta(this.current);
       this.emit();
+    });
+  }
+
+  /** A copy of the open scope under a new id, which becomes the open one. */
+  duplicate(): Promise<void> {
+    return this.serial(async () => {
+      if (!this.current) return;
+      const name = `${this.current.name} copy`;
+      await this.drain();
+      const snapshot = await this.engine.save();
+      await this.adopt(snapshot, name);
+    });
+  }
+
+  /** Delete a scope; it cannot be undone. Deleting the open one opens the
+   *  most recent other, or a new empty scope when none is left. A scope open
+   *  in another tab is refused. */
+  remove(id: string): Promise<void> {
+    return this.serial(async () => {
+      const isCurrent = this.current?.id === id;
+      if (isCurrent) {
+        if (this.readOnly) throw new Error('open in another tab: delete it there');
+        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+        this.release?.();
+        this.release = null;
+        this.current = null;
+      } else if (this.locks) {
+        const release = await this.locks.acquire(this.lockName(id), () => {});
+        if (!release) throw new Error('open in another tab: delete it there');
+        release();
+      }
+      await this.storage.remove(id);
+      if (!isCurrent) { this.emit(); return; }
+      const rest = await this.storage.list();
+      const next = rest.sort((a, b) => b.modified - a.modified)[0];
+      const stored = next ? await this.storage.read(next.id) : null;
+      if (stored) {
+        await this.openStored(stored);
+      } else {
+        const { snapshot } = await this.engine.call('scope_template', ['empty']);
+        await this.adopt(snapshot, 'Untitled');
+      }
+    });
+  }
+
+  /** The open scope as a saved document, everything written first. */
+  exportText(): Promise<{ name: string; text: string }> {
+    return this.serial(async () => {
+      await this.drain();
+      return { name: this.current?.name ?? 'iron-document', text: await this.engine.save() };
     });
   }
 
@@ -193,6 +270,24 @@ export class Scopes {
       }
     }
     if (!this.readOnly) await this.storage.setLast(id);
+    this.emit();
+  }
+
+  /** Make `text` a new scope and open it (inside `serial`). */
+  private async adopt(text: string, name: string) {
+    await this.leave();
+    const id = newScopeId();
+    const r = await this.engine.call('scope_open', [id, text, []]);
+    const now = Date.now();
+    const meta: ScopeMeta = { id, name, created: now, modified: now };
+    await this.storage.create(meta, text, r.version);
+    await this.storage.setLast(id);
+    this.release = (await this.locks?.acquire(this.lockName(id), () => this.lost())) ?? null;
+    this.current = meta;
+    this.readOnly = false;
+    this.notice = '';
+    this.persisted = r.version;
+    this.logCount = this.logBytes = 0;
     this.emit();
   }
 

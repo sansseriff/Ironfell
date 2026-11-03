@@ -1,7 +1,7 @@
 # Scopes: durable local storage and global identity
 
 **Status:** Approved 2026-11-02: the user accepted every default in §2 and §9.
-**Phases 1–2 done 2026-11-02** (§10, with the deviations); phases 3–5 not started.
+**Phases 1–2 done 2026-11-02** (§10, with the deviations); **phase 3 done 2026-11-03** (§10.1); phases 4–5 not started.
 **Replaces:** the project-container section of
 [`clipboard-and-assets.md`](clipboard-and-assets.md) §6.
 **Background:** [`../notes/narrative-layer-and-storage-primitives.md`](../notes/narrative-layer-and-storage-primitives.md)
@@ -335,4 +335,30 @@ Wired in `document_client.svelte.ts`; `__iron.scope()`, `__iron.flush()`,
 **Limits.** The flush on `pagehide` is asynchronous and best effort, so killing a tab
 loses at most the batch window (~500 ms). `navigator.storage.persist()` is requested
 when the first scope is created; the estimate display waits for the menu.
+
+### 10.1 Phase 3, the scope menu (2026-11-03)
+
+Built: `src-ui/views/ScopeMenu.svelte`, at the left of the top-left tab group's header
+(dockview's prefix header action, shown by the group at the window's top left), since
+the shell has no title area. `Scopes` gained `list` (with sizes), `estimate`,
+`create(kind)`, `open`, `rename`, `duplicate`, `remove` and `exportText`;
+`ScopeStorage` gained `size` and `estimate`. A new engine call, `scope_template(kind)`,
+returns a starting document built in a fresh store: `empty` (a `main` 2D composition, a
+library and a model) or `demo` (the demo scene and the contexts showcase).
+
+Deviations and choices:
+
+1. **Two News**, *New* (empty) and *New demo*, as buttons rather than a submenu.
+2. **Delete asks once in place** (the bin becomes "Delete?") rather than a dialog.
+   Deleting the open scope opens the most recently modified other one, or a new empty
+   scope when none is left. A scope another tab holds is refused.
+3. **Import takes `.json` only**: bundles (`.zip`) wait for assets (phase 5). Export is
+   the existing download, named after the scope, written after the pending log.
+4. **Duplicate** writes the open scope first, so the copy and the original both hold
+   its latest state; the copy is opened.
+5. **Rename applies to the scope the menu opened on**: a blur after a switch does not
+   rename the scope switched to (a bug found by the driving script).
+
+Tests: `tests/scopes.test.ts` (9, two new: the menu's actions; deleting a scope open in
+another tab); `.claude/skills/run-iron/scope-menu.txt`.
 

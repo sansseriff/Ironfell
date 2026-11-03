@@ -15,6 +15,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "save" => { arity(args,0)?; crate::engine_api::document_save(app) },
         "scope_open" => { arity(args,3)?; crate::engine_api::scope_open(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<Vec<String>>(args,2)?)? },
         "scope_assign" => { arity(args,1)?; crate::engine_api::scope_assign(app,argument::<String>(args,0)?)? },
+        "scope_template" => { arity(args,1)?; crate::engine_api::scope_template(app,argument::<String>(args,0)?)? },
         "scope_log" => { arity(args,1)?; crate::engine_api::scope_log(app,argument::<u64>(args,0)?)? },
         "view" => { arity(args,1)?; crate::engine_api::document_view(app,argument::<String>(args,0)?)? },
         "apply" => { arity(args,2)?; crate::engine_api::document_apply(app,argument::<String>(args,0)?,argument::<u32>(args,1)?) },

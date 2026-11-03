@@ -47,6 +47,7 @@ class FakeEngine implements ScopeEngine {
         return { version: this.version, replayed, skipped, failed };
       }
       case 'scope_assign': this.scope = args[0] || null; return { scope: this.scope };
+      case 'scope_template': return { snapshot: `{"schema": 9, "next_id": 1, "next_rel": 1, "version": ${args[0] === 'demo' ? 30 : 1},\n "nodes": {}}` };
       case 'scope_log': {
         if (this.pendingFor > 0) { this.pendingFor--; return { pending: true }; }
         const since = args[0] as number;
@@ -221,4 +222,66 @@ test('opening a saved file makes a new scope and leaves the old one compacted', 
   assert.deepEqual(storage.snapshots(old), [2], 'the edits before the switch were kept');
   assert.deepEqual(storage.snapshots(id(scopes)), [12]);
   assert.equal(await storage.last(), id(scopes));
+});
+
+test('the scope menu: new, rename, open, duplicate, export, delete', async () => {
+  const storage = new MemoryScopeStorage();
+  const engine = new FakeEngine();
+  const scopes = new Scopes(engine, storage, null);
+  await scopes.boot(async () => {});
+  const first = id(scopes);
+  engine.apply(2); scopes.changed(engine.version);
+
+  await scopes.create('empty');
+  const blank = id(scopes);
+  assert.notEqual(blank, first);
+  assert.equal(scopes.state().current!.name, 'Untitled');
+  assert.equal(engine.version, 1, 'the empty template is open');
+  assert.deepEqual(storage.snapshots(first), [2], 'switching wrote the first scope');
+
+  await scopes.rename('  Notes  ');
+  assert.equal((await storage.list()).find(m => m.id === blank)!.name, 'Notes');
+
+  await scopes.open(first);
+  assert.equal(id(scopes), first);
+  assert.equal(engine.version, 2);
+  assert.equal(await storage.last(), first, 'boot opens it next time');
+
+  engine.apply(1);
+  await scopes.duplicate();
+  const copy = id(scopes);
+  assert.equal(scopes.state().current!.name, 'Demo copy');
+  assert.deepEqual(storage.snapshots(copy), [3], 'the copy has the unsaved edit');
+  assert.deepEqual(storage.snapshots(first), [3], 'and so does the original');
+
+  const out = await scopes.exportText();
+  assert.equal(out.name, 'Demo copy');
+  assert.match(out.text, /"version": 3/);
+
+  const listed = await scopes.list();
+  assert.equal(listed.length, 3);
+  assert.ok(listed.every(m => m.bytes > 0));
+
+  await scopes.remove(blank);
+  assert.equal((await storage.list()).length, 2, 'another scope deleted');
+  assert.equal(id(scopes), copy, 'the open one stays open');
+
+  await scopes.remove(copy);
+  assert.equal(id(scopes), first, 'deleting the open one opens the most recent other');
+  await scopes.remove(first);
+  assert.equal(scopes.state().current!.name, 'Untitled', 'none left: a new empty one');
+  assert.equal((await storage.list()).length, 1);
+});
+
+test('a scope open in another tab cannot be deleted from here', async () => {
+  const storage = new MemoryScopeStorage();
+  const locks = sharedLocks();
+  const tabA = new Scopes(new FakeEngine(), storage, locks());
+  await tabA.boot(async () => {});
+  const a = id(tabA);
+  const tabB = new Scopes(new FakeEngine(), storage, locks());
+  await tabB.boot(async () => {});
+  await tabB.create('demo');
+  await assert.rejects(tabB.remove(a), /another tab/);
+  assert.ok(await storage.read(a), 'still there');
 });

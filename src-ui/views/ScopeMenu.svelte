@@ -1,0 +1,340 @@
+<script lang="ts">
+  // The scope menu (plans/specs/scopes.md §6), at the left of the top-left
+  // tab group's header: the open scope's name, editable in place; New,
+  // Duplicate, Import, Export; the stored scopes to open or delete; and the
+  // storage used. Each action is a `Scopes` call (runtime/scopes.ts), also
+  // reachable from the driver as `__iron.scopes.*`.
+  import type { DockviewApi, DockviewGroupPanel } from "dockview-core";
+  import { onMount } from "svelte";
+  import { Popover } from "bits-ui";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import Trash from "@lucide/svelte/icons/trash-2";
+  import Database from "@lucide/svelte/icons/database";
+  import { controllerManager } from "../controller-manager.svelte";
+  import type { ScopeMeta } from "../runtime/scope_storage";
+
+  let { api, group }: { api: DockviewApi; group: DockviewGroupPanel } = $props();
+
+  const doc = controllerManager.docClient;
+  let open = $state(false);
+  let shown = $state(false);
+  let scopes: (ScopeMeta & { bytes: number })[] = $state([]);
+  let storage: { usage: number; quota: number } | null = $state(null);
+  let name = $state("");
+  /** The scope the name field was filled from: a rename applies only to it,
+   *  so a blur after a switch does not rename the scope switched to. */
+  let naming: string | null = null;
+  let confirming: string | null = $state(null);
+  let busy = $state(false);
+  let error = $state("");
+  let fileInput: HTMLInputElement | undefined = $state();
+
+  // Only the group at the top left shows the menu: one per window.
+  function place() {
+    const r = group.element.getBoundingClientRect();
+    shown = r.left < 2 && r.top < 2;
+  }
+  onMount(() => {
+    place();
+    const d = api.onDidLayoutChange(place);
+    return () => d.dispose();
+  });
+
+  const current = $derived(doc.scope.current);
+
+  async function refresh() {
+    if (!doc.scopes) return;
+    scopes = await doc.scopes.list();
+    storage = await doc.scopes.estimate();
+  }
+
+  async function opened(now: boolean) {
+    confirming = null;
+    error = "";
+    name = current?.name ?? "";
+    naming = now ? (current?.id ?? null) : null;
+    if (now) await refresh();
+  }
+
+  /** Run a menu action: busy while it runs, its error shown in the menu. */
+  async function act(work: () => Promise<unknown>, close = true) {
+    busy = true;
+    error = "";
+    try {
+      await work();
+      if (close) open = false;
+      else await refresh();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+      confirming = null;
+    }
+  }
+
+  function commitName() {
+    if (!doc.scopes || !current || current.id !== naming) return;
+    if (name.trim() && name.trim() !== current.name) void act(() => doc.scopes!.rename(name), false);
+  }
+
+  async function onFile(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (file) await act(() => doc.openFile(file));
+  }
+
+  function remove(id: string) {
+    if (confirming !== id) {
+      confirming = id;
+      return;
+    }
+    // Deleting the open scope switches to another: close, as other switches do.
+    void act(() => doc.scopes!.remove(id), id !== current?.id ? false : true);
+  }
+
+  const bytes = (n: number) => (n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+  function ago(ms: number) {
+    const s = (Date.now() - ms) / 1000;
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return new Date(ms).toLocaleDateString();
+  }
+</script>
+
+<div class="scope" class:hidden={!shown}>
+  {#if shown}
+    <Popover.Root bind:open onOpenChange={opened}>
+      <Popover.Trigger class="scope-trigger" title="Scopes: open, new, import, export" data-scope-menu>
+        <Database size={14} strokeWidth={1.75} />
+        <span class="scope-name">{doc.scopes ? (current?.name ?? "…") : "Unsaved demo"}</span>
+        {#if doc.scope.readOnly}<span class="badge">read-only</span>{/if}
+        <ChevronDown size={13} strokeWidth={1.75} />
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content class="property-popover scope-popover" side="bottom" align="start" sideOffset={4} aria-label="Scopes">
+          {#if !doc.scopes}
+            <div class="body">
+              <p>This page is not saved: it opened with <code>?demo</code> (or as a benchmark, or without browser storage).</p>
+              <p class="hint">Remove <code>demo</code> from the address to keep work between reloads.</p>
+            </div>
+          {:else}
+            <div class="body">
+              <input
+                class="name"
+                aria-label="Scope name"
+                bind:value={name}
+                disabled={!current || doc.scope.readOnly}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") commitName();
+                  if (e.key === "Escape") name = current?.name ?? "";
+                }}
+                onblur={commitName}
+              />
+              {#if doc.scope.notice}
+                <p class="notice">{doc.scope.notice}</p>
+              {/if}
+              {#if doc.scope.readOnly}
+                <button class="primary" disabled={busy} onclick={() => act(() => doc.scopes!.takeOver())}>Open here instead</button>
+              {/if}
+              <div class="actions">
+                <button disabled={busy} onclick={() => act(() => doc.scopes!.create("empty"))} data-action="new-empty">New</button>
+                <button disabled={busy} onclick={() => act(() => doc.scopes!.create("demo"))} data-action="new-demo">New demo</button>
+                <button disabled={busy || !current} onclick={() => act(() => doc.scopes!.duplicate())} data-action="duplicate">Duplicate</button>
+                <button disabled={busy} onclick={() => fileInput?.click()} data-action="import">Import…</button>
+                <button disabled={busy || !current} onclick={() => act(() => doc.download())} data-action="export">Export</button>
+              </div>
+              <input type="file" accept=".json,application/json" bind:this={fileInput} hidden onchange={onFile} />
+              {#if error}<p class="error">{error}</p>{/if}
+            </div>
+            <div class="list" role="list" aria-label="Stored scopes">
+              {#each scopes as s (s.id)}
+                <div class="item" role="listitem" class:current={s.id === current?.id}>
+                  <button class="open" disabled={busy || s.id === current?.id} onclick={() => act(() => doc.scopes!.open(s.id))} title={s.id}>
+                    <span class="item-name">{s.name}</span>
+                    <span class="meta">{bytes(s.bytes)} · {ago(s.modified)}</span>
+                  </button>
+                  <button
+                    class="delete"
+                    class:confirming={confirming === s.id}
+                    disabled={busy}
+                    aria-label={confirming === s.id ? `Delete ${s.name}: cannot be undone` : `Delete ${s.name}`}
+                    title={confirming === s.id ? "Click again to delete; this cannot be undone" : "Delete"}
+                    onclick={() => remove(s.id)}
+                  >
+                    {#if confirming === s.id}Delete?{:else}<Trash size={13} strokeWidth={1.75} />{/if}
+                  </button>
+                </div>
+              {/each}
+            </div>
+            {#if storage}
+              <p class="storage">{bytes(storage.usage)} used of {bytes(storage.quota)} available to this site</p>
+            {/if}
+          {/if}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  {/if}
+</div>
+
+<style>
+  .scope {
+    flex: none;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    pointer-events: auto;
+  }
+  .scope.hidden {
+    display: none;
+  }
+  .scope :global(.scope-trigger) {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    max-width: 200px;
+    flex-shrink: 0;
+    padding: 0 6px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fg);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .scope :global(.scope-trigger:hover),
+  .scope :global(.scope-trigger[data-state="open"]) {
+    background: var(--hover);
+  }
+  .scope-name {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .badge {
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--fg-muted);
+    font-size: 10px;
+    font-weight: 500;
+  }
+  :global(.scope-popover) {
+    width: 320px;
+  }
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .name {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .notice {
+    margin: 0;
+    color: var(--fg-muted);
+  }
+  .hint {
+    color: var(--fg-faint);
+  }
+  .error {
+    margin: 0;
+    color: var(--danger);
+  }
+  .primary {
+    align-self: flex-start;
+  }
+  .list {
+    max-height: 260px;
+    overflow: auto;
+    padding: 4px;
+  }
+  .item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 6px;
+  }
+  .item:hover {
+    background: var(--hover);
+  }
+  .item.current {
+    background: var(--accent-soft);
+  }
+  .open {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 5px 8px;
+    border: none;
+    background: transparent;
+    color: var(--fg);
+    text-align: left;
+    cursor: pointer;
+  }
+  .open:disabled {
+    cursor: default;
+  }
+  .item-name {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .meta {
+    color: var(--fg-faint);
+    font-size: 11px;
+  }
+  .delete {
+    flex: none;
+    height: 24px;
+    min-width: 24px;
+    margin-right: 4px;
+    padding: 0 4px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fg-faint);
+    cursor: pointer;
+  }
+  .delete:hover {
+    color: var(--danger);
+  }
+  .delete.confirming {
+    background: var(--danger);
+    color: white;
+    font-size: 11px;
+  }
+  .storage {
+    margin: 0;
+    padding: 8px 12px 10px;
+    border-top: 1px solid var(--border);
+    color: var(--fg-faint);
+    font-size: 11px;
+  }
+  code {
+    font-size: 11px;
+  }
+</style>

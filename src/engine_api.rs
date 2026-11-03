@@ -282,6 +282,15 @@ pub fn scope_open(app: &mut WorkerApp, id: String, snapshot: String, log: Vec<St
     Ok(serde_json::json!({"version": version, "replayed": replayed, "skipped": skipped, "failed": failed}).to_string())
 }
 
+/// A new scope's starting document (the scope menu's New, scopes.md §6), as
+/// snapshot text, built in a fresh store so the open document is untouched:
+/// `"empty"` holds a `main` 2D composition, a library and a model; `"demo"`
+/// is the demo scene with the contexts showcase. `{"snapshot"}`.
+pub fn scope_template(_app: &mut WorkerApp, kind: String) -> Result<String, String> {
+    let snapshot = crate::document_bridge::template_snapshot(&kind)?;
+    Ok(serde_json::json!({"snapshot": snapshot}).to_string())
+}
+
 /// Name the current document's scope (`""`: none), as creating a scope from
 /// what is open does. Applies to a load still waiting for the next sync,
 /// if there is one, since that is what will be open.

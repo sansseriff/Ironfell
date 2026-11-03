@@ -1598,3 +1598,45 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     ])?;
     Ok(iron_document::TransactionInput { label: "open showcase".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: out, exact: false })
 }
+
+/// A new scope's starting document as snapshot text (`engine_api::
+/// scope_template`), built in a fresh store: `"empty"` is a `main` 2D
+/// composition (what the Main view shows), a library and a model; `"demo"`
+/// is the demo scene plus the contexts showcase, as a first visit gets.
+pub fn template_snapshot(kind: &str) -> Result<String, String> {
+    let mut store = iron_document::Store::new();
+    let err = |e: Vec<iron_document::ApplyError>| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ");
+    match kind {
+        "empty" => {
+            let ty = |s: &str| TypeId::lookup(s).expect("registered type");
+            let ids = store.document().next_ids(3);
+            let named = |t: &str| {
+                let mut nm = DocName::default();
+                nm.text = Slot::Const(Value::Str(t.into()));
+                nm.wrap()
+            };
+            let mut c = Composition::default();
+            c.dims = Slot::Const(Value::Enum("2d".into()));
+            let k0 = OrderKey::first();
+            let k1 = OrderKey::after(&k0);
+            let k2 = OrderKey::after(&k1);
+            let ops = vec![
+                Op::Create { id: ids[0], ty: ty("composition"), parent: None, order: k0, facets: vec![named("main"), c.wrap()] },
+                Op::Create { id: ids[1], ty: ty("library"), parent: None, order: k1, facets: vec![named("library")] },
+                Op::Create { id: ids[2], ty: ty("model"), parent: None, order: k2, facets: vec![named("model")] },
+            ];
+            store
+                .apply(iron_document::TransactionInput { label: "new scope".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false })
+                .map_err(err)?;
+        }
+        "demo" => {
+            let tx = demo_scene(&store);
+            store.apply(tx).map_err(err)?;
+            let tx = showcase(&store)?;
+            store.apply(tx).map_err(err)?;
+        }
+        other => return Err(format!("unknown scope template {other:?} (empty, demo)")),
+    }
+    store.clear_history();
+    Ok(store.save())
+}

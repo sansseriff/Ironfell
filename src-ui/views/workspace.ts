@@ -10,6 +10,7 @@ import { mount, unmount } from 'svelte';
 import ViewPanel from './ViewPanel.svelte';
 import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
+import ScopeMenu from './ScopeMenu.svelte';
 import type { ViewSpec } from './views';
 
 const STORAGE_KEY = 'iron.workspace.v6';
@@ -99,6 +100,23 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
             target: element,
             props: { id: params.api.id, spec: (params.params as { spec: ViewSpec }).spec, api: params.api },
           });
+        },
+        dispose() {
+          if (instance) unmount(instance);
+          instance = null;
+        },
+      };
+    },
+    // The scope menu (scopes.md §6): offered to every group, shown by the
+    // one at the top left.
+    createPrefixHeaderActionComponent: (group): IHeaderActionsRenderer => {
+      const element = document.createElement('div');
+      element.style.height = '100%';
+      let instance: Record<string, any> | null = null;
+      return {
+        element,
+        init() {
+          instance = mount(ScopeMenu, { target: element, props: { api, group } });
         },
         dispose() {
           if (instance) unmount(instance);

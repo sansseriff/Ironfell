@@ -1,0 +1,33 @@
+# The scope menu (plans/specs/scopes.md §6, phase 3): New, rename, open,
+# duplicate, export, import and delete, through the menu at the left of the
+# top-left tab bar and through `__iron.scopes`. Starts with empty OPFS (a
+# fresh browser context), so the first page makes the Demo scope.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog
+ready
+eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const a=await __iron.edit('<edit><create id="$m" type="rect" parent="#1" name="marker" x="40" y="40" w="60" h="40" color="#2266ff"/></edit>');if(!a.ok)throw new Error(JSON.stringify(a));sessionStorage.setItem('demo',__iron.scope().current.id);return 'opened '+__iron.scope().current.name+', marked'})()
+clickel [data-scope-menu]
+sleep 300
+shot scope-menu
+eval (()=>{const items=[...document.querySelectorAll('[aria-label="Stored scopes"] .item-name')].map(e=>e.textContent);return 'menu lists '+JSON.stringify(items)})()
+clickel [data-action=new-empty]
+eval (async()=>{for(let i=0;i<100&&__iron.scope().current?.name!=='Untitled';i++)await new Promise(r=>setTimeout(r,50));for(let i=0;i<100&&(await __iron.view({fidelity:'full'})).includes('name="marker"');i++)await new Promise(r=>setTimeout(r,50));const v=await __iron.view({fidelity:'full'});if(v.includes('name="marker"')||!v.includes('name="main"'))throw new Error('not the empty template');return 'New: '+__iron.scope().current.name+', empty main composition'})()
+eval (async()=>{await __iron.scopes.rename('Notes');const l=await __iron.scopes.list();return 'renamed; stored '+JSON.stringify(l.map(s=>s.name))})()
+eval (async()=>{await __iron.scopes.open(sessionStorage.getItem('demo'));for(let i=0;i<100&&!(await __iron.view({fidelity:'full'})).includes('name="marker"');i++)await new Promise(r=>setTimeout(r,50));return 'opened '+__iron.scope().current.name+', marker back: '+(await __iron.view({fidelity:'full'})).includes('name="marker"')})()
+eval (async()=>{await __iron.scopes.duplicate();for(let i=0;i<100&&!(await __iron.view({fidelity:'full'})).includes('name="marker"');i++)await new Promise(r=>setTimeout(r,50));const s=__iron.scope().current;return 'duplicated: '+s.name+', new id '+(s.id!==sessionStorage.getItem('demo'))+', marker '+(await __iron.view({fidelity:'full'})).includes('name="marker"')})()
+eval (async()=>{const x=await __iron.scopes.exportText();await __iron.scopes.importText(x.text,'Imported');for(let i=0;i<100&&!(await __iron.view({fidelity:'full'})).includes('name="marker"');i++)await new Promise(r=>setTimeout(r,50));return 'exported '+x.name+' ('+(x.text.includes('"schema": 9')?'schema 9':'?')+'), imported as '+__iron.scope().current.name})()
+eval (async()=>{const l=await __iron.scopes.list();const n=l.find(s=>s.name==='Notes');await __iron.scopes.remove(n.id);const after=await __iron.scopes.list();return 'deleted Notes; stored '+JSON.stringify(after.map(s=>s.name).sort())})()
+# Delete through the menu: the open scope, two clicks.
+clickel [data-scope-menu]
+sleep 300
+eval (()=>'open: '+__iron.scope().current.name+'; menu marks '+[...document.querySelectorAll('[aria-label="Stored scopes"] .item.current .item-name')].map(e=>e.textContent).join(',')+'; name field '+document.querySelector('.scope-popover input.name').value)()
+eval (async()=>{const b=document.querySelector('[aria-label="Stored scopes"] .item.current .delete');b.click();await new Promise(r=>setTimeout(r,50));return 'first click asks: '+b.textContent.trim()})()
+eval (async()=>{document.querySelector('[aria-label="Stored scopes"] .item .delete.confirming').click();for(let i=0;i<100&&__iron.scope().current?.name==='Imported';i++)await new Promise(r=>setTimeout(r,50));const l=await __iron.scopes.list();await new Promise(r=>setTimeout(r,300));return 'deleted the open one; menu closed: '+!document.querySelector('[aria-label="Stored scopes"]')+'; now '+__iron.scope().current.name+'; stored '+JSON.stringify(l.map(s=>s.name).sort())})()
+# Rename in the menu: type, Enter.
+clickel [data-scope-menu]
+sleep 300
+eval (async()=>{const f=document.querySelector('.scope-popover input.name');f.focus();f.value='Lab bench';f.dispatchEvent(new Event('input',{bubbles:true}));f.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));for(let i=0;i<50&&__iron.scope().current.name!=='Lab bench';i++)await new Promise(r=>setTimeout(r,50));return 'renamed in the menu: '+__iron.scope().current.name+'; trigger shows '+document.querySelector('[data-scope-menu] .scope-name').textContent})()
+key Escape
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog
+ready
+eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const l=await __iron.scopes.list();return 'reload opens '+__iron.scope().current.name+'; stored '+JSON.stringify(l.map(s=>s.name).sort())})()
+errors

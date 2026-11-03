@@ -4,6 +4,7 @@ export type DocumentCommand =
   | { op: 'save' }
   | { op: 'scope_open'; id: string; snapshot: string; log: (string)[] }
   | { op: 'scope_assign'; id: string }
+  | { op: 'scope_template'; kind: string }
   | { op: 'scope_log'; since: number }
   | { op: 'view'; query_json: string }
   | { op: 'apply'; transaction_json: string; expect_version: number }
@@ -63,6 +64,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'save': return { fn: command.op, args: [] };
     case 'scope_open': return { fn: command.op, args: [command.id, command.snapshot, command.log] };
     case 'scope_assign': return { fn: command.op, args: [command.id] };
+    case 'scope_template': return { fn: command.op, args: [command.kind] };
     case 'scope_log': return { fn: command.op, args: [command.since] };
     case 'view': return { fn: command.op, args: [command.query_json] };
     case 'apply': return { fn: command.op, args: [command.transaction_json, command.expect_version] };

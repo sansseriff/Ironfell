@@ -52,6 +52,10 @@ export interface ScopeStorage {
   setAside(id: string): Promise<void>;
   writeMeta(meta: ScopeMeta): Promise<void>;
   remove(id: string): Promise<void>;
+  /** Bytes the scope's files hold (snapshots, log, set-aside segments). */
+  size(id: string): Promise<number>;
+  /** Storage used and available to the origin, when the browser says. */
+  estimate(): Promise<{ usage: number; quota: number } | null>;
 }
 
 /** 128 random bits as 26 Crockford base32 characters, the top digit holding
@@ -128,6 +132,13 @@ export class MemoryScopeStorage implements ScopeStorage {
     if (s) s.meta = { ...meta };
   }
   async remove(id: string) { this.scopes.delete(id); }
+  async size(id: string) {
+    const s = this.scopes.get(id);
+    if (!s) return 0;
+    const sum = (m: Map<number, string>) => [...m.values()].reduce((n, t) => n + t.length, 0);
+    return sum(s.snapshots) + sum(s.segments) + [...s.broken.values()].reduce((n, m) => n + sum(m), 0) + JSON.stringify(s.meta).length;
+  }
+  async estimate() { return null; }
 
   /** For tests: the segment files, by first version. */
   segments(id: string): number[] { return [...(this.scopes.get(id)?.segments.keys() ?? [])].sort((a, b) => a - b); }
@@ -274,5 +285,28 @@ export class OpfsScopeStorage implements ScopeStorage {
 
   async remove(id: string) {
     await (await this.scopesDir()).removeEntry(id, { recursive: true }).catch(() => {});
+  }
+
+  async size(id: string): Promise<number> {
+    const dir = await this.scopeDir(id);
+    if (!dir) return 0;
+    const walk = async (d: FileSystemDirectoryHandle): Promise<number> => {
+      let n = 0;
+      for await (const [, handle] of (d as any).entries() as AsyncIterable<[string, FileSystemHandle]>) {
+        if (handle.kind === 'file') n += (await (handle as FileSystemFileHandle).getFile()).size;
+        else n += await walk(handle as FileSystemDirectoryHandle);
+      }
+      return n;
+    };
+    return walk(dir);
+  }
+
+  async estimate() {
+    try {
+      const e = await navigator.storage.estimate();
+      return { usage: e.usage ?? 0, quota: e.quota ?? 0 };
+    } catch {
+      return null;
+    }
   }
 }

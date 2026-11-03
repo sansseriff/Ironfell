@@ -54,10 +54,11 @@ eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.
 ddrag 810 500 760 530
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="bar"[^>]*>/); return m ? m[0].replace(/ y\.bind=.*/, '') : v.slice(0, 200); })()
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<slider[^>]*name="level"[^>]*>/); return m ? m[0].replace(/.* value=/, 'value=') : v.slice(0, 200); })()
-# Exit criterion 4: scrub the timeline to about 2.6 s of 30. The "spin" clip
-# turns the torus and the "slide" clip has moved the square; the torus view
-# names the clip that drives it.
-pdrag timeline 4 30 140 30
+# Exit criterion 4: scrub the timeline to 3 s by its playhead grip (the
+# timeline is a composition since timeline.md phase 2: the grip sits at
+# label_w 160 + t * 100 px). The "spin" clip turns the torus and the "slide"
+# clip has moved the square; the torus view names the clip that drives it.
+pdrag timeline 160 10 460 10
 shot after-timeline-scrub
 eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<mesh[\s\S]*?(\/>|<\/mesh>)/); return m ? m[0].replace(/\s+/g, ' ') : v.slice(0, 200); })()
 # Exit criterion 5: an edit in the model's markup lands on the same undo

@@ -67,6 +67,10 @@ pub enum RelKind {
     /// §4.1, §5.5): signals cross by bindings; this says where the inner end
     /// is, so an anchor following one finds the other.
     Exposes,
+    /// A session node to the content node it stands for (timeline.md
+    /// §4.3): a timeline segment to its clip. Selection and the probe follow
+    /// it. Session to content only; never saved.
+    Projects,
 }
 
 impl RelKind {
@@ -82,6 +86,7 @@ impl RelKind {
             RelKind::Connects => "connects",
             RelKind::Selects => "selects",
             RelKind::Exposes => "exposes",
+            RelKind::Projects => "projects",
         }
     }
 }

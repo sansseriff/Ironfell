@@ -2,8 +2,8 @@
  * Views (plans/specs/panels-and-session.md): every tab or panel in the workspace is
  * a view, a window onto something in the document drawn in some notation.
  *
- *   source    what it is a view of: a composition (id or name), the timeline
- *             root, the document, the session's selection, a narrative
+ *   source    what it is a view of: a composition (id or name; the timeline
+ *             is the session's `timeline` composition), the document, the session's selection, a narrative
  *   notation  how it is drawn
  *
  * A notation decides which part of the view the canvas draws (its Rust panel
@@ -21,7 +21,7 @@ import SettingsView from './html/SettingsView.svelte';
 import CompositionTools from './html/CompositionTools.svelte';
 import NarrativeView from './html/NarrativeView.svelte';
 
-export type Notation = 'composition' | 'timeline' | 'markup' | 'selection' | 'conversation' | 'narrative' | 'settings';
+export type Notation = 'composition' | 'markup' | 'selection' | 'conversation' | 'narrative' | 'settings';
 
 export interface ViewSpec {
   source: string;
@@ -38,7 +38,6 @@ export interface NotationDef {
 
 export const NOTATIONS: Record<Notation, NotationDef> = {
   composition: { label: 'Composition', canvas: 'composition', html: CompositionTools },
-  timeline: { label: 'Timeline', canvas: 'timeline' },
   markup: { label: 'Document', html: DocumentView },
   selection: { label: 'Inspector', html: SelectionView },
   conversation: { label: 'Model', html: ModelView },
@@ -53,7 +52,8 @@ export const SETTINGS_VIEW: ViewSpec = { source: 'app', notation: 'settings' };
 
 /** Views that are not compositions, for the "open a view" menu. */
 export const FIXED_VIEWS: { title: string; spec: ViewSpec }[] = [
-  { title: 'Timeline', spec: { source: 'timeline', notation: 'timeline' } },
+  // A session composition generated from the clips (plans/specs/timeline.md).
+  { title: 'Timeline', spec: { source: 'timeline', notation: 'composition' } },
   { title: 'Document', spec: { source: 'document', notation: 'markup' } },
   { title: 'Inspector', spec: { source: 'selection', notation: 'selection' } },
   { title: 'Model', spec: { source: 'document', notation: 'conversation' } },

@@ -60,6 +60,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `scopes.txt` | ~15 s |
 | `scope-menu.txt` | ~20 s |
 | `narrative.txt` | ~25 s |
+| `timeline.txt` | ~15 s |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1 min |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
@@ -244,7 +245,7 @@ redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #11.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#11.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
-"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,5.34…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,4.88…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
 {"ok":true,"version":9,"aliases":{"$n":"#3t"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
 "<rect id=\"#3t\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
@@ -252,6 +253,7 @@ redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
 ["<ellipse id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<ellipse id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
+#JMAIjpv locked for this drag: #JMAIjpv.transform2d.y is bound and reads no free leaf
 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 "<applied version=\"14\">\n  <solver clusters=\"#V\" moved=\"#Y #Z #a\"/>\n  <unmet leaf=\"#a.transform2d.x\" requested=\"900\" solved=\"619.99…\">constrained by cluster #V: the constraints allow 619.99… at most</unmet>\n</applied>"
@@ -287,6 +289,7 @@ applied "undo: move rect" (2 ops, System) -> v5
 applied "redo: move rect" (2 ops, System) -> v6
 applied "set slider" (1 ops, Human) -> v7
 applied "move rect" (2 ops, Human) -> v8
+#JMAIjpv locked for this drag: #JMAIjpv.transform2d.y is bound and reads no free leaf
 applied "model edit" (2 ops, Model) -> v9
 applied "move ellipse" (2 ops, Human) -> v10
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
@@ -745,7 +748,7 @@ cd -
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
 | `move x y`, `down [button]`, `up [button]`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels; `down right` … `up right` around `move`s orbits a 3D panel's camera |
 | `dmove x y`, `ddrag x0 y0 x1 y1 [steps]` | the same in document 2D space: viewer-panel top-left origin, y-down, the space `transform2d.x/y` are in |
-| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); a drag along the timeline scrubs the playhead over its 30 s |
+| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); in the timeline, a drag of the playhead grip (at x = 160 + t·100, y 10) scrubs, and a drag of a segment retimes its clip |
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
 | `pclick <panel> x y` | click inside a named panel, panel-relative |
@@ -1081,8 +1084,8 @@ artifacts, which this skill does not run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-239 tests pass (verified 2026-11-03 after timeline phase 1 added
-`tests/clock.rs`; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
+243 tests pass (verified 2026-11-03 after timeline phase 2 added
+`tests/timeline_view.rs`; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
@@ -1987,6 +1990,45 @@ lines:
 block diff; `cargo test … --test narrative` and `narrative::tests` the store
 side (edits as one transaction, undo, save/load, the span index and stale
 mentions, markdown both ways, the model view).
+
+## The timeline as a composition (2026-11-03)
+
+plans/specs/timeline.md §11. The Timeline tab is the session's generated
+`timeline` composition (`iron_document::timeline_view`, notation `timeline`,
+context `std:timeline`), shown like any composition (`{source: 'timeline',
+notation: 'composition'}`); the old Bevy timeline panel is gone. Rows by object,
+then property; a segment per clip and target, its x bound to
+`label_w + (start − t0)·pps` on the composition's `axis`, its y to a literal; the
+playhead and its grip bound to the session clock's `t`. Layout in document px from
+the panel's top-left: `label_w` 160, ruler 24 tall, rows 22 apart from y 28, so the
+grip is at (160 + t·100, 10) and the demo's segments are at y 53 (spin, torus rot)
+and y 97 (slide, square x). Dragging the grip scrubs (a session op, no
+transaction); dragging a segment retimes its clip ("retime slide"), undone with
+Cmd+Z. The transport (`TimelineTransport.svelte`) plays, pauses, goes back to 0 and
+seeks by typing. Engine calls: `clock_read()` → `{ok, id, t, playing, rate,
+loop_in, loop_out, end}`, `clock_set(json)`.
+
+`timeline.txt`. Expected, minus `nav`, `ready`, `key` and `screenshot` lines:
+
+```
+"clock at 0, playing false, last clip ends at 4"
+"scrubbed to 2.60 s; square drawn at x 700; version 2"
+"slide: start=\"1.5\"; version 3"
+"after undo slide: start=\"0.5\""
+"playing true, advanced true; paused true"
+applied "open demo scene" (298 ops, System) -> v1
+applied "open showcase" (189 ops, System) -> v2
+applied "retime slide" (1 ops, Human) -> v3
+applied "undo: retime slide" (1 ops, System) -> v4
+(no page errors)
+```
+
+`cargo test … --test clock` (phase 1: the clock, the axis rule) and `--test
+timeline_view` (the generator: rows, segments projecting their clips, retiming by
+drag without regenerating, the static pieces locked, the playhead scrubbing, keyed
+reconcile) cover the store side. The smoke's scrub step drags the grip to 3 s, and
+logs one `locked for this drag: ….transform2d.y is bound and reads no free leaf`
+for the grip's y (intended: the timeline moves only in time).
 
 ## Free running and the Stats view (2026-10-18)
 

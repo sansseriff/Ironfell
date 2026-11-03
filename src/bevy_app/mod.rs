@@ -16,7 +16,6 @@ pub(crate) mod schematic_tool;
 pub(crate) mod links;
 pub(crate) mod text_tool;
 pub(crate) mod scene3d;
-mod timeline;
 mod ui_panels;
 mod alpha_stress;
 mod latency_film;
@@ -44,7 +43,6 @@ use interaction::{
 use picking::{pick_document_2d_system, pick_world_3d_system, pointer_panel_system, resolve_primary_hit_system};
 use pointer::pointer_collect_system;
 use scene3d::{apply_focus, render_active_shapes, setup_3d_scene, sync_embed_cameras, sync_panel_cameras, sync_view_images, update_aabbes};
-use timeline::TimelinePlugin;
 
 use crate::{
     WorkerApp,
@@ -186,7 +184,6 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
             smoothing_factor: 2.0 / (MAX_HISTORY_LENGTH as f64 + 1.0),
         },
         CameraControllerPlugin,
-        TimelinePlugin,
         // The authored store and its projection into entities. Scene content
         // (the rects, the circle, the torus) comes from here as document nodes.
         DocumentPlugin,

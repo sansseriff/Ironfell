@@ -1,9 +1,8 @@
 //! The canvas side of views (plans/specs/panels-and-session.md).
 //!
 //! A **view** is a window onto a composition: what it shows (`source`), how
-//! (`kind`, its notation: `composition` draws a 2D or 3D composition,
-//! `timeline` draws the timeline root's clips over time, `ui` a plain
-//! background), and where. The shell lays views out as tabs and splits
+//! (`kind`, its notation: `composition` draws a 2D or 3D composition, the
+//! generated timeline among them, `ui` a plain background), and where. The shell lays views out as tabs and splits
 //! (dockview) and decides which part of a view is HTML. Whatever part of a
 //! visible view the canvas draws arrives here as a **panel**: the view's id,
 //! its kind and source, and its rectangle (physical px, top-left origin of the
@@ -14,7 +13,7 @@
 //! - a `composition` panel shows one composition (ECM §7.1): its 2D content
 //!   drawn and picked inside the rect, or a 3D camera viewport on its layer
 //!   (`document_bridge::panel_views` resolves which)
-//! - vello panels (timeline, ui) draw in screen space clipped to their rect
+//! - vello panels (ui) draw in screen space clipped to their rect
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -25,7 +24,6 @@ use kurbo;
 pub const VIEWER_PANEL: &str = "viewer";
 /// The kind of a panel that shows one composition.
 pub const COMPOSITION_PANEL: &str = "composition";
-pub const TIMELINE_PANEL: &str = "timeline";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PanelRect {
@@ -57,7 +55,7 @@ impl PanelRect {
 
 #[derive(Debug, Clone)]
 pub struct Panel {
-    /// The view's notation: `composition`, `timeline`, `ui`.
+    /// The view's notation: `composition`, `ui`.
     pub kind: String,
     /// For a composition view, the composition it shows: a node id
     /// (`#4`), a composition name, or empty for the first one with the

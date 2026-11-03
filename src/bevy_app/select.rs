@@ -2315,8 +2315,13 @@ pub fn select_tool_system(
                 break 'press;
             }
             // The Library tab (a session composition): a press takes the
-            // entry under it; nothing there is edited.
-            if view.composition.is_some_and(|c| c.is_session()) {
+            // entry under it; nothing there is edited. Other session
+            // compositions (the timeline, timeline.md) edit what they
+            // project through their bindings, like any view.
+            let library = view.composition.is_some_and(|c| {
+                c.is_session() && geo.doc().get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(iron_document::standard::LIBRARY)
+            });
+            if library {
                 if let Some((chain, _)) = top_hit(&hits)
                     && let Some(key) = geo.doc().get::<iron_document::facet::Name>(chain[0]).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned)
                 {
@@ -2796,7 +2801,14 @@ pub fn select_tool_system(
                     let mine = movers(&reaches, &view.panel);
                     let mut drags = Vec::new();
                     let ids: Vec<NodeId> = mine.iter().map(|r| r.node()).collect();
-                    let label = format!("move {}", type_label(geo.doc(), &ids));
+                    // A timeline segment stands for its clip (timeline.md §6):
+                    // moving it retimes the clip.
+                    let projected: Vec<NodeId> = ids.iter().filter_map(|&id| geo.doc().relations_from(id).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to)).collect();
+                    let label = match projected.as_slice() {
+                        [clip] => format!("retime {}", geo.doc().get::<iron_document::facet::Name>(*clip).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("clip")),
+                        [] => format!("move {}", type_label(geo.doc(), &ids)),
+                        _ => "retime clips".to_owned(),
+                    };
                     let grabs: Vec<(NodeId, Affine, Point)> = mine
                         .iter()
                         .filter_map(|r| {

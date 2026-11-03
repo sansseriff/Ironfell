@@ -54,6 +54,7 @@ pub mod layout;
 pub mod narrative;
 pub mod table;
 pub mod time;
+pub mod timeline_view;
 pub mod units;
 pub mod value;
 pub mod view;

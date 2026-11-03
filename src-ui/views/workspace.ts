@@ -13,7 +13,7 @@ import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
 import type { ViewSpec } from './views';
 
-const STORAGE_KEY = 'iron.workspace.v7';
+const STORAGE_KEY = 'iron.workspace.v8';
 
 /** The layout to start from: the main viewer with each composition in a
  *  tab beside it, HTML views left and right, the timeline across the bottom.
@@ -50,7 +50,9 @@ function defaultLayout(api: DockviewApi) {
   if (new URLSearchParams(location.search).has('meters')) {
     view('meters', 'Meters', { source: 'meters', notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' });
   }
-  view('timeline', 'Timeline', { source: 'timeline', notation: 'timeline' }, { direction: 'below' }, { initialHeight: 220 });
+  // The timeline: the session's generated `timeline` composition
+  // (plans/specs/timeline.md), drawn like any other.
+  view('timeline', 'Timeline', { source: 'timeline', notation: 'composition' }, { direction: 'below' }, { initialHeight: 220 });
   // Frame rate, renderer, build and canvas size (free-running.md §4): the
   // session's stats composition, where the FPS overlay used to sit.
   view('stats', 'Stats', { source: 'stats', notation: 'composition' }, { referencePanel: 'timeline', direction: 'right' }, { initialWidth: 360 });

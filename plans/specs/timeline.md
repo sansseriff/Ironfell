@@ -311,3 +311,39 @@ revisited; none is expensive to change.
   (the narrative's later concern) needs a stable name, e.g. a `clock()` function in the
   expression language.
 
+### Phase 2 (2026-11-03)
+
+- **The generator.** `iron_document::timeline_view`: `plan(store, clock, comp)` says
+  what the timeline shows (rows by object then property, a segment per clip and target
+  with its stagger offset, the ruler's extent in 5 s steps past the last clip, the tick
+  spacing for the axis's `pps`, the clips in error); `reconcile` turns it into session
+  ops, keyed by node name (`segment <clip> <target>`, `object <target>`, `tick 3`, …),
+  so kept nodes keep their ids; `sync` runs both when the plan changed. The bridge calls
+  it from `sync_document`, after the Library and Stats compositions.
+- **The composition.** A session `composition` named `timeline`, notation `timeline`,
+  with an `axis`. Everything is bound: segments to `label_w + (start + offset − t0)·pps`
+  and `w = dur·pps`, their labels likewise; the playhead and its grip to `clock.t`; the
+  background, ruler, ticks, grid lines and row headers to expressions reading no free
+  leaf, so a drag cannot move them. Each segment and its label `projects` its clip (a
+  new relation kind, session to content).
+- **Behaviour.** `std:timeline`: rects and text select and drag; the palette is Select
+  only. The select tool's session-composition branch was the Library's for every
+  session composition; it is now the Library's only. A drag on a segment is named
+  "retime <clip>".
+- **The transport.** `TimelineTransport.svelte` over the view (from
+  `CompositionTools`, which hides its tool palette for the timeline): back to 0, play
+  and pause, the time (click to type a time and seek), the end. It polls `clock_read`
+  every 100 ms.
+- **What went away.** `bevy_app/timeline.rs` (`TimelinePlugin`, `TimelineState`),
+  `panels::TIMELINE_PANEL`, `order::TIMELINE_*`, the `timeline` notation in `views.ts`
+  and its tab icon. The layout key is `iron.workspace.v8`.
+- **Tests.** `tests/timeline_view.rs` (4); `timeline.txt`; the smoke's scrub step drags
+  the grip to 3 s (the torus reads `rot="0,4.88…,0"`).
+- **Found on the way, not yet verified:** a selected segment shows the box grips, and
+  its width is `dur·pps`, so dragging the right edge should change `dur` by inversion
+  and the left edge `start` and `dur`. Phase 3 checks these and replaces the box with
+  `affords.grips="ends"`.
+- **Not yet (phase 3):** Space and the other transport keys, `view.nav` (scroll pans
+  the camera today, not the axis), snapping, end values and easing curves, the error
+  mark in the header, the loop band, cross-view selection through `projects`.
+

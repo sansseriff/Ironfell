@@ -1,0 +1,27 @@
+# The timeline as a composition (plans/specs/timeline.md phase 2): the
+# session's generated `timeline` composition in the Timeline tab. Rows by
+# object then property; a segment per clip and target; the playhead is the
+# session clock. Dragging the playhead grip scrubs (no transaction); dragging
+# a segment retimes its clip (one transaction, undone with Cmd+Z); the
+# transport plays.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&bevy=debuglog
+ready
+sleep 1000
+eval (async()=>{const c=await __iron.call('clock_read',[]);return 'clock at '+c.t+', playing '+c.playing+', last clip ends at '+c.end})()
+shot timeline-start
+# Scrub: the grip sits at label_w (160) + t * 100 px; drag it to 2.6 s.
+pdrag timeline 160 10 420 10
+sleep 300
+eval (async()=>{const c=await __iron.call('clock_read',[]);const v=await __iron.view({fidelity:'full'});const x=v.match(/name="square" x="([0-9.]+)"/);return 'scrubbed to '+c.t.toFixed(2)+' s; square drawn at x '+(x?x[1]:'?')+'; version '+__iron.protocolState().version})()
+# Retime: the slide segment (row 4, 0.5 s to 2.5 s) moves 1 s later.
+pdrag timeline 300 105 400 105
+sleep 400
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/);return 'slide: '+(m?m[0].match(/start="[^"]*"/)[0]:'?')+'; version '+__iron.protocolState().version})()
+shot timeline-retimed
+key Meta+z
+sleep 400
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/);return 'after undo slide: '+(m?m[0].match(/start="[^"]*"/)[0]:'?')})()
+# Play from the start; the clock advances, then pause.
+eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:0})]);[...document.querySelectorAll('.transport button')].find(b=>b.ariaLabel==='Play').click();await new Promise(r=>setTimeout(r,700));const c=await __iron.call('clock_read',[]);[...document.querySelectorAll('.transport button')].find(b=>b.ariaLabel==='Pause').click();await new Promise(r=>setTimeout(r,200));const d=await __iron.call('clock_read',[]);return 'playing '+c.playing+', advanced '+(c.t>0.3)+'; paused '+!d.playing})()
+logs applied
+errors

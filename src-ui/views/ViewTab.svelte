@@ -5,7 +5,6 @@
   import { onDestroy, type Component } from "svelte";
   import type { DockviewPanelApi } from "dockview-core";
   import Shapes from "@lucide/svelte/icons/shapes";
-  import ChartGantt from "@lucide/svelte/icons/chart-gantt";
   import FileCode from "@lucide/svelte/icons/file-code";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import Bot from "@lucide/svelte/icons/bot";
@@ -18,7 +17,6 @@
 
   const ICONS: Record<Notation, Component> = {
     composition: Shapes,
-    timeline: ChartGantt,
     markup: FileCode,
     selection: SlidersHorizontal,
     conversation: Bot,

@@ -377,7 +377,7 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes, mut ui): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>),
+    (mut drawables, modes, mut ui, mut timeline): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>),
 ) {
     if pending.0.is_empty()
         && history.0.is_empty()
@@ -516,6 +516,16 @@ pub(crate) fn sync_document(
                 Err(e) => warn!("{name} composition: {e}"),
             }
         }
+    }
+    // The timeline (timeline.md §4.3): a session composition generated from
+    // the clips, regenerated when what it shows changes.
+    match iron_document::timeline_view::sync(&mut store.0, &mut timeline) {
+        Ok(Some(ids)) => {
+            affected.extend(ids);
+            structure = true;
+        }
+        Ok(None) => {}
+        Err(e) => warn!("timeline composition: {e}"),
     }
     synced.0 = store.0.document().version();
     // Resolved values that moved: bindings re-evaluated, or a gesture

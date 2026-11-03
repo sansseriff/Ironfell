@@ -7,6 +7,11 @@ If the user requests a worktree, use `.agents/worktrees/<name>` — never `/tmp`
 session scratchpad, or `.claude/worktrees/`. Create it with `git worktree add`, enter
 it with `EnterWorktree`'s `path` parameter, and remove it when the work is done.
 
-Full instructions, including cleanup and the reasoning:
+Icons: import each Lucide icon from its own path only,
+`import Plus from "@lucide/svelte/icons/plus"`, never `{ Plus }` from
+`@lucide/svelte`, `@lucide/svelte/icons` or `lucide-svelte` (AGENTS.md says why).
+
+Full shared instructions, including the required Svelte component styling and
+Lucide icon conventions, worktree cleanup, and the reasoning:
 
 @AGENTS.md

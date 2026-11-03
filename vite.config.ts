@@ -26,6 +26,9 @@ export default defineConfig(({ mode }) => ({
   optimizeDeps: {
     entries: ['index.html', 'src-ui/App.svelte', 'src-ui/ScopesPage.svelte'],
     include: ['bits-ui', 'dockview-core'],
+    // Icons are deep imports, one per file: pre-bundled, every new one
+    // would re-optimise and reload. They are plain ESM Svelte, served as is.
+    exclude: ['@lucide/svelte'],
   },
   // Ensure WASM files are treated as assets
   assetsInclude: ['**/*.wasm'],

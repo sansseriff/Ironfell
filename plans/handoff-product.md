@@ -22,6 +22,10 @@ Rendering performance (stage H) has its own handoff, [`handoff-render.md`](hando
 
 Done (details in the roadmap's Status table):
 
+- **Frontend agent conventions, 2026-11-03:** `AGENTS.md` now requires Bits UI/Melt
+  UI patterns, Iron-styled controls (never browser-default buttons), and Lucide
+  icons, with working examples. `CLAUDE.md` imports those shared instructions.
+  This records guidance only; it does not restyle the existing Document panel.
 - **A** groundwork; **B** values, units, records, definitions as data (schema 3);
 - **C1** compositions, entities, figures, linking, cross-probing, one view per
   composition, embedded compositions;

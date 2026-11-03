@@ -14,6 +14,9 @@
   import Repeat from "@lucide/svelte/icons/repeat";
   import Maximize from "@lucide/svelte/icons/maximize-2";
   import { controllerManager } from "../../controller-manager.svelte";
+  import Button from "../../lib/ui/Button.svelte";
+  import IconButton from "../../lib/ui/IconButton.svelte";
+  import TextInput from "../../lib/ui/TextInput.svelte";
 
   const doc = controllerManager.docClient;
 
@@ -116,25 +119,18 @@
 </script>
 
 <div class="transport canvas-ui" role="toolbar" aria-label="Transport" bind:this={root}>
-  <button class="tool" title="Back to start" aria-label="Back to start" onclick={() => set({ t: 0 })}>
-    <SkipBack size={15} strokeWidth={1.75} />
-  </button>
-  <button class="tool play" title={clock.playing ? "Pause" : "Play"} aria-label={clock.playing ? "Pause" : "Play"} onclick={toggle}>
-    {#if clock.playing}<Pause size={15} strokeWidth={1.75} />{:else}<Play size={15} strokeWidth={1.75} />{/if}
-  </button>
-  <button class="tool" class:on={looping} title={looping ? "Loop off" : "Loop every clip (I, O set its ends)"} aria-label="Loop" onclick={toggleLoop}>
-    <Repeat size={15} strokeWidth={1.75} />
-  </button>
-  <button class="tool" title="Fit the clips (F)" aria-label="Fit" onclick={fit}>
-    <Maximize size={15} strokeWidth={1.75} />
-  </button>
+  <IconButton icon={SkipBack} label="Back to start" large onclick={() => set({ t: 0 })} />
+  <IconButton icon={clock.playing ? Pause : Play} label={clock.playing ? "Pause" : "Play"} title={clock.playing ? "Pause (Space)" : "Play (Space)"} large onclick={toggle} />
+  <IconButton icon={Repeat} label="Loop" title={looping ? "Loop off" : "Loop every clip (I, O set its ends)"} large pressed={looping} onPressedChange={toggleLoop} />
+  <IconButton icon={Maximize} label="Fit" title="Fit the clips (F)" large onclick={fit} />
   {#if editing}
     <!-- svelte-ignore a11y_autofocus -->
-    <input
+    <TextInput
       class="time"
       autofocus
+      aria-label="Seek to time"
       bind:value={draft}
-      onkeydown={(e) => {
+      onkeydown={(e: KeyboardEvent) => {
         if (e.key === "Enter") {
           seek(draft);
           editing = false;
@@ -143,13 +139,13 @@
       onblur={() => (editing = false)}
     />
   {:else}
-    <button
+    <Button
       class="time"
       title="Type a time to seek"
       onclick={() => {
         draft = clock.t.toFixed(2);
         editing = true;
-      }}>{fmt(clock.t)}</button
+      }}>{fmt(clock.t)}</Button
     >
   {/if}
   <span class="end">/ {fmt(clock.end)}</span>
@@ -171,41 +167,14 @@
     user-select: none;
     font-variant-numeric: tabular-nums;
   }
-  .tool {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--fg);
-    cursor: pointer;
-  }
-  .tool:hover {
-    background: var(--hover);
-  }
-  .tool.on {
-    background: var(--accent);
-    color: var(--accent-fg);
-  }
-  .time {
-    width: 64px;
-    height: 24px;
-    padding: 0 4px;
-    border: 1px solid transparent;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--fg);
-    font: inherit;
-    font-size: 12px;
+  .transport :global(.time) {
+    width: 68px;
+    min-height: 26px;
+    justify-content: flex-end;
     text-align: right;
-    cursor: text;
   }
-  input.time {
-    border-color: var(--border-strong);
-    outline: none;
+  .transport :global(button.time) {
+    cursor: text;
   }
   .end {
     font-size: 12px;

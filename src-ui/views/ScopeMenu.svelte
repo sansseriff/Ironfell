@@ -6,11 +6,13 @@
   // reachable from the driver as `__iron.scopes.*`.
   import type { DockviewApi, DockviewGroupPanel } from "dockview-core";
   import { onMount } from "svelte";
-  import { Popover } from "bits-ui";
+  import { Button as BitsButton, Popover } from "bits-ui";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Trash from "@lucide/svelte/icons/trash-2";
   import Database from "@lucide/svelte/icons/database";
   import { controllerManager } from "../controller-manager.svelte";
+  import Button from "../lib/ui/Button.svelte";
+  import TextInput from "../lib/ui/TextInput.svelte";
   import type { ScopeMeta } from "../runtime/scope_storage";
 
   let { api, group }: { api: DockviewApi; group: DockviewGroupPanel } = $props();
@@ -121,12 +123,12 @@
             </div>
           {:else}
             <div class="body">
-              <input
+              <TextInput
                 class="name"
                 aria-label="Scope name"
                 bind:value={name}
                 disabled={!current || doc.scope.readOnly}
-                onkeydown={(e) => {
+                onkeydown={(e: KeyboardEvent) => {
                   if (e.key === "Enter") commitName();
                   if (e.key === "Escape") name = current?.name ?? "";
                 }}
@@ -136,14 +138,14 @@
                 <p class="notice">{doc.scope.notice}</p>
               {/if}
               {#if doc.scope.readOnly}
-                <button class="primary" disabled={busy} onclick={() => act(() => doc.scopes!.takeOver())}>Open here instead</button>
+                <Button variant="primary" class="take-over" disabled={busy} onclick={() => act(() => doc.scopes!.takeOver())}>Open here instead</Button>
               {/if}
               <div class="actions">
-                <button disabled={busy} onclick={() => act(() => doc.scopes!.create("empty"))} data-action="new-empty">New</button>
-                <button disabled={busy} onclick={() => act(() => doc.scopes!.create("demo"))} data-action="new-demo">New demo</button>
-                <button disabled={busy || !current} onclick={() => act(() => doc.scopes!.duplicate())} data-action="duplicate">Duplicate</button>
-                <button disabled={busy} onclick={() => fileInput?.click()} data-action="import">Import…</button>
-                <button disabled={busy || !current} onclick={() => act(() => doc.download())} data-action="export">Export</button>
+                <Button variant="outline" small disabled={busy} onclick={() => act(() => doc.scopes!.create("empty"))} data-action="new-empty">New</Button>
+                <Button variant="outline" small disabled={busy} onclick={() => act(() => doc.scopes!.create("demo"))} data-action="new-demo">New demo</Button>
+                <Button variant="outline" small disabled={busy || !current} onclick={() => act(() => doc.scopes!.duplicate())} data-action="duplicate">Duplicate</Button>
+                <Button variant="outline" small disabled={busy} onclick={() => fileInput?.click()} data-action="import">Import…</Button>
+                <Button variant="outline" small disabled={busy || !current} onclick={() => act(() => doc.download())} data-action="export">Export</Button>
               </div>
               <input type="file" accept=".json,application/json" bind:this={fileInput} hidden onchange={onFile} />
               {#if error}<p class="error">{error}</p>{/if}
@@ -151,20 +153,20 @@
             <div class="list" role="list" aria-label="Stored scopes">
               {#each scopes as s (s.id)}
                 <div class="item" role="listitem" class:current={s.id === current?.id}>
-                  <button class="open" disabled={busy || s.id === current?.id} onclick={() => act(() => doc.scopes!.open(s.id))} title={s.id}>
+                  <BitsButton.Root class="open" disabled={busy || s.id === current?.id} onclick={() => act(() => doc.scopes!.open(s.id))} title={s.id}>
                     <span class="item-name">{s.name}</span>
                     <span class="meta">{bytes(s.bytes)} · {ago(s.modified)}</span>
-                  </button>
-                  <button
-                    class="delete"
-                    class:confirming={confirming === s.id}
+                  </BitsButton.Root>
+                  <!-- One element both ways, so focus stays on it for the second press. -->
+                  <BitsButton.Root
+                    class="property-icon delete {confirming === s.id ? 'confirming' : ''}"
                     disabled={busy}
                     aria-label={confirming === s.id ? `Delete ${s.name}: cannot be undone` : `Delete ${s.name}`}
                     title={confirming === s.id ? "Click again to delete; this cannot be undone" : "Delete"}
                     onclick={() => remove(s.id)}
                   >
                     {#if confirming === s.id}Delete?{:else}<Trash size={13} strokeWidth={1.75} />{/if}
-                  </button>
+                  </BitsButton.Root>
                 </div>
               {/each}
             </div>
@@ -234,15 +236,9 @@
     padding: 12px;
     border-bottom: 1px solid var(--border);
   }
-  .name {
-    font: inherit;
+  .body :global(.name) {
     font-size: 14px;
     font-weight: 600;
-    padding: 4px 6px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg);
-    color: var(--fg);
   }
   .actions {
     display: flex;
@@ -260,7 +256,7 @@
     margin: 0;
     color: var(--danger);
   }
-  .primary {
+  .body :global(.take-over) {
     align-self: flex-start;
   }
   .list {
@@ -280,7 +276,7 @@
   .item.current {
     background: var(--accent-soft);
   }
-  .open {
+  .item :global(.open) {
     flex: 1;
     min-width: 0;
     display: flex;
@@ -288,12 +284,17 @@
     align-items: flex-start;
     padding: 5px 8px;
     border: none;
+    border-radius: 6px;
     background: transparent;
     color: var(--fg);
     text-align: left;
     cursor: pointer;
   }
-  .open:disabled {
+  .item :global(.open:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .item :global(.open:disabled) {
     cursor: default;
   }
   .item-name {
@@ -307,24 +308,17 @@
     color: var(--fg-faint);
     font-size: 11px;
   }
-  .delete {
-    flex: none;
-    height: 24px;
-    min-width: 24px;
+  .item :global(.delete) {
     margin-right: 4px;
-    padding: 0 4px;
-    border: none;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--fg-faint);
-    cursor: pointer;
   }
-  .delete:hover {
+  .item :global(.delete:hover) {
     color: var(--danger);
   }
-  .delete.confirming {
+  .item :global(.delete.confirming) {
+    width: auto;
+    padding: 0 6px;
     background: var(--danger);
-    color: white;
+    color: var(--accent-fg);
     font-size: 11px;
   }
   .storage {

@@ -149,3 +149,52 @@
 .property-icon:hover { background: var(--hover); color: var(--fg); }
 .property-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .property-icon:disabled { opacity: .35; cursor: default; }
+
+/* Buttons and fields (AGENTS.md), in the Inspector's look: icon buttons are
+   `.property-icon` (above), a field is PropertyField's sunken `.control`, a
+   text button is the Inspector's `.add` button. `Button`, `IconButton` and
+   `TextInput` in src-ui/lib/ui/ put these on Bits UI's Button and Toggle. */
+.property-icon[data-state="on"] { background: var(--accent-soft); color: var(--accent); }
+.property-icon.large { width: 28px; height: 28px; padding: 6px; border-radius: 6px; color: var(--fg); }
+
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ui-button:hover { background: var(--hover); }
+.ui-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ui-button:disabled, .ui-button[data-disabled] { opacity: .35; cursor: default; background: transparent; }
+.ui-button.is-outline { border-color: var(--border-strong); background: var(--bg); }
+.ui-button.is-outline:hover { background: var(--hover); }
+.ui-button.is-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
+.ui-button.is-primary:hover { filter: brightness(1.08); background: var(--accent); }
+.ui-button.is-danger { color: var(--danger); }
+.ui-button.is-small { min-height: 20px; padding: 2px 6px; font-size: 11px; }
+
+.ui-input {
+  min-height: 30px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: var(--bg-sunken);
+  color: var(--fg);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.ui-input:hover { border-color: var(--border-strong); }
+.ui-input:focus { outline: none; border-color: var(--accent); }
+.ui-input::placeholder { color: var(--fg-faint); }
+textarea.ui-input { line-height: 1.4; resize: vertical; }

@@ -12,6 +12,25 @@
   // §…", or "conversation only"); a model turn's changes to the narrative are
   // marked for review, each kept or reverted (§7 item 6).
   import { getContext, onDestroy, onMount } from "svelte";
+  import { Button as BitsButton, DropdownMenu, Switch, ToggleGroup } from "bits-ui";
+  import Pilcrow from "@lucide/svelte/icons/pilcrow";
+  import Heading1 from "@lucide/svelte/icons/heading-1";
+  import Heading2 from "@lucide/svelte/icons/heading-2";
+  import List from "@lucide/svelte/icons/list";
+  import ListOrdered from "@lucide/svelte/icons/list-ordered";
+  import TextQuote from "@lucide/svelte/icons/text-quote";
+  import Code from "@lucide/svelte/icons/code";
+  import Bold from "@lucide/svelte/icons/bold";
+  import Italic from "@lucide/svelte/icons/italic";
+  import Variable from "@lucide/svelte/icons/variable";
+  import SquareCode from "@lucide/svelte/icons/square-code";
+  import Download from "@lucide/svelte/icons/download";
+  import Upload from "@lucide/svelte/icons/upload";
+  import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
+  import Button from "../../lib/ui/Button.svelte";
+  import IconButton from "../../lib/ui/IconButton.svelte";
+  import TextInput from "../../lib/ui/TextInput.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { ViewSpec } from "../views";
   import { showComposition } from "../workspace";
@@ -127,6 +146,7 @@
   onMount(() => {
     makeEditor();
     void listNarratives();
+    void loadCompositions().catch(() => {});
   });
   onDestroy(() => {
     void editor?.flush();
@@ -289,7 +309,6 @@
   async function loadCompositions() {
     compositions = await doc.command({ op: "compositions" });
   }
-  let viewPick = $state("");
   let valueLeaf = $state("");
   let valueDigits = $state("");
   let valueError = $state("");
@@ -369,17 +388,24 @@
 
 <section class="html-view narrative" data-mode={mode}>
   <header class="bar">
-    <select class="pick" aria-label="Narrative" value={source} onfocus={listNarratives} onchange={(e) => open((e.currentTarget as HTMLSelectElement).value)}>
-      {#if !narratives.some((n) => n.name === source || n.id === source)}<option value={source}>{source}</option>{/if}
-      {#each narratives as n (n.id)}<option value={n.name || n.id}>{n.name || n.id}</option>{/each}
-    </select>
-    <div class="modes" role="radiogroup" aria-label="Layout">
-      {#each [["authoring", "Authoring"], ["hybrid", "Hybrid"], ["exploration", "Exploration"]] as [m, label] (m)}
-        <button role="radio" aria-checked={mode === m} class:on={mode === m} data-mode-button={m} onclick={() => (mode = m as Mode)}>{label}</button>
-      {/each}
+    <div class="pick">
+      <Select
+        label="Narrative"
+        value={source}
+        items={[
+          ...(narratives.some((n) => n.name === source || n.id === source) ? [] : [{ value: source, label: source }]),
+          ...narratives.map((n) => ({ value: n.name || n.id, label: n.name || n.id })),
+        ]}
+        onChange={(v) => open(v)}
+      />
     </div>
+    <ToggleGroup.Root type="single" class="modes" aria-label="Layout" value={mode} onValueChange={(v) => v && (mode = v as Mode)}>
+      {#each [["authoring", "Authoring"], ["hybrid", "Hybrid"], ["exploration", "Exploration"]] as [m, label] (m)}
+        <ToggleGroup.Item value={m} class="ui-button is-small mode" data-mode-button={m}>{label}</ToggleGroup.Item>
+      {/each}
+    </ToggleGroup.Root>
     <span class="state" title={status.error || `v${status.version}`}>
-      {#if status.error && !missing}<span class="err">⚠ {status.error}</span>{:else if status.pending}saving…{:else}saved{/if}
+      {#if status.error && !missing}<span class="err"><TriangleAlert size={12} strokeWidth={1.75} /> {status.error}</span>{:else if status.pending}saving…{:else}saved{/if}
     </span>
   </header>
 
@@ -387,12 +413,12 @@
     <div class="empty">
       <p>No narrative named <strong>{source}</strong> in this scope.</p>
       <div class="row">
-        <input placeholder="name" bind:value={newName} onkeydown={(e) => e.key === "Enter" && createNarrative()} />
-        <button onclick={createNarrative}>New narrative</button>
-        <button onclick={() => mdInput?.click()}>Import .md…</button>
+        <TextInput placeholder="name" aria-label="New narrative's name" bind:value={newName} onkeydown={(e: KeyboardEvent) => e.key === "Enter" && createNarrative()} />
+        <Button variant="primary" onclick={createNarrative}>New narrative</Button>
+        <Button variant="outline" onclick={() => mdInput?.click()}><Upload size={13} strokeWidth={1.75} />Import .md…</Button>
       </div>
       {#if narratives.length}
-        <p class="hint">Or open one: {#each narratives as n, i (n.id)}{i ? ", " : ""}<button class="link" onclick={() => open(n.name || n.id)}>{n.name || n.id}</button>{/each}</p>
+        <div class="hint">Or open one: {#each narratives as n (n.id)}<Button small onclick={() => open(n.name || n.id)}>{n.name || n.id}</Button>{/each}</div>
       {/if}
     </div>
   {/if}
@@ -401,49 +427,56 @@
     <div class="doc" class:collapsed={mode === "exploration"}>
       {#if mode !== "exploration"}
         <div class="tools" role="toolbar" aria-label="Formatting">
-          <button title="Paragraph" onclick={() => editor?.setKind("paragraph")}>¶</button>
-          <button title="Heading 1" onclick={() => editor?.setKind("heading", { level: 1 })}>H1</button>
-          <button title="Heading 2" onclick={() => editor?.setKind("heading", { level: 2 })}>H2</button>
-          <button title="Bulleted item" onclick={() => editor?.setKind("bullet")}>•</button>
-          <button title="Numbered item" onclick={() => editor?.setKind("ordered")}>1.</button>
-          <button title="Quote" onclick={() => editor?.setKind("quote")}>❝</button>
-          <button title="Code" onclick={() => editor?.setKind("code")}>{"{}"}</button>
+          <IconButton icon={Pilcrow} label="Paragraph" onclick={() => editor?.setKind("paragraph")} />
+          <IconButton icon={Heading1} label="Heading 1" onclick={() => editor?.setKind("heading", { level: 1 })} />
+          <IconButton icon={Heading2} label="Heading 2" onclick={() => editor?.setKind("heading", { level: 2 })} />
+          <IconButton icon={List} label="Bulleted item" onclick={() => editor?.setKind("bullet")} />
+          <IconButton icon={ListOrdered} label="Numbered item" onclick={() => editor?.setKind("ordered")} />
+          <IconButton icon={TextQuote} label="Quote" onclick={() => editor?.setKind("quote")} />
+          <IconButton icon={Code} label="Code" onclick={() => editor?.setKind("code")} />
           <span class="sep"></span>
-          <button title="Bold (⌘B)" onclick={() => editor?.toggle("strong")}><b>B</b></button>
-          <button title="Italic (⌘I)" onclick={() => editor?.toggle("em")}><i>I</i></button>
+          <IconButton icon={Bold} label="Bold" title="Bold (⌘B)" onclick={() => editor?.toggle("strong")} />
+          <IconButton icon={Italic} label="Italic" title="Italic (⌘I)" onclick={() => editor?.toggle("em")} />
           <span class="sep"></span>
-          <select title="Insert a view block" aria-label="Insert a view block" value={viewPick} onfocus={loadCompositions} onchange={(e) => {
-            const v = (e.currentTarget as HTMLSelectElement).value;
-            if (v) editor?.insertViewBlock(v, "");
-            viewPick = "";
-            (e.currentTarget as HTMLSelectElement).value = "";
-          }}>
-            <option value="">View…</option>
-            {#each compositions as c (c.id)}<option value={c.name ?? c.id}>{c.name ?? c.id} ({c.dims})</option>{/each}
-          </select>
-          <button title="Insert a live value" onclick={() => (showValue = !showValue)}>= value</button>
+          <DropdownMenu.Root onOpenChange={(o) => o && loadCompositions()}>
+            <DropdownMenu.Trigger class="property-icon" aria-label="Insert a view block" title="Insert a view block">
+              <SquareCode size={14} strokeWidth={1.75} />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content class="ui-menu" sideOffset={4} align="start">
+                <div class="ui-menu-heading">Show a composition</div>
+                {#each compositions as c (c.id)}
+                  <DropdownMenu.Item class="ui-menu-item" onSelect={() => editor?.insertViewBlock(c.name ?? c.id, "")}>
+                    <span>{c.name ?? c.id}</span><span class="ui-hint">{c.dims}</span>
+                  </DropdownMenu.Item>
+                {/each}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+          <IconButton icon={Variable} label="Insert a live value" pressed={showValue} onPressedChange={(v: boolean) => (showValue = v)} />
           <label class="follow" title="Show each view block's composition as it scrolls to the top">
-            <input type="checkbox" bind:checked={follow} /> follow views
+            <Switch.Root class="ui-switch" bind:checked={follow} aria-label="Follow views"><Switch.Thumb class="ui-switch-thumb" /></Switch.Root>
+            Follow views
           </label>
           <span class="spacer"></span>
-          <button title="Export as markdown" onclick={exportMarkdown}>.md ↓</button>
-          <button title="Import markdown as a new narrative" onclick={() => mdInput?.click()}>.md ↑</button>
+          <IconButton icon={Download} label="Export as markdown" onclick={exportMarkdown} />
+          <IconButton icon={Upload} label="Import markdown as a new narrative" onclick={() => mdInput?.click()} />
         </div>
         {#if showValue}
           <div class="value-form">
-            <input placeholder="#4.size.w or square.transform2d.x" bind:value={valueLeaf} onkeydown={(e) => e.key === "Enter" && insertValue()} />
-            <input class="digits" placeholder="digits" bind:value={valueDigits} />
-            <button onclick={insertValue}>Insert</button>
+            <TextInput class="leaf" aria-label="Leaf" placeholder="#4.size.w or square.transform2d.x" bind:value={valueLeaf} onkeydown={(e: KeyboardEvent) => e.key === "Enter" && insertValue()} />
+            <TextInput class="digits" aria-label="Digits" placeholder="digits" bind:value={valueDigits} />
+            <Button variant="outline" small onclick={insertValue}>Insert</Button>
             {#if valueError}<span class="err">{valueError}</span>{/if}
           </div>
         {/if}
       {:else}
         <nav class="outline" aria-label="Outline">
           {#each outline as o (o.id)}
-            <button style:padding-left="{(o.level - 1) * 10 + 6}px" onclick={() => {
+            <BitsButton.Root class="outline-item" style="padding-left: {(o.level - 1) * 10 + 6}px" onclick={() => {
               mode = "hybrid";
               setTimeout(() => editor?.reveal(o.id), 0);
-            }}>{o.text || "(untitled)"}</button>
+            }}>{o.text || "(untitled)"}</BitsButton.Root>
           {/each}
         </nav>
       {/if}
@@ -467,9 +500,9 @@
                   {#if t.reviewed}
                     <span class="done">{t.reviewed}</span>
                   {:else}
-                    <button onclick={() => editor?.reveal(t.changed[0])}>Show</button>
-                    <button onclick={() => keep(i)} data-keep>Keep</button>
-                    <button onclick={() => revert(i)} data-revert>Revert</button>
+                    <Button small onclick={() => editor?.reveal(t.changed[0])}>Show</Button>
+                    <Button variant="primary" small onclick={() => keep(i)} data-keep>Keep</Button>
+                    <Button variant="outline" small onclick={() => revert(i)} data-revert>Revert</Button>
                   {/if}
                 </div>
               {/if}
@@ -481,31 +514,33 @@
 
     <div class="composer">
       <div class="target">
-        <button class="toggle" title="Where the model writes" onclick={() => (writeAtCursor = !writeAtCursor)}>{targetLabel}</button>
-        {#if !doc.apiKey}<input class="key" type="password" placeholder="Anthropic API key" onchange={(e) => doc.setApiKey((e.currentTarget as HTMLInputElement).value)} />{/if}
+        <Button variant="outline" small title="Where the model writes: click to switch" onclick={() => (writeAtCursor = !writeAtCursor)}>{targetLabel}</Button>
+        {#if !doc.apiKey}<TextInput class="key" type="password" aria-label="Anthropic API key" placeholder="Anthropic API key" onchange={(e: Event) => doc.setApiKey((e.currentTarget as HTMLInputElement).value)} />{/if}
       </div>
-      <textarea
+      <TextInput
+        multiline
+        aria-label="Instruction"
         rows={mode === "authoring" ? 2 : 3}
         placeholder={writeAtCursor ? "Ask the model to write here… (⌘↵)" : "Talk to the model… (⌘↵)"}
         bind:value={instruction}
-        onkeydown={(e) => {
+        onkeydown={(e: KeyboardEvent) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send();
         }}
-      ></textarea>
-      <button class="send" onclick={() => send()} disabled={doc.asking || !doc.apiKey || !instruction.trim()}>{doc.asking ? "Asking…" : "Ask"}</button>
+      />
+      <Button variant="primary" class="send" onclick={() => send()} disabled={doc.asking || !doc.apiKey || !instruction.trim()}>{doc.asking ? "Asking…" : "Ask"}</Button>
     </div>
   </div>
   <input type="file" accept=".md,.markdown,.txt,text/markdown" bind:this={mdInput} hidden onchange={importMarkdown} />
 
   {#if mention && targets.length}
-    <div class="mentions" role="listbox" style:left="{mention.left}px" style:top="{mention.bottom + 4}px">
+    <div class="mentions ui-menu" role="listbox" style:left="{mention.left}px" style:top="{mention.bottom + 4}px">
       {#each targets as t, i (t.id)}
-        <button role="option" aria-selected={i === pick} class:on={i === pick} onmousedown={(e) => {
+        <BitsButton.Root class="ui-menu-item mention" role="option" aria-selected={i === pick} data-highlighted={i === pick ? "" : undefined} onmousedown={(e: MouseEvent) => {
           e.preventDefault();
           choose(i);
         }}>
-          <span>{t.name}</span><span class="hint">{t.type}{t.composition ? ` · ${t.composition}` : ""} {t.id}</span>
-        </button>
+          <span>{t.name}</span><span class="ui-hint">{t.type}{t.composition ? ` · ${t.composition}` : ""} {t.id}</span>
+        </BitsButton.Root>
       {/each}
     </div>
   {/if}
@@ -525,26 +560,16 @@
     flex: none;
   }
   .pick {
-    max-width: 160px;
-    font: inherit;
+    width: 160px;
+    min-width: 0;
   }
-  .modes {
+  .bar :global(.modes) {
     display: flex;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow: hidden;
+    gap: 2px;
   }
-  .modes button {
-    border: none;
-    background: transparent;
-    padding: 2px 8px;
-    font-size: 12px;
-    color: var(--fg-muted);
-    cursor: pointer;
-  }
-  .modes button.on {
+  .bar :global(.mode[data-state="on"]) {
     background: var(--accent-soft);
-    color: var(--fg);
+    color: var(--accent);
   }
   .state {
     margin-left: auto;
@@ -552,6 +577,9 @@
     font-size: 11px;
   }
   .err {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     color: var(--danger);
   }
   .empty {
@@ -560,12 +588,17 @@
     flex-direction: column;
     gap: 10px;
   }
-  .link {
-    border: none;
-    background: none;
-    color: var(--accent);
-    padding: 0;
-    cursor: pointer;
+  .empty .row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .empty .hint {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    color: var(--fg-muted);
   }
   .body {
     flex: 1;
@@ -599,20 +632,6 @@
     padding: 4px 8px;
     border-bottom: 1px solid var(--border);
   }
-  .tools button,
-  .tools select {
-    font: inherit;
-    font-size: 12px;
-    padding: 1px 6px;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--fg);
-    cursor: pointer;
-  }
-  .tools button:hover {
-    background: var(--hover);
-  }
   .tools .sep {
     width: 1px;
     height: 16px;
@@ -627,7 +646,8 @@
     color: var(--fg-muted);
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: 6px;
+    margin-left: 6px;
   }
   .value-form {
     display: flex;
@@ -636,20 +656,19 @@
     border-bottom: 1px solid var(--border);
     align-items: center;
   }
-  .value-form input {
+  .value-form :global(.leaf) {
     flex: 1;
-    font: inherit;
   }
-  .value-form .digits {
+  .value-form :global(.digits) {
     flex: none;
-    width: 60px;
+    width: 70px;
   }
   .outline {
     display: flex;
     flex-direction: column;
     padding: 6px;
   }
-  .outline button {
+  .outline :global(.outline-item) {
     text-align: left;
     border: none;
     background: none;
@@ -658,7 +677,11 @@
     cursor: pointer;
     border-radius: 4px;
   }
-  .outline button:hover {
+  .outline :global(.outline-item:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .outline :global(.outline-item:hover) {
     background: var(--hover);
   }
   .scroll {
@@ -832,25 +855,14 @@
     gap: 6px;
     align-items: center;
   }
-  .composer .toggle {
-    border: none;
-    background: var(--accent-soft);
-    border-radius: 10px;
-    padding: 1px 8px;
-    font-size: 11px;
-    color: var(--fg);
-    cursor: pointer;
-  }
-  .composer .key {
+  .composer :global(.key) {
     flex: 1;
     font-size: 11px;
   }
-  .composer textarea {
-    font: inherit;
-    font-size: 12px;
+  .composer :global(textarea) {
     resize: none;
   }
-  .composer .send {
+  .composer :global(.send) {
     align-self: end;
   }
   .mentions {
@@ -859,33 +871,17 @@
     min-width: 220px;
     max-height: 240px;
     overflow: auto;
-    padding: 4px;
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    background: var(--bg);
-    box-shadow: var(--menu-shadow);
     display: flex;
     flex-direction: column;
     pointer-events: auto;
   }
-  .mentions button {
-    display: flex;
+  .mentions :global(.mention) {
     justify-content: space-between;
     gap: 12px;
     border: none;
     background: none;
-    padding: 4px 8px;
-    border-radius: 5px;
+    width: 100%;
     text-align: left;
-    color: var(--fg);
-    cursor: pointer;
-  }
-  .mentions button.on {
-    background: var(--accent);
-    color: var(--accent-fg);
-  }
-  .mentions .hint {
-    font-size: 11px;
-    opacity: 0.7;
+    font: inherit;
   }
 </style>

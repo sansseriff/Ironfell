@@ -5,6 +5,14 @@
 ports, anchors, plugging and mates). **Goal:** every part of the Components tab's demo
 (laser, fiber, dial meter, slider, their wiring) can be made from the UI, without code.
 
+**Follow-up, 2026-10-28:** [`authoring-workflows.md`](authoring-workflows.md) owns a
+new design investigation into the full journey from ordinary geometry to behavior,
+ports, linked representations and computation. The mains/ports/links below remain the
+existing foundation; packaging content alone does not establish that all demo behavior
+can currently be authored from the UI. The fiber is the first workflow to audit. Its required multi-shape case (fiber plus
+separate shadow, shared endpoint controls) also audits empties: geometric attachments
+must preserve each point's contour ownership. See that plan's §3.1.
+
 ## 0. Decisions
 
 | Question | Decision |

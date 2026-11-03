@@ -15,7 +15,7 @@
 <header class="chapter-head">
   <p class="kicker">Part 12 of 14 · <span class="chip sys-react">Bindings & handles</span> <span class="chip sys-bound">Engine boundary</span></p>
   <h1>Runtime signals and producers</h1>
-  <p class="lede">F3 described a stack of layers that every read goes through: overlay, binding, physics, clips, constant. Two of those were special-purpose maps, and a planned simulation would have been a third. Phase 4 of vision 10 (<code>50b36f1</code>) replaced them with one <em>runtime layer</em> of signals, each owned by a producer. Clips and the port network became the first two producers. A Bevy system became the third: 160 gas particles that have no document nodes, push on a piston, and publish a pressure the document's bindings read like any value. This part covers the layer, the publish algorithm, freezing, and the demo.</p>
+  <p class="lede">F3 described a stack of layers that every read goes through: overlay, binding, physics, clips, constant. Two of those were special-purpose maps, and a planned simulation would have added a third special-purpose map. Phase 4 of vision 10 (<code>50b36f1</code>) replaced them with one <em>runtime layer</em> of signals, each owned by a producer. Clips and the port network became the first two producers. A Bevy system became the first host producer: 160 gas particles that have no document nodes, push on a piston, and publish a pressure the document's bindings read like any value. This part covers the layer, the publish algorithm, freezing, and the demo.</p>
   <div class="prereq">
     <div><b>You need</b>F3 (the graph, <code>read_with</code>, clips), Part 9 (the across/through network), Part 10 (Iron owns world transforms), Part 11 (the frame order).</div>
     <div><b>Files</b><code>iron_document/src/graph.rs</code>, <code>lib.rs</code> (<code>publish</code>, <code>freeze</code>, <code>register_producer</code>, <code>resample</code>, <code>resolve_physics</code>), <code>handle.rs</code>, <code>document_bridge/gas.rs</code>, <code>demo.rs</code> (<code>piston</code>); tests in <code>tests/signals.rs</code>, smoke script <code>piston.txt</code>.</div>
@@ -29,7 +29,7 @@
 </div>
 
 <h2 id="layer"><span class="sec">12.2</span>The layer and the read order</h2>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:32">src/iron_document/src/graph.rs</a><span class="range">lines 32–52</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">32
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:32">src/iron_document/src/graph.rs</a><span class="range">lines 32–54</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">32
 33
 34
 35
@@ -49,7 +49,9 @@
 49
 50
 51
-52</pre><pre class="src"><code class="language-rust">/// Who publishes a runtime signal. Two producers are built in; a host
+52
+53
+54</pre><pre class="src"><code class="language-rust">/// Who publishes a runtime signal. Three producers are built in; a host
 /// registers more through `Store::register_producer`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ProducerId(pub u32);
@@ -59,8 +61,10 @@ impl ProducerId {
     pub const CLIPS: ProducerId = ProducerId(0);
     /// The across/through network&#x27;s solution (`Store::resolve_physics`).
     pub const NETWORK: ProducerId = ProducerId(1);
+    /// Where groups&#x27; layouts place their children (`layout.rs`).
+    pub const LAYOUT: ProducerId = ProducerId(2);
     /// The first id a host producer receives.
-    pub const FIRST_HOST: ProducerId = ProducerId(2);
+    pub const FIRST_HOST: ProducerId = ProducerId(3);
 }
 
 /// One published value: who published it and at which of their frames.
@@ -71,9 +75,7 @@ pub struct Signal {
     pub stamp: u64,
 }</code></pre></div></div></figure>
 <p>Inside <code>Reactive</code>, the two maps became three fields:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:61">src/iron_document/src/graph.rs</a><span class="range">lines 61–91</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:11"></span><pre class="gutter" aria-hidden="true">61
-62
-63
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:63">src/iron_document/src/graph.rs</a><span class="range">lines 63–93</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">63
 64
 65
 66
@@ -101,7 +103,9 @@ pub struct Signal {
 88
 89
 90
-91</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, Default)]
+91
+92
+93</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, Default)]
 pub struct Reactive {
     nodes: BTreeMap&lt;Leaf, BoundNode&gt;,
     /// Any leaf -&gt; the bound leaves that read it.
@@ -145,12 +149,12 @@ pub struct Reactive {
   <text class="t-mono-s" x="34" y="176">runtime: BTreeMap&lt;Leaf, Signal{value, producer, stamp}&gt;</text>
   <text class="t-mono-s" x="34" y="192">held: BTreeMap&lt;ProducerId, BTreeSet&lt;Leaf&gt;&gt;</text>
   <text class="t-mono-s" x="34" y="208">signal_errors: BTreeMap&lt;Leaf, String&gt;</text>
-  <text class="t-xs" x="34" y="224">producers: 0 clips · 1 network · 2+ registered by the host</text>
+  <text class="t-xs" x="34" y="224">producers: 0 clips · 1 network · 2 layout · 3+ registered by the host</text>
   <text class="t-xs" x="34" y="238">(was: animated, physics)</text>
   <rect x="24" y="254" width="412" height="40" rx="4" class="box-fill"/>
   <text class="t-mono-s" x="34" y="272">changes, touched</text><text class="t-xs" x="34" y="286">the two drains (Part 10)</text>
   <text class="t-s" x="24" y="318">The document's own slots (Const / Bound) sit</text>
-  <text class="t-s" x="24" y="334">beneath all of this, in the component tables.</text>
+  <text class="t-s" x="24" y="334">beneath all of this, in the facet tables.</text>
 
   <rect x="470" y="10" width="440" height="340" rx="8" class="zone"/>
   <text class="t-b" x="484" y="32">read_with(leaf): first rung that answers</text>
@@ -160,11 +164,11 @@ pub struct Reactive {
   <text class="t-xs" x="494" y="96">(a gesture is never hidden by a producer)</text>
   <rect x="484" y="112" width="412" height="56" rx="4" class="s-react"/>
   <text class="t-mono-s" x="494" y="130">2 leaf is bound → resolved (stop here)</text>
-  <text class="t-xs" x="494" y="146">pressure bar size.w = clamp(#p.default*50, 0, 300)</text>
+  <text class="t-xs" x="494" y="146">pressure bar size.w = clamp(#p.signal*50, 0, 300)</text>
   <text class="t-xs" x="494" y="160">never falls through, which is why a bound leaf can't be driven</text>
   <rect x="484" y="176" width="412" height="56" rx="4" class="s-bound"/>
   <text class="t-mono-s" x="494" y="194">3 runtime has it → signal.value</text>
-  <text class="t-xs" x="494" y="210">#p.param_spec.default = 1.04 from producer 2 "gas"</text>
+  <text class="t-xs" x="494" y="210">#p.port.signal = 1.04 from a registered host producer "gas"</text>
   <text class="t-xs" x="494" y="224">a torus's rot from producer 0, a heater's T from 1</text>
   <rect x="484" y="240" width="412" height="44" rx="4" class="box-fill"/>
   <text class="t-mono-s" x="494" y="258">4 the document's constant</text>
@@ -174,25 +178,25 @@ pub struct Reactive {
 </svg>
 <figcaption>The rung order is the semantics. Bindings above signals means a producer can't overwrite a formula. Signals above constants means a running producer hides the authored value without destroying it, so releasing the producer shows that value again.</figcaption>
 </figure>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:393">src/iron_document/src/graph.rs</a><span class="range">lines 393–411</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">393
-394
-395
-396
-397
-398
-399
-400
-401
-402
-403
-404
-405
-406
-407
-408
-409
-410
-411</pre><pre class="src"><code class="language-rust">fn read_with(
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:417">src/iron_document/src/graph.rs</a><span class="range">lines 417–435</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435</pre><pre class="src"><code class="language-rust">fn read_with(
     overlay: &amp;BTreeMap&lt;Leaf, Value&gt;,
     runtime: &amp;BTreeMap&lt;Leaf, Signal&gt;,
     resolved: &amp;BTreeMap&lt;Leaf, Value&gt;,
@@ -214,9 +218,7 @@ pub struct Reactive {
 
 <h2 id="publish"><span class="sec">12.3</span>Publishing: replace your whole set</h2>
 <p>A producer publishes everything it holds, every time. The graph diffs that against what it held last time:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:130">src/iron_document/src/graph.rs</a><span class="range">lines 130–182</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:4"></span><span class="band" style="--from:14;--len:4"></span><span class="band" style="--from:29;--len:6"></span><span class="band" style="--from:43;--len:9"></span><pre class="gutter" aria-hidden="true">130
-131
-132
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:132">src/iron_document/src/graph.rs</a><span class="range">lines 132–184</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">132
 133
 134
 135
@@ -266,7 +268,9 @@ pub struct Reactive {
 179
 180
 181
-182</pre><pre class="src"><code class="language-rust">/// Replace everything `producer` publishes with `values`: leaves it no
+182
+183
+184</pre><pre class="src"><code class="language-rust">/// Replace everything `producer` publishes with `values`: leaves it no
 /// longer names are released, leaves another producer holds are refused
 /// and reported. Leaves whose readable value moved are noted and their
 /// dependents re-evaluated, as for a constant that was set.
@@ -320,31 +324,31 @@ pub fn publish(&amp;mut self, doc: &amp;Document, producer: ProducerId, values: 
     self.invalidate(doc, changed);
 }</code></pre></div></div></figure>
 <ol>
-  <li><strong>Bound leaves are refused</strong> (139–142): a formula wins, and the attempt is recorded in <code>signal_errors</code>.</li>
-  <li><strong>The first claim wins</strong> (144–147): a leaf held by a different producer stays with it, and the newcomer gets an error. A leaf the producer re-publishes with the same value is restamped but not reported as changed.</li>
-  <li><strong>What it stopped naming is released</strong> (159–164): the difference between last time's <code>held</code> set and this time's.</li>
-  <li><strong>Only moved values propagate</strong> (173–181): each changed leaf is noted, unless a gesture is previewing it, and its dependents are invalidated in height order, as for a constant that was set.</li>
+  <li><strong>Bound leaves are refused</strong> (141–144): a formula wins, and the attempt is recorded in <code>signal_errors</code>.</li>
+  <li><strong>The first claim wins</strong> (146–149): a leaf held by a different producer stays with it, and the newcomer gets an error. A leaf the producer re-publishes with the same value is restamped but not reported as changed.</li>
+  <li><strong>What it stopped naming is released</strong> (161–166): the difference between last time's <code>held</code> set and this time's.</li>
+  <li><strong>Only moved values propagate</strong> (175–183): each changed leaf is noted, unless a gesture is previewing it, and its dependents are invalidated in height order, as for a constant that was set.</li>
 </ol>
 <figure class="diagram">
 <svg viewBox="0 0 920 300" role="img" aria-label="Three publishes. Frame k: gas publishes pressure 0.98; it now holds the pressure leaf. Frame k+1: gas publishes pressure 1.02; changed, so it is noted and the two bars re-evaluate. A second producer asks for the same leaf: refused, error recorded, the gas keeps it. Frame k+2: gas publishes an empty set: the leaf is released and reads its authored constant again.">
   <defs><marker id="d1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
-  <g class="t-b"><text x="24" y="26">publish(…)</text><text x="330" y="26">runtime[#p.default]</text><text x="560" y="26">held</text><text x="720" y="26">effect</text></g>
+  <g class="t-b"><text x="24" y="26">publish(…)</text><text x="330" y="26">runtime[#p.signal]</text><text x="560" y="26">held</text><text x="720" y="26">effect</text></g>
   <rect x="10" y="38" width="900" height="56" class="band"/>
-  <text class="t-mono-s" x="24" y="60">frame k: gas {#p.default: 0.98}</text>
+  <text class="t-mono-s" x="24" y="60">frame k: gas {#p.signal: 0.98}</text>
   <text class="t-mono-s" x="330" y="60">0.98 · gas · stamp 41</text>
-  <text class="t-mono-s" x="560" y="60">gas: {#p.default}</text>
+  <text class="t-mono-s" x="560" y="60">gas: {#p.signal}</text>
   <text class="t-s" x="720" y="60">new → note, invalidate</text>
   <text class="t-xs" x="720" y="78">both bars re-evaluate</text>
-  <text class="t-mono-s" x="24" y="122">frame k+1: gas {#p.default: 1.02}</text>
+  <text class="t-mono-s" x="24" y="122">frame k+1: gas {#p.signal: 1.02}</text>
   <text class="t-mono-s" x="330" y="122">1.02 · gas · stamp 44</text>
-  <text class="t-mono-s" x="560" y="122">gas: {#p.default}</text>
+  <text class="t-mono-s" x="560" y="122">gas: {#p.signal}</text>
   <text class="t-s" x="720" y="122">changed → bars re-evaluate</text>
   <rect x="10" y="138" width="900" height="56" class="band"/>
-  <text class="t-mono-s" x="24" y="160">producer 3 {#p.default: 5}</text>
+  <text class="t-mono-s" x="24" y="160">producer 4 {#p.signal: 5}</text>
   <text class="t-mono-s" x="330" y="160">1.02 · gas (kept)</text>
-  <text class="t-mono-s" x="560" y="160">3: {}</text>
+  <text class="t-mono-s" x="560" y="160">4: {}</text>
   <text class="t-edge" x="720" y="160">refused; signal_errors:</text>
-  <text class="t-xs" x="720" y="178">"already driven by producer 2"</text>
+  <text class="t-xs" x="720" y="178">"already driven by gas"</text>
   <text class="t-mono-s" x="24" y="222">frame k+2: gas {} (unpublish)</text>
   <text class="t-mono-s" x="330" y="222">(absent) → reads constant</text>
   <text class="t-mono-s" x="560" y="222">gas: (removed)</text>
@@ -360,34 +364,35 @@ pub fn publish(&amp;mut self, doc: &amp;Document, producer: ProducerId, values: 
   <tbody>
     <tr><td><code>ProducerId::CLIPS</code> (0)</td><td><code>Store::resample</code>: <code>time::sample</code> at the playhead</td><td><code>set_time</code>; after every transaction (a clip's timing or a link may have changed)</td></tr>
     <tr><td><code>ProducerId::NETWORK</code> (1)</td><td><code>Store::resolve_physics</code>: the across/through solve (Part 9)</td><td>After every transaction, preview, publish and playhead move</td></tr>
-    <tr><td>Host producers (2, 3, …)</td><td><code>Store::publish</code>, from wherever the host runs them</td><td>The gas: every frame its composition is visible, first in <code>PreUpdate</code></td></tr>
+    <tr><td><code>ProducerId::LAYOUT</code> (2)</td><td><code>Store::resolve_layout</code></td><td>After the network, relevant edits/previews and font changes</td></tr>
+    <tr><td>Host producers (3, 4, …)</td><td><code>Store::publish</code>, from wherever the host runs them</td><td>Gas and Stats publish when their visible compositions are running, before the first sync</td></tr>
   </tbody>
 </table></div>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:367">src/iron_document/src/lib.rs</a><span class="range">lines 367–372</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">367
-368
-369
-370
-371
-372</pre><pre class="src"><code class="language-rust">fn resample(&amp;mut self) {
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:631">src/iron_document/src/lib.rs</a><span class="range">lines 631–636</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">631
+632
+633
+634
+635
+636</pre><pre class="src"><code class="language-rust">fn resample(&amp;mut self) {
     let sample = time::sample(&amp;self.doc, self.time);
     self.time_errors = sample.errors;
     self.signal_stamp += 1;
     self.reactive.publish(&amp;self.doc, ProducerId::CLIPS, sample.values, self.signal_stamp);
 }</code></pre></div></div></figure>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:401">src/iron_document/src/lib.rs</a><span class="range">lines 401–414</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:4"></span><pre class="gutter" aria-hidden="true">401
-402
-403
-404
-405
-406
-407
-408
-409
-410
-411
-412
-413
-414</pre><pre class="src"><code class="language-rust">/// Publish a host producer&#x27;s signals for this frame (vision 10 §4):
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:666">src/iron_document/src/lib.rs</a><span class="range">lines 666–679</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">666
+667
+668
+669
+670
+671
+672
+673
+674
+675
+676
+677
+678
+679</pre><pre class="src"><code class="language-rust">/// Publish a host producer&#x27;s signals for this frame (vision 10 §4):
 /// `values` replaces everything the producer published before. The
 /// values are read beneath bindings and above authored constants, never
 /// enter the document or its history, and re-evaluate what reads them.
@@ -401,38 +406,46 @@ pub fn publish(&amp;mut self, producer: ProducerId, values: std::collections::BT
     }
     self.resolve_physics();
 }</code></pre></div></div></figure>
-<p>A host publish isn't an isolated write. Lines 410–413 re-solve every constraint cluster live and then the network, so a signal that feeds a cluster's input moves the mechanism in the same call, and a signal that feeds a network parameter moves its solution. This is the "one evaluator" of Part 10 in practice: producers supply inputs, and the store propagates them through bindings, clusters and the network in one place.</p>
+<p>A host publish isn't an isolated write. Lines 675–678 re-solve every constraint cluster live and then the network, so a signal that feeds a cluster's input moves the mechanism in the same call, and a signal that feeds a network parameter moves its solution. This is the "one evaluator" of Part 10 in practice: producers supply inputs, and the store propagates them through bindings, clusters and the network in one place.</p>
 <p>The network is also a producer that reads its own last output: its initial guess for each unknown is the signal it published last time (<code>x0</code> in <code>resolve_physics</code>), so successive solves start warm.</p>
+
+<h3 id="layout">Layout is built-in producer 2</h3>
+<p><code>Store::resolve_physics</code> now solves the network and then layout. <code>layout::compute</code> builds a Taffy tree from groups and tables, measures text, and publishes item positions and the sizes layout chooses under <code>ProducerId::LAYOUT</code>. It reads beneath its own previous output to avoid feeding yesterday's layout back as authored input. These published leaves are locked for ordinary direct manipulation.</p>
+<p>Layout recomputes after transactions and relevant previews/signals; reordering previews change the flow without changing authored order. Declared transitions interpolate those derived placements as motion advances. Host producer ids now begin at 3; gas and Stats use that registry. Their runtime values remain outside saves and history.</p>
+<h3 id="running">Free running is per composition</h3>
+<p>Run mode Auto follows visible live sources and bubbles through embeds; Always forces continuous frames; On demand stops continuous updates. Gas and Stats register live sources. The settings menu and <code>__iron.runMode</code> edit that policy through transactions. The old Bevy UI FPS overlay has been replaced by the session's Stats composition: ordinary text nodes fed by a producer. Set it to On demand before an idle-render experiment.</p>
 
 <h2 id="edit"><span class="sec">12.5</span>Gestures, handles and freezing</h2>
 <p>A leaf a producer holds isn't the user's to drag right now. The handle says so and names the producer:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:49">src/iron_document/src/handle.rs</a><span class="range">lines 49–55</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">49
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:49">src/iron_document/src/handle.rs</a><span class="range">lines 49–56</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">49
 50
 51
 52
 53
 54
-55</pre><pre class="src"><code class="language-rust">if let Some(signal) = reactive.signal(leaf) {
+55
+56</pre><pre class="src"><code class="language-rust">if let Some(signal) = reactive.signal(leaf) {
     return Handle::Locked(match signal.producer {
         ProducerId::CLIPS =&gt; format!(&quot;{leaf} is driven by a clip at the current time&quot;),
         ProducerId::NETWORK =&gt; format!(&quot;{leaf} is solved by its across/through network; change a source or a parameter instead&quot;),
+        ProducerId::LAYOUT =&gt; format!(&quot;{leaf} is placed by its group&#x27;s layout; change the layout, or make it absolute&quot;),
         p =&gt; format!(&quot;{leaf} is published by producer {} at runtime; freeze it to edit&quot;, p.0),
     });
 }</code></pre></div></div></figure>
 <p>When the user does want to keep what a producer computed, <em>freeze</em> turns its signals into constants:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:431">src/iron_document/src/lib.rs</a><span class="range">lines 431–443</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">431
-432
-433
-434
-435
-436
-437
-438
-439
-440
-441
-442
-443</pre><pre class="src"><code class="language-rust">/// Freeze a producer&#x27;s signals into the document: one transaction that
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:696">src/iron_document/src/lib.rs</a><span class="range">lines 696–708</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">696
+697
+698
+699
+700
+701
+702
+703
+704
+705
+706
+707
+708</pre><pre class="src"><code class="language-rust">/// Freeze a producer&#x27;s signals into the document: one transaction that
 /// sets every leaf it holds to the published value as a constant, after
 /// which the producer holds nothing (the host stops it or it republishes,
 /// and takes the leaves back). `None` when it holds nothing.
@@ -451,9 +464,9 @@ pub fn freeze(&amp;mut self, producer: ProducerId, label: String, actor: Actor, 
 <p>A 3D composition <code>cylinder</code> holds a translucent <code>chamber</code> (a unit cylinder scaled to radius 0.6, length 3, along X), a <code>piston</code> disc, and a <code>rod</code>. A 2D composition <code>piston</code> embeds the 3D view next to a <code>stroke</code> slider and two gauge bars. The document side is ordinary bindings:</p>
 <figure class="plainfig"><figcaption>demo.rs, the bindings (ids as the demo names them)</figcaption><pre class="plain"><code class="language-plaintext">piston.transform3d.pos = [1, 0, 0] * (1.3 - stroke.slider.value * 2.2) + [0, 1.2, 0]
 rod.transform3d.pos    = piston.transform3d.pos + [0.9, 0, 0]
-pressure_bar.size.w    = clamp(pressure.param_spec.default * 50, 0, 300)
-pv_bar.size.w          = clamp(pressure.param_spec.default * (2.74 - 2.2 * stroke.slider.value) * 100 / 3, 0, 300)</code></pre></figure>
-<p>Nothing in the document computes <code>pressure.param_spec.default</code>. A Bevy system does:</p>
+pressure_bar.size.w    = clamp(pressure.port.signal * 50, 0, 300)
+pv_bar.size.w          = clamp(pressure.port.signal * (2.74 - 2.2 * stroke.slider.value) * 100 / 3, 0, 300)</code></pre></figure>
+<p>Nothing in the document computes <code>pressure.port.signal</code>. A Bevy system does:</p>
 <figure class="diagram">
 <svg viewBox="0 0 920 440" role="img" aria-label="Document side: the stroke slider feeds the piston's position binding, which feeds the rod; the store computes world_affine3 for chamber and piston. Bevy side: the gas system reads both poses, builds the chamber frame with centre, axes, radius and the piston face's axial limit, integrates 160 particles held in GasSim and drawn as entities without Provenance, reflects off the wall and the end, sums the momentum transferred to the piston face, smooths it into a pressure, and publishes it onto the pressure parameter. The two bar bindings re-evaluate and are reconciled in the same frame's sync.">
   <defs><marker id="d2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
@@ -463,7 +476,7 @@ pv_bar.size.w          = clamp(pressure.param_spec.default * (2.74 - 2.2 * strok
   <rect x="24" y="110" width="180" height="40" rx="4" class="s-react"/><text class="t-mono-s" x="34" y="128">piston.transform3d.pos</text><text class="t-xs" x="34" y="142">binding (Vec3)</text>
   <rect x="236" y="110" width="190" height="40" rx="4" class="s-react"/><text class="t-mono-s" x="246" y="128">rod.transform3d.pos</text><text class="t-xs" x="246" y="142">binding</text>
   <rect x="24" y="174" width="402" height="40" rx="4" class="s-store"/><text class="t-mono-s" x="34" y="192">Store::world_affine3(chamber), (piston)</text><text class="t-xs" x="34" y="206">Iron's poses, f64 (Part 10)</text>
-  <rect x="24" y="290" width="402" height="44" rx="4" class="s-bound"/><text class="t-mono-s" x="34" y="308">runtime[pressure.param_spec.default]</text><text class="t-xs" x="34" y="324">Signal { value, producer: "gas", stamp }</text>
+  <rect x="24" y="290" width="402" height="44" rx="4" class="s-bound"/><text class="t-mono-s" x="34" y="308">runtime[pressure.port.signal]</text><text class="t-xs" x="34" y="324">Signal { value, producer: "gas", stamp }</text>
   <rect x="24" y="358" width="190" height="56" rx="4" class="s-react"/><text class="t-mono-s" x="34" y="376">pressure bar</text><text class="t-xs" x="34" y="392">rises as you compress</text>
   <rect x="236" y="358" width="190" height="56" rx="4" class="s-react"/><text class="t-mono-s" x="246" y="376">P·V bar</text><text class="t-xs" x="246" y="392">stays level: isothermal</text>
   <line x1="114" y1="86" x2="114" y2="108" class="ln" marker-end="url(#d2)"/>
@@ -504,13 +517,7 @@ pv_bar.size.w          = clamp(pressure.param_spec.default * (2.74 - 2.2 * strok
 </svg>
 <figcaption>Bevy reads Iron's world affines (vision 10 requires it: the evaluator owns transforms) and writes only a runtime signal. In steady play the demo applies zero transactions per frame; <code>piston.txt</code> checks it.</figcaption>
 </figure>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/gas.rs:141">src/document_bridge/gas.rs</a><span class="range">lines 141–171</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:26;--len:4"></span><pre class="gutter" aria-hidden="true">141
-142
-143
-144
-145
-146
-147
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/gas.rs:147">src/document_bridge/gas.rs</a><span class="range">lines 147–191</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">147
 148
 149
 150
@@ -534,13 +541,33 @@ pv_bar.size.w          = clamp(pressure.param_spec.default * (2.74 - 2.2 * strok
 168
 169
 170
-171</pre><pre class="src"><code class="language-rust">/// Step the gas and publish the pressure. Runs before `sync_document`, so
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191</pre><pre class="src"><code class="language-rust">/// Step the gas and publish the pressure. Runs before `sync_document`, so
 /// the published value reaches this frame&#x27;s reconcile like any change.
 pub(super) fn step_and_publish(
     mut sim: ResMut&lt;GasSim&gt;,
     mut store: ResMut&lt;DocumentStore&gt;,
-    views: Res&lt;PanelViews&gt;,
-    embeds: Res&lt;EmbedViews&gt;,
+    liveness: Res&lt;Liveness&gt;,
+    mut sources: ResMut&lt;LiveSources&gt;,
     time: Res&lt;Time&gt;,
     assets: Option&lt;Res&lt;MeshAssets&gt;&gt;,
     mut layers: ResMut&lt;CompositionLayers&gt;,
@@ -552,6 +579,9 @@ pub(super) fn step_and_publish(
         sim.found = Some((version, find(&amp;store.0)));
     }
     let Some((_, Some(targets))) = sim.found else {
+        if let Some((_, Some(t))) = std::mem::take(&amp;mut sim.last_targets) {
+            sources.0.remove(&amp;t.composition);
+        }
         if !sim.entities.is_empty() {
             for e in sim.entities.drain(..) {
                 commands.entity(e).try_despawn();
@@ -560,12 +590,23 @@ pub(super) fn step_and_publish(
         }
         return;
     };
-    let shown = views.0.iter().any(|v| v.composition == Some(targets.composition)) || embeds.0.iter().any(|e| e.source == targets.composition);
-    if !shown || !sim.running {
+    // A source while it runs, whether or not anything shows it yet: what
+    // shows it decides `liveness.running` from the sources.
+    if let Some((_, Some(t))) = sim.last_targets.replace((version, Some(targets)))
+        &amp;&amp; t.composition != targets.composition
+    {
+        sources.0.remove(&amp;t.composition);
+    }
+    if sim.running {
+        sources.0.insert(targets.composition);
+    } else {
+        sources.0.remove(&amp;targets.composition);
+    }
+    if !liveness.running.contains(&amp;targets.composition) || !sim.running {
         return;
     }
     let Some(ch) = chamber(&amp;store.0, &amp;targets) else { return };</code></pre></div></div></figure>
-<p>Three details from that excerpt. The targets are found by name and cached per document version (154–157), so an edit elsewhere doesn't re-search every frame. The producer runs only while some panel or embed shows the <code>cylinder</code> composition (167–170), so a hidden demo costs nothing. And it runs before <code>sync_document</code>: the publish's changes are drained by the sync right after it and reach the screen this frame, together with everything else.</p>
+<p>Three details from that excerpt. The targets are found by name and cached per document version (160–163), so an edit elsewhere doesn't re-search every frame. The producer runs only while some panel or embed shows the <code>cylinder</code> composition (176–190), so a hidden demo costs nothing. And it runs before <code>sync_document</code>: the publish's changes are drained by the sync right after it and reach the screen this frame, together with everything else.</p>
 <p>The physics check: compressing the gas with the slider raises the pressure bar, and the P·V bar (pressure × gas length) stays level. That's Boyle's law, and it holds only if the gas really is isothermal, which elastic walls guarantee. <code>__iron.signals()</code> lists producers, signals and conflicts; <code>__iron.producer('gas', 'freeze' | 'stop' | 'run')</code> drives it.</p>
 
 <h2 id="tests"><span class="sec">12.7</span>What the tests promise</h2>
@@ -580,7 +621,7 @@ pub(super) fn step_and_publish(
 </table></div>
 
 <div class="box edge"><span class="tab">Rough edges and open questions</span>
-<p><strong>One host producer, by name.</strong> <code>engine_api::document_producer</code> knows only <code>"gas"</code>; a second Bevy producer needs a registry of running producers on the host side.</p>
+<p><strong>Host controls remain specific.</strong> Gas and Stats publish runtime signals, but the debug <code>document_producer</code> control still handles gas explicitly; it is not a general simulation-service lifecycle API.</p>
 <p><strong>No collisions with document shapes yet.</strong> The "Live + simulating" mode (Part 10), a physics engine acting on Live document entities and publishing their poses, isn't built. The publish it would use is the one shown here.</p>
 <p><strong>Within one producer, nothing is checked.</strong> Two clips aimed at one leaf both go into the clips producer's single map, and the later one silently wins (F3's rough edge still holds). Conflict detection is only between producers.</p>
 <p><strong>Open (vision 10 §8).</strong> Q1: does the kinematic simulation of CS §11 run in <code>iron_solve</code> or as a Bevy producer? Q4: should the model's view of a leaf name the producer behind its value?</p>
@@ -588,7 +629,7 @@ pub(super) fn step_and_publish(
 
 <div class="box recap"><span class="tab">Before you go on</span>
 <ul>
-  <li>Reads go overlay → binding → runtime signal → constant. Clips (0), the network (1) and host systems (2+) are all producers of the one runtime layer.</li>
+  <li>Reads go overlay → binding → runtime signal → constant. Clips (0), the network (1) layout (2) and host systems (3+) are all producers of the one runtime layer.</li>
   <li>A producer publishes its whole set each time; the graph releases what it dropped, refuses bound leaves and other producers' leaves, and propagates only values that moved.</li>
   <li>A published leaf is <code>Locked</code> to gestures, naming its producer. <code>freeze</code> turns a producer's values into one undoable transaction.</li>
   <li>The gas reads Iron's poses, keeps 160 particles with no document nodes, and publishes one number before the sync, so the document stays the only thing that's saved or undone.</li>

@@ -2,9 +2,22 @@
 
 **Status:** design note, 2026-10-12. Built: the dock presenter and views, pan and zoom,
 and the session tier with the selection (see "Built so far" at the end). Not yet built:
-the workspace root, the inspector, and selection in undo. It came out of a conversation
+the workspace root, the inspector as a bound session composition, and selection in undo.
+A first HTML inspector is built; it currently inspects the first selected node, with
+context-driven section order and scoped reactive reads. It came out of a conversation
 after the select tool (plans/specs/select-tool.md) and records the direction agreed there. It
 revises one earlier verdict, in document-spine.md §4; see "What this changes" below.
+
+**Follow-up, 2026-10-28:** [`authoring-workflows.md`](authoring-workflows.md) §8.3–8.4
+investigates panel source selection without a privileged main viewport, explicit
+follow/pin/workflow modes, multiple-selection applicability and aggregation, and how
+workflow UI coexists with ordinary inspection. The resistor schematic/3D example
+requires occurrence-aware UI for one shared entity. Workflow definitions and invocations
+are separate from a reusable task presenter; do not add a permanent panel tab for
+every possible or user-authored workflow. A composition layers stack is a candidate
+default replacement for document markup; no default workspace change is implemented by
+that discussion. This plan retains ownership of the session/workspace tier and bound
+inspector direction; the authoring investigation must ground it in concrete journeys.
 
 ## The question
 

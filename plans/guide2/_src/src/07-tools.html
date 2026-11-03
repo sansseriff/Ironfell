@@ -1,21 +1,21 @@
 <header class="chapter-head">
-  <p class="kicker">Part 7 of 9 · <chip sys="tools"/> <chip sys="shell"/></p>
+  <p class="kicker">Part 7 of 14 · <chip sys="tools"/> <chip sys="shell"/></p>
   <h1>The select tool and the pen</h1>
-  <p class="lede">You asked for Figma's semantics: its selection rules, its drag, its transform box, its pen. This part covers roadmap stage E as built: how a click picks a node out of a nested scene, how resizing and rotating become leaf values, how a path is stored as point nodes, and the first inspector. Everything here is a gesture in the sense of Part 3: it previews through the store and commits once.</p>
+  <p class="lede">You asked for Figma's semantics: its selection rules, its drag, its transform box, its pen. This part covers roadmap stage E as built: how a click picks a node out of a nested scene, how resizing and rotating become leaf values, packed and editable path geometry, text, layout, tables and the inspector. Everything here is a gesture in the sense of Part 3: it previews through the store and commits once.</p>
   <div class="prereq">
     <div><b>You need</b>Part 3 (previews, <code>begin_drag</code>), Part 5 (hit chains, embeds).</div>
-    <div><b>Files</b><code>bevy_app/{select,manipulate,pen,shape_tool,picking,pointer}.rs</code>, <code>iron_document/src/{contour,shape}.rs</code> (paths and shapes), <code>engine_api.rs</code> (inspector), <code>src-ui/views/html/SelectionView.svelte</code>, <code>src-ui/runtime/input_manager.ts</code>. Record: <code>plans/select-tool.md</code>.</div>
+    <div><b>Files</b><code>bevy_app/{select,manipulate,pen,shape_tool,picking,pointer}.rs</code>, <code>iron_document/src/{contour,shape}.rs</code> (paths and shapes), <code>engine_api.rs</code> (inspector), <code>src-ui/views/html/SelectionView.svelte</code>, <code>src-ui/runtime/input_manager.ts</code>. Record: <code>plans/specs/select-tool.md</code>.</div>
   </div>
 </header>
 
 <h2 id="select"><span class="sec">7.1</span>Which node does a click select?</h2>
-<snip file="src/bevy_app/select.rs" lines="1-20"/>
+<snip file="src/bevy_app/select.rs" lines="1-20" first="//! The select tool (roadmap stage E): Figma&#x27;s selection, drag and transform" last="//! `interaction`: dragging meshes in 3D, content on planes in 3D, sliders."/>
 <div class="compare">
   <div class="box naive"><span class="tab">The simple version</span><p><strong>Select whatever is under the pointer.</strong> The innermost shape always wins. You can never select a group by clicking it, and dragging one arm of the pendulum drags just that arm out of the mechanism.</p></div>
   <div class="box built"><span class="tab">What was built (Figma's rule)</span><p><strong>Select the outermost node whose container isn't open.</strong> A group is closed until you enter it; once something inside is selected, the group is open, so siblings are one click away. Cmd/Ctrl-click selects the innermost node directly. A double-click enters one level.</p></div>
 </div>
 <p>Part 5 showed that every pointer hit carries its <em>chain</em>: the nodes from the panel's top level down through groups and embeds to the hit node. Choosing a node is choosing an index into that chain:</p>
-<snip file="src/bevy_app/select.rs" lines="873-886"/>
+<snip file="src/bevy_app/select.rs" lines="1352-1364" first="/// outermost one whose container the selection is not inside, or the hit" last="/// Where `id` shows in a 2D panel, for a selection made elsewhere: in a"/>
 <p>Index 0 is the top level. A container at depth <code>i</code> is open if some selected node's chain passes through it. The one extra rule is the first clause: <strong>a top-level embed is always open</strong>, like a top-level frame in Figma (an artboard). That rule was forced by the demo: the whole scene sits inside one embed in Main, so without it every click would select "scene view". With it, clicking a rect selects the rect, clicking the embed's empty background selects the embed, and the pendulum (a group inside its own embed) selects as a whole.</p>
 <raw title="The pendulum's ball, clicked in Main">chain:  [pendulum view (embed), pendulum (group), ball]
          index 0: top-level embed → open
@@ -26,70 +26,72 @@ Esc:          up one level (ball → group → embed → nothing)</raw>
 
 <h3 id="press">What a press does</h3>
 <p>A press has to be decided before anyone knows whether it's a click or a drag. The tool enters <code>Gesture::Press</code>, recording what a click would do on release and what a drag would become if the pointer travels more than three pixels (Part 13 draws the whole state machine):</p>
-<snip file="src/bevy_app/select.rs" lines="344-393"/>
-<snip file="src/bevy_app/select.rs" lines="1855-1884" mark="1855-1867,1873-1882"/>
+<snip file="src/bevy_app/select.rs" lines="493-521" first="#[derive(Default)]" last="id: NodeId,"/>
+<snip file="src/bevy_app/select.rs" lines="2698-2727" first="// A top-level embed&#x27;s background: a drag draws a marquee over" last="}"/>
 <p>The decisions match Figma's. Pressing an unselected node selects it at once and a drag moves it. Pressing an already-selected node in a multi-selection keeps the selection (so the drag moves them all), and only a click without movement narrows it to that node. Pressing an artboard's background starts a marquee over its contents; a click selects the artboard. Meshes in 3D, content on planes, sliders, path handles and shape handles become other kinds of manipulator in the same <code>Gesture::Edit</code> state; since October 15 there are no separate legacy drags, and selected meshes in a 3D panel get a transform gizmo.</p>
 <p>A drag moves every selected node, each through <code>Store::begin_drag</code> (Part 3), so constrained nodes drag through their cluster and bound axes hold with their reason logged. The keyboard follows Figma too: arrows nudge 1 px (Shift: 10), Delete deletes, Enter and Shift+Enter go down and up a level, Tab walks siblings, Cmd+A selects all at the current level. Each is one transaction.</p>
 
 <h2 id="box"><span class="sec">7.2</span>The transform box</h2>
 <p>The box is the unit square mapped onto the selection: a node's own (oriented) box for one node, the axis-aligned bounds of every node's box for several. Grips are found in window pixels, so they stay the same size at any zoom:</p>
-<snip file="src/bevy_app/select.rs" lines="957-988" mark="960-974,980-986"/>
+<snip file="src/bevy_app/select.rs" lines="1433-1464" first="fn grip_at(frame: Affine, p: Point, resizable: bool, rotatable: bool, k: f64) -&gt; Option&lt;Grip&gt; {" last="}"/>
 <p>Corners resize both axes, edges one, and the area just outside a corner rotates, with no separate rotation handle, as in Figma. A resize or rotation becomes one affine map <code>A</code>, in the panel's document pixels:</p>
-<snip file="src/bevy_app/manipulate.rs" lines="290-326" mark="296-300,307-311,314-318"/>
+<snip file="src/bevy_app/manipulate.rs" lines="450-526" first="Manip::Transform(t) =&gt; {" last="preview_writes(cx.store, writes);"/>
 <p>For a resize, the anchor is the opposite grip (or the centre, with Alt), and the scale is measured from where the press landed rather than from the grip's exact corner, so pressing a grip without moving changes nothing. Shift keeps the aspect ratio. A scale never collapses below one pixel. For a rotation, Shift snaps the node's final angle to 15°.</p>
 
 <h3 id="decompose">Turning A into leaf values</h3>
 <p>Every node the gesture affects is a <code>Part</code>, captured when the gesture begins:</p>
-<snip file="src/bevy_app/select.rs" lines="427-438"/>
+<snip file="src/bevy_app/select.rs" lines="779-793" first="/// One node a resize or rotation writes, as it was when the gesture began." last="}"/>
 <p>For each part, <code>A</code> is moved into the node's parent space, <code>Q = P⁻¹·A·P</code>, and composed with the node's own transform and its box. The result is decomposed back into position, rotation and size:</p>
-<snip file="src/bevy_app/select.rs" lines="782-795"/>
-<p>What gets written depends on the kind of node, which is the important design choice. Resizing a rect writes its <code>size</code>, not its scale, so its stroke keeps its width (Figma's behaviour, and why the shadow rect resizes cleanly). An ellipse writes its two radii about its centre, so a circle stretched along one axis becomes an ellipse. A 2D embed's resize changes its <em>window</em> (its <code>frame</code>) and leaves the content where it is. A path moves its points and scales its handles:</p>
-<snip file="src/bevy_app/select.rs" lines="797-872" mark="813-823,836-842,843-856"/>
-<p>Dragging past the opposite edge flips the node by negating its <code>sy</code>. Every leaf is previewed through its handle each frame (<ref file="src/bevy_app/select.rs" line="2237" has="fn preview_writes">preview_writes</ref>), so a locked leaf simply holds still, and the whole gesture commits as one transaction labelled "resize rect" or "rotate 3 nodes".</p>
+<snip file="src/bevy_app/select.rs" lines="1199-1212" first="/// Position, rotation, box size and whether `sy` flips, from the map of" last="}"/>
+<p>What gets written depends on the kind of node, which is the important design choice. Resizing a rect writes its <code>size</code>, not its scale, so its stroke keeps its width (Figma's behaviour, and why the shadow rect resizes cleanly). An ellipse writes its two radii about its centre, so a circle stretched along one axis becomes an ellipse. A 2D embed's resize changes its <em>window</em> (its <code>frame</code>) and leaves the content where it is. A path transforms its packed anchors, or its expanded points and handles:</p>
+<snip file="src/bevy_app/select.rs" lines="1214-1296" first="impl Part {" last=""/>
+<p>Dragging past the opposite edge flips the node by negating its <code>sy</code>. Every leaf is previewed through its handle each frame (<ref file="src/bevy_app/select.rs" line="3313" has="fn preview_writes">preview_writes</ref>), so a locked leaf simply holds still, and the whole gesture commits as one transaction labelled "resize rect" or "rotate 3 nodes".</p>
 
 <h3 id="overlay">The box is not in the document</h3>
 <p>The box, the grips, the hover outline and the marquee are drawn into each panel's <code>Overlay</code> view, a separate retained texture above the panel's content (Part 6), rebuilt from the selection when it changes:</p>
-<snip file="src/bevy_app/select.rs" lines="2254-2274"/>
-<p>Rebuilding this small list re-renders only the overlay texture, never the document's content. The geometry it draws (frames, grips, lit outlines) is cached in <code>SelectionGeometryCache</code>, keyed on the document version and the global <code>GeometryRevision</code>, so it rebuilds whenever anything anywhere moved. Part 10's rough edges explain why that key is now too coarse.</p>
+<snip file="src/bevy_app/select.rs" lines="3515-3547" first="mut overlays: Query&lt;(Entity, &amp;SelectOverlay, &amp;mut DisplayList, &amp;mut VectorView), Without&lt;DocumentPanelLayer&gt;&gt;," last="}"/>
+<p>Rebuilding this small list re-renders only the overlay texture, never the document's content. The geometry it draws (frames, grips, lit outlines) is cached in <code>SelectionGeometryCache</code>, keyed by the view's composition revisions (including embeds), selection reaches and interaction state. An unrelated Stats composition tick no longer invalidates its geometry. Chrome sizes and colours come from the view's resolved context fields (Part 14).</p>
 
 <h2 id="input"><span class="sec">7.3</span>What the shell had to start sending</h2>
 <p>The tools needed input the canvas never received before:</p>
 <ul>
-  <li><strong>Modifier keys.</strong> Alt and Cmd never arrived as keys. Every pointer, wheel and key event now carries modifier bits (Shift 1, Ctrl 2, Alt 4, Cmd 8) through <ref file="src/web_ffi.rs" line="484" has="pub fn set_modifiers">set_modifiers</ref>.</li>
-  <li><strong>Tool keys.</strong> Escape, Enter, Tab, arrows, Delete, Cmd+A, the zoom keys and P/V are decided in the shell and sent as commands (<code>toolKey</code>), not raw keys, so browser behaviours like Tab focus and Cmd+A text selection are prevented.</li>
+  <li><strong>Modifier keys.</strong> Alt and Cmd never arrived as keys. Every pointer, wheel and key event now carries modifier bits (Shift 1, Ctrl 2, Alt 4, Cmd 8) through <ref file="src/engine_api.rs" line="1506" has="pub fn set_modifiers">engine_api::set_modifiers</ref>.</li>
+  <li><strong>Tool keys.</strong> The shell routes editing/navigation commands and suppresses browser defaults. View tool keys are resolved from contexts, then sent as commands (<code>toolKey</code>), not raw keys, so browser behaviours like Tab focus and Cmd+A text selection are prevented.</li>
   <li><strong>Where a press happened.</strong> On a slow frame, the press and the first moves of a drag land in the same frame. A press now carries its own position (<code>left_bt_down_at</code>), and later moves wait for the next frame, so a press is resolved where it happened.</li>
-  <li><strong>Cursors.</strong> The canvas lives in a worker, which can't set a cursor, so Rust sends the cursor it wants (<code>send_cursor_from_worker</code>) and the main thread sets it. CSS has no rotation cursor, so <code>rotate:&lt;degrees&gt;</code> becomes a small SVG arrow turned toward the corner.</li>
+  <li><strong>Cursors.</strong> The canvas lives in a worker, which can't set a cursor, so Rust sends the cursor it wants (<code>EngineEvent::Cursor</code>, through the shared event union) and the main thread sets it. CSS has no rotation cursor, so <code>rotate:&lt;degrees&gt;</code> becomes a small SVG arrow turned toward the corner.</li>
 </ul>
-<snip file="src/bevy_app/pointer.rs" lines="59-66"/>
+<snip file="src/bevy_app/pointer.rs" lines="59-66" first="// A press is resolved where it happened: moves that arrived after it in" last="}"/>
 
-<h2 id="paths"><span class="sec">7.4</span>Shapes, paths, contours and points</h2>
-<p>The roadmap decided early how a path is stored: as nodes, so each point can be bound, constrained, selected and undone on its own. Since October 15 (SVG import, compound paths) there is one level more: a <code>path</code> holds <code>contour</code> children, each one outline, and each contour holds its <code>point</code>s in order. Several contours make a compound path (a donut, the letter "O"), and the path's <code>fill_rule</code> (<code>nonzero</code> or <code>evenodd</code>, as in SVG) decides which enclosed areas are inside.</p>
-<raw title="a path with a hole">path    transform2d, path.fill_rule = "evenodd", fill, stroke
-  contour  contour.closed = true          outer ring
-    point  transform2d (x, y), handles (ix iy ox oy, relative; 0 = corner)
-    point  …
-  contour  contour.closed = true          the hole
-    point  …</raw>
-<p><code>iron_document::contour</code> builds the outlines, so the renderer, the editors, shape conversion and SVG agree:</p>
-<snip file="src/iron_document/src/contour.rs" lines="80-109"/>
-<p>Points and contours have no draw data of their own: when one changes, the reconciler redraws its path, and Part 10's revisions classify the change as a <em>local</em> change of the path. A click hits a path within 5 px of its line, or anywhere inside its filled area by its fill rule.</p>
+<h2 id="paths"><span class="sec">7.4</span>Shapes, packed paths and editable points</h2>
+<p>A path usually holds all contours in one <code>path.d</code> geometry value. Each contour has closedness and anchors with relative handles. <code>Value::Geometry</code> shares immutable data through an <code>Arc</code>, with outlines and bounds cached on first read; cloning a transaction does not copy every anchor. Schema 8 stores six numbers per anchor, preserving handle bits rather than round-tripping SVG text.</p>
+<p>When points need independent identity for editing, binding or constraints, <code>contour::expand_points</code> returns ops that clear the packed value and create contour/point nodes in one transaction. Selected-path point editing performs this expansion; the pen still authors individual point nodes. Both representations use the same contour reader, renderer, picker and SVG exporter. Moving an expanded point is a local geometry change of its path.</p>
+<snip file="src/iron_document/src/contour.rs" lines="48-79" first="pub fn packed(doc: &amp;Document, path: NodeId) -&gt; Option&lt;&amp;Arc&lt;Geometry&gt;&gt; {" last="/// `path`&#x27;s contours in order, each with its points: an expanded path&#x27;s,"/>
 <p><strong>Shapes</strong> follow Figma's model (October 14). A <code>rect</code> (with optional <code>corners</code>) and an <code>ellipse</code> (with optional <code>arc</code>: start, sweep, inner ratio) keep their parameters, so they stay editable, bindable and constrainable; a lone selected shape shows dots for its corner radii or its arc. <code>iron_document::shape</code> computes their outlines as anchors with handles, the same form a path's points take. Editing a shape point by point first converts it to a path: a <code>Delete</code> and a restoring <code>Create</code> of the <em>same id</em> in one transaction, which keeps its placement, paint, name and relations. What can't survive is anything that reads or drives the old parameters (a binding on <code>size.w</code>, a clip on <code>radius.rx</code>). Those are <em>cuts</em>, and the shell asks before making them.</p>
 
 <h3 id="pen">The pen</h3>
-<snip file="src/bevy_app/pen.rs" lines="1-13"/>
+<snip file="src/bevy_app/pen.rs" lines="1-13" first="//! The pen tool (roadmap stage E, §4): Figma&#x27;s pen over the document&#x27;s" last="//! own composition."/>
 <p>Each placed point is one transaction, so undo removes one point. The first click creates the path, its first contour and its first point together; later clicks add a point to the last contour; a click back on the first point sets <code>contour.closed</code>:</p>
-<snip file="src/bevy_app/pen.rs" lines="277-299" mark="287-298"/>
+<snip file="src/bevy_app/pen.rs" lines="318-340" first="// Continue the path being drawn in this view, or start one." last="pen.path = None;"/>
 <p>The point's handles come from the drag between press and release, so a click is a corner and a click-drag is a smooth point. The transaction is pushed only on release, which is why the pen never needs to preview a node that doesn't exist yet. While drawing, the overlay draws the path's points, the line from the last point to the pointer, and the handle being dragged; none of that is stored.</p>
 <p>When a lone path is selected with the select tool, its points and handles are drawn and take the press before the box's grips. A point drags through <code>begin_drag</code> like any node ("move point"); a handle writes the point's <code>handles</code> leaves, mirrored to the opposite handle unless Alt is held ("move handle").</p>
 
 <h2 id="inspector"><span class="sec">7.5</span>The inspector</h2>
-<p>The right-hand panel shows the first selected node's components and fields. Rust describes the node, including how an edit to each field would land:</p>
-<snip file="src/engine_api.rs" lines="615-662" mark="636-640"/>
+<p>The right-hand panel shows the first selected node's facets and fields. Rust describes the node, including how an edit to each field would land:</p>
+<snip file="src/engine_api.rs" lines="1018-1080" first="pub fn document_inspect(app: &amp;mut WorkerApp, node: String) -&gt; String {" last=""/>
 <p>A field shows its value as a reader sees it, its binding if bound, and its handle: <code>direct</code>, <code>via</code> a linear binding's source, or <code>locked</code> with the reason (shown as the field's tooltip, with the input disabled). Setting a field parses the text by the field's current kind (number, colour, vector, quantity) and applies it through the handle as one transaction, "set size.w" (<code>Store::set_through_handle</code>, which leaves a running drag alone unless the edit conflicts with it; Part 13). Number fields can also be scrubbed by dragging their label, which runs a real store gesture with a token. So setting the shadow's bound <code>x</code> to 720 moves the square to 620, through <code>x = #square.x + 100</code>.</p>
 <div class="box edge"><span class="tab">What it isn't yet</span>
-<p>This inspector is HTML generated from a JSON description. The design note (<code>plans/panels-and-session.md</code>) makes it a composition in the session whose controls are nodes <em>bound</em> to the target's leaves. The semantics are already the same (edits go through handles, locks say why). What's missing is hosting document nodes as HTML, which Part 8 discusses.</p>
+<p>This inspector is HTML generated from a JSON description. The design note (<code>plans/specs/panels-and-session.md</code>) makes it a composition in the session whose controls are nodes <em>bound</em> to the target's leaves. The semantics are already the same (edits go through handles, locks say why). What's missing is hosting document nodes as HTML, which Part 8 discusses.</p>
 </div>
 
-<div class="box edge"><span class="tab">Rough edges</span>
-<p>Since this part was first written, Alt-drag duplication, copy and paste (Part 13), shape tools (R, O) with a bottom toolbar, Cmd-drag to bend a segment, and the 3D gizmo have landed. Still missing: snapping and smart guides, a size label (the display list has no text yet), group/ungroup, and inserting a point on a segment. <code>plans/specs/select-tool.md</code> keeps the "Not yet" list.</p>
-</div>
+
+<h2 id="snapping"><span class="sec">7.6</span>Snapping and smart guides</h2>
+<p><code>iron_spatial::snap</code> supplies edge/centre candidates and a latch with hysteresis in screen pixels. Moving, resizing, path points and the pen use it. Smart guides are overlay geometry, not stored constraints. View contexts supply whether snapping is enabled and its tolerances; the shape tools and equal-spacing labels remain follow-ups.</p>
+
+<h2 id="text"><span class="sec">7.7</span>Text is drawn and edited on the canvas</h2>
+<p>A <code>text</code> node has content, font, style runs and sizing (auto width, auto height or fixed). <code>iron_text</code> shapes and measures text; <code>iron_document::text::measure</code> gives bounds, picking, renderer and caret one layout. The display list supports glyph runs. Font catalog entries load on demand through the host; native also discovers installed fonts. New font availability triggers remeasurement and layout.</p>
+<p>The text tool and double-click enter editing. A hidden HTML input handles text/IME and UTF-16 selection offsets; Rust owns the canvas selection, movement and transaction edits. The Text inspector can style selected ranges. Content may be bound, including <code>fmt</code> readouts for quantities, so a live electrical voltage label is an ordinary text binding.</p>
+
+<h2 id="layout"><span class="sec">7.8</span>Layout and tables</h2>
+<p>A group's <code>layout</code> facet chooses horizontal/vertical stack or grid, gaps, padding and alignment. Children's <code>layout_item</code> leaves choose fixed/hug/fill sizing, tracks, spans and absolute placement. <code>iron_layout</code> wraps Taffy; the document's layout producer publishes resulting positions and chosen sizes as runtime signals (Part 12). A laid-out position is therefore locked against a plain move, while a sequence affordance can reorder items and preview the new flow. Motion eases that preview without storing intermediate positions (Part 14).</p>
+<p>A <code>table</code> contains <code>row</code> nodes whose cells are text nodes. Merges use row/column spans; layout computes explicit grid areas, and table decoration draws bands and rules broken around merged cells. Boxed/light presets, row and column edits, spreadsheet paste, a canvas tool, inspector and model <code>&lt;table&gt;</code> markup all use transactions. Style inheritance remains deferred.</p>
+<div class="box edge"><span class="tab">Still open</span><p>Group/ungroup, drag reparenting and inserting points on segments remain in <code>plans/specs/select-tool.md</code>. Text and layout have additional limits recorded in their specs; the inspector is still HTML, with context-driven section order, rather than a session composition of hosted controls.</p></div>

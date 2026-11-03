@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build guide 2: expand <snip>, <ref>, <chip>, <out>, <raw> in _src/src/*.html into plans/guide/*.html.
+"""Build guide 2: expand <snip>, <ref>, <chip>, <out>, <raw> in _src/src/*.html into plans/guide2/*.html.
 
 Run from anywhere:  python3 plans/guide2/_src/build.py   (or name pages: ... build.py 03-ops)
 
@@ -35,7 +35,7 @@ SYSTEMS = {
 PAGES = [
     # slug, number, title, blurb
     ("index", "", "Iron, Part Two", ""),
-    ("f1-document", "F1", "What the document is made of", "Ids, nodes, relations, values and slots, components, the registry, order keys, tombstones; plus a Rust phrasebook"),
+    ("f1-document", "F1", "What the document is made of", "Ids, nodes, relations, values and slots, facets, the registry, order keys, tombstones; plus a Rust phrasebook"),
     ("f2-changes", "F2", "Ops, transactions and undo", "The nine ops and their inverses, all-or-nothing transactions, undo as a transaction, the file, and views"),
     ("f3-bindings", "F3", "Bindings, the graph and clips", "Expressions, the reactive graph, read layers, gesture previews, and clips on a timeline"),
     ("f4-bridge", "F4", "Bevy and the model", "How the store reaches the screen, how the shell talks to it, and how Claude edits it"),
@@ -44,12 +44,12 @@ PAGES = [
     ("03-handles", "3", "Drags through the store", "World transforms, handles that invert bindings, previews, and the same-frame reconcile"),
     ("04-solver", "4", "Constraints and the solver", "iron_solve, constraint nodes, clusters, fingers, and the pendulum"),
     ("05-compositions", "5", "Compositions, figures and embeds", "One thing drawn many ways, panels, Link, and compositions inside compositions"),
-    ("06-rendering", "6", "Every view is a texture", "Per-view textures, render on demand, 3D inside 2D, 2D on planes, and latency"),
-    ("07-tools", "7", "The select tool and the pen", "Figma's selection rules, the transform box, paths of point nodes, the inspector"),
+    ("06-rendering", "6", "Every view is a texture", "Per-view textures, render on demand, 3D inside 2D, 2D on planes, chunks, tiles and instance sharing"),
+    ("07-tools", "7", "The select tool and the pen", "Figma's selection rules, the transform box, packed paths, text, layout, tables and the inspector"),
     ("08-workspace", "8", "The workspace and the session", "Views and notations, the dock, pan and zoom, and state that is never saved"),
     ("09-ports", "9", "Ports, connections and physics", "One-way signals derived from connections, and across/through pairs solved as equations"),
     ("10-boundary", "10", "Who computes where things are", "Iron owns every world transform: revisions, a spatial scene in group-local space, flat entities, and entities only for the working set"),
-    ("11-frame", "11", "One frame, in order", "Two hosts, one engine: what crosses the boundary, which system runs when, what each reads and writes, and how answers get out"),
+    ("11-frame", "11", "One frame, in order", "Three runtimes, one engine: what crosses the boundary, which system runs when, what each reads and writes, and how answers get out"),
     ("12-signals", "12", "Runtime signals and producers", "Clips, the port network and Bevy simulations as producers of one runtime layer; freeze; the piston demo"),
     ("13-ownership", "13", "Gestures have owners", "Previews that belong to a gesture, edits that race it, Alt-drag as one undo step, copy and paste, one pointer state machine"),
     ("14-contexts", "14", "Behaviour as data", "The app today on one page; then contexts: rules the engine reads for selection, controls, keys, motion, palettes, tolerances and chrome"),
@@ -142,6 +142,11 @@ def expand_snip(m):
     if end > len(src):
         errors.append(f"{path}: range {start}-{end} past end ({len(src)})")
     body = src[start - 1:end]
+    # Boundary text is authored with the range. A shifted range must fail,
+    # rather than silently quote unrelated code that happens to fit in the file.
+    for attr, actual in (("first", body[0] if body else ""), ("last", body[-1] if body else "")):
+        if attr in a and html.unescape(a[attr]) != actual.strip():
+            errors.append(f"snip {path}:{start}-{end} {attr} boundary changed: {actual.strip()!r}")
     body = [l.replace("\t", "    ") for l in body]
     indents = [len(l) - len(l.lstrip(" ")) for l in body if l.strip()]
     cut = min(indents) if indents else 0
@@ -290,6 +295,7 @@ def build_guide_rows():
 
 def main():
     only = set(sys.argv[1:])
+    pending = []
     for i, (slug, *_rest) in enumerate(PAGES):
         path = os.path.join(SRC, f"{slug}.html")
         if not os.path.exists(path):
@@ -303,13 +309,16 @@ def main():
         if "<!--GUIDE-ROWS-->" in body:
             body = body.replace("<!--GUIDE-ROWS-->", build_guide_rows())
         body = transform(body)
-        with open(os.path.join(OUT, f"{slug}.html"), "w", encoding="utf-8") as f:
-            f.write(page(i, body))
+        pending.append((slug, page(i, body)))
     if errors:
         print("\nERRORS:")
         for e in errors:
             print("  " + e)
         sys.exit(1)
+    # Leave the last valid guide intact if any page or reference failed.
+    for slug, rendered in pending:
+        with open(os.path.join(OUT, f"{slug}.html"), "w", encoding="utf-8") as f:
+            f.write(rendered)
     print("ok")
 
 

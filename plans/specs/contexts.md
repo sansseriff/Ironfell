@@ -1,8 +1,8 @@
 # Contexts: Iron's behaviour as data (master plan)
 
-**Status:** §5 steps 0–8 built 2026-10-26/27 (4 in its first part; `track` along a path deferred; 7 as `chrome.md`'s revision, chrome as context fields the overlay reads, not yet chrome nodes; 8 as [`schematic.md`](schematic.md)); state machines (step 9) next; the rest proposed. The user supports the direction ("I'm not afraid of
+**Status:** §5 steps 0–8 built 2026-10-26/27 (4 in its first part; `track` along a path deferred; 7 as `chrome.md`'s revision, chrome as context fields the overlay reads, not yet chrome nodes; 8 as [`schematic.md`](schematic.md)); interaction consolidation is the agreed follow-up direction (see below); state machines (step 9) and the remaining domains are proposed. The user supports the direction ("I'm not afraid of
 thinking big on this topic. Now is the time in this program to have these overarching
-ideas"). Nothing built. This plan owns the shared foundation and the order of work;
+ideas"). This plan owns the shared foundation and the order of work;
 domain specs own their detail: [`affordances.md`](affordances.md) (interaction and
 motion) first, then [`chrome.md`](chrome.md) (the editor's chrome), then the rest of
 §4. Where they disagree on the foundation, this plan wins.
@@ -18,6 +18,16 @@ conventions push a composition toward one kind of diagram"); [vision 02](../visi
 §9 (editors as artifacts; "making the binding layer data is the whole move");
 [vision 06](../vision/06_the-computation-boundary.md) §2–3 (state machines before
 handlers; enumerated choice).
+
+**Follow-up, 2026-10-28:** [`interaction-lifecycle.md`](interaction-lifecycle.md)
+refines how existing resolved policy becomes typed interaction offers and shared
+semantic commands. [`authoring-workflows.md`](authoring-workflows.md) is the separate
+design investigation for author-facing components, linked representations, computation
+bindings and pedagogical scopes. A context may choose remove-representation versus
+delete-subject; shared document operations compute the effects. The current locality
+and built-in/authored split remain in force. Work order is in the product handoff;
+these plans do not approve a general runtime mechanism registry or arbitrary time/space
+context cascade.
 
 ---
 

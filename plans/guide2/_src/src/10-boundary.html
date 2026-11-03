@@ -112,12 +112,12 @@
   <div class="box built"><span class="tab">What was built</span><p><strong>Classify each change.</strong> A node's own <code>transform2d</code> moving is a <em>placement</em> change: its descendants' bounds, <em>in its own space</em>, didn't move. Its own size, radius, stroke or outline moving is a <em>local</em> change. Creating, deleting, reparenting or reordering is <em>structure</em>. An index that keeps each group's contents in the group's space then rewrites one entry for a rotation.</p></div>
 </div>
 <p>The classification is one function from a changed leaf to its effect:</p>
-<snip file="src/iron_document/src/geom.rs" lines="300-317" mark="306-308"/>
-<p>Line 306 is the subtle one: a <code>point</code> or <code>contour</code> moving isn't a placement of its own. A path's points are its outline, so moving one is a <em>local</em> change of the enclosing <code>path</code> (Part 7 covers contours). A colour, a name or a 3D transform is <code>None</code>: nothing a 2D index cares about.</p>
+<snip file="src/iron_document/src/geom.rs" lines="304-321" first="/// Classify a resolved-value change. A point&#x27;s position is part of its" last="}"/>
+<p>Line 310 is the subtle one: a <code>point</code> or <code>contour</code> moving isn't a placement of its own. A path's points are its outline, so moving one is a <em>local</em> change of the enclosing <code>path</code> (Part 7 covers contours). A colour, a name or a 3D transform is <code>None</code>: nothing a 2D index cares about.</p>
 <p>The counters live in the store:</p>
-<snip file="src/iron_document/src/geom.rs" lines="334-348"/>
+<snip file="src/iron_document/src/geom.rs" lines="338-352" first="/// Monotonic counters per node and for the tree, bumped as changes are" last="}"/>
 <p>The counters are bumped when someone <em>takes</em> the changes, not when they happen, so there is exactly one consumer: the spatial scene. That raised a problem, because the reconciler already drains the graph's change list every frame. If both read the same list, whichever ran first would leave nothing for the other. So the graph's one place that records a change now writes two sets:</p>
-<snip file="src/iron_document/src/graph.rs" lines="310-319"/>
+<snip file="src/iron_document/src/graph.rs" lines="334-343" first="/// The one place a resolved change is recorded." last="}"/>
 <figure class="diagram">
 <svg viewBox="0 0 920 360" role="img" aria-label="Two sources and two drains. Reactive::note writes both changes (a map leaf to value) and touched (a set of leaves). A transaction's ops go to the reconciler through the log and to Revisions as pending leaves and a pending structure flag. The reconciler drains changes; the spatial scene takes touched plus pending, classifies them with effect_of and bumps counters.">
   <defs><marker id="b3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
@@ -153,7 +153,7 @@
   <line x1="270" y1="280" x2="328" y2="330" class="ln" marker-end="url(#b3)"/>
   <rect x="650" y="40" width="260" height="110" rx="5" class="s-bound"/>
   <text class="t-mono" x="662" y="62">drain_changes()</text>
-  <text class="t-s" x="662" y="80">sync_document, reconcile_gesture</text>
+  <text class="t-s" x="662" y="80">sync_document, post-tool sync</text>
   <text class="t-s" x="662" y="98">→ Drawables, entities,</text>
   <text class="t-s" x="662" y="114">DocumentChanges (render)</text>
   <text class="t-xs" x="662" y="136">plus the log's op ids (collect_ids)</text>
@@ -185,11 +185,11 @@
     <tr><td>Delete, paste, reorder</td><td></td><td>structure</td><td>rebuild (40 ms at 10k, native)</td></tr>
   </tbody>
 </table></div>
-<p><code>Revisions::chain_stamp</code> (<ref file="src/iron_document/src/geom.rs" line="365" has="pub fn chain_stamp">geom.rs:365</ref>) sums the placement revisions up a node's chain: a cheap key for anything derived from a world affine, which stays equal until some ancestor moves. Only a test uses it today; the selection overlay's cache is its intended first user (see the rough edges at the end).</p>
+<p><code>Revisions::chain_stamp</code> (<ref file="src/iron_document/src/geom.rs" line="369" has="pub fn chain_stamp">geom.rs:369</ref>) sums the placement revisions up a node's chain: a cheap key for anything derived from a world affine, which stays equal until some ancestor moves. Only a test uses it today; the selection overlay's cache is its intended first user (see the rough edges at the end).</p>
 
 <h2 id="scene"><span class="sec">10.4</span>The spatial scene: a tree of indexes</h2>
 <p><code>iron_spatial::Scene</code> mirrors the document's groups. Every node with children that hold 2D content gets a <em>scope</em>: one R-tree (<code>BoundsIndex</code>, over <code>understory_index</code>) of its children, in its own local space. A group is then an <em>entry</em> in its parent's scope whose bounds are its own scope's union mapped through its affine.</p>
-<snip file="src/iron_spatial/src/scene.rs" lines="29-81" mark="41-50,53-58"/>
+<snip file="src/iron_spatial/src/scene.rs" lines="58-112" first="#[derive(Clone, Copy, Debug, PartialEq)]" last="}"/>
 <p>Drawn out for the stress scene, rotated:</p>
 <figure class="diagram">
 <svg viewBox="0 0 920 470" role="img" aria-label="Left: a composition containing a rotated field group, whose cells are groups of rects; each group has its own axes. Right: the Scene's maps. scopes keyed by Some(composition), Some(field), Some(cell) each hold an R-tree and a union in that scope's space. entries map each node to its scope, kind, own affine, bounds in the scope's space and painter order. Rotating the field rewrites only the field's entry in the composition's scope.">
@@ -257,14 +257,14 @@
 
 <h3 id="update">Updating: placement versus local</h3>
 <p>Each frame, <code>prepare_spatial</code> calls <code>Scene::update</code>, which takes the store's changes and branches on their kind:</p>
-<snip file="src/iron_spatial/src/scene.rs" lines="219-285" mark="222-225,243-259,273-280"/>
-<p>Structure rebuilds everything (222–225); the scene can't patch painter order or chains cheaply, and structural edits are rare. A local change recomputes one leaf's bounds from <code>Store::local_bounds</code> (247–248). A placement change of a <em>group</em> (273–280) is the case the whole design is for: the group's subtree union is already in its child scope, so its entry in the parent scope becomes that union under the new affine. Nothing below it is touched. Then <code>settle</code> carries changed unions upward:</p>
-<snip file="src/iron_spatial/src/scene.rs" lines="287-317"/>
-<p>Dirty scopes are processed deepest first (290). After committing a scope's R-tree, if its union changed, either the scope is a composition, in which case every frameless 2D embed showing it must grow or shrink (306–311), or it's a group, whose entry in its parent is rewritten and the parent marked dirty (312–317). So a dragged leaf costs one entry, and up to its depth more only when it pushes a union outward.</p>
+<snip file="src/iron_spatial/src/scene.rs" lines="260-326" first="/// Bring the scene up to date with everything the store reports moved." last="}"/>
+<p>Structure rebuilds everything (263–266); the scene can't patch painter order or chains cheaply, and structural edits are rare. A local change recomputes one leaf's bounds from <code>Store::local_bounds</code> (288–289). A placement change of a <em>group</em> (314–321) is the case the whole design is for: the group's subtree union is already in its child scope, so its entry in the parent scope becomes that union under the new affine. Nothing below it is touched. Then <code>settle</code> carries changed unions upward:</p>
+<snip file="src/iron_spatial/src/scene.rs" lines="328-359" first="/// Commit every dirty scope, deepest first, and carry changed unions up" last="dirty.insert(parent);"/>
+<p>Dirty scopes are processed deepest first (331). After committing a scope's R-tree, if its union changed, either the scope is a composition, in which case every frameless 2D embed showing it must grow or shrink (347–353), or it's a group, whose entry in its parent is rewritten and the parent marked dirty (354–359). So a dragged leaf costs one entry, and up to its depth more only when it pushes a union outward.</p>
 
 <h3 id="query">Querying: map the question, not the content</h3>
 <p>A point or rectangle query descends the same tree. At each group entry it hits, it maps the query <em>into</em> the group's space through the inverse affine, rather than mapping the group's content out:</p>
-<snip file="src/iron_spatial/src/scene.rs" lines="192-215" mark="205-212"/>
+<snip file="src/iron_spatial/src/scene.rs" lines="233-256" first="fn query(&amp;self, scope: Option&lt;NodeId&gt;, only: Option&lt;&amp;BTreeSet&lt;NodeId&gt;&gt;, point: Option&lt;Point&gt;, rect: Rect, out: &amp;mut Vec&lt;NodeId&gt;) {" last="}"/>
 <figure class="diagram">
 <svg viewBox="0 0 920 210" role="img" aria-label="A point query: p in composition space hits the field entry; p is mapped by the field's inverse affine into field space, where it hits cell c17; mapped again by c17's inverse into cell space, it hits rect r42. Results are sorted by painter order.">
   <defs><marker id="b5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
@@ -282,8 +282,8 @@
 <figcaption>Each step is one R-tree lookup in a scope and one affine inverse. A singular affine (a zero scale) shows nothing and is skipped.</figcaption>
 </figure>
 <p>The same scope tree answers the other question readers need, "what is this node's world affine?", in O(depth) without walking any content: <code>placement(scope)</code> multiplies the group affines above a scope, and <code>world_affine(id) = placement(entry.scope) · entry.affine</code>.</p>
-<snip file="src/iron_spatial/src/scene.rs" lines="130-136"/>
-<snip file="src/iron_spatial/src/scene.rs" lines="165-176"/>
+<snip file="src/iron_spatial/src/scene.rs" lines="163-169" first="/// An indexed node&#x27;s affine from its local space to its composition&#x27;s:" last="}"/>
+<snip file="src/iron_spatial/src/scene.rs" lines="206-217" first="/// The affine from a scope&#x27;s space to its composition&#x27;s: the product of" last="}"/>
 <p>Native numbers for the stress shape (100 cells of 100), from <code>tests/scene.rs</code>: rotate update 24 µs, one leaf drag 25 µs, a 1600×1000 visible-rect query 142 µs for 405 hits, structural rebuild 40 ms. In the app, the bounds phase fell from 24.8 ms to under 0.1 ms for the 10k rotation.</p>
 <div class="box rust"><span class="tab">Reading the code</span>
 <p><code>prepare_spatial</code> (<ref file="src/document_bridge/spatial.rs" line="33" has="pub fn prepare_spatial">spatial.rs:33</ref>) calls <code>bypass_change_detection()</code> on both the scene and the store before updating. Bevy marks a resource changed whenever a system takes it mutably, and the 2D layer rebuilds its display lists when the scene is changed. So the system compares <code>generation</code> before and after and calls <code>set_changed()</code> only when something moved. Without that, every idle frame would rebuild every view.</p>
@@ -341,28 +341,28 @@
 <figcaption>What a 2D entity carried was a copy of its node's draw data and a transform Iron also computed. Both now live by <code>NodeId</code> (draw data in <code>Drawables</code>, placement in the scene), and an entity is spawned only when something in Bevy needs a handle on the node.</figcaption>
 </figure>
 <p>The reconciler's first pass now writes draw data for every touched node and spawns an entity only where one is due:</p>
-<snip file="src/document_bridge/materialize.rs" lines="355-386" mark="362-368"/>
+<snip file="src/document_bridge/materialize.rs" lines="368-399" first="// Pass 1: draw data for every touched node, and an entity where one is due." last="}"/>
 <p>A 3D entity's pose comes from <code>Store::world_affine3</code>, written as both <code>Transform</code> and <code>GlobalTransform</code>. A root entity without a parent gets its <code>GlobalTransform</code> copied from its <code>Transform</code> by Bevy's simple sync, so writing both makes that copy a no-op instead of an overwrite, and keeps <code>update_aabbes</code> and the gizmo, which read <code>Transform</code>, current. Since entities are flat, moving a 3D parent has to rewrite its materialised descendants explicitly. That's the second pass:</p>
-<snip file="src/document_bridge/materialize.rs" lines="388-406"/>
+<snip file="src/document_bridge/materialize.rs" lines="401-419" first="// Pass 2: 3D placement below a moved 3D node. Entities are flat (no" last="}"/>
 <p>A 2D reader asks for a world affine through one function, which prefers the scene's cached placement and falls back to the store's walk for nodes the scene doesn't hold (an empty group, a point):</p>
-<snip file="src/document_bridge/nest.rs" lines="96-102"/>
+<snip file="src/document_bridge/nest.rs" lines="173-179" first="/// A 2D node&#x27;s local space to its composition&#x27;s: the spatial scene&#x27;s cached" last="}"/>
 <p>And the draw walk queries the scene for visible candidates, then restores the groups above them, because a group's opacity or clip must still wrap its visible children once, not once per leaf:</p>
-<snip file="src/document_bridge/render.rs" lines="159-178"/>
+<snip file="src/document_bridge/render.rs" lines="436-455" first="fn walk(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, roots: &amp;[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &amp;str, depth: u32) {" last="}"/>
 
 <h2 id="modes"><span class="sec">10.6</span>Modes: entities only for the working set</h2>
-<p>Vision 10 §5.2 says every subtree is in one <em>presentation mode</em>, which decides both what Bevy holds for it and how it's drawn. Two of the modes are built:</p>
+<p>Vision 10 §5.2 says every subtree is in one <em>presentation mode</em>, which decides both what Bevy holds for it and how it's drawn. The modes now combine entity policy with the chunk/raster cache of Part 6:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Mode</th><th>Entities per node</th><th>Encoded</th><th>Typical use</th><th>Built</th></tr></thead>
   <tbody>
     <tr><td><strong>Live</strong></td><td>one, flat</td><td>every change</td><td>the selection and the hover: what is being edited</td><td>yes</td></tr>
     <tr><td><strong>Live + simulating</strong></td><td>the same, plus a producer's components (collider, body)</td><td>every change</td><td>physics on document shapes</td><td>no (Part 12's producer has no document entities)</td></tr>
-    <tr><td><strong>Retained vector</strong></td><td>none</td><td>today: the whole view re-encodes on a change</td><td>everything else on screen</td><td>yes, the default</td></tr>
-    <tr><td><strong>Baked</strong></td><td>none in 2D; one per subtree in 3D</td><td>drawn from a texture or merged mesh</td><td>static, complex or tiny on screen</td><td>no (phase 5)</td></tr>
+    <tr><td><strong>Retained vector</strong></td><td>none</td><td>changed chunks re-record; cacheable equal instance runs share recordings</td><td>everything else on screen</td><td>yes, the default</td></tr>
+    <tr><td><strong>Baked</strong></td><td>none in 2D; one per subtree in 3D</td><td>drawn from a texture or merged mesh</td><td>static, complex or tiny on screen</td><td>2D cold chunks: yes; 3D merged meshes: no</td></tr>
     <tr><td><strong>Compiled</strong></td><td>none</td><td>raster or video made deliberately</td><td></td><td>no</td></tr>
   </tbody>
 </table></div>
 <p>The Live set is chosen by policy each frame, from the selection and the hover:</p>
-<snip file="src/document_bridge/materialize.rs" lines="83-111" mark="98-106"/>
+<snip file="src/document_bridge/materialize.rs" lines="94-122" first="/// The most descendants a picked node brings into the Live set. Past this" last="}"/>
 <p><code>sync_live</code>, chained right after it in <code>PreUpdate</code>, despawns entities for nodes that left the set and spawns them for nodes that entered. The draw data is already in <code>Drawables</code>, so only the entity comes and goes. The budget exists because of one measured disaster:</p>
 <figure class="diagram">
 <svg viewBox="0 0 920 230" role="img" aria-label="The 100k stress scene as a tree: composition, the field, a thousand cells, a hundred rects each. Hovering the field makes the field and its thousand cells Live, 1,001 nodes, because its 101,000 descendants exceed the 2,000 budget. Selecting one rect makes its lineage Live: field, cell, rect. Clearing returns to the two 3D entities.">
@@ -385,11 +385,10 @@
 <figcaption>Shaded: the Live set while the field is hovered. Its subtree is 101,000 nodes, over the 2,000 budget, so only its direct children join.</figcaption>
 </figure>
 
-<div class="box edge"><span class="tab">Rough edges</span>
-<p><strong>Stale comments.</strong> The module comment at the top of <code>document_bridge/mod.rs</code> still says a drag "moves the entity's <code>Transform</code> each frame for latency"; that stopped being true in Part 3. The comment in <code>spatial.rs</code> still says drawing and picking take placements from Bevy and that the drift check stays; both ended with <code>26de602</code>. <code>rendering/architecture.md</code> §1 still lists "Bevy entities, transform propagation" as a pipeline step. The code here is the reference.</p>
-<p><strong>The selection overlay's cache</strong> (<code>SelectionGeometryCache</code>, Part 7) is still keyed on the global <code>GeometryRevision</code>, so any change anywhere rebuilds the selection's box and outlines. With Part 12's producer publishing every frame, a ticking gauge invalidates whatever is selected. Keying it on the selected subtrees' revisions (<code>chain_stamp</code> plus local revisions) is the render handoff's open item 3.</p>
-<p><strong>The store itself caches no world affine.</strong> <code>Store::world_affine</code> still walks the chain each call; the scene caches placements per group, which is what the 2D readers use. 3D world affines are recomputed per write.</p>
-<p><strong>A picker runs a little before the scene updates.</strong> Picking runs in <code>PreUpdate</code>, but <code>prepare_spatial</code> runs in <code>PostUpdate</code>. So a transaction applied by this frame's sync reaches the picker's placements next frame. Picking re-runs whenever the version changes, so this shows only as one frame of staleness for nodes the sync just moved.</p>
+<div class="box edge"><span class="tab">Current limits</span>
+<p><strong>Selection geometry is view-scoped.</strong> <code>GeometryRevision::of_view</code> includes the compositions a view shows, including embeds and loose content. Unrelated Stats ticks no longer invalidate a large drawing. The stamp remains conservative within a view; finer selected-subtree keys are still possible.</p>
+<p><strong>Structural changes rebuild the spatial scene.</strong> Value and placement changes patch entries, but painter order and scope changes still take the structural path. The store's own <code>world_affine</code> remains an ancestor walk; the scene caches group placements for 2D readers.</p>
+<p><strong>Picking and presentation have different barriers.</strong> Picking follows the PreUpdate document sync, while the spatial scene updates in PostUpdate after the second sync. Exact tests can therefore encounter an index from the prior scene update; same-frame tool commits are drawn after the post-tool barrier. Do not infer display latency from this schedule.</p>
 </div>
 
 <div class="box recap"><span class="tab">Before you go on</span>

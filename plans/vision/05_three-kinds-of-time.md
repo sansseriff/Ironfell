@@ -1,7 +1,7 @@
 # Three kinds of time
 
 **Status:** Vision draft
-**Date:** 2026-08-31
+**Date:** 2026-08-31; amended 2026-11-02 (§2.1, §4, §5.2, from the narrative note §6.7)
 **Scope:** A scope boundary on the temporal vocabulary of
 `04_architecture-an-llm-editable-scene-document.md` §6.5, the storage question it
 leaves open, and the authoring surfaces that keep the three kinds distinct
@@ -62,6 +62,14 @@ is a reactive binding on the property, not a clip. If a scripted animation needs
 to end at a data-dependent value, it animates a *normalised* parameter (0→1) and
 a reactive binding maps that parameter to the data-dependent range. The two kinds
 compose without either absorbing the other.
+
+> *Amended 2026-11-02* ([narrative note §6.7](../notes/narrative-layer-and-storage-primitives.md)): the rule that matters is
+> weaker. **An endpoint must be seekable**: a pure function of the document and the
+> clocks the narrative owns, so it can be evaluated at the clip's end without running
+> time. A literal is the trivial case; `to="{{signal.threshold}}"` is allowed when the
+> threshold resolves from a narrative clock, and refused when it depends on a free
+> input (the pointer, wall time) or on something with memory (a simulation). The
+> normalised parameter is how the engine runs a clip, not something to author.
 
 ---
 
@@ -183,6 +191,14 @@ component animates itself whenever it feels like it" or "the parent reaches
 inside and drives the component's internals," and the second breaks encapsulation
 irreparably.
 
+> *Amended 2026-11-02* ([narrative note §6.7](../notes/narrative-layer-and-storage-primitives.md)): the newer plan is that a
+> component's machine is part of its design, and each **transition holds a
+> sub-timeline** (`<transition from="seated" to="out" timeline="pull"/>`). A parent or a
+> narrative sets the component's state; the transition's timeline is the derived
+> sub-move for that change, and an author overrides it by exception. `<play>` remains
+> only for named timelines that are not transitions (a flourish): an arrow without a
+> state change.
+
 **Local state is required, not optional.** `phase: hidden | shown` is §5.3's
 `local_state`. Without it there is nowhere to record that the flourish has
 already played, and the component either replays on every re-evaluation or needs
@@ -244,6 +260,13 @@ This generalises After Effects' stopwatch, which is the best-known solution to
 the const→animated transition, and which fails mainly by being a tiny icon whose
 state is easy to miss. Making the mode an always-visible three-way control fixes
 that and extends it to the reactive case, which AE has no equivalent for.
+
+> *Amended 2026-11-02* ([narrative note §6.7](../notes/narrative-layer-and-storage-primitives.md)): the control is
+> **`const | bound`**. Whether a drag edits the design or a point in a narrative is
+> decided by the view's source (the narrative note §6.5), not per property, so
+> `animated` is not a mode: it is a marker on the row ("a move sets this") that opens
+> the move. A bound value has no drag handle unless its binding inverts (document
+> spine §5.10). The corollary below stands.
 
 **Corollary: never silently create a keyframe.** Moving an object while the
 playhead is off zero must do what the mode says, and the mode must be visible
@@ -311,8 +334,8 @@ otherwise invisible on the surface where a user is most likely looking for it.
 | `byTarget` reverse index | §2.6 |
 | Tombstones must cover animation targets, not just semantic links | §2.4 |
 | Component definitions hold template edges; instantiation mints concrete ones | §5.3 (doc 02) |
-| Named timelines are part of a component's declared interface | §5.3 (doc 02) |
-| Clip endpoints stay literal; data-dependence goes through a bound parameter | new |
+| Named timelines are part of a component's declared interface; transitions hold sub-timelines (amended 2026-11-02) | §5.3 (doc 02) |
+| Clip endpoints are seekable (literal, or resolved from a narrative clock); amended 2026-11-02 | new |
 | Signals may be state-machine inputs | new |
 
 Nothing here contradicts the existing documents. The two additions are the

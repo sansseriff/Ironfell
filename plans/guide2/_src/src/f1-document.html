@@ -1,15 +1,15 @@
 <header class="chapter-head">
   <p class="kicker">Foundations 1 of 4 · <chip sys="store"/></p>
   <h1>What the document is made of</h1>
-  <p class="lede">Everything in Iron is stored in one place: a document held by a small Rust crate, <code>iron_document</code>, that knows nothing about Bevy. This page covers the data, not yet how it changes: ids, nodes, relations, values, the slots that hold them, components, the registry of node types, sibling order and deletion. Each piece is introduced by the simple version it replaces and the specific way that version breaks.</p>
+  <p class="lede">Everything in Iron is stored in one place: a document held by a small Rust crate, <code>iron_document</code>, that knows nothing about Bevy. This page covers the data, not yet how it changes: ids, nodes, relations, values, the slots that hold them, facets, the registry of node types, sibling order and deletion. Each piece is introduced by the simple version it replaces and the specific way that version breaks.</p>
   <div class="prereq">
     <div><b>You need</b>Nothing. If Rust syntax gets in the way, the phrasebook at the end of this page covers the twenty or so constructs the code uses.</div>
-    <div><b>Files</b><code>id.rs</code>, <code>value.rs</code>, <code>component.rs</code>, <code>registry.rs</code>, <code>document.rs</code>, <code>order.rs</code>, all in <code>src/iron_document/src/</code>.</div>
+    <div><b>Files</b><code>id.rs</code>, <code>value.rs</code>, <code>facet.rs</code>, <code>registry.rs</code>, <code>document.rs</code>, <code>order.rs</code>, all in <code>src/iron_document/src/</code>.</div>
   </div>
 </header>
 
 <div class="box rust"><span class="tab">About the Foundations pages</span>
-<p>These four pages replace guide 1 (<code>plans/guide/</code>) for anyone starting here. They keep only what is still true of the code today, with excerpts from the current tree. Guide 1 described the system at an earlier commit and spent time on decisions that have since been overtaken: the old one-op-per-drag writeback, the Document panel, a fixed list of demo ids. You don't need any of that to read Parts 1–9.</p>
+<p>These four pages replace guide 1 (<code>plans/archive/guide-spine/</code>) for anyone starting here. They keep only what is still true of the code today, with excerpts from the current tree. Guide 1 described the system at an earlier commit and spent time on decisions that have since been overtaken: the old one-op-per-drag writeback, the Document panel, a fixed list of demo ids. You don't need any of that to read Parts 1–14.</p>
 </div>
 
 <h2 id="obvious"><span class="sec">F1.1</span>Start with the obvious document</h2>
@@ -27,7 +27,7 @@
   <tbody>
     <tr><td>A name is not an identity. Rename "square" and every reference to it breaks. A model will invent names, and two things can share one.</td><td>Opaque ids, never reused: <code>NodeId</code></td><td>F1.2</td></tr>
     <tr><td>Nesting ties <em>where</em> a node is to <em>what</em> it is. Moving it into another group means deleting and re-inserting.</td><td>A flat table of nodes, each with a <code>parent</code> field</td><td>F1.3</td></tr>
-    <tr><td><code>"x": true</code> is accepted. <code>"colour"</code> (a typo) is silently kept and ignored.</td><td>Typed components, and a registry of which components each type allows</td><td>F1.4–F1.6</td></tr>
+    <tr><td><code>"x": true</code> is accepted. <code>"colour"</code> (a typo) is silently kept and ignored.</td><td>Typed facets, and a registry of which facets each type allows</td><td>F1.4–F1.6</td></tr>
     <tr><td>A property can only hold a value. It can't say "this is the slider's value × 300".</td><td><code>Slot</code>: a value or a binding</td><td>F1.4</td></tr>
     <tr><td>Children are ordered by array index. Inserting one renumbers every later sibling.</td><td>Fractional order keys</td><td>F1.8</td></tr>
     <tr><td>Deleting removes the node, so undo recreates it with a new identity, and anything pointing at it dangles.</td><td>Tombstones</td><td>F1.9</td></tr>
@@ -35,19 +35,20 @@
 </table></div>
 
 <h2 id="ids"><span class="sec">F1.2</span>Identity: <code>NodeId</code></h2>
-<p>A node's id is a number that means nothing: not its position, name or type. The store hands out the next number from a counter and never hands it out again, even after deletion. For display it's written in base62 (digits, then A–Z, then a–z) with a <code>#</code> in front: <code>#1</code>, <code>#M</code> (22), <code>#1a</code>. You'll see ids like these in every view and log line.</p>
+<p>An authored node's id is an opaque number that means nothing: not its position, name or type. The store hands out the next number from a counter and never hands it out again, even after deletion. For display it's written in base62 (digits, then A–Z, then a–z) with a <code>#</code> in front: <code>#1</code>, <code>#M</code> (22), <code>#1a</code>. You'll see ids like these in every view and log line.</p>
 <p>There are two kinds of id, node ids (<code>#…</code>) and relation ids (<code>r…</code>), which need identical code (printing, parsing, JSON). <code>id.rs</code> writes it once as a macro and invokes it twice:</p>
-<snip file="src/iron_document/src/id.rs" lines="54-71" mark="58,61-66"/>
+<snip file="src/iron_document/src/id.rs" lines="118-135" first="macro_rules! id_type {" last="}"/>
 <div class="box rust"><span class="tab">Reading the Rust</span>
 <p><code>macro_rules! id_type</code> is a template. <code>$name:ident</code> matches an identifier such as <code>NodeId</code>, <code>$prefix:literal</code> a literal such as <code>"#"</code>, and <code>$(#[$m:meta])*</code> "zero or more attributes", which is how the <code>///</code> doc comment is passed through. Everything after <code>=&gt;</code> is pasted once per invocation with those names filled in.</p>
-<p>Line 58 is the point: <code>pub struct $name(u64)</code>, with the field <em>not</em> <code>pub</code>. Code outside the crate can't read or construct the integer; only <code>from_raw</code> and <code>raw</code>, which are <code>pub(crate)</code>, can. JSON writes the id as its string (<code>"#M"</code>, never 22). So nothing outside the store can depend on ids being numbers. <code>is_session</code> belongs to Part 8: ids from 2⁴⁰ up are for state that's never saved.</p>
+<p>Line 122 is the point: <code>pub struct $name(u64)</code>, with the field <em>not</em> <code>pub</code>. Code outside the crate can't read or construct the integer; only <code>from_raw</code> and <code>raw</code>, which are <code>pub(crate)</code>, can. JSON writes the id as its string (<code>"#M"</code>, never 22). So nothing outside the store can depend on ids being numbers. <code>is_session</code> belongs to Part 8: ids from 2⁴⁰ up are for state that's never saved.</p>
 </div>
 <p>The third id-like type counts transactions. Every successful one bumps it by exactly one, undo included:</p>
-<snip file="src/iron_document/src/id.rs" lines="121-125"/>
+<snip file="src/iron_document/src/id.rs" lines="263-267" first="/// Monotonic document version, bumped once per applied transaction." last="pub struct Version(pub u64);"/>
 
+<p>Session ids occupy their own range (Part 8). Expanded instance ids are stable owner/local paths such as <code>#m/7</code>, interned by the id registry, rather than fresh allocations from the authored counter (Part 2). They never become authored records in a save.</p>
 <h2 id="nodes"><span class="sec">F1.3</span>The node record, and relations</h2>
-<p>A node holds almost nothing itself. Its properties live in separate component tables (next section). The node is identity, type and placement:</p>
-<snip file="src/iron_document/src/document.rs" lines="17-66" mark="18-27,38-45"/>
+<p>A node holds almost nothing itself. Its properties live in separate facet tables (next section). The node is identity, type and placement:</p>
+<snip file="src/iron_document/src/document.rs" lines="17-70" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
 <ul>
   <li><code>parent: Option&lt;NodeId&gt;</code>. <code>None</code> means a root. Placement is a field, not nesting, so moving a node changes this one field.</li>
   <li><code>order: OrderKey</code> positions the node among its siblings (F1.8).</li>
@@ -57,88 +58,88 @@
 
 <h2 id="values"><span class="sec">F1.4</span>Values, and the slots that hold them</h2>
 <p>A <em>leaf</em> is one editable authored value, such as "the square's x". Every leaf holds a <code>Value</code> of a known kind:</p>
-<snip file="src/iron_document/src/value.rs" lines="18-39"/>
-<p><code>Quantity</code> and <code>Record</code> are Part 2's subject. <code>ValueKind</code> is the matching type tag, used to check that a <code>Number</code> field only ever receives numbers; its extra member <code>Any</code> is for fields that take whatever kind their target has (clip endpoints, parameter defaults).</p>
+<snip file="src/iron_document/src/value.rs" lines="20-45" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
+<p><code>Quantity</code> and <code>Record</code> are Part 2's subject. <code>ValueKind</code> is the matching type tag, used to check that a <code>Number</code> field only ever receives numbers; its extra member <code>Any</code> is for fields that take whatever kind their target has (clip endpoints, port defaults).</p>
 <p>A leaf doesn't hold a bare <code>Value</code>, though. It holds a <code>Slot</code>, which answers the fourth problem in the table above:</p>
-<snip file="src/iron_document/src/value.rs" lines="400-427"/>
+<snip file="src/iron_document/src/value.rs" lines="425-452" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
 <ul>
   <li><code>Slot::Const(value)</code>: an authored constant. "x is 500."</li>
   <li><code>Slot::Bound(expr)</code>: an expression over other leaves. "height is <code>#O.slider.value * 300</code>." The slot stores the formula, never its result. Results live in the reactive graph (F3).</li>
-  <li><code>Slot::Animated(Reserved)</code>: can never be built. Its payload contains an enum with no variants, so no value of it exists, and <code>match r._private {}</code> (line 417) is Rust's way of saying "this branch can't run". It was reserved for clip-driven values, which ended up as a layer in the graph instead (F3.6). Ignore it.</li>
+  <li><code>Slot::Animated(Reserved)</code>: can never be built. Its payload contains an enum with no variants, so no value of it exists, and <code>match r._private {}</code> (line 442) is Rust's way of saying "this branch can't run". It was reserved for clip-driven values, which ended up as a layer in the graph instead (F3.6). Ignore it.</li>
 </ul>
 <p>In JSON the kind stays visible: numbers, bools and strings are bare, vectors are arrays, and colours, enums, refs and quantities are single-key objects (<code>{"rgba": […]}</code>, <code>{"enum": "linear"}</code>, <code>{"ref": "#M"}</code>, <code>{"q": [0.01, "W"]}</code>). A binding is <code>{"bind": "&lt;expression text&gt;"}</code>.</p>
 
-<h2 id="components"><span class="sec">F1.5</span>Components: typed structs from one table</h2>
-<p>Leaves are grouped into <em>components</em>, each a small named bundle: <code>transform2d</code> holds <code>x, y, rot, sx, sy</code>; <code>fill</code> holds <code>color, opacity</code>. A leaf's address is <code>component.field</code>, as in <code>transform2d.x</code>.</p>
+<h2 id="facets"><span class="sec">F1.5</span>Facets: typed structs from one table</h2>
+<p>Leaves are grouped into <em>facets</em>, each a small named bundle: <code>transform2d</code> holds <code>x, y, rot, sx, sy</code>; <code>fill</code> holds <code>color, opacity</code>. A leaf's address is <code>facet.field</code>, as in <code>transform2d.x</code>.</p>
 <div class="compare">
   <div class="box naive"><span class="tab">The simple version</span><p><strong>One map per node</strong>, <code>HashMap&lt;String, serde_json::Value&gt;</code>. Every reader checks at run time that <code>"x"</code> exists and is a number. Typos are silent.</p></div>
-  <div class="box built"><span class="tab">What was built</span><p><strong>A Rust struct per component</strong>, one <code>Slot</code> field per leaf, plus a static table of field names and kinds. Readers get typed access; the validator, file loader, view renderer and the model's schema all read the same table.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>A Rust struct per facet</strong>, one <code>Slot</code> field per leaf, plus a static table of field names and kinds. Readers get typed access; the validator, file loader, view renderer and the model's schema all read the same table.</p></div>
 </div>
-<p><code>component.rs</code> declares every component in one table and lets a macro generate the structs and lookups. A few entries:</p>
-<snip file="src/iron_document/src/component.rs" lines="143-169"/>
-<p>Read <code>Radius / "radius" =&gt; Radius { rx: Number = Value::Number(50.0), ry: … }</code> as: "a component whose enum variant is <code>Radius</code>, whose JSON name is <code>"radius"</code>, whose struct is <code>Radius</code>, with fields <code>rx</code> and <code>ry</code> of kind <code>Number</code>, each defaulting to 50." (Until schema 4 there was a <code>circle</code> type with one <code>r</code>; the loader migrates it to an <code>ellipse</code> with equal radii.) The table now has about forty entries, including the Figma-style appearance added on October 14–15 (<code>corners</code>, <code>arc</code>, <code>shadow</code>, <code>gradient</code>, <code>appearance</code>, <code>group_clip</code>, <code>contour</code>); the later parts introduce them as they come up. Here is the per-component half of the macro that consumes them:</p>
-<snip file="src/iron_document/src/component.rs" lines="34-66"/>
+<p><code>facet.rs</code> declares every facet in one table and lets a macro generate the structs and lookups. A few entries:</p>
+<snip file="src/iron_document/src/facet.rs" lines="155-181" first="Transform2d / &quot;transform2d&quot; =&gt; Transform2d {" last=""/>
+<p>Read <code>Radius / "radius" =&gt; Radius { rx: Number = Value::Number(50.0), ry: … }</code> as: "a facet whose enum variant is <code>Radius</code>, whose JSON name is <code>"radius"</code>, whose struct is <code>Radius</code>, with fields <code>rx</code> and <code>ry</code> of kind <code>Number</code>, each defaulting to 50." (Until schema 4 there was a <code>circle</code> type with one <code>r</code>; the loader migrates it to an <code>ellipse</code> with equal radii.) The table now includes additional text, layout, component, interaction and context facets, including the Figma-style appearance added on October 14–15 (<code>corners</code>, <code>arc</code>, <code>shadow</code>, <code>gradient</code>, <code>appearance</code>, <code>group_clip</code>, <code>contour</code>); the later parts introduce them as they come up. Here is the per-facet half of the macro that consumes them:</p>
+<snip file="src/iron_document/src/facet.rs" lines="36-70" first="macro_rules! facets {" last=")*"/>
 <div class="box rust"><span class="tab">Reading the Rust</span>
-<p><code>$( … )*</code> means "repeat for each match". The outer repetition matches each component entry, the inner one each field. Lines 40–66 run once per component and produce the struct, its <code>Default</code>, and its <code>LeafStruct</code> implementation. <code>stringify!($field)</code> turns the identifier <code>rx</code> into the string <code>"rx"</code>. The rest of the macro (after line 66) runs once in total and lists every component again, producing the <code>ComponentKind</code> and <code>Component</code> enums. Written out by hand, the <code>Radius</code> entry becomes:</p>
+<p><code>$( … )*</code> means "repeat for each match". The outer repetition matches each facet entry, the inner one each field. Lines 42–70 run once per facet and produce the struct, its <code>Default</code>, and its <code>LeafStruct</code> implementation. <code>stringify!($field)</code> turns the identifier <code>rx</code> into the string <code>"rx"</code>. The rest of the macro (after line 70) runs once in total and lists every facet again, producing the <code>FacetKind</code> and <code>Facet</code> enums. Written out by hand, the <code>Radius</code> entry becomes:</p>
 <pre><code>pub struct Radius { pub rx: Slot, pub ry: Slot }
 impl Default for Radius { fn default() -&gt; Self { Self { rx: Slot::Const(Value::Number(50.0)), ry: Slot::Const(Value::Number(50.0)) } } }
 impl LeafStruct for Radius {
-    const KIND: ComponentKind = ComponentKind::Radius;
+    const KIND: FacetKind = FacetKind::Radius;
     const FIELDS: &amp;'static [(&amp;'static str, ValueKind)] = &amp;[("rx", ValueKind::Number), ("ry", ValueKind::Number)];
     fn get(&amp;self, field: &amp;str) -&gt; Option&lt;&amp;Slot&gt; { match field { "rx" =&gt; Some(&amp;self.rx), "ry" =&gt; Some(&amp;self.ry), _ =&gt; None } }
     /* get_mut, wrap, unwrap_ref likewise */
 }</code></pre>
-<p>The final <code>@dynamic</code> entry, <code>Params</code>, is the one component whose fields aren't known at compile time: an entity's parameters, named by its definition (Part 2).</p>
+<p>The <code>@dynamic</code> entry is <code>Args</code>: its field names come from a definition's input ports (Part 2). Overrides are separate authored records.</p>
 </div>
 <p>Three related names, worth keeping apart:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Name</th><th>What it is</th><th>Used for</th></tr></thead>
   <tbody>
-    <tr><td><code>Radius</code>, <code>Fill</code>, <code>Transform2d</code>…</td><td>The struct with <code>Slot</code> fields</td><td>Building components in code: <code>let mut t = Transform2d::default(); t.x = …;</code></td></tr>
-    <tr><td><code>Component</code></td><td>An enum holding any one of those structs</td><td>Storing mixed components in one table; <code>t.wrap()</code> converts a struct into it</td></tr>
-    <tr><td><code>ComponentKind</code></td><td>Just the tag, no data</td><td>Keys in maps, addresses in leaf paths, lookups by name</td></tr>
+    <tr><td><code>Radius</code>, <code>Fill</code>, <code>Transform2d</code>…</td><td>The struct with <code>Slot</code> fields</td><td>Building facets in code: <code>let mut t = Transform2d::default(); t.x = …;</code></td></tr>
+    <tr><td><code>Facet</code></td><td>An enum holding any one of those structs</td><td>Storing mixed facets in one table; <code>t.wrap()</code> converts a struct into it</td></tr>
+    <tr><td><code>FacetKind</code></td><td>Just the tag, no data</td><td>Keys in maps, addresses in leaf paths, lookups by name</td></tr>
   </tbody>
 </table></div>
 <p>The one hand-written method that matters is <code>set</code>, which replaces one field's slot. It type-checks constants and returns the old slot, which, as F2 shows, is exactly what undo needs:</p>
-<snip file="src/iron_document/src/component.rs" lines="497-523" mark="508-520,522"/>
+<snip file="src/iron_document/src/facet.rs" lines="703-732" first="/// Replace one field&#x27;s slot, checking the value kind. Returns the previous" last="}"/>
 
 <h3 id="leafpath">The leaf address: <code>LeafPath</code></h3>
-<snip file="src/iron_document/src/component.rs" lines="596-625"/>
-<p>A <code>LeafPath</code> is a component kind plus a field name. The field is a <code>&amp;'static str</code> pointing into the generated table (or, for a parameter, an interned name), so a path is two small values that are free to copy. The only way to make one is <code>LeafPath::new</code> (or <code>"fill.color".parse()</code>), which rejects unknown fields. <strong>An unknown path is an error, never a silent no-op</strong>; that rule recurs all the way up to the model's edit parser.</p>
+<snip file="src/iron_document/src/facet.rs" lines="805-834" first="/// `facet.field`, the address of one editable value." last="}"/>
+<p>A <code>LeafPath</code> is a facet kind plus a field name. The field is a <code>&amp;'static str</code> pointing into the generated table (or, for a dynamic field, an interned name), so a path is two small values that are free to copy. The only way to make one is <code>LeafPath::new</code> (or <code>"fill.color".parse()</code>), which rejects unknown fields. <strong>An unknown path is an error, never a silent no-op</strong>; that rule recurs all the way up to the model's edit parser.</p>
 <p>When a leaf also needs to say which node, it becomes a <code>Leaf { node, path }</code> (<ref file="src/iron_document/src/expr.rs" line="27" has="pub struct Leaf">expr.rs:27</ref>), printed <code>#O.slider.value</code>: exactly the syntax expressions use.</p>
 
 <h2 id="registry"><span class="sec">F1.6</span>The registry: which types exist</h2>
-<p>A node's <code>ty</code> says what kind of thing it is. The registry lists every type: which components it allows (and requires), what it may contain, and which renderer draws it by default:</p>
-<snip file="src/iron_document/src/registry.rs" lines="40-73"/>
+<p>A node's <code>ty</code> says what kind of thing it is. The registry lists every type: which facets it allows (and requires), what it may contain, and which renderer draws it by default:</p>
+<snip file="src/iron_document/src/registry.rs" lines="40-74" first="pub struct TypeSpec {" last="},"/>
 <p>The registry holds <strong>primitives only</strong>. Domain things (a bar chart, a laser) are <em>definitions</em> in the document's own library, built from these (Part 2). Today's types, grouped:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Group</th><th>Types</th><th>Covered in</th></tr></thead>
   <tbody>
-    <tr><td>Drawing</td><td><code>group</code>, <code>rect</code>, <code>ellipse</code>, <code>path</code> → <code>contour</code> → <code>point</code>, <code>mesh</code>, <code>slider</code></td><td>here, Part 7</td></tr>
+    <tr><td>Drawing</td><td><code>group</code>, <code>rect</code>, <code>ellipse</code>, <code>path</code> → <code>contour</code> → <code>point</code>, <code>mesh</code>, <code>slider</code>, <code>text</code>, <code>empty</code>, <code>use</code>, <code>table</code>, <code>row</code></td><td>here, Part 7</td></tr>
     <tr><td>Time</td><td><code>timeline</code>, <code>clip</code></td><td>F3</td></tr>
-    <tr><td>Things and their kinds</td><td><code>library</code>, <code>definition</code>, <code>param_spec</code>, <code>template</code>, <code>model</code>, <code>entity</code></td><td>Part 2</td></tr>
+    <tr><td>Things and their kinds</td><td><code>library</code>, <code>definition</code>, <code>template</code>, <code>model</code>, <code>entity</code></td><td>Part 2</td></tr>
     <tr><td>Constraints</td><td><code>constraint</code></td><td>Part 4</td></tr>
     <tr><td>Diagrams</td><td><code>composition</code>, <code>embed</code>, <code>camera</code></td><td>Part 5</td></tr>
     <tr><td>Session</td><td><code>session</code>, <code>selection</code></td><td>Part 8</td></tr>
     <tr><td>Wiring</td><td><code>port_spec</code>, <code>port</code>, <code>equation</code>, <code>connection</code></td><td>Part 9</td></tr>
   </tbody>
 </table></div>
-<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<ref file="src/iron_document/src/registry.rs" line="339" has="pub fn schema_json">registry.rs:339</ref>) exports the registry and the component table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
+<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<ref file="src/iron_document/src/registry.rs" line="419" has="pub fn schema_json">registry.rs:419</ref>) exports the registry and the facet table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
 
 <h2 id="document"><span class="sec">F1.7</span>The <code>Document</code>: tables and indexes</h2>
-<snip file="src/iron_document/src/document.rs" lines="84-104" mark="86-94,98-103"/>
+<snip file="src/iron_document/src/document.rs" lines="89-109" first="#[derive(Clone, Debug, Default)]" last="}"/>
 <ul>
-  <li><strong>The tables</strong> (lines 86–94) are the data: nodes by id, components by kind and then by node, relations by id, the id counters and the version. This is what's saved.</li>
-  <li><strong>The indexes</strong> (lines 98–103) are derived, to make questions fast: a node's children in order, the roots, nodes by type, nodes by component, relations by source and by target. Never saved; rebuilt after loading.</li>
+  <li><strong>The tables</strong> (lines 91–99) are the data: nodes by id, facets by kind and then by node, relations by id, the id counters and the version. This is what's saved.</li>
+  <li><strong>The indexes</strong> (lines 103–108) are derived, to make questions fast: a node's children in order, the roots, nodes by type, nodes by facet, relations by source and by target. Never saved; rebuilt after loading.</li>
 </ul>
 <p>Components are stored by kind first, so "every <code>transform2d</code>" is one lookup and, in the saved file, all <code>transform2d</code> records sit together.</p>
 <h3 id="reads">Reads are public</h3>
 <p>Everything under <code>// ---- reads</code> is <code>pub</code> and takes <code>&amp;self</code>:</p>
-<snip file="src/iron_document/src/document.rs" lines="214-229"/>
-<p><code>leaf(id, path)</code> is the most used: find the component, then the field, return the <code>Slot</code>. The <code>?</code> on line 228 means "if this node has no such component, return <code>None</code>". Others you'll meet: <code>live(id)</code> (the node, only if not deleted), <code>children</code>, <code>descendants</code>, <code>is_ancestor</code>, <code>nodes_of_type</code>, <code>relations_from</code>, <code>relations_to</code>.</p>
+<snip file="src/iron_document/src/document.rs" lines="266-281" first="pub fn facet(&amp;self, id: NodeId, kind: FacetKind) -&gt; Option&lt;&amp;Facet&gt; {" last="}"/>
+<p><code>leaf(id, path)</code> is the most used: find the facet, then the field, return the <code>Slot</code>. The <code>?</code> on line 280 means "if this node has no such facet, return <code>None</code>". Others you'll meet: <code>live(id)</code> (the node, only if not deleted), <code>children</code>, <code>descendants</code>, <code>is_ancestor</code>, <code>nodes_of_type</code>, <code>relations_from</code>, <code>relations_to</code>.</p>
 <h3 id="writes">Writes are <code>pub(crate)</code></h3>
-<snip file="src/iron_document/src/document.rs" lines="293-297"/>
-<p>…and below it <code>insert_node</code>, <code>restore_node</code>, <code>tombstone</code>, <code>set_parent</code>, <code>set_order</code>, <code>insert_component</code>, <code>remove_component</code>, <code>insert_relation</code>, <code>remove_relation</code>, all <code>pub(crate)</code>.</p>
+<snip file="src/iron_document/src/document.rs" lines="345-349" first="// ---- crate-private mutators ---------------------------------------" last="}"/>
+<p>…and below it <code>insert_node</code>, <code>restore_node</code>, <code>tombstone</code>, <code>set_parent</code>, <code>set_order</code>, <code>insert_facet</code>, <code>remove_facet</code>, <code>insert_relation</code>, <code>remove_relation</code>, all <code>pub(crate)</code>.</p>
 <p>Every method that changes the document is <code>pub(crate)</code>: callable only from inside <code>iron_document</code>. The Bevy app, the FFI and the tests can read the document but cannot write it except by submitting ops (F2). "No code path mutates the store directly" isn't a convention here; code that breaks it won't compile. <code>check_invariants</code> cross-checks every index against the tables, and the tests call it after every transaction.</p>
 
 <h2 id="order"><span class="sec">F1.8</span>Sibling order without renumbering</h2>
@@ -157,11 +158,11 @@ impl LeafStruct for Radius {
   </tbody>
 </table></div>
 <p>It works because the base62 alphabet <code>0-9 A-Z a-z</code> is also in ASCII order, so plain string comparison sorts keys correctly. This is the published rocicorp/fractional-indexing scheme. The rule to remember: <strong>code outside the store never computes order keys</strong>. It asks with <code>OrderKey::first/after/before/between</code>, or from TypeScript with <code>document_place</code>. Inside, a binary search keeps each child list sorted by (key, id), so even two siblings sharing a key have a stable order:</p>
-<snip file="src/iron_document/src/document.rs" lines="437-452" mark="447-450"/>
+<snip file="src/iron_document/src/document.rs" lines="493-508" first="fn place(&amp;mut self, id: NodeId) {" last="}"/>
 
 <h2 id="tombstones"><span class="sec">F1.9</span>Deletion keeps the record</h2>
-<snip file="src/iron_document/src/document.rs" lines="357-374"/>
-<p>Deleting a node sets <code>tombstoned = Some(version)</code> and removes it from every index, so <code>children</code> and <code>nodes_of_type</code> stop seeing it. The record and its components stay, which buys three things:</p>
+<snip file="src/iron_document/src/document.rs" lines="413-430" first="/// Tombstone one node. The caller tombstones descendants separately so" last="}"/>
+<p>Deleting a node sets <code>tombstoned = Some(version)</code> and removes it from every index, so <code>children</code> and <code>nodes_of_type</code> stop seeing it. The record and its facets stay, which buys three things:</p>
 <ul>
   <li><strong>Stale references fail loudly.</strong> An op naming a deleted id gets "#M was deleted at version 5", not "no node #M".</li>
   <li><strong>Undo restores the same id.</strong> Recreating a tombstoned id counts as a restore (F2). Anything that referred to <code>#M</code> refers to it again.</li>
@@ -195,7 +196,7 @@ impl LeafStruct for Radius {
     <tr><td><code>pub</code> · <code>pub(crate)</code> · <code>pub(super)</code> · nothing</td><td>Visible everywhere · inside this crate · in the parent module · in this module only.</td></tr>
     <tr><td><code>match x { A =&gt; …, B { id } =&gt; … }</code></td><td>A switch that must handle every case and can pull data out of each variant. Add an op kind and the compiler points at every <code>match</code> that forgot it.</td></tr>
     <tr><td><code>trait LeafStruct { … }</code> + <code>impl LeafStruct for Fill</code></td><td>An interface, and one type's implementation of it.</td></tr>
-    <tr><td><code>fn get&lt;T: LeafStruct&gt;(…) -&gt; Option&lt;&amp;T&gt;</code></td><td>A generic function. <code>doc.get::&lt;Timing&gt;(id)</code> asks for that node's <code>Timing</code> component, typed.</td></tr>
+    <tr><td><code>fn get&lt;T: LeafStruct&gt;(…) -&gt; Option&lt;&amp;T&gt;</code></td><td>A generic function. <code>doc.get::&lt;Timing&gt;(id)</code> asks for that node's <code>Timing</code> facet, typed.</td></tr>
     <tr><td><code>impl Display</code> / <code>impl FromStr</code></td><td>What <code>.to_string()</code> and <code>"…".parse()</code> call. So <code>"transform2d.x".parse()</code> builds a <code>LeafPath</code>.</td></tr>
   </tbody>
 </table></div>
@@ -215,14 +216,14 @@ impl LeafStruct for Radius {
 </table></div>
 <div class="box rust"><span class="tab">Three things that look scarier than they are</span>
 <p><strong>Lifetimes</strong> (<code>'a</code>, <code>'d</code>, <code>'static</code>) are the compiler's name for how long a borrowed reference stays valid. <code>fn live&lt;'d&gt;(doc: &amp;'d Document, …) -&gt; Result&lt;&amp;'d Node, …&gt;</code> says only that the returned node points into <code>doc</code>. <code>&amp;'static str</code> is a string baked into the program. You can read past them almost every time.</p>
-<p><strong>Macros</strong> end in <code>!</code>: <code>format!</code>, <code>vec!</code>, <code>write!</code> build strings and lists; <code>macro_rules!</code> defines a code template, as <code>id_type!</code> and <code>components!</code> above.</p>
+<p><strong>Macros</strong> end in <code>!</code>: <code>format!</code>, <code>vec!</code>, <code>write!</code> build strings and lists; <code>macro_rules!</code> defines a code template, as <code>id_type!</code> and <code>facets!</code> above.</p>
 <p><strong>Attributes</strong> are <code>#[…]</code>: <code>#[derive(…)]</code> generates code, <code>#[serde(tag = "t")]</code> tunes JSON, <code>#[wasm_bindgen]</code> exports a function to JavaScript, <code>#[test]</code> marks a test, and Bevy adds <code>#[derive(Resource)]</code> and <code>#[derive(Component)]</code>.</p>
 </div>
 
 <div class="box recap"><span class="tab">Before you go on</span>
 <ul>
   <li>Nodes have opaque, never-reused ids (<code>#M</code>). A node record is only type, parent, order key and tombstone. Relations link nodes without nesting them.</li>
-  <li>Properties live in typed components generated from one table. A leaf is <code>component.field</code> and holds a <code>Slot</code>: a constant or a binding.</li>
+  <li>Properties live in typed facets generated from one table. A leaf is <code>facet.field</code> and holds a <code>Slot</code>: a constant or a binding.</li>
   <li>The registry says what each node type may hold, and is exported as JSON for the model.</li>
   <li>The document's reads are <code>pub</code>; its writes are <code>pub(crate)</code>, reachable only from the op applier, which is F2.</li>
 </ul>

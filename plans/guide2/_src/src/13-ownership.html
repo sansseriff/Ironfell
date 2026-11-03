@@ -65,7 +65,7 @@
 </figure>
 
 <h2 id="data"><span class="sec">13.2</span>What a gesture is now</h2>
-<snip file="src/iron_document/src/gesture.rs" lines="44-68"/>
+<snip file="src/iron_document/src/gesture.rs" lines="44-68" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
 <p>Next to those, the store keeps the fields a gesture is made of. <code>drivers</code> is the set of leaves the tool previewed on purpose (what a commit writes); <code>fingers</code> are the drag grips the solver satisfies; <code>ended</code> remembers how the last gesture finished, so its tool can ask afterwards.</p>
 <figure class="diagram">
 <svg viewBox="0 0 920 210" role="img" aria-label="Store fields for a gesture: gesture is an optional ActiveGesture with id and watched nodes; drivers, a set of leaves; fingers, a list of Finger; the overlay in the reactive graph; ended, the last gesture's id and status. Lifecycle: begin_gesture or an implicit watch creates it; preview and begin_drag add watched nodes, drivers and fingers; commit_gesture records Committed; cancel, a conflict, undo, redo or a newer gesture record Cancelled with a reason; an id from before a load is Unknown.">
@@ -92,40 +92,40 @@
 </figure>
 
 <h2 id="apply"><span class="sec">13.3</span>The classification in <code>Store::apply</code></h2>
-<snip file="src/iron_document/src/lib.rs" lines="957-976" mark="962,963,966-969,970-973"/>
+<snip file="src/iron_document/src/lib.rs" lines="1488-1507" first="/// Apply a transaction atomically. Either every op applies and the" last="}"/>
 <p>Four steps, in this order for reasons:</p>
 <ol>
-  <li><strong>Classify before applying</strong> (962). <code>conflict</code> asks "is a watched node, or an ancestor of one, deleted?" against the document <em>before</em> the delete, while <code>is_ancestor</code> can still answer.</li>
-  <li><strong>Suspend</strong> (963): take the driven overlay values, drivers and fingers into a <code>Suspended</code> record and clear the overlay, so the transaction runs and solves against the document alone.</li>
+  <li><strong>Classify before applying</strong> (1493). <code>conflict</code> asks "is a watched node, or an ancestor of one, deleted?" against the document <em>before</em> the delete, while <code>is_ancestor</code> can still answer.</li>
+  <li><strong>Suspend</strong> (1494): take the driven overlay values, drivers and fingers into a <code>Suspended</code> record and clear the overlay, so the transaction runs and solves against the document alone.</li>
   <li><strong>Apply</strong>: the ordinary path of F2: run on a clone, swap, <code>after_transaction</code>, solve-on-apply.</li>
-  <li><strong>Decide</strong> (966–973): a classified conflict, but only if the transaction actually applied, or the solver having moved a watched node (<code>moved</code> scans <code>derived_ops</code>), ends the gesture with that reason. Otherwise the previews go back on top of the new document and clusters re-solve live with the finger.</li>
+  <li><strong>Decide</strong> (1497–1504): a classified conflict, but only if the transaction actually applied, or the solver having moved a watched node (<code>moved</code> scans <code>derived_ops</code>), ends the gesture with that reason. Otherwise the previews go back on top of the new document and clusters re-solve live with the finger.</li>
 </ol>
-<snip file="src/iron_document/src/lib.rs" lines="587-610"/>
-<p>Resume checks that each leaf still exists (602) before re-previewing it. What counts as a conflict:</p>
-<snip file="src/iron_document/src/gesture.rs" lines="92-116"/>
+<snip file="src/iron_document/src/lib.rs" lines="897-920" first="/// Set the running gesture&#x27;s previews aside, so another transaction" last="}"/>
+<p>Resume checks that each leaf still exists (912) before re-previewing it. What counts as a conflict:</p>
+<snip file="src/iron_document/src/gesture.rs" lines="92-116" first="/// Why `ops`, about to apply to `doc`, conflict with the gesture; `None`" last="}"/>
 <div class="table-wrap"><table>
   <thead><tr><th>The other transaction…</th><th>Verdict</th><th>Example</th></tr></thead>
   <tbody>
     <tr><td>deletes or reparents a watched node or an ancestor</td><td>cancel</td><td>the model deletes the group you're dragging a child of</td></tr>
     <tr><td>sets a leaf the gesture drives</td><td>cancel</td><td>the model sets the slider you're scrubbing</td></tr>
     <tr><td>sets a <code>GEOMETRY</code> leaf of a watched node, or binds any of its leaves</td><td>cancel</td><td>the model moves the square you're dragging</td></tr>
-    <tr><td>adds or removes a geometry component on one</td><td>cancel</td><td>a <code>corners</code> component appears</td></tr>
+    <tr><td>adds or removes a geometry facet on one</td><td>cancel</td><td>a <code>corners</code> facet appears</td></tr>
     <tr><td>links or unlinks a constraint or clip to one</td><td>cancel</td><td>a <code>distance</code> constraint now holds it</td></tr>
     <tr><td>makes the solver move a watched node</td><td>cancel</td><td>the model drags the pendulum's platform while you hold the ball</td></tr>
     <tr><td>anything else</td><td>carry on</td><td>a colour, a name, another node's position</td></tr>
   </tbody>
 </table></div>
-<p><code>GEOMETRY</code> (<ref file="src/iron_document/src/gesture.rs" line="73" has="const GEOMETRY">gesture.rs:73</ref>) lists the components a gesture reads to turn the pointer into values: transforms, size, radius, corners, arc, handles, path shape, contour, frame, group clip, slider. A colour isn't one, so recolouring the node you're dragging doesn't stop the drag.</p>
-<p>Undo and redo always cancel a running gesture first (<code>Store::undo</code>, <ref file="src/iron_document/src/lib.rs" line="1049" has="self.gesture.is_some()">lib.rs:1049</ref>), so Cmd+Z mid-drag takes the drag back rather than undoing something underneath it.</p>
+<p><code>GEOMETRY</code> (<ref file="src/iron_document/src/gesture.rs" line="73" has="const GEOMETRY">gesture.rs:73</ref>) lists the facets a gesture reads to turn the pointer into values: transforms, size, radius, corners, arc, handles, path shape, contour, frame, group clip, slider. A colour isn't one, so recolouring the node you're dragging doesn't stop the drag.</p>
+<p>When history is available, undo and redo cancel a running gesture first (<code>Store::undo</code>, <ref file="src/iron_document/src/lib.rs" line="1580" has="self.gesture.is_some()">lib.rs:1580</ref>), so Cmd+Z discards the preview before applying history; an unfinished drag is never captured in the undo transaction.</p>
 
 <h2 id="notice"><span class="sec">13.4</span>How the tool finds out</h2>
 <p>The store can't call the tool. The tool keeps the id of the gesture it owns and asks each frame:</p>
-<snip file="src/bevy_app/select.rs" lines="1886-1905"/>
-<p>Once cancelled, the overlay, drivers and fingers are already gone, so even a commit request would find nothing to write. The tool goes idle, its release does nothing, and the model's edit stands. The inspector's number scrubbing uses the same contract over the host boundary: <code>inspect_scrub("begin")</code> returns the gesture id as a token, and every <code>"move"</code> checks <code>active_gesture() == token</code> before previewing (<ref file="src/engine_api.rs" line="764" has="pub fn document_inspect_scrub">engine_api.rs:764</ref>). One-off inspector edits go through <code>Store::set_through_handle</code>: a normal transaction through the leaf's handle, outside the overlay, classified like any other.</p>
+<snip file="src/bevy_app/select.rs" lines="2729-2748" first="// ---- Gesture ownership ----" last="}"/>
+<p>Once cancelled, the overlay, drivers and fingers are already gone, so even a commit request would find nothing to write. The tool goes idle, its release does nothing, and the model's edit stands. The inspector's number scrubbing uses the same contract over the host boundary: <code>inspect_scrub("begin")</code> returns the gesture id as a token, and every <code>"move"</code> checks <code>active_gesture() == token</code> before previewing (<ref file="src/engine_api.rs" line="1279" has="pub fn document_inspect_scrub">engine_api.rs:1279</ref>). One-off inspector edits go through <code>Store::set_through_handle</code>: a normal transaction through the leaf's handle, outside the overlay, classified like any other.</p>
 
-<h3 id="commit">Commit can now add components</h3>
-<snip file="src/iron_document/src/lib.rs" lines="677-719" mark="684-698,714-715"/>
-<p>Dragging a rect's corner-radius dot previews <code>corners.tl</code> on a rect that has no <code>corners</code> component. <code>handle</code> answers <code>Direct</code> for a leaf of a component the type allows but the node lacks, and the commit prepends an <code>AddComp</code> with defaults plus the previewed fields (684–698, 714–715). So "round this corner" is one transaction.</p>
+<h3 id="commit">Commit can now add facets</h3>
+<snip file="src/iron_document/src/lib.rs" lines="987-1029" first="// The gesture&#x27;s own commit: taken first, so `apply` neither suspends" last="}"/>
+<p>Dragging a rect's corner-radius dot previews <code>corners.tl</code> on a rect that has no <code>corners</code> facet. <code>handle</code> answers <code>Direct</code> for a leaf of a facet the type allows but the node lacks, and the commit prepends an <code>AddFacet</code> with defaults plus the previewed fields (684–698, 714–715). So "round this corner" is one transaction.</p>
 
 <h2 id="alt"><span class="sec">13.5</span>Alt-drag: a structural edit inside a gesture</h2>
 <p>Figma's Alt-drag duplicates the selection and drags the copies; releasing Alt mid-drag takes the copies back. The spine's rule was that a gesture never spans a structural op. Alt-drag is the one exception, and it's built from three store calls:</p>
@@ -159,7 +159,7 @@
 </svg>
 <figcaption>The duplicate is applied synchronously, not queued, because the copies have to exist for <code>begin_drag</code> to grab them in the same frame. The bridge picks the transaction up from the log at the next sync like any other synchronous apply. Esc mid-drag cancels and retracts.</figcaption>
 </figure>
-<snip file="src/iron_document/src/lib.rs" lines="612-646"/>
+<snip file="src/iron_document/src/lib.rs" lines="922-956" first="/// Take back transaction `version` if it is the latest: undo it and drop" last="}"/>
 <p>The merged entry's inverse is <code>v8.inverse</code> followed by <code>v9.inverse</code>, and <code>undo_ops</code> applies an inverse list in reverse, so undo first moves the copy back, then deletes it.</p>
 
 <h2 id="copy"><span class="sec">13.6</span>Copy and paste: a fragment and its closure</h2>
@@ -210,7 +210,7 @@
 </svg>
 <figcaption>What differs between manipulators is only how a pointer becomes leaf values: through a panel's affine, through a camera ray onto a plane, through an affine decomposed into position, rotation and size, or through the gizmo handing back a whole transform.</figcaption>
 </figure>
-<snip file="src/bevy_app/manipulate.rs" lines="184-205"/>
+<snip file="src/bevy_app/manipulate.rs" lines="290-312" first="/// Every document edit a pointer can make." last="}"/>
 
 <h2 id="tests"><span class="sec">13.8</span>What the tests promise</h2>
 <div class="table-wrap"><table>

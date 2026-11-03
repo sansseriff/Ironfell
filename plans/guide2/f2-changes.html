@@ -17,7 +17,7 @@
   <h1>Ops, transactions and undo</h1>
   <p class="lede">F1 ended with a document whose write methods can't be called from outside the crate. This page covers the one door that is open: <em>ops</em>, grouped into <em>transactions</em>. Undo falls out of that design almost for free. The page ends with the two ways data leaves the store: the saved file and the view.</p>
   <div class="prereq">
-    <div><b>You need</b>F1: <code>NodeId</code>, <code>Slot</code>, components, <code>LeafPath</code>, tombstones, writes are <code>pub(crate)</code>.</div>
+    <div><b>You need</b>F1: <code>NodeId</code>, <code>Slot</code>, facets, <code>LeafPath</code>, tombstones, writes are <code>pub(crate)</code>.</div>
     <div><b>Files</b><code>op.rs</code>, <code>lib.rs</code> (<code>Store</code>), <code>serial.rs</code>, <code>view.rs</code>, <code>tests/spine.rs</code>.</div>
   </div>
 </header>
@@ -89,7 +89,7 @@
 pub enum Op {
     /// Mint a node. `id` must be at or past the document&#x27;s allocation counter
     /// (reserve with [`Document::next_ids`]), or name a tombstoned node, in
-    /// which case this is a restore and the given placement and components
+    /// which case this is a restore and the given placement and facets
     /// replace the old ones.
     Create {
         id: NodeId,
@@ -97,7 +97,7 @@ pub enum Op {
         parent: Option&lt;NodeId&gt;,
         order: OrderKey,
         #[serde(default)]
-        components: Vec&lt;Component&gt;,
+        facets: Vec&lt;Facet&gt;,
     },
     /// Tombstone a node and its live descendants.
     Delete {
@@ -118,13 +118,13 @@ pub enum Op {
         path: LeafPath,
         slot: Slot,
     },
-    AddComp {
+    AddFacet {
         id: NodeId,
-        comp: Component,
+        facet: Facet,
     },
-    RemoveComp {
+    RemoveFacet {
         id: NodeId,
-        kind: ComponentKind,
+        kind: FacetKind,
     },
     /// `rel.id` must not be in use; take fresh ids from `next_relation_id`.
     Link {
@@ -139,18 +139,18 @@ pub enum Op {
 <div class="table-wrap"><table>
   <thead><tr><th>Op</th><th>What it does</th><th>Its inverse</th></tr></thead>
   <tbody>
-    <tr><td><code>Create</code></td><td>Adds a node with its components. If the id is a tombstone, restores it.</td><td><code>Delete { id }</code></td></tr>
-    <tr><td><code>Delete</code></td><td>Tombstones a node and its live descendants.</td><td>One <code>Create</code> per tombstoned node, with its placement and components</td></tr>
+    <tr><td><code>Create</code></td><td>Adds a node with its facets. If the id is a tombstone, restores it.</td><td><code>Delete { id }</code></td></tr>
+    <tr><td><code>Delete</code></td><td>Tombstones a node and its live descendants.</td><td>One <code>Create</code> per tombstoned node, with its placement and facets</td></tr>
     <tr><td><code>Reparent</code></td><td>Moves a node under a new parent at a new key.</td><td><code>Reparent</code> back</td></tr>
     <tr><td><code>Reorder</code></td><td>Changes only the order key.</td><td><code>Reorder</code> to the old key</td></tr>
     <tr><td><code>Set</code></td><td>Replaces one leaf's slot.</td><td><code>Set</code> with the old slot</td></tr>
-    <tr><td><code>AddComp</code> / <code>RemoveComp</code></td><td>Adds or removes an optional component.</td><td>The other one</td></tr>
+    <tr><td><code>AddFacet</code> / <code>RemoveFacet</code></td><td>Adds or removes an optional facet.</td><td>The other one</td></tr>
     <tr><td><code>Link</code> / <code>Unlink</code></td><td>Adds or removes a relation.</td><td>The other one, with the same relation id</td></tr>
   </tbody>
 </table></div>
 
 <h2 id="tx"><span class="sec">F2.3</span>Transactions: what goes in, what gets recorded</h2>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:75">src/iron_document/src/op.rs</a><span class="range">lines 75–126</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:28;--len:7"></span><pre class="gutter" aria-hidden="true">75
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:75">src/iron_document/src/op.rs</a><span class="range">lines 75–131</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">75
 76
 77
 78
@@ -201,7 +201,12 @@ pub enum Op {
 123
 124
 125
-126</pre><pre class="src"><code class="language-rust">/// What a caller submits.
+126
+127
+128
+129
+130
+131</pre><pre class="src"><code class="language-rust">/// What a caller submits.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransactionInput {
     /// Semantic, in the user&#x27;s vocabulary: &quot;move 3 objects&quot;, never &quot;set x14&quot;.
@@ -236,6 +241,11 @@ pub struct Transaction {
     pub derived_ops: Vec&lt;Op&gt;,
     /// Applying these in reverse order undoes `ops` and `derived_ops`.
     pub inverse: Vec&lt;Op&gt;,
+    /// What expansion changed in the instances&#x27; derived nodes
+    /// (component-model.md §3), for consumers that follow ops. Not history:
+    /// undo, redo and replay re-expand from the authored state.
+    #[serde(default, skip_serializing_if = &quot;Vec::is_empty&quot;)]
+    pub expanded: Vec&lt;Op&gt;,
     /// Causes the model is told about: which clusters re-solved and which
     /// requested values were not honoured.
     #[serde(default, skip_serializing_if = &quot;Option::is_none&quot;)]
@@ -253,7 +263,7 @@ impl Transaction {
         self.ops.iter().chain(self.derived_ops.iter()).cloned().collect()
     }
 }</code></pre></div></div></figure>
-<p>Two structs, because the caller and the log need different things. A <code>TransactionInput</code> is what a caller submits: a label, an <code>Actor</code> (<code>Human</code>, <code>Model</code> or <code>System</code>), a timestamp, an optional idempotency key, the ops, and <code>exact</code> (Part 4). A <code>Transaction</code> is what the log keeps: all that, plus the version it produced, the computed inverse, and two things the solver adds in Part 4, <code>derived_ops</code> (what it moved to keep constraints holding) and a <code>solver</code> summary. A real one, from <code>examples/dump.rs</code> moving a rect from x=120 to x=200:</p>
+<p>Two structs, because the caller and the log need different things. A <code>TransactionInput</code> is what a caller submits: a label, an <code>Actor</code> (<code>Human</code>, <code>Model</code> or <code>System</code>), a timestamp, an optional idempotency key, the ops, and <code>exact</code> (Part 4). A <code>Transaction</code> is what the log keeps: all that, plus the version it produced, the computed inverse, and two things the solver adds in Part 4, <code>derived_ops</code> (what it moved to keep constraints holding) and a <code>solver</code> summary. Its <code>expanded</code> ops tell bridge consumers how linked instances changed; undo/redo re-expand from authored state rather than replaying those as authored history. For example, moving a rect from x=120 to x=200:</p>
 <figure class="plainfig"><figcaption>cargo run -p iron_document --example dump (last transaction)</figcaption><pre class="plain"><code class="language-plaintext">{
   &quot;version&quot;: 2,
   &quot;label&quot;: &quot;move rect&quot;,
@@ -265,21 +275,7 @@ impl Transaction {
 <p>Undo doesn't need to understand what "move rect" meant. It applies <code>inverse</code> in reverse order: <code>undo_ops()</code>.</p>
 
 <h2 id="applier"><span class="sec">F2.4</span>The applier: one function per op</h2>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:188">src/iron_document/src/op.rs</a><span class="range">lines 188–227</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">188
-189
-190
-191
-192
-193
-194
-195
-196
-197
-198
-199
-200
-201
-202
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:202">src/iron_document/src/op.rs</a><span class="range">lines 202–241</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">202
 203
 204
 205
@@ -304,7 +300,21 @@ impl Transaction {
 224
 225
 226
-227</pre><pre class="src"><code class="language-rust">/// Apply one op to `doc`, returning the ops that invert it. On error `doc` is
+227
+228
+229
+230
+231
+232
+233
+234
+235
+236
+237
+238
+239
+240
+241</pre><pre class="src"><code class="language-rust">/// Apply one op to `doc`, returning the ops that invert it. On error `doc` is
 /// untouched: every check precedes every mutation.
 pub(crate) fn apply_op(
     doc: &amp;mut Document,
@@ -319,8 +329,8 @@ pub(crate) fn apply_op(
             ty,
             parent,
             order,
-            components,
-        } =&gt; create(doc, &amp;cx, *id, *ty, *parent, order, components),
+            facets,
+        } =&gt; create(doc, &amp;cx, *id, *ty, *parent, order, facets),
         Op::Delete { id } =&gt; delete(doc, &amp;cx, *id),
         Op::Reparent { id, parent, order } =&gt; reparent(doc, &amp;cx, *id, *parent, order),
         Op::Reorder { id, order } =&gt; {
@@ -333,8 +343,8 @@ pub(crate) fn apply_op(
             }])
         }
         Op::Set { id, path, slot } =&gt; set(doc, &amp;cx, *id, *path, slot),
-        Op::AddComp { id, comp } =&gt; add_comp(doc, &amp;cx, *id, comp),
-        Op::RemoveComp { id, kind } =&gt; remove_comp(doc, &amp;cx, *id, *kind),
+        Op::AddFacet { id, facet } =&gt; add_comp(doc, &amp;cx, *id, facet),
+        Op::RemoveFacet { id, kind } =&gt; remove_comp(doc, &amp;cx, *id, *kind),
         Op::Link { rel } =&gt; link(doc, &amp;cx, rel),
         Op::Unlink { id } =&gt; {
             let r = doc
@@ -345,35 +355,35 @@ pub(crate) fn apply_op(
     }
 }</code></pre></div></div></figure>
 <p><code>apply_op</code> takes the working document, the op's index (so errors can say "op 2"), the op, and the version this transaction will produce. It returns the inverse ops or an error. <code>set</code> is the simplest complete arm and the pattern for the rest:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:478">src/iron_document/src/op.rs</a><span class="range">lines 478–506</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:1"></span><span class="band" style="--from:8;--len:3"></span><span class="band" style="--from:11;--len:6"></span><span class="band" style="--from:17;--len:3"></span><span class="band" style="--from:23;--len:5"></span><pre class="gutter" aria-hidden="true">478
-479
-480
-481
-482
-483
-484
-485
-486
-487
-488
-489
-490
-491
-492
-493
-494
-495
-496
-497
-498
-499
-500
-501
-502
-503
-504
-505
-506</pre><pre class="src"><code class="language-rust">fn set(
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:552">src/iron_document/src/op.rs</a><span class="range">lines 552–580</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">552
+553
+554
+555
+556
+557
+558
+559
+560
+561
+562
+563
+564
+565
+566
+567
+568
+569
+570
+571
+572
+573
+574
+575
+576
+577
+578
+579
+580</pre><pre class="src"><code class="language-rust">fn set(
     doc: &amp;mut Document,
     cx: &amp;Ctx,
     id: NodeId,
@@ -384,16 +394,16 @@ pub(crate) fn apply_op(
     if let Some(expr) = slot.expr() {
         check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
     }
-    let comp = doc.component_mut(id, path.component).ok_or_else(|| {
+    let comp = doc.facet_mut(id, path.facet).ok_or_else(|| {
         cx.err(
             ErrorKind::UnknownPath,
-            format!(&quot;{id} has no {} component&quot;, path.component.name()),
+            format!(&quot;{id} has no {} component&quot;, path.facet.name()),
         )
     })?;
     let old = comp
         .set(path.field, slot.clone())
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
-    if matches!(path.component, ComponentKind::Params | ComponentKind::Instance | ComponentKind::Embed | ComponentKind::EmbedCamera) {
+    if matches!(path.facet, FacetKind::Args | FacetKind::Instance | FacetKind::Embed | FacetKind::EmbedCamera) {
         check_entity(doc, cx, id)?;
     }
     Ok(vec![Op::Set {
@@ -403,34 +413,34 @@ pub(crate) fn apply_op(
     }])
 }</code></pre></div></div></figure>
 <ol>
-  <li>The node must be live (485). <code>live(…)?</code> returns an <code>UnknownNode</code> or <code>Tombstoned</code> error, and <code>?</code> hands it straight back.</li>
-  <li>A binding is validated (486–488): every leaf it reads must exist, and it must not end up depending on itself (F3.3).</li>
-  <li>The node must have the component (489–494). <code>ok_or_else</code> turns "no such component" into an <code>UnknownPath</code> error.</li>
-  <li><code>Component::set</code> from F1 type-checks and swaps the value in, returning the old slot (495–497). Line 498 re-checks entities against their definitions (Part 2).</li>
-  <li>The inverse is built from that old slot (501–505). No other bookkeeping.</li>
+  <li>The node must be live (559). <code>live(…)?</code> returns an <code>UnknownNode</code> or <code>Tombstoned</code> error, and <code>?</code> hands it straight back.</li>
+  <li>A binding is validated (560–562): every leaf it reads must exist, and it must not end up depending on itself (F3.3).</li>
+  <li>The node must have the facet (563–568). <code>ok_or_else</code> turns "no such facet" into an <code>UnknownPath</code> error.</li>
+  <li><code>Facet::set</code> from F1 type-checks and swaps the value in, returning the old slot (569–571). Line 572 re-checks entities against their definitions (Part 2).</li>
+  <li>The inverse is built from that old slot (575–579). No other bookkeeping.</li>
 </ol>
 <h3 id="delete">Delete: the one whose inverse needs care</h3>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:385">src/iron_document/src/op.rs</a><span class="range">lines 385–405</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">385
-386
-387
-388
-389
-390
-391
-392
-393
-394
-395
-396
-397
-398
-399
-400
-401
-402
-403
-404
-405</pre><pre class="src"><code class="language-rust">fn delete(doc: &amp;mut Document, cx: &amp;Ctx, id: NodeId) -&gt; Result&lt;Vec&lt;Op&gt;, ApplyError&gt; {
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:449">src/iron_document/src/op.rs</a><span class="range">lines 449–469</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">449
+450
+451
+452
+453
+454
+455
+456
+457
+458
+459
+460
+461
+462
+463
+464
+465
+466
+467
+468
+469</pre><pre class="src"><code class="language-rust">fn delete(doc: &amp;mut Document, cx: &amp;Ctx, id: NodeId) -&gt; Result&lt;Vec&lt;Op&gt;, ApplyError&gt; {
     live(doc, cx, id)?;
     let mut order = vec![id];
     order.extend(doc.descendants(id));
@@ -439,35 +449,21 @@ pub(crate) fn apply_op(
     let mut inverse = Vec::with_capacity(order.len());
     for &amp;n in order.iter().rev() {
         let node = doc.node(n).expect(&quot;descendant exists&quot;).clone();
-        let comps: Vec&lt;Component&gt; = doc.components_of(n).cloned().collect();
+        let comps: Vec&lt;Facet&gt; = doc.facets_of(n).cloned().collect();
         inverse.push(Op::Create {
             id: n,
             ty: node.ty,
             parent: node.parent,
             order: node.order,
-            components: comps,
+            facets: comps,
         });
         doc.tombstone(n, cx.stamp);
     }
     Ok(inverse)
 }</code></pre></div></div></figure>
-<p>Deleting a group tombstones it and everything under it. Each node gets its own <code>Create</code> in the inverse, carrying its components, so undo restores the same ids with the same data. The loop walks deepest-first, so the reversed list recreates the group before its children.</p>
+<p>Deleting a group tombstones it and everything under it. Each node gets its own <code>Create</code> in the inverse, carrying its facets, so undo restores the same ids with the same data. The loop walks deepest-first, so the reversed list recreates the group before its children.</p>
 <h3 id="create">Create, and the rules about ids</h3>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:288">src/iron_document/src/op.rs</a><span class="range">lines 288–337</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:16"></span><span class="band" style="--from:30;--len:15"></span><pre class="gutter" aria-hidden="true">288
-289
-290
-291
-292
-293
-294
-295
-296
-297
-298
-299
-300
-301
-302
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:302">src/iron_document/src/op.rs</a><span class="range">lines 302–351</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">302
 303
 304
 305
@@ -502,14 +498,28 @@ pub(crate) fn apply_op(
 334
 335
 336
-337</pre><pre class="src"><code class="language-rust">fn create(
+337
+338
+339
+340
+341
+342
+343
+344
+345
+346
+347
+348
+349
+350
+351</pre><pre class="src"><code class="language-rust">fn create(
     doc: &amp;mut Document,
     cx: &amp;Ctx,
     id: NodeId,
     ty: TypeId,
     parent: Option&lt;NodeId&gt;,
     order: &amp;OrderKey,
-    comps: &amp;[Component],
+    comps: &amp;[Facet],
 ) -&gt; Result&lt;Vec&lt;Op&gt;, ApplyError&gt; {
     let restoring = match doc.node(id) {
         Some(n) if n.is_live() =&gt; {
@@ -531,7 +541,7 @@ pub(crate) fn apply_op(
         return Err(cx.err(ErrorKind::Cycle, format!(&quot;{id} cannot be its own parent&quot;)));
     }
     check_parent(doc, cx, parent, ty)?;
-    check_components(cx, ty, comps)?;
+    check_facets(cx, ty, comps)?;
     if restoring {
         doc.restore_node(id, ty, parent, order.clone(), comps.to_vec());
     } else {
@@ -553,68 +563,96 @@ pub(crate) fn apply_op(
     Ok(vec![Op::Delete { id }])
 }</code></pre></div></div></figure>
 <ul>
-  <li>An id already live is refused (298–300).</li>
-  <li>A fresh id must come from the counter (302–309). Callers reserve ids with <code>Document::next_ids</code> and use them in <code>Create</code> ops; an id below the counter that isn't a tombstone is refused, so ids can't be reused.</li>
+  <li>An id already live is refused (312–314).</li>
+  <li>A fresh id must come from the counter (316–323). Callers reserve ids with <code>Document::next_ids</code> and use them in <code>Create</code> ops; an id below the counter that isn't a tombstone is refused, so ids can't be reused.</li>
   <li>A tombstoned id means "restore" (301, 318–319). That's how undo of a delete gets the same node back.</li>
 </ul>
-<p>Some checks need the whole transaction in place: a created node's bindings may read a sibling created later in the same transaction (undoing the deletion of a group whose children bind to each other does exactly that). Those are deferred to <code>check_created</code>, run after every op has applied (comment at 333–335).</p>
+<p>Some checks need the whole transaction in place: a created node's bindings may read a sibling created later in the same transaction (undoing the deletion of a group whose children bind to each other does exactly that). Those are deferred to <code>check_created</code>, run after every op has applied (comment at 347–349).</p>
 
 <h2 id="run"><span class="sec">F2.5</span>All or nothing: <code>Store::run</code></h2>
 <p>Several ops in one transaction must all apply or none. The simplest correct approach, which is the one used: copy the whole document, apply every op to the copy, and swap it in only if nothing failed.</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1192">src/iron_document/src/lib.rs</a><span class="range">lines 1192–1245</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:9;--len:1"></span><span class="band" style="--from:13;--len:6"></span><span class="band" style="--from:19;--len:16"></span><span class="band" style="--from:38;--len:1"></span><pre class="gutter" aria-hidden="true">1192
-1193
-1194
-1195
-1196
-1197
-1198
-1199
-1200
-1201
-1202
-1203
-1204
-1205
-1206
-1207
-1208
-1209
-1210
-1211
-1212
-1213
-1214
-1215
-1216
-1217
-1218
-1219
-1220
-1221
-1222
-1223
-1224
-1225
-1226
-1227
-1228
-1229
-1230
-1231
-1232
-1233
-1234
-1235
-1236
-1237
-1238
-1239
-1240
-1241
-1242
-1243
-1244
-1245</pre><pre class="src"><code class="language-rust">/// Run the ops against a working copy and return it with the
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1723">src/iron_document/src/lib.rs</a><span class="range">lines 1723–1804</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1723
+1724
+1725
+1726
+1727
+1728
+1729
+1730
+1731
+1732
+1733
+1734
+1735
+1736
+1737
+1738
+1739
+1740
+1741
+1742
+1743
+1744
+1745
+1746
+1747
+1748
+1749
+1750
+1751
+1752
+1753
+1754
+1755
+1756
+1757
+1758
+1759
+1760
+1761
+1762
+1763
+1764
+1765
+1766
+1767
+1768
+1769
+1770
+1771
+1772
+1773
+1774
+1775
+1776
+1777
+1778
+1779
+1780
+1781
+1782
+1783
+1784
+1785
+1786
+1787
+1788
+1789
+1790
+1791
+1792
+1793
+1794
+1795
+1796
+1797
+1798
+1799
+1800
+1801
+1802
+1803
+1804</pre><pre class="src"><code class="language-rust">/// Run the ops against a working copy and return it with the
 /// transaction; the caller commits the copy.
 ///
 /// Cloning per transaction is the simplest way to report every error in a
@@ -623,15 +661,31 @@ pub(crate) fn apply_op(
 /// If it ever shows up in a profile, the alternative is applying with
 /// rollback through the inverses.
 fn run(&amp;mut self, input: TransactionInput) -&gt; Result&lt;(Transaction, Document), Vec&lt;ApplyError&gt;&gt; {
+    // Edits aimed inside an instance become edits to what it derives from
+    // (component-model.md §7): an argument, a slider, an override.
+    let mut input = input;
+    input.ops = expand::translate(&amp;self.doc, &amp;self.reactive, std::mem::take(&amp;mut input.ops)).map_err(|e| vec![e])?;
     let mut work = self.doc.clone();
     let stamp = work.version().next();
     let mut inverse = Vec::new();
     let mut errors = Vec::new();
     for (i, op) in input.ops.iter().enumerate() {
+        if let Some(reason) = expand::refuse(op) {
+            errors.push(ApplyError { op: i, kind: ErrorKind::BadId, message: reason });
+            continue;
+        }
         match op::apply_op(&amp;mut work, i, op, stamp) {
             Ok(inv) =&gt; inverse.extend(inv),
             Err(e) =&gt; errors.push(e),
         }
+    }
+    // Instances re-derive what their definitions say, before the checks
+    // that read them (a connection to an expanded port).
+    let mut expanded = Vec::new();
+    if errors.is_empty() &amp;&amp; expand::affected_by(&amp;work, &amp;input.ops) {
+        let (ops, problems) = expand::expand(&amp;mut work, stamp);
+        expanded = ops;
+        self.expansion_problems = problems;
     }
     if errors.is_empty() {
         // A connection is reported once, however many of its links the
@@ -647,12 +701,23 @@ fn run(&amp;mut self, input: TransactionInput) -&gt; Result&lt;(Transaction, Doc
             if let Err(e) = op::check_created(&amp;work, i, op, stamp) {
                 errors.push(e);
             }
+            if let Err(message) = expand::check_scope(&amp;work, op) {
+                errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });
+            }
         }
     }
     if !errors.is_empty() {
         return Err(errors);
     }
     work.set_version(stamp);
+    // Derived nodes and relations come back by re-expansion, never by
+    // undo: a deleted instance&#x27;s expanded children are not restored by
+    // its inverse (the guard would refuse them anyway).
+    inverse.retain(|op| match op {
+        Op::Create { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } =&gt; !id.is_expanded(),
+        Op::Link { rel } =&gt; !rel.id.is_expanded(),
+        Op::Unlink { id } =&gt; !id.is_expanded(),
+    });
     Ok((
         Transaction {
             version: stamp,
@@ -663,61 +728,62 @@ fn run(&amp;mut self, input: TransactionInput) -&gt; Result&lt;(Transaction, Doc
             ops: input.ops,
             derived_ops: Vec::new(),
             inverse,
+            expanded,
             solver: None,
         },
         work,
     ))
 }</code></pre></div></div></figure>
-<p>The loop doesn't stop at the first error (1205–1210); it collects every one, because a model fixing a rejected edit wants the whole list in one round trip. The deferred checks follow (1211–1226). Only if both passes are clean does the copy get the new version and go back to the caller. The comment above <code>run</code> covers the cost: one clone per <em>commit</em>, not per frame, because a drag produces one transaction when it ends (F3.5).</p>
+<p>The loop doesn't stop at the first error (1740–1757); it collects every one, because a model fixing a rejected edit wants the whole list in one round trip. The deferred checks follow (1758–1776). Only if both passes are clean does the copy get the new version and go back to the caller. The comment above <code>run</code> covers the cost: one clone per <em>commit</em>, not per frame, because a drag produces one transaction when it ends (F3.5).</p>
 
 <h2 id="apply"><span class="sec">F2.6</span><code>Store::apply</code>, the public entry point</h2>
 <p><code>apply</code> is now two layers. The outer one deals with a gesture that may be running (it classifies the transaction against the gesture, sets the gesture's previews aside, and afterwards resumes or cancels it; Part 13 covers that). The inner one, <code>apply_now</code>, is the transaction path proper:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:978">src/iron_document/src/lib.rs</a><span class="range">lines 978–1023</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:9"></span><span class="band" style="--from:11;--len:3"></span><span class="band" style="--from:14;--len:12"></span><span class="band" style="--from:34;--len:6"></span><pre class="gutter" aria-hidden="true">978
-979
-980
-981
-982
-983
-984
-985
-986
-987
-988
-989
-990
-991
-992
-993
-994
-995
-996
-997
-998
-999
-1000
-1001
-1002
-1003
-1004
-1005
-1006
-1007
-1008
-1009
-1010
-1011
-1012
-1013
-1014
-1015
-1016
-1017
-1018
-1019
-1020
-1021
-1022
-1023</pre><pre class="src"><code class="language-rust">fn apply_now(&amp;mut self, input: TransactionInput) -&gt; Result&lt;Applied, Vec&lt;ApplyError&gt;&gt; {
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1509">src/iron_document/src/lib.rs</a><span class="range">lines 1509–1554</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1509
+1510
+1511
+1512
+1513
+1514
+1515
+1516
+1517
+1518
+1519
+1520
+1521
+1522
+1523
+1524
+1525
+1526
+1527
+1528
+1529
+1530
+1531
+1532
+1533
+1534
+1535
+1536
+1537
+1538
+1539
+1540
+1541
+1542
+1543
+1544
+1545
+1546
+1547
+1548
+1549
+1550
+1551
+1552
+1553
+1554</pre><pre class="src"><code class="language-rust">fn apply_now(&amp;mut self, input: TransactionInput) -&gt; Result&lt;Applied, Vec&lt;ApplyError&gt;&gt; {
     if let Some(k) = &amp;input.idempotency_key
         &amp;&amp; let Some((_, v)) = self.recent_keys.iter().find(|(key, _)| key == k)
     {
@@ -764,48 +830,48 @@ fn run(&amp;mut self, input: TransactionInput) -&gt; Result&lt;(Transaction, Doc
     })
 }</code></pre></div></div></figure>
 <ul>
-  <li><strong>Idempotency</strong> (979–987). A key matching one of the last 64 transactions returns that version and does nothing, so a network retry can't apply a model edit twice.</li>
-  <li><strong>Run and swap</strong> (989–991), then <code>after_transaction</code>, which keeps everything derived in step: the reactive graph and clips (F3), constraint clusters (Part 4), the physics network (Part 9), and the geometry revisions the spatial scene reads (Part 10).</li>
-  <li><strong>Solve</strong> (992–1003). <code>post_apply</code> runs the constraint solver over the committed document (Part 4). If the constraints can't hold, the old document is put back and the transaction never happened.</li>
-  <li><strong>Record</strong> (1012–1017): push onto the undo stack (trimmed to 200), clear the redo stack, append to the log.</li>
+  <li><strong>Idempotency</strong> (1510–1518). A key matching one of the last 64 transactions returns that version and does nothing, so a network retry can't apply a model edit twice.</li>
+  <li><strong>Run and swap</strong> (1520–1522), then <code>after_transaction</code>, which keeps everything derived in step: the reactive graph and clips (F3), constraint clusters (Part 4), the physics network (Part 9), and the geometry revisions the spatial scene reads (Part 10).</li>
+  <li><strong>Solve</strong> (1523–1534). <code>post_apply</code> runs the constraint solver over the committed document (Part 4). If the constraints can't hold, the old document is put back and the transaction never happened.</li>
+  <li><strong>Record</strong> (1543–1548): push onto the undo stack (trimmed to 200), clear the redo stack, append to the log.</li>
 </ul>
 
 <h2 id="undo"><span class="sec">F2.7</span>Undo and redo: ordinary transactions</h2>
 <p><code>History</code> keeps three lists: <code>past</code> (what undo will reverse), <code>future</code> (what redo will replay), and <code>log</code> (every transaction that applied, undo and redo included). The log is what the Bevy bridge reads (F4).</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1046">src/iron_document/src/lib.rs</a><span class="range">lines 1046–1079</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1046
-1047
-1048
-1049
-1050
-1051
-1052
-1053
-1054
-1055
-1056
-1057
-1058
-1059
-1060
-1061
-1062
-1063
-1064
-1065
-1066
-1067
-1068
-1069
-1070
-1071
-1072
-1073
-1074
-1075
-1076
-1077
-1078
-1079</pre><pre class="src"><code class="language-rust">/// Undo the most recent transaction. `ts` is the caller&#x27;s clock.
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1577">src/iron_document/src/lib.rs</a><span class="range">lines 1577–1610</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1577
+1578
+1579
+1580
+1581
+1582
+1583
+1584
+1585
+1586
+1587
+1588
+1589
+1590
+1591
+1592
+1593
+1594
+1595
+1596
+1597
+1598
+1599
+1600
+1601
+1602
+1603
+1604
+1605
+1606
+1607
+1608
+1609
+1610</pre><pre class="src"><code class="language-rust">/// Undo the most recent transaction. `ts` is the caller&#x27;s clock.
 /// `None` when there is nothing to undo.
 pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;ApplyError&gt;&gt;&gt; {
     if self.gesture.is_some() &amp;&amp; self.history.can_undo() {
@@ -839,7 +905,7 @@ pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;Ap
         }
     })
 }</code></pre></div></div></figure>
-<p>Undo pops the last transaction, builds a new one from its inverse, labels it "undo: …" with actor <code>System</code>, and runs it through the same <code>run</code> as everything else. Redo replays the original ops plus its <code>derived_ops</code>, without solving, so redo reproduces exactly what happened. Because both go through the normal path, validation, the version bump, the Bevy sync and the model's view of history need no special cases. Two newer details: undo first cancels any running gesture (1049–1051), so Cmd+Z mid-drag takes the drag back; and two calls edit the undo stack without new semantics, <code>retract</code> and <code>merge_with_previous</code>, which make an Alt-drag one undo step (Part 13).</p>
+<p>Undo pops the last transaction, builds a new one from its inverse, labels it "undo: …" with actor <code>System</code>, and runs it through the same <code>run</code> as everything else. Redo replays the original ops plus its <code>derived_ops</code>, without solving, so redo reproduces exactly what happened. Because both go through the normal path, validation, the version bump, the Bevy sync and the model's view of history need no special cases. Two newer details: undo first cancels any running gesture (1580–1582), so Cmd+Z mid-drag takes the drag back; and two calls edit the undo stack without new semantics, <code>retract</code> and <code>merge_with_previous</code>, which make an Alt-drag one undo step (Part 13).</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Action</th><th>Version</th><th>past</th><th>future</th><th>Appended to the log</th></tr></thead>
   <tbody>
@@ -853,13 +919,13 @@ pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;Ap
 
 <h2 id="file"><span class="sec">F2.8</span>Out to disk: canonical JSON</h2>
 <p>The saved file from the same example, after the move:</p>
-<figure class="plainfig"><figcaption>cargo run -p iron_document --example dump (file)</figcaption><pre class="plain"><code class="language-plaintext">{&quot;schema&quot;: 5, &quot;next_id&quot;: 4, &quot;next_rel&quot;: 1, &quot;version&quot;: 2,
+<figure class="plainfig"><figcaption>Illustrative save (fields abbreviated)</figcaption><pre class="plain"><code class="language-plaintext">{&quot;schema&quot;: 8, &quot;next_id&quot;: 4, &quot;next_rel&quot;: 1, &quot;version&quot;: 2,
  &quot;nodes&quot;: {
   &quot;#1&quot;: {&quot;order&quot;:&quot;a0&quot;,&quot;parent&quot;:null,&quot;ty&quot;:&quot;group&quot;},
   &quot;#2&quot;: {&quot;order&quot;:&quot;a0&quot;,&quot;parent&quot;:&quot;#1&quot;,&quot;ty&quot;:&quot;rect&quot;},
   &quot;#3&quot;: {&quot;order&quot;:&quot;a1&quot;,&quot;parent&quot;:&quot;#1&quot;,&quot;ty&quot;:&quot;ellipse&quot;}
  },
- &quot;components&quot;: {
+ &quot;facets&quot;: {
   &quot;name&quot;: {
    &quot;#1&quot;: {&quot;text&quot;:&quot;scene&quot;}
   },
@@ -880,22 +946,22 @@ pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;Ap
  &quot;relations&quot;: [
  ]}</code></pre></figure>
 <ul>
-  <li><strong>Flat, not nested.</strong> Nodes, components and relations are separate tables keyed by id. Reparenting changes one <code>"parent"</code> value on one line.</li>
+  <li><strong>Flat, not nested.</strong> Nodes, facets and relations are separate tables keyed by id. Reparenting changes one <code>"parent"</code> value on one line.</li>
   <li><strong>Canonical.</strong> Keys sorted, one record per line. Saving the same document twice gives the same bytes, and a git diff of two saves reads like a list of ops.</li>
-  <li><strong>Tombstones and counters are saved</strong>, so ids stay unique across save and reload. Session-tier nodes (Part 8) are left out.</li>
+  <li><strong>Tombstones and counters are saved</strong>, so ids stay unique across save and reload. Session-tier nodes, expanded instance nodes/relations and built-in contexts are left out. Runtime signals are not document tables at all.</li>
 </ul>
-<p><code>load</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/serial.rs:228" title="src/iron_document/src/serial.rs:228"><code>serial.rs:228</code></a>) trusts nothing. It checks the schema version (renaming the older spellings from schemas 1 and 2, turning schema 3's <code>circle</code> into an <code>ellipse</code>, and moving schema 4's path points under a <code>contour</code>), every id against its counter, every parent and child policy, parent cycles, required components, and relation endpoints, then rebuilds the indexes and runs <code>check_invariants</code>. A bad file is an error with a message before anything else sees it.</p>
+<p><code>load</code> validates schema, ids, parents, child policies, cycles, required facets and relation endpoints, then rebuilds indexes and checks invariants. Schema 8 reads schemas 1–8, including circle/contour migrations, parameters to input ports and args, detached legacy instances, and packed geometry (Part 2). Store initialization derives expanded instances, bindings and runtime results.</p>
 
 <h2 id="views"><span class="sec">F2.9</span>Out to a reader: views</h2>
 <p>The file is for machines. A <em>view</em> is for a reader, a person or the model:</p>
-<figure class="plainfig"><figcaption>cargo run -p iron_document --example dump (view)</figcaption><pre class="plain"><code class="language-plaintext">&amp;lt;document version=&quot;2&quot;&amp;gt;
+<figure class="plainfig"><figcaption>Illustrative tree view</figcaption><pre class="plain"><code class="language-plaintext">&amp;lt;document version=&quot;2&quot;&amp;gt;
   &amp;lt;group id=&quot;#1&quot; name=&quot;scene&quot; count=&quot;2&quot;&amp;gt;
     &amp;lt;rect id=&quot;#2&quot; x=&quot;200&quot; y=&quot;80&quot; rot=&quot;0&quot; sx=&quot;1&quot; sy=&quot;1&quot; w=&quot;100&quot; h=&quot;100&quot; color=&quot;#808080ff&quot; opacity=&quot;1&quot;/&amp;gt;
     &amp;lt;ellipse id=&quot;#3&quot; x=&quot;0&quot; y=&quot;0&quot; rot=&quot;0&quot; sx=&quot;1&quot; sy=&quot;1&quot; rx=&quot;50&quot; ry=&quot;50&quot;/&amp;gt;
   &amp;lt;/group&amp;gt;
 &amp;lt;/document&amp;gt;</code></pre></figure>
 <p>It's XML-shaped because the tree is the information, and models read XML well. A view is requested with a <code>ViewQuery</code>:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/view.rs:16">src/iron_document/src/view.rs</a><span class="range">lines 16–52</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">16
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/view.rs:16">src/iron_document/src/view.rs</a><span class="range">lines 16–57</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">16
 17
 18
 19
@@ -931,7 +997,12 @@ pub fn undo(&amp;mut self, ts: u64) -&gt; Option&lt;Result&lt;Applied, Vec&lt;Ap
 49
 50
 51
-52</pre><pre class="src"><code class="language-rust">#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+52
+53
+54
+55
+56
+57</pre><pre class="src"><code class="language-rust">#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = &quot;snake_case&quot;)]
 pub enum Fidelity {
     /// Types, ids, names and counts. No leaves.
@@ -967,13 +1038,20 @@ pub struct ViewQuery {
     /// Levels below the scope to descend. `None` is unlimited.
     #[serde(default)]
     pub depth: Option&lt;u32&gt;,
+    /// Instances whose expanded insides to show, marked `derived`
+    /// (component-model.md §9). Otherwise only an instance&#x27;s ports, its
+    /// interface, are shown of what it derives.
+    #[serde(default)]
+    pub expand: Vec&lt;NodeId&gt;,
 }</code></pre></div></div></figure>
 <ul>
   <li><strong>Relation</strong> picks which structure to walk: the raw tree, the model (entities and their figures, Part 5), or one composition's layout.</li>
   <li><strong>Fidelity.</strong> <code>skeleton</code> shows types, ids, names and child counts; <code>summary</code> shows values but elides long child lists; <code>full</code> shows everything.</li>
   <li><strong>Elision is always marked.</strong> A node whose children were left out carries <code>elided</code> and the true count, so a reader can tell "no children" from "children not shown".</li>
 </ul>
-<p>Attribute names are bare field names (<code>x</code>, <code>w</code>, <code>color</code>) unless two components on one node share a field name, in which case both are written in full (<code>fill.color</code>, <code>stroke.color</code>). Every value shown is the <em>resolved</em> value, read through the reactive graph, so a bound leaf shows its current number plus the formula: <code>h="75" h.bind="#1.slider.value * 300"</code> (F3). Every view starts with <code>&lt;document version="N"&gt;</code>; the model sends that number back when it edits (F4).</p>
+<p>Attribute names are bare field names (<code>x</code>, <code>w</code>, <code>color</code>) unless two facets on one node share a field name, in which case both are written in full (<code>fill.color</code>, <code>stroke.color</code>). Every value shown is the <em>resolved</em> value, read through the reactive graph, so a bound leaf shows its current number plus the formula: <code>h="75" h.bind="#1.slider.value * 300"</code> (F3). Every view starts with <code>&lt;document version="N"&gt;</code>; the model sends that number back when it edits (F4).</p>
+
+<p>Views now keep linked instances compact by default: callers can request selected instance ids through <code>ViewQuery::expand</code> to inspect derived insides. Long packed path data is summarized rather than expanded into thousands of point nodes. This is a reading policy, separate from what the engine derives for interaction and drawing.</p>
 
 <h2 id="tests"><span class="sec">F2.10</span>The tests are the specification</h2>
 <p><code>tests/spine.rs</code> is a good summary of what the store promises:</p>

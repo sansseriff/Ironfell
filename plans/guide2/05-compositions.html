@@ -13,12 +13,12 @@
 <nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html" aria-current="page"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="14-contexts.html"><span class="num">14</span>Behaviour as data</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
-  <p class="kicker">Part 5 of 9 · <span class="chip sys-comp">Compositions</span> <span class="chip sys-render">Rendering</span></p>
+  <p class="kicker">Part 5 of 14 · <span class="chip sys-comp">Compositions</span> <span class="chip sys-render">Rendering</span></p>
   <h1>Compositions, figures and embeds</h1>
   <p class="lede">The central idea of vision document 09 is that one <em>thing</em> (a laser, a torus) can be drawn many ways, in many diagrams, and every drawing stays linked to the thing. This part covers roadmap stage C1 and the embedding work after it: composition roots, the <code>figures</code> relation, cross-highlighting and Link, and compositions shown inside other compositions (2D in 2D, 3D in 2D as a camera view, 2D in 3D as a plane).</p>
   <div class="prereq">
     <div><b>You need</b>Part 2's entities and definitions; F4's reconciler.</div>
-    <div><b>Files</b><code>iron_document/src/composition.rs</code>, <code>document_bridge/{panel_views,nest,highlight,render,materialize}.rs</code>, <code>bevy_app/{picking,scene3d}.rs</code>. Design: <code>plans/entity-composition-model.md</code> (ECM) §5–§7.</div>
+    <div><b>Files</b><code>iron_document/src/composition.rs</code>, <code>document_bridge/{panel_views,nest,highlight,render,materialize}.rs</code>, <code>bevy_app/{picking,scene3d}.rs</code>. Design: <code>plans/specs/entity-composition-model.md</code> (ECM) §5–§7.</div>
   </div>
 </header>
 
@@ -59,31 +59,31 @@
 //! is drawn in, which entity a node pictures, and every picture of an
 //! entity. Nothing is stored that these functions can compute.</code></pre></div></div></figure>
 <p>The last sentence of that comment is the rule for this whole file: <strong>nothing is stored that can be computed</strong>. Which composition a node is in is found by walking up to the nearest composition root; which entity a node pictures is found by walking up to the nearest node with a <code>figures</code> relation:</p>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/composition.rs:64">src/iron_document/src/composition.rs</a><span class="range">lines 64–88</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:10;--len:10"></span><pre class="gutter" aria-hidden="true">64
-65
-66
-67
-68
-69
-70
-71
-72
-73
-74
-75
-76
-77
-78
-79
-80
-81
-82
-83
-84
-85
-86
-87
-88</pre><pre class="src"><code class="language-rust">/// The entity `node` pictures directly: the target of its `figures`
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/composition.rs:132">src/iron_document/src/composition.rs</a><span class="range">lines 132–156</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156</pre><pre class="src"><code class="language-rust">/// The entity `node` pictures directly: the target of its `figures`
 /// relation, if that entity is live.
 pub fn figured_by(doc: &amp;Document, node: NodeId) -&gt; Option&lt;NodeId&gt; {
     doc.relations_from(node).find(|r| r.rel == RelKind::Figures &amp;&amp; doc.is_live(r.to)).map(|r| r.to)
@@ -110,9 +110,11 @@ pub fn figures_of(doc: &amp;Document, entity: NodeId) -&gt; Vec&lt;NodeId&gt; {
 }</code></pre></div></div></figure>
 <p><code>figure_of</code> walks <em>up</em>, which is what makes grouped figures work: clicking one wheel of a car that is a figure of a <code>car</code> entity finds the group, and the group's entity.</p>
 
+<p>For linked components the authored figure is a <code>use</code>; its picture children are expanded from a definition template. Several uses can figure one entity in different notations. Detached figures are ordinary authored pictures. Mains edit the definition itself, while instance edits produce overrides (Part 2). Render-only references name a definition directly and draw its template without entity expansion (Part 6).</p>
+
 <h2 id="panels"><span class="sec">5.2</span>One panel per composition</h2>
 <p>A panel is a rectangle the shell lays out (Part 8 covers how). Rust resolves each composition panel into a <code>PanelView</code>: which composition, 2D or 3D, and how document space maps to the window:</p>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/panel_views.rs:28">src/document_bridge/panel_views.rs</a><span class="range">lines 28–66</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:21;--len:4"></span><pre class="gutter" aria-hidden="true">28
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/panel_views.rs:28">src/document_bridge/panel_views.rs</a><span class="range">lines 28–78</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">28
 29
 30
 31
@@ -150,7 +152,19 @@ pub fn figures_of(doc: &amp;Document, entity: NodeId) -&gt; Vec&lt;NodeId&gt; {
 63
 64
 65
-66</pre><pre class="src"><code class="language-rust">/// What one composition panel shows.
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78</pre><pre class="src"><code class="language-rust">/// What one composition panel shows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelView {
     pub panel: String,
@@ -167,18 +181,30 @@ pub struct PanelView {
     pub pan: Vec2,
     /// A 2D view&#x27;s zoom: window px per document px.
     pub zoom: f32,
+    /// A render inspector (plans/specs/render-inspector.md): the panel it
+    /// watches, whose composition it shows with that panel&#x27;s render plan
+    /// drawn over it. Its spec is `inspect:&lt;panel&gt;`.
+    pub observes: Option&lt;String&gt;,
 }
 
 impl PanelView {
-    /// Document 2D space to window space, for this panel.
+    /// Where document space&#x27;s origin lands, in window px: on a whole pixel,
+    /// so a raster tile maps texel for pixel (`vector::raster`) and a live
+    /// chunk beside it lines up exactly.
+    fn origin(&amp;self) -&gt; Vec2 {
+        Vec2::new((self.rect.x + self.pan.x).round(), (self.rect.y + self.pan.y).round())
+    }
+
+    /// Document 2D space to window px, for this panel.
     pub fn affine(&amp;self) -&gt; kurbo::Affine {
-        kurbo::Affine::translate(((self.rect.x + self.pan.x) as f64, (self.rect.y + self.pan.y) as f64)) * kurbo::Affine::scale(self.zoom as f64)
+        let o = self.origin();
+        kurbo::Affine::translate((o.x as f64, o.y as f64)) * kurbo::Affine::scale(self.zoom as f64)
     }
 
     /// A window-space point in this panel&#x27;s document space; `None` outside
-    /// the panel.
+    /// the panel. The inverse of [`Self::affine`].
     pub fn to_doc(&amp;self, screen: Vec2) -&gt; Option&lt;Vec2&gt; {
-        self.rect.contains(screen).then(|| (Vec2::new(screen.x - self.rect.x - self.pan.x, screen.y - self.rect.y - self.pan.y)) / self.zoom)
+        self.rect.contains(screen).then(|| (screen - self.origin()) / self.zoom)
     }
 
     /// Whether a node drawn in `composition` belongs in this panel.
@@ -190,19 +216,7 @@ impl PanelView {
     }
 }</code></pre></div></div></figure>
 <p>Every 2D path, drawing, picking and the select tool, goes through <code>affine()</code>, so the pan and zoom added in Part 8 needed no other changes. A 3D composition panel gets its own <code>Camera3d</code> with its viewport set to the panel's rectangle, and its meshes go on a <em>render layer</em> that only that composition's cameras see:</p>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/panel_views.rs:112">src/document_bridge/panel_views.rs</a><span class="range">lines 112–135</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">112
-113
-114
-115
-116
-117
-118
-119
-120
-121
-122
-123
-124
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/panel_views.rs:124">src/document_bridge/panel_views.rs</a><span class="range">lines 124–147</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">124
 125
 126
 127
@@ -213,7 +227,19 @@ impl PanelView {
 132
 133
 134
-135</pre><pre class="src"><code class="language-rust">/// Composition → render layer, assigned on first use and never reused.
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147</pre><pre class="src"><code class="language-rust">/// Composition → render layer, assigned on first use and never reused.
 #[derive(Resource, Debug)]
 pub struct CompositionLayers {
     layers: BTreeMap&lt;NodeId, usize&gt;,
@@ -268,47 +294,47 @@ pub fn lit(doc: &amp;Document, picked: impl IntoIterator&lt;Item = NodeId&gt;) -
 
 <h3 id="link">Link, and the merge question</h3>
 <p>Link says "these two pictures are the same thing". Four cases:</p>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/composition.rs:192">src/iron_document/src/composition.rs</a><span class="range">lines 192–232</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:18;--len:3"></span><span class="band" style="--from:26;--len:5"></span><span class="band" style="--from:32;--len:6"></span><pre class="gutter" aria-hidden="true">192
-193
-194
-195
-196
-197
-198
-199
-200
-201
-202
-203
-204
-205
-206
-207
-208
-209
-210
-211
-212
-213
-214
-215
-216
-217
-218
-219
-220
-221
-222
-223
-224
-225
-226
-227
-228
-229
-230
-231
-232</pre><pre class="src"><code class="language-rust">pub fn link_ops(doc: &amp;Document, a: NodeId, b: NodeId, keep: Option&lt;NodeId&gt;) -&gt; Result&lt;Vec&lt;Op&gt;, LinkError&gt; {
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/composition.rs:260">src/iron_document/src/composition.rs</a><span class="range">lines 260–300</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">260
+261
+262
+263
+264
+265
+266
+267
+268
+269
+270
+271
+272
+273
+274
+275
+276
+277
+278
+279
+280
+281
+282
+283
+284
+285
+286
+287
+288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298
+299
+300</pre><pre class="src"><code class="language-rust">pub fn link_ops(doc: &amp;Document, a: NodeId, b: NodeId, keep: Option&lt;NodeId&gt;) -&gt; Result&lt;Vec&lt;Op&gt;, LinkError&gt; {
     if a == b {
         return Err(LinkError::Invalid(format!(&quot;{a} cannot be linked to itself&quot;)));
     }
@@ -353,12 +379,12 @@ pub fn lit(doc: &amp;Document, picked: impl IntoIterator&lt;Item = NodeId&gt;) -
   <li>Neither pictures anything yet: create an entity (and a <code>thing</code> definition and a <code>model</code> root if missing), and link both.</li>
   <li>One does: link the other to the same entity.</li>
   <li>Both picture the same entity already: nothing to do.</li>
-  <li>Both picture <em>different</em> entities: one of them must go, and the user (or the model) is asked which, never left to a guess. The question carries a summary of each entity (definition, parameters, figures, ports) so the answer is informed. Answering with <code>keep</code> moves the other entity's figures over and deletes it, all in one transaction.</li>
+  <li>Both picture <em>different</em> entities: one of them must go, and the user (or the model) is asked which, never left to a guess. The question carries a summary of each entity (definition, arguments, figures, ports) so the answer is informed. Answering with <code>keep</code> moves the other entity's figures over and deletes it, all in one transaction.</li>
 </ul>
-<p>"Show in" is the reverse journey: from a figure, find its counterparts' compositions and frame them (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/web_ffi.rs:401" title="src/web_ffi.rs:401"><code>document_focus</code></a>). A 2D view pans the node to its centre; a 3D panel backs its camera off until the node fills about half the view.</p>
+<p>"Show in" is the reverse journey: from a figure, find its counterparts' compositions and frame them (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/engine_api.rs:976" title="src/engine_api.rs:976"><code>document_focus</code></a>). A 2D view pans the node to its centre; a 3D panel backs its camera off until the node fills about half the view.</p>
 
 <h3 id="views">Two new views for the model</h3>
-<p>The tree view shows the document as stored. Two more relations were added (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/view.rs:31" title="src/iron_document/src/view.rs:31"><code>view.rs:31</code></a>): <code>Model</code> lists entities with their parameters, ports (Part 9) and figures, and <code>Composition(id)</code> shows one composition's layout with each figure naming its entity as <code>of="#e"</code>. The model surface sends the model view first, then the tree, so the model reads "what things are" before "how they're drawn".</p>
+<p>The tree view shows the document as stored. Two more relations were added (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/view.rs:31" title="src/iron_document/src/view.rs:31"><code>view.rs:31</code></a>): <code>Model</code> lists entities with their arguments, ports (Part 9) and figures, and <code>Composition(id)</code> shows one composition's layout with each figure naming its entity as <code>of="#e"</code>. The model surface sends the model view first, then the tree, so the model reads "what things are" before "how they're drawn".</p>
 
 <h2 id="embeds"><span class="sec">5.4</span>Compositions inside compositions</h2>
 <p>Later the user pointed out that compositions aren't really panels; like After Effects compositions, they can be placed inside other compositions. An <code>embed</code> node does that: a live reference, not a copy.</p>
@@ -371,44 +397,44 @@ pub fn lit(doc: &amp;Document, picked: impl IntoIterator&lt;Item = NodeId&gt;) -
     <tr><td>3D composition</td><td>3D composition</td><td>A group (the obvious meaning; not yet needed)</td></tr>
   </tbody>
 </table></div>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/composition.rs:345">src/iron_document/src/composition.rs</a><span class="range">lines 345–376</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">345
-346
-347
-348
-349
-350
-351
-352
-353
-354
-355
-356
-357
-358
-359
-360
-361
-362
-363
-364
-365
-366
-367
-368
-369
-370
-371
-372
-373
-374
-375
-376</pre><pre class="src"><code class="language-rust">/// An embed must sit inside a composition, name a live composition, and not
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/composition.rs:416">src/iron_document/src/composition.rs</a><span class="range">lines 416–447</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447</pre><pre class="src"><code class="language-rust">/// An embed must sit inside a composition, name a live composition, and not
 /// close a loop: the composition it shows must not, through its own embeds,
 /// show the one the embed is in. A named camera must be a camera of the
 /// embedded composition.
 pub fn validate_embed(doc: &amp;Document, embed: NodeId) -&gt; Result&lt;(), String&gt; {
     let home = composition_of(doc, embed).ok_or_else(|| format!(&quot;embed {embed} is not inside a composition&quot;))?;
-    let of = match doc.get::&lt;crate::component::Embed&gt;(embed).and_then(|e| e.source.constant()) {
+    let of = match doc.get::&lt;crate::facet::Embed&gt;(embed).and_then(|e| e.source.constant()) {
         Some(crate::value::Value::Ref(c)) =&gt; *c,
         _ =&gt; return Err(format!(&quot;embed {embed}: embed.source must name a composition&quot;)),
     };
@@ -426,7 +452,7 @@ pub fn validate_embed(doc: &amp;Document, embed: NodeId) -&gt; Result&lt;(), Str
             stack.extend(embeds_in(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
         }
     }
-    if let Some(cam) = doc.get::&lt;crate::component::EmbedCamera&gt;(embed).and_then(|e| e.camera.constant()) {
+    if let Some(cam) = doc.get::&lt;crate::facet::EmbedCamera&gt;(embed).and_then(|e| e.camera.constant()) {
         let ok = matches!(cam, crate::value::Value::Ref(c) if doc.live(*c).is_some_and(|n| n.ty.name() == &quot;camera&quot;) &amp;&amp; composition_of(doc, *c) == Some(of));
         if !ok {
             return Err(format!(&quot;embed {embed}: embed_camera.camera must name a camera inside {of}&quot;));
@@ -450,36 +476,62 @@ composition &quot;assembly&quot; (3d)
 
 <h3 id="walk">Drawing and picking walk through embeds</h3>
 <p>The 2D layer draws a composition's nodes in painter order (the visible ones, from the spatial scene; Part 10). At each embed it recurses into the embedded composition through the embed's placement, clipped to its region; a 3D embed draws its camera's texture (Part 6) in the same painter order:</p>
-<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/render.rs:208">src/document_bridge/render.rs</a><span class="range">lines 208–237</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:6;--len:5"></span><span class="band" style="--from:11;--len:14"></span><pre class="gutter" aria-hidden="true">208
-209
-210
-211
-212
-213
-214
-215
-216
-217
-218
-219
-220
-221
-222
-223
-224
-225
-226
-227
-228
-229
-230
-231
-232
-233
-234
-235
-236
-237</pre><pre class="src"><code class="language-rust">fn content(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, id: NodeId, base: kurbo::Affine, clip: kurbo::Rect, key: &amp;str, depth: u32, allowed: &amp;std::collections::BTreeSet&lt;NodeId&gt;) {
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/render.rs:487">src/document_bridge/render.rs</a><span class="range">lines 487–529</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">487
+488
+489
+490
+491
+492
+493
+494
+495
+496
+497
+498
+499
+500
+501
+502
+503
+504
+505
+506
+507
+508
+509
+510
+511
+512
+513
+514
+515
+516
+517
+518
+519
+520
+521
+522
+523
+524
+525
+526
+527
+528
+529</pre><pre class="src"><code class="language-rust">fn content(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, id: NodeId, base: kurbo::Affine, clip: kurbo::Rect, key: &amp;str, depth: u32, allowed: Option&lt;&amp;BTreeSet&lt;NodeId&gt;&gt;) {
+        // A reference: its definition&#x27;s template, in place, placed
+        // through it (instance-cache.md phase D).
+        if let Some(template) = nest::reference(self.doc, id) {
+            if depth &gt;= nest::MAX_DEPTH {
+                return;
+            }
+            let outer = self.relative;
+            self.relative = Some((template, self.world(id)));
+            let kids: Vec&lt;NodeId&gt; = self.doc.children(template).to_vec();
+            self.branches(b, &amp;kids, base, clip, key, depth + 1, None);
+            self.relative = outer;
+            return;
+        }
         if nest::is_embed(self.doc, id) {
             if depth &gt;= nest::MAX_DEPTH {
                 return;
@@ -510,8 +562,7 @@ composition &quot;assembly&quot; (3d)
         self.branches(b, self.doc.children(id), base, clip, key, depth, allowed);
 }</code></pre></div></div></figure>
 <p>Picking mirrors drawing. It asks the spatial scene for candidates at the point, which already come with their chain inside the composition (<code>Scene::chain</code>); the pointer is mapped through each embed's inverse placement, and every hit records its <em>chain</em>: the nodes from the panel's top level down through every group and embed to the hit node. Part 7's selection rules are all about choosing a node along that chain.</p>
-<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/picking.rs:141">src/bevy_app/picking.rs</a><span class="range">lines 141–185</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:18;--len:10"></span><span class="band" style="--from:28;--len:3"></span><pre class="gutter" aria-hidden="true">141
-142
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/picking.rs:142">src/bevy_app/picking.rs</a><span class="range">lines 142–200</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">142
 143
 144
 145
@@ -554,7 +605,22 @@ composition &quot;assembly&quot; (3d)
 182
 183
 184
-185</pre><pre class="src"><code class="language-rust">pub fn walk(&amp;mut self, roots: &amp;[NodeId], prefix: &amp;[NodeId], p: kurbo::Point, space: kurbo::Affine, key: &amp;str, depth: u32) {
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200</pre><pre class="src"><code class="language-rust">pub fn walk(&amp;mut self, roots: &amp;[NodeId], prefix: &amp;[NodeId], p: kurbo::Point, space: kurbo::Affine, key: &amp;str, depth: u32) {
     let indexed = self.spatial.enabled;
     let candidates = if indexed {
         self.spatial.candidates(roots, Some(p), kurbo::Rect::ZERO)
@@ -567,6 +633,20 @@ composition &quot;assembly&quot; (3d)
         let mut chain = prefix.to_vec();
         if indexed { chain.extend_from_slice(self.spatial.chain(id)); }
         else { chain.push(id); }
+        // A reference: into its definition&#x27;s template, through it.
+        if let Some(template) = nest::reference(self.doc, id) {
+            if depth &gt;= nest::MAX_DEPTH {
+                continue;
+            }
+            let placement = nest::world_2d(self.store, self.spatial, id);
+            if placement.determinant().abs() &lt; 1e-12 {
+                continue;
+            }
+            let inv = placement.inverse();
+            let kids: Vec&lt;NodeId&gt; = self.doc.children(template).to_vec();
+            self.walk(&amp;kids, &amp;chain, inv * p, inv * space, key, depth + 1);
+            continue;
+        }
         if nest::is_embed(self.doc, id) {
             if depth &gt;= nest::MAX_DEPTH {
                 continue;
@@ -599,48 +679,50 @@ composition &quot;assembly&quot; (3d)
         }
     }
 }</code></pre></div></div></figure>
-<p>Note line 165: an embed's own area is a hit too, marked <code>background</code>. It ranks below every shape hit, wherever the shape is. That ordering mattered when the pendulum moved into its own embed: the pendulum embed's region covers most of the scene, and without the rule, clicking a scene rect selected the transparent pendulum embed on top of it.</p>
+<p>Note line 180: an embed's own area is a hit too, marked <code>background</code>. It ranks below every shape hit, wherever the shape is. That ordering mattered when the pendulum moved into its own embed: the pendulum embed's region covers most of the scene, and without the rule, clicking a scene rect selected the transparent pendulum embed on top of it.</p>
 
 <h3 id="cams">3D embeds: a camera per view</h3>
 <p>Every visible 3D embed becomes an <code>EmbedView</code> with a stable key (the panel id plus the chain of embeds that reach it), so its Bevy camera survives from frame to frame. The texture is sized to the embed's on-screen size, so it stays sharp at any zoom:</p>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/nest.rs:221">src/document_bridge/nest.rs</a><span class="range">lines 221–258</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:27;--len:9"></span><pre class="gutter" aria-hidden="true">221
-222
-223
-224
-225
-226
-227
-228
-229
-230
-231
-232
-233
-234
-235
-236
-237
-238
-239
-240
-241
-242
-243
-244
-245
-246
-247
-248
-249
-250
-251
-252
-253
-254
-255
-256
-257
-258</pre><pre class="src"><code class="language-rust">#[allow(clippy::too_many_arguments)]
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/nest.rs:311">src/document_bridge/nest.rs</a><span class="range">lines 311–350</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">311
+312
+313
+314
+315
+316
+317
+318
+319
+320
+321
+322
+323
+324
+325
+326
+327
+328
+329
+330
+331
+332
+333
+334
+335
+336
+337
+338
+339
+340
+341
+342
+343
+344
+345
+346
+347
+348
+349
+350</pre><pre class="src"><code class="language-rust">#[allow(clippy::too_many_arguments)]
 fn collect(
     store: &amp;iron_document::Store,
     spatial: &amp;super::SpatialScene,
@@ -651,11 +733,13 @@ fn collect(
     clip: kurbo::Rect,
     key: &amp;str,
     depth: u32,
+    open: bool,
     found: &amp;mut Vec&lt;EmbedView&gt;,
 ) {
     let doc = store.document();
-    for id in preorder(doc, roots) {
-        if !is_embed(doc, id) || depth &gt;= MAX_DEPTH {
+    let open_through = |c: NodeId| open &amp;&amp; composition::run_mode(doc, c) != composition::RunMode::OnDemand;
+    for id in embeds_under(doc, roots) {
+        if depth &gt;= MAX_DEPTH {
             continue;
         }
         let placement = world_2d(store, spatial, id);
@@ -664,7 +748,7 @@ fn collect(
             let inner = base * e.placement;
             let clip = clip.intersect(inner.transform_rect_bbox(e.region));
             let kids: Vec&lt;NodeId&gt; = doc.children(e.source).to_vec();
-            collect(store, spatial, layers, view, &amp;kids, inner, clip, &amp;key, depth + 1, found);
+            collect(store, spatial, layers, view, &amp;kids, inner, clip, &amp;key, depth + 1, open_through(e.source), found);
         } else if let Some((source, camera, w, h)) = embed_3d(store, id) {
             let to_window = base * placement;
             let visible = to_window.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w, h)).intersect(clip);
@@ -676,26 +760,10 @@ fn collect(
             let s = to_window.determinant().abs().sqrt().max(1e-6);
             let size = UVec2::new(((w * s).ceil() as u32).clamp(1, 4096), ((h * s).ceil() as u32).clamp(1, 4096));
             let to_texture = kurbo::Affine::scale_non_uniform(size.x as f64 / w, size.y as f64 / h) * to_window.inverse();
-            found.push(EmbedView { key, panel: view.panel.clone(), size, to_texture, clip: visible, source, camera, layer: layers.of(Some(source)) });
+            found.push(EmbedView { key, panel: view.panel.clone(), size, to_texture, clip: visible, source, camera, layer: layers.of(Some(source)), open: open_through(source) });
         }</code></pre></div></div></figure>
 <p>Without a named camera node, the view frames everything in the composition from a fixed direction, and only re-frames when content leaves the framed sphere, so dragging the torus doesn't make the camera chase it:</p>
-<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/scene3d.rs:367">src/bevy_app/scene3d.rs</a><span class="range">lines 367–402</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">367
-368
-369
-370
-371
-372
-373
-374
-375
-376
-377
-378
-379
-380
-381
-382
-383
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/scene3d.rs:383">src/bevy_app/scene3d.rs</a><span class="range">lines 383–429</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">383
 384
 385
 386
@@ -714,9 +782,37 @@ fn collect(
 399
 400
 401
-402</pre><pre class="src"><code class="language-rust">// The derived default view: frame every mesh of the composition
-// from a fixed direction, re-framing only when the content
-// leaves what was framed.
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429</pre><pre class="src"><code class="language-rust">// The derived default view: frame every mesh of the composition
+// from a fixed direction. A change of the content&#x27;s bounds inside
+// the dead zone (`FRAME_SLACK`) keeps the framing; past it, the
+// view eases to the new one (`FRAME_EASE`).
 None =&gt; {
     // Meshes, and the corners of planes (2D compositions in it).
     let plane_corners = planes.iter().filter(|(_, _, within)| within.0 == Some(view.source)).flat_map(|(gt, plane, _)| {
@@ -736,21 +832,31 @@ None =&gt; {
         Some((lo, hi)) =&gt; ((lo + hi) * 0.5, ((hi - lo) * 0.5).length().max(0.25)),
         None =&gt; (Vec3::ZERO, 2.0),
     };
-    let reframe = match cam.framed {
-        Some((c0, r0)) =&gt; centre.distance(c0) + radius &gt; r0 * 1.001 || radius &lt; r0 * 0.5,
-        None =&gt; true,
+    let target = match cam.framed {
+        Some((c0, r0)) if (radius / r0 - 1.0).abs() &lt;= FRAME_SLACK &amp;&amp; centre.distance(c0) &lt;= FRAME_SLACK * r0 =&gt; (c0, r0),
+        _ =&gt; (centre, radius),
     };
-    if reframe {
-        let half_v = DEFAULT_FOV * 0.5;
-        let half_h = (half_v.tan() * aspect).atan();
-        let dist = radius / half_v.min(half_h).sin() * 1.1;
-        *transform = Transform::from_translation(centre + DEFAULT_VIEW_FROM.normalize() * dist).looking_at(centre, Vec3::Y);
-        cam.framed = Some((centre, radius));
-        if let Projection::Perspective(p) = projection.as_mut() {
-            p.fov = DEFAULT_FOV;
+    cam.framed = Some(target);
+    // The first framing is immediate; later ones ease, and land
+    // exactly once close, so a settled view stops re-rendering.
+    let shown = match cam.shown {
+        Some((c, r)) =&gt; {
+            let k = 1.0 - (-time.delta_secs() / FRAME_EASE).exp();
+            let (c, r) = (c.lerp(target.0, k), r + (target.1 - r) * k);
+            if c.distance(target.0) &lt; 1e-3 * target.1 &amp;&amp; (r - target.1).abs() &lt; 1e-3 * target.1 { target } else { (c, r) }
         }
+        None =&gt; target,
+    };
+    cam.shown = Some(shown);
+    let (centre, radius) = shown;
+    let half_v = DEFAULT_FOV * 0.5;
+    let half_h = (half_v.tan() * aspect).atan();
+    let dist = radius / half_v.min(half_h).sin() * 1.1;
+    let posed = Transform::from_translation(centre + DEFAULT_VIEW_FROM.normalize() * dist).looking_at(centre, Vec3::Y);
+    if *transform != posed {
+        *transform = posed;
     }</code></pre></div></div></figure>
-<p>A 2D composition embedded in 3D is materialised as a plane mesh (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:433" title="src/document_bridge/materialize.rs:433"><code>materialize.rs:433</code></a>), 100 document px per world unit, whose texture is the 2D content rendered off-screen (Part 6). Clicking on the plane intersects the camera ray with it and hands the 2D picker a point in the card's own space, so the card's shapes can be selected and dragged in 3D.</p>
+<p>A 2D composition embedded in 3D is materialised as a plane mesh (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:452" title="src/document_bridge/materialize.rs:452"><code>materialize.rs:452</code></a>), 100 document px per world unit, whose texture is the 2D content rendered off-screen (Part 6). Clicking on the plane intersects the camera ray with it and hands the 2D picker a point in the card's own space, so the card's shapes can be selected and dragged in 3D.</p>
 
 <div class="box edge"><span class="tab">Rough edge</span>
 <p>An embed without a <code>frame</code> takes its content's bounds, which shift as content moves, and its transparent background then covers whatever is beneath it in the parent. The background-ranks-last rule makes clicks behave, but the embed's region is still invisible to the user until hovered. A drawn frame (like Figma's frame labels) or a required <code>frame</code> on top-level embeds would make it explicit.</p>

@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-10-26 on `master`. Update this file whenever a plan is added,
+**Updated:** 2026-10-28 on `master`. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -16,7 +16,8 @@ finishes, or is superseded.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as
-   built, rebuilt 2026-10-17 with Parts 10–13 on the engine boundary (vision 10).
+   built, refreshed 2026-10-28 against `5334ab8`: Foundations and Parts 1–14,
+   including components, caches, layout, contexts, schematics and shared hosts.
 
 Where documents disagree, the higher one in this list wins: roadmap Status, then the
 handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `archive/`.
@@ -52,6 +53,8 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`component-model.md`](specs/component-model.md) | Components: authored vs expanded instances, ports as the one interface, overrides, scope, libraries, render analysis; amends ECM §4, §6.1, §9 | Approved 2026-10-18; phases 0–4 done (the `Facet` rename; `in` ports replace parameters; linked instances, schema 7; overrides, edit translation, scope; anchors and empties; make component with nesting; plugging, mates and nested overrides). 5 waits on the project container, 6 is render-track work |
 | [`snapping.md`](specs/snapping.md) | Object snapping and smart guides in 2D compositions (Figma's edges and centres), the core in `iron_spatial::snap` | Phases 1–2 and most of 3 built 2026-10-20 (moving, resizing, path points, the pen); the shape tools, 4–5 open |
 | [`layout-and-tables.md`](specs/layout-and-tables.md) | A layout engine for 2D compositions (Taffy inside `iron_layout`: stacks and grids on groups, published by a layout producer), tables on it (rows of text cells, merges, boxed and light presets, the `<table>` model op and compact view, spreadsheet paste), | Phases 0–3 done 2026-10-26 (style inheritance deferred) |
+| [`interaction-lifecycle.md`](specs/interaction-lifecycle.md) | Shared removal meanings and operation planning, typed context consumers, one interaction coordinator/lifecycle, minimal scope warnings and explanation provenance | Direction agreed 2026-10-28; phased implementation plan proposed, no code changes |
+| [`authoring-workflows.md`](specs/authoring-workflows.md) | Design investigation: path-to-fiber authoring, related representations and embeddings, computation bindings and pedagogical context scopes | Requested 2026-10-28; next-agent design brief, UI/API and implementation slices to be refined |
 | [`contexts.md`](specs/contexts.md) | **Master plan**: Iron's behaviour as data. The engine holds mechanisms; human-interface choices (interaction, motion, chrome, keymaps, tolerances, snapping, palettes and defaults, inspector layout, enum domains, port domains, the standard library, workspace) are context rules, built-in ones never saved, a notation a bundle of them; the shared foundation, the domains in order, and the work order | Steps 0–8 built 2026-10-26/27 (step 7 as chrome fields, 8 as `schematic.md`); the rest proposed |
 | [`affordances.md`](specs/affordances.md) | Interaction and motion as context data: the engine holds mechanisms (resolver, drag kinds, keyboard models, one interpolator); behaviour, built-in defaults included, is contexts of rules (a user-agent stylesheet, never saved; a composition's `notation` names one); gestures drive a node's own leaf through the existing bindings; interaction state and declared transitions; prior art; phases A–D and five demos | Phases A–C built 2026-10-26/27 (track along a path deferred); D proposed |
 | [`chrome.md`](specs/chrome.md) | The editor's chrome (selection boxes, grips, outlines, guides, points, ports, previews, caret) as pictures of session state: built-in chrome definitions chosen by context rules, attached in screen pixels, with affordances (handle priority becomes stacking) and declared motion | Revised and built 2026-10-27 as context fields the overlay reads (accent, grips, hover, lit, part handles); chrome as nodes waits for the schematic |
@@ -61,6 +64,9 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`render-inspector.md`](specs/render-inspector.md) | A debug view that observes another 2D view: chunk tints, its viewport box and culling, live layers, tiles by state, a legend | Approved 2026-10-23; phases A and B built (chunk colours, viewport and culling, raster squares by state, legend) |
 | [`instance-cache.md`](specs/instance-cache.md) | Drawing components by what each part depends on (component-model §11): static, keyed and live parts; groups moved rigidly; equal instances sharing drawings and tiles; SVG repeats as references to definitions | Approved and built 2026-10-24 (phases 0, A–D, §7): the Prussia near-whole drag 235.5 → 0.6 ms; Prussia imports as 14,407 nodes (was 42,667). Open: incremental expansion |
 | [`model-interop.md`](specs/model-interop.md) | External computational Models: jobs, live sessions, optional local acceleration; shared web/native data and lifecycle semantics | Proposal drafted 2026-10-16; pending user approval. No implementation; conditional work order in `handoff-product.md` §4.2 |
+| [`scopes.md`](specs/scopes.md) | Durable local storage and global identity: scope ids, schema 9, snapshot plus op log in OPFS, boot into the last scope, the scope menu, workspace and assets per scope; replaces `clipboard-and-assets.md` §6 | Approved 2026-11-02; **phases 1–2 done 2026-11-02** (§10: durable OPFS scopes, boot into the last scope, `&demo` for scripts); phases 3–5 (menu, workspace, assets) next. Background in `notes/narrative-layer-and-storage-primitives.md` |
+| [`narrative-panel.md`](specs/narrative-panel.md) | Outline: an HTML (ProseMirror) panel for narrative text as block nodes in the store, level-1 references (mentions, live values, view changes), the LLM editing blocks, document-first LLM interaction options | Outline 2026-11-02; to become a spec after `scopes.md` |
+| [`timeline.md`](specs/timeline.md) | The timeline as a session composition: what a clip is, a session `clock` node, `axis` leaves fixed during drags, generated rows by object and property bound to clips, `std:timeline`, retiming, explicit clip creation | Draft 2026-11-03, for review; after the scope menu and narrative panel phases 1–2 |
 
 ## 4. Rendering
 

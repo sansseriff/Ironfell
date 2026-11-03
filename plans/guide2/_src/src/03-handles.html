@@ -1,10 +1,10 @@
 <header class="chapter-head">
-  <p class="kicker">Part 3 of 9 · <chip sys="react"/> <chip sys="tools"/></p>
+  <p class="kicker">Part 3 of 14 · <chip sys="react"/> <chip sys="tools"/></p>
   <h1>Drags through the store</h1>
   <p class="lede">In the first guide a drag moved the <em>entity</em> every frame and wrote one op on release. That was enough for a square on its own. It isn't enough once a shadow is bound to the square (the shadow should follow during the drag, not after), or once the dragged value is itself bound (<code>y = 640 − 300·v</code>, where dragging should set <code>v</code>). This part covers roadmap stage A: world transforms inside the store, handles that invert bindings, and previews that reach the screen in the same frame.</p>
   <div class="prereq">
     <div><b>You need</b>Foundations 3 and 4: <code>Store::preview</code>, the gesture overlay, and the reconciler.</div>
-    <div><b>Files</b><code>iron_document/src/{geom,handle,lib}.rs</code>, <code>document_bridge/mod.rs</code> (<code>reconcile_gesture</code>, <code>DocumentChanges</code>), <code>bevy_app/mod.rs</code>. Parts 10 and 13 continue this part: who owns transforms, and what happens when another edit arrives mid-gesture.</div>
+    <div><b>Files</b><code>iron_document/src/{geom,handle,lib}.rs</code>, <code>document_bridge/mod.rs</code> (<code>post-tool sync</code>, <code>DocumentChanges</code>), <code>bevy_app/mod.rs</code>. Parts 10 and 13 continue this part: who owns transforms, and what happens when another edit arrives mid-gesture.</div>
   </div>
 </header>
 
@@ -17,7 +17,7 @@
 
 <h2 id="geom"><span class="sec">3.2</span>World transforms in the store</h2>
 <p>The solver (Part 4) and the gesture code run inside the store and need to know where a node is without a round trip through the ECS. Stage A added <code>geom.rs</code> to compute it. At first this was a second copy of what Bevy computed for rendering, checked against it every frame; since vision 10 it is <em>the</em> answer, and Bevy receives it (Part 10):</p>
-<snip file="src/iron_document/src/geom.rs" lines="96-120" mark="112-120"/>
+<snip file="src/iron_document/src/geom.rs" lines="96-120" first="/// A node&#x27;s own transform, read through `read`. A node without a" last="}"/>
 <p>Two details. Values are read through <code>read</code>, the same reader the reactive graph uses, so previews, bindings and clips are all respected: a node mid-drag is where the preview says. And the composition order (translate, rotate, scale; parent before child) is exactly Bevy's, which a unit test checks with <code>glam</code>, so 3D poses handed to Bevy and the old entity transforms agree. The same file now has <code>Affine3</code> and <code>world_affine3</code> for 3D, the revisions of Part 10, and <code>local_bounds</code>, a drawable node's extent in its own space.</p>
 <div class="box rust"><span class="tab">Reading the Rust</span>
 <p><code>chain.iter().rev().fold(Affine2::IDENTITY, |acc, &amp;n| acc.then(local_affine(doc, read, n)))</code> walks the parent chain root first, starting from the identity and composing each node's local transform onto what's accumulated. <code>fold</code> is a loop with an accumulator; <code>|acc, &amp;n|</code> destructures the borrowed id so <code>n</code> is a plain <code>NodeId</code>.</p>
@@ -25,7 +25,7 @@
 
 <h2 id="handles"><span class="sec">3.3</span>Handles: which leaf does a drag write?</h2>
 <p>Ask the store "if someone drags this leaf, where does the new value go?" and it answers with a <code>Handle</code>:</p>
-<snip file="src/iron_document/src/handle.rs" lines="19-28"/>
+<snip file="src/iron_document/src/handle.rs" lines="19-28" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
 <div class="table-wrap"><table>
   <thead><tr><th>Leaf</th><th>Handle</th><th>A drag to value y writes</th></tr></thead>
   <tbody>
@@ -37,73 +37,73 @@
   </tbody>
 </table></div>
 <p>The decision:</p>
-<snip file="src/iron_document/src/handle.rs" lines="36-95" mark="40-47,49-55,58-60,65-72,79-89"/>
+<snip file="src/iron_document/src/handle.rs" lines="36-118" first="/// The handle for `leaf` now: roles are read at the moment of the grab, so a" last=""/>
 <p>Read it top to bottom:</p>
 <ol>
-  <li>A leaf of a component the node lacks but its type allows (a rect's <code>corners</code> before any corner was rounded) is <code>Direct</code> (40–47): the gesture drives it and its commit adds the component (Part 13).</li>
-  <li>A leaf a producer holds is locked (49–55), with a reason naming the producer: a clip, the physics network (Part 9) or a host producer such as Part 12's gas. Its value isn't the user's to set right now.</li>
+  <li>A leaf of a facet the node lacks but its type allows (a rect's <code>corners</code> before any corner was rounded) is <code>Direct</code> (40–47): the gesture drives it and its commit adds the facet (Part 13).</li>
+  <li>A leaf a producer holds is locked (49–56), with a reason naming the producer: a clip, the physics network (Part 9) or a host producer such as Part 12's gas. Its value isn't the user's to set right now.</li>
   <li>A constant is <code>Direct</code>. A bound leaf continues, and so does an in-port whose signal a connection derives (58–60, Part 9).</li>
   <li><code>inline</code> substitutes every bound leaf the expression reads by its own expression, recursively, so the result reads only constants. The shadow's <code>x</code> stays <code>#sq.x + 100</code>; a chain like <em>meter reading ← fiber output ← laser output ← laser power</em> collapses to one formula over the laser's power.</li>
-  <li>The <em>free</em> leaves are the constants the inlined formula reads that no producer drives (65–72). One free leaf and a linear formula gives a <code>Linear</code> handle. Several free leaves, but linear in exactly one, also gives <code>Linear</code> on that one: the fiber's length and loss sit inside an exponent, so dragging the meter's reading moves the laser's power and holds the rest (79–89, from Part 9).</li>
+  <li>The <em>free</em> leaves are the constants the inlined formula reads that no producer drives (73–80). One free leaf and a linear formula gives a <code>Linear</code> handle. Several free leaves, but linear in exactly one, also gives <code>Linear</code> on that one: the fiber's length and loss sit inside an exponent, so dragging the meter's reading moves the laser's power and holds the rest (79–89, from Part 9).</li>
 </ol>
 <p><code>linear</code> is a small symbolic differentiator: it returns <code>(a, b)</code> such that the expression is <code>a·var + b</code>, or <code>None</code> if it isn't linear:</p>
-<snip file="src/iron_document/src/handle.rs" lines="126-150"/>
+<snip file="src/iron_document/src/handle.rs" lines="149-173" first="/// `expr = a·var + b` over numbers, with every other leaf read through" last="}"/>
 <p>It's symbolic on purpose. A function that happens to look straight over the range you sampled (a <code>sin</code> near zero) is still rejected, so a drag never lands somewhere other than where the pointer is.</p>
 <p>Finally, <code>resolve_target</code> turns "I want this leaf to read y" into "write this value to this leaf":</p>
-<snip file="src/iron_document/src/handle.rs" lines="182-199" mark="189-194"/>
-<p>Lines 189–194 keep the source's kind: if the source is a quantity in watts, the inverted value is written back as watts, not as a bare number. That's what lets the meter's gauge drag the laser's power in Part 9.</p>
+<snip file="src/iron_document/src/handle.rs" lines="205-230" first="/// The leaf a target value for `leaf` would be written to, with the value." last="}"/>
+<p>Lines 215–225 keep the source's kind: if the source is a quantity in watts, the inverted value is written back as watts, not as a bare number. That's what lets the meter's gauge drag the laser's power in Part 9.</p>
 
 <h2 id="preview"><span class="sec">3.4</span>Previews, and commit</h2>
 <p>A gesture is a set of previewed leaves sitting in the graph's overlay (F3.5). Stage A added the handle-aware entry point:</p>
-<snip file="src/iron_document/src/lib.rs" lines="501-529"/>
+<snip file="src/iron_document/src/lib.rs" lines="803-839" first="/// Preview a leaf&#x27;s value for the duration of a gesture. Bindings that" last="}"/>
 <p><code>preview_target</code> is what every tool calls: the select tool's move, resize and rotate (Part 7), the pen's point drags, the inspector's fields (Part 7) and the meter gauge (Part 9). Each <code>preview</code> also re-solves constraint clusters (Part 4) and the physics network (Part 9), so everything downstream is live while the pointer moves.</p>
 <p>On release the overlay becomes one transaction:</p>
-<snip file="src/iron_document/src/lib.rs" lines="665-737" mark="687-701,716-719"/>
+<snip file="src/iron_document/src/lib.rs" lines="975-1047" first="/// Turn the gesture into one transaction: a `Set` for every leaf the" last="}"/>
 <p>Only <em>drivers</em> are written, meaning leaves a tool previewed on purpose. Leaves the solver moved in response are not written here; the solver reproduces them when the transaction applies (Part 4). A gesture that changed nothing (a click) produces no transaction at all, so a click never shows up in history as a "move".</p>
 
 <h2 id="drags"><span class="sec">3.5</span>The drag API</h2>
 <p>Dragging a whole node is more than previewing two numbers: the pointer is in world space, the node's <code>x</code>/<code>y</code> are in its parent's space, the grab point is somewhere inside the node, and the node may be part of a constraint cluster. The store wraps all of that:</p>
-<snip file="src/iron_document/src/lib.rs" lines="76-100"/>
-<snip file="src/iron_document/src/lib.rs" lines="276-340" mark="281-291,319-338"/>
+<snip file="src/iron_document/src/lib.rs" lines="90-131" first="/// A drag in progress on one node (constraint-system.md §8.1)." last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="383-604" first="/// Start dragging `id` by `anchor` (local coordinates). Decides the" last="}"/>
 <p><code>begin_drag</code> decides once, at the grab, which of three modes applies:</p>
 <ul>
-  <li><strong>Cluster</strong> (281–291): the node is held by constraints, so the drag places a <em>finger</em> (a target for the grab point) and the solver moves everything (Part 4).</li>
+  <li><strong>Cluster</strong> (388–400): the node is held by constraints, so the drag places a <em>finger</em> (a target for the grab point) and the solver moves everything (Part 4).</li>
   <li><strong>Axes</strong>: each of <code>x</code> and <code>y</code> has its own handle. A locked axis holds still for the whole drag, with the reason logged once, rather than moving and snapping back.</li>
   <li><strong>Locked</strong>: neither axis can move.</li>
 </ul>
-<p><code>begin_drag</code> also adds the node to the running gesture's watched set (<code>watch</code>), which is what lets a later edit to it cancel the drag (Part 13). <code>drag_to</code> in axes mode (319–338) undoes the parent's transform, then the node's own rotation and scale applied to the grab point, to find the origin that puts the grab point under the pointer, and previews that through each free axis's handle.</p>
+<p><code>begin_drag</code> also adds the node to the running gesture's watched set (<code>watch</code>), which is what lets a later edit to it cancel the drag (Part 13). <code>drag_to</code> in axes mode (428–447) undoes the parent's transform, then the node's own rotation and scale applied to the grab point, to find the origin that puts the grab point under the pointer, and previews that through each free axis's handle.</p>
+
+<h3 id="bounds">The source bounds the inverse</h3><p>An inverted numeric edit is clamped to its source's bounds: dragging a bar driven by a slider cannot write below the slider's minimum or above its maximum. The bound check belongs to handle resolution, so canvas drags and inspector edits agree.</p>
 
 <h2 id="same-frame"><span class="sec">3.6</span>Same-frame reconcile</h2>
-<p>The document sync runs at the start of the frame, in <code>PreUpdate</code>. Tools preview in <code>PostUpdate</code>. Without something more, every previewed value would reach the screen one frame behind the pointer. <code>reconcile_gesture</code> is the in-frame half:</p>
-<snip file="src/document_bridge/mod.rs" lines="441-468"/>
-<p>It drains whatever the previews changed (the dragged leaves and every binding that read them) and rewrites just that draw data, and any entities. It is scheduled right after the tools, with an <code>ApplyDeferred</code> so its entity commands land before anything later in the frame reads them:</p>
-<snip file="src/bevy_app/mod.rs" lines="230-246"/>
-<p>The "before propagation" ordering dates from when 2D entities carried transforms Bevy propagated. Now it matters for 3D (a dragged mesh's pose) and for ordering: <code>prepare_spatial</code> and the 2D layer, which run after propagation, see this frame's preview. Part 11 has the whole schedule.</p>
+<p>The document sync runs before input, then again after tools. The second <code>sync_document</code> drains previews and applies queued transactions, commits and history before drawing. <code>ApplyDeferred</code> installs entity commands before propagation; view resolution follows it so pan/zoom is current too. Part 11 covers the full schedule.</p>
+<snip file="src/bevy_app/mod.rs" lines="287-289" first="(sync_document, ApplyDeferred, resolve_panel_views)" last=".in_set(GestureSystems)"/>
+
 <figure class="diagram">
-<svg viewBox="0 0 920 230" role="img" aria-label="PostUpdate during a drag: the select or pen tool previews through the store; the store's overlay and graph re-evaluate; reconcile_gesture rewrites draw data; prepare_spatial updates the scene; the 2D layer draws. All in one frame.">
+<svg viewBox="0 0 920 230" role="img" aria-label="PostUpdate during a drag: the select or pen tool previews through the store; the store's overlay and graph re-evaluate; post-tool sync rewrites draw data; prepare_spatial updates the scene; the 2D layer draws. All in one frame.">
   <defs><marker id="h1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
   <rect x="10" y="10" width="900" height="200" rx="8" class="zone"/>
   <text class="t-b" x="26" y="34">PostUpdate, one frame</text>
   <rect x="26" y="52" width="190" height="56" rx="5" class="s-tools"/><text class="t-mono" x="121" y="76" text-anchor="middle">select / pen tool</text><text class="t-s" x="121" y="94" text-anchor="middle">preview_target, drag_to</text>
   <rect x="246" y="52" width="190" height="56" rx="5" class="s-react"/><text class="t-mono" x="341" y="76" text-anchor="middle">Store: overlay + graph</text><text class="t-s" x="341" y="94" text-anchor="middle">bindings, clusters, physics</text>
-  <rect x="466" y="52" width="190" height="56" rx="5" class="s-react"/><text class="t-mono" x="561" y="76" text-anchor="middle">reconcile_gesture</text><text class="t-s" x="561" y="94" text-anchor="middle">rewrite changed draw data</text>
+  <rect x="466" y="52" width="190" height="56" rx="5" class="s-react"/><text class="t-mono" x="561" y="76" text-anchor="middle">post-tool sync</text><text class="t-s" x="561" y="94" text-anchor="middle">rewrite changed draw data</text>
   <rect x="686" y="52" width="200" height="56" rx="5" class="s-bound"/><text class="t-mono" x="786" y="76" text-anchor="middle">prepare_spatial</text><text class="t-s" x="786" y="94" text-anchor="middle">scene: placements, bounds</text>
   <line x1="216" y1="80" x2="244" y2="80" class="ln" marker-end="url(#h1)"/>
   <line x1="436" y1="80" x2="464" y2="80" class="ln" marker-end="url(#h1)"/>
   <line x1="656" y1="80" x2="684" y2="80" class="ln" marker-end="url(#h1)"/>
   <rect x="466" y="136" width="420" height="50" rx="5" class="s-render"/><text class="t-mono" x="676" y="158" text-anchor="middle">render_document_layer · views</text><text class="t-s" x="676" y="176" text-anchor="middle">reads DocumentChanges: which nodes moved, and the damage</text>
   <line x1="786" y1="108" x2="786" y2="134" class="ln" marker-end="url(#h1)"/>
-  <text class="t-s" x="130" y="160">The pointer's position on this frame</text>
-  <text class="t-s" x="130" y="176">is on screen on this frame.</text>
+  <text class="t-s" x="130" y="160">The preview computed in this frame</text>
+  <text class="t-s" x="130" y="176">is drawn in this engine frame.</text>
 </svg>
-<figcaption>Gesture previews reach the screen in the frame they happen. The sync at the start of the next frame only applies the committed transaction.</figcaption>
+<figcaption>Gesture previews reach the screen in the frame they happen. The same post-tool barrier applies the commit on release.</figcaption>
 </figure>
 
 <h3 id="changes">What changed, not just "something changed"</h3>
 <p>The first guide had a <code>DocumentDirty</code> boolean. Stage A replaced it with the set of nodes the reconciler touched, plus whether the tree's shape changed, and later a monotonic counter that rendering never drains:</p>
-<snip file="src/document_bridge/mod.rs" lines="167-191"/>
+<snip file="src/document_bridge/mod.rs" lines="177-205" first="/// What the reconciler rewrote since the 2D layer last drew: the nodes, and" last="pub struct GeometryRevision(pub u64, BTreeMap&lt;nest::Home, u64&gt;);"/>
 <p>Stage H (October 13–14) turned the set into real work-avoidance: the 2D layer redraws only views whose content changed, culls through the spatial index, and keeps editor feedback in a separate retained target (Part 6). The <code>redraw (document): 2 of 39 nodes changed [#M #U]; damage …</code> line in the smoke output still reports it. Part 10 adds the finer-grained answer the scene uses: <em>which kind</em> of change, per node.</p>
 
 <div class="box edge"><span class="tab">Rough edge</span>
-<p>A linear handle needs a single free source. A rect bound to the sum of two sliders is locked, with the reason "bound to 2 free leaves". The roadmap's answer is a constraint cluster (Part 4) or a disambiguation policy (prefer the most recently touched source); neither exists for plain bindings yet.</p>
+<p>A linear handle needs one unambiguous linear source. A rect bound to the sum of two equally eligible sliders is locked, with the reason "bound to 2 free leaves". The roadmap's answer is a constraint cluster (Part 4) or a disambiguation policy (prefer the most recently touched source); neither exists for plain bindings yet.</p>
 </div>

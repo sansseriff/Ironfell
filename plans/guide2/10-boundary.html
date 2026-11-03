@@ -126,11 +126,7 @@
   <div class="box built"><span class="tab">What was built</span><p><strong>Classify each change.</strong> A node's own <code>transform2d</code> moving is a <em>placement</em> change: its descendants' bounds, <em>in its own space</em>, didn't move. Its own size, radius, stroke or outline moving is a <em>local</em> change. Creating, deleting, reparenting or reordering is <em>structure</em>. An index that keeps each group's contents in the group's space then rewrites one entry for a rotation.</p></div>
 </div>
 <p>The classification is one function from a changed leaf to its effect:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/geom.rs:300">src/iron_document/src/geom.rs</a><span class="range">lines 300–317</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:6;--len:3"></span><pre class="gutter" aria-hidden="true">300
-301
-302
-303
-304
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/geom.rs:304">src/iron_document/src/geom.rs</a><span class="range">lines 304–321</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">304
 305
 306
 307
@@ -143,31 +139,31 @@
 314
 315
 316
-317</pre><pre class="src"><code class="language-rust">/// Classify a resolved-value change. A point&#x27;s position is part of its
+317
+318
+319
+320
+321</pre><pre class="src"><code class="language-rust">/// Classify a resolved-value change. A point&#x27;s position is part of its
 /// path&#x27;s outline, not a placement of its own.
 pub fn effect_of(doc: &amp;Document, leaf: Leaf) -&gt; GeometryEffect {
     let Some(node) = doc.live(leaf.node) else { return GeometryEffect::None };
     let ty = node.ty.name();
-    match leaf.path.component {
-        ComponentKind::Transform2d if matches!(ty, &quot;point&quot; | &quot;contour&quot;) =&gt; enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
-        ComponentKind::Transform2d =&gt; GeometryEffect::Placement(leaf.node),
-        ComponentKind::Handles | ComponentKind::Contour =&gt; enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
-        ComponentKind::Size | ComponentKind::Radius | ComponentKind::Arc | ComponentKind::Stroke | ComponentKind::Shadow | ComponentKind::Frame | ComponentKind::Embed | ComponentKind::EmbedCamera =&gt; {
+    match leaf.path.facet {
+        FacetKind::Transform2d if matches!(ty, &quot;point&quot; | &quot;contour&quot;) =&gt; enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
+        FacetKind::Transform2d =&gt; GeometryEffect::Placement(leaf.node),
+        FacetKind::Handles | FacetKind::Contour =&gt; enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
+        FacetKind::Size | FacetKind::PathShape | FacetKind::Text | FacetKind::Font | FacetKind::Radius | FacetKind::Arc | FacetKind::Stroke | FacetKind::Shadow | FacetKind::Frame | FacetKind::Embed | FacetKind::EmbedCamera =&gt; {
             GeometryEffect::Local(leaf.node)
         }
         // A camera&#x27;s aspect shapes every embed that looks through it; rare,
         // and structure-free, so the embeds are found by the scene on demand.
-        ComponentKind::Camera =&gt; GeometryEffect::Local(leaf.node),
+        FacetKind::Camera =&gt; GeometryEffect::Local(leaf.node),
         _ =&gt; GeometryEffect::None,
     }
 }</code></pre></div></div></figure>
-<p>Line 306 is the subtle one: a <code>point</code> or <code>contour</code> moving isn't a placement of its own. A path's points are its outline, so moving one is a <em>local</em> change of the enclosing <code>path</code> (Part 7 covers contours). A colour, a name or a 3D transform is <code>None</code>: nothing a 2D index cares about.</p>
+<p>Line 310 is the subtle one: a <code>point</code> or <code>contour</code> moving isn't a placement of its own. A path's points are its outline, so moving one is a <em>local</em> change of the enclosing <code>path</code> (Part 7 covers contours). A colour, a name or a 3D transform is <code>None</code>: nothing a 2D index cares about.</p>
 <p>The counters live in the store:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/geom.rs:334">src/iron_document/src/geom.rs</a><span class="range">lines 334–348</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">334
-335
-336
-337
-338
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/geom.rs:338">src/iron_document/src/geom.rs</a><span class="range">lines 338–352</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">338
 339
 340
 341
@@ -177,7 +173,11 @@ pub fn effect_of(doc: &amp;Document, leaf: Leaf) -&gt; GeometryEffect {
 345
 346
 347
-348</pre><pre class="src"><code class="language-rust">/// Monotonic counters per node and for the tree, bumped as changes are
+348
+349
+350
+351
+352</pre><pre class="src"><code class="language-rust">/// Monotonic counters per node and for the tree, bumped as changes are
 /// taken. A consumer stamps what it derived with the revisions it read and
 /// re-derives when they move; a chain&#x27;s placement stamp is the sum of its
 /// nodes&#x27; placement revisions, so a cached world affine stays valid until
@@ -193,16 +193,16 @@ pub struct Revisions {
     pending_structure: bool,
 }</code></pre></div></div></figure>
 <p>The counters are bumped when someone <em>takes</em> the changes, not when they happen, so there is exactly one consumer: the spatial scene. That raised a problem, because the reconciler already drains the graph's change list every frame. If both read the same list, whichever ran first would leave nothing for the other. So the graph's one place that records a change now writes two sets:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:310">src/iron_document/src/graph.rs</a><span class="range">lines 310–319</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">310
-311
-312
-313
-314
-315
-316
-317
-318
-319</pre><pre class="src"><code class="language-rust">/// The one place a resolved change is recorded.
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:334">src/iron_document/src/graph.rs</a><span class="range">lines 334–343</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">334
+335
+336
+337
+338
+339
+340
+341
+342
+343</pre><pre class="src"><code class="language-rust">/// The one place a resolved change is recorded.
 fn note(&amp;mut self, leaf: Leaf, value: Value) {
     self.touched.insert(leaf);
     self.changes.insert(leaf, value);
@@ -247,7 +247,7 @@ pub fn take_touched(&amp;mut self) -&gt; BTreeSet&lt;Leaf&gt; {
   <line x1="270" y1="280" x2="328" y2="330" class="ln" marker-end="url(#b3)"/>
   <rect x="650" y="40" width="260" height="110" rx="5" class="s-bound"/>
   <text class="t-mono" x="662" y="62">drain_changes()</text>
-  <text class="t-s" x="662" y="80">sync_document, reconcile_gesture</text>
+  <text class="t-s" x="662" y="80">sync_document, post-tool sync</text>
   <text class="t-s" x="662" y="98">→ Drawables, entities,</text>
   <text class="t-s" x="662" y="114">DocumentChanges (render)</text>
   <text class="t-xs" x="662" y="136">plus the log's op ids (collect_ids)</text>
@@ -279,40 +279,11 @@ pub fn take_touched(&amp;mut self) -&gt; BTreeSet&lt;Leaf&gt; {
     <tr><td>Delete, paste, reorder</td><td></td><td>structure</td><td>rebuild (40 ms at 10k, native)</td></tr>
   </tbody>
 </table></div>
-<p><code>Revisions::chain_stamp</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/geom.rs:365" title="src/iron_document/src/geom.rs:365"><code>geom.rs:365</code></a>) sums the placement revisions up a node's chain: a cheap key for anything derived from a world affine, which stays equal until some ancestor moves. Only a test uses it today; the selection overlay's cache is its intended first user (see the rough edges at the end).</p>
+<p><code>Revisions::chain_stamp</code> (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/geom.rs:369" title="src/iron_document/src/geom.rs:369"><code>geom.rs:369</code></a>) sums the placement revisions up a node's chain: a cheap key for anything derived from a world affine, which stays equal until some ancestor moves. Only a test uses it today; the selection overlay's cache is its intended first user (see the rough edges at the end).</p>
 
 <h2 id="scene"><span class="sec">10.4</span>The spatial scene: a tree of indexes</h2>
 <p><code>iron_spatial::Scene</code> mirrors the document's groups. Every node with children that hold 2D content gets a <em>scope</em>: one R-tree (<code>BoundsIndex</code>, over <code>understory_index</code>) of its children, in its own local space. A group is then an <em>entry</em> in its parent's scope whose bounds are its own scope's union mapped through its affine.</p>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:29">src/iron_spatial/src/scene.rs</a><span class="range">lines 29–81</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:12;--len:10"></span><span class="band" style="--from:24;--len:6"></span><pre class="gutter" aria-hidden="true">29
-30
-31
-32
-33
-34
-35
-36
-37
-38
-39
-40
-41
-42
-43
-44
-45
-46
-47
-48
-49
-50
-51
-52
-53
-54
-55
-56
-57
-58
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:58">src/iron_spatial/src/scene.rs</a><span class="range">lines 58–112</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">58
 59
 60
 61
@@ -335,12 +306,45 @@ pub fn take_touched(&amp;mut self) -&gt; BTreeSet&lt;Leaf&gt; {
 78
 79
 80
-81</pre><pre class="src"><code class="language-rust">#[derive(Clone, Copy, Debug, PartialEq)]
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112</pre><pre class="src"><code class="language-rust">#[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
     /// A drawable node, or a 3D embed&#x27;s frame: its own local bounds.
     Leaf,
     /// An embed of a 2D composition: its region (frame, or the source&#x27;s
-    /// content), which follows the source&#x27;s content.
+    /// content), which follows the source&#x27;s content. A reference to a
+    /// definition (`expand::reference_template`) is one too, its source the
+    /// definition&#x27;s template.
     Embed2d { source: NodeId, framed: bool },
     /// A group with content below it.
     Group,
@@ -455,48 +459,7 @@ pub struct Scene {
 
 <h3 id="update">Updating: placement versus local</h3>
 <p>Each frame, <code>prepare_spatial</code> calls <code>Scene::update</code>, which takes the store's changes and branches on their kind:</p>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:219">src/iron_spatial/src/scene.rs</a><span class="range">lines 219–285</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:4"></span><span class="band" style="--from:24;--len:17"></span><span class="band" style="--from:54;--len:8"></span><pre class="gutter" aria-hidden="true">219
-220
-221
-222
-223
-224
-225
-226
-227
-228
-229
-230
-231
-232
-233
-234
-235
-236
-237
-238
-239
-240
-241
-242
-243
-244
-245
-246
-247
-248
-249
-250
-251
-252
-253
-254
-255
-256
-257
-258
-259
-260
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:260">src/iron_spatial/src/scene.rs</a><span class="range">lines 260–326</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">260
 261
 262
 263
@@ -521,7 +484,48 @@ pub struct Scene {
 282
 283
 284
-285</pre><pre class="src"><code class="language-rust">/// Bring the scene up to date with everything the store reports moved.
+285
+286
+287
+288
+289
+290
+291
+292
+293
+294
+295
+296
+297
+298
+299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+315
+316
+317
+318
+319
+320
+321
+322
+323
+324
+325
+326</pre><pre class="src"><code class="language-rust">/// Bring the scene up to date with everything the store reports moved.
 pub fn update(&amp;mut self, store: &amp;mut Store) {
     let changes = store.take_geometry_changes();
     if changes.structure || !self.built {
@@ -588,38 +592,39 @@ pub fn update(&amp;mut self, store: &amp;mut Store) {
     }
     self.settle(store, dirty);
 }</code></pre></div></div></figure>
-<p>Structure rebuilds everything (222–225); the scene can't patch painter order or chains cheaply, and structural edits are rare. A local change recomputes one leaf's bounds from <code>Store::local_bounds</code> (247–248). A placement change of a <em>group</em> (273–280) is the case the whole design is for: the group's subtree union is already in its child scope, so its entry in the parent scope becomes that union under the new affine. Nothing below it is touched. Then <code>settle</code> carries changed unions upward:</p>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:287">src/iron_spatial/src/scene.rs</a><span class="range">lines 287–317</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">287
-288
-289
-290
-291
-292
-293
-294
-295
-296
-297
-298
-299
-300
-301
-302
-303
-304
-305
-306
-307
-308
-309
-310
-311
-312
-313
-314
-315
-316
-317</pre><pre class="src"><code class="language-rust">/// Commit every dirty scope, deepest first, and carry changed unions up
+<p>Structure rebuilds everything (263–266); the scene can't patch painter order or chains cheaply, and structural edits are rare. A local change recomputes one leaf's bounds from <code>Store::local_bounds</code> (288–289). A placement change of a <em>group</em> (314–321) is the case the whole design is for: the group's subtree union is already in its child scope, so its entry in the parent scope becomes that union under the new affine. Nothing below it is touched. Then <code>settle</code> carries changed unions upward:</p>
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:328">src/iron_spatial/src/scene.rs</a><span class="range">lines 328–359</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">328
+329
+330
+331
+332
+333
+334
+335
+336
+337
+338
+339
+340
+341
+342
+343
+344
+345
+346
+347
+348
+349
+350
+351
+352
+353
+354
+355
+356
+357
+358
+359</pre><pre class="src"><code class="language-rust">/// Commit every dirty scope, deepest first, and carry changed unions up
 /// through group entries and across to the embeds that show them.
 fn settle(&amp;mut self, store: &amp;Store, mut dirty: BTreeSet&lt;Option&lt;NodeId&gt;&gt;) {
     while let Some(&amp;scope) = dirty.iter().max_by_key(|s| self.scopes.get(s).map_or(0, |x| x.depth)) {
@@ -637,8 +642,9 @@ fn settle(&amp;mut self, store: &amp;Store, mut dirty: BTreeSet&lt;Option&lt;Nod
             continue;
         }
         let Some(g) = scope else { continue };
-        if is_type(store.document(), g, &quot;composition&quot;) {
-            // Content changed: the embeds showing it follow.
+        if is_type(store.document(), g, &quot;composition&quot;) || is_type(store.document(), g, &quot;template&quot;) {
+            // Content changed: the embeds (and references) showing it
+            // follow.
             for embed in self.shown_by.get(&amp;g).cloned().unwrap_or_default() {
                 let Some(es) = self.entries.get(&amp;embed).filter(|e| matches!(e.kind, Kind::Embed2d { framed: false, .. })).map(|e| e.scope) else { continue };
                 self.refresh_embed(store, embed);
@@ -650,34 +656,34 @@ fn settle(&amp;mut self, store: &amp;Store, mut dirty: BTreeSet&lt;Option&lt;Nod
                 None =&gt; self.remove(g),
             }
             dirty.insert(parent);</code></pre></div></div></figure>
-<p>Dirty scopes are processed deepest first (290). After committing a scope's R-tree, if its union changed, either the scope is a composition, in which case every frameless 2D embed showing it must grow or shrink (306–311), or it's a group, whose entry in its parent is rewritten and the parent marked dirty (312–317). So a dragged leaf costs one entry, and up to its depth more only when it pushes a union outward.</p>
+<p>Dirty scopes are processed deepest first (331). After committing a scope's R-tree, if its union changed, either the scope is a composition, in which case every frameless 2D embed showing it must grow or shrink (347–353), or it's a group, whose entry in its parent is rewritten and the parent marked dirty (354–359). So a dragged leaf costs one entry, and up to its depth more only when it pushes a union outward.</p>
 
 <h3 id="query">Querying: map the question, not the content</h3>
 <p>A point or rectangle query descends the same tree. At each group entry it hits, it maps the query <em>into</em> the group's space through the inverse affine, rather than mapping the group's content out:</p>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:192">src/iron_spatial/src/scene.rs</a><span class="range">lines 192–215</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:13;--len:8"></span><pre class="gutter" aria-hidden="true">192
-193
-194
-195
-196
-197
-198
-199
-200
-201
-202
-203
-204
-205
-206
-207
-208
-209
-210
-211
-212
-213
-214
-215</pre><pre class="src"><code class="language-rust">fn query(&amp;self, scope: Option&lt;NodeId&gt;, only: Option&lt;&amp;BTreeSet&lt;NodeId&gt;&gt;, point: Option&lt;Point&gt;, rect: Rect, out: &amp;mut Vec&lt;NodeId&gt;) {
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:233">src/iron_spatial/src/scene.rs</a><span class="range">lines 233–256</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">233
+234
+235
+236
+237
+238
+239
+240
+241
+242
+243
+244
+245
+246
+247
+248
+249
+250
+251
+252
+253
+254
+255
+256</pre><pre class="src"><code class="language-rust">fn query(&amp;self, scope: Option&lt;NodeId&gt;, only: Option&lt;&amp;BTreeSet&lt;NodeId&gt;&gt;, point: Option&lt;Point&gt;, rect: Rect, out: &amp;mut Vec&lt;NodeId&gt;) {
     let Some(s) = self.scopes.get(&amp;scope) else { return };
     let hits = match point {
         Some(p) =&gt; s.index.at_point(p),
@@ -718,31 +724,31 @@ fn settle(&amp;mut self, store: &amp;Store, mut dirty: BTreeSet&lt;Option&lt;Nod
 <figcaption>Each step is one R-tree lookup in a scope and one affine inverse. A singular affine (a zero scale) shows nothing and is skipped.</figcaption>
 </figure>
 <p>The same scope tree answers the other question readers need, "what is this node's world affine?", in O(depth) without walking any content: <code>placement(scope)</code> multiplies the group affines above a scope, and <code>world_affine(id) = placement(entry.scope) · entry.affine</code>.</p>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:130">src/iron_spatial/src/scene.rs</a><span class="range">lines 130–136</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">130
-131
-132
-133
-134
-135
-136</pre><pre class="src"><code class="language-rust">/// An indexed node&#x27;s affine from its local space to its composition&#x27;s:
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:163">src/iron_spatial/src/scene.rs</a><span class="range">lines 163–169</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">163
+164
+165
+166
+167
+168
+169</pre><pre class="src"><code class="language-rust">/// An indexed node&#x27;s affine from its local space to its composition&#x27;s:
 /// its parent scope&#x27;s placement then its own transform. `None` for a
 /// node the scene does not hold (an empty group, a 3D node, a point).
 pub fn world_affine(&amp;self, id: NodeId) -&gt; Option&lt;Affine&gt; {
     let e = self.entries.get(&amp;id)?;
     Some(self.placement(e.scope) * e.affine)
 }</code></pre></div></div></figure>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:165">src/iron_spatial/src/scene.rs</a><span class="range">lines 165–176</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">165
-166
-167
-168
-169
-170
-171
-172
-173
-174
-175
-176</pre><pre class="src"><code class="language-rust">/// The affine from a scope&#x27;s space to its composition&#x27;s: the product of
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_spatial/src/scene.rs:206">src/iron_spatial/src/scene.rs</a><span class="range">lines 206–217</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217</pre><pre class="src"><code class="language-rust">/// The affine from a scope&#x27;s space to its composition&#x27;s: the product of
 /// the group affines above it. `O(depth)`, no walk of any content.
 fn placement(&amp;self, scope: Option&lt;NodeId&gt;) -&gt; Affine {
     let mut out = Affine::IDENTITY;
@@ -811,20 +817,7 @@ fn placement(&amp;self, scope: Option&lt;NodeId&gt;) -&gt; Affine {
 <figcaption>What a 2D entity carried was a copy of its node's draw data and a transform Iron also computed. Both now live by <code>NodeId</code> (draw data in <code>Drawables</code>, placement in the scene), and an entity is spawned only when something in Bevy needs a handle on the node.</figcaption>
 </figure>
 <p>The reconciler's first pass now writes draw data for every touched node and spawns an entity only where one is due:</p>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:355">src/document_bridge/materialize.rs</a><span class="range">lines 355–386</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:7"></span><pre class="gutter" aria-hidden="true">355
-356
-357
-358
-359
-360
-361
-362
-363
-364
-365
-366
-367
-368
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:368">src/document_bridge/materialize.rs</a><span class="range">lines 368–399</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">368
 369
 370
 371
@@ -842,7 +835,20 @@ fn placement(&amp;self, scope: Option&lt;NodeId&gt;) -&gt; Affine {
 383
 384
 385
-386</pre><pre class="src"><code class="language-rust">// Pass 1: draw data for every touched node, and an entity where one is due.
+386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399</pre><pre class="src"><code class="language-rust">// Pass 1: draw data for every touched node, and an entity where one is due.
 for &amp;id in affected {
     match (doc.live(id), map.entity(id)) {
         (Some(_), None) =&gt; {
@@ -875,25 +881,25 @@ for &amp;id in affected {
     }
 }</code></pre></div></div></figure>
 <p>A 3D entity's pose comes from <code>Store::world_affine3</code>, written as both <code>Transform</code> and <code>GlobalTransform</code>. A root entity without a parent gets its <code>GlobalTransform</code> copied from its <code>Transform</code> by Bevy's simple sync, so writing both makes that copy a no-op instead of an overwrite, and keeps <code>update_aabbes</code> and the gizmo, which read <code>Transform</code>, current. Since entities are flat, moving a 3D parent has to rewrite its materialised descendants explicitly. That's the second pass:</p>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:388">src/document_bridge/materialize.rs</a><span class="range">lines 388–406</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">388
-389
-390
-391
-392
-393
-394
-395
-396
-397
-398
-399
-400
-401
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:401">src/document_bridge/materialize.rs</a><span class="range">lines 401–419</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">401
 402
 403
 404
 405
-406</pre><pre class="src"><code class="language-rust">// Pass 2: 3D placement below a moved 3D node. Entities are flat (no
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419</pre><pre class="src"><code class="language-rust">// Pass 2: 3D placement below a moved 3D node. Entities are flat (no
 // `ChildOf`, so Bevy propagates nothing for document nodes); the store
 // computes every world affine, and a 3D ancestor&#x27;s move is written to
 // each materialised descendant here. 3D nodes are few; 2D entities carry
@@ -913,13 +919,13 @@ for &amp;id in affected {
     }
 }</code></pre></div></div></figure>
 <p>A 2D reader asks for a world affine through one function, which prefers the scene's cached placement and falls back to the store's walk for nodes the scene doesn't hold (an empty group, a point):</p>
-<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/nest.rs:96">src/document_bridge/nest.rs</a><span class="range">lines 96–102</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">96
-97
-98
-99
-100
-101
-102</pre><pre class="src"><code class="language-rust">/// A 2D node&#x27;s local space to its composition&#x27;s: the spatial scene&#x27;s cached
+<figure class="code"><figcaption><span class="chip sys-comp">Compositions</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/nest.rs:173">src/document_bridge/nest.rs</a><span class="range">lines 173–179</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">173
+174
+175
+176
+177
+178
+179</pre><pre class="src"><code class="language-rust">/// A 2D node&#x27;s local space to its composition&#x27;s: the spatial scene&#x27;s cached
 /// placement for anything it indexes (every drawable node, group with
 /// content and embed), the store&#x27;s walk for the rest. Both read resolved
 /// values, so previews, bindings and clips are honoured.
@@ -927,26 +933,26 @@ pub fn world_2d(store: &amp;iron_document::Store, spatial: &amp;super::SpatialSc
     spatial.world_affine(id).unwrap_or_else(|| kurbo::Affine::new(store.world_affine(id).0))
 }</code></pre></div></div></figure>
 <p>And the draw walk queries the scene for visible candidates, then restores the groups above them, because a group's opacity or clip must still wrap its visible children once, not once per leaf:</p>
-<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/render.rs:159">src/document_bridge/render.rs</a><span class="range">lines 159–178</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">159
-160
-161
-162
-163
-164
-165
-166
-167
-168
-169
-170
-171
-172
-173
-174
-175
-176
-177
-178</pre><pre class="src"><code class="language-rust">fn walk(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, roots: &amp;[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &amp;str, depth: u32) {
+<figure class="code"><figcaption><span class="chip sys-render">Rendering</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/render.rs:436">src/document_bridge/render.rs</a><span class="range">lines 436–455</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455</pre><pre class="src"><code class="language-rust">fn walk(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, roots: &amp;[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &amp;str, depth: u32) {
     // Expand in device space for antialiasing, then conservatively map the
     // clip AABB back through the view/occurrence affine. Exact clips remain
     // in the display list, so rotation cannot expose extra pixels.
@@ -964,34 +970,23 @@ pub fn world_2d(store: &amp;iron_document::Store, spatial: &amp;super::SpatialSc
             at = self.doc.live(n).and_then(|n| n.parent);
         }
     }
-    self.branches(b, roots, base, clip, key, depth, &amp;allowed);
+    self.branches(b, roots, base, clip, key, depth, Some(&amp;allowed));
 }</code></pre></div></div></figure>
 
 <h2 id="modes"><span class="sec">10.6</span>Modes: entities only for the working set</h2>
-<p>Vision 10 §5.2 says every subtree is in one <em>presentation mode</em>, which decides both what Bevy holds for it and how it's drawn. Two of the modes are built:</p>
+<p>Vision 10 §5.2 says every subtree is in one <em>presentation mode</em>, which decides both what Bevy holds for it and how it's drawn. The modes now combine entity policy with the chunk/raster cache of Part 6:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Mode</th><th>Entities per node</th><th>Encoded</th><th>Typical use</th><th>Built</th></tr></thead>
   <tbody>
     <tr><td><strong>Live</strong></td><td>one, flat</td><td>every change</td><td>the selection and the hover: what is being edited</td><td>yes</td></tr>
     <tr><td><strong>Live + simulating</strong></td><td>the same, plus a producer's components (collider, body)</td><td>every change</td><td>physics on document shapes</td><td>no (Part 12's producer has no document entities)</td></tr>
-    <tr><td><strong>Retained vector</strong></td><td>none</td><td>today: the whole view re-encodes on a change</td><td>everything else on screen</td><td>yes, the default</td></tr>
-    <tr><td><strong>Baked</strong></td><td>none in 2D; one per subtree in 3D</td><td>drawn from a texture or merged mesh</td><td>static, complex or tiny on screen</td><td>no (phase 5)</td></tr>
+    <tr><td><strong>Retained vector</strong></td><td>none</td><td>changed chunks re-record; cacheable equal instance runs share recordings</td><td>everything else on screen</td><td>yes, the default</td></tr>
+    <tr><td><strong>Baked</strong></td><td>none in 2D; one per subtree in 3D</td><td>drawn from a texture or merged mesh</td><td>static, complex or tiny on screen</td><td>2D cold chunks: yes; 3D merged meshes: no</td></tr>
     <tr><td><strong>Compiled</strong></td><td>none</td><td>raster or video made deliberately</td><td></td><td>no</td></tr>
   </tbody>
 </table></div>
 <p>The Live set is chosen by policy each frame, from the selection and the hover:</p>
-<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:83">src/document_bridge/materialize.rs</a><span class="range">lines 83–111</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:15;--len:9"></span><pre class="gutter" aria-hidden="true">83
-84
-85
-86
-87
-88
-89
-90
-91
-92
-93
-94
+<figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/materialize.rs:94">src/document_bridge/materialize.rs</a><span class="range">lines 94–122</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">94
 95
 96
 97
@@ -1008,7 +1003,18 @@ pub fn world_2d(store: &amp;iron_document::Store, spatial: &amp;super::SpatialSc
 108
 109
 110
-111</pre><pre class="src"><code class="language-rust">/// The most descendants a picked node brings into the Live set. Past this
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122</pre><pre class="src"><code class="language-rust">/// The most descendants a picked node brings into the Live set. Past this
 /// a hovered 100k-shape group would spawn an entity per shape (3.9 s at 100k
 /// on the container); its own node, ancestors and direct children suffice
 /// until a producer asks for more (vision 10 §8 Q2).
@@ -1026,11 +1032,11 @@ pub(super) fn decide_modes(store: Res&lt;super::DocumentStore&gt;, sel: Res&lt;c
         for n in super::nest::lineage(doc, id) {
             live.insert(n);
         }
-        let below = doc.descendants(id);
-        if below.len() &lt;= LIVE_BUDGET {
-            live.extend(below);
-        } else {
-            live.extend(doc.children(id).iter().copied());
+        // Counted only up to the budget: this runs every frame, and a
+        // hovered group of a large import has tens of thousands below it.
+        match doc.descendants_within(id, LIVE_BUDGET) {
+            Some(below) =&gt; live.extend(below),
+            None =&gt; live.extend(doc.children(id).iter().copied()),
         }
     }
     if modes.live != live {
@@ -1059,11 +1065,10 @@ pub(super) fn decide_modes(store: Res&lt;super::DocumentStore&gt;, sel: Res&lt;c
 <figcaption>Shaded: the Live set while the field is hovered. Its subtree is 101,000 nodes, over the 2,000 budget, so only its direct children join.</figcaption>
 </figure>
 
-<div class="box edge"><span class="tab">Rough edges</span>
-<p><strong>Stale comments.</strong> The module comment at the top of <code>document_bridge/mod.rs</code> still says a drag "moves the entity's <code>Transform</code> each frame for latency"; that stopped being true in Part 3. The comment in <code>spatial.rs</code> still says drawing and picking take placements from Bevy and that the drift check stays; both ended with <code>26de602</code>. <code>rendering/architecture.md</code> §1 still lists "Bevy entities, transform propagation" as a pipeline step. The code here is the reference.</p>
-<p><strong>The selection overlay's cache</strong> (<code>SelectionGeometryCache</code>, Part 7) is still keyed on the global <code>GeometryRevision</code>, so any change anywhere rebuilds the selection's box and outlines. With Part 12's producer publishing every frame, a ticking gauge invalidates whatever is selected. Keying it on the selected subtrees' revisions (<code>chain_stamp</code> plus local revisions) is the render handoff's open item 3.</p>
-<p><strong>The store itself caches no world affine.</strong> <code>Store::world_affine</code> still walks the chain each call; the scene caches placements per group, which is what the 2D readers use. 3D world affines are recomputed per write.</p>
-<p><strong>A picker runs a little before the scene updates.</strong> Picking runs in <code>PreUpdate</code>, but <code>prepare_spatial</code> runs in <code>PostUpdate</code>. So a transaction applied by this frame's sync reaches the picker's placements next frame. Picking re-runs whenever the version changes, so this shows only as one frame of staleness for nodes the sync just moved.</p>
+<div class="box edge"><span class="tab">Current limits</span>
+<p><strong>Selection geometry is view-scoped.</strong> <code>GeometryRevision::of_view</code> includes the compositions a view shows, including embeds and loose content. Unrelated Stats ticks no longer invalidate a large drawing. The stamp remains conservative within a view; finer selected-subtree keys are still possible.</p>
+<p><strong>Structural changes rebuild the spatial scene.</strong> Value and placement changes patch entries, but painter order and scope changes still take the structural path. The store's own <code>world_affine</code> remains an ancestor walk; the scene caches group placements for 2D readers.</p>
+<p><strong>Picking and presentation have different barriers.</strong> Picking follows the PreUpdate document sync, while the spatial scene updates in PostUpdate after the second sync. Exact tests can therefore encounter an index from the prior scene update; same-frame tool commits are drawn after the post-tool barrier. Do not infer display latency from this schedule.</p>
 </div>
 
 <div class="box recap"><span class="tab">Before you go on</span>

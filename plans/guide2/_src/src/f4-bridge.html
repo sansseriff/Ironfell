@@ -1,7 +1,7 @@
 <header class="chapter-head">
   <p class="kicker">Foundations 4 of 4 · <chip sys="react"/> <chip sys="shell"/> <chip sys="model"/></p>
   <h1>Bevy and the model</h1>
-  <p class="lede">The store from F1–F3 knows nothing about Bevy, the browser or Claude. This page covers the three ways it meets the outside: the bridge that turns document nodes into Bevy entities and redraws only what changed; the wasm boundary the Svelte shell talks through; and the model surface, where Claude reads a view and writes an edit that becomes an ordinary transaction.</p>
+  <p class="lede">The store from F1–F3 knows nothing about Bevy, the browser or Claude. This page covers the three ways it meets the outside: the bridge that reconciles document nodes into draw data and entities where needed; the wasm boundary the Svelte shell talks through; and the model surface, where Claude reads a view and writes an edit that becomes an ordinary transaction.</p>
   <div class="prereq">
     <div><b>You need</b>F2 (transactions, the log, <code>Store::apply</code>) and F3 (resolved values, <code>drain_changes</code>, previews).</div>
     <div><b>Files</b><code>src/document_bridge/{mod,materialize,demo}.rs</code>, <code>src/engine_api.rs</code> (with thin hosts in <code>web_ffi.rs</code> and <code>src-native/</code>), <code>src-ui/worker.ts</code>, <code>src-ui/model/{agent,edit,schema,manifest,transport}.ts</code>.</div>
@@ -13,7 +13,7 @@
   <thead><tr><th>Word</th><th>Meaning</th></tr></thead>
   <tbody>
     <tr><td><strong>Entity</strong></td><td>An id for "a thing in the scene", with no data of its own. Recycled after despawn, so it can't be a node's identity.</td></tr>
-    <tr><td><strong>Component</strong> (Bevy's)</td><td>Data attached to an entity: <code>Transform</code>, <code>Mesh3d</code>. Not the same as a document component.</td></tr>
+    <tr><td><strong>Component</strong> (Bevy's)</td><td>Data attached to an entity: <code>Transform</code>, <code>Mesh3d</code>. The document calls its bundles facets; reusable authored things are components.</td></tr>
     <tr><td><strong>Resource</strong></td><td>A single global value in the Bevy world: <code>DocumentStore</code>, <code>NodeMap</code>.</td></tr>
     <tr><td><strong>System</strong></td><td>A function Bevy calls each frame. Its parameters declare what it reads and writes.</td></tr>
     <tr><td><code>Res&lt;T&gt;</code> / <code>ResMut&lt;T&gt;</code></td><td>Read / write access to a resource, as a system parameter.</td></tr>
@@ -33,7 +33,7 @@
 </div>
 
 <h2 id="resources"><span class="sec">F4.3</span>The bridge's resources</h2>
-<snip file="src/document_bridge/mod.rs" lines="46-68"/>
+<snip file="src/document_bridge/mod.rs" lines="56-78" first="/// The authored store, as a resource. Reads go through `.0.document()`;" last="}"/>
 <div class="table-wrap"><table>
   <thead><tr><th>Resource</th><th>Holds</th><th>Written by</th></tr></thead>
   <tbody>
@@ -54,42 +54,42 @@
 <p>The pattern throughout: anything that wants to change the document pushes a request into a queue, and one system, <code>sync_document</code>, drains every queue in a fixed order early in each frame. Part 11 lists the exceptions (host calls that apply immediately) and shows the whole frame.</p>
 
 <h2 id="sync"><span class="sec">F4.4</span><code>sync_document</code>: the heart of the bridge</h2>
-<p>It runs once per frame in <code>PreUpdate</code>, right after any producer has published. In three pieces:</p>
+<p>It runs in <code>PreUpdate</code> after producers publish and again in <code>PostUpdate</code> after tools, before transform propagation. In three pieces:</p>
 <h3 id="skip">Skip, or load</h3>
-<snip file="src/document_bridge/mod.rs" lines="303-337"/>
+<snip file="src/document_bridge/mod.rs" lines="374-412" first="if pending.0.is_empty()" last="}"/>
 <p>The early return is why an idle frame costs nothing: no queued work, no pending value changes, and the version equals the one already synced. A load tears down every entity and all draw data rather than diffing (the same id may be a different type in the new document) and installs a fresh <code>Store</code> with empty history.</p>
 <h3 id="drain">Drain the queues, in order</h3>
-<snip file="src/document_bridge/mod.rs" lines="338-386"/>
+<snip file="src/document_bridge/mod.rs" lines="413-461" first="for mut input in pending.0.drain(..) {" last="}"/>
 <p>Transactions, then gesture commits, then undo and redo. A rejected transaction is logged and simply doesn't happen. <code>ts == 0</code> means "stamp me with the frame clock". <code>CommitMerged</code> commits and then folds the commit into the duplicate before it, so an Alt-drag is one undo step (Part 13).</p>
 <h3 id="reconcile-log">Read the log, then reconcile</h3>
-<snip file="src/document_bridge/mod.rs" lines="387-439" mark="388,408-410,415-417,421-424,433"/>
-<p>Line 388 is the design decision in code. It doesn't look at what was queued; it reads everything the log gained since <code>SyncedVersion</code>. That covers queued transactions, undo and redo, and also transactions applied by other routes: the model surface calls <code>Store::apply</code> synchronously through the host boundary, and the sync picks those up here without being told. For each, it collects ids from the ops, the solver's derived ops and the inverse (408–410):</p>
-<snip file="src/document_bridge/mod.rs" lines="470-499"/>
-<p>Why the inverse too? For a <code>Reparent</code>, the op names the new parent and the inverse the old one; both child lists changed. Then come the nodes whose resolved values moved (415–417), such as a bar whose height binding re-evaluated or a gauge a producer just published. If the version moved, a <code>DocumentChanged</code> event is pushed for the shell (421–424), which is how HTML views refresh. Then the affected set goes to the reconciler (433).</p>
+<snip file="src/document_bridge/mod.rs" lines="462-540" first="// Everything the log gained since the last sync, whoever applied it. These" last="}"/>
+<p>Line 464 is the design decision in code. It doesn't look at what was queued; it reads everything the log gained since <code>SyncedVersion</code>. That covers queued transactions, undo and redo, and also transactions applied by other routes: the model surface calls <code>Store::apply</code> synchronously through the host boundary, and the sync picks those up here without being told. For each, it collects ids from the ops, solver-derived ops, the inverse and expansion ops (485–510):</p>
+<snip file="src/document_bridge/mod.rs" lines="573-602" first="/// The nodes an op touches. Returns whether it changed the tree&#x27;s shape" last="}"/>
+<p>Why the inverse too? For a <code>Reparent</code>, the op names the new parent and the inverse the old one; both child lists changed. Then come the nodes whose resolved values moved (515–517), such as a bar whose height binding re-evaluated or a gauge a producer just published. If the version moved, a <code>DocumentChanged</code> event is pushed for the shell (521–524), which is how HTML views refresh. Then the affected set goes to the reconciler (534).</p>
 
 <h2 id="reconciler"><span class="sec">F4.5</span>The reconciler: node → draw data, and an entity where one is due</h2>
-<snip file="src/document_bridge/materialize.rs" lines="325-386" mark="340-353,356-386"/>
-<p>First (340–353), a touched <code>point</code> or <code>contour</code> adds its enclosing <code>path</code>, since points have no draw data of their own (Part 7). Then, for each affected id, four cases: live with no entity, write its draw data and spawn an entity only if <code>Modes</code> says one is due; entity with no live node, despawn it; both, rewrite; neither, drop any draw data. Nothing under a <code>library</code> is drawn (Part 2). A second pass, shown in Part 10, places 3D descendants, because entities are flat.</p>
-<p><code>write_values</code> turns document components into draw data and Bevy components, one arm per node type, and reads every value through <code>Reader</code>:</p>
-<snip file="src/document_bridge/materialize.rs" lines="554-564"/>
+<snip file="src/document_bridge/materialize.rs" lines="338-399" first="pub(super) fn reconcile(" last="}"/>
+<p>First (353–366), a touched <code>point</code> or <code>contour</code> adds its enclosing <code>path</code>, since points have no draw data of their own (Part 7). Then, for each affected id, four cases: live with no entity, write its draw data and spawn an entity only if <code>Modes</code> says one is due; entity with no live node, despawn it; both, rewrite; neither, drop any draw data. Nothing under a <code>library</code> is drawn (Part 2). A second pass, shown in Part 10, places 3D descendants, because entities are flat.</p>
+<p><code>write_values</code> turns document facets into draw data and Bevy components, one arm per node type, and reads every value through <code>Reader</code>:</p>
+<snip file="src/document_bridge/materialize.rs" lines="601-611" first="/// Resolved-value reads for one node, with defaults for absent components." last="}"/>
 <p>It calls <code>store.resolved(…)</code>, not <code>doc.leaf(…)</code>: the value a reader should see now, through every layer of F3. So the reconciler draws bound, previewed, animated, published and solved values with no special cases. Document 2D space is y-down with the origin at the top-left, as in SVG. A 2D node's draw data is in its own local space, and its placement comes from the store (Part 10); each panel's pan and zoom are applied when drawing (Part 5).</p>
 
 <h3 id="frame">Where gestures fit in the frame</h3>
-<p><code>sync_document</code> runs at the <em>start</em> of the frame. Tools run in <code>PostUpdate</code>, where a drag previews into the store (F3.5). Without help, every preview would reach the screen a frame late, so a second, smaller pass, <code>reconcile_gesture</code>, drains the preview's changes and rewrites that draw data in the same frame. Part 3 covers it; Part 11 places it in the whole schedule. On release, the tool pushes a <code>GestureRequest::Commit</code>, and the next frame's sync turns the previews into one transaction.</p>
+<p>Tools preview and queue edits in PostUpdate. The same <code>sync_document</code> then runs again, followed by <code>ApplyDeferred</code> and view resolution, before propagation and drawing. This drains preview changes and applies release commits, pen clicks, deletes and undo in the frame of the input. The separate <code>reconcile_gesture</code> pass described by earlier versions of this guide has been replaced. Part 11 gives the current schedule.</p>
 
 <h3 id="demo">The starting scene is a transaction</h3>
-<snip file="src/document_bridge/demo.rs" lines="13-31"/>
-<p>The app spawns nothing by hand. <code>demo_scene</code> builds one <code>TransactionInput</code> and queues it at startup, so the demo is saved, viewed and undone like anything else. Lines 23–31 set up two generators: <code>next_ids(61)</code> reserves ids up front and <code>next</code> hands them out; <code>order</code> hands out <code>a0</code>, <code>a1</code>, <code>a2</code>…. The rest of the file (now long) builds the compositions, the pendulum, the bar definition, the optics and thermal chains, the timeline, and since October 17 the piston demo. Parts 2–12 show its pieces.</p>
+<snip file="src/document_bridge/demo.rs" lines="13-41" first="pub(super) fn queue_demo_scene(store: Res&lt;super::DocumentStore&gt;, mut pending: ResMut&lt;PendingTransactions&gt;) {" last="};"/>
+<p><code>demo_scene</code> builds authored nodes through ops and queues one opening transaction. Host-only gas particles are separate runtime entities. Later builders add standard components, text/layout examples, the context showcase and a circuit using the same transaction door. The Library and Stats views live in the session tier.</p>
 
 <h2 id="ffi"><span class="sec">F4.6</span>The host boundary</h2>
-<p>On the web the app runs in a web worker: Bevy, the store and the model surface's TypeScript together. The Svelte shell on the main thread sends messages; <code>worker.ts</code> calls <code>#[wasm_bindgen]</code> functions in <code>web_ffi.rs</code>. Since the macOS target (Part 11), those are thin wrappers: the behaviour lives in <code>engine_api.rs</code>, shared by both hosts, and each function either reads the store directly, applies to it, or queues a request for a system.</p>
-<snip file="src/engine_api.rs" lines="907-931"/>
-<p>Which keystroke means undo is chrome policy, decided on the main thread (and ignored while you type in a text field); only the command crosses. It is queued with the other tool keys, so it keeps its place relative to a Delete pressed just before it (Part 11 shows the bug this fixed); <code>remaining_frames</code> keeps the frame loop ticking, since the app stops rendering when idle (Part 6). Save and view read the store directly and return strings. Load validates on the spot, so a broken file is an error to the caller and never reaches the scene:</p>
-<snip file="src/engine_api.rs" lines="220-231"/>
+<p>On the web the app runs in a web worker: Bevy and the store, with the model surface using a transport-neutral API. The Svelte shell on the main thread sends messages; the shared <code>BrowserRuntime</code> dispatches ordinary messages to Rust's <code>engine_protocol</code>. Since the macOS target (Part 11), those are thin wrappers: the behaviour lives in <code>engine_api.rs</code>, shared by both hosts, and each function either reads the store directly, applies to it, or queues a request for a system.</p>
+<snip file="src/engine_api.rs" lines="1480-1504" first="pub fn undo(app: &amp;mut WorkerApp) {" last="}"/>
+<p>Which keystroke means undo is input policy (view tool keys come from contexts, Part 14), routed by the shell (and ignored while you type in a text field); only the command crosses. It is queued with the other tool keys, so it keeps its place relative to a Delete pressed just before it (Part 11 shows the bug this fixed); <code>remaining_frames</code> keeps the frame loop ticking, since the app stops rendering when idle (Part 6). Save and view read the store directly and return strings. Load validates on the spot, so a broken file is an error to the caller and never reaches the scene:</p>
+<snip file="src/engine_api.rs" lines="222-233" first="pub fn document_load(app: &amp;mut WorkerApp, text: String) -&gt; Result&lt;(), String&gt; {" last="}"/>
 <p>One call is different. The model needs every error in one round trip, so <code>document_apply</code> applies <em>now</em> and answers in JSON instead of queueing:</p>
-<snip file="src/engine_api.rs" lines="243-276" mark="254-262,263-271"/>
+<snip file="src/engine_api.rs" lines="245-278" first="pub fn document_apply(app: &amp;mut WorkerApp, transaction_json: String, expect_version: u32) -&gt; String {" last="}"/>
 <p><code>expect_version</code> is compare-and-swap. The model read <code>&lt;document version="7"&gt;</code>; if you dragged something while it was thinking, the document is at 8 and its edit, based on a stale view, is refused with "re-read before retrying". If you are dragging <em>while</em> it applies, the edit is classified against your gesture (Part 13). On success the bridge still picks the transaction up from the log on the next frame.</p>
-<p>The other calls the model surface uses keep the store in charge of what only it should decide: <code>document_next_ids</code> and <code>document_next_relation_ids</code> (ids come from the store's counter), <code>document_place</code> (order keys, F1.8), and <code>document_schema</code> (the registry as JSON, F1.6). On the web they reach Rust as <code>documentCall</code> messages, decoded by name through <code>engine_dispatch</code>'s allowlist. Later parts add more: <code>link</code>, <code>inspect</code>, <code>selection</code>, <code>signals</code>, <code>export_svg</code>; the field guide lists them.</p>
+<p>The other calls the model surface uses keep the store in charge of what only it should decide: <code>document_next_ids</code> and <code>document_next_relation_ids</code> (ids come from the store's counter), <code>document_place</code> (order keys, F1.8), and <code>document_schema</code> (the registry as JSON, F1.6). On all hosts they reach Rust as <code>documentCall</code> messages, decoded by name through <code>engine_dispatch</code>'s allowlist. Later parts add more: <code>link</code>, <code>inspect</code>, <code>selection</code>, <code>signals</code>, <code>export_svg</code>; the field guide lists them.</p>
 
 <h2 id="model"><span class="sec">F4.7</span>The model surface</h2>
 <div class="compare">
@@ -104,11 +104,11 @@
 &lt;/edit&gt;</code></pre>
 <p>TypeScript turns that into <em>one</em> transaction: it resolves <code>$n</code> to a real id, asks Rust for order keys, maps <code>w</code> to <code>size.w</code> and <code>color</code> to <code>fill.color</code>, coerces <code>#ff0000</code> to a colour, turns <code>{= …}</code> into a binding, and applies it with the version check.</p>
 </div>
-<p>It runs in the worker, next to the wasm, so every question it asks the store is a plain synchronous call; only the network call to Claude is asynchronous. One turn:</p>
-<snip file="src-ui/model/agent.ts" lines="21-58"/>
-<p>Build the system prompt from the schema, and the user message from the model view, the tree view, the current selection (Part 8) and the request (22–34). Call the model. Pull out the <code>&lt;edit&gt;</code>. Apply it with the label "model: …". If it failed, send back the failure and ask for one corrected edit. At most two attempts. The actor is <code>model</code>, so the edit sits on the same undo stack as your drags, and Cmd+Z undoes it.</p>
+<p><code>makeDocumentApi(call)</code> supplies the same model surface over synchronous or asynchronous transports. The agent awaits its reads and apply, so it can run with the native host too. One turn:</p>
+<snip file="src-ui/model/agent.ts" lines="21-63" first="export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string): Promise&lt;AskResult&gt; {" last="return { ok: !!lastOutcome?.ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name };"/>
+<p>Build the system prompt from the schema, and the user message from the model view, the tree view, the current selection (Part 8) and the request (22–39). Call the model. Pull out the <code>&lt;edit&gt;</code>. Apply it with the label "model: …". If it failed, send back the failure and ask for one corrected edit. At most two attempts. The actor is <code>model</code>, so the edit sits on the same undo stack as your drags, and Cmd+Z undoes it.</p>
 <h3 id="parse">The edit parser: four passes, one transaction</h3>
-<snip file="src-ui/model/edit.ts" lines="74-127"/>
+<snip file="src-ui/model/edit.ts" lines="76-129" first="// Pass 1: verbs in order, with their attributes." last=""/>
 <ol>
   <li><strong>Collect verbs</strong> in order, rejecting unknown ones with the list of valid ones.</li>
   <li><strong>Mint aliases.</strong> Every <code>&lt;create id="$something"&gt;</code> gets a real id from the store, so later verbs can say <code>parent="$group"</code>. The model never invents a real id.</li>
@@ -116,15 +116,15 @@
   <li><strong>Build ops</strong> in exactly the JSON shape Rust's <code>Op</code> deserialises (F2.2).</li>
 </ol>
 <p>Attribute names and values are both resolved from the schema, so they can't disagree with the validator:</p>
-<snip file="src-ui/model/schema.ts" lines="19-42"/>
-<p>A bare field name resolves to the first component, in the type's declared order, that has it: on a rect <code>color</code> is <code>fill.color</code>, and <code>stroke.color</code> must be written in full. <code>coerce</code> is forgiving about format (<code>"12"</code>, <code>12px</code>; <code>#rrggbb</code> or <code>rgba(…)</code>; <code>9.58 mW</code> for a quantity) and strict about meaning.</p>
+<snip file="src-ui/model/schema.ts" lines="23-46" first="/**" last="}"/>
+<p>A bare field name resolves to the first facet, in the type's declared order, that has it: on a rect <code>color</code> is <code>fill.color</code>, and <code>stroke.color</code> must be written in full. <code>coerce</code> is forgiving about format (<code>"12"</code>, <code>12px</code>; <code>#rrggbb</code> or <code>rgba(…)</code>; <code>9.58 mW</code> for a quantity) and strict about meaning.</p>
 <p>Parse errors and store errors come back the same way, as markup the model reads just as it read the view:</p>
-<snip file="src-ui/model/edit.ts" lines="343-346"/>
+<snip file="src-ui/model/edit.ts" lines="427-430" first="function failed(version: number, errors: { op: number | null; kind: string; message: string }[]): string {" last="}"/>
 <p>Successful edits that moved constrained nodes also come back with an <code>&lt;applied&gt;</code> summary naming what the solver did (Part 4). The system prompt (<code>manifest.ts</code>) is generated from <code>document_schema()</code> at run time, so the vocabulary the model is told and the vocabulary the validator enforces can't drift. The transport (<code>transport.ts</code>) calls the Claude API from the browser with your key, stored in this browser's local storage; it's a local tool, not something to deploy.</p>
 
 <div class="box recap"><span class="tab">Before you go on, and the whole of Foundations in five lines</span>
 <ul>
-  <li>The document (<code>iron_document</code>) holds all authored state: stable ids, typed components, slots, relations. Its writes are private to the op applier.</li>
+  <li>The document (<code>iron_document</code>) holds all authored state: stable ids, typed facets, slots, relations. Its writes are private to the op applier.</li>
   <li>Every change is a transaction of ops that commits entirely or not at all and records its own inverse. Undo is another transaction.</li>
   <li>The reactive graph layers previews, bindings and runtime signals over the constants; every reader, including the reconciler, sees the same resolved values.</li>
   <li>The bridge reconciles from the transaction log, whoever applied the transaction, writing draw data by node and entities only where Bevy acts. Gestures preview each frame and commit once.</li>

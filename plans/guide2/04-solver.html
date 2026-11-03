@@ -13,12 +13,12 @@
 <nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html" aria-current="page"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="14-contexts.html"><span class="num">14</span>Behaviour as data</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
-  <p class="kicker">Part 4 of 9 · <span class="chip sys-solve">Solver & constraints</span></p>
+  <p class="kicker">Part 4 of 14 · <span class="chip sys-solve">Solver & constraints</span></p>
   <h1>Constraints and the solver</h1>
   <p class="lede">Bindings run one way: the bar reads the slider. Many relationships in a diagram run both ways: two joints are coincident, and whichever one you drag, the other follows. This part covers roadmap stages C2 and D: a small numerical solver crate, constraint nodes in the document, the clusters they form, and the pendulum demo that drags through them.</p>
   <div class="prereq">
     <div><b>You need</b>Part 3: handles, previews, <code>begin_drag</code>/<code>drag_to</code>, and what a <em>driver</em> is.</div>
-    <div><b>Files</b><code>src/iron_solve/src/{lib,cluster,analysis,linalg}.rs</code>, <code>iron_document/src/{constraint,solve,lib}.rs</code>, the pendulum in <code>document_bridge/demo.rs</code>. Design: <code>plans/constraint-system.md</code>.</div>
+    <div><b>Files</b><code>src/iron_solve/src/{lib,cluster,analysis,linalg}.rs</code>, <code>iron_document/src/{constraint,solve,lib}.rs</code>, the pendulum in <code>document_bridge/demo.rs</code>. Design: <code>plans/specs/constraint-system.md</code>.</div>
   </div>
 </header>
 
@@ -88,7 +88,7 @@
 //! closures. That separation (Inkling&#x27;s lesson: reduction is separable from
 //! the numerical method) is what lets the solver be swapped.</code></pre></div></div></figure>
 <p>A problem is a vector of variables, a scale per variable, and <em>terms</em>. A term is a small function over a few variables that writes residuals: numbers that are zero when the term is satisfied.</p>
-<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/lib.rs:36">src/iron_solve/src/lib.rs</a><span class="range">lines 36–103</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:1;--len:5"></span><span class="band" style="--from:20;--len:6"></span><span class="band" style="--from:39;--len:9"></span><pre class="gutter" aria-hidden="true">36
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/lib.rs:36">src/iron_solve/src/lib.rs</a><span class="range">lines 36–103</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">36
 37
 38
 39
@@ -287,7 +287,7 @@ pub fn solve(problem: &amp;Problem, opts: &amp;Options) -&gt; Solution {
         let mut jac = vec![0.0; m * n];
         work.residual(&amp;z, &amp;mut r);
         let mut cost = 0.5 * r.iter().map(|v| v * v).sum::&lt;f64&gt;();</code></pre></div></div></figure>
-<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/lib.rs:372">src/iron_solve/src/lib.rs</a><span class="range">lines 372–433</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:14;--len:6"></span><span class="band" style="--from:30;--len:3"></span><span class="band" style="--from:35;--len:15"></span><pre class="gutter" aria-hidden="true">372
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_solve/src/lib.rs:372">src/iron_solve/src/lib.rs</a><span class="range">lines 372–433</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">372
 373
 374
 375
@@ -506,11 +506,11 @@ pub struct Analysis {
 }</code></pre></div></div></figure>
 
 <h2 id="document"><span class="sec">4.3</span>Constraints in the document</h2>
-<p>A constraint is an ordinary node: a <code>constraint</code> component (kind, value, enabled) and one <code>constrains</code> relation per operand. The relation's data carries the operand's <em>role</em> and its <em>anchor</em>, a point in the operand's local space:</p>
+<p>A constraint is an ordinary node: a <code>constraint</code> facet (kind, value, enabled) and one <code>constrains</code> relation per operand. The relation's data carries the operand's <em>role</em> and its <em>anchor</em>, a point in the operand's local space:</p>
 <figure class="plainfig"><figcaption>The hinge between the platform and the first joint</figcaption><pre class="plain"><code class="language-plaintext">constraint &quot;hinge&quot;   kind=coincident
   constrains → #platform   role=a  anchor=80,20    (the platform&#x27;s bottom centre)
   constrains → #joint0     role=b  anchor=0,0</code></pre></figure>
-<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/constraint.rs:21">src/iron_document/src/constraint.rs</a><span class="range">lines 21–40</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">21
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/constraint.rs:21">src/iron_document/src/constraint.rs</a><span class="range">lines 21–43</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">21
 22
 23
 24
@@ -529,7 +529,10 @@ pub struct Analysis {
 37
 38
 39
-40</pre><pre class="src"><code class="language-rust">#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+40
+41
+42
+43</pre><pre class="src"><code class="language-rust">#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConstraintSpec {
     pub kind: &amp;&#x27;static str,
     /// Operand roles, each required exactly once.
@@ -548,6 +551,9 @@ pub const KINDS: &amp;[ConstraintSpec] = &amp;[
     ConstraintSpec { kind: &quot;angle&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: true, equations: 1 },
     ConstraintSpec { kind: &quot;horizontal&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: false, equations: 1 },
     ConstraintSpec { kind: &quot;vertical&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: false, equations: 1 },
+    // Two frames held together, facing each other: a port plugged into a
+    // port (component-model.md §4.3). Connections imply them (`plug.rs`).
+    ConstraintSpec { kind: &quot;mate&quot;, roles: &amp;[&quot;a&quot;, &quot;b&quot;], uses_value: false, equations: 3 },
 ];</code></pre></div></div></figure>
 <p>The vocabulary is code, like node types. A <code>value</code> can be bound: the pendulum's three <code>distance</code> constraints read <code>value = #length.slider.value · 100</code>, a <em>driving dimension</em>. Validation rejects malformed constraints and duplicates (two constraints of one kind over the same anchored operands) with an explicit error, because the main author of constraints is going to be a model, and an error teaches more than silent merging.</p>
 
@@ -572,21 +578,17 @@ pub const KINDS: &amp;[ConstraintSpec] = &amp;[
 //! through shared operand nodes form a *cluster*, solved as one problem.
 //! Drivers (a transaction&#x27;s explicit `Set`, or a finger during a drag) are
 //! strong terms; the implicit least-change rows keep the rest still.</code></pre></div></div></figure>
-<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:118">src/iron_document/src/solve.rs</a><span class="range">lines 118–122</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">118
-119
-120
-121
-122</pre><pre class="src"><code class="language-rust">fn is_free(doc: &amp;Document, reactive: &amp;crate::graph::Reactive, leaf: Leaf) -&gt; bool {
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:121">src/iron_document/src/solve.rs</a><span class="range">lines 121–125</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">121
+122
+123
+124
+125</pre><pre class="src"><code class="language-rust">fn is_free(doc: &amp;Document, reactive: &amp;crate::graph::Reactive, leaf: Leaf) -&gt; bool {
     doc.leaf(leaf.node, leaf.path).is_some_and(|s| s.constant().is_some())
         &amp;&amp; !reactive.is_bound(leaf)
         &amp;&amp; !reactive.is_driven(leaf)
 }</code></pre></div></div></figure>
 <p>A leaf is free if it holds a constant, isn't bound, and no producer (a clip, the network, a host simulation; Part 12) drives it right now. Each operand node contributes its free <code>x</code>, <code>y</code> and <code>rot</code>. Constraints connected through shared nodes form one cluster. Then each kind becomes a residual closure:</p>
-<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:358">src/iron_document/src/solve.rs</a><span class="range">lines 358–430</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:14;--len:13"></span><span class="band" style="--from:48;--len:5"></span><span class="band" style="--from:54;--len:17"></span><pre class="gutter" aria-hidden="true">358
-359
-360
-361
-362
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:362">src/iron_document/src/solve.rs</a><span class="range">lines 362–450</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">362
 363
 364
 365
@@ -654,7 +656,27 @@ pub const KINDS: &amp;[ConstraintSpec] = &amp;[
 427
 428
 429
-430</pre><pre class="src"><code class="language-rust">    let b = Builder { doc, read, var_index };
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450</pre><pre class="src"><code class="language-rust">    let b = Builder { doc, read, var_index };
 
     for c in &amp;cluster.constraints {
         let kind = c.spec.kind;
@@ -667,6 +689,7 @@ pub const KINDS: &amp;[ConstraintSpec] = &amp;[
         // to a slider changes between solves.
         let value = read(constraint::value_leaf(c.id)).and_then(|v| v.as_f64()).unwrap_or(c.value);
         let at = c.operands[0].at;
+        let turns = [c.operands[0].turn, c.operands.get(1).map_or(0.0, |o| o.turn)];
         let term = match kind {
             &quot;coincident&quot; =&gt; Term::new(Tier::Required, locals, 2, move |v, r| {
                 let p = poses[0].0.point(v, poses[0].1);
@@ -689,6 +712,15 @@ pub const KINDS: &amp;[ConstraintSpec] = &amp;[
             }
             &quot;angle&quot; =&gt; Term::new(Tier::Required, locals, 1, move |v, r| {
                 r[0] = wrap_angle(poses[1].0.rotation(v) - poses[0].0.rotation(v) - value);
+            }),
+            &quot;mate&quot; =&gt; Term::new(Tier::Required, locals, 3, move |v, r| {
+                let p = poses[0].0.point(v, poses[0].1);
+                let q = poses[1].0.point(v, poses[1].1);
+                r[0] = p[0] - q[0];
+                r[1] = p[1] - q[1];
+                // Facings opposed; a radian weighs like a unit here, as for
+                // `angle`.
+                r[2] = wrap_angle(poses[1].0.rotation(v) + turns[1] - poses[0].0.rotation(v) - turns[0] - std::f64::consts::PI);
             }),
             &quot;horizontal&quot; =&gt; Term::new(Tier::Required, locals, 1, move |v, r| {
                 r[0] = poses[0].0.point(v, poses[0].1)[1] - poses[1].0.point(v, poses[1].1)[1];
@@ -724,10 +756,16 @@ pub const KINDS: &amp;[ConstraintSpec] = &amp;[
             r[1] = p[1] - target[1];
         }));
         tags.push(Tag::Finger(f.node));
+        if let Some(rot) = f.hold_rot
+            &amp;&amp; let Some(&amp;i) = b.var_index.get(&amp;Leaf { node: f.node, path: t2(&quot;rot&quot;) })
+        {
+            problem.term(Term::new(Tier::Strong, vec![i], 1, move |v, r| r[0] = v[0] - rot));
+            tags.push(Tag::Finger(f.node));
+        }
     }
     (problem, tags)
 }</code></pre></div></div></figure>
-<p>Every residual is written in world positions (<code>pose.point(v, anchor)</code>, which uses Part 3's world transforms), so a joint inside a rotated group is constrained where it actually is. Lines 406–410 turn a transaction's <code>Set</code> into a strong "be this value" term; lines 412–428 turn a drag's <em>finger</em> into a strong "this anchor is at the pointer" term.</p>
+<p>Every residual is written in world positions (<code>pose.point(v, anchor)</code>, which uses Part 3's world transforms), so a joint inside a rotated group is constrained where it actually is. Lines 420–424 turn a transaction's <code>Set</code> into a strong "be this value" term; lines 426–448 turn a drag's <em>finger</em> into a strong "this anchor is at the pointer" term.</p>
 
 <h2 id="when"><span class="sec">4.5</span>When the solver runs</h2>
 <p>Two moments, with different rules for what is written:</p>
@@ -740,37 +778,37 @@ pub const KINDS: &amp;[ConstraintSpec] = &amp;[
     <tr><td>On failure</td><td>Keep the last good pose</td><td>Reject the transaction, naming the culprits</td></tr>
   </tbody>
 </table></div>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:243">src/iron_document/src/lib.rs</a><span class="range">lines 243–273</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:18;--len:11"></span><pre class="gutter" aria-hidden="true">243
-244
-245
-246
-247
-248
-249
-250
-251
-252
-253
-254
-255
-256
-257
-258
-259
-260
-261
-262
-263
-264
-265
-266
-267
-268
-269
-270
-271
-272
-273</pre><pre class="src"><code class="language-rust">/// Re-solve every cluster from the current resolved values, with the
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:350">src/iron_document/src/lib.rs</a><span class="range">lines 350–380</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">350
+351
+352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375
+376
+377
+378
+379
+380</pre><pre class="src"><code class="language-rust">/// Re-solve every cluster from the current resolved values, with the
 /// active fingers, previewing the results. Used during gestures and when
 /// the playhead moves a cluster&#x27;s input.
 fn resolve_clusters_live(&amp;mut self) -&gt; SolveReport {
@@ -802,82 +840,82 @@ fn resolve_clusters_live(&amp;mut self) -&gt; SolveReport {
     }
     report</code></pre></div></div></figure>
 <p>Solve-on-apply is what keeps the document consistent no matter who edits it. A model edit that sets the ball's <code>x</code> to 900 is a driver; the solver moves the joints, and their new positions are recorded as derived ops on the same transaction, so one undo puts everything back:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1115">src/iron_document/src/lib.rs</a><span class="range">lines 1115–1190</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:23;--len:11"></span><span class="band" style="--from:46;--len:16"></span><span class="band" style="--from:68;--len:4"></span><pre class="gutter" aria-hidden="true">1115
-1116
-1117
-1118
-1119
-1120
-1121
-1122
-1123
-1124
-1125
-1126
-1127
-1128
-1129
-1130
-1131
-1132
-1133
-1134
-1135
-1136
-1137
-1138
-1139
-1140
-1141
-1142
-1143
-1144
-1145
-1146
-1147
-1148
-1149
-1150
-1151
-1152
-1153
-1154
-1155
-1156
-1157
-1158
-1159
-1160
-1161
-1162
-1163
-1164
-1165
-1166
-1167
-1168
-1169
-1170
-1171
-1172
-1173
-1174
-1175
-1176
-1177
-1178
-1179
-1180
-1181
-1182
-1183
-1184
-1185
-1186
-1187
-1188
-1189
-1190</pre><pre class="src"><code class="language-rust">/// What needs the whole transaction in place (constraint-system.md §7):
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1646">src/iron_document/src/lib.rs</a><span class="range">lines 1646–1721</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1646
+1647
+1648
+1649
+1650
+1651
+1652
+1653
+1654
+1655
+1656
+1657
+1658
+1659
+1660
+1661
+1662
+1663
+1664
+1665
+1666
+1667
+1668
+1669
+1670
+1671
+1672
+1673
+1674
+1675
+1676
+1677
+1678
+1679
+1680
+1681
+1682
+1683
+1684
+1685
+1686
+1687
+1688
+1689
+1690
+1691
+1692
+1693
+1694
+1695
+1696
+1697
+1698
+1699
+1700
+1701
+1702
+1703
+1704
+1705
+1706
+1707
+1708
+1709
+1710
+1711
+1712
+1713
+1714
+1715
+1716
+1717
+1718
+1719
+1720
+1721</pre><pre class="src"><code class="language-rust">/// What needs the whole transaction in place (constraint-system.md §7):
 /// every constraint is well formed, bindings and clusters form no cycle,
 /// and every cluster is solved, with leaves this transaction set treated
 /// as drivers. The solver&#x27;s writes are applied and recorded as
@@ -890,7 +928,7 @@ fn post_apply(&amp;mut self, tx: &amp;mut Transaction, exact: bool) -&gt; Result
         let read = |l: Leaf| self.reactive.read(&amp;self.doc, l);
         constraint::validate_all(&amp;self.doc, &amp;read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
     }
-    let clusters = solve::clusters(&amp;self.doc, &amp;self.reactive).map_err(|m| err(ErrorKind::Cycle, m))?;
+    let clusters = solve::clusters(&amp;self.doc, &amp;self.reactive, self.contexts()).map_err(|m| err(ErrorKind::Cycle, m))?;
     self.clusters = clusters.clone();
     if clusters.list.is_empty() {
         return Ok(None);
@@ -954,10 +992,7 @@ fn post_apply(&amp;mut self, tx: &amp;mut Transaction, exact: bool) -&gt; Result
     Ok((!summary.is_empty()).then_some(summary))
 }</code></pre></div></div></figure>
 <p>Two refinements matter for the model. The returned <code>SolverSummary</code> reports causes, not every changed value: which clusters re-solved, which nodes moved, and any request the solver couldn't honour (<code>&lt;unmet&gt;</code>). And <code>exact: true</code> on a transaction turns an unmet request into a rejection instead of an adjustment, for edits that must land exactly or not at all.</p>
-<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:68">src/iron_document/src/solve.rs</a><span class="range">lines 68–91</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">68
-69
-70
-71
+<figure class="code"><figcaption><span class="chip sys-solve">Solver & constraints</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/solve.rs:71">src/iron_document/src/solve.rs</a><span class="range">lines 71–94</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">71
 72
 73
 74
@@ -977,7 +1012,10 @@ fn post_apply(&amp;mut self, tx: &amp;mut Transaction, exact: bool) -&gt; Result
 88
 89
 90
-91</pre><pre class="src"><code class="language-rust">/// A requested value the solver could not honour.
+91
+92
+93
+94</pre><pre class="src"><code class="language-rust">/// A requested value the solver could not honour.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Unmet {
     pub leaf: String,
@@ -1001,7 +1039,7 @@ impl SolverSummary {
         self.clusters.is_empty() &amp;&amp; self.moved.is_empty() &amp;&amp; self.unmet.is_empty()
     }
 }</code></pre></div></div></figure>
-<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:992" title="src/iron_document/src/lib.rs:992"><code>lib.rs:992</code></a>).</p>
+<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<a class="ref" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1523" title="src/iron_document/src/lib.rs:1523"><code>lib.rs:1523</code></a>).</p>
 <div class="box rust"><span class="tab">Solve-on-apply and a running drag</span>
 <p>The two columns of the table above used to overlap. <code>post_apply</code> reads leaves through the reactive graph and passes the store's active fingers, so if a transaction arrived <em>during</em> a cluster drag (a model edit, an inspector field, even a recolour of something else), the solver read the dragged pose from the overlay, honoured the drag's finger, and wrote the half-finished pose into that unrelated transaction as derived ops. Since October 15, <code>apply</code> first sets the gesture aside (overlay values, drivers and fingers move into a <code>Suspended</code> record), applies and solves against the document alone, and then resumes the gesture or cancels it if the edit conflicts with it, including when the solver moved a node the drag holds. Part 13 has the algorithm.</p>
 </div>

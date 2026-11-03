@@ -1,10 +1,10 @@
 <header class="chapter-head">
-  <p class="kicker">Part 9 of 9 · <chip sys="ports"/> <chip sys="react"/> <chip sys="solve"/></p>
+  <p class="kicker">Part 9 of 14 · <chip sys="ports"/> <chip sys="react"/> <chip sys="solve"/></p>
   <h1>Ports, connections and physics</h1>
   <p class="lede">A laser feeds a fiber, which feeds a power meter; a heater warms a block through a thermal link. Entities need a way to be <em>wired together</em> so that a value computed in one flows into another. This part covers roadmap stage F, steps 1–3: port kinds, connections, one-way signals that ride the binding graph, across/through pairs solved as equations, and the two demos (Optics and Thermal) that use them.</p>
   <div class="prereq">
     <div><b>You need</b>Part 2 (definitions, <code>instantiate</code>), Part 3 (the reactive graph, handles), Part 4 (<code>iron_solve</code>).</div>
-    <div><b>Files</b><code>iron_document/src/port.rs</code>, <code>{component,definition,graph,handle,op,view,lib}.rs</code>, <code>document_bridge/demo.rs</code> (<code>optics</code>, <code>thermal</code>), <code>tests/ports.rs</code>. Design: <code>plans/entity-composition-model.md</code> §6.1.</div>
+    <div><b>Files</b><code>iron_document/src/port.rs</code>, <code>{facet,definition,graph,handle,op,view,lib}.rs</code>, <code>document_bridge/demo.rs</code> (<code>optics</code>, <code>thermal</code>), <code>tests/ports.rs</code>. Design: <code>plans/specs/entity-composition-model.md</code> §6.1.</div>
   </div>
 </header>
 
@@ -14,52 +14,50 @@
   <div class="box built"><span class="tab">One-way signal</span><p><strong><code>out</code> → <code>in</code>.</strong> Optical power along a fiber. The in-port's value <em>is</em> its partner out-port's value. It compiles to a dataflow edge in the binding graph, evaluated like any binding; cycles are rejected. A back-reflection would be a second signal running the other way.</p></div>
   <div class="box built"><span class="tab">Across / through pair</span><p><strong>Acausal, as in Modelica, Simscape and SPICE.</strong> Temperature and heat flow; voltage and current. At a joint the across values are equal and the through values sum to zero. These compile to equations, solved together with each part's own behaviour equations. Loops are fine.</p></div>
 </div>
-<p>Two things are deliberately <em>not</em> port features. <strong>Editing from either end</strong> (drag the meter's reading, and the laser's power moves) is the store's existing gesture machinery from Part 3: the meter's signal has a linear handle back to the laser. And <strong>geometry stays out of ports</strong>: a mount bolted to a table is a constraint (Part 4), not a connection. Physics flows through ports; placement goes through constraints.</p>
+<p>Editing a signal from either end uses the existing handle inversion; it is not another port flow mode. Ports can also have anchors on their pictures. Flexible connections let a follower track its partner; rigid plugging adds a mate constraint for placement. The connection and the mate are separate document objects.</p>
 
 <h2 id="kinds"><span class="sec">9.2</span>Port kinds</h2>
 <p>The vocabulary is code, like node types and constraint kinds:</p>
-<snip file="src/iron_document/src/port.rs" lines="22-53" mark="43-49"/>
-<p>Every port carries all five fields; the kind decides which ones mean anything. Storing <code>signal</code>, <code>across</code> and <code>through</code> on every port was step 1 of the plan: the file format holds both variable sorts from the start, so files never need migrating as the solving arrives.</p>
-<snip file="src/iron_document/src/component.rs" lines="355-379"/>
+<snip file="src/iron_document/src/port.rs" lines="22-53" first="/// How a port kind&#x27;s variables flow." last="}"/>
+<p>Every port carries signal and pair fields, plus interface metadata; the kind decides which ones mean anything. Storing <code>signal</code>, <code>across</code> and <code>through</code> on every port was step 1 of the plan: the file format holds both variable sorts from the start, so files never need migrating as the solving arrives.</p>
+<snip file="src/iron_document/src/facet.rs" lines="514-542" first="/// A port on an entity, or a definition&#x27;s spec for one (ECM §6.1). `kind`" last="Connection / &quot;connection&quot; =&gt; Connection { domain: Str = Value::Str(String::new()) }"/>
 
 <h3 id="specs">Ports come from definitions</h3>
-<p>A definition (Part 2) gains two kinds of child: <code>port_spec</code> and <code>equation</code>. An out-port's spec carries its <em>behaviour</em> as a binding: the laser's <code>out.signal</code> is bound to its <code>power</code> parameter; the fiber's is its input attenuated by length and loss. <code>instantiate</code> copies each spec onto the new entity as a <code>port</code>, and each equation as an equation, with every reference rewritten the same way template bindings are:</p>
-<snip file="src/iron_document/src/definition.rs" lines="142-180" mark="144-145,173-177"/>
-<p>So <code>#fiber_out.port.signal = #fiber_in.port.signal · 10^(−loss·length/10)</code> in the definition becomes the same expression over the fiber <em>entity's</em> own ports and <code>params</code>. Templates read ports too: the meter's gauge width is bound to <code>#meter_in.port.signal / 1 mW · 24</code>, and <code>place_figures</code> maps each spec to the entity's port of the same name, so the schematic's gauge reads the same port.</p>
+<p>A definition exposes <code>port_spec</code> children and behaviour <code>equation</code>s. Input ports define arguments and defaults, output ports hold bindings, and pair terminals participate in the network. Linked entities derive their ports and equations through expansion; detached instances copy them as authored nodes. Templates read those ports, rewritten to the particular entity, so multiple uses show the same live values (Part 2).</p>
 
 <h2 id="connections"><span class="sec">9.3</span>Connections</h2>
 <p>A connection is a <code>connection</code> node under the <code>model</code> root with exactly two <code>connects</code> relations, tagged <code>end: a</code> and <code>end: b</code>. That's all a file stores; nothing about which value flows where.</p>
 <raw title="laser → fiber, as nodes">model
   entity "laser"   (instance of laser)
-    port "out"     kind=optical_power dir=out  signal = params.power
+    port "out"     kind=optical_power dir=out  signal = args.power
   entity "fiber"
     port "in"      kind=optical_power dir=in
     port "out"     kind=optical_power dir=out  signal = in.signal · 10^(−loss·length/10)
   connection       domain="optical"
     connects → laser.out   end=a
     connects → fiber.in    end=b</raw>
-<snip file="src/iron_document/src/port.rs" lines="68-89"/>
+<snip file="src/iron_document/src/port.rs" lines="68-89" first="/// A connection&#x27;s two ends, `a` then `b`, if it has exactly those." last="}"/>
 
 <h3 id="derived">One-way signals are derived bindings</h3>
 <div class="compare">
   <div class="box naive"><span class="tab">The simple version</span><p><strong>Write a binding onto the in-port when the connection is made.</strong> Now the file holds the wiring twice (the connection and the binding), deleting the connection must find and remove the binding, and an undo that restores one without the other leaves a ghost.</p></div>
   <div class="box built"><span class="tab">What was built</span><p><strong>Derive the binding from the connection, never store it.</strong> Every time the graph is rebuilt, each live, valid one-way connection contributes one binding: in-port's signal reads out-port's signal. Delete the connection and the binding is simply not derived next time.</p></div>
 </div>
-<snip file="src/iron_document/src/port.rs" lines="91-110"/>
+<snip file="src/iron_document/src/port.rs" lines="91-110" first="/// Every in-port&#x27;s signal as its partner&#x27;s: one derived binding per live," last="}"/>
 <p>The reactive graph (Part 3) folds them in alongside the stored bindings, so a signal is evaluated in topological order with everything else, in the same pass:</p>
-<snip file="src/iron_document/src/graph.rs" lines="225-245" mark="229-232"/>
-<p>This is what makes the chain feel instant. Move the laser-power slider: the entity's <code>params.power</code> (bound to the slider) changes, then the laser's <code>out.signal</code>, the fiber's <code>in.signal</code> (derived), the fiber's <code>out.signal</code>, the meter's <code>in.signal</code> (derived), and both gauges, all in one glitch-free pass.</p>
+<snip file="src/iron_document/src/graph.rs" lines="227-249" first="pub fn rebuild(&amp;mut self, doc: &amp;Document) {" last="}"/>
+<p>This is what makes the chain feel instant. Move the laser-power slider: the entity's <code>args.power</code> (bound to the slider) changes, then the laser's <code>out.signal</code>, the fiber's <code>in.signal</code> (derived), the fiber's <code>out.signal</code>, the meter's <code>in.signal</code> (derived), and both gauges, all in one glitch-free pass.</p>
 
 <h3 id="invert">Dragging the meter's reading</h3>
 <p>Part 3's handle resolution asks "what is this leaf's expression?". An in-port has no stored expression, so it asks the graph for its derived one:</p>
-<snip file="src/iron_document/src/handle.rs" lines="56-60"/>
+<snip file="src/iron_document/src/handle.rs" lines="57-62" first="// The graph&#x27;s binding is the one in effect: a connected in-port resolves" last="};"/>
 <p>Inlining walks back through the fiber (which multiplies by a constant at the current length) to the laser's <code>power</code>, which is bound to the slider. The result is a linear handle with one free source, the slider, so dragging the meter's gauge sets the laser's power. The test asks for 5 mW at the meter and checks the laser is set to 5 mW / 10<sup>−0.1</sup>:</p>
-<snip file="src/iron_document/tests/ports.rs" lines="185-198"/>
+<snip file="src/iron_document/tests/ports.rs" lines="186-199" first="#[test]" last="}"/>
 
 <h3 id="validate">Validation</h3>
 <p>A connection is checked once both <code>connects</code> relations exist, at the end of the transaction that makes it:</p>
-<snip file="src/iron_document/src/op.rs" lines="342-351"/>
-<snip file="src/iron_document/src/port.rs" lines="112-144"/>
+<snip file="src/iron_document/src/op.rs" lines="356-365" first="// A connection is checked once both of its ends exist (ECM §6.1)." last="}"/>
+<snip file="src/iron_document/src/port.rs" lines="112-144" first="/// Check a connection: two live ports of one kind; for a one-way kind, an" last="}"/>
 <p>Same kind on both ends; for a one-way kind, exactly one out and one in, and an in-port fed by at most one connection; and no loop through bindings and derived signals together (<code>signal_loop</code>, a three-colour depth-first search). Each failure is a <code>BadConnection</code> error with a sentence a model can act on: <em>cannot connect rf_voltage (#40) to optical_power (#52); a connection joins ports of one kind</em>.</p>
 
 <h2 id="pairs"><span class="sec">9.4</span>Across/through pairs as equations</h2>
@@ -93,26 +91,26 @@
 </figure>
 
 <h3 id="network">Assembling the network</h3>
-<snip file="src/iron_document/src/port.rs" lines="184-200"/>
+<snip file="src/iron_document/src/port.rs" lines="184-200" first="/// The across/through network (ECM §6.1, step 3), assembled for the solver:" last="}"/>
 <p><code>network</code> collects every pair port on a live entity. Each port's <code>across</code> and <code>through</code> is an unknown unless it's bound. Ports joined by connections are grouped into <em>nets</em> by union-find (the same trick <code>iron_solve</code> uses for clusters); each net contributes its conservation laws; each live <code>equation</code> on an entity contributes <code>lhs − rhs</code>:</p>
-<snip file="src/iron_document/src/port.rs" lines="208-283" mark="230-247,254-269,270-281"/>
+<snip file="src/iron_document/src/port.rs" lines="208-283" first="pub fn network(doc: &amp;Document) -&gt; Network {" last="}"/>
 <p>Line 273 skips equations on <em>definitions</em>: a definition's equations describe the template, which has no network of its own. An unconnected terminal ends up in a net of one, where "throughs sum to zero" means it carries no flow, which is the physically right default for an open end.</p>
 
 <h3 id="resolve">Solving, and where the answer lives</h3>
-<snip file="src/iron_document/src/lib.rs" lines="779-846" mark="784-791,804-834,838-845"/>
+<snip file="src/iron_document/src/lib.rs" lines="1251-1321" first="/// Solve the across/through network (ECM §6.1, step 3) and put its" last="}"/>
 <p>Every equation becomes a <code>Required</code> term (Part 4's tiers). <code>Linear</code> rows are plain sums; <code>Expr</code> rows evaluate both sides with the unknowns substituted (as quantities with their dimensions, so <code>2 K/W · 5 W</code> is a temperature) and everything else read from the store. The previous solution (read back from the network's own published signals) is the starting point, so a slider drag converges in a step or two.</p>
-<p>The solution is <strong>not written to the document</strong>. It is <em>published</em> into the reactive graph's runtime layer as producer 1, <code>ProducerId::NETWORK</code> (838–845), which readers see beneath bindings. When this part was first written the network had its own <code>physics</code> map; on October 17 it became one producer among several (clips are producer 0, host simulations 2 and up; Part 12):</p>
-<snip file="src/iron_document/src/graph.rs" lines="393-411"/>
+<p>The solution is <strong>not written to the document</strong>. It is <em>published</em> into the reactive graph's runtime layer as producer 1, <code>ProducerId::NETWORK</code> (1313–1320), which readers see beneath bindings. When this part was first written the network had its own <code>physics</code> map; on October 17 it became one producer among several (clips are producer 0, layout is producer 3, host simulations are 3 and up; Part 12):</p>
+<snip file="src/iron_document/src/graph.rs" lines="417-435" first="fn read_with(" last="}"/>
 <div class="table-wrap"><table>
   <thead><tr><th>Order</th><th>Layer</th><th>Comes from</th><th>Stored?</th></tr></thead>
   <tbody>
     <tr><td>1</td><td>overlay</td><td>A gesture's previews (Part 3)</td><td>no</td></tr>
     <tr><td>2</td><td>resolved</td><td>Bindings, stored and derived</td><td>no</td></tr>
-    <tr><td>3</td><td>runtime</td><td>Producers: this network (1), clips (0), host simulations (2+)</td><td>no</td></tr>
+    <tr><td>3</td><td>runtime</td><td>Producers: this network (1), clips (0), layout (2), host simulations (3+)</td><td>no</td></tr>
     <tr><td>4</td><td>constant</td><td>The document</td><td>yes</td></tr>
   </tbody>
 </table></div>
-<p>So the heater's gauge, bound to <code>(#out.port.across − 293.15 K) / 1 K · 6</code>, reads the solved temperature like any value, and when the solution changes, <code>publish</code> invalidates its dependents like any change. <code>resolve_physics</code> runs after every transaction, preview, publish and playhead move (<ref file="src/iron_document/src/lib.rs" line="930" has="resolve_physics">lib.rs:930</ref>). A solved leaf is <code>Locked</code> for editing, because a producer holds it, with the reason "solved by its across/through network; change a source or a parameter instead" (<ref file="src/iron_document/src/handle.rs" line="52" has="across/through network">handle.rs:52</ref>).</p>
+<p>So the heater's gauge, bound to <code>(#out.port.across − 293.15 K) / 1 K · 6</code>, reads the solved temperature like any value, and when the solution changes, <code>publish</code> invalidates its dependents like any change. <code>resolve_physics</code> runs after every transaction, preview, publish and playhead move (<ref file="src/iron_document/src/lib.rs" line="1456" has="resolve_physics">lib.rs:1456</ref>). A solved leaf is <code>Locked</code> for editing, because a producer holds it, with the reason "solved by its across/through network; change a source or a parameter instead" (<ref file="src/iron_document/src/handle.rs" line="52" has="across/through network">handle.rs:52</ref>).</p>
 <div class="box rust"><span class="tab">Why not solve-on-apply like constraints?</span>
 <p>Constraint solutions (Part 4) are <em>positions</em>: authored state the user owns, so they are written as derived ops and undone with the transaction. Physics solutions are <em>consequences</em>: the temperature is whatever the heater's power and the link's resistance make it. Storing it would put a cache in the file that could disagree with its own inputs. A network that fails to converge keeps its previous solution and reports why through <code>physics_error()</code>; it never rejects a transaction.</p>
 </div>
@@ -120,21 +118,21 @@
 <h2 id="demos"><span class="sec">9.5</span>The two demos</h2>
 <h3 id="optics">Optics: laser → fiber → meter</h3>
 <p>The Optics and Schematic tabs are two compositions of the same three entities: a cartoon (a laser body whose beam brightens with power, a curved fiber path, a meter dial with a gauge) and a block diagram with wires. Each definition carries both templates:</p>
-<snip file="src/document_bridge/demo.rs" lines="776-799" mark="779,791"/>
+<snip file="src/document_bridge/demo.rs" lines="798-821" first="let mut ops = vec![" last="];"/>
 <p>Each entity is instantiated in the cartoon, then drawn again in the schematic with <code>place_figures</code>. The two connections are created with a schematic wire each, and each wire is a figure of its <em>connection</em>, so selecting a wire highlights the connection's ends through the usual <code>figures</code> machinery (Part 5):</p>
-<snip file="src/document_bridge/demo.rs" lines="858-882" mark="869-871,876"/>
+<snip file="src/document_bridge/demo.rs" lines="880-904" first="// The connections, and their wires in the schematic." last="]);"/>
 <p>Two sliders in the cartoon drive the laser's <code>power</code> and the fiber's <code>length_km</code>. Drag either gauge (cartoon or schematic), and the power slider moves.</p>
 
 <h3 id="thermal">Thermal: heater → link → ambient</h3>
 <p>The Thermal tab is the same pattern with pair ports. Each definition has a <code>heat_flow</code> port per terminal and its behaviour as <code>equation</code> children; the heater's template draws a temperature bar and a heat-flow bar bound to its port:</p>
-<snip file="src/document_bridge/demo.rs" lines="996-1022" mark="1000,1005,1007,1012-1013,1019"/>
-<p>Note the port defaults (lines 957–958, set where the port specs are built): <code>293.15 K</code> and <code>0 W</code>, in the kind's own units. The template's gauges read the definition's ports before any network exists, and with plain-number defaults they failed with a unit error. An instance's values are then overridden by the physics layer.</p>
-<p>The test that pins the arithmetic: 5 W through 2 K/W into 293.15 K settles at 303.15 K with 5 W flowing (<ref file="src/iron_document/tests/ports.rs" line="228" has="fn a_heater_settles_through_its_thermal_link">ports.rs:228</ref>).</p>
+<snip file="src/document_bridge/demo.rs" lines="1016-1042" first="phase(&amp;mut scratch, vec![" last="]);"/>
+<p>Note the port defaults (lines 979–980, set where the port specs are built): <code>293.15 K</code> and <code>0 W</code>, in the kind's own units. The template's gauges read the definition's ports before any network exists, and with plain-number defaults they failed with a unit error. An instance's values are then overridden by the physics layer.</p>
+<p>The test that pins the arithmetic: 5 W through 2 K/W into 293.15 K settles at 303.15 K with 5 W flowing (<ref file="src/iron_document/tests/ports.rs" line="229" has="fn a_heater_settles_through_its_thermal_link">ports.rs:229</ref>).</p>
 
 <h2 id="model"><span class="sec">9.6</span>What the model sees</h2>
 <p>The model view (Part 5) lists each entity's ports with their live values, and every connection by its ends' names:</p>
-<snip file="src/iron_document/src/view.rs" lines="224-245"/>
-<raw title="The shape of the model view for the fiber (ids elided, values rounded)">&lt;entity id="#…" name="fiber" definition="fiber" params.length_km="2" …&gt;
+<snip file="src/iron_document/src/view.rs" lines="293-314" first="// Ports with their live values (ECM §6.1): a one-way kind shows its" last="}"/>
+<raw title="The shape of the model view for the fiber (ids elided, values rounded)">&lt;entity id="#…" name="fiber" definition="fiber" args.length_km="2" …&gt;
   &lt;port id="#…" name="in"  kind="optical_power" dir="in"  signal="10 mW"/&gt;
   &lt;port id="#…" name="out" kind="optical_power" dir="out" signal="7.94 mW"/&gt;
   &lt;figure id="#…" type="group" in="#…" composition="optics"/&gt;
@@ -143,6 +141,13 @@
 &lt;connection id="#…" a="laser.out" b="fiber.in" kind="optical_power"/&gt;</raw>
 <p>So "connect the meter straight to the laser" is something the model can attempt, and if the meter is already fed, it gets back <em>#… already has a connection feeding it</em> and can delete the fiber's connection first.</p>
 
-<div class="box edge"><span class="tab">Rough edges and what's next</span>
-<p>The module comment at the top of <code>port.rs</code> still says pair solving "comes next"; it has since landed. There's no gesture for making a connection: they come from the demo or a model edit, and the schematic's wires are ordinary paths that don't follow their blocks. Pair networks solve as one problem; splitting them into independent clusters is easy (the nets already are) but unneeded at demo scale. Time-varying signals (a thermal mass, a modulated laser) would make the network a differential system, which is roadmap stage G and the subject of the open questions about animation and state machines.</p>
-</div>
+
+<h2 id="anchors"><span class="sec">9.7</span>Anchors, plugging and joints</h2>
+<p>An <code>empty</code> with an <code>anchor</code> facet locates a port on a picture. Derived <code>anchor.wx</code>, <code>wy</code> and <code>wrot</code> expressions carry its position and facing through ancestor transforms. A following anchor derives its own placement from its connected partner, so the fiber follows the laser when moved. Handle inversion can follow those expressions back to a movable source.</p>
+<p><code>Store::begin_plug</code>, <code>plug_drag</code> and <code>finish_plug</code> preview and commit a connection. Rigid ports also produce a mate constraint; loose ends form a draggable joint. The port and empty tools, mains and link lines make these interfaces authorable on the canvas, rather than available only in demo code.</p>
+
+<h2 id="circuit"><span class="sec">9.8</span>The electrical schematic is built</h2>
+<p>The newer Circuit tab uses notation <code>schematic</code>; it is distinct from the optics demo's older Schematic tab. <code>std_parts.xml</code> declares electrical parts as markup. <code>parts.rs</code> turns each into a definition with value input ports, electrical pins, equations and a symbol template. Each pin has an anchored empty in its symbol. The built-in library is read-only; first placement copies the part definition into the document and records <code>import.source = std:&lt;key&gt;</code>.</p>
+<p>The notation's context supplies its palette, shortcuts, grid and snapping. The wire tool creates connection nodes and visible paths whose ends bind to anchor coordinates. Joining a wire creates a junction; ordinary geometric crossings do not alone connect nets. Moving or rotating a symbol updates its wire endpoints through the same graph, not by patching path coordinates from the UI.</p>
+<p>The existing across/through network solves DC voltage/current values, and bound text labels display live readings. <code>&lt;circuit&gt;</code> is a model macro that returns ops; <code>__iron.netlist('circuit')</code> emits a SPICE-like netlist with solved net voltages. This is the initial DC schematic, not a transient simulator or external SPICE engine.</p>
+<div class="box edge"><span class="tab">Open work</span><p>Pair networks still solve as one problem and keep their previous solution on failure. Time-domain signals, richer devices and external computational Model sessions remain separate follow-ups. See <code>plans/specs/schematic.md</code> and the product handoff for implemented phases and remaining work.</p></div>

@@ -13,12 +13,12 @@
 <nav class="sidebar" aria-label="Series"><h4>The series</h4><ol><li><a href="index.html"><span class="num"></span>Start here</a></li><li><a href="f1-document.html"><span class="num">F1</span>What the document is made of</a></li><li><a href="f2-changes.html"><span class="num">F2</span>Ops, transactions and undo</a></li><li><a href="f3-bindings.html"><span class="num">F3</span>Bindings, the graph and clips</a></li><li><a href="f4-bridge.html"><span class="num">F4</span>Bevy and the model</a></li><li><a href="01-orientation.html"><span class="num">1</span>Where things stand now</a></li><li><a href="02-values.html"><span class="num">2</span>Richer values and definitions</a></li><li><a href="03-handles.html" aria-current="page"><span class="num">3</span>Drags through the store</a></li><li><a href="04-solver.html"><span class="num">4</span>Constraints and the solver</a></li><li><a href="05-compositions.html"><span class="num">5</span>Compositions, figures and embeds</a></li><li><a href="06-rendering.html"><span class="num">6</span>Every view is a texture</a></li><li><a href="07-tools.html"><span class="num">7</span>The select tool and the pen</a></li><li><a href="08-workspace.html"><span class="num">8</span>The workspace and the session</a></li><li><a href="09-ports.html"><span class="num">9</span>Ports, connections and physics</a></li><li><a href="10-boundary.html"><span class="num">10</span>Who computes where things are</a></li><li><a href="11-frame.html"><span class="num">11</span>One frame, in order</a></li><li><a href="12-signals.html"><span class="num">12</span>Runtime signals and producers</a></li><li><a href="13-ownership.html"><span class="num">13</span>Gestures have owners</a></li><li><a href="14-contexts.html"><span class="num">14</span>Behaviour as data</a></li><li><a href="field-guide.html"><span class="num"></span>Field guide</a></li></ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>
 <header class="chapter-head">
-  <p class="kicker">Part 3 of 9 · <span class="chip sys-react">Bindings & handles</span> <span class="chip sys-tools">Select & pen</span></p>
+  <p class="kicker">Part 3 of 14 · <span class="chip sys-react">Bindings & handles</span> <span class="chip sys-tools">Select & pen</span></p>
   <h1>Drags through the store</h1>
   <p class="lede">In the first guide a drag moved the <em>entity</em> every frame and wrote one op on release. That was enough for a square on its own. It isn't enough once a shadow is bound to the square (the shadow should follow during the drag, not after), or once the dragged value is itself bound (<code>y = 640 − 300·v</code>, where dragging should set <code>v</code>). This part covers roadmap stage A: world transforms inside the store, handles that invert bindings, and previews that reach the screen in the same frame.</p>
   <div class="prereq">
     <div><b>You need</b>Foundations 3 and 4: <code>Store::preview</code>, the gesture overlay, and the reconciler.</div>
-    <div><b>Files</b><code>iron_document/src/{geom,handle,lib}.rs</code>, <code>document_bridge/mod.rs</code> (<code>reconcile_gesture</code>, <code>DocumentChanges</code>), <code>bevy_app/mod.rs</code>. Parts 10 and 13 continue this part: who owns transforms, and what happens when another edit arrives mid-gesture.</div>
+    <div><b>Files</b><code>iron_document/src/{geom,handle,lib}.rs</code>, <code>document_bridge/mod.rs</code> (<code>post-tool sync</code>, <code>DocumentChanges</code>), <code>bevy_app/mod.rs</code>. Parts 10 and 13 continue this part: who owns transforms, and what happens when another edit arrives mid-gesture.</div>
   </div>
 </header>
 
@@ -31,7 +31,7 @@
 
 <h2 id="geom"><span class="sec">3.2</span>World transforms in the store</h2>
 <p>The solver (Part 4) and the gesture code run inside the store and need to know where a node is without a round trip through the ECS. Stage A added <code>geom.rs</code> to compute it. At first this was a second copy of what Bevy computed for rendering, checked against it every frame; since vision 10 it is <em>the</em> answer, and Bevy receives it (Part 10):</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/geom.rs:96">src/iron_document/src/geom.rs</a><span class="range">lines 96–120</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:16;--len:9"></span><pre class="gutter" aria-hidden="true">96
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/geom.rs:96">src/iron_document/src/geom.rs</a><span class="range">lines 96–120</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">96
 97
 98
 99
@@ -56,13 +56,13 @@
 118
 119
 120</pre><pre class="src"><code class="language-rust">/// A node&#x27;s own transform, read through `read`. A node without a
-/// `transform2d` component is the identity, as in the bridge.
+/// `transform2d` facet is the identity, as in the bridge.
 pub fn local_affine(doc: &amp;Document, read: &amp;dyn Fn(Leaf) -&gt; Option&lt;Value&gt;, id: NodeId) -&gt; Affine2 {
-    if doc.component(id, ComponentKind::Transform2d).is_none() {
+    if doc.facet(id, FacetKind::Transform2d).is_none() {
         return Affine2::IDENTITY;
     }
     let num = |field: &amp;str, default: f64| {
-        let path = LeafPath::new(ComponentKind::Transform2d, field).expect(&quot;declared field&quot;);
+        let path = LeafPath::new(FacetKind::Transform2d, field).expect(&quot;declared field&quot;);
         read(Leaf { node: id, path }).and_then(|v| v.as_f64()).unwrap_or(default)
     };
     Affine2::from_trs(num(&quot;x&quot;, 0.0), num(&quot;y&quot;, 0.0), num(&quot;rot&quot;, 0.0), num(&quot;sx&quot;, 1.0), num(&quot;sy&quot;, 1.0))
@@ -117,7 +117,7 @@ pub enum Handle {
   </tbody>
 </table></div>
 <p>The decision:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:36">src/iron_document/src/handle.rs</a><span class="range">lines 36–95</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:4;--len:8"></span><span class="band" style="--from:13;--len:7"></span><span class="band" style="--from:22;--len:3"></span><span class="band" style="--from:29;--len:8"></span><span class="band" style="--from:43;--len:11"></span><pre class="gutter" aria-hidden="true">36
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:36">src/iron_document/src/handle.rs</a><span class="range">lines 36–118</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">36
 37
 38
 39
@@ -176,15 +176,38 @@ pub enum Handle {
 92
 93
 94
-95</pre><pre class="src"><code class="language-rust">/// The handle for `leaf` now: roles are read at the moment of the grab, so a
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118</pre><pre class="src"><code class="language-rust">/// The handle for `leaf` now: roles are read at the moment of the grab, so a
 /// leaf that a clip drives at this playhead is locked even though it is an
 /// authored constant.
 pub fn handle(doc: &amp;Document, reactive: &amp;Reactive, leaf: Leaf) -&gt; Handle {
     let Some(slot) = doc.leaf(leaf.node, leaf.path) else {
-        // A leaf of a component the node may have but lacks (a rect&#x27;s
+        // A leaf of a facet the node may have but lacks (a rect&#x27;s
         // `corners`): a gesture drives it directly and its commit adds the
-        // component (`Store::commit_gesture`).
-        if doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.component)) &amp;&amp; doc.component(leaf.node, leaf.path.component).is_none() {
+        // facet (`Store::commit_gesture`).
+        if doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.facet)) &amp;&amp; doc.facet(leaf.node, leaf.path.facet).is_none() {
             return Handle::Direct;
         }
         return Handle::Locked(format!(&quot;{leaf} does not exist&quot;));
@@ -193,15 +216,23 @@ pub fn handle(doc: &amp;Document, reactive: &amp;Reactive, leaf: Leaf) -&gt; Han
         return Handle::Locked(match signal.producer {
             ProducerId::CLIPS =&gt; format!(&quot;{leaf} is driven by a clip at the current time&quot;),
             ProducerId::NETWORK =&gt; format!(&quot;{leaf} is solved by its across/through network; change a source or a parameter instead&quot;),
+            ProducerId::LAYOUT =&gt; format!(&quot;{leaf} is placed by its group&#x27;s layout; change the layout, or make it absolute&quot;),
             p =&gt; format!(&quot;{leaf} is published by producer {} at runtime; freeze it to edit&quot;, p.0),
         });
     }
-    // A connection&#x27;s in-port has no binding of its own but resolves through
-    // its partner (`port::derived_signals`), so it inverts like one.
-    let Some(expr) = slot.expr().or_else(|| reactive.expr_of(leaf)) else {
+    // The graph&#x27;s binding is the one in effect: a connected in-port resolves
+    // through its partner (`port::derived_signals`) in place of its stored
+    // binding to its argument, so it inverts through the connection.
+    let Some(expr) = reactive.expr_of(leaf).or_else(|| slot.expr()) else {
         return Handle::Direct;
     };
     let inlined = inline(doc, reactive, expr);
+    // Words that show a number (`fmt(x, &quot;mW&quot;, 2)`, `str(x)`) invert through
+    // the number: typing in a readout edits what it reads.
+    let inlined = match (&amp;inlined, leaf.path.kind()) {
+        (Expr::Call(f, args), ValueKind::Str) if matches!(f.as_str(), &quot;fmt&quot; | &quot;str&quot; | &quot;sci&quot;) &amp;&amp; !args.is_empty() =&gt; args[0].clone(),
+        _ =&gt; inlined,
+    };
     let read = |l: Leaf| reactive.read(doc, l);
     // Candidates: constant number leaves the (inlined) expression reads.
     // Clip-driven and non-number leaves are knowns for the drag.
@@ -230,6 +261,21 @@ pub fn handle(doc: &amp;Document, reactive: &amp;Reactive, leaf: Leaf) -&gt; Han
             if let [(source, a, b)] = linear_in.as_slice() {
                 return Handle::Linear { source: *source, a: *a, b: *b };
             }
+            // Still several: prefer what a person placed over what an
+            // instance derives (an expanded node&#x27;s template value), and over
+            // the dragged node&#x27;s own containers, whose move cancels out (a
+            // fiber&#x27;s end follows its plug; dragging it should move the plug,
+            // not the fiber).
+            let placed: Vec&lt;&amp;(Leaf, f64, f64)&gt; = linear_in.iter().filter(|(s, ..)| !s.node.is_expanded() &amp;&amp; s.node != leaf.node &amp;&amp; !doc.is_ancestor(s.node, leaf.node)).collect();
+            if let [(source, a, b)] = placed.as_slice() {
+                return Handle::Linear { source: *source, a: *a, b: *b };
+            }
+            // And a leaf of the same kind as the dragged one: dragging an x
+            // moves an x, not a scale that happens to move it too.
+            let alike: Vec&lt;&amp;&amp;(Leaf, f64, f64)&gt; = placed.iter().filter(|(s, ..)| s.path == leaf.path).collect();
+            if let [(source, a, b)] = alike.as_slice() {
+                return Handle::Linear { source: *source, a: *a, b: *b };
+            }
             let names: Vec&lt;String&gt; = many.iter().map(|l| l.to_string()).collect();
             Handle::Locked(format!(&quot;{leaf} is bound to {} free leaves ({})&quot;, many.len(), names.join(&quot;, &quot;)))
         }
@@ -238,38 +284,38 @@ pub fn handle(doc: &amp;Document, reactive: &amp;Reactive, leaf: Leaf) -&gt; Han
 </code></pre></div></div></figure>
 <p>Read it top to bottom:</p>
 <ol>
-  <li>A leaf of a component the node lacks but its type allows (a rect's <code>corners</code> before any corner was rounded) is <code>Direct</code> (40–47): the gesture drives it and its commit adds the component (Part 13).</li>
-  <li>A leaf a producer holds is locked (49–55), with a reason naming the producer: a clip, the physics network (Part 9) or a host producer such as Part 12's gas. Its value isn't the user's to set right now.</li>
+  <li>A leaf of a facet the node lacks but its type allows (a rect's <code>corners</code> before any corner was rounded) is <code>Direct</code> (40–47): the gesture drives it and its commit adds the facet (Part 13).</li>
+  <li>A leaf a producer holds is locked (49–56), with a reason naming the producer: a clip, the physics network (Part 9) or a host producer such as Part 12's gas. Its value isn't the user's to set right now.</li>
   <li>A constant is <code>Direct</code>. A bound leaf continues, and so does an in-port whose signal a connection derives (58–60, Part 9).</li>
   <li><code>inline</code> substitutes every bound leaf the expression reads by its own expression, recursively, so the result reads only constants. The shadow's <code>x</code> stays <code>#sq.x + 100</code>; a chain like <em>meter reading ← fiber output ← laser output ← laser power</em> collapses to one formula over the laser's power.</li>
-  <li>The <em>free</em> leaves are the constants the inlined formula reads that no producer drives (65–72). One free leaf and a linear formula gives a <code>Linear</code> handle. Several free leaves, but linear in exactly one, also gives <code>Linear</code> on that one: the fiber's length and loss sit inside an exponent, so dragging the meter's reading moves the laser's power and holds the rest (79–89, from Part 9).</li>
+  <li>The <em>free</em> leaves are the constants the inlined formula reads that no producer drives (73–80). One free leaf and a linear formula gives a <code>Linear</code> handle. Several free leaves, but linear in exactly one, also gives <code>Linear</code> on that one: the fiber's length and loss sit inside an exponent, so dragging the meter's reading moves the laser's power and holds the rest (79–89, from Part 9).</li>
 </ol>
 <p><code>linear</code> is a small symbolic differentiator: it returns <code>(a, b)</code> such that the expression is <code>a·var + b</code>, or <code>None</code> if it isn't linear:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:126">src/iron_document/src/handle.rs</a><span class="range">lines 126–150</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">126
-127
-128
-129
-130
-131
-132
-133
-134
-135
-136
-137
-138
-139
-140
-141
-142
-143
-144
-145
-146
-147
-148
-149
-150</pre><pre class="src"><code class="language-rust">/// `expr = a·var + b` over numbers, with every other leaf read through
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:149">src/iron_document/src/handle.rs</a><span class="range">lines 149–173</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173</pre><pre class="src"><code class="language-rust">/// `expr = a·var + b` over numbers, with every other leaf read through
 /// `read`. `None` when the expression is not linear in `var` (or not a
 /// number at all). Symbolic, so a function that happens to be straight on
 /// the sampled interval is still rejected.
@@ -296,32 +342,48 @@ pub fn linear(expr: &amp;Expr, var: Leaf, read: &amp;dyn Fn(Leaf) -&gt; Option&l
         }</code></pre></div></div></figure>
 <p>It's symbolic on purpose. A function that happens to look straight over the range you sampled (a <code>sin</code> near zero) is still rejected, so a drag never lands somewhere other than where the pointer is.</p>
 <p>Finally, <code>resolve_target</code> turns "I want this leaf to read y" into "write this value to this leaf":</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:182">src/iron_document/src/handle.rs</a><span class="range">lines 182–199</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:7;--len:6"></span><pre class="gutter" aria-hidden="true">182
-183
-184
-185
-186
-187
-188
-189
-190
-191
-192
-193
-194
-195
-196
-197
-198
-199</pre><pre class="src"><code class="language-rust">/// The leaf a target value for `leaf` would be written to, with the value.
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/handle.rs:205">src/iron_document/src/handle.rs</a><span class="range">lines 205–230</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">205
+206
+207
+208
+209
+210
+211
+212
+213
+214
+215
+216
+217
+218
+219
+220
+221
+222
+223
+224
+225
+226
+227
+228
+229
+230</pre><pre class="src"><code class="language-rust">/// The leaf a target value for `leaf` would be written to, with the value.
 /// `Direct` answers the leaf itself; `Linear` inverts; `Locked` is an error.
 pub fn resolve_target(doc: &amp;Document, reactive: &amp;Reactive, leaf: Leaf, value: Value) -&gt; Result&lt;(Leaf, Value), String&gt; {
     match handle(doc, reactive, leaf) {
-        Handle::Direct =&gt; Ok((leaf, value)),
+        Handle::Direct =&gt; Ok((leaf, clamp_to_bounds(doc, reactive, leaf, value))),
         Handle::Linear { source, a, b } =&gt; {
-            let y = magnitude(&amp;value).ok_or_else(|| format!(&quot;{leaf}: a linear handle takes a number or quantity, got {}&quot;, value.kind().name()))?;
+            let y = match &amp;value {
+                Value::Str(text) =&gt; typed_number(doc, reactive, leaf, text).ok_or_else(|| format!(&quot;{leaf}: \&quot;{text}\&quot; is not a number&quot;))?,
+                v =&gt; magnitude(v).ok_or_else(|| format!(&quot;{leaf}: a linear handle takes a number or quantity, got {}&quot;, v.kind().name()))?,
+            };
             // The source keeps its own kind: a quantity stays one, in SI.
+            // Held to its bounds, so whatever reads it stops where it does.
             let x = (y - b) / a;
+            let x = match bounds(doc, reactive, source) {
+                Some((lo, hi)) =&gt; x.clamp(lo, hi),
+                None =&gt; x,
+            };
             let v = match doc.leaf(source.node, source.path).and_then(|s| s.constant()) {
                 Some(Value::Quantity { dim, .. }) =&gt; Value::Quantity { si: x, dim: *dim },
                 _ =&gt; Value::Number(x),
@@ -331,39 +393,47 @@ pub fn resolve_target(doc: &amp;Document, reactive: &amp;Reactive, leaf: Leaf, v
         Handle::Locked(reason) =&gt; Err(reason),
     }
 }</code></pre></div></div></figure>
-<p>Lines 189–194 keep the source's kind: if the source is a quantity in watts, the inverted value is written back as watts, not as a bare number. That's what lets the meter's gauge drag the laser's power in Part 9.</p>
+<p>Lines 215–225 keep the source's kind: if the source is a quantity in watts, the inverted value is written back as watts, not as a bare number. That's what lets the meter's gauge drag the laser's power in Part 9.</p>
 
 <h2 id="preview"><span class="sec">3.4</span>Previews, and commit</h2>
 <p>A gesture is a set of previewed leaves sitting in the graph's overlay (F3.5). Stage A added the handle-aware entry point:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:501">src/iron_document/src/lib.rs</a><span class="range">lines 501–529</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">501
-502
-503
-504
-505
-506
-507
-508
-509
-510
-511
-512
-513
-514
-515
-516
-517
-518
-519
-520
-521
-522
-523
-524
-525
-526
-527
-528
-529</pre><pre class="src"><code class="language-rust">/// Preview a leaf&#x27;s value for the duration of a gesture. Bindings that
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:803">src/iron_document/src/lib.rs</a><span class="range">lines 803–839</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">803
+804
+805
+806
+807
+808
+809
+810
+811
+812
+813
+814
+815
+816
+817
+818
+819
+820
+821
+822
+823
+824
+825
+826
+827
+828
+829
+830
+831
+832
+833
+834
+835
+836
+837
+838
+839</pre><pre class="src"><code class="language-rust">/// Preview a leaf&#x27;s value for the duration of a gesture. Bindings that
 /// read it re-evaluate now; nothing is written to the document until
 /// [`Store::commit_gesture`].
 pub fn preview(&amp;mut self, id: NodeId, path: LeafPath, value: Value) {
@@ -374,6 +444,14 @@ pub fn preview(&amp;mut self, id: NodeId, path: LeafPath, value: Value) {
     if !self.clusters.list.is_empty() {
         self.resolve_clusters_live();
     }
+    self.resolve_physics();
+}
+
+/// Withdraw one leaf&#x27;s preview (it reads as the document again).
+pub fn unpreview(&amp;mut self, id: NodeId, path: LeafPath) {
+    let leaf = Leaf { node: id, path };
+    self.drivers.remove(&amp;leaf);
+    self.reactive.unpreview(&amp;self.doc, leaf);
     self.resolve_physics();
 }
 
@@ -394,79 +472,79 @@ pub fn preview_target(&amp;mut self, id: NodeId, path: LeafPath, value: Value) -
 }</code></pre></div></div></figure>
 <p><code>preview_target</code> is what every tool calls: the select tool's move, resize and rotate (Part 7), the pen's point drags, the inspector's fields (Part 7) and the meter gauge (Part 9). Each <code>preview</code> also re-solves constraint clusters (Part 4) and the physics network (Part 9), so everything downstream is live while the pointer moves.</p>
 <p>On release the overlay becomes one transaction:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:665">src/iron_document/src/lib.rs</a><span class="range">lines 665–737</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:22;--len:15"></span><span class="band" style="--from:51;--len:4"></span><pre class="gutter" aria-hidden="true">665
-666
-667
-668
-669
-670
-671
-672
-673
-674
-675
-676
-677
-678
-679
-680
-681
-682
-683
-684
-685
-686
-687
-688
-689
-690
-691
-692
-693
-694
-695
-696
-697
-698
-699
-700
-701
-702
-703
-704
-705
-706
-707
-708
-709
-710
-711
-712
-713
-714
-715
-716
-717
-718
-719
-720
-721
-722
-723
-724
-725
-726
-727
-728
-729
-730
-731
-732
-733
-734
-735
-736
-737</pre><pre class="src"><code class="language-rust">/// Turn the gesture into one transaction: a `Set` for every leaf the
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:975">src/iron_document/src/lib.rs</a><span class="range">lines 975–1047</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">975
+976
+977
+978
+979
+980
+981
+982
+983
+984
+985
+986
+987
+988
+989
+990
+991
+992
+993
+994
+995
+996
+997
+998
+999
+1000
+1001
+1002
+1003
+1004
+1005
+1006
+1007
+1008
+1009
+1010
+1011
+1012
+1013
+1014
+1015
+1016
+1017
+1018
+1019
+1020
+1021
+1022
+1023
+1024
+1025
+1026
+1027
+1028
+1029
+1030
+1031
+1032
+1033
+1034
+1035
+1036
+1037
+1038
+1039
+1040
+1041
+1042
+1043
+1044
+1045
+1046
+1047</pre><pre class="src"><code class="language-rust">/// Turn the gesture into one transaction: a `Set` for every leaf the
 /// gesture drove (not the leaves the solver moved for it: solve-on-apply
 /// reproduces those as `derived_ops`, warm-started from the previewed
 /// pose). Previews on bound leaves are dropped: a derived value has no
@@ -485,17 +563,17 @@ pub fn commit_gesture(
         self.ended = Some((g.id, GestureStatus::Committed));
     }
     let mut ops = Vec::new();
-    // Leaves of components the node lacks but allows: the component is
+    // Leaves of facets the node lacks but allows: the facet is
     // added, defaults with the previewed fields set, before the `Set`s.
-    let mut added: BTreeMap&lt;(NodeId, ComponentKind), Component&gt; = BTreeMap::new();
+    let mut added: BTreeMap&lt;(NodeId, FacetKind), Facet&gt; = BTreeMap::new();
     for (leaf, value) in self.reactive.overlay() {
         if !self.drivers.contains(leaf) {
             continue;
         }
         let Some(slot) = self.doc.leaf(leaf.node, leaf.path) else {
-            let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.component));
-            if allowed &amp;&amp; self.doc.component(leaf.node, leaf.path.component).is_none() {
-                let c = added.entry((leaf.node, leaf.path.component)).or_insert_with(|| leaf.path.component.default_component());
+            let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.facet));
+            if allowed &amp;&amp; self.doc.facet(leaf.node, leaf.path.facet).is_none() {
+                let c = added.entry((leaf.node, leaf.path.facet)).or_insert_with(|| leaf.path.facet.default_facet());
                 let _ = c.set(leaf.path.field, Slot::Const(value.clone()));
             }
             continue;
@@ -515,7 +593,7 @@ pub fn commit_gesture(
             });
         }
     }
-    let adds = added.into_iter().map(|((id, _), comp)| Op::AddComp { id, comp });
+    let adds = added.into_iter().map(|((id, _), comp)| Op::AddFacet { id, facet: comp });
     ops = adds.chain(ops).collect();
     if ops.is_empty() {
         self.cancel_gesture();
@@ -543,21 +621,7 @@ pub fn cancel_gesture(&amp;mut self) {
 
 <h2 id="drags"><span class="sec">3.5</span>The drag API</h2>
 <p>Dragging a whole node is more than previewing two numbers: the pointer is in world space, the node's <code>x</code>/<code>y</code> are in its parent's space, the grab point is somewhere inside the node, and the node may be part of a constraint cluster. The store wraps all of that:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:76">src/iron_document/src/lib.rs</a><span class="range">lines 76–100</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">76
-77
-78
-79
-80
-81
-82
-83
-84
-85
-86
-87
-88
-89
-90
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:90">src/iron_document/src/lib.rs</a><span class="range">lines 90–131</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">90
 91
 92
 93
@@ -567,7 +631,38 @@ pub fn cancel_gesture(&amp;mut self) {
 97
 98
 99
-100</pre><pre class="src"><code class="language-rust">/// A drag in progress on one node (constraint-system.md §8.1).
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131</pre><pre class="src"><code class="language-rust">/// A drag in progress on one node (constraint-system.md §8.1).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DragHandle {
     pub node: NodeId,
@@ -591,76 +686,250 @@ impl DragHandle {
     pub fn is_locked(&amp;self) -&gt; bool {
         matches!(self.mode, DragMode::Locked(_))
     }
+}
+
+/// A plug drag in progress (component-model.md §4.3), from
+/// `Store::begin_plug`: a port dragged to connect or disconnect it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plugging {
+    /// The port dragged from, as it was when the drag began.
+    pub from: plug::PortAnchor,
+    /// What follows the pointer: the loose end itself, or the instance a
+    /// rigid port belongs to.
+    pub moved: NodeId,
+    pub drag: DragHandle,
+    /// `moved`&#x27;s rotation when the drag began.
+    pub rot0: f64,
+    /// The port it was connected to, and the unplug applied for the drag.
+    pub was: Option&lt;NodeId&gt;,
+    unplugged: Option&lt;Version&gt;,
 }</code></pre></div></div></figure>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:276">src/iron_document/src/lib.rs</a><span class="range">lines 276–340</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:5;--len:11"></span><span class="band" style="--from:43;--len:20"></span><pre class="gutter" aria-hidden="true">276
-277
-278
-279
-280
-281
-282
-283
-284
-285
-286
-287
-288
-289
-290
-291
-292
-293
-294
-295
-296
-297
-298
-299
-300
-301
-302
-303
-304
-305
-306
-307
-308
-309
-310
-311
-312
-313
-314
-315
-316
-317
-318
-319
-320
-321
-322
-323
-324
-325
-326
-327
-328
-329
-330
-331
-332
-333
-334
-335
-336
-337
-338
-339
-340</pre><pre class="src"><code class="language-rust">/// Start dragging `id` by `anchor` (local coordinates). Decides the
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:383">src/iron_document/src/lib.rs</a><span class="range">lines 383–604</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">383
+384
+385
+386
+387
+388
+389
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435
+436
+437
+438
+439
+440
+441
+442
+443
+444
+445
+446
+447
+448
+449
+450
+451
+452
+453
+454
+455
+456
+457
+458
+459
+460
+461
+462
+463
+464
+465
+466
+467
+468
+469
+470
+471
+472
+473
+474
+475
+476
+477
+478
+479
+480
+481
+482
+483
+484
+485
+486
+487
+488
+489
+490
+491
+492
+493
+494
+495
+496
+497
+498
+499
+500
+501
+502
+503
+504
+505
+506
+507
+508
+509
+510
+511
+512
+513
+514
+515
+516
+517
+518
+519
+520
+521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+531
+532
+533
+534
+535
+536
+537
+538
+539
+540
+541
+542
+543
+544
+545
+546
+547
+548
+549
+550
+551
+552
+553
+554
+555
+556
+557
+558
+559
+560
+561
+562
+563
+564
+565
+566
+567
+568
+569
+570
+571
+572
+573
+574
+575
+576
+577
+578
+579
+580
+581
+582
+583
+584
+585
+586
+587
+588
+589
+590
+591
+592
+593
+594
+595
+596
+597
+598
+599
+600
+601
+602
+603
+604</pre><pre class="src"><code class="language-rust">/// Start dragging `id` by `anchor` (local coordinates). Decides the
 /// drag&#x27;s mode from the roles at this moment.
 pub fn begin_drag(&amp;mut self, id: NodeId, anchor: [f64; 2]) -&gt; DragHandle {
     self.watch(id);
-    let t2 = |f: &amp;str| LeafPath::new(ComponentKind::Transform2d, f).expect(&quot;declared&quot;);
+    let t2 = |f: &amp;str| LeafPath::new(FacetKind::Transform2d, f).expect(&quot;declared&quot;);
     if let Some(cluster) = self.clusters.containing(id) {
         let free: Vec&lt;Leaf&gt; = cluster.vars.iter().copied().filter(|v| v.node == id).collect();
         if free.is_empty() {
@@ -668,7 +937,9 @@ pub fn begin_drag(&amp;mut self, id: NodeId, anchor: [f64; 2]) -&gt; DragHandle 
         }
         let cluster_id = cluster.id;
         let target = self.world_affine(id).apply(anchor);
-        self.fingers.push(Finger { node: id, anchor, target });
+        let mated = cluster.constraints.iter().any(|c| c.spec.kind == &quot;mate&quot; &amp;&amp; c.nodes().any(|n| n == id));
+        let hold_rot = mated.then(|| self.resolved(id, t2(&quot;rot&quot;)).and_then(|v| v.as_f64()).unwrap_or(0.0));
+        self.fingers.push(Finger { node: id, anchor, target, hold_rot });
         self.drivers.extend(free);
         return DragHandle { node: id, anchor, mode: DragMode::Cluster(cluster_id) };
     }
@@ -702,7 +973,7 @@ pub fn drag_to(&amp;mut self, h: &amp;DragHandle, world: [f64; 2]) -&gt; SolveRe
         DragMode::Axes { free, .. } =&gt; {
             // The origin that puts the anchor at `world`: undo the
             // parent&#x27;s transform, then the node&#x27;s own rotation and scale.
-            let t2 = |f: &amp;str| LeafPath::new(ComponentKind::Transform2d, f).expect(&quot;declared&quot;);
+            let t2 = |f: &amp;str| LeafPath::new(FacetKind::Transform2d, f).expect(&quot;declared&quot;);
             let num = |s: &amp;Store, f: &amp;str, d: f64| s.resolved(h.node, t2(f)).and_then(|v| v.as_f64()).unwrap_or(d);
             let parent = match self.doc.live(h.node).and_then(|n| n.parent) {
                 Some(p) =&gt; self.world_affine(p),
@@ -720,140 +991,203 @@ pub fn drag_to(&amp;mut self, h: &amp;DragHandle, world: [f64; 2]) -&gt; SolveRe
             SolveReport { converged: true, ..Default::default() }
         }
     }
+}
+
+// ---- Plugging (component-model.md §4.3) --------------------------------
+
+/// Every port anchor, with where it is and what it is connected to.
+pub fn port_anchors(&amp;self) -&gt; Vec&lt;plug::PortAnchor&gt; {
+    let read = |l: Leaf| self.reactive.read(&amp;self.doc, l);
+    plug::port_anchors(&amp;self.doc, &amp;read)
+}
+
+/// Remove a connection, as one transaction: the far ends that followed
+/// it stay where they are (their positions set, as overrides inside an
+/// instance) rather than return to their template positions.
+pub fn unplug(&amp;mut self, connection: NodeId, label: impl Into&lt;String&gt;, actor: Actor) -&gt; Result&lt;Version, String&gt; {
+    let t2 = |f: &amp;str| LeafPath::new(FacetKind::Transform2d, f).expect(&quot;declared&quot;);
+    let ends = port::ends(&amp;self.doc, connection).ok_or_else(|| format!(&quot;{connection} is not a connection&quot;))?;
+    let pins: Vec&lt;(NodeId, f64, f64)&gt; = self
+        .port_anchors()
+        .into_iter()
+        .filter(|a| a.follow &amp;&amp; (a.outer == ends.0 || a.outer == ends.1 || a.port == ends.0 || a.port == ends.1))
+        .filter_map(|a| Some((a.anchor, self.resolved(a.anchor, t2(&quot;x&quot;))?.as_f64()?, self.resolved(a.anchor, t2(&quot;y&quot;))?.as_f64()?)))
+        .collect();
+    let mut ops: Vec&lt;Op&gt; = self.doc.relations_from(connection).map(|r| Op::Unlink { id: r.id }).collect();
+    ops.push(Op::Delete { id: connection });
+    let label = label.into();
+    let tx = |label: &amp;str, ops| TransactionInput { label: label.to_owned(), actor, ts: 0, idempotency_key: None, ops, exact: false };
+    let first = self.apply(tx(&amp;label, ops)).map_err(|e| e.iter().map(|e| e.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot;; &quot;))?.version;
+    let sets: Vec&lt;Op&gt; = pins
+        .into_iter()
+        .flat_map(|(a, x, y)| [Op::Set { id: a, path: t2(&quot;x&quot;), slot: Slot::Const(Value::Number(x)) }, Op::Set { id: a, path: t2(&quot;y&quot;), slot: Slot::Const(Value::Number(y)) }])
+        .collect();
+    if sets.is_empty() {
+        return Ok(first);
+    }
+    match self.apply(tx(&amp;label, sets)) {
+        Ok(a) =&gt; {
+            self.merge_with_previous(first, label);
+            Ok(a.version)
+        }
+        Err(e) =&gt; {
+            self.retract(first, 0);
+            Err(e.iter().map(|e| e.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot;; &quot;))
+        }
+    }
+}
+
+/// Start dragging the port at `anchor` to plug it somewhere: a loose
+/// end moves itself, a rigid port moves `moved` (the instance it
+/// belongs to, as the pointer reached it). A connected port is unplugged
+/// at once, so the drag shows it free; `finish_plug` or `cancel_plug`
+/// settles it.
+pub fn begin_plug(&amp;mut self, anchor: NodeId, moved: NodeId) -&gt; Result&lt;Plugging, String&gt; {
+    let from = self.port_anchors().into_iter().find(|a| a.anchor == anchor).ok_or_else(|| format!(&quot;{anchor} is not a port&#x27;s anchor&quot;))?;
+    if from.sealed {
+        return Err(format!(&quot;{} is inside a component that does not expose it&quot;, from.port));
+    }
+    let unplugged = match from.connection {
+        Some(c) =&gt; Some(self.unplug(c, format!(&quot;disconnect {}&quot;, from.name), Actor::Human)?),
+        None =&gt; None,
+    };
+    let moved = if from.follow { anchor } else { moved };
+    self.begin_gesture(&amp;[moved]);
+    let grab = if from.follow {
+        [0.0, 0.0]
+    } else {
+        let m = self.world_affine(moved).inverse().unwrap_or(Affine2::IDENTITY).then(self.world_affine(anchor));
+        m.apply([0.0, 0.0])
+    };
+    let drag = self.begin_drag(moved, grab);
+    let rot0 = self.resolved(moved, LeafPath::new(FacetKind::Transform2d, &quot;rot&quot;).expect(&quot;declared&quot;)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    Ok(Plugging { was: from.partner, from, moved, drag, rot0, unplugged })
+}
+
+/// The ports the drag could plug into now.
+pub fn plug_targets(&amp;self, p: &amp;Plugging) -&gt; Vec&lt;plug::PortAnchor&gt; {
+    self.port_anchors().into_iter().filter(|t| plug::compatible(&amp;self.doc, &amp;p.from, t).is_ok()).collect()
+}
+
+/// Move the drag&#x27;s port to `world` (its composition), or snap it onto
+/// `target`: onto its anchor, and turned to face it when it is rigid.
+pub fn plug_drag(&amp;mut self, p: &amp;Plugging, world: [f64; 2], target: Option&lt;&amp;plug::PortAnchor&gt;) -&gt; SolveReport {
+    let at = target.map_or(world, |t| t.world);
+    if !p.from.follow {
+        let rot = match target {
+            Some(t) if !t.follow =&gt; {
+                let turn = t.facing + std::f64::consts::PI - p.from.facing;
+                p.rot0 + (turn + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+            }
+            _ =&gt; p.rot0,
+        };
+        let path = LeafPath::new(FacetKind::Transform2d, &quot;rot&quot;).expect(&quot;declared&quot;);
+        if self.resolved(p.moved, path).and_then(|v| v.as_f64()).is_none_or(|r| (r - rot).abs() &gt; 1e-12) {
+            let _ = self.preview_target(p.moved, path, Value::Number(rot));
+        }
+    }
+    self.drag_to(&amp;p.drag, at)
+}
+
+/// Release a plug drag: plugged into `target` when given, else left
+/// where it was dropped. One history entry with the drag&#x27;s unplug;
+/// released back on the port it came from, nothing changes. Returns the
+/// entry&#x27;s version, `None` when nothing changed.
+pub fn finish_plug(&amp;mut self, p: Plugging, target: Option&lt;plug::PortAnchor&gt;) -&gt; Result&lt;Option&lt;Version&gt;, String&gt; {
+    self.end_drag(&amp;p.drag);
+    if p.was.is_some() &amp;&amp; target.as_ref().map(|t| t.outer) == p.was {
+        self.cancel_gesture();
+        if let Some(v) = p.unplugged {
+            self.retract(v, 0);
+        }
+        return Ok(None);
+    }
+    let label = match &amp;target {
+        Some(t) =&gt; format!(&quot;connect {} to {}&quot;, p.from.name, t.name),
+        None if p.was.is_some() =&gt; format!(&quot;disconnect {}&quot;, p.from.name),
+        None =&gt; format!(&quot;move {}&quot;, p.from.name),
+    };
+    let mut last = p.unplugged;
+    let fold = |s: &amp;mut Store, last: &amp;mut Option&lt;Version&gt;, now: Version| {
+        if let Some(v) = *last {
+            s.merge_with_previous(v, label.clone());
+        }
+        *last = Some(now);
+    };
+    if p.from.follow &amp;&amp; target.is_some() {
+        // The end will sit on its partner; where the pointer left it
+        // is not kept.
+        self.cancel_gesture();
+    } else {
+        match self.commit_gesture(label.clone(), Actor::Human, 0) {
+            Some(Ok(a)) =&gt; fold(self, &amp;mut last, a.version),
+            Some(Err(e)) =&gt; return Err(e.iter().map(|e| e.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot;; &quot;)),
+            None =&gt; {}
+        }
+    }
+    if let Some(t) = target {
+        let id = self.doc.next_id();
+        let rels = self.doc.next_relation_ids(2);
+        // Two loose ends: the one landed on holds the joint.
+        let held = (p.from.follow &amp;&amp; t.follow).then_some(t.outer);
+        let ops = plug::plug_ops(&amp;self.doc, p.from.outer, t.outer, held, id, [rels[0], rels[1]])?;
+        let input = TransactionInput { label: label.clone(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false };
+        let a = self.apply(input).map_err(|e| e.iter().map(|e| e.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot;; &quot;))?;
+        fold(self, &amp;mut last, a.version);
+    }
+    Ok(last)
+}
+
+/// Abandon a plug drag (Esc): nothing moves, and the port is connected
+/// as it was.
+pub fn cancel_plug(&amp;mut self, p: Plugging) {
+    self.end_drag(&amp;p.drag);
+    self.cancel_gesture();
+    if let Some(v) = p.unplugged {
+        self.retract(v, 0);
+    }
 }</code></pre></div></div></figure>
 <p><code>begin_drag</code> decides once, at the grab, which of three modes applies:</p>
 <ul>
-  <li><strong>Cluster</strong> (281–291): the node is held by constraints, so the drag places a <em>finger</em> (a target for the grab point) and the solver moves everything (Part 4).</li>
+  <li><strong>Cluster</strong> (388–400): the node is held by constraints, so the drag places a <em>finger</em> (a target for the grab point) and the solver moves everything (Part 4).</li>
   <li><strong>Axes</strong>: each of <code>x</code> and <code>y</code> has its own handle. A locked axis holds still for the whole drag, with the reason logged once, rather than moving and snapping back.</li>
   <li><strong>Locked</strong>: neither axis can move.</li>
 </ul>
-<p><code>begin_drag</code> also adds the node to the running gesture's watched set (<code>watch</code>), which is what lets a later edit to it cancel the drag (Part 13). <code>drag_to</code> in axes mode (319–338) undoes the parent's transform, then the node's own rotation and scale applied to the grab point, to find the origin that puts the grab point under the pointer, and previews that through each free axis's handle.</p>
+<p><code>begin_drag</code> also adds the node to the running gesture's watched set (<code>watch</code>), which is what lets a later edit to it cancel the drag (Part 13). <code>drag_to</code> in axes mode (428–447) undoes the parent's transform, then the node's own rotation and scale applied to the grab point, to find the origin that puts the grab point under the pointer, and previews that through each free axis's handle.</p>
+
+<h3 id="bounds">The source bounds the inverse</h3><p>An inverted numeric edit is clamped to its source's bounds: dragging a bar driven by a slider cannot write below the slider's minimum or above its maximum. The bound check belongs to handle resolution, so canvas drags and inspector edits agree.</p>
 
 <h2 id="same-frame"><span class="sec">3.6</span>Same-frame reconcile</h2>
-<p>The document sync runs at the start of the frame, in <code>PreUpdate</code>. Tools preview in <code>PostUpdate</code>. Without something more, every previewed value would reach the screen one frame behind the pointer. <code>reconcile_gesture</code> is the in-frame half:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:441">src/document_bridge/mod.rs</a><span class="range">lines 441–468</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">441
-442
-443
-444
-445
-446
-447
-448
-449
-450
-451
-452
-453
-454
-455
-456
-457
-458
-459
-460
-461
-462
-463
-464
-465
-466
-467
-468</pre><pre class="src"><code class="language-rust">/// The in-frame half of a gesture (constraint-system.md §8.2). `sync_document`
-/// runs in `PreUpdate`, but drags preview in `PostUpdate`; without this pass
-/// every previewed value would reach the screen a frame behind the pointer.
-/// It drains the resolved changes the previews produced (the dragged leaves
-/// and every binding that read them) and rewrites those entities, scheduled
-/// before transform propagation so rendering sees them this frame. Values
-/// only: a preview never changes the tree, so the paint order stands.
-pub(crate) fn reconcile_gesture(
-    mut store: ResMut&lt;DocumentStore&gt;,
-    mut map: ResMut&lt;NodeMap&gt;,
-    mut changes: ResMut&lt;DocumentChanges&gt;,
-    mut geometry_revision: ResMut&lt;GeometryRevision&gt;,
-    mut layers: ResMut&lt;CompositionLayers&gt;,
-    mut commands: Commands,
-    assets: Option&lt;Res&lt;MeshAssets&gt;&gt;,
-    mut drawables: ResMut&lt;Drawables&gt;,
-    modes: Res&lt;Modes&gt;,
-) {
-    if !store.0.has_changes() {
-        return;
-    }
-    let _timing = crate::perf::span(crate::perf::Phase::GestureReconcile);
-    let affected: BTreeSet&lt;NodeId&gt; = store.0.drain_changes().into_iter().map(|c| c.leaf.node).collect();
-    geometry_revision.0 = geometry_revision.0.wrapping_add(1);
-    let Some(assets) = assets else { return };
-    materialize::reconcile(&amp;store.0, &amp;affected, &amp;mut map, &amp;mut layers, &amp;mut commands, &amp;assets, &amp;mut drawables, &amp;modes);
-    changes.nodes.extend(affected);
-}</code></pre></div></div></figure>
-<p>It drains whatever the previews changed (the dragged leaves and every binding that read them) and rewrites just that draw data, and any entities. It is scheduled right after the tools, with an <code>ApplyDeferred</code> so its entity commands land before anything later in the frame reads them:</p>
-<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/mod.rs:230">src/bevy_app/mod.rs</a><span class="range">lines 230–246</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">230
-231
-232
-233
-234
-235
-236
-237
-238
-239
-240
-241
-242
-243
-244
-245
-246</pre><pre class="src"><code class="language-rust">select::navigate_views.before(pen::pen_tool_system),
-pen::pen_tool_system.before(select::select_tool_system),
-shape_tool::shape_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
-select::select_tool_system,
-select::sync_session_selection.after(select::select_tool_system),
-// A drag previews into the store, the bridge rewrites the
-// affected entities, and the deferred inserts are applied, all
-// before propagation so transform consumers and the 2D layer see
-// this frame&#x27;s pointer position (constraint-system.md §8.2).
-(reconcile_gesture, ApplyDeferred)
+<p>The document sync runs before input, then again after tools. The second <code>sync_document</code> drains previews and applies queued transactions, commits and history before drawing. <code>ApplyDeferred</code> installs entity commands before propagation; view resolution follows it so pan/zoom is current too. Part 11 covers the full schedule.</p>
+<figure class="code"><figcaption><span class="chip sys-shell">Shell & views</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/mod.rs:287">src/bevy_app/mod.rs</a><span class="range">lines 287–289</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">287
+288
+289</pre><pre class="src"><code class="language-rust">(sync_document, ApplyDeferred, resolve_panel_views)
     .chain()
-    .in_set(GestureSystems)
-    .after(select::select_tool_system)
-    .before(TransformSystems::Propagate),
-// The 3D gizmo&#x27;s triangles, in an overlay view over its panel.
-manipulate::draw_gizmo_overlay.after(select::select_tool_system),
-update_aabbes.after(GestureSystems),</code></pre></div></div></figure>
-<p>The "before propagation" ordering dates from when 2D entities carried transforms Bevy propagated. Now it matters for 3D (a dragged mesh's pose) and for ordering: <code>prepare_spatial</code> and the 2D layer, which run after propagation, see this frame's preview. Part 11 has the whole schedule.</p>
+    .in_set(GestureSystems)</code></pre></div></div></figure>
+
 <figure class="diagram">
-<svg viewBox="0 0 920 230" role="img" aria-label="PostUpdate during a drag: the select or pen tool previews through the store; the store's overlay and graph re-evaluate; reconcile_gesture rewrites draw data; prepare_spatial updates the scene; the 2D layer draws. All in one frame.">
+<svg viewBox="0 0 920 230" role="img" aria-label="PostUpdate during a drag: the select or pen tool previews through the store; the store's overlay and graph re-evaluate; post-tool sync rewrites draw data; prepare_spatial updates the scene; the 2D layer draws. All in one frame.">
   <defs><marker id="h1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
   <rect x="10" y="10" width="900" height="200" rx="8" class="zone"/>
   <text class="t-b" x="26" y="34">PostUpdate, one frame</text>
   <rect x="26" y="52" width="190" height="56" rx="5" class="s-tools"/><text class="t-mono" x="121" y="76" text-anchor="middle">select / pen tool</text><text class="t-s" x="121" y="94" text-anchor="middle">preview_target, drag_to</text>
   <rect x="246" y="52" width="190" height="56" rx="5" class="s-react"/><text class="t-mono" x="341" y="76" text-anchor="middle">Store: overlay + graph</text><text class="t-s" x="341" y="94" text-anchor="middle">bindings, clusters, physics</text>
-  <rect x="466" y="52" width="190" height="56" rx="5" class="s-react"/><text class="t-mono" x="561" y="76" text-anchor="middle">reconcile_gesture</text><text class="t-s" x="561" y="94" text-anchor="middle">rewrite changed draw data</text>
+  <rect x="466" y="52" width="190" height="56" rx="5" class="s-react"/><text class="t-mono" x="561" y="76" text-anchor="middle">post-tool sync</text><text class="t-s" x="561" y="94" text-anchor="middle">rewrite changed draw data</text>
   <rect x="686" y="52" width="200" height="56" rx="5" class="s-bound"/><text class="t-mono" x="786" y="76" text-anchor="middle">prepare_spatial</text><text class="t-s" x="786" y="94" text-anchor="middle">scene: placements, bounds</text>
   <line x1="216" y1="80" x2="244" y2="80" class="ln" marker-end="url(#h1)"/>
   <line x1="436" y1="80" x2="464" y2="80" class="ln" marker-end="url(#h1)"/>
   <line x1="656" y1="80" x2="684" y2="80" class="ln" marker-end="url(#h1)"/>
   <rect x="466" y="136" width="420" height="50" rx="5" class="s-render"/><text class="t-mono" x="676" y="158" text-anchor="middle">render_document_layer · views</text><text class="t-s" x="676" y="176" text-anchor="middle">reads DocumentChanges: which nodes moved, and the damage</text>
   <line x1="786" y1="108" x2="786" y2="134" class="ln" marker-end="url(#h1)"/>
-  <text class="t-s" x="130" y="160">The pointer's position on this frame</text>
-  <text class="t-s" x="130" y="176">is on screen on this frame.</text>
+  <text class="t-s" x="130" y="160">The preview computed in this frame</text>
+  <text class="t-s" x="130" y="176">is drawn in this engine frame.</text>
 </svg>
-<figcaption>Gesture previews reach the screen in the frame they happen. The sync at the start of the next frame only applies the committed transaction.</figcaption>
+<figcaption>Gesture previews reach the screen in the frame they happen. The same post-tool barrier applies the commit on release.</figcaption>
 </figure>
 
 <h3 id="changes">What changed, not just "something changed"</h3>
 <p>The first guide had a <code>DocumentDirty</code> boolean. Stage A replaced it with the set of nodes the reconciler touched, plus whether the tree's shape changed, and later a monotonic counter that rendering never drains:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:167">src/document_bridge/mod.rs</a><span class="range">lines 167–191</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">167
-168
-169
-170
-171
-172
-173
-174
-175
-176
-177
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/document_bridge/mod.rs:177">src/document_bridge/mod.rs</a><span class="range">lines 177–205</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">177
 178
 179
 180
@@ -867,7 +1201,21 @@ update_aabbes.after(GestureSystems),</code></pre></div></div></figure>
 188
 189
 190
-191</pre><pre class="src"><code class="language-rust">/// What the reconciler rewrote since the 2D layer last drew: the nodes, and
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205</pre><pre class="src"><code class="language-rust">/// What the reconciler rewrote since the 2D layer last drew: the nodes, and
 /// whether the tree&#x27;s shape (hence painter order) changed. Both reconcile
 /// passes add to it; rendering takes it, decides what to redraw and reports
 /// what it did. Roadmap stage H turns this into culling and damage.
@@ -890,12 +1238,16 @@ impl DocumentChanges {
 /// Monotonic projection generation, including resolved previews and document
 /// replacement. Unlike DocumentChanges this is never drained by rendering.
 /// Consumers can retain derived geometry across unchanged frames.
+///
+/// The second field counts the same changes by where they draw
+/// ([`nest::Home`]), so a consumer about one view can ignore the rest
+/// ([`GeometryRevision::of_view`]).
 #[derive(Resource, Default)]
-pub struct GeometryRevision(pub u64);</code></pre></div></div></figure>
+pub struct GeometryRevision(pub u64, BTreeMap&lt;nest::Home, u64&gt;);</code></pre></div></div></figure>
 <p>Stage H (October 13–14) turned the set into real work-avoidance: the 2D layer redraws only views whose content changed, culls through the spatial index, and keeps editor feedback in a separate retained target (Part 6). The <code>redraw (document): 2 of 39 nodes changed [#M #U]; damage …</code> line in the smoke output still reports it. Part 10 adds the finer-grained answer the scene uses: <em>which kind</em> of change, per node.</p>
 
 <div class="box edge"><span class="tab">Rough edge</span>
-<p>A linear handle needs a single free source. A rect bound to the sum of two sliders is locked, with the reason "bound to 2 free leaves". The roadmap's answer is a constraint cluster (Part 4) or a disambiguation policy (prefer the most recently touched source); neither exists for plain bindings yet.</p>
+<p>A linear handle needs one unambiguous linear source. A rect bound to the sum of two equally eligible sliders is locked, with the reason "bound to 2 free leaves". The roadmap's answer is a constraint cluster (Part 4) or a disambiguation policy (prefer the most recently touched source); neither exists for plain bindings yet.</p>
 </div>
 
 <nav class="nextprev"><a href="02-values.html"><small>Previous</small><span>Part 2: Richer values and definitions</span></a><a class="next" href="04-solver.html"><small>Next</small><span>Part 4: Constraints and the solver</span></a></nav>

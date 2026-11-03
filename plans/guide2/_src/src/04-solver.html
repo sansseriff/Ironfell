@@ -1,10 +1,10 @@
 <header class="chapter-head">
-  <p class="kicker">Part 4 of 9 · <chip sys="solve"/></p>
+  <p class="kicker">Part 4 of 14 · <chip sys="solve"/></p>
   <h1>Constraints and the solver</h1>
   <p class="lede">Bindings run one way: the bar reads the slider. Many relationships in a diagram run both ways: two joints are coincident, and whichever one you drag, the other follows. This part covers roadmap stages C2 and D: a small numerical solver crate, constraint nodes in the document, the clusters they form, and the pendulum demo that drags through them.</p>
   <div class="prereq">
     <div><b>You need</b>Part 3: handles, previews, <code>begin_drag</code>/<code>drag_to</code>, and what a <em>driver</em> is.</div>
-    <div><b>Files</b><code>src/iron_solve/src/{lib,cluster,analysis,linalg}.rs</code>, <code>iron_document/src/{constraint,solve,lib}.rs</code>, the pendulum in <code>document_bridge/demo.rs</code>. Design: <code>plans/constraint-system.md</code>.</div>
+    <div><b>Files</b><code>src/iron_solve/src/{lib,cluster,analysis,linalg}.rs</code>, <code>iron_document/src/{constraint,solve,lib}.rs</code>, the pendulum in <code>document_bridge/demo.rs</code>. Design: <code>plans/specs/constraint-system.md</code>.</div>
   </div>
 </header>
 
@@ -16,9 +16,9 @@
 
 <h2 id="crate"><span class="sec">4.2</span><code>iron_solve</code>: a solver that knows nothing about documents</h2>
 <p>The solver is its own crate with no dependencies. It knows variables and residual functions, nothing about nodes or constraint kinds. That separation is deliberate: the adapter in <code>iron_document</code> translates, so the numerical method could be swapped without touching the document.</p>
-<snip file="src/iron_solve/src/lib.rs" lines="1-29"/>
+<snip file="src/iron_solve/src/lib.rs" lines="1-29" first="//! `iron_solve`: a small dense constraint solver (plans/specs/constraint-system.md §5)." last="//! the numerical method) is what lets the solver be swapped."/>
 <p>A problem is a vector of variables, a scale per variable, and <em>terms</em>. A term is a small function over a few variables that writes residuals: numbers that are zero when the term is satisfied.</p>
-<snip file="src/iron_solve/src/lib.rs" lines="36-103" mark="37-41,56-61,75-83"/>
+<snip file="src/iron_solve/src/lib.rs" lines="36-103" first="#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]" last="}"/>
 <p>The three tiers do different jobs:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Tier</th><th>Means</th><th>Example</th></tr></thead>
@@ -32,8 +32,8 @@
 
 <h3 id="lm">The method: projected Levenberg–Marquardt</h3>
 <p>The solver minimises the weighted sum of squared residuals. Each iteration linearises every term (central finite differences, only over each term's own variables), solves a damped least-squares step, and then <strong>projects</strong> the trial pose back onto the required terms with a few Newton steps before judging it:</p>
-<snip file="src/iron_solve/src/lib.rs" lines="346-371"/>
-<snip file="src/iron_solve/src/lib.rs" lines="372-433" mark="386-391,402-404,407-421"/>
+<snip file="src/iron_solve/src/lib.rs" lines="346-371" first="/// Solve `problem` with `opts`. Deterministic: the same problem and options" last="let mut cost = 0.5 * r.iter().map(|v| v * v).sum::&lt;f64&gt;();"/>
+<snip file="src/iron_solve/src/lib.rs" lines="372-433" first="// Damping is λ·I in the scaled space, not Marquardt&#x27;s λ·diag(JᵀJ):" last="}"/>
 <p>Plainly: try a step; if the cost went down, accept it and trust the model more (λ shrinks); if not, damp harder (λ grows ×10) and try again. The projection means the iteration walks along the surface where the constraints hold, rather than trading constraint error against the pointer through a penalty weight. A finger the pendulum can't reach leaves a strong residual equal to the gap, and the chain points straight at the pointer at full extension.</p>
 <div class="box rust"><span class="tab">Reading the numerics</span>
 <p><code>normal_equations</code> forms JᵀJ and Jᵀr from the Jacobian J and residuals r. <code>cholesky_solve</code> solves (JᵀJ + λI)δ = −Jᵀr. Variables are divided by their scale first, so a rotation (radians, scaled by the node's half-diagonal) and a position (pixels) are comparable. All loops run in index order without hashing, so the same input gives bit-identical output, which keeps tests and undo deterministic.</p>
@@ -41,25 +41,25 @@
 
 <h3 id="clusters">Clusters and analysis</h3>
 <p>Terms that share no variables are independent problems. <code>cluster.rs</code> groups them with union-find, so dragging the pendulum never re-solves an unrelated mechanism:</p>
-<snip file="src/iron_solve/src/cluster.rs" lines="1-29"/>
+<snip file="src/iron_solve/src/cluster.rs" lines="1-29" first="//! Clustering: terms that share a variable solve together, terms that do" last="}"/>
 <p><code>analysis.rs</code> answers "how many ways can this still move?" (degrees of freedom) and, when a system can't be solved, "which constraints are to blame?". It computes the rank of the required Jacobian, then drops one term at a time and re-tests (SolveSpace's method). That's where the error message <em>likely at fault: #c3, #c4</em> comes from.</p>
-<snip file="src/iron_solve/src/analysis.rs" lines="7-21"/>
+<snip file="src/iron_solve/src/analysis.rs" lines="7-21" first="#[derive(Clone, Debug, PartialEq, Eq)]" last="}"/>
 
 <h2 id="document"><span class="sec">4.3</span>Constraints in the document</h2>
-<p>A constraint is an ordinary node: a <code>constraint</code> component (kind, value, enabled) and one <code>constrains</code> relation per operand. The relation's data carries the operand's <em>role</em> and its <em>anchor</em>, a point in the operand's local space:</p>
+<p>A constraint is an ordinary node: a <code>constraint</code> facet (kind, value, enabled) and one <code>constrains</code> relation per operand. The relation's data carries the operand's <em>role</em> and its <em>anchor</em>, a point in the operand's local space:</p>
 <raw title="The hinge between the platform and the first joint">constraint "hinge"   kind=coincident
   constrains → #platform   role=a  anchor=80,20    (the platform's bottom centre)
   constrains → #joint0     role=b  anchor=0,0</raw>
-<snip file="src/iron_document/src/constraint.rs" lines="21-40"/>
+<snip file="src/iron_document/src/constraint.rs" lines="21-43" first="#[derive(Clone, Copy, Debug, PartialEq, Eq)]" last="];"/>
 <p>The vocabulary is code, like node types. A <code>value</code> can be bound: the pendulum's three <code>distance</code> constraints read <code>value = #length.slider.value · 100</code>, a <em>driving dimension</em>. Validation rejects malformed constraints and duplicates (two constraints of one kind over the same anchored operands) with an explicit error, because the main author of constraints is going to be a model, and an error teaches more than silent merging.</p>
 
 <h2 id="adapter"><span class="sec">4.4</span>The adapter: leaves become variables</h2>
 <p><code>solve.rs</code> decides, per solve, what is a variable and what is known:</p>
-<snip file="src/iron_document/src/solve.rs" lines="1-10"/>
-<snip file="src/iron_document/src/solve.rs" lines="118-122"/>
+<snip file="src/iron_document/src/solve.rs" lines="1-10" first="//! The adapter between constraints in the document and `iron_solve`" last="//! strong terms; the implicit least-change rows keep the rest still."/>
+<snip file="src/iron_document/src/solve.rs" lines="121-125" first="fn is_free(doc: &amp;Document, reactive: &amp;crate::graph::Reactive, leaf: Leaf) -&gt; bool {" last="}"/>
 <p>A leaf is free if it holds a constant, isn't bound, and no producer (a clip, the network, a host simulation; Part 12) drives it right now. Each operand node contributes its free <code>x</code>, <code>y</code> and <code>rot</code>. Constraints connected through shared nodes form one cluster. Then each kind becomes a residual closure:</p>
-<snip file="src/iron_document/src/solve.rs" lines="358-430" mark="372-384,406-410,412-428"/>
-<p>Every residual is written in world positions (<code>pose.point(v, anchor)</code>, which uses Part 3's world transforms), so a joint inside a rotated group is constrained where it actually is. Lines 406–410 turn a transaction's <code>Set</code> into a strong "be this value" term; lines 412–428 turn a drag's <em>finger</em> into a strong "this anchor is at the pointer" term.</p>
+<snip file="src/iron_document/src/solve.rs" lines="362-450" first="let b = Builder { doc, read, var_index };" last="}"/>
+<p>Every residual is written in world positions (<code>pose.point(v, anchor)</code>, which uses Part 3's world transforms), so a joint inside a rotated group is constrained where it actually is. Lines 420–424 turn a transaction's <code>Set</code> into a strong "be this value" term; lines 426–448 turn a drag's <em>finger</em> into a strong "this anchor is at the pointer" term.</p>
 
 <h2 id="when"><span class="sec">4.5</span>When the solver runs</h2>
 <p>Two moments, with different rules for what is written:</p>
@@ -72,12 +72,12 @@
     <tr><td>On failure</td><td>Keep the last good pose</td><td>Reject the transaction, naming the culprits</td></tr>
   </tbody>
 </table></div>
-<snip file="src/iron_document/src/lib.rs" lines="243-273" mark="261-271"/>
+<snip file="src/iron_document/src/lib.rs" lines="350-380" first="/// Re-solve every cluster from the current resolved values, with the" last="report"/>
 <p>Solve-on-apply is what keeps the document consistent no matter who edits it. A model edit that sets the ball's <code>x</code> to 900 is a driver; the solver moves the joints, and their new positions are recorded as derived ops on the same transaction, so one undo puts everything back:</p>
-<snip file="src/iron_document/src/lib.rs" lines="1115-1190" mark="1138-1148,1161-1176,1183-1186"/>
+<snip file="src/iron_document/src/lib.rs" lines="1646-1721" first="/// What needs the whole transaction in place (constraint-system.md §7):" last="}"/>
 <p>Two refinements matter for the model. The returned <code>SolverSummary</code> reports causes, not every changed value: which clusters re-solved, which nodes moved, and any request the solver couldn't honour (<code>&lt;unmet&gt;</code>). And <code>exact: true</code> on a transaction turns an unmet request into a rejection instead of an adjustment, for edits that must land exactly or not at all.</p>
-<snip file="src/iron_document/src/solve.rs" lines="68-91"/>
-<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<ref file="src/iron_document/src/lib.rs" line="992" has="post_apply">lib.rs:992</ref>).</p>
+<snip file="src/iron_document/src/solve.rs" lines="71-94" first="/// A requested value the solver could not honour." last="}"/>
+<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<ref file="src/iron_document/src/lib.rs" line="1523" has="post_apply">lib.rs:1523</ref>).</p>
 <div class="box rust"><span class="tab">Solve-on-apply and a running drag</span>
 <p>The two columns of the table above used to overlap. <code>post_apply</code> reads leaves through the reactive graph and passes the store's active fingers, so if a transaction arrived <em>during</em> a cluster drag (a model edit, an inspector field, even a recolour of something else), the solver read the dragged pose from the overlay, honoured the drag's finger, and wrote the half-finished pose into that unrelated transaction as derived ops. Since October 15, <code>apply</code> first sets the gesture aside (overlay values, drivers and fingers move into a <code>Suspended</code> record), applies and solves against the document alone, and then resumes the gesture or cancels it if the edit conflicts with it, including when the solver moved a node the drag holds. Part 13 has the algorithm.</p>
 </div>

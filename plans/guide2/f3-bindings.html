@@ -214,16 +214,16 @@ pub fn eval(&amp;self, read: &amp;dyn Fn(Leaf) -&gt; Option&lt;Value&gt;) -&gt; 
 <p><code>read: &amp;dyn Fn(Leaf) -&gt; Option&lt;Value&gt;</code> means "any function that takes a <code>Leaf</code> and maybe returns a <code>Value</code>". <code>eval</code> doesn't know where values come from; the caller passes in a lookup. The graph passes one that reads through the layers of F3.4; tests pass canned values.</p>
 </div>
 <p><code>binary()</code> defines what operators mean: arithmetic on numbers and quantities (dimension-checked, Part 2), <code>+</code>/<code>-</code> on vectors, comparisons, <code>&amp;&amp;</code>/<code>||</code>. Anything else is a type error, never a silent coercion. Functions come from <em>the floor</em>, a fixed list of pure, cheap functions where adding one means adding one match arm:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:435">src/iron_document/src/expr.rs</a><span class="range">lines 435–444</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">435
-436
-437
-438
-439
-440
-441
-442
-443
-444</pre><pre class="src"><code class="language-rust">/// The floor: pure, total, bounded functions available to expressions
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:480">src/iron_document/src/expr.rs</a><span class="range">lines 480–489</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">480
+481
+482
+483
+484
+485
+486
+487
+488
+489</pre><pre class="src"><code class="language-rust">/// The floor: pure, total, bounded functions available to expressions
 /// (doc 02 §6). Each is one arm; adding one is a Rust change by design.
 pub mod floor {
     use super::{EvalError, Value};
@@ -231,51 +231,51 @@ pub mod floor {
 
     pub const NAMES: &amp;[&amp;str] = &amp;[
         &quot;abs&quot;, &quot;floor&quot;, &quot;ceil&quot;, &quot;round&quot;, &quot;min&quot;, &quot;max&quot;, &quot;clamp&quot;, &quot;lerp&quot;, &quot;scale&quot;, &quot;sin&quot;, &quot;cos&quot;, &quot;tan&quot;, &quot;atan2&quot;, &quot;sqrt&quot;,
-        &quot;pow&quot;, &quot;hypot&quot;,
+        &quot;pow&quot;, &quot;hypot&quot;, &quot;fmt&quot;, &quot;sci&quot;, &quot;str&quot;,
     ];</code></pre></div></div></figure>
 <h3 id="parser">Text in, text out</h3>
 <p>Files and views show a binding as text (<code>{"bind": "640 - #O.slider.value * 300"}</code>), so the tree must parse from text and print back to the same text. The parser uses precedence climbing:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:826">src/iron_document/src/expr.rs</a><span class="range">lines 826–866</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:31;--len:7"></span><pre class="gutter" aria-hidden="true">826
-827
-828
-829
-830
-831
-832
-833
-834
-835
-836
-837
-838
-839
-840
-841
-842
-843
-844
-845
-846
-847
-848
-849
-850
-851
-852
-853
-854
-855
-856
-857
-858
-859
-860
-861
-862
-863
-864
-865
-866</pre><pre class="src"><code class="language-rust">fn expr(&amp;mut self, min_prec: u8) -&gt; Result&lt;Expr, ParseError&gt; {
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/expr.rs:895">src/iron_document/src/expr.rs</a><span class="range">lines 895–935</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">895
+896
+897
+898
+899
+900
+901
+902
+903
+904
+905
+906
+907
+908
+909
+910
+911
+912
+913
+914
+915
+916
+917
+918
+919
+920
+921
+922
+923
+924
+925
+926
+927
+928
+929
+930
+931
+932
+933
+934
+935</pre><pre class="src"><code class="language-rust">fn expr(&amp;mut self, min_prec: u8) -&gt; Result&lt;Expr, ParseError&gt; {
     let mut lhs = self.unary()?;
     loop {
         let Some(tok) = self.peek() else { break };
@@ -316,37 +316,44 @@ pub mod floor {
     }
     Ok(lhs)
 }</code></pre></div></div></figure>
-<p>Using <code>1 + 2 * 3</code>: <code>expr(0)</code> reads <code>1</code>, sees <code>+</code>, and calls <code>expr(prec + 1)</code> for the right side. That inner call reads <code>2</code>, sees <code>*</code> (higher precedence, so it continues), reads <code>3</code>, and returns <code>2 * 3</code>. The outer call builds <code>1 + (2 * 3)</code>. The <code>+ 1</code> on line 862 also makes equal precedences group left: <code>1 - 2 - 3</code> is <code>(1 - 2) - 3</code>. The printer mirrors this, adding parentheses only where needed; a test checks that parse then print round-trips.</p>
+<p>Using <code>1 + 2 * 3</code>: <code>expr(0)</code> reads <code>1</code>, sees <code>+</code>, and calls <code>expr(prec + 1)</code> for the right side. That inner call reads <code>2</code>, sees <code>*</code> (higher precedence, so it continues), reads <code>3</code>, and returns <code>2 * 3</code>. The outer call builds <code>1 + (2 * 3)</code>. The <code>+ 1</code> on line 931 also makes equal precedences group left: <code>1 - 2 - 3</code> is <code>(1 - 2) - 3</code>. The printer mirrors this, adding parentheses only where needed; a test checks that parse then print round-trips.</p>
 
 <h2 id="validate"><span class="sec">F3.3</span>Validation: no dangling reads, no cycles</h2>
-<p>A binding is checked when a transaction applies it, through <code>Set</code>, <code>Create</code> or <code>AddComp</code>:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:435">src/iron_document/src/op.rs</a><span class="range">lines 435–461</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">435
-436
-437
-438
-439
-440
-441
-442
-443
-444
-445
-446
-447
-448
-449
-450
-451
-452
-453
-454
-455
-456
-457
-458
-459
-460
-461</pre><pre class="src"><code class="language-rust">fn check_binding(
+<p>A binding is checked when a transaction applies it, through <code>Set</code>, <code>Create</code> or <code>AddFacet</code>:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/op.rs:499">src/iron_document/src/op.rs</a><span class="range">lines 499–532</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">499
+500
+501
+502
+503
+504
+505
+506
+507
+508
+509
+510
+511
+512
+513
+514
+515
+516
+517
+518
+519
+520
+521
+522
+523
+524
+525
+526
+527
+528
+529
+530
+531
+532</pre><pre class="src"><code class="language-rust">fn check_binding(
     doc: &amp;Document,
     cx: &amp;Ctx,
     target: crate::expr::Leaf,
@@ -354,45 +361,52 @@ pub mod floor {
 ) -&gt; Result&lt;(), ApplyError&gt; {
     for dep in expr.deps() {
         live(doc, cx, dep.node).map_err(|e| cx.err(e.kind, format!(&quot;binding reads {dep}: {}&quot;, e.message)))?;
-        let Some(comp) = doc.component(dep.node, dep.path.component) else {
+        let Some(comp) = doc.facet(dep.node, dep.path.facet) else {
             return Err(cx.err(
                 ErrorKind::UnknownPath,
                 format!(
                     &quot;binding reads {dep}, but {} has no {} component&quot;,
                     dep.node,
-                    dep.path.component.name()
+                    dep.path.facet.name()
                 ),
             ));
         };
         if comp.get(dep.path.field).is_none() {
-            return Err(cx.err(ErrorKind::UnknownPath, format!(&quot;binding reads {dep}, but {} has no such parameter&quot;, dep.node)));
+            return Err(cx.err(ErrorKind::UnknownPath, format!(&quot;binding reads {dep}, but {} has no such argument&quot;, dep.node)));
         }
+    }
+    // Interaction state is presentation: it may drive how a node looks,
+    // never what the document holds (affordances.md §8.1).
+    if expr.deps().iter().any(|d| d.path.facet == FacetKind::Interaction)
+        &amp;&amp; !matches!(target.path.facet, FacetKind::Appearance | FacetKind::Fill | FacetKind::Gradient | FacetKind::Stroke | FacetKind::Shadow)
+    {
+        return Err(cx.err(ErrorKind::OutOfScope, format!(&quot;{target} reads interaction state, which may drive only how a node looks (appearance, fill, gradient, stroke, shadow)&quot;)));
     }
     if doc.binding_cycles(target, expr) {
         return Err(cx.err(ErrorKind::Cycle, format!(&quot;binding {target} would depend on itself&quot;)));
     }
     Ok(())
 }</code></pre></div></div></figure>
-<p>Every leaf it reads must be on a live node with that component, and it must not reach itself. <code>binding_cycles</code> follows bindings outward from the new expression; if the search reaches the leaf being bound, it's a cycle:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:247">src/iron_document/src/document.rs</a><span class="range">lines 247–265</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">247
-248
-249
-250
-251
-252
-253
-254
-255
-256
-257
-258
-259
-260
-261
-262
-263
-264
-265</pre><pre class="src"><code class="language-rust">/// Whether binding `target` to `expr` would let a value depend on itself,
+<p>Every leaf it reads must be on a live node with that facet, and it must not reach itself. <code>binding_cycles</code> follows bindings outward from the new expression; if the search reaches the leaf being bound, it's a cycle:</p>
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/document.rs:299">src/iron_document/src/document.rs</a><span class="range">lines 299–317</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">299
+300
+301
+302
+303
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+315
+316
+317</pre><pre class="src"><code class="language-rust">/// Whether binding `target` to `expr` would let a value depend on itself,
 /// following existing bindings. Checked at apply time so the graph is
 /// always a DAG.
 pub fn binding_cycles(&amp;self, target: Leaf, expr: &amp;Expr) -&gt; bool {
@@ -415,9 +429,7 @@ pub fn binding_cycles(&amp;self, target: Leaf, expr: &amp;Expr) -&gt; bool {
 
 <h2 id="graph"><span class="sec">F3.4</span>The reactive graph</h2>
 <p><code>Reactive</code> lives inside the <code>Store</code> and holds everything derived:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:61">src/iron_document/src/graph.rs</a><span class="range">lines 61–91</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">61
-62
-63
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:63">src/iron_document/src/graph.rs</a><span class="range">lines 63–93</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">63
 64
 65
 66
@@ -445,7 +457,9 @@ pub fn binding_cycles(&amp;self, target: Leaf, expr: &amp;Expr) -&gt; bool {
 88
 89
 90
-91</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, Default)]
+91
+92
+93</pre><pre class="src"><code class="language-rust">#[derive(Clone, Debug, Default)]
 pub struct Reactive {
     nodes: BTreeMap&lt;Leaf, BoundNode&gt;,
     /// Any leaf -&gt; the bound leaves that read it.
@@ -492,30 +506,30 @@ pub struct Reactive {
 
 <h3 id="height">Height: the order that avoids glitches</h3>
 <p>A bound leaf's <em>height</em> is 1 + the largest height among the bound leaves it reads; an unbound leaf counts as 0. Take a diamond: <code>b = a * 2</code>, <code>c = a + b</code>. Then <code>b</code> has height 1 and <code>c</code> height 2. If <code>a</code> changes and dependents run in arbitrary order, <code>c</code> might run first, show a<sub>new</sub> + b<sub>old</sub>, then run again. Sorting by height guarantees <code>b</code> runs before <code>c</code>, each once.</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:328">src/iron_document/src/graph.rs</a><span class="range">lines 328–351</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">328
-329
-330
-331
-332
-333
-334
-335
-336
-337
-338
-339
-340
-341
-342
-343
-344
-345
-346
-347
-348
-349
-350
-351</pre><pre class="src"><code class="language-rust">fn compute_heights(&amp;mut self) {
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:352">src/iron_document/src/graph.rs</a><span class="range">lines 352–375</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">352
+353
+354
+355
+356
+357
+358
+359
+360
+361
+362
+363
+364
+365
+366
+367
+368
+369
+370
+371
+372
+373
+374
+375</pre><pre class="src"><code class="language-rust">fn compute_heights(&amp;mut self) {
     // Relaxation to a fixpoint. The applier keeps the graph acyclic, so
     // this converges within `nodes.len()` rounds; the bound is a guard.
     for _ in 0..=self.nodes.len() {
@@ -540,43 +554,71 @@ pub struct Reactive {
     }
 }</code></pre></div></div></figure>
 <h3 id="rebuild">Rebuild vs. invalidate</h3>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:900">src/iron_document/src/lib.rs</a><span class="range">lines 900–931</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:3;--len:9"></span><span class="band" style="--from:12;--len:17"></span><span class="band" style="--from:29;--len:2"></span><pre class="gutter" aria-hidden="true">900
-901
-902
-903
-904
-905
-906
-907
-908
-909
-910
-911
-912
-913
-914
-915
-916
-917
-918
-919
-920
-921
-922
-923
-924
-925
-926
-927
-928
-929
-930
-931</pre><pre class="src"><code class="language-rust">/// Keep the graph in step with a transaction that just applied.
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:1409">src/iron_document/src/lib.rs</a><span class="range">lines 1409–1457</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">1409
+1410
+1411
+1412
+1413
+1414
+1415
+1416
+1417
+1418
+1419
+1420
+1421
+1422
+1423
+1424
+1425
+1426
+1427
+1428
+1429
+1430
+1431
+1432
+1433
+1434
+1435
+1436
+1437
+1438
+1439
+1440
+1441
+1442
+1443
+1444
+1445
+1446
+1447
+1448
+1449
+1450
+1451
+1452
+1453
+1454
+1455
+1456
+1457</pre><pre class="src"><code class="language-rust">/// Keep the graph in step with a transaction that just applied.
 fn after_transaction(&amp;mut self, tx: &amp;Transaction) {
-    self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()));
-    let structural = tx.ops.iter().chain(tx.inverse.iter()).any(|op| match op {
+    // Outside a gesture the overlay holds only a live solve&#x27;s pose (a
+    // producer&#x27;s publish or a playhead move re-solves the clusters).
+    // Nothing else owns it, so it would shadow what this transaction
+    // wrote, even after the cluster is gone: drop it, and re-solve
+    // against the new document below. A gesture&#x27;s own commit has taken
+    // the gesture but still holds its drivers, and clears its previews
+    // itself.
+    let live = self.gesture.is_none() &amp;&amp; self.drivers.is_empty() &amp;&amp; self.fingers.is_empty() &amp;&amp; !self.reactive.overlay().is_empty();
+    if live {
+        self.reactive.clear_overlay(&amp;self.doc);
+    }
+    self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(tx.expanded.iter()));
+    let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(tx.expanded.iter()).any(|op| match op {
         // A link can be a connection&#x27;s end, which derives a signal.
-        Op::Create { .. } | Op::Delete { .. } | Op::AddComp { .. } | Op::RemoveComp { .. } | Op::Link { .. } | Op::Unlink { .. } =&gt; true,
+        Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } =&gt; true,
         Op::Set { slot, .. } =&gt; slot.expr().is_some(),
         _ =&gt; false,
     });
@@ -584,9 +626,12 @@ fn after_transaction(&amp;mut self, tx: &amp;Transaction) {
         self.reactive.rebuild(&amp;self.doc);
         self.resample();
     } else {
+        // What re-expansion wrote counts too: an override updated in
+        // place changes its derived node&#x27;s leaf, and whatever reads it.
         let changed: Vec&lt;Leaf&gt; = tx
             .ops
             .iter()
+            .chain(tx.expanded.iter())
             .filter_map(|op| match op {
                 Op::Set { id, path, .. } =&gt; Some(Leaf {
                     node: *id,
@@ -601,18 +646,17 @@ fn after_transaction(&amp;mut self, tx: &amp;Transaction) {
         self.resample();
     }
     self.rebuild_clusters();
+    if live &amp;&amp; !self.clusters.list.is_empty() {
+        self.resolve_clusters_live();
+    }
     self.resolve_physics();
 }</code></pre></div></div></figure>
 <ul>
-  <li><strong>Structural transactions</strong> (nodes created or deleted, components added or removed, relations linked, a binding set) call <code>rebuild</code>: re-read every bound slot, rebuild edges and heights, re-evaluate everything. It checks the inverse too, because undoing a binding is also structural.</li>
+  <li><strong>Structural transactions</strong> (nodes created or deleted, facets added or removed, relations linked, a binding set) call <code>rebuild</code>: re-read every bound slot, rebuild edges and heights, re-evaluate everything. It checks the inverse too, because undoing a binding is also structural.</li>
   <li><strong>Plain value changes</strong> (a <code>Set</code> of a constant, by far the most common) call <code>invalidate</code> with just the leaves that were set.</li>
 </ul>
 <p>Around that, the function keeps the other derived state in step: the first line records the transaction's ops for the geometry revisions (Part 10); <code>resample</code> republishes the clips; the last two lines rebuild constraint clusters (Part 4) and re-solve the port network (Part 9).</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:261">src/iron_document/src/graph.rs</a><span class="range">lines 261–282</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">261
-262
-263
-264
-265
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:265">src/iron_document/src/graph.rs</a><span class="range">lines 265–286</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">265
 266
 267
 268
@@ -629,7 +673,11 @@ fn after_transaction(&amp;mut self, tx: &amp;Transaction) {
 279
 280
 281
-282</pre><pre class="src"><code class="language-rust">/// The values of `changed` leaves moved (a constant was set, or the
+282
+283
+284
+285
+286</pre><pre class="src"><code class="language-rust">/// The values of `changed` leaves moved (a constant was set, or the
 /// overlay changed). Re-evaluate what depends on them, in height order.
 pub fn invalidate(&amp;mut self, doc: &amp;Document, changed: impl IntoIterator&lt;Item = Leaf&gt;) {
     let mut primed = BTreeSet::new();
@@ -652,31 +700,7 @@ pub fn invalidate(&amp;mut self, doc: &amp;Document, changed: impl IntoIterator&
     self.evaluate(doc, &amp;dirty, &amp;primed);
 }</code></pre></div></div></figure>
 <p><code>invalidate</code> follows dependents outward to find everything that <em>might</em> need recomputing (<code>dirty</code>), and marks only the direct readers as <em>definitely</em> needing it (<code>primed</code>). Then:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:353">src/iron_document/src/graph.rs</a><span class="range">lines 353–390</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:6;--len:2"></span><span class="band" style="--from:9;--len:3"></span><span class="band" style="--from:24;--len:7"></span><pre class="gutter" aria-hidden="true">353
-354
-355
-356
-357
-358
-359
-360
-361
-362
-363
-364
-365
-366
-367
-368
-369
-370
-371
-372
-373
-374
-375
-376
-377
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:377">src/iron_document/src/graph.rs</a><span class="range">lines 377–414</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">377
 378
 379
 380
@@ -689,7 +713,31 @@ pub fn invalidate(&amp;mut self, doc: &amp;Document, changed: impl IntoIterator&
 387
 388
 389
-390</pre><pre class="src"><code class="language-rust">/// Evaluate `dirty` in height order. A node runs only if it is primed:
+390
+391
+392
+393
+394
+395
+396
+397
+398
+399
+400
+401
+402
+403
+404
+405
+406
+407
+408
+409
+410
+411
+412
+413
+414</pre><pre class="src"><code class="language-rust">/// Evaluate `dirty` in height order. A node runs only if it is primed:
 /// a leaf it reads changed since the last pass. Primed-ness spreads from
 /// a node to its dependents only when its own value actually changed,
 /// which is the equality cutoff.
@@ -727,29 +775,29 @@ fn evaluate(&amp;mut self, doc: &amp;Document, dirty: &amp;BTreeSet&lt;Leaf&gt;,
         }
     }
 }</code></pre></div></div></figure>
-<p>Dirty leaves run in height order (359–360), but only if primed (362–364). When a result differs from the old one (377), its dependents become primed. When it's the same, they don't, and propagation stops there: the <strong>equality cutoff</strong>. A threshold binding <code>w &gt; 100 ? 1 : 0</code> re-evaluates when <code>w</code> goes from 150 to 160, still gives 1, and nothing reading it runs.</p>
+<p>Dirty leaves run in height order (383–384), but only if primed (386–388). When a result differs from the old one (401), its dependents become primed. When it's the same, they don't, and propagation stops there: the <strong>equality cutoff</strong>. A threshold binding <code>w &gt; 100 ? 1 : 0</code> re-evaluates when <code>w</code> goes from 150 to 160, still gives 1, and nothing reading it runs.</p>
 
 <h3 id="layers">What a reader sees: the layers</h3>
 <p>This one function answers "what is this leaf's value right now?" for the reconciler, views, drags and the evaluator itself:</p>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:393">src/iron_document/src/graph.rs</a><span class="range">lines 393–411</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">393
-394
-395
-396
-397
-398
-399
-400
-401
-402
-403
-404
-405
-406
-407
-408
-409
-410
-411</pre><pre class="src"><code class="language-rust">fn read_with(
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:417">src/iron_document/src/graph.rs</a><span class="range">lines 417–435</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">417
+418
+419
+420
+421
+422
+423
+424
+425
+426
+427
+428
+429
+430
+431
+432
+433
+434
+435</pre><pre class="src"><code class="language-rust">fn read_with(
     overlay: &amp;BTreeMap&lt;Leaf, Value&gt;,
     runtime: &amp;BTreeMap&lt;Leaf, Signal&gt;,
     resolved: &amp;BTreeMap&lt;Leaf, Value&gt;,
@@ -784,11 +832,7 @@ fn evaluate(&amp;mut self, doc: &amp;Document, dirty: &amp;BTreeSet&lt;Leaf&gt;,
   <div class="box naive"><span class="tab">The simple version</span><p><strong>Scrubbing the slider submits a <code>Set</code> every frame.</strong> The bar follows, but a two-second scrub fills history with 120 "set slider" entries, and undo steps back one frame at a time.</p></div>
   <div class="box built"><span class="tab">What was built</span><p><strong>The overlay.</strong> <code>Store::preview</code> puts a value on top of the document for one leaf, and dependents re-evaluate at once. <code>commit_gesture</code> turns the previews into one transaction; <code>cancel_gesture</code> drops them.</p></div>
 </div>
-<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:284">src/iron_document/src/graph.rs</a><span class="range">lines 284–304</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">284
-285
-286
-287
-288
+<figure class="code"><figcaption><span class="chip sys-react">Bindings & handles</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/graph.rs:288">src/iron_document/src/graph.rs</a><span class="range">lines 288–322</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">288
 289
 290
 291
@@ -804,7 +848,25 @@ fn evaluate(&amp;mut self, doc: &amp;Document, dirty: &amp;BTreeSet&lt;Leaf&gt;,
 301
 302
 303
-304</pre><pre class="src"><code class="language-rust">/// Preview a value without writing the document.
+304
+305
+306
+307
+308
+309
+310
+311
+312
+313
+314
+315
+316
+317
+318
+319
+320
+321
+322</pre><pre class="src"><code class="language-rust">/// Preview a value without writing the document.
 pub fn preview(&amp;mut self, doc: &amp;Document, leaf: Leaf, value: Value) {
     let before = self.read(doc, leaf);
     self.overlay.insert(leaf, value.clone());
@@ -814,30 +876,52 @@ pub fn preview(&amp;mut self, doc: &amp;Document, leaf: Leaf, value: Value) {
     }
 }
 
+/// Drop one leaf&#x27;s preview; it falls back to the document.
+pub fn unpreview(&amp;mut self, doc: &amp;Document, leaf: Leaf) {
+    if self.overlay.remove(&amp;leaf).is_some() {
+        if let Some(v) = self.read(doc, leaf) {
+            self.note(leaf, v);
+        }
+        self.invalidate(doc, [leaf]);
+    }
+}
+
 /// Drop every preview; values fall back to the document.
 pub fn clear_overlay(&amp;mut self, doc: &amp;Document) {
     let leaves: Vec&lt;Leaf&gt; = self.overlay.keys().copied().collect();
     self.overlay.clear();
     for &amp;l in &amp;leaves {
-        if let Some(v) = self.read(doc, l) {
+        // A leaf of a facet the node lacks (a gesture that would have
+        // added it) reads nothing now: report its default, so whatever
+        // drew the preview redraws without it.
+        let v = self.read(doc, l).or_else(|| l.path.facet.default_facet().get(l.path.field).and_then(|s| s.constant()).cloned());
+        if let Some(v) = v {
             self.note(l, v);
         }
     }
     self.invalidate(doc, leaves);
 }</code></pre></div></div></figure>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:501">src/iron_document/src/lib.rs</a><span class="range">lines 501–513</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">501
-502
-503
-504
-505
-506
-507
-508
-509
-510
-511
-512
-513</pre><pre class="src"><code class="language-rust">/// Preview a leaf&#x27;s value for the duration of a gesture. Bindings that
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:803">src/iron_document/src/lib.rs</a><span class="range">lines 803–823</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">803
+804
+805
+806
+807
+808
+809
+810
+811
+812
+813
+814
+815
+816
+817
+818
+819
+820
+821
+822
+823</pre><pre class="src"><code class="language-rust">/// Preview a leaf&#x27;s value for the duration of a gesture. Bindings that
 /// read it re-evaluate now; nothing is written to the document until
 /// [`Store::commit_gesture`].
 pub fn preview(&amp;mut self, id: NodeId, path: LeafPath, value: Value) {
@@ -849,81 +933,89 @@ pub fn preview(&amp;mut self, id: NodeId, path: LeafPath, value: Value) {
         self.resolve_clusters_live();
     }
     self.resolve_physics();
+}
+
+/// Withdraw one leaf&#x27;s preview (it reads as the document again).
+pub fn unpreview(&amp;mut self, id: NodeId, path: LeafPath) {
+    let leaf = Leaf { node: id, path };
+    self.drivers.remove(&amp;leaf);
+    self.reactive.unpreview(&amp;self.doc, leaf);
+    self.resolve_physics();
 }</code></pre></div></div></figure>
 <p>The store's <code>preview</code> also adds the leaf to the running gesture's watched nodes (<code>watch</code>, starting a gesture if none runs; Part 13) and re-solves any constraint clusters and the physics network (Parts 4 and 9), so everything downstream of a dragged value moves in the same frame. Commit:</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:665">src/iron_document/src/lib.rs</a><span class="range">lines 665–737</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:22;--len:4"></span><span class="band" style="--from:34;--len:3"></span><span class="band" style="--from:37;--len:11"></span><span class="band" style="--from:51;--len:4"></span><pre class="gutter" aria-hidden="true">665
-666
-667
-668
-669
-670
-671
-672
-673
-674
-675
-676
-677
-678
-679
-680
-681
-682
-683
-684
-685
-686
-687
-688
-689
-690
-691
-692
-693
-694
-695
-696
-697
-698
-699
-700
-701
-702
-703
-704
-705
-706
-707
-708
-709
-710
-711
-712
-713
-714
-715
-716
-717
-718
-719
-720
-721
-722
-723
-724
-725
-726
-727
-728
-729
-730
-731
-732
-733
-734
-735
-736
-737</pre><pre class="src"><code class="language-rust">/// Turn the gesture into one transaction: a `Set` for every leaf the
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:975">src/iron_document/src/lib.rs</a><span class="range">lines 975–1047</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">975
+976
+977
+978
+979
+980
+981
+982
+983
+984
+985
+986
+987
+988
+989
+990
+991
+992
+993
+994
+995
+996
+997
+998
+999
+1000
+1001
+1002
+1003
+1004
+1005
+1006
+1007
+1008
+1009
+1010
+1011
+1012
+1013
+1014
+1015
+1016
+1017
+1018
+1019
+1020
+1021
+1022
+1023
+1024
+1025
+1026
+1027
+1028
+1029
+1030
+1031
+1032
+1033
+1034
+1035
+1036
+1037
+1038
+1039
+1040
+1041
+1042
+1043
+1044
+1045
+1046
+1047</pre><pre class="src"><code class="language-rust">/// Turn the gesture into one transaction: a `Set` for every leaf the
 /// gesture drove (not the leaves the solver moved for it: solve-on-apply
 /// reproduces those as `derived_ops`, warm-started from the previewed
 /// pose). Previews on bound leaves are dropped: a derived value has no
@@ -942,17 +1034,17 @@ pub fn commit_gesture(
         self.ended = Some((g.id, GestureStatus::Committed));
     }
     let mut ops = Vec::new();
-    // Leaves of components the node lacks but allows: the component is
+    // Leaves of facets the node lacks but allows: the facet is
     // added, defaults with the previewed fields set, before the `Set`s.
-    let mut added: BTreeMap&lt;(NodeId, ComponentKind), Component&gt; = BTreeMap::new();
+    let mut added: BTreeMap&lt;(NodeId, FacetKind), Facet&gt; = BTreeMap::new();
     for (leaf, value) in self.reactive.overlay() {
         if !self.drivers.contains(leaf) {
             continue;
         }
         let Some(slot) = self.doc.leaf(leaf.node, leaf.path) else {
-            let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.component));
-            if allowed &amp;&amp; self.doc.component(leaf.node, leaf.path.component).is_none() {
-                let c = added.entry((leaf.node, leaf.path.component)).or_insert_with(|| leaf.path.component.default_component());
+            let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.facet));
+            if allowed &amp;&amp; self.doc.facet(leaf.node, leaf.path.facet).is_none() {
+                let c = added.entry((leaf.node, leaf.path.facet)).or_insert_with(|| leaf.path.facet.default_facet());
                 let _ = c.set(leaf.path.field, Slot::Const(value.clone()));
             }
             continue;
@@ -972,7 +1064,7 @@ pub fn commit_gesture(
             });
         }
     }
-    let adds = added.into_iter().map(|((id, _), comp)| Op::AddComp { id, comp });
+    let adds = added.into_iter().map(|((id, _), comp)| Op::AddFacet { id, facet: comp });
     ops = adds.chain(ops).collect();
     if ops.is_empty() {
         self.cancel_gesture();
@@ -996,26 +1088,30 @@ pub fn commit_gesture(
 pub fn cancel_gesture(&amp;mut self) {
     self.end_gesture(GestureStatus::Cancelled(&quot;cancelled&quot;.into()));
 }</code></pre></div></div></figure>
-<p>It writes a <code>Set</code> for each leaf the gesture <em>drove</em> (688: not leaves the solver moved for it, which solve-on-apply reproduces), skipping bound leaves (699: a derived value has no handle here) and values equal to the document. A driven leaf of a component the node lacks becomes an <code>AddComp</code> instead (Part 13). If nothing qualifies, it cancels and records nothing.</p>
+<p>It writes a <code>Set</code> for each leaf the gesture <em>drove</em> (not leaves the solver moved for it, which solve-on-apply reproduces), skipping bound leaves (a derived value has no handle here) and values equal to the document. A driven leaf of a facet the node lacks becomes an <code>AddFacet</code> instead (Part 13). If nothing qualifies, it cancels and records nothing.</p>
 <p>The slider is the simplest gesture. While it's dragged, the pointer becomes a value in the slider's own space and is previewed; nothing else is sent anywhere. It is one of the select tool's manipulators (Part 13):</p>
-<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/manipulate.rs:355">src/bevy_app/manipulate.rs</a><span class="range">lines 355–372</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">355
-356
-357
-358
-359
-360
-361
-362
-363
-364
-365
-366
-367
-368
-369
-370
-371
-372</pre><pre class="src"><code class="language-rust">Manip::Slider { id, mapping } =&gt; {
+<figure class="code"><figcaption><span class="chip sys-tools">Select & pen</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/bevy_app/manipulate.rs:555">src/bevy_app/manipulate.rs</a><span class="range">lines 555–576</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">555
+556
+557
+558
+559
+560
+561
+562
+563
+564
+565
+566
+567
+568
+569
+570
+571
+572
+573
+574
+575
+576</pre><pre class="src"><code class="language-rust">Manip::Slider { id, mapping } =&gt; {
     // The pointer along the track, in the slider&#x27;s own space,
     // becomes a value; anything bound to it follows this frame.
     let Some(p) = mapping.point(cx.pointer.screen, cx.views, cx.cameras, cx.planes) else { return };
@@ -1030,7 +1126,11 @@ pub fn cancel_gesture(&amp;mut self) {
     }
     let value = value.clamp(min.min(max), max.max(min));
     if num(cx.store, &quot;slider.value&quot;, f64::NAN) != value {
-        cx.store.preview(*id, leaf(&quot;slider.value&quot;), Value::Number(value));
+        // Through its handle: a slider inside an instance is
+        // bound to the instance&#x27;s argument, which takes the value.
+        if cx.store.preview_target(*id, leaf(&quot;slider.value&quot;), Value::Number(value)).is_err() {
+            cx.store.preview(*id, leaf(&quot;slider.value&quot;), Value::Number(value));
+        }
     }
 }</code></pre></div></div></figure>
 <p>On release the bridge commits it as "set slider" (F4). Part 3 generalises this: previewing a value <em>for</em> a leaf through its handle (<code>preview_target</code>), so dragging a bound bar sets the slider it's bound to.</p>
@@ -1038,27 +1138,27 @@ pub fn cancel_gesture(&amp;mut self) {
 <h2 id="clips"><span class="sec">F3.6</span>Clips on a timeline</h2>
 <div class="compare">
   <div class="box naive"><span class="tab">The simple version</span><p><strong>Keyframes on the property</strong>, or Bevy's animation system. Either the animation isn't a thing you can select and retime, or it lives outside the document where nothing can see it.</p></div>
-  <div class="box built"><span class="tab">What was built</span><p><strong>A clip is a node; its target is a relation; sampling produces a layer.</strong> A <code>clip</code> (child of a <code>timeline</code>) has <code>Timing</code> and <code>Clip</code> components and an <code>animates</code> relation to each target. The sample at the playhead is published into the graph's runtime layer as producer 0.</p></div>
+  <div class="box built"><span class="tab">What was built</span><p><strong>A clip is a node; its target is a relation; sampling produces a layer.</strong> A <code>clip</code> (child of a <code>timeline</code>) has <code>Timing</code> and <code>Clip</code> facets and an <code>animates</code> relation to each target. The sample at the playhead is published into the graph's runtime layer as producer 0.</p></div>
 </div>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/component.rs:283">src/iron_document/src/component.rs</a><span class="range">lines 283–297</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">283
-284
-285
-286
-287
-288
-289
-290
-291
-292
-293
-294
-295
-296
-297</pre><pre class="src"><code class="language-rust">/// Scripted time (doc 05 §2): a start and a duration on a track.
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/facet.rs:409">src/iron_document/src/facet.rs</a><span class="range">lines 409–423</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">409
+410
+411
+412
+413
+414
+415
+416
+417
+418
+419
+420
+421
+422
+423</pre><pre class="src"><code class="language-rust">/// Scripted time (doc 05 §2): a start and a duration on a track.
 Timing / &quot;timing&quot; =&gt; Timing {
     start: Number = Value::Number(0.0),
     dur: Number = Value::Number(1.0),
-    easing: Enum = Value::Enum(&quot;linear&quot;.to_owned()),
+    easing: Enum = Value::Enum(&quot;linear&quot;.to_owned()) =&gt; [&quot;linear&quot;, &quot;ease_in&quot;, &quot;ease_out&quot;, &quot;ease_in_out&quot;],
 }
 
 /// What a clip does to its target. Endpoints stay literal (doc 05 §2.1)
@@ -1070,7 +1170,7 @@ Clip / &quot;clip&quot; =&gt; Clip {
     to: Any = Value::Number(1.0),
 }</code></pre></div></div></figure>
 <p><code>prop</code> is a leaf path as a string (<code>"transform3d.rot"</code>). <code>from</code> and <code>to</code> are <code>Any</code>, because their kind is the target's: a <code>Vec3</code> for a rotation, a <code>Number</code> for an x. Nothing names the target; the <code>animates</code> relation does.</p>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/time.rs:72">src/iron_document/src/time.rs</a><span class="range">lines 72–137</span></figcaption><div class="code-scroll"><div class="code-grid"><span class="band" style="--from:23;--len:1"></span><span class="band" style="--from:27;--len:5"></span><span class="band" style="--from:32;--len:1"></span><span class="band" style="--from:39;--len:4"></span><span class="band" style="--from:59;--len:3"></span><pre class="gutter" aria-hidden="true">72
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/time.rs:72">src/iron_document/src/time.rs</a><span class="range">lines 72–137</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">72
 73
 74
 75
@@ -1203,32 +1303,32 @@ Clip / &quot;clip&quot; =&gt; Clip {
 }</code></pre></div></div></figure>
 <p>For every clip and every <code>animates</code> relation leaving it (95): apply the relation's optional <code>offset</code>, and skip the target before the clip starts (99–103), so it shows its authored value. Progress <code>u</code> is capped at 1 (104), so after the end it holds <code>to</code>. Conflicts are reported, not resolved: a missing leaf, a bound target (111–114), or endpoints of the wrong kind put an error under the clip's id, and the timeline draws that clip red. Then ease, interpolate, record (131–133).</p>
 <h3 id="playhead">The playhead lives in the store, but isn't saved</h3>
-<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:347">src/iron_document/src/lib.rs</a><span class="range">lines 347–372</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">347
-348
-349
-350
-351
-352
-353
-354
-355
-356
-357
-358
-359
-360
-361
-362
-363
-364
-365
-366
-367
-368
-369
-370
-371
-372</pre><pre class="src"><code class="language-rust">pub fn time(&amp;self) -&gt; f64 {
+<figure class="code"><figcaption><span class="chip sys-store">Document model</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/iron_document/src/lib.rs:611">src/iron_document/src/lib.rs</a><span class="range">lines 611–636</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">611
+612
+613
+614
+615
+616
+617
+618
+619
+620
+621
+622
+623
+624
+625
+626
+627
+628
+629
+630
+631
+632
+633
+634
+635
+636</pre><pre class="src"><code class="language-rust">pub fn time(&amp;self) -&gt; f64 {
     self.time
 }
 
@@ -1258,7 +1358,7 @@ fn resample(&amp;mut self) {
 <h3 id="driven">"Why is this moving?"</h3>
 <p>Because a target is a relation, the answer is one lookup, <code>relations_to</code>, and views render it on the driven node as <code>&lt;driven-by ref="#6" rel="animates" prop="transform2d.x"/&gt;</code>. Bindings show as <code>.bind</code> attributes; relations that drive a node (clips, and later constraints) show as <code>&lt;driven-by&gt;</code>. A clip-driven leaf has no handle while the clip drives it: dragging it is refused with the reason, rather than silently writing a constant the clip would hide (Part 3).</p>
 <div class="box edge"><span class="tab">Rough edge</span>
-<p>Two clips on one leaf: the higher-numbered clip silently wins where they overlap (<code>out.values.insert</code> on line 132). Clip-against-binding conflicts are reported; clip-against-clip ones aren't.</p>
+<p>Two clips on one leaf: the higher-numbered clip silently wins where they overlap (<code>out.values.insert</code> on line 163). Clip-against-binding conflicts are reported; clip-against-clip ones aren't.</p>
 </div>
 
 <div class="box recap"><span class="tab">Before you go on</span>

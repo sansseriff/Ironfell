@@ -63,7 +63,7 @@
   const FRAME = 1 / 30;
   function fit() {
     const r = area();
-    if (r) doc.command({ op: "timeline_axis", fields: JSON.stringify({ fit: r.width * devicePixelRatio }) });
+    if (r) doc.command({ op: "timeline_axis", fields: JSON.stringify({ fit: r.width }) });
   }
   const toggleAutokey = () => set({ autokey: !clock.autokey });
   function toggleLoop() {

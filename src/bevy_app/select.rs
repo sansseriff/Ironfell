@@ -2316,7 +2316,14 @@ pub fn select_tool_system(
             }));
         }
         (true, Some(Some(m))) => {
-            view_cameras.0.entry(m.panel.clone()).or_default().pan = m.pan + (pointer.screen - m.start);
+            let (panel, start, pan) = (m.panel.clone(), m.start, m.pan);
+            if views.get(&panel).is_some_and(|v| drag_pan_timeline(&mut store.0, v, pointer.screen - start)) {
+                if let Some(Some(m)) = tool.middle.as_mut() {
+                    m.start = pointer.screen;
+                }
+            } else {
+                view_cameras.0.entry(panel).or_default().pan = pan + (pointer.screen - start);
+            }
         }
         (false, Some(_)) => tool.middle = None,
         _ => {}
@@ -3042,7 +3049,11 @@ pub fn select_tool_system(
         }
         match &mut tool.gesture {
             Gesture::Pan { panel, start, pan } => {
-                view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
+                if views.get(panel).is_some_and(|v| drag_pan_timeline(&mut store.0, v, pointer.screen - *start)) {
+                    *start = pointer.screen;
+                } else {
+                    view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
+                }
             }
             Gesture::Library { at, .. } => *at = screen,
             Gesture::Drive(d) => {
@@ -4194,6 +4205,23 @@ pub fn draw_select_overlay(
 /// Zoom limits, window px per document px.
 const ZOOM: (f32, f32) = (0.05, 64.0);
 
+/// Drag-pan `view` by `d` window px since the last frame. The timeline
+/// (timeline.md §6) never pans in 2D, so its ruler and headers stay put:
+/// a drag's x pans time on its axis and its y scrolls the rows (`axis.y0`),
+/// as grabbing the content would. Returns whether it was the timeline.
+fn drag_pan_timeline(store: &mut iron_document::Store, view: &PanelView, d: Vec2) -> bool {
+    let timeline = iron_document::timeline_view::find(store);
+    if timeline.is_none() || view.composition != timeline {
+        return false;
+    }
+    let s = view.zoom.max(1e-6) as f64;
+    let r = iron_document::timeline_view::navigate(store, -d.x as f64 / s, 0.0, 0.0).and_then(|_| iron_document::timeline_view::scroll(store, -d.y as f64 / s));
+    if let Err(e) = r {
+        warn!("timeline pan: {e}");
+    }
+    true
+}
+
 /// Keep `doc` (document px) under `screen` (window px) at zoom `z`.
 fn pan_keeping(view: &PanelView, doc: Vec2, screen: Vec2, z: f32) -> Vec2 {
     screen - Vec2::new(view.rect.x, view.rect.y) - doc * z
@@ -4217,12 +4245,25 @@ pub fn navigate_views(
     mut store: ResMut<DocumentStore>,
     spatial: Res<crate::document_bridge::SpatialScene>,
     drawables: Res<crate::document_bridge::Drawables>,
+    dpr: Res<crate::Dpr>,
 ) {
     let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
     // The timeline (timeline.md §6) navigates time on its axis, so text
     // and corners never stretch: the wheel's horizontal part pans `t0`,
     // Ctrl/Cmd zooms `pps` about the pointer, and only the rows scroll.
     let timeline = iron_document::timeline_view::find(&store.0);
+    // A camera's zoom is CSS px per document px; `k` is window px per CSS px.
+    let k = dpr.0 as f32;
+    // The timeline's camera never moves: it scrolls on its axis instead.
+    if timeline.is_some() {
+        for view in views.0.iter().filter(|v| v.composition == timeline) {
+            if let Some(c) = cameras.0.get_mut(&view.panel)
+                && (c.pan != Vec2::ZERO || c.zoom != 1.0)
+            {
+                *c = Default::default();
+            }
+        }
+    }
     if let Some(view) = under
         && scroll.delta != Vec2::ZERO
         && timeline.is_some()
@@ -4233,13 +4274,14 @@ pub fn navigate_views(
             bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta,
         };
         let camera = cameras.0.entry(view.panel.clone()).or_default();
-        let at = ((pointer.screen.x - view.rect.x - camera.pan.x) / camera.zoom) as f64;
+        let at = ((pointer.screen.x - view.rect.x - camera.pan.x) / camera.scale(dpr.0)) as f64;
         let result = if pointer.modifiers.ctrl || pointer.modifiers.meta {
             iron_document::timeline_view::navigate(&mut store.0, 0.0, scroll.zoom as f64, at)
         } else {
             let d = if pointer.modifiers.shift && px.x == 0.0 { Vec2::new(px.y, 0.0) } else { px };
-            camera.pan.y = (camera.pan.y - d.y).min(0.0);
-            if d.x != 0.0 { iron_document::timeline_view::navigate(&mut store.0, (d.x / camera.zoom) as f64, 0.0, at) } else { Ok(()) }
+            let s = camera.scale(dpr.0);
+            let r = if d.x != 0.0 { iron_document::timeline_view::navigate(&mut store.0, (d.x / s) as f64, 0.0, at) } else { Ok(()) };
+            r.and_then(|_| if d.y != 0.0 { iron_document::timeline_view::scroll(&mut store.0, (d.y / s) as f64) } else { Ok(()) })
         };
         if let Err(e) = result {
             warn!("timeline navigation: {e}");
@@ -4253,9 +4295,9 @@ pub fn navigate_views(
         };
         let camera = cameras.0.entry(view.panel.clone()).or_default();
         if pointer.modifiers.ctrl || pointer.modifiers.meta {
-            let doc = (pointer.screen - Vec2::new(view.rect.x, view.rect.y) - camera.pan) / camera.zoom;
+            let doc = (pointer.screen - Vec2::new(view.rect.x, view.rect.y) - camera.pan) / camera.scale(dpr.0);
             let z = (camera.zoom * (-scroll.zoom).exp()).clamp(ZOOM.0, ZOOM.1);
-            camera.pan = pan_keeping(view, doc, pointer.screen, z);
+            camera.pan = pan_keeping(view, doc, pointer.screen, z * k);
             camera.zoom = z;
         } else {
             let d = if pointer.modifiers.shift && px.x == 0.0 { Vec2::new(px.y, 0.0) } else { px };
@@ -4273,17 +4315,18 @@ pub fn navigate_views(
         .cloned();
     let mut rest = Vec::new();
     for (key, m) in std::mem::take(&mut keys.0) {
-        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoomfit" | "zoomsel" | "zoom100" | "zoomin" | "zoomout")) else {
+        let on_timeline = timeline.is_some() && target.as_ref().is_some_and(|v| v.composition == timeline);
+        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoomfit" | "zoomsel" | "zoom100" | "zoomin" | "zoomout") && (key == "zoomfit" || !on_timeline)) else {
             rest.push((key, m));
             continue;
         };
         let size = Vec2::new(view.rect.w, view.rect.h);
         let centre = Vec2::new(view.rect.x, view.rect.y) + size * 0.5;
         let camera = cameras.0.entry(view.panel.clone()).or_default();
-        let at_centre = (size * 0.5 - camera.pan) / camera.zoom;
+        let at_centre = (size * 0.5 - camera.pan) / camera.scale(dpr.0);
         // Fitting the timeline fits its clips in time (`F`, Shift+1).
         if key == "zoomfit" && timeline.is_some() && view.composition == timeline {
-            if let Err(e) = iron_document::timeline_view::fit(&mut store.0, (size.x / camera.zoom) as f64) {
+            if let Err(e) = iron_document::timeline_view::fit(&mut store.0, (size.x / camera.scale(dpr.0)) as f64) {
                 warn!("timeline fit: {e}");
             }
             camera.pan = Vec2::ZERO;
@@ -4306,18 +4349,18 @@ pub fn navigate_views(
                 else {
                     continue;
                 };
-                let z = ((size.x / (r.width() as f32 * 1.1)).min(size.y / (r.height() as f32 * 1.1))).clamp(ZOOM.0, ZOOM.1);
+                let z = ((size.x / (r.width() as f32 * 1.1)).min(size.y / (r.height() as f32 * 1.1)) / k).clamp(ZOOM.0, ZOOM.1);
                 let c = Vec2::new(r.center().x as f32, r.center().y as f32);
-                camera.pan = pan_keeping(view, c, centre, z);
+                camera.pan = pan_keeping(view, c, centre, z * k);
                 camera.zoom = z;
             }
             "zoom100" => {
-                camera.pan = pan_keeping(view, at_centre, centre, 1.0);
+                camera.pan = pan_keeping(view, at_centre, centre, k);
                 camera.zoom = 1.0;
             }
             _ => {
                 let z = (camera.zoom * if key == "zoomin" { 2.0 } else { 0.5 }).clamp(ZOOM.0, ZOOM.1);
-                camera.pan = pan_keeping(view, at_centre, centre, z);
+                camera.pan = pan_keeping(view, at_centre, centre, z * k);
                 camera.zoom = z;
             }
         }

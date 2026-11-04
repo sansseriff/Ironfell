@@ -746,7 +746,7 @@ cd -
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
 | `move x y`, `down [button]`, `up [button]`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels; `down right` … `up right` around `move`s orbits a 3D panel's camera |
 | `dmove x y`, `ddrag x0 y0 x1 y1 [steps]` | the same in document 2D space: viewer-panel top-left origin, y-down, the space `transform2d.x/y` are in |
-| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); in the timeline, a press or drag anywhere on the ruler (y 0–80, time t at x = 160 + t·100) scrubs, a drag of a bar retimes its clip and a drag of a key diamond moves the key |
+| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); in the timeline, a press or drag anywhere on the ruler (y 0–56, time t at x = 160 + t·100) scrubs, a drag of a bar retimes its clip and a drag of a key diamond moves the key |
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
 | `pclick <panel> x y` | click inside a named panel, panel-relative |
@@ -1082,8 +1082,8 @@ artifacts, which this skill does not run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-252 tests pass (verified 2026-11-03 after keyframes and auto-keyframe,
-`tests/timeline_view.rs` 13; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
+253 tests pass (verified 2026-11-03 after view zoom became CSS px and the
+timeline's rows scroll on its axis, `tests/timeline_view.rs` 14; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
@@ -2028,16 +2028,17 @@ notation `timeline`, context `std:timeline`), shown like any composition
 (`{source: 'timeline', notation: 'composition'}`); its left column, `label_w` wide,
 is DOM (`TimelinePanel.svelte`, `[data-timeline-column]`) over the canvas's plain
 backdrop. Both are laid out from one plan: the column polls `timeline_rows(panel)`
-for its rows and the canvas view's pan, and its wheel scrolls the canvas
-(`view_pan`). A clip is one property's animation: `timing.start`, `clip.prop` and
+for its rows and the axis's row scroll `y0`, and its wheel scrolls the rows
+(`timeline_axis` `{"scroll": dy}`). The timeline's camera never pans or zooms: the
+ruler and headers stay put. A clip is one property's animation: `timing.start`, `clip.prop` and
 two or more `key` children (`t` after the start, `value`, `easing`).
 
-Canvas layout in document px from the panel's top-left, before any pan or zoom:
-`label_w` 160, ruler 80 tall (23 px labels, minor ticks, the playhead's head low on
-it), rows 22 apart from y 84, so time t is at x 160 + t·100. The demo has an object
-row and a property row per animated object: torus (`rot`, the spin clip, 1–4 s) and
-square (`x`, the slide clip, keys at 0.5 s and 2.5 s, its bar from x 210 to 410 at
-y 150–172). Per property row a bar spans the clip's keys (`bar <clip> <target>`)
+Canvas layout in document px from the panel's top-left, which a 2D view at 100%
+shows as CSS px at any pixel ratio: `label_w` 160, ruler 56 tall (13 px labels,
+minor ticks, the playhead's head low on it), rows 22 apart from y 60, so time t is
+at x 160 + t·100. The demo has an object row and a property row per animated
+object: torus (`rot`, the spin clip, 1–4 s) and square (`x`, the slide clip, keys
+at 0.5 s and 2.5 s, its bar from x 210 to 410 at y 126–148). Per property row a bar spans the clip's keys (`bar <clip> <target>`)
 with a diamond per key (`key <key> <target>`, a rect turned π/4); per object row a
 summary bar spans all its keys (display only).
 
@@ -2053,7 +2054,7 @@ summary bar spans all its keys (display only).
   `src-ui/cursors/`); `grips="ends"` shows the same. Backdrop, grid and headers are
   declared no target (a click clears the selection); labels and the playhead's line
   are `inert`, transparent to the pointer.
-- **Press anywhere on the ruler** (y 0–80): the playhead jumps there and a drag
+- **Press anywhere on the ruler** (y 0–56): the playhead jumps there and a drag
   scrubs (the ruler group is a `track` whose value is the clock's `t`; a session
   op, no transaction). A selected bar lights what its clip animates in every view,
   and a selected animated node lights its bars.
@@ -2069,17 +2070,19 @@ summary bar spans all its keys (display only).
   field; while on, the other 2D views wear a red frame and an "Auto-keyframe" chip.
 - **Keys**, with the pointer over the timeline (the transport takes them before the
   engine): Space, Home, End, ← → (1/30 s; Shift, 1 s), I and O (loop ends), F (fit).
-- **Wheel**: horizontal pans time (`axis.t0`), vertical scrolls the rows,
-  Ctrl/Cmd zooms `axis.pps` about the pointer. Shift+1 fits, as F does.
+- **Wheel**: horizontal pans time (`axis.t0`), vertical scrolls the rows under the
+  ruler (`axis.y0`), Ctrl/Cmd zooms `axis.pps` about the pointer. Middle-drag and
+  Space-drag do the same as grabbing the content: x pans time, y scrolls the rows.
+  Shift+1 fits, as F does; the other zoom keys leave the timeline alone.
 - **Transport** (`TimelineTransport.svelte`, in the column's corner over the
   ruler): back to 0, play/pause, loop (all clips), fit, auto-keyframe, the time
   (click to type and seek), the end.
 - **Engine calls**: `clock_read()` → `{ok, id, t, playing, autokey, rate, loop_in,
   loop_out, end}`; `clock_set(json)`; `timeline_axis(json)`, `{"fit": width}` or
-  `{"pan", "zoom", "at"}`, → `{ok, t0, pps}` (`'{}'` reads); `timeline_rows(panel)`
-  → `{ok, rows: [{kind, label, y, target, prop, clip, error, keyed}], pan_y, zoom,
-  label_w, ruler_h, row_h}`; `timeline_key(action, clip)` (`prev`, `next`,
-  `toggle`); `view_pan(panel, pan_y)`.
+  `{"pan", "zoom", "at"}` or `{"scroll": dy}`, → `{ok, t0, pps, y0}` (`'{}'`
+  reads); `timeline_rows(panel)` → `{ok, rows: [{kind, label, y, target, prop, clip,
+  error, keyed}], y0, zoom, label_w, ruler_h, row_h}` (a row's top is `(y − y0)·zoom`
+  CSS px); `timeline_key(action, clip)` (`prev`, `next`, `toggle`).
 
 `timeline.txt` (it turns smart guides off first). Expected, minus `nav`, `ready`,
 `key`, `sleep` and `screenshot` lines:

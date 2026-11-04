@@ -444,12 +444,14 @@ facets! {
 
     /// How a projection is being looked at along one axis (timeline.md
     /// §4.2): `t0` at the left edge, `pps` units per second (pixels per
-    /// unit), `label_w` the header column's width. A drag holds these
-    /// fixed: it edits what a view shows, never how it is looked at.
+    /// unit), `label_w` the header column's width, `y0` how far its rows
+    /// are scrolled up under the ruler (px). A drag holds these fixed: it
+    /// edits what a view shows, never how it is looked at.
     Axis / "axis" => Axis {
         t0: Number = Value::Number(0.0),
         pps: Number = Value::Number(100.0),
         label_w: Number = Value::Number(160.0),
+        y0: Number = Value::Number(0.0),
     }
 
     /// A value laid along a node (timeline.md §7): with `affords.drag=

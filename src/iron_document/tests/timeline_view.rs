@@ -201,7 +201,7 @@ fn the_static_pieces_do_not_move_and_the_playhead_scrubs() {
     }
     let grip = node_named(&store, comp, "playhead grip");
     let past = store.history().past().len();
-    let h = store.begin_drag(grip, [8.0, 0.0]);
+    let h = store.begin_drag(grip, [6.0, 0.0]);
     store.drag_to(&h, [360.0, 0.0]);
     assert_eq!(store.time(), 2.0);
     assert_eq!(x_of(&store, rect), 200.0, "the clip samples at the dragged playhead");
@@ -417,4 +417,23 @@ fn the_rows_buttons_step_and_toggle_keys() {
     let ops = timeline_view::toggle_key_ops(&store, clip).unwrap();
     assert_eq!(ops, vec![Op::Delete { id: keys[1] }]);
     let _ = rect;
+}
+
+#[test]
+fn scrolling_moves_the_rows_under_a_ruler_that_stays() {
+    let Scene { mut store, rect, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let y = |store: &Store, key: &str| store.resolved(node_named(store, comp, key), path("transform2d.y")).and_then(|v| v.as_f64()).unwrap();
+    let summary = format!("summary {rect}");
+    let (row, ruler) = (y(&store, &summary), y(&store, "ruler bar"));
+    let past = store.history().past().len();
+    // Only one row pair: the scroll stops with the last row under the ruler.
+    timeline_view::scroll(&mut store, 1000.0).unwrap();
+    let scrolled = y(&store, &summary);
+    assert!(scrolled < row, "the rows moved up: {row} → {scrolled}");
+    assert_eq!(y(&store, "ruler bar"), ruler, "the ruler stays");
+    timeline_view::scroll(&mut store, -5000.0).unwrap();
+    assert_eq!(y(&store, &summary), row, "back to the top, and no further");
+    assert_eq!(store.history().past().len(), past, "scrolling is not an edit");
 }

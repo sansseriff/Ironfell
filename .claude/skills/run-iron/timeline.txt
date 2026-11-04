@@ -4,7 +4,7 @@
 # composition (ruler, bars, key diamonds, playhead). A clip is one property's
 # keys; a drag on an animated object writes keys by the visible mode.
 # Canvas layout (document px from the panel's top-left): label_w 160, ruler
-# 80 tall, time t at x 160 + t*100; the square's x row at y 150-172, its
+# 56 tall, time t at x 160 + t*100; the square's x row at y 126-148, its
 # slide bar from 210 to 410 (keys at 0.5 s and 2.5 s).
 nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&bevy=debuglog
 ready
@@ -18,16 +18,16 @@ pdrag timeline 300 20 420 20
 sleep 300
 eval (async()=>{const c=await __iron.call('clock_read',[]);const v=await __iron.view({fidelity:'full'});return 'scrubbed to '+c.t.toFixed(2)+' s; square at x '+v.match(/name="square" x="([0-9.]+)"/)[1]+'; version '+__iron.protocolState().version})()
 # A bar retimes its clip; undo.
-pdrag timeline 300 161 400 161
+pdrag timeline 300 137 400 137
 sleep 400
 eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'slide: '+v.match(/<clip[^>]*name="slide"[^>]*>/)[0].match(/start="[^"]*"/)[0]})()
 key Meta+z
 sleep 300
 # The slide's last key: the cursor says it trims, and a drag moves the key.
-pmove timeline 410 161
+pmove timeline 410 137
 sleep 300
 eval 'over the last key: cursor '+document.getElementById('bevy-canvas').dataset.cursor
-pdrag timeline 410 161 460 161
+pdrag timeline 410 137 460 137
 sleep 400
 eval (async()=>{const v=await __iron.view({fidelity:'full'});const c=v.slice(v.indexOf('name="slide"'));return 'keys after the drag: '+JSON.stringify([...c.slice(0,c.indexOf('</clip>')).matchAll(/<key[^>]* t="([^"]*)"/g)].map(m=>m[1]))})()
 key Meta+z
@@ -70,7 +70,7 @@ sleep 300
 key Shift+K
 sleep 300
 # Delete: a selected bar deletes its clip; undo brings it back.
-pclick timeline 300 161
+pclick timeline 300 137
 key Delete
 sleep 500
 eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'after delete: slide clip '+(v.includes('name="slide"')?'still there':'gone')})()

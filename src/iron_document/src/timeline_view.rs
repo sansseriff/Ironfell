@@ -32,14 +32,16 @@ pub const TIMELINE: &str = "timeline";
 /// Its notation, whose built-in context is `std:timeline`.
 pub const NOTATION: &str = "timeline";
 
-/// The ruler's height and a row's, in document px.
-pub const RULER_H: f64 = 80.0;
+/// The ruler's height and a row's, in document px, which a view at 100%
+/// shows as CSS px: the ruler is as tall as the transport the DOM column
+/// puts over its left end (§12.3).
+pub const RULER_H: f64 = 56.0;
 pub const ROW_H: f64 = 22.0;
 const SEG_H: f64 = 16.0;
 /// How far the background, header and lines reach, in px.
 const FAR: f64 = 8000.0;
 /// The ruler's labels, px.
-const LABEL_PX: f64 = 23.0;
+const LABEL_PX: f64 = 13.0;
 /// Ticks are about this far apart at the current zoom, in px.
 const TICK_PX: f64 = 80.0;
 
@@ -293,7 +295,10 @@ const KEY_PX: f64 = 10.0;
 /// pieces in drawing order.
 fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let ax = |f: &str| format!("{comp}.axis.{f}");
-    let (lw, t0, pps) = (ax("label_w"), ax("t0"), ax("pps"));
+    let (lw, t0, pps, y0) = (ax("label_w"), ax("t0"), ax("pps"), ax("y0"));
+    // A row's y, `v` px from the top, scrolled by the axis's `y0`: the rows
+    // scroll under the ruler, which stays.
+    let ry = |v: f64| format!("{} - {y0}", lit(v));
     // Where time `e` (an expression) is, in px.
     let at = |e: &str| format!("{lw} + ({e} - {t0}) * {pps}");
     // The static pieces reach well past any panel, so the view reads as
@@ -325,11 +330,11 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
         let t = k as f64 * plan.tick / MINOR as f64;
         let x = at(&lit(t));
         let major = k % MINOR == 0;
-        let len = if major { 22.0 } else { 9.0 };
+        let len = if major { 14.0 } else { 6.0 };
         push("ruler", format!("tick {k}"), "rect", vec![place(&x, &lit(RULER_H - len)), sized("1", &lit(len)), paint(if major { TICK } else { DIM })], None);
         if major {
             let text = if plan.tick < 1.0 { format!("{t:.1}s") } else { format!("{t}s") };
-            let mut f = vec![place(&format!("{x} + 6"), "14")];
+            let mut f = vec![place(&format!("{x} + 4"), "8")];
             f.extend(words(&text, LABEL_PX, 500.0));
             f.push(paint(LABEL));
             push("ruler", format!("tick label {}", k / MINOR), "text", f, None);
@@ -337,7 +342,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     }
     let head = at(&format!("{clock}.clock.t"));
     // The playhead's head, low on the ruler under the labels.
-    push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 8"), &lit(RULER_H - 30.0)), sized("16", "26"), rounded(4.0), paint(PLAYHEAD)], None);
+    push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 6"), &lit(RULER_H - 20.0)), sized("12", "18"), rounded(3.0), paint(PLAYHEAD)], None);
 
     // Rows (their names and controls are the DOM column's, §12.3): per
     // object a summary of its keys, per property a bar per clip and a
@@ -350,7 +355,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
         let all: Vec<String> = o.props.iter().flat_map(|p| &p.segments).flat_map(|s| s.keys.iter().map(move |&k| key_x(s, k))).collect();
         if !all.is_empty() {
             let (lo, hi) = (fold("min", &all), fold("max", &all));
-            push("backdrop", format!("summary {}", o.target), "rect", vec![place(&at(&lo), &lit(row.y + 5.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(ROW_H - 10.0)), rounded(3.0), paint(SUMMARY)], None);
+            push("backdrop", format!("summary {}", o.target), "rect", vec![place(&at(&lo), &ry(row.y + 5.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(ROW_H - 10.0)), rounded(3.0), paint(SUMMARY)], None);
         }
         for p in &o.props {
             let row = ri.next().expect("a property row");
@@ -362,8 +367,8 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 // retimes the clip (it projects the clip, so its start is
                 // the leaf the drag moves); Delete deletes the clip.
                 let x = at(&format!("{}.timing.start + {} + {lo}", s.clip, lit(s.offset)));
-                push("tracks", format!("bar {} {}", s.clip, o.target), "rect", vec![place(&x, &lit(row.y + 3.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
-                let mut f = vec![place(&format!("{x} + 8"), &lit(row.y + 4.0))];
+                push("tracks", format!("bar {} {}", s.clip, o.target), "rect", vec![place(&x, &ry(row.y + 3.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
+                let mut f = vec![place(&format!("{x} + 8"), &ry(row.y + 4.0))];
                 f.extend(words(&s.label, 11.0, 500.0));
                 f.push(paint([1.0, 1.0, 1.0, 0.9]));
                 push("tracks", format!("bar label {} {}", s.clip, o.target), "text", f, None);
@@ -373,7 +378,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 for (i, &k) in s.keys.iter().enumerate() {
                     let mut t = Transform2d::default();
                     t.x = bound(&at(&key_x(s, k)));
-                    t.y = bound(&lit(row.y + (ROW_H - KEY_PX * std::f64::consts::SQRT_2) / 2.0));
+                    t.y = bound(&ry(row.y + (ROW_H - KEY_PX * std::f64::consts::SQRT_2) / 2.0));
                     t.rot = bound(&lit(std::f64::consts::FRAC_PI_4));
                     let mut st = Stroke::default();
                     st.color = Slot::Const(Value::Color([0.1, 0.12, 0.16, 1.0]));
@@ -564,6 +569,21 @@ pub fn navigate(store: &mut Store, dx: f64, zoom: f64, at: f64) -> Result<(), St
     let t0 = under - (at - lw) / next + dx / next;
     let (_, ops) = axis_ops(store, t0, next)?;
     store.apply_session(ops).map_err(|e| e.message)
+}
+
+/// Scroll the rows by `dy` document px (positive shows later rows), between
+/// the top and the last row just under the ruler. A session op, as
+/// [`navigate`] is.
+pub fn scroll(store: &mut Store, dy: f64) -> Result<(), String> {
+    let Some(comp) = find(store) else { return Ok(()) };
+    let y0 = number(store, comp, FacetKind::Axis, "y0").unwrap_or(0.0);
+    let last = store.clock().map(|c| rows(&plan(store, c, Some(comp))).last().map_or(0.0, |r| r.y - RULER_H - 4.0)).unwrap_or(0.0);
+    let next = (y0 + dy).clamp(0.0, last.max(0.0));
+    if next == y0 {
+        return Ok(());
+    }
+    let op = Op::Set { id: comp, path: LeafPath::new(FacetKind::Axis, "y0").expect("axis field"), slot: Slot::Const(Value::Number(next)) };
+    store.apply_session(vec![op]).map_err(|e| e.message)
 }
 
 /// Fit every clip into `width` document px of the view (`F`): the axis

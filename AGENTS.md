@@ -64,6 +64,15 @@ UI in `src-ui/`, including new panels such as the Document panel.
   `@lucide/svelte` from `optimizeDeps`, so a newly used icon is served as is
   instead of making Vite re-optimise and reload the page; keep that.
 
+- **Size Svelte UI in CSS px, and never scale it by `devicePixelRatio`.** A 2D
+  canvas view's zoom is CSS px per document px (the engine applies the pixel
+  ratio itself, `ViewCamera::scale`), so DOM laid over or beside a canvas view
+  (a hybrid view, such as the timeline's column) places itself at
+  `document px × zoom` from what the engine serves, in CSS px. If you find
+  yourself dividing by `devicePixelRatio` in Svelte, the engine call should
+  answer in CSS px instead. Check such UI by screenshot at 2× as well as 1×
+  (`SIZE=…@2`, the run-iron skill).
+
 ## Worktrees
 
 Do work in the currently checked-out branch. Only do work in a worktree if the user

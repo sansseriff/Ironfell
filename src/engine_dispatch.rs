@@ -26,7 +26,6 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "timeline_axis" => { arity(args,1)?; crate::engine_api::timeline_axis(app,argument::<String>(args,0)?) },
         "timeline_rows" => { arity(args,1)?; crate::engine_api::timeline_rows(app,argument::<String>(args,0)?) },
         "timeline_key" => { arity(args,2)?; crate::engine_api::timeline_key(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
-        "view_pan" => { arity(args,2)?; crate::engine_api::view_pan(app,argument::<String>(args,0)?,argument::<f64>(args,1)?) },
         "clock_read" => { arity(args,0)?; crate::engine_api::clock_read(app) },
         "clock_set" => { arity(args,1)?; crate::engine_api::clock_set(app,argument::<String>(args,0)?) },
         "narrative_probe" => { arity(args,2)?; crate::engine_api::narrative_probe(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },

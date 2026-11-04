@@ -7,7 +7,8 @@
   // property's ‹ ◇ › (previous key, add or remove a key at the playhead, next
   // key). Both halves come from one plan: the engine serves the rows
   // (`timeline_rows`) with the canvas view's pan, and the column's wheel
-  // scrolls that view (`view_pan`), so they stay aligned.
+  // scrolls its rows (`timeline_axis` `scroll`, the axis's `y0`), so they
+  // stay aligned; the ruler never moves.
   import { onDestroy } from "svelte";
   import { Button as BitsButton } from "bits-ui";
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
@@ -22,14 +23,15 @@
   const doc = controllerManager.docClient;
 
   type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean };
-  type Rows = { ok: boolean; rows: Row[]; pan_y: number; zoom: number; label_w: number; ruler_h: number; row_h: number };
-  let layout: Rows = $state({ ok: false, rows: [], pan_y: 0, zoom: 1, label_w: 160, ruler_h: 80, row_h: 22 });
+  type Rows = { ok: boolean; rows: Row[]; y0: number; zoom: number; label_w: number; ruler_h: number; row_h: number };
+  let layout: Rows = $state({ ok: false, rows: [], y0: 0, zoom: 1, label_w: 160, ruler_h: 56, row_h: 22 });
   let root: HTMLDivElement | undefined = $state();
 
-  // Document px to this column's CSS px: the canvas view's zoom, over the
-  // device's ratio (the panel's rectangle is physical px).
-  const css = (px: number) => (px * layout.zoom) / devicePixelRatio;
-  const top = (y: number) => (layout.pan_y + y * layout.zoom) / devicePixelRatio;
+  // Document px to this column's CSS px: the canvas view's zoom is CSS px
+  // per document px (the engine applies the display's pixel ratio), so no
+  // `devicePixelRatio` here.
+  const css = (px: number) => px * layout.zoom;
+  const top = (y: number) => (y - layout.y0) * layout.zoom;
 
   let pending = false;
   async function read() {
@@ -70,12 +72,13 @@
     window.removeEventListener("pointermove", onMove, true);
   });
 
-  // The column scrolls the canvas view with it.
+  // The column's wheel scrolls the rows of both halves (the ruler stays).
   function wheel(e: WheelEvent) {
     e.preventDefault();
-    const pan_y = Math.min(0, layout.pan_y - e.deltaY * devicePixelRatio);
-    layout = { ...layout, pan_y };
-    void doc.command({ op: "view_pan", panel, pan_y });
+    const dy = e.deltaY / layout.zoom;
+    void doc.command<{ ok: boolean; y0: number }>({ op: "timeline_axis", fields: JSON.stringify({ scroll: dy }) }).then(r => {
+      if (r.ok) layout = { ...layout, y0: r.y0 };
+    });
   }
 
   const key = (action: "prev" | "next" | "toggle", clip: string | null) => clip && doc.command({ op: "timeline_key", action, clip }).then(read);

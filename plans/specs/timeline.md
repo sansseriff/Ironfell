@@ -608,3 +608,28 @@ Built as §12.1–12.3 say, with §12.5's cursors.
   The full smoke passes; its expected ids after the demo moved by the four new keys.
 - **Also:** `vite.config.ts` stops watching `.agents/`, `plans/` and `target/`: another
   agent's worktree edits had reloaded the app mid-smoke.
+
+### CSS px views; the timeline's own scroll (2026-11-03)
+
+Found by the user on a 2× display: the DOM column was half its intended width and the
+transport did not fit, because a 2D view mapped 1 document px to 1 *device* px, so every
+composition drew at half its CSS size on Retina while the DOM beside it did not.
+
+- **A view's zoom is CSS px per document px** (`ViewCamera::zoom`; `PanelView.zoom` is
+  that times the pixel ratio, `ViewCamera::scale`), for every 2D view: 100% now means 1
+  document px per CSS px, Figma's 100%, and a hybrid view's DOM half places itself at
+  `document px · zoom` with no `devicePixelRatio`. The zoom keys, fit, pinch and "Show
+  in" work in it; 3D views (a field of view) and the gizmo (already scaled) are
+  unchanged. At 1× nothing changes, so the smoke's expected output does not.
+- **The ruler at CSS size**: 56 tall (the transport's height), 13 px labels, ticks and
+  the playhead's head to match: what the user had on a 2× display, plus room for the
+  transport.
+- **The timeline never pans in 2D.** Its rows scroll on the axis (`axis.y0`, a session
+  leaf, `timeline_view::scroll`): row pieces are bound to `y − y0` and pass under the
+  ruler, which stays. The wheel, the column's wheel (`timeline_axis` `{"scroll": dy}`,
+  replacing `view_pan`), middle-drag and Space-drag all scroll rows on y and pan time on
+  x; a camera pan left on the timeline is reset.
+- **Tests.** 253 `iron_document` tests (`timeline_view` 14: scrolling moves the rows
+  under a ruler that stays, without history). `timeline.txt` (rows 24 px higher) and the
+  full smoke pass; checked at 2× by screenshot, before and after a middle-drag.
+

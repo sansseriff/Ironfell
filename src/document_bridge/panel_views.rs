@@ -40,7 +40,8 @@ pub struct PanelView {
     /// A 2D view's pan: document space's origin sits at the panel's
     /// top-left plus this offset, in window px (`ViewCameras`).
     pub pan: Vec2,
-    /// A 2D view's zoom: window px per document px.
+    /// A 2D view's scale: window px per document px, its camera's zoom
+    /// times the device pixel ratio ([`ViewCamera::scale`]).
     pub zoom: f32,
     /// A render inspector (plans/specs/render-inspector.md): the panel it
     /// watches, whose composition it shows with that panel's render plan
@@ -106,8 +107,19 @@ pub struct ViewCameras(pub bevy::platform::collections::HashMap<String, ViewCame
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewCamera {
+    /// Window px.
     pub pan: Vec2,
+    /// CSS px per document px: 1 is 100%, whatever the display's pixel
+    /// ratio, so a view's document px line up with the DOM beside it (a
+    /// hybrid view's HTML half, timeline.md §12.3).
     pub zoom: f32,
+}
+
+impl ViewCamera {
+    /// Window px per document px on a display of `dpr` device px per CSS px.
+    pub fn scale(&self, dpr: f64) -> f32 {
+        self.zoom * dpr as f32
+    }
 }
 
 impl Default for ViewCamera {
@@ -173,6 +185,7 @@ pub(crate) fn resolve_panel_views(
     panels: Res<Panels>,
     store: Res<DocumentStore>,
     cameras: Res<ViewCameras>,
+    dpr: Res<crate::Dpr>,
     mut layers: ResMut<CompositionLayers>,
     mut views: ResMut<PanelViews>,
 ) {
@@ -198,7 +211,7 @@ pub(crate) fn resolve_panel_views(
                 loose: observes.as_deref().unwrap_or(id) == VIEWER_PANEL,
                 observes,
                 pan: cameras.0.get(id).map_or(Vec2::ZERO, |c| c.pan),
-                zoom: cameras.0.get(id).map_or(1.0, |c| c.zoom),
+                zoom: cameras.0.get(id).copied().unwrap_or_default().scale(dpr.0),
             }
         })
         .collect();

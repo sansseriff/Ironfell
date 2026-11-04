@@ -2156,7 +2156,8 @@ pub fn clock_set(app: &mut WorkerApp, fields: String) -> String {
 /// Navigate the timeline's time axis (timeline.md §6), as session ops:
 /// `{"fit": width}` fits every clip into `width` document px;
 /// `{"pan": dx, "zoom": z, "at": x}` pans by `dx` px and zooms by `z` (log,
-/// positive out) about document x `at`. `{"ok", "t0", "pps"}` after.
+/// positive out) about document x `at`; `{"scroll": dy}` scrolls the rows
+/// by `dy` document px (`axis.y0`). `{"ok", "t0", "pps", "y0"}` after.
 pub fn timeline_axis(app: &mut WorkerApp, fields: String) -> String {
     narrative_run(app, |store| {
         use iron_document::timeline_view as tv;
@@ -2164,20 +2165,23 @@ pub fn timeline_axis(app: &mut WorkerApp, fields: String) -> String {
         let n = |k: &str| v.get(k).and_then(|x| x.as_f64());
         if let Some(w) = n("fit") {
             tv::fit(store, w)?;
+        } else if let Some(dy) = n("scroll") {
+            tv::scroll(store, dy)?;
         } else {
             tv::navigate(store, n("pan").unwrap_or(0.0), n("zoom").unwrap_or(0.0), n("at").unwrap_or(0.0))?;
         }
         let comp = tv::find(store).ok_or("no timeline composition")?;
         let read = |f: &str| iron_document::facet::LeafPath::new(iron_document::facet::FacetKind::Axis, f).ok().and_then(|p| store.resolved(comp, p)).and_then(|v| v.as_f64());
-        Ok(serde_json::json!({"ok": true, "t0": read("t0"), "pps": read("pps")}))
+        Ok(serde_json::json!({"ok": true, "t0": read("t0"), "pps": read("pps"), "y0": read("y0")}))
     })
 }
 
 /// The timeline's rows for its DOM column (timeline.md §12.3): `{"ok",
 /// "rows": [{"kind", "label", "y", "target", "prop", "clip", "error",
-/// "keyed"}], "pan_y", "zoom", "label_w", "ruler_h", "row_h"}`, `y` in
-/// document px (the view's `pan_y` and `zoom` place them on screen), `keyed`
-/// whether a key of the row's clip is at the playhead.
+/// "keyed"}], "y0", "zoom", "label_w", "ruler_h", "row_h"}`, `y` in
+/// document px; `zoom` is CSS px per document px, so a row sits at
+/// `(y − y0)·zoom` CSS px from the view's top, whatever the pixel ratio.
+/// `keyed`: whether a key of the row's clip is at the playhead.
 pub fn timeline_rows(app: &mut WorkerApp, panel: String) -> String {
     let camera = app.world().get_resource::<crate::document_bridge::ViewCameras>().and_then(|c| c.0.get(&panel).copied()).unwrap_or_default();
     narrative_run(app, |store| {
@@ -2197,8 +2201,9 @@ pub fn timeline_rows(app: &mut WorkerApp, panel: String) -> String {
                 serde_json::json!({"kind": r.kind, "label": r.label, "y": r.y, "target": r.target.to_string(), "prop": r.prop, "clip": r.clip.map(|c| c.to_string()), "error": r.error, "keyed": keyed})
             })
             .collect();
-        let label_w = comp.and_then(|c| iron_document::facet::LeafPath::new(iron_document::facet::FacetKind::Axis, "label_w").ok().and_then(|p| store.resolved(c, p))).and_then(|v| v.as_f64()).unwrap_or(160.0);
-        Ok(serde_json::json!({"ok": true, "rows": rows, "pan_y": camera.pan.y, "zoom": camera.zoom, "label_w": label_w, "ruler_h": tv::RULER_H, "row_h": tv::ROW_H}))
+        let axis = |f: &str, d: f64| comp.and_then(|c| iron_document::facet::LeafPath::new(iron_document::facet::FacetKind::Axis, f).ok().and_then(|p| store.resolved(c, p))).and_then(|v| v.as_f64()).unwrap_or(d);
+        let label_w = axis("label_w", 160.0);
+        Ok(serde_json::json!({"ok": true, "rows": rows, "y0": axis("y0", 0.0), "zoom": camera.zoom, "label_w": label_w, "ruler_h": tv::RULER_H, "row_h": tv::ROW_H}))
     })
 }
 
@@ -2225,20 +2230,6 @@ pub fn timeline_key(app: &mut WorkerApp, action: String, clip: String) -> String
             _ => Err(format!("timeline_key: unknown action {action:?} (prev, next, toggle)")),
         }
     })
-}
-
-/// Scroll a 2D view vertically to `pan_y` (window px; 0 is the top, more
-/// negative is further down): the timeline's DOM column scrolls the canvas
-/// with it (timeline.md §12.3). `{"ok", "pan_y"}`.
-pub fn view_pan(app: &mut WorkerApp, panel: String, pan_y: f64) -> String {
-    let y = (pan_y as f32).min(0.0);
-    if let Some(mut cameras) = app.world_mut().get_resource_mut::<crate::document_bridge::ViewCameras>() {
-        cameras.0.entry(panel).or_default().pan.y = y;
-    }
-    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() {
-        activity.remaining_frames = 10;
-    }
-    serde_json::json!({"ok": true, "pan_y": y}).to_string()
 }
 
 /// Nodes a mention can name (the `#` menu): live, named, not session or

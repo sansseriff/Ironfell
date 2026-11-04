@@ -212,6 +212,7 @@ pub(crate) fn apply_focus(
     map: Res<crate::document_bridge::NodeMap>,
     spatial: Res<crate::document_bridge::SpatialScene>,
     mut view_cameras: ResMut<crate::document_bridge::ViewCameras>,
+    dpr: Res<crate::Dpr>,
     volumes: Query<(&GlobalTransform, Option<&CurrentVolume>)>,
     mut cameras: Query<(&PanelCamera, &mut Transform, &Projection, Option<&mut CameraController>)>,
 ) {
@@ -227,7 +228,7 @@ pub(crate) fn apply_focus(
                     let Some(r) = crate::document_bridge::nest::locate(&store.0, &spatial, view, id) else { continue };
                     let centre = Vec2::new(r.center().x as f32, r.center().y as f32);
                     let camera = view_cameras.0.entry(view.panel.clone()).or_default();
-                    camera.pan = Vec2::new(view.rect.w, view.rect.h) * 0.5 - centre * camera.zoom;
+                    camera.pan = Vec2::new(view.rect.w, view.rect.h) * 0.5 - centre * camera.scale(dpr.0);
                     info!("focus {id}: panel {} pans to centre it", view.panel);
                 }
                 Dims::Three if view.composition == target => {

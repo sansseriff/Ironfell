@@ -12,7 +12,7 @@
  *   await __iron.load(text)        -> replaces the document
  *   await __iron.view({fidelity:'summary', depth: 2})
  *   await __iron.edit('<edit>…</edit>')   -> apply markup as the model would
- *   await __iron.ask('make the circle red') -> a real model turn (needs a key)
+ *   await __iron.ask('make the circle red') -> a real model turn
  *   await __iron.bench(20, 200)    -> the solver benchmark in this build (JSON)
  *   __iron.selection()             -> picked node ids, in pick order
  *   await __iron.link('#a', '#b', keep?) -> link two pictures (ECM §7.2)
@@ -53,6 +53,9 @@ import { Scopes, webLocks, type ScopeState } from './scopes';
 import { OpfsScopeStorage } from './scope_storage';
 import { persistent, scopesUrl, showScope, target } from '../route';
 import { isNativeHost } from './native_host';
+import { isLoopbackOrigin, localEndpoint, type AgentProvider } from '../model/runtime-options';
+import { discoverLocalAgent } from '../model/local-pairing';
+import type { ConversationOptions } from '../model/conversation';
 
 /** Whether this page keeps its document (scopes.md D11). */
 export type Fidelity = 'skeleton' | 'summary' | 'full';
@@ -88,6 +91,16 @@ export class DocumentClient {
   // The model surface's state, for the prompt panel.
   apiKey = $state('');
   modelName = $state('claude-opus-5');
+  agentProvider: AgentProvider = $state('codex');
+  agentEndpoint = $state('http://127.0.0.1:4318');
+  agentToken = $state('');
+  agentModel = $state('');
+  agentPairing = $state(false);
+  private pairedToken = $state('');
+  private pairedEndpoint = $state('');
+  private pairingSequence = 0;
+  agentAutoPaired = $derived(!!this.agentToken && this.agentToken === this.pairedToken && this.agentEndpoint === this.pairedEndpoint);
+  canAsk = $derived(this.agentProvider === 'anthropic' ? !!this.apiKey : !!this.agentToken);
   asking = $state(false);
   lastAsk: any = $state(null);
 
@@ -181,6 +194,7 @@ export class DocumentClient {
     } catch {
       // storage unavailable; the key is entered per session
     }
+    void this.connectLocalAgent();
     (window as any).__iron = {
       // Diagnostic access to JSON-returning operations, including contract errors.
       call: (name: string, args: unknown[] = []) => this.call(name, args),
@@ -206,6 +220,7 @@ export class DocumentClient {
       view: (q: ViewQuery) => this.request('documentView', { query: { scope: null, depth: null, ...q } }),
       edit: (xml: string, label?: string) => this.edit(xml, label),
       ask: (instruction: string) => this.ask(instruction),
+      configureAgent: (options: { provider: AgentProvider; endpoint?: string; token?: string; model?: string }) => this.configureAgent(options),
       bench: async (iterations = 20, repeats = 200) =>
         JSON.parse(await this.request('solveBench', { iterations, repeats })),
       selection: () => [...this.selection],
@@ -282,6 +297,33 @@ export class DocumentClient {
     }
   }
 
+  configureAgent(options: { provider: AgentProvider; endpoint?: string; token?: string; model?: string }) {
+    if (!['codex', 'claude', 'anthropic'].includes(options.provider)) throw new Error('Unknown agent provider');
+    if (options.endpoint !== undefined) localEndpoint(options.endpoint);
+    this.agentProvider = options.provider;
+    if (options.endpoint !== undefined) this.agentEndpoint = options.endpoint;
+    if (options.token !== undefined) this.agentToken = options.token;
+    this.agentModel = options.model ?? '';
+    if (options.provider !== 'anthropic' && options.token === undefined) void this.connectLocalAgent();
+  }
+
+  async connectLocalAgent(): Promise<boolean> {
+    if (!import.meta.env.DEV || isNativeHost() || !isLoopbackOrigin(location.origin) || this.agentProvider === 'anthropic') return false;
+    const sequence = ++this.pairingSequence;
+    const generation = this.generation;
+    const endpoint = this.agentEndpoint;
+    const previousToken = this.agentToken;
+    this.agentPairing = true;
+    try {
+      const token = await discoverLocalAgent(endpoint);
+      if (!token || sequence !== this.pairingSequence || generation !== this.generation || endpoint !== this.agentEndpoint || previousToken !== this.agentToken) return false;
+      this.agentToken = token;
+      this.pairedToken = token;
+      this.pairedEndpoint = endpoint;
+      return true;
+    } finally { if (sequence === this.pairingSequence) this.agentPairing = false; }
+  }
+
   /** Pick a tool, as its key would (V select, P pen, R rectangle, O ellipse). */
   setTool(tool: Tool) {
     this.post?.({ ty: 'toolKey', key: `tool:${tool}`, m: 0 });
@@ -335,12 +377,18 @@ export class DocumentClient {
   }
 
   /** One model turn: view, prompt, apply. */
-  async ask(instruction: string): Promise<any> {
+  async ask(instruction: string, conversation: ConversationOptions = {}): Promise<any> {
     const generation = this.generation;
-    if (!this.apiKey) throw new Error('no API key set');
+    if (this.asking) throw new Error('a model turn is already running');
     this.asking = true;
     try {
-      const result = await this.request('modelAsk', { instruction, apiKey: this.apiKey, model: this.modelName });
+      if (this.agentProvider !== 'anthropic') await this.connectLocalAgent();
+      if (generation !== this.generation) throw new Error('session disposed');
+      if (!this.canAsk) throw new Error(this.agentProvider === 'anthropic' ? 'no API key set' : 'start the local agent bridge and connect in Agent settings');
+      const runtime = this.agentProvider === 'anthropic' ? undefined : {
+        provider: this.agentProvider, endpoint: this.agentEndpoint, token: this.agentToken, model: this.agentModel || undefined,
+      };
+      const result = await this.request('modelAsk', { instruction, apiKey: runtime ? '' : this.apiKey, model: this.modelName, runtime, ...conversation });
       if (generation === this.generation) this.lastAsk = result;
       return result;
     } finally {

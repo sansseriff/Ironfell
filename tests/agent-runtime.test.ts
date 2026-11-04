@@ -1,0 +1,279 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { resolve } from 'node:path';
+import { createAgentBridge, validateRequest } from '../scripts/agent-bridge/server';
+import { codexRuntime, claudeRuntime, type Runtime } from '../scripts/agent-bridge/runtimes';
+import { LocalRuntimeTransport } from '../src-ui/model/transport';
+import { localEndpoint, type CompletionRequest } from '../src-ui/model/runtime-options';
+import { ask } from '../src-ui/model/agent';
+import { discoverLocalAgent } from '../src-ui/model/local-pairing';
+import type { DocumentApi } from '../src-ui/model/api';
+
+const fixture = resolve(import.meta.dir, 'fixtures/fake-agent-runtime.ts');
+const token = 'iron-test-token-not-a-provider-key-12345';
+const payload: CompletionRequest = { provider: 'codex', system: 'Iron manifest', messages: [{ role: 'user', content: 'add a shape' }] };
+
+async function bridgeTest(runtime: Runtime, run: (endpoint: string) => Promise<void>, timeoutMs = 500) {
+  const bridge = createAgentBridge({ token, origins: ['http://localhost:5173'], runtimes: { codex: runtime, claude: runtime }, timeoutMs });
+  bridge.server.listen(0, '127.0.0.1');
+  await once(bridge.server, 'listening');
+  const address = bridge.server.address() as { port: number };
+  try { await run(`http://127.0.0.1:${address.port}`); }
+  finally { bridge.stop(); }
+}
+
+test('bridge validates loopback URLs and request envelopes', () => {
+  for (const endpoint of ['https://127.0.0.1', 'http://example.com', 'http://127.0.0.1.evil', 'http://user@localhost', 'http://localhost/path']) assert.throws(() => localEndpoint(endpoint));
+  assert.equal(localEndpoint('http://127.0.0.1:4318').hostname, '127.0.0.1');
+  assert.deepEqual(validateRequest(payload), payload);
+  for (const value of [null, {}, { ...payload, provider: 'shell' }, { ...payload, messages: [{ role: 'system', content: '' }] }]) assert.throws(() => validateRequest(value));
+});
+
+test('local pairing requires opt-in, exact trusted loopback Origin and preflight header', async () => {
+  const origin = 'http://localhost:5173';
+  const bridge = createAgentBridge({ token, origins: [origin, 'https://example.com'], allowPairing: true });
+  bridge.server.listen(0, '127.0.0.1');
+  await once(bridge.server, 'listening');
+  const endpoint = `http://127.0.0.1:${(bridge.server.address() as { port: number }).port}`;
+  const headers = { Origin: origin, 'Content-Type': 'application/json', 'X-Iron-Local-Pairing': '1' };
+  try {
+    const response = await fetch(`${endpoint}/pair`, { method: 'POST', headers });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.deepEqual(await response.json(), { token });
+    for (const originValue of ['', 'null', 'http://localhost:9999', 'https://example.com', 'https://evil.test']) {
+      assert.equal((await fetch(`${endpoint}/pair`, { method: 'POST', headers: { ...headers, Origin: originValue } })).status, 403);
+    }
+    assert.equal((await fetch(`${endpoint}/pair`, { headers })).status, 403);
+    assert.equal((await fetch(`${endpoint}/pair`, { method: 'POST', headers: { ...headers, 'X-Iron-Local-Pairing': '' } })).status, 403);
+    assert.equal((await fetch(`${endpoint}/pair`, { method: 'POST', headers: { ...headers, 'Content-Type': 'text/plain' } })).status, 415);
+    assert.equal((await fetch(`${endpoint}/complete`, { method: 'POST', headers, body: JSON.stringify(payload) })).status, 401);
+    const preflight = await fetch(`${endpoint}/pair`, { method: 'OPTIONS', headers: { Origin: origin } });
+    assert.match(preflight.headers.get('Access-Control-Allow-Headers')!, /X-Iron-Local-Pairing/);
+    const fetcher = ((url, options) => fetch(url, { ...options, headers: { ...options?.headers, Origin: origin } })) as typeof fetch;
+    assert.equal(await discoverLocalAgent(endpoint, fetcher), token);
+  } finally { bridge.stop(); }
+  await bridgeTest(async () => ({ text: 'unused' }), async endpoint => {
+    assert.equal((await fetch(`${endpoint}/pair`, { method: 'POST', headers })).status, 401);
+  });
+});
+
+test('pairing discovery is memory-only, loopback-only and fails gracefully', async () => {
+  let calls = 0;
+  const fetcher = (async (url, options) => {
+    calls++;
+    assert.equal(String(url), 'http://127.0.0.1:4318/pair');
+    assert.equal(options?.method, 'POST');
+    assert.equal(options?.cache, 'no-store');
+    assert.equal(options?.credentials, 'omit');
+    assert.equal(options?.redirect, 'error');
+    assert.equal(options?.referrerPolicy, 'no-referrer');
+    assert.equal(new Headers(options?.headers).get('X-Iron-Local-Pairing'), '1');
+    return Response.json({ token });
+  }) as typeof fetch;
+  assert.equal(await discoverLocalAgent('http://127.0.0.1:4318', fetcher), token);
+  for (const endpoint of ['https://localhost', 'http://evil.test', 'http://localhost/?token=secret']) {
+    assert.equal(await discoverLocalAgent(endpoint, fetcher), null);
+  }
+  assert.equal(calls, 1);
+  for (const value of [null, {}, { token: 'short' }, { token: 123 }, { token: 'x'.repeat(1025) }]) {
+    assert.equal(await discoverLocalAgent('http://127.0.0.1:4318', (async () => Response.json(value)) as typeof fetch), null);
+  }
+  assert.equal(await discoverLocalAgent('http://127.0.0.1:4318', (async () => new Response('', { status: 403 })) as typeof fetch), null);
+  assert.equal(await discoverLocalAgent('http://127.0.0.1:4318', (async () => { throw new Error('offline'); }) as typeof fetch), null);
+});
+
+test('authenticated transport preserves prompts, model and provider without API credentials', async () => {
+  await bridgeTest(async request => {
+    assert.deepEqual(request, { ...payload, model: 'chosen-model' });
+    assert.equal('apiKey' in request, false);
+    return { text: '<edit/>', usage: { tokens: 4 } };
+  }, async endpoint => {
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token, model: 'chosen-model' });
+    assert.deepEqual(await transport.complete(payload.system, payload.messages), { text: '<edit/>', usage: { tokens: 4 } });
+    await assert.rejects(() => new LocalRuntimeTransport({ provider: 'codex', endpoint, token: 'bad' }).complete(payload.system, payload.messages), /token/);
+  });
+});
+
+test('bridge rejects untrusted origins, Host rebinding, missing tokens and oversized bodies', async () => {
+  let calls = 0;
+  await bridgeTest(async () => { calls++; return { text: '<edit/>' }; }, async endpoint => {
+    const post = (headers = {}, body = JSON.stringify(payload)) => fetch(`${endpoint}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...headers }, body });
+    assert.equal((await post({ Origin: 'https://evil.test' })).status, 403);
+    assert.equal((await post({ Host: 'evil.test:4318' })).status, 403);
+    assert.equal((await post({ Authorization: '' })).status, 401);
+    assert.equal((await post({ 'Content-Type': 'text/plain' })).status, 415);
+    assert.equal((await post({}, 'x'.repeat(1_000_001))).status, 400);
+    assert.equal(calls, 0);
+    const preflight = await fetch(`${endpoint}/complete`, { method: 'OPTIONS', headers: { Origin: 'http://localhost:5173' } });
+    assert.equal(preflight.headers.get('Access-Control-Allow-Origin'), 'http://localhost:5173');
+  });
+});
+
+test('bridge bounds concurrency and aborts timed-out runtimes', async () => {
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  await bridgeTest(async (_request, signal) => {
+    entered();
+    return await new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+  }, async endpoint => {
+    const post = () => fetch(`${endpoint}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload) });
+    const first = post();
+    await started;
+    assert.equal((await post()).status, 429);
+    assert.equal((await first).status, 504);
+  }, 100);
+});
+
+test('disconnecting a browser request cancels its runtime', async () => {
+  let entered!: () => void;
+  let aborted!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const cancelled = new Promise<void>(resolve => { aborted = resolve; });
+  await bridgeTest(async (_request, signal) => {
+    entered();
+    return await new Promise((_, reject) => signal.addEventListener('abort', () => { aborted(); reject(new Error('disconnected')); }, { once: true }));
+  }, async endpoint => {
+    const controller = new AbortController();
+    const request = fetch(`${endpoint}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(payload), signal: controller.signal });
+    const rejected = assert.rejects(() => request, /abort/i);
+    await started;
+    controller.abort();
+    await rejected;
+    await cancelled;
+  });
+});
+
+test('Codex app-server handshake, final items, failures, approvals, exit and cancellation', async () => {
+  try {
+    const runtime = codexRuntime(fixture);
+    const result = await runtime(payload, AbortSignal.timeout(3000));
+    assert.match(result.text, /<create/);
+    await assert.rejects(() => codexRuntime('/missing-iron-codex')(payload, AbortSignal.timeout(3000)), /ENOENT/);
+    for (const [mode, expected] of [['failed', /fixture turn failed/], ['approval', /Unexpected runtime request/], ['exit', /Runtime exited/], ['malformed', /JSON|Unexpected/], ['timeout', /abort/i]] as const) {
+      process.env.IRON_TEST_RUNTIME_MODE = mode;
+      await assert.rejects(() => runtime(payload, AbortSignal.timeout(mode === 'timeout' ? 100 : 3000)), expected);
+    }
+  } finally { delete process.env.IRON_TEST_RUNTIME_MODE; }
+});
+
+test('Claude adapter is tool-free and requires explicit API-key authentication', async () => {
+  const previous = process.env.ANTHROPIC_API_KEY;
+  try {
+    delete process.env.ANTHROPIC_API_KEY;
+    await assert.rejects(() => claudeRuntime(fixture)(payload, AbortSignal.timeout(3000)), /ANTHROPIC_API_KEY/);
+    process.env.ANTHROPIC_API_KEY = 'fixture-not-a-real-key';
+    assert.equal((await claudeRuntime(fixture)(payload, AbortSignal.timeout(3000))).text, '<edit/>');
+  } finally {
+    if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = previous;
+  }
+});
+
+function documentFixture() {
+  let version = 1;
+  let applyCalls = 0;
+  const nodes: Record<string, { type: string; name: string; x: number; color: string }> = {};
+  const api = {
+    version: () => version,
+    schema: () => ({ facets: { transform2d: { x: 'number', y: 'number' }, size: { w: 'number', h: 'number' }, fill: { color: 'color' } }, types: { rect: { facets: [{ kind: 'transform2d', required: true }, { kind: 'size', required: true }, { kind: 'fill', required: true }], default_host: '2d', children: 'none' } } }),
+    view: () => `<document version="${version}"><composition id="#1" name="test" notation="2d">${Object.entries(nodes).map(([id, node]) => `<rect id="${id}" name="${node.name}" x="${node.x}"/>`).join('')}</composition></document>`,
+    selection: () => [], nextIds: () => ['#fixture'], nextRelationIds: () => [], place: () => ['a0'],
+    apply: (transaction: any, expected: number) => {
+      applyCalls++;
+      assert.equal(transaction.actor, 'model');
+      assert.equal(expected, version);
+      for (const operation of transaction.ops) {
+        if (operation.t === 'create') nodes[operation.id] = { type: operation.ty, name: 'agent-test-shape', x: 100, color: '#ff2200' };
+        if (operation.t === 'set' && operation.path === 'transform2d.x') nodes[operation.id].x = operation.slot;
+      }
+      version++;
+      return { ok: true, version };
+    },
+  } as unknown as DocumentApi;
+  return { api, nodes, changed: () => version++, calls: () => applyCalls };
+}
+
+test('agent edit pipeline sends model-authored shape creation through the transaction API', async () => {
+  const fixtureDoc = documentFixture();
+  await bridgeTest(codexRuntime(fixture), async endpoint => {
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    const result = await ask(fixtureDoc.api, transport, 'add a rectangle');
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(fixtureDoc.calls(), 1);
+    assert.equal(result.outcome?.aliases?.$shape, '#fixture');
+    assert.equal(fixtureDoc.nodes['#fixture'].type, 'rect');
+    const edited = await ask(fixtureDoc.api, transport, 'edit-test-shape');
+    assert.equal(edited.ok, true, JSON.stringify(edited));
+    assert.equal(fixtureDoc.nodes['#fixture'].x, 240);
+    assert.equal(fixtureDoc.calls(), 2);
+  }, 3000);
+});
+
+test('late replies cannot edit a document changed during generation', async () => {
+  const fixtureDoc = documentFixture();
+  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { fixtureDoc.changed(); return { text: '<edit><create type="rect" parent="#1"/></edit>' }; } }, 'add a rectangle');
+  assert.equal(result.ok, false);
+  assert.match(result.error!, /document changed/);
+  assert.equal(fixtureDoc.calls(), 0);
+});
+
+test('invalid model edits get one correction attempt and no partial transaction', async () => {
+  const fixtureDoc = documentFixture();
+  let calls = 0;
+  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async (_system, messages) => {
+    calls++;
+    if (calls === 1) return { text: '<edit><create type="not-a-type" parent="#1"/></edit>' };
+    assert.match(messages.at(-1)!.content, /edit-failed/);
+    return { text: '<edit><create id="$shape" type="rect" parent="#1" x="20"/></edit>' };
+  } }, 'add a rectangle');
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.attempts, 2);
+  assert.equal(fixtureDoc.calls(), 1);
+});
+
+test('missing edit blocks and runtime errors do not mutate or silently fall back', async () => {
+  for (const complete of [async () => ({ text: 'I cannot do that' }), async () => { throw new Error('runtime unavailable'); }]) {
+    const fixtureDoc = documentFixture();
+    const result = await ask(fixtureDoc.api, { name: 'fixture', complete }, 'add a rectangle');
+    assert.equal(result.ok, false);
+    assert.equal(result.attempts, 1);
+    assert.equal(fixtureDoc.calls(), 0);
+  }
+});
+
+test('chat explicitly accepts prose-only replies with bounded previous conversation and no mutation', async () => {
+  const fixtureDoc = documentFixture();
+  const history = [{ role: 'user' as const, content: 'What is the rectangle?' }, { role: 'assistant' as const, content: 'A shape in the composition.' }];
+  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async (system, messages) => {
+    assert.match(system, /CONVERSATION/);
+    assert.deepEqual(messages.slice(0, 2), history);
+    assert.match(messages.at(-1)!.content, /REQUEST\nExplain it/);
+    return { text: '## The rectangle\n\nA **2D** shape.\n\n::view{show=test}' };
+  } }, 'Explain it', { history, allowTextReply: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.edit, null);
+  assert.equal(fixtureDoc.calls(), 0);
+  assert.match(result.note, /2D/);
+});
+
+test('chat renders edit examples as prose without applying fenced or inline code', async () => {
+  const fixtureDoc = documentFixture();
+  for (const text of ['Here is an example:\n\n```xml\n<edit><create type="rect" parent="#1"/></edit>\n```', 'Example: `<edit><create type="rect" parent="#1"/></edit>`', 'Example:\n\n    <edit><create type="rect" parent="#1"/></edit>', '> <edit><create type="rect" parent="#1"/></edit>']) {
+    const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => ({ text }) }, 'Explain edit syntax', { allowTextReply: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.edit, null);
+    assert.equal(fixtureDoc.calls(), 0);
+  }
+});
+
+test('a prose-only correction cannot turn a rejected edit into a reported success', async () => {
+  const fixtureDoc = documentFixture();
+  let calls = 0;
+  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => ({ text: ++calls === 1 ? '<edit><create type="not-a-type"/></edit>' : 'Done.' }) }, 'Make a shape', { allowTextReply: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.attempts, 2);
+  assert.equal(fixtureDoc.calls(), 0);
+});

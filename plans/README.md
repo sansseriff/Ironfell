@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-10-28 on `master`. Update this file whenever a plan is added,
+**Updated:** 2026-11-04 for local agent/chat integration. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -38,6 +38,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 
 | Spec | What it specifies | State |
 |---|---|---|
+| [`agent-runtimes.md`](specs/agent-runtimes.md) | Loopback runtime interoperability, Codex bootstrap, Claude CLI adapter, provider selection and 2D authoring tests | Bootstrap built 2026-11-03 in `agent-runtimes` worktree; live Codex create/edit/undo passes in worker/main modes; live Claude, native and full smoke pending |
 | [`document-spine.md`](specs/document-spine.md) | `iron_document`: ops, transactions, ids, history, file format | Implemented; the store's rules |
 | [`entity-composition-model.md`](specs/entity-composition-model.md) (ECM) | Units, definitions, entities, compositions, ports, lessons | Phases 1–3 done; 4–7 open |
 | [`constraint-system.md`](specs/constraint-system.md) (CS) | Solver, constraints, interaction-time causality | Phases 1–3 done; 4–7 open |
@@ -65,7 +66,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`instance-cache.md`](specs/instance-cache.md) | Drawing components by what each part depends on (component-model §11): static, keyed and live parts; groups moved rigidly; equal instances sharing drawings and tiles; SVG repeats as references to definitions | Approved and built 2026-10-24 (phases 0, A–D, §7): the Prussia near-whole drag 235.5 → 0.6 ms; Prussia imports as 14,407 nodes (was 42,667). Open: incremental expansion |
 | [`model-interop.md`](specs/model-interop.md) | External computational Models: jobs, live sessions, optional local acceleration; shared web/native data and lifecycle semantics | Proposal drafted 2026-10-16; pending user approval. No implementation; conditional work order in `handoff-product.md` §4.2 |
 | [`scopes.md`](specs/scopes.md) | Durable local storage and global identity: scope ids, schema 9, snapshot plus op log in OPFS, boot into the last scope, the scope menu, workspace and assets per scope; replaces `clipboard-and-assets.md` §6 | Approved 2026-11-02; **phases 1–2 done 2026-11-02** (§10: durable OPFS scopes, boot into the last scope, `&demo` for scripts); **phase 3 done 2026-11-03** (the scope menu, §10.1); phases 4–5 (workspace, assets) later. Background in `notes/narrative-layer-and-storage-primitives.md` |
-| [`narrative-panel.md`](specs/narrative-panel.md) | Outline: an HTML (ProseMirror) panel for narrative text as block nodes in the store, level-1 references (mentions, live values, view changes), the LLM editing blocks, document-first LLM interaction options | Outline 2026-11-02; decisions by best guess and **built 2026-11-03** (§7, §8) |
+| [`narrative-panel.md`](specs/narrative-panel.md) | ProseMirror narrative, references and model block edits; shared T3-inspired Model/Lesson conversation components and layout modes | Narrative built 2026-11-03 (§7–8); shared chat built in `agent-runtimes` (§9): worker/main UI tests and real Codex prose/visual/edit pass; full smoke/native pending |
 | [`timeline.md`](specs/timeline.md) | The timeline as a session composition: what a clip is, a session `clock` node, `axis` leaves fixed during drags, generated rows by object and property bound to clips, `std:timeline`, retiming, explicit clip creation | Phases 1–2, most of 3 and Animate change (4) done 2026-11-03 (§11); snapping, easing curves, ends at the playhead, phase 5 next |
 
 ## 4. Rendering

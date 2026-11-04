@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [svelte()],
   base: mode === 'native' ? './' : '/Ironfell/', // Updated to match the actual repository name
   root: '.',
+  cacheDir: '.agents/vite',
   build: {
     outDir: mode === 'native' ? 'dist-native' : 'dist',
 

@@ -1,7 +1,8 @@
 # The narrative panel (outline)
 
-**Status:** Outline 2026-11-02; **decisions taken by best guess 2026-11-03** (§7), with
-the user away, and **built 2026-11-03** (§8).
+**Status:** Initial outline 2026-11-02; decisions and narrative built 2026-11-03
+(§7–8). Shared T3-inspired conversations built 2026-11-03 in `agent-runtimes`
+(§9), not merged into the main checkout.
 **Background:** [`../notes/narrative-layer-and-storage-primitives.md`](../notes/narrative-layer-and-storage-primitives.md)
 §5 (text as the surface, the formalisation ladder, how text is stored) and §6 (moves,
 the narrative clock). Canvas text, drawn by the engine, is a different thing and stays
@@ -268,4 +269,118 @@ Not built: tracked changes inside a block's text (the review is per block); marg
 comments, intent blocks and `@iron` lines (§4 options 3–5); `:go` moves and the
 narrative clock beyond scroll-to-top; mark targets as relations (§7.1's limit);
 remapping targets on paste between documents.
+
+## 9. Shared conversation UI (T3 investigation, 2026-11-03)
+
+**Status:** implemented in the `agent-runtimes` worktree; validation in §9.4.
+The user requested substantial study of T3 Code and one chat UI for Model and
+Lesson. Studied `pingdotgg/t3code` main snapshot **e68e19d** (MIT), downloaded into
+gitignored `.agents/reference/t3code`; no T3 source is copied into Iron.
+
+### 9.1 Decisions from the reference
+
+| T3 source (relative to repository root) | Decision for Iron |
+|---|---|
+| `apps/web/src/components/ChatView.tsx`, `chat/ChatComposer.tsx`, `chat/ComposerSurface.tsx`, `chat/ComposerFooterControls.tsx` | Separate orchestration, transcript, input surface and provider controls. A bounded readable transcript and bottom composer, not a prompt plus last-result dump. Reimplement in Svelte/Bits UI and Iron tokens, not React/Base UI/Tailwind. |
+| `apps/web/src/composerDraftStore.ts`, `chat/useComposerSend.ts` | Scoped drafts and stable turn ids; optimistic user turns, explicit pending/success/failure and restoring failed input without overwriting newly typed text. Mode switching must not recreate a conversation. |
+| `apps/web/src/components/chat/ThreadTimeline.tsx`, `MessagesTimeline.logic.ts`, `TimelineAssistantRows.tsx`, `TimelineV2EventRow.tsx` | Typed user/assistant content and separate document-change details. Do not reparse prose to infer runtime success or treat XML as the assistant's primary response. |
+| `apps/web/src/components/chat/useTimelineFollow.ts`, `timelineViewport.ts`, `useTimelinePositionRestore.test.ts` | Follow the bottom only while the reader is there; scrolling upward releases follow; explicit Latest action. Keep stable message identity during layout changes. |
+| `apps/web/src/composer-logic.ts`, `components/ComposerPromptEditorTiptap.tsx` | IME-safe submit; Shift+Enter remains a newline; retain Iron's Cmd/Ctrl+Enter shortcut. No global keystroke interception from the document editor. |
+| `apps/web/src/components/ChatMarkdown.tsx`, `chat/MermaidDiagram.tsx`, `chat/MessageCopyButton.tsx` | Dedicated prose/code/table/media renderers, safe links, copy feedback, lazy visual work. Use a Markdown AST without raw HTML injection; engine-exported SVG is an image, never inserted as executable DOM. |
+| `packages/contracts/src/orchestrationV2.ts` | Separate normalized conversation records from provider wire messages and document transactions. Keep provider-specific details behind transport adapters. |
+
+Reference links: `https://github.com/pingdotgg/t3code/tree/e68e19d/apps/web/src`
+and `https://github.com/pingdotgg/t3code/blob/e68e19d/packages/contracts/src/orchestrationV2.ts`.
+The monorepo also has mobile, orchestration, provider and history layers; those
+are not dependencies to port wholesale into Iron. Read the focal modules and
+their scroll/composer tests, rather than running T3's whole build.
+
+### 9.2 Components and contracts
+
+- `chat/conversation.ts`: provider-independent turns, status, bounded history,
+  content parts and input/scroll policy. No credentials or document ownership.
+- `chat/sessions.svelte.ts`: page-session state keyed by engine generation,
+  scope, view/source; draft and transcript survive tab/mode changes. Not another
+  persistent store; scope durability still belongs to `iron_document`.
+- `chat/ChatPanel.svelte`: one shared orchestrator, used by Model and Lesson.
+- `chat/ChatTranscript.svelte`, `ChatMessage.svelte`: role-separated turns,
+  pending/error state, copy/retry and collapsed edit diagnostics; extension
+  snippet for Lesson's Keep/Revert controls.
+- `chat/ChatComposer.svelte`: shared input, explicit target slot, provider/model
+  controls and connection settings. No fake Stop/streaming controls.
+- `chat/ChatMarkdown.svelte`, `ChatVisual.svelte`: safe Markdown AST rendering
+  and explicit `::view{show=composition focus=#node}` cards with engine SVG
+  snapshots and an Open action. No arbitrary model-generated HTML/JS.
+
+Model gets a document-focused conversation. Lesson keeps its ProseMirror editor,
+outline, cursor context and block review, passing those through slots/hooks to
+the same conversation. Authoring makes the document primary and the transcript
+compact; Hybrid gives both space; Exploration makes chat primary with the
+document outline available. These are layouts, not provider permission modes.
+Switching preserves draft, turns, cursor and pending work. Targets remain
+visible; asking to discuss must be allowed to produce prose without an edit.
+
+Bounded recent messages accompany each request; current document context is
+read fresh. The legacy `__iron.ask` edit contract remains the default; chat
+requests explicitly allow prose-only replies. Existing atomic/stale-version
+checks still govern any edits. Browser/native adapters use the same options.
+
+### 9.3 Deliberate follow-ups
+
+Real token streaming, end-to-end Stop, provider-native session resume, durable
+chat records, virtualized/paged long histories, attachments, math/Mermaid,
+arbitrary interactive artifacts and queued/steered requests require separate
+runtime/storage work. Do not imply those features exist through decorative UI.
+Hybrid's adjustable split and context-driven layout defaults remain follow-ups;
+this slice preserves the existing mode behavior and shares its conversation.
+
+### 9.4 Built and verified
+
+- Model and Lesson use the same `ChatPanel`, transcript, composer, message,
+  Markdown and visual renderers. Lesson contributes only its explicit write
+  target and block-review snippet. Prose stays in ProseMirror; chat state is
+  page-session UI state, keyed by engine generation, scope and narrative source.
+- Drafts and conversations survive mode/tab changes. Authoring keeps the editor
+  primary with a compact most-recent turn; Hybrid shares space; Exploration
+  shows the conversation and outline. Cursor identity survives all three.
+- Markdown uses `marked` tokens rendered by Svelte, not raw HTML injection.
+  Code examples cannot become executable edits. Links reject unsafe schemes;
+  external images require a click to load. Composition cards export passive
+  SVG snapshots, with Open and Refresh, and revoke blob URLs on disposal.
+- Chat accepts prose-only replies; legacy edit-only calls are unchanged. The
+  last 12 history messages are bounded to 48,000 characters in total. A failed
+  edit's repair cannot report success merely by returning prose. Edits still
+  pass through the existing validation/version/transaction path.
+- Revert refuses to replace a narrative if it has changed since that model
+  reply, preventing a review action from overwriting newer human prose.
+- `bun test tests/`: **40 pass**. `bun run check`: **0 errors / 9 existing
+  warnings**. Web and native-mode frontend production bundles and strict bridge
+  type checking pass. Native bundling is not native runtime/package validation.
+- The existing `narrative.txt` run-iron smoke also passes against worktree port
+  5175, including typing/undo, mentions, live values, linked views, all modes,
+  block review/revert, stale references and durable prose after reload; no page
+  errors. Its expected output is unchanged.
+- `.claude/skills/run-iron/chat-ui.ts` passes in **worker and main** modes:
+  Markdown/table/code/visual rendering, unsafe content, multi-turn context,
+  scroll-follow release/Latest, IME, separate drafts, mode/cursor continuity,
+  discussion without mutation, review/revert/conflict and failed-input recovery
+  without overwriting a newer unsent draft. Screenshots inspected for Model,
+  Authoring, Hybrid and Exploration, under gitignored `.agents/chat/`.
+- **Real Codex, worker:** a prose-and-visual reply left the document unchanged;
+  a subsequent shared-composer request created a validated named rectangle.
+  Both completed with no page errors. Provider process authentication stays
+  local; no provider credentials enter chat history.
+
+Vite's cache now lives in root-relative `.agents/vite`, so worktrees using
+shared installed dependencies do not overwrite each other's optimizer cache.
+
+Integration validation 2026-11-04 incorporates main `fcba711` and freshly builds
+both wasm backends. All 45 JS tests, frontend/bridge checks, web/native-mode
+frontend bundles, worker/main chat and agent fixture tests, pairing/rotation,
+fast/broad smoke and `narrative.txt` pass without page errors. Earlier live Codex
+evidence above is from 2026-11-03; no new paid inference was needed. Logs and
+fixture evidence are retained in `.agents/agent-runtimes-validation/` in the main
+checkout. Native packaging and live Claude validation remain pending. Native CSP
+permits passive blob snapshots and opt-in HTTPS images; native frontend wiring
+does not imply a packaged-native test. Nothing is pushed.
 

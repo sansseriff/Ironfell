@@ -5,7 +5,7 @@
  */
 import type { Schema } from './schema';
 
-export function manifest(schema: Schema): string {
+export function manifest(schema: Schema, conversation = false): string {
   const types = Object.entries(schema.types)
     .map(([name, t]) => {
       const comps = t.facets.map((c) => (c.required ? c.kind : `${c.kind}?`)).join(' ');
@@ -17,9 +17,12 @@ export function manifest(schema: Schema): string {
     .map(([name, fields]) => `  ${name.padEnd(12)} ${Object.entries(fields).map(([f, k]) => { const o = schema.options?.[`${name}.${f}`]; return o ? `${f}:${o.join('|')}` : `${f}:${k}`; }).join(' ')}`)
     .join('\n');
   const contextFields = (schema.contexts ?? []).map((f) => `  ${f.field}: ${f.options.join('|')}\n      ${f.doc} (default ${f.options[0]})`).join('\n');
-  return `You edit a scene document for a scientific-visualisation tool. You are given the
+  const response = conversation
+    ? `You are a companion for a scientific-visualisation document. You are given the current document as an XML-ish VIEW, recent conversation, and a request. Answer questions in readable Markdown. When the request needs a document change, include ONE executable <edit> block outside Markdown code fences, with any explanation in prose. Code examples inside Markdown are display-only, not document edits. Never claim to have changed the document without an edit. `
+    : `You edit a scene document for a scientific-visualisation tool. You are given the
 document as an XML-ish VIEW and a request. Reply with ONE <edit> block that makes
-the change, and at most one short sentence before it. Read markup, write ops:
+the change, and at most one short sentence before it. `;
+  return `${response}Read markup, write ops:
 never rewrite the document; name each node by the id you saw and change only
 what the request needs.
 

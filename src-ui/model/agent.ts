@@ -6,6 +6,7 @@ import type { DocumentApi } from './api';
 import { applyEdit, extractEdit, type EditOutcome } from './edit';
 import { manifest } from './manifest';
 import type { ModelTransport } from './transport';
+import { boundedHistory, executableReply, type ConversationOptions } from './conversation';
 
 export interface AskResult {
   ok: boolean;
@@ -18,8 +19,9 @@ export interface AskResult {
   error?: string;
 }
 
-export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string): Promise<AskResult> {
-  const system = manifest(await api.schema());
+export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string, options: ConversationOptions = {}): Promise<AskResult> {
+  const snapshotVersion = await api.version();
+  const system = manifest(await api.schema(), options.allowTextReply) + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
   // The model view first (what things are and where each is drawn, ECM §11),
   // then the tree, which also holds what no composition does (the library,
   // timelines, loose roots).
@@ -35,6 +37,7 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
     ? `SELECTED\n${picked.map((p) => `${p.node} (${p.type ?? 'node'}${p.name ? ` "${p.name}"` : ''})`).join('\n')}\n\n`
     : '';
   const messages: { role: 'user' | 'assistant'; content: string }[] = [
+    ...boundedHistory(options.history),
     { role: 'user', content: `${view}\n\n${selection}REQUEST\n${instruction}` },
   ];
   let attempts = 0;
@@ -49,13 +52,18 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
     } catch (e) {
       return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: String(e) };
     }
-    const edit = extractEdit(text);
+    const edit = extractEdit(options.allowTextReply ? executableReply(text) : text);
     note = text.replace(edit ?? '', '').trim();
     if (!edit) {
+      if (options.allowTextReply && note && attempts === 1) return { ok: true, note, edit: null, outcome: null, attempts, transport: transport.name };
       return { ok: false, note, edit: null, outcome: null, attempts, transport: transport.name, error: 'the reply had no <edit> block' };
     }
     lastEdit = edit;
-    lastOutcome = await applyEdit(api, edit, `model: ${instruction.slice(0, 60)}`);
+    if (await api.version() !== snapshotVersion) {
+      return { ok: false, note, edit, outcome: null, attempts, transport: transport.name, error: 'document changed while the agent was thinking; ask again with the current document' };
+    }
+    const guardedApi = { ...api, apply: (transaction: object) => api.apply(transaction, snapshotVersion) };
+    lastOutcome = await applyEdit(guardedApi, edit, `model: ${instruction.slice(0, 60)}`);
     if (lastOutcome.ok) break;
     messages.push({ role: 'assistant', content: text });
     messages.push({ role: 'user', content: `${lastOutcome.failure}\n\nSend one corrected <edit>.` });

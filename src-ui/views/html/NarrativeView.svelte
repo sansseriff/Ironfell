@@ -30,6 +30,11 @@
   import Button from "../../lib/ui/Button.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
   import TextInput from "../../lib/ui/TextInput.svelte";
+  import ChatPanel from '../../chat/ChatPanel.svelte';
+  import { chatSession } from '../../chat/sessions.svelte';
+  import { narrativeMode, type ChatHandle, type ChatTurn, type NarrativeMode as Mode } from '../../chat/conversation';
+  import type { ConversationMessage } from '../../model/conversation';
+  import type { AskResult } from '../../model/agent';
   import Select from "../../lib/ui/Select.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { ViewSpec } from "../views";
@@ -41,12 +46,11 @@
 
   const doc = controllerManager.docClient;
   const active = getContext<() => boolean>("iron-view-active") ?? (() => true);
-  type Mode = "authoring" | "hybrid" | "exploration";
   // svelte-ignore state_referenced_locally
   const modeKey = `iron.narrative.mode.${panel ?? spec.source}`;
   let mode: Mode = $state((() => {
     try {
-      return (localStorage.getItem(modeKey) as Mode) || "authoring";
+      return narrativeMode(localStorage.getItem(modeKey));
     } catch {
       return "authoring";
     }
@@ -217,19 +221,17 @@
   });
 
   // ---- the conversation ----------------------------------------------
-  interface Turn {
-    instruction: string;
-    target: string;
-    ok: boolean;
-    note: string;
-    error: string;
-    /** What the narrative held before, and which blocks the turn changed. */
-    before: StoredBlock[] | null;
+  interface NarrativeReview {
+    source: string;
+    before: StoredBlock[];
+    after: StoredBlock[];
     changed: string[];
     reviewed: "" | "kept" | "reverted";
+    error?: string;
   }
-  let turns: Turn[] = $state([]);
-  let instruction = $state("");
+  const session = $derived(chatSession(`${doc.generation}:${doc.scope.current?.id ?? 'demo'}:narrative:${source}`));
+  const reviews = $derived(session.annotations as Record<string, NarrativeReview>);
+  let chat: ChatHandle | undefined = $state();
   let writeAtCursor = $state(true);
   $effect(() => {
     // Each mode's default target (§4.1): Authoring writes at the cursor,
@@ -252,54 +254,60 @@
     return `${text}\n\n(The author's cursor is in the narrative "${source}"${at}${cursor.heading ? `, under the heading "${cursor.heading}"` : ""}. Insert new text there with <write narrative="${source}" after="${cursor.block ?? "end"}">; edits elsewhere are allowed when the request implies them.)${sel}`;
   }
 
-  async function send(xmlForTest?: string) {
-    const text = instruction.trim();
-    if (!text && !xmlForTest) return;
+  async function performTurn(text: string, history: ConversationMessage[], turn: ChatTurn, xmlForTest?: string): Promise<AskResult> {
+    const instruction = contextFor(text);
+    const owner = session;
+    const currentSource = source;
+    const currentEditor = editor;
+    const generation = doc.generation;
     await editor?.flush();
-    const before = editor?.storedBlocks() ?? null;
-    const turn: Turn = { instruction: text || "(scripted edit)", target: targetLabel, ok: false, note: "", error: "", before, changed: [], reviewed: "" };
-    turns = [...turns, turn];
-    instruction = "";
-    try {
-      if (xmlForTest !== undefined) {
-        const r = await doc.edit(xmlForTest, `model: ${text.slice(0, 60)}`);
-        turn.ok = !!r?.ok;
-        turn.error = r?.ok ? "" : (r?.failure ?? "not applied");
-      } else {
-        const r = await doc.ask(contextFor(text));
-        turn.ok = !!r?.ok;
-        turn.note = r?.note ?? "";
-        turn.error = r?.error ?? (r?.ok ? "" : (r?.outcome?.failure ?? ""));
-      }
-    } catch (e) {
-      turn.error = String(e);
+    const before = currentEditor?.storedBlocks() ?? [];
+    let result: AskResult;
+    if (xmlForTest !== undefined) {
+      const outcome = await doc.edit(xmlForTest, `model: ${text.slice(0, 60)}`);
+      result = { ok: !!outcome.ok, note: '', edit: xmlForTest, outcome, attempts: 1, transport: 'scripted' };
+    } else {
+      result = await doc.ask(instruction, { history, allowTextReply: true });
     }
-    await editor?.refresh();
-    const after = editor?.storedBlocks() ?? [];
-    if (before) {
-      const was = new Map(before.map((b) => [b.id, b]));
-      turn.changed = after.filter((b) => !was.has(b.id) || !sameContent(was.get(b.id)!, b)).map((b) => b.id);
-      if (before.some((b) => !after.find((a) => a.id === b.id))) turn.changed.push("(deleted)");
+    if (generation !== doc.generation) return result;
+    const read = await doc.command<{ ok: boolean; blocks: StoredBlock[] }>({ op: 'narrative_read', source: currentSource });
+    const after = read.ok ? read.blocks : [];
+    const was = new Map(before.map(block => [block.id, block]));
+    const changed = after.filter(block => !was.has(block.id) || !sameContent(was.get(block.id)!, block)).map(block => block.id);
+    if (before.some(block => !after.find(next => next.id === block.id))) changed.push('(deleted)');
+    owner.annotations[turn.id] = { source: currentSource, before, after, changed, reviewed: '' } satisfies NarrativeReview;
+    if (editor === currentEditor && source === currentSource) {
+      await editor?.refresh();
+      editor?.highlight(new Set(changed));
+      if (changed[0] && changed[0] !== '(deleted)') editor?.reveal(changed[0]);
     }
-    turns = [...turns.slice(0, -1), { ...turn }];
-    editor?.highlight(new Set(turn.changed));
-    if (turn.changed[0] && turn.changed[0] !== "(deleted)") editor?.reveal(turn.changed[0]);
+    return result;
   }
 
-  function keep(i: number) {
-    turns[i] = { ...turns[i], reviewed: "kept" };
+  function keep(index: number) {
+    const review = reviews[session.turns[index]?.id];
+    if (!review) return;
+    review.reviewed = 'kept';
     editor?.highlight(new Set());
   }
 
   /** Put the narrative back as it was before turn `i`, as one transaction. */
-  async function revert(i: number) {
-    const t = turns[i];
-    if (!t.before || !editor) return;
+  async function revert(index: number) {
+    const turn = session.turns[index];
+    const review = reviews[turn?.id];
+    if (!review || review.source !== source || !editor || doc.asking) return;
     await editor.flush();
     const now = editor.storedBlocks();
-    const { edits } = diff(now, t.before.map((b) => ({ id: b.id, content: b })));
-    if (edits.length) await doc.command({ op: "narrative_edit", source, edits: JSON.stringify(edits), label: "revert model change", actor: "human" });
-    turns[i] = { ...t, reviewed: "reverted" };
+    if (now.length !== review.after.length || now.some((block, blockIndex) => block.id !== review.after[blockIndex]?.id || !sameContent(block, review.after[blockIndex]))) {
+      review.error = 'The narrative changed after this reply. Revert would overwrite newer work; use Undo or edit the affected blocks instead.';
+      return;
+    }
+    const { edits } = diff(now, review.before.map(block => ({ id: block.id, content: block })));
+    if (edits.length) {
+      const result = await doc.command<{ ok: boolean; error?: string }>({ op: "narrative_edit", source, edits: JSON.stringify(edits), label: "revert model change", actor: "human" });
+      if (!result.ok) { review.error = result.error || 'Could not revert the model change.'; return; }
+    }
+    review.reviewed = 'reverted';
     editor.highlight(new Set());
     await editor.refresh();
   }
@@ -369,10 +377,9 @@
       mode: (m?: Mode) => (m ? (mode = m) : mode),
       flush: () => editor?.flush(),
       askWith: (xml: string, text = "") => {
-        instruction = text;
-        return send(xml);
+        return chat?.submit(text || '(scripted edit)', (instruction, history, turn) => performTurn(instruction, history, turn, xml));
       },
-      turns: () => turns.map((t) => ({ ...t, before: undefined })),
+      turns: () => session.turns.map(turn => ({ ...turn, ok: !!turn.result?.ok, note: turn.result?.note ?? '', ...reviews[turn.id], before: undefined, after: undefined })),
       keep,
       revert,
       status: () => ({ ...status, missing, cursor: { ...cursor }, target: targetLabel, shown: editor?.shown ?? "" }),
@@ -485,49 +492,28 @@
       </div>
     </div>
 
-    {#if mode !== "authoring" || turns.length}
-      <div class="conversation" class:compact={mode === "authoring"}>
-        {#each turns as t, i (i)}
-          {#if mode !== "authoring" || i === turns.length - 1}
-            <div class="turn" class:failed={!t.ok}>
-              <p class="you">{t.instruction}</p>
-              <p class="meta">{t.target}{t.ok ? "" : " · not applied"}</p>
-              {#if t.note}<p class="note">{t.note}</p>{/if}
-              {#if t.error}<p class="err">{t.error}</p>{/if}
-              {#if t.changed.length}
-                <div class="review" data-review={i}>
-                  <span>Changed {t.changed.filter((c) => c !== "(deleted)").length} block{t.changed.length === 1 ? "" : "s"}{t.changed.includes("(deleted)") ? ", deleted some" : ""}</span>
-                  {#if t.reviewed}
-                    <span class="done">{t.reviewed}</span>
-                  {:else}
-                    <Button small onclick={() => editor?.reveal(t.changed[0])}>Show</Button>
-                    <Button variant="primary" small onclick={() => keep(i)} data-keep>Keep</Button>
-                    <Button variant="outline" small onclick={() => revert(i)} data-revert>Revert</Button>
-                  {/if}
-                </div>
+    <div class="conversation-host" class:compact={mode === 'authoring'}>
+      <ChatPanel {session} bind:this={chat} compact={mode === 'authoring'} target={targetLabel} send={performTurn}>
+        {#snippet targetControl()}
+          <Button variant="outline" small title="Where the model writes: click to switch" onclick={() => writeAtCursor = !writeAtCursor}>{targetLabel}</Button>
+        {/snippet}
+        {#snippet review(turn: ChatTurn)}
+          {@const change = reviews[turn.id]}
+          {@const index = session.turns.findIndex(item => item.id === turn.id)}
+          {#if change?.changed.length}
+            <div class="review" data-review={index}>
+              <span>Changed {change.changed.filter(id => id !== '(deleted)').length} block{change.changed.length === 1 ? '' : 's'}{change.changed.includes('(deleted)') ? ', deleted some' : ''}</span>
+              {#if change.reviewed}<span class="done">{change.reviewed}</span>
+              {:else}
+                <Button small onclick={() => editor?.reveal(change.changed.find(id => id !== '(deleted)') ?? '')}>Show</Button>
+                <Button variant="primary" small onclick={() => keep(index)} data-keep>Keep</Button>
+                <Button variant="outline" small onclick={() => revert(index)} data-revert disabled={doc.asking}>Revert</Button>
               {/if}
+              {#if change.error}<span class="err" role="alert">{change.error}</span>{/if}
             </div>
           {/if}
-        {/each}
-      </div>
-    {/if}
-
-    <div class="composer">
-      <div class="target">
-        <Button variant="outline" small title="Where the model writes: click to switch" onclick={() => (writeAtCursor = !writeAtCursor)}>{targetLabel}</Button>
-        {#if !doc.apiKey}<TextInput class="key" type="password" aria-label="Anthropic API key" placeholder="Anthropic API key" onchange={(e: Event) => doc.setApiKey((e.currentTarget as HTMLInputElement).value)} />{/if}
-      </div>
-      <TextInput
-        multiline
-        aria-label="Instruction"
-        rows={mode === "authoring" ? 2 : 3}
-        placeholder={writeAtCursor ? "Ask the model to write here… (⌘↵)" : "Talk to the model… (⌘↵)"}
-        bind:value={instruction}
-        onkeydown={(e: KeyboardEvent) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send();
-        }}
-      />
-      <Button variant="primary" class="send" onclick={() => send()} disabled={doc.asking || !doc.apiKey || !instruction.trim()}>{doc.asking ? "Asking…" : "Ask"}</Button>
+        {/snippet}
+      </ChatPanel>
     </div>
   </div>
   <input type="file" accept=".md,.markdown,.txt,text/markdown" bind:this={mdInput} hidden onchange={importMarkdown} />
@@ -799,71 +785,29 @@
     background: color-mix(in srgb, var(--accent-soft) 60%, transparent);
     box-shadow: -3px 0 0 var(--accent);
   }
-  .conversation {
+  .conversation-host {
     flex: 2;
     min-height: 0;
-    overflow: auto;
     border-top: 1px solid var(--border);
-    padding: 8px 10px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
   }
-  .conversation.compact {
+  .conversation-host.compact {
     flex: none;
-    max-height: 140px;
+    max-height: 280px;
   }
-  .narrative[data-mode="exploration"] .conversation {
+  .narrative[data-mode="exploration"] .conversation-host {
     flex: 1;
-  }
-  .turn {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .turn .you {
-    font-weight: 500;
-  }
-  .turn .meta {
-    font-size: 11px;
-    color: var(--fg-faint);
-  }
-  .turn .note {
-    white-space: pre-wrap;
-    color: var(--fg-muted);
   }
   .review {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     align-items: center;
     font-size: 12px;
   }
   .review .done {
     color: var(--fg-faint);
-  }
-  .composer {
-    flex: none;
-    border-top: 1px solid var(--border);
-    padding: 6px 10px 8px;
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 4px 6px;
-  }
-  .composer .target {
-    grid-column: 1 / -1;
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .composer :global(.key) {
-    flex: 1;
-    font-size: 11px;
-  }
-  .composer :global(textarea) {
-    resize: none;
-  }
-  .composer :global(.send) {
-    align-self: end;
   }
   .mentions {
     position: fixed;

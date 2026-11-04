@@ -4,6 +4,32 @@ Technical and scientific communication in age of AI
 
 ## Run it
 
+### Iron + Codex (one terminal)
+
+From the repository root, after dependencies and wasm are built:
+
+```sh
+bun run dev:agent:demo --open  # temporary demo, opens the browser
+# or:
+bun run dev:agent --open       # your last saved scope
+```
+
+These start Iron on **127.0.0.1:5175** and the local agent bridge on
+**127.0.0.1:4318**. Choose **Codex** in the Model or Lesson composer; the bridge
+token fills automatically. Keep the terminal open; **Ctrl+C stops both**.
+Demo changes are temporary, so export anything you want to keep.
+
+The launcher finds `codex` on PATH or the local Codex app's bundled CLI. An
+explicit `IRON_CODEX_BIN=/path/to/codex` takes precedence. It uses that CLI's
+existing login; if sign-in is needed, run the login command printed at startup.
+No model call, wasm rebuild or login happens merely by starting the servers.
+Occupied ports cause a clear failure, never killing or reusing another server.
+Run `bun run dev:agent --help` for options.
+
+`bun run dev` remains frontend-only; `bun run agent:serve` remains bridge-only.
+
+### Initial build / frontend only
+
 ```sh
 bun install
 bun run wasm:fast   # optimized build (opt 3, SIMD): use this to judge performance

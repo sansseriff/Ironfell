@@ -13,7 +13,7 @@ export async function dispatchEngineMessage(
       const outcome = await modelEdit(glue, handle, data.xml, data.label, alive);
       emit({ ty: 'modelEditResult', requestId: data.requestId, ok: outcome.ok, outcome, ack: outcome.ok ? 'applied' : 'completed' });
     } else if (data.ty === 'modelAsk') {
-      const result = await modelAsk(glue, handle, data.instruction, { apiKey: data.apiKey, model: data.model }, alive);
+      const result = await modelAsk(glue, handle, data.instruction, data, alive);
       emit({ ty: 'modelAskResult', requestId: data.requestId, ok: result.ok, result, ack: 'completed' });
     } else {
       const reply = JSON.parse(glue.engine_message(handle, JSON.stringify(data)));

@@ -22,6 +22,25 @@ Rendering performance (stage H) has its own handoff, [`handoff-render.md`](hando
 
 Done (details in the roadmap's Status table):
 
+- **Shared Model/Lesson chat, 2026-11-03, `agent-runtimes` worktree:**
+  [`narrative-panel.md` §9](specs/narrative-panel.md#9-shared-conversation-ui-t3-investigation-2026-11-03)
+  records the substantial T3 Code source investigation, adopted boundaries,
+  component contracts, tests and deliberate deferrals. One chat UI now serves
+  Model and all three Lesson layouts; editor/cursor and per-block review remain.
+  Worker/main UI tests and real Codex prose/visual/shape creation pass. Streaming,
+  Stop, durable/provider sessions, adjustable Hybrid splits and native packaging
+  remain follow-ups, not implied features. Integration validation 2026-11-04
+  includes fresh wasm, both browser runtime modes and both smoke gates.
+
+- **Local agent bootstrap, 2026-11-03, isolated worktree:**
+  [`specs/agent-runtimes.md`](specs/agent-runtimes.md) owns the plan/bootstrap.
+  Codex app-server and Claude CLI use the existing transaction edit pipeline
+  through an authenticated loopback bridge. Live Codex shape create/edit/undo
+  passes in worker/main browser modes. One-command `bun run dev:agent` starts
+  app + bridge with automatic pairing. Fresh wasm, frontend builds and fast/broad
+  smoke validation completed 2026-11-04; native packaging and live Claude remain pending. Persistent
+  sessions and provider-native tool interoperability are follow-up phases.
+
 - **Frontend agent conventions, 2026-11-03:** `AGENTS.md` now requires Bits UI/Melt
   UI patterns, Iron-styled controls (never browser-default buttons), and Lucide
   icons, with working examples. `CLAUDE.md` imports those shared instructions.

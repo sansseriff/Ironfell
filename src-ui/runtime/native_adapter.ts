@@ -3,7 +3,7 @@ import { documentArguments } from './protocol.generated';
 import { makeDocumentApi } from '../model/api';
 import { applyEdit } from '../model/edit';
 import { ask } from '../model/agent';
-import { AnthropicTransport } from '../model/transport';
+import { makeModelTransport } from '../model/transport';
 
 /** Same UI protocol as the web adapters. Native display callbacks drive Bevy;
  * this adapter batches control traffic and never sends frame ticks. */
@@ -45,7 +45,7 @@ export class NativeAdapter {
     if (data.ty === 'modelEdit' || data.ty === 'modelAsk') {
       const operation = data.ty === 'modelEdit'
         ? applyEdit(this.documentApi(), data.xml, data.label)
-        : ask(this.documentApi(), new AnthropicTransport(data.apiKey, data.model), data.instruction);
+        : ask(this.documentApi(), makeModelTransport(data), data.instruction, data);
       void operation.then((result) => this.receive({ ty: data.ty + 'Result', requestId: data.requestId, ok: result.ok, ack: data.ty === 'modelEdit' && result.ok ? 'applied' : 'completed', [data.ty === 'modelEdit' ? 'outcome' : 'result']: result }))
         .catch((e: unknown) => this.receive({ ty: data.ty + 'Result', requestId: data.requestId, ok: false, error: String(e) }));
       return;

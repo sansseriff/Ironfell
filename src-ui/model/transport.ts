@@ -4,10 +4,36 @@
  *
  * - `AnthropicTransport`: the Claude API from the browser, with a key the
  *   user supplies. Simplest; the key lives in this browser's localStorage.
- * - a local sidecar (not yet written) that shells out to `claude -p` or
- *   exposes the document as MCP tools, for driving from Claude Code.
+ * - `LocalRuntimeTransport`: a loopback bridge to Codex or Claude runtimes.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { localEndpoint, type ModelOptions, type LocalRuntimeOptions } from './runtime-options';
+
+export function makeModelTransport(options: ModelOptions): ModelTransport {
+  return options.runtime ? new LocalRuntimeTransport(options.runtime) : new AnthropicTransport(options.apiKey, options.model);
+}
+
+export class LocalRuntimeTransport implements ModelTransport {
+  readonly name: string;
+  private endpoint: URL;
+
+  constructor(private options: LocalRuntimeOptions) {
+    this.endpoint = localEndpoint(options.endpoint);
+    this.name = `${options.provider}:local${options.model ? `:${options.model}` : ''}`;
+  }
+
+  async complete(system: string, messages: { role: 'user' | 'assistant'; content: string }[]) {
+    const response = await fetch(new URL('/complete', this.endpoint), {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.options.token}` },
+      body: JSON.stringify({ provider: this.options.provider, system, messages, ...(this.options.model ? { model: this.options.model } : {}) }),
+      signal: AbortSignal.timeout(50000),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? `Agent bridge returned ${response.status}`);
+    if (typeof result.text !== 'string') throw new Error('Invalid agent bridge response');
+    return { text: result.text, usage: result.usage };
+  }
+}
 
 export interface ModelTransport {
   readonly name: string;

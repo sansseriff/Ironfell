@@ -68,6 +68,13 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
 | `bun run attachments.ts` | ~10 s (9.52 s, 2026-11-04) |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
+| `agent-runtime.ts`, fixture runtime, worker or main | ~2 s (1.90 s, 2026-11-03) |
+| `agent-runtime.ts`, live Codex, worker or main | ~10–30 s; capped at 55 s |
+| `agent-pairing.ts`, local fixture | ~3–5 s; capped at 55 s |
+| `bun test tests/dev-agent.test.ts`, warm launcher tests | <1 s (2026-11-04) |
+| `bun run dev:agent:demo`, warm startup to ready | ~1 s; stays running until Ctrl+C |
+| `chat-ui.ts`, fixture, worker or main | ~4–7 s; capped at 55 s |
+| `chat-ui.ts`, real Codex prose/visual + shape, worker | ~10–25 s; capped at 55 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -97,6 +104,112 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `bench-large-svg.txt` | ~1 min |
 | a short ad-hoc driver script (a few commands) | 20–40 s |
 | ⏱ `cargo test -p iron_document`, after a dependency change | a few minutes (not yet timed) |
+
+## Local agent runtime bootstrap
+
+The owning plan is [`plans/specs/agent-runtimes.md`](../../../plans/specs/agent-runtimes.md).
+For manual testing, use **one terminal** in the repository root:
+
+```sh
+bun run dev:agent:demo --open  # ephemeral demo
+# bun run dev:agent --open    # last saved scope instead
+```
+
+Expected startup banner: `Iron + Codex ready`, followed by the app URL on
+127.0.0.1:5175, bridge URL on 127.0.0.1:4318, detected Codex executable,
+automatic-pairing/login guidance and `Ctrl+C stops both services.` No token is
+printed by this launcher. It checks Codex executability, not login validity;
+an authenticated model turn remains the login test. It reuses built wasm,
+does not perform inference at startup, and never kills an occupied-port owner.
+`--open` is optional; Ctrl+C stops both services. `bun run dev` remains UI-only.
+
+From the worktree root, with Vite on port 5175:
+
+```sh
+bun test tests/agent-runtime.test.ts
+bun test tests/dev-agent.test.ts
+bun .claude/skills/run-iron/agent-pairing.ts
+bun .claude/skills/run-iron/agent-runtime.ts
+RUNTIME=main bun .claude/skills/run-iron/agent-runtime.ts
+LIVE_AGENT=1 IRON_CODEX_BIN=/path/to/codex bun .claude/skills/run-iron/agent-runtime.ts
+```
+
+The fixture test uses the real document engine and a scripted Codex protocol
+process; `LIVE_AGENT=1` uses the signed-in CLI and consumes model usage. Each
+browser run is capped at 55 seconds. `URL` overrides the worktree app address;
+`RUNTIME=main` selects main-thread mode (default worker). A separate temporary
+bridge is started and stopped by the test; no manually running bridge is needed.
+
+Local Vite development pages automatically discover the CLI bridge token; no
+paste is needed on refresh. Start the bridge with `IRON_AGENT_ORIGINS` matching
+the exact app origins (for example `http://127.0.0.1:5175,http://localhost:5175`).
+The settings gear provides a retry and manual fallback. Native/static builds
+still need manual entry. Pairing trusts those local app origins and is not an
+OS multi-user security boundary. Tokens stay in memory, not URLs or storage.
+
+Pairing fixture expected output (no model usage):
+
+```text
+PASS LOCAL PAIRING: autofill, reload, token rotation, authenticated send, no credential storage; no page errors
+```
+
+Expected output (one line per browser run):
+
+```text
+PASS FIXTURE CODEX worker: create, edit, preserve dimensions, undo; no page errors
+PASS FIXTURE CODEX main: create, edit, preserve dimensions, undo; no page errors
+PASS LIVE CODEX worker: create, edit, preserve dimensions, undo; no page errors
+PASS LIVE CODEX main: create, edit, preserve dimensions, undo; no page errors
+```
+
+All four pass on 2026-11-03. The live worker repeat after disabling runtime
+hooks/plugins takes 10.86 s. Token-free readback evidence is saved under
+`.agents/agent-runtime/`. These checks use copied cached wasm; they do not
+replace a fresh build or the full smoke. The existing full smoke expected
+output is unchanged. Unit suite: 31 pass including 11 new runtime tests.
+
+## Shared Model/Lesson chat
+
+Owning plan: `plans/specs/narrative-panel.md` §9 (T3 source investigation,
+component boundaries, explicit deferrals and validation). From the worktree root
+with Vite on 5175:
+
+```sh
+bun .claude/skills/run-iron/chat-ui.ts
+RUNTIME=main bun .claude/skills/run-iron/chat-ui.ts
+LIVE_AGENT=1 IRON_CODEX_BIN=/path/to/codex bun .claude/skills/run-iron/chat-ui.ts
+```
+
+Expected output:
+
+```text
+PASS CHAT worker: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery; no page errors
+PASS CHAT main: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery; no page errors
+PASS LIVE CHAT worker: real Codex prose/visual without mutation, then validated shape creation; no page errors
+```
+
+All pass 2026-11-03 with cached wasm. Each fixture run uses the real engine and
+a scripted local runtime, covering the shared components in both panels and all
+three narrative modes. It also checks unsafe content, failure input restoration,
+history, scroll-follow release/Latest and review conflicts. Live mode consumes
+signed-in Codex usage. `URL` overrides the address but must include `?demo`.
+Waits require the UI, loader completion and a successful engine schema read,
+not merely the early diagnostic `__iron` object. Screenshots are in gitignored
+`.agents/chat/`, inspected for each layout. Total timeout is 55 seconds.
+Unit suite now has 40 passing tests. Full smoke expected output is unchanged;
+these focused tests do not replace full smoke/fresh-build/native validation.
+
+Integration validation 2026-11-04 (main `fcba711` incorporated): **45 JS tests**,
+frontend check (0 errors / 9 existing warnings), strict launcher/bridge types,
+fresh WebGPU + WebGL2 wasm (85.53 s total), web/native-mode frontend bundles,
+fast and broad smoke, `narrative.txt`, pairing and worker/main agent/chat fixtures
+pass. Smoke expected output is unchanged; browser checks report no page errors.
+No new paid inference. Native packaging/runtime and live Claude remain untested.
+Logs and fixture evidence: main checkout `.agents/agent-runtimes-validation/`.
+The existing `narrative.txt` smoke also passes on worktree port 5175 after this
+refactor, including typing/undo, references, modes, review and durability. Its
+expected output is unchanged. Vite caches are root-local `.agents/vite`, not
+under a possibly shared `node_modules/.vite`.
 
 ## Prerequisites
 

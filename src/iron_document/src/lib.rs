@@ -34,6 +34,7 @@ pub mod interaction;
 pub mod gesture;
 pub mod anchor;
 pub mod author;
+pub mod attachment;
 pub mod appearance;
 pub mod graph;
 pub mod handle;
@@ -1863,6 +1864,11 @@ impl Store {
                 }
             }
         }
+        if errors.is_empty() {
+            if let Err(message) = attachment::validate(&self.doc, &work) {
+                errors.push(ApplyError { op: 0, kind: ErrorKind::BadParent, message });
+            }
+        }
         if !errors.is_empty() {
             return Err(errors);
         }
@@ -1951,4 +1957,3 @@ impl Store {
 fn clock_path(field: &str) -> LeafPath {
     LeafPath::new(FacetKind::Clock, field).expect("a clock field")
 }
-

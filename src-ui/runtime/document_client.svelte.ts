@@ -117,6 +117,7 @@ export class DocumentClient {
   canUndo = $state(false);
   canRedo = $state(false);
   generation = $state(0);
+  documentEpoch = $state(0);
   private sessionId = 0;
   private viewGeneration = 0;
   private counterpartGeneration = 0;
@@ -377,6 +378,7 @@ export class DocumentClient {
         this.subscriptions.start();
         return true;
       case 'stateChanged':
+        if (data.reset) this.documentEpoch++;
         this.version = data.version;
         this.sessionVersion = data.sessionVersion;
         this.resolvedVersion = data.resolvedVersion;

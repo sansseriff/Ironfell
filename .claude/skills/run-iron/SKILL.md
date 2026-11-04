@@ -45,6 +45,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ `build.sh` (both backends), warm | ~1.5 min |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
 | ⏱ `build.sh` cold | ~5 min |
+| ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4 min (cargo 3m 25s, plus binding generation; 2026-11-03) |
 | ⏱ full `smoke.txt` (`GPU=1`) | ~3.5–4 min (3m 54s, 2026-11-03) |
 | `piston.txt` | ~1 min |
 | `snapping.txt` | ~30 s |
@@ -62,6 +63,8 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `narrative.txt` | ~25 s |
 | `timeline.txt` | ~30 s |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1 min |
+| `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
+| `bun run attachments.ts` | ~20 s |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
@@ -2455,3 +2458,39 @@ records original OS event timestamp, monitor receipt and PostUpdate, plus cursor
 button and target state. Live validation shows held target motion and release;
 these input ages are not presentation/photon measurements. No hosted-versus-standalone
 latency conclusion is claimed yet. Details: the standalone project's README.
+
+### Shared point controls / fiber and separate shadow — 2026-11-03
+
+With a WebGL2 build and a Vite server running, from this skill directory:
+
+```sh
+URL='http://localhost:5186/Ironfell/?gfx=webgl2&demo&showcase=0&layout=default' bun run attachments.ts
+```
+
+The fixture creates two ordinary paths and two empty controls, makes a main,
+then uses the inspector task to attach both paths' starts and ends. It exposes
+input/output ports, moves an endpoint through the document inspector API,
+edits an offset through the task, detaches and undoes, and saves/reloads the
+canonical document. Reload must close the task even when node IDs are reused.
+Light/dark screenshots go to `.agents/attachments/` in the worktree.
+Expected output:
+
+```text
+PASS: two paths, two shared controls, ports, movement, offsets, detach/undo, save/reload; no page errors
+```
+
+The movement step sets a transform through `inspect_patch`; this fixture does
+not simulate a pointer drag. Native authoring tests cover transformed parent
+frames, rotation/scale following, preserved tangent vectors, contour ownership,
+instance overrides, port exposure, a plugged laser moving both paths, unplug
+placement, atomic rejection, detach/undo, deletion/cycle rejection and rejection
+of attachment-metadata removal while its position bindings remain.
+
+Validation in the isolated `fiber-authoring` worktree: cold WebGL2 build and
+final warm rebuild pass; the full native document suite passes **254 tests**, with
+one pre-existing ignored test; frontend checking has **0 errors / 10 existing
+warnings**. The full GPU browser `smoke.txt` completes with its expected semantic
+outputs and `(no page errors)`. After the final lifecycle/removal guards, the
+native suite, frontend checking and attachment browser fixture pass again.
+Only WebGL2 was built here; the WebGPU artifact is a loader stub, so use
+`?gfx=webgl2` when trying this worktree until a real WebGPU build is made.

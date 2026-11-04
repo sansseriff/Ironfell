@@ -1,7 +1,8 @@
 # Authoring workflows: from a drawing to a linked, computed component
 
-**Status:** design investigation requested by the user, 2026-10-28. This is a starting
-plan for another agent to refine. No new panels, APIs, schema or computational backend
+**Status:** design investigation requested 2026-10-28; first shared point-control
+implementation built 2026-11-03 (§10), following explicit user authorization. The
+broader workflow and panel design remains open. No new panels, APIs, schema or computational backend
 are approved merely by their appearance here. The direction is agreed: make the
 semantic operations behind the demos explicit and usable from the UI and model surface.
 
@@ -463,3 +464,86 @@ silently implement the entire table or reopen settled transaction, component, co
 locality and rendering contracts. Implementation slices become concrete after the
 investigation; their work order is recorded in the product handoff. Record completed
 investigation here and in roadmap Status without marking unbuilt UI complete.
+
+## 10. Shared point controls — first implementation, 2026-11-03
+
+The user resumed this work after reviewing the October 18 and October 28 chats and
+explicitly requested implementation in an isolated worktree. Branch `fiber-authoring`
+is based on `0d8e416`; concurrent uncommitted timeline work in the main checkout is
+not part of this slice. This implements the shared geometric-control and port-exposure
+journey; it does not mark the general workflow presenter or §8.3 panel system complete.
+
+### Decisions and ownership
+
+| Decision | Implemented choice | Author supplies |
+|---|---|---|
+| Owner | A main component, captured when the task starts | Select the main or one of its parts |
+| Control | An existing empty inside that main | Choose an empty; the existing Empty tool creates one |
+| Geometry | Points from any number of the main's paths, retaining contour parents and order | Collect canvas points or pick numbered points in the task |
+| Placement | Preserve every point's current position when attaching | No manual offset required |
+| Frame | Offsets in the control's local 2D frame; rotation and scale carry positions | Editable X/Y offsets |
+| Tangents | Keep existing handle vectors in the path's frame | Edit handles separately with the existing point tool |
+| Existing driver | Refuse an already bound/runtime-driven position or existing attachment | Explicitly detach/remove its driver first |
+| Port | Add a port spec and anchor facet to the same empty, default loose-end behavior | Choose input/output, then kind/connector/signal in the existing inspector |
+| Detach | Bake resolved position in the point's path coordinates, remove attachment | Detach one point or all points on a control |
+| Delete/reparent | Refuse deleting a referenced control or changing an attached point's transform ancestry without detaching | Detach first; deleting the whole rig is valid |
+| History | Each Attach, Detach, exposure and offset edit is one document transaction | Pending picks and Cancel create no history |
+
+The containment tree remains `template → path → contour → point`, with sibling
+empties. `point.attachment` records the control reference and numeric `dx/dy` offsets.
+The attachment operation writes ordinary `transform2d.x/y` bindings: control-local
+offset → composition coordinates → point-parent coordinates. It reuses the same
+expression builders as port anchors, not another transform evaluator or a fiber
+producer. Instance expansion rewrites control and point references normally.
+
+A control need not be a port. Exposing it later retains its identity and every
+attachment. Signal kind, connector compatibility and output equations remain separate
+from geometric follow behavior. The standard optical transfer expression can still be
+entered in the Port value field; no fiber-specific signal editor was added.
+
+### Walkthrough
+
+1. Draw the fiber and a separate shadow path. Make them a component; enter its main
+   and place two empties using the existing Empty tool. Name them endpoint A/B.
+2. With the main or one of its parts selected, choose **Attach points to control** in
+   the inspector. The task captures the main and remains open as selection changes.
+   Ordinary properties remain below it rather than being replaced.
+3. Choose endpoint A. Collect its corresponding points across both paths. Canvas
+   point editing offers **Collect canvas point**; the path list also offers numbered
+   point buttons, so points on overlapping strokes remain individually addressable.
+4. **Attach 2 points** preserves placement and commits once. Pending picks do not
+   move geometry. The Controlled points list shows each dependency and its offset.
+5. Repeat with endpoint B. Move the empties: both paths respond through the graph.
+6. Expose A/B as input/output ports. Select the main/empty to edit port kinds and
+   connector properties in the existing inspector. Duplicate the main to obtain an
+   instance, then plug its ends into compatible components using existing port drags.
+7. Edit offsets, detach individual points, or detach all from a control. Undo restores
+   the attachment. **Done** or **Cancel pending picks** closes the task; previously
+   applied actions remain normal undoable transactions.
+
+For a packed path, **Enable point attachments** explicitly expands only that chosen
+path using the existing whole-path expansion operation. It is its own undoable step;
+there is no automatic expansion of other imported paths or new packed-point addressing.
+
+### Boundaries and follow-ups
+
+This is one focused task presenter using shared document operations, not the proposed
+catalog of authored workflow definitions. It pins a main identity; per-view occurrence
+pinning, mixed-selection aggregation, layers, workflow search and simultaneous task
+invocations remain open. Point positions follow rotation/scale but tangent vectors do
+not. Automatic bend-distance mappings, tangent-follow policies, new blur effects,
+3D controls and nested-instance attachment authoring remain open. Geometry is authored
+on a main; placed instances consume it and can move/override their endpoint controls.
+
+Store APIs live in `attachment.rs` and `author::expose_control`; the existing `author`
+command exposes `attach_points`, `detach_points`, `expose_control`,
+`expand_path_points`, and the read-only `attachment_info` query. The Svelte task uses
+Iron's Bits UI wrappers and theme tokens, retains pending point IDs explicitly, checks
+stale targets on refresh and clears on engine/document session replacement.
+
+Validation: `tests/authoring.rs` covers shared controls, frame following, contour
+ownership, tangent preservation, detach/undo, deletion/cycle and unsafe metadata-removal rejection, instance
+expansion, save/reload and a plugged laser moving both paths without an unplug jump.
+The `attachments.ts` browser fixture exercises both endpoints through the task UI,
+port exposure, offset editing, detach/undo and canonical reload with task reset, and captures light/dark
+screens. Full regression results are recorded in the run-iron skill.

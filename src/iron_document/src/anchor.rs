@@ -59,7 +59,7 @@ fn transformed_chain(doc: &Document, id: NodeId, with_self: bool) -> Vec<NodeId>
 
 /// The point `(px, py)` of `node`'s parent space (or own, `with_self`)
 /// carried out to composition space.
-fn outward(doc: &Document, node: NodeId, with_self: bool, mut px: Expr, mut py: Expr) -> (Expr, Expr) {
+pub(crate) fn outward(doc: &Document, node: NodeId, with_self: bool, mut px: Expr, mut py: Expr) -> (Expr, Expr) {
     for n in transformed_chain(doc, node, with_self) {
         let (c, s) = (call("cos", t(n, "rot")), call("sin", t(n, "rot")));
         let (ax, ay) = (bin(BinOp::Mul, t(n, "sx"), px), bin(BinOp::Mul, t(n, "sy"), py));
@@ -70,7 +70,7 @@ fn outward(doc: &Document, node: NodeId, with_self: bool, mut px: Expr, mut py: 
 }
 
 /// A composition-space point carried into `node`'s parent space.
-fn inward(doc: &Document, node: NodeId, mut qx: Expr, mut qy: Expr) -> (Expr, Expr) {
+pub(crate) fn inward(doc: &Document, node: NodeId, mut qx: Expr, mut qy: Expr) -> (Expr, Expr) {
     let mut chain = transformed_chain(doc, node, false);
     chain.reverse();
     for n in chain {

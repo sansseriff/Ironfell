@@ -185,3 +185,163 @@ fn ports_inputs_wraps_links_and_lines_are_authored_on_the_main() {
     apply(&mut store, "connect", ops);
     assert_eq!(store.resolved(to, path("port.signal")), Some(Value::parse_quantity("4 mW").unwrap()));
 }
+
+fn fiber_rig() -> (Store, NodeId, NodeId, Vec<NodeId>) {
+    use iron_document::facet::{PathShape, Stroke};
+    use iron_document::shape::Anchor as PathAnchor;
+    use kurbo::{Point, Vec2};
+    let Desk { mut store, comp, body, beam } = desk();
+    apply(&mut store, "clear", vec![Op::Delete { id: body }, Op::Delete { id: beam }]);
+    let ids = store.document().next_ids(8);
+    let (fiber, shadow, control) = (ids[0], ids[1], ids[2]);
+    let mut ops = vec![];
+    let mut point_ops = vec![];
+    let mut pts = Vec::new();
+    for (i, shape) in [fiber, shadow].into_iter().enumerate() {
+        let mut t = Transform2d::default();
+        t.x = Slot::Const(Value::Number(20.0));
+        t.y = Slot::Const(Value::Number(i as f64 * 8.0));
+        ops.push(Op::Create { id: shape, ty: ty("path"), parent: Some(comp), order: key(i as u32), facets: vec![t.wrap(), PathShape::default().wrap(), Stroke::default().wrap(), named(if i == 0 { "fiber" } else { "shadow" })] });
+        let mut seq = vec![ids[3+i*2], ids[4+i*2]].into_iter();
+        let a = PathAnchor { at: Point::new(0.0, 0.0), inn: Vec2::new(-30.0, 0.0), out: Vec2::new(30.0, 0.0) };
+        point_ops.extend(contour::contour_ops(shape, key(0), &[a], false, &mut seq));
+        pts.push(ids[4+i*2]);
+    }
+    ops.push(Op::Create { id: control, ty: ty("empty"), parent: Some(comp), order: key(3), facets: vec![Transform2d::default().wrap(), named("A")] });
+    ops.extend(point_ops);
+    apply(&mut store, "draw", ops);
+    let (made, input) = store.make_component(&[fiber, shadow, control], "fiber and shadow", Actor::Human).unwrap();
+    apply(&mut store, "make", input.ops);
+    (store, made.picture, control, pts)
+}
+
+#[test]
+fn shared_control_preserves_contours_offsets_and_follows_rotation_scale() {
+    let (mut store, main, control, points) = fiber_rig();
+    let parents: Vec<_> = points.iter().map(|p| store.document().live(*p).unwrap().parent).collect();
+    let before: Vec<_> = points.iter().map(|p| store.world_affine(*p).translation()).collect();
+    let shown = |p| NodeId::expanded(main, p).unwrap();
+    let ops = attachment::attach(&store, shown(control), &points.iter().map(|p| shown(*p)).collect::<Vec<_>>()).unwrap();
+    apply(&mut store, "attach", ops);
+    for (i, &p) in points.iter().enumerate() {
+        assert_eq!(store.document().live(p).unwrap().parent, parents[i]);
+        assert_eq!(store.world_affine(p).translation(), before[i]);
+    }
+    apply(&mut store, "move endpoint", vec![Op::Set { id: shown(control), path: path("transform2d.x"), slot: Slot::Const(Value::Number(100.0)) }]);
+    assert!((num(&store, points[1], "transform2d.y") - num(&store, points[0], "transform2d.y")).abs() < 1e-8);
+    let a = store.world_affine(points[0]).translation();
+    let b = store.world_affine(points[1]).translation();
+    assert!((b[1] - a[1] - 8.0).abs() < 1e-8);
+    apply(&mut store, "turn endpoint", vec![Op::Set { id: shown(control), path: path("transform2d.rot"), slot: Slot::Const(Value::Number(std::f64::consts::FRAC_PI_2)) }, Op::Set { id: shown(control), path: path("transform2d.sy"), slot: Slot::Const(Value::Number(2.0)) }]);
+    let a = store.world_affine(points[0]).translation();
+    let b = store.world_affine(points[1]).translation();
+    assert!((b[0] - a[0] + 16.0).abs() < 1e-8);
+    assert_eq!(num(&store, points[0], "handles.ox"), 30.0);
+    // Detaching freezes each point in its own path coordinates, not world.
+    let before: Vec<_> = points.iter().map(|p| store.world_affine(*p).translation()).collect();
+    let ops = attachment::detach(&store, &points).unwrap();
+    apply(&mut store, "detach", ops);
+    for (i, &p) in points.iter().enumerate() { assert_eq!(store.world_affine(p).translation(), before[i]); }
+    store.undo(0).unwrap().unwrap();
+    assert!(store.document().get::<facet::Attachment>(points[0]).is_some());
+    let saved = store.save();
+    let loaded = Store::load(&saved).unwrap();
+    assert_eq!(loaded.save(), saved);
+    for (i, &p) in points.iter().enumerate() { assert_eq!(loaded.world_affine(p).translation(), before[i]); }
+}
+
+#[test]
+fn attachments_survive_instances_and_port_exposure_and_reject_invalid_edits() {
+    let (mut store, main, control, points) = fiber_rig();
+    let shown = |p| NodeId::expanded(main, p).unwrap();
+    let ops = attachment::attach(&store, shown(control), &points).unwrap();
+    apply(&mut store, "attach", ops);
+    let before = store.save();
+    assert!(store.apply(tx("delete control", vec![Op::Delete { id: shown(control) }])).is_err());
+    assert_eq!(store.save(), before);
+    assert!(store.apply(tx("remove attachment metadata", vec![Op::RemoveFacet { id: points[0], kind: facet::FacetKind::Attachment }])).is_err());
+    assert_eq!(store.save(), before);
+    assert!(attachment::attach(&store, control, &points).is_err());
+    let ops = author::expose_control(store.document(), shown(control), "in", true).unwrap();
+    apply(&mut store, "expose", ops);
+    assert!(store.document().get::<facet::Anchor>(control).is_some());
+    let pasted = copy::duplicate(&store, &[main]).unwrap();
+    let instance = pasted.roots[0];
+    apply(&mut store, "instance", pasted.ops);
+    let p = NodeId::expanded(instance, points[1]).unwrap();
+    let c = NodeId::expanded(instance, control).unwrap();
+    assert_eq!(store.document().get::<facet::Attachment>(p).unwrap().control.constant().unwrap().as_ref(), Some(c));
+    assert!(attachment::attach(&store, c, &[p]).is_err());
+    let before = store.world_affine(p).translation();
+    apply(&mut store, "override endpoint", vec![Op::Set { id: c, path: path("transform2d.x"), slot: Slot::Const(Value::Number(90.0)) }]);
+    assert_ne!(store.world_affine(p).translation(), before);
+    let saved = store.save();
+    let restored = Store::load(&saved).unwrap();
+    assert_eq!(restored.world_affine(p).translation(), store.world_affine(p).translation());
+    // A control driven by its point would create a cycle.
+    assert!(store.apply(tx("cycle", vec![Op::Set { id: control, path: path("transform2d.x"), slot: Slot::Bound(Expr::parse(&format!("{}.transform2d.x", points[0])).unwrap()) }])).is_err());
+}
+
+#[test]
+fn both_paths_follow_a_plugged_instance_and_unplug_without_jumping() {
+    let (mut store, main, control, points) = fiber_rig();
+    let shown = NodeId::expanded(main, control).unwrap();
+    let ops = attachment::attach(&store, shown, &points).unwrap();
+    apply(&mut store, "attach", ops);
+    let ops = author::expose_control(store.document(), shown, "in", true).unwrap();
+    apply(&mut store, "expose", ops);
+    let spec = store.document().get::<facet::Anchor>(control).unwrap().port.constant().unwrap().as_ref().unwrap();
+    let ops = author::edit_port(store.document(), spec, &PortPatch { kind: Some("optical_power".into()), ..Default::default() }).unwrap();
+    apply(&mut store, "optical", ops);
+    let copy = copy::duplicate(&store, &[main]).unwrap();
+    let instance = copy.roots[0];
+    apply(&mut store, "instance", copy.ops);
+    let comp = store.document().live(main).unwrap().parent.unwrap();
+    let laser = store.place_standard("laser", comp, [400.0, 300.0], Actor::Human).unwrap();
+    let entity = expand::use_entity(store.document(), instance).unwrap();
+    let input = NodeId::expanded(entity, spec).unwrap();
+    let laser_anchor = store.port_anchors().into_iter().find(|p| p.anchor.path().first() == Some(&laser)).unwrap();
+    let read = |l: Leaf| store.resolved(l.node, l.path);
+    let ops = author::connect(store.document(), &read, laser_anchor.port, input).unwrap();
+    apply(&mut store, "connect", ops);
+    let p = NodeId::expanded(instance, points[0]).unwrap();
+    let q = NodeId::expanded(instance, points[1]).unwrap();
+    let start = store.world_affine(p).translation();
+    apply(&mut store, "move laser", vec![Op::Set { id: laser, path: path("transform2d.x"), slot: Slot::Const(Value::Number(450.0)) }]);
+    assert!((store.world_affine(p).translation()[0] - start[0] - 50.0).abs() < 1e-8);
+    assert!((store.world_affine(q).translation()[1] - store.world_affine(p).translation()[1] - 8.0).abs() < 1e-8);
+    let before = store.world_affine(p).translation();
+    let connection = plug::connection_of(store.document(), input).unwrap();
+    store.unplug(connection.0, "unplug", Actor::Human).unwrap();
+    assert_eq!(store.world_affine(p).translation(), before);
+}
+
+#[test]
+fn attachment_batch_rejects_foreign_or_driven_points_without_partial_changes() {
+    let (mut store, main, control, points) = fiber_rig();
+    let before = store.save();
+    assert!(attachment::attach(&store, control, &[points[0], main]).is_err());
+    assert_eq!(store.save(), before);
+    apply(&mut store, "existing driver", vec![Op::Set { id: points[1], path: path("transform2d.x"), slot: Slot::Bound(Expr::parse(&format!("{control}.transform2d.x + 3")).unwrap()) }]);
+    let before = store.save();
+    assert!(attachment::attach(&store, control, &points).is_err());
+    assert_eq!(store.save(), before);
+    assert!(store.document().get::<facet::Attachment>(points[0]).is_none());
+}
+
+#[test]
+fn attaching_under_transformed_paths_preserves_world_positions() {
+    let (mut store, _main, control, points) = fiber_rig();
+    let contour = store.document().live(points[1]).unwrap().parent.unwrap();
+    let path_node = store.document().live(contour).unwrap().parent.unwrap();
+    apply(&mut store, "transform shadow", vec![Op::Set { id: path_node, path: path("transform2d.rot"), slot: Slot::Const(Value::Number(0.7)) }, Op::Set { id: path_node, path: path("transform2d.sx"), slot: Slot::Const(Value::Number(2.0)) }]);
+    let before = store.world_affine(points[1]).translation();
+    let ops = attachment::attach(&store, control, &points).unwrap();
+    apply(&mut store, "attach", ops);
+    let after = store.world_affine(points[1]).translation();
+    assert!((after[0]-before[0]).abs()<1e-8 && (after[1]-before[1]).abs()<1e-8);
+    let control_x = num(&store, control, "transform2d.x");
+    apply(&mut store, "move", vec![Op::Set { id: control, path: path("transform2d.x"), slot: Slot::Const(Value::Number(60.0)) }]);
+    let moved = store.world_affine(points[1]).translation();
+    assert!((moved[0]-after[0]-(60.0-control_x)).abs()<1e-8 && (moved[1]-after[1]).abs()<1e-8);
+}

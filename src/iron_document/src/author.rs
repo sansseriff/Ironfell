@@ -325,3 +325,23 @@ pub fn ports_of(doc: &Document, def: NodeId) -> Vec<(NodeId, String, String, boo
         })
         .collect()
 }
+
+/// Give an existing geometric control a port without moving it or creating
+/// another empty. Geometry bindings keep referring to the same control.
+pub fn expose_control(doc: &Document, shown: NodeId, dir: &str, follow: bool) -> Result<Vec<Op>, String> {
+    let steps = shown.path();
+    if steps.len() != 2 || expand::main_definition(doc, steps[0]).is_none() {
+        return Err("Select an empty inside the component's main".into());
+    }
+    let control = crate::attachment::authored(doc, shown)?;
+    if doc.live(control).map(|n| n.ty.name()) != Some("empty") { return Err("Select an empty control".into()); }
+    if doc.get::<Anchor>(control).is_some() { return Err("This control already exposes a port".into()); }
+    if !matches!(dir, "in" | "out" | "pair") { return Err("Choose in, out or pair".into()); }
+    let (mut ops, spec, new_anchor) = add_port(doc, steps[0], [0.0, 0.0], dir, follow)?;
+    ops.retain(|op| !matches!(op, Op::Create { id, .. } if *id == new_anchor));
+    let mut a = Anchor::default();
+    a.port = Slot::Const(Value::Ref(spec));
+    a.follow = Slot::Const(Value::Bool(follow));
+    ops.push(Op::AddFacet { id: control, facet: a.wrap() });
+    Ok(ops)
+}

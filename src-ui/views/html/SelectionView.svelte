@@ -2,6 +2,7 @@
   // The session's selection (source: selection): what is picked, Link and
   // Show in, and Link's merge question. The seed of the inspector
   // (plans/specs/panels-and-session.md).
+  import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import Plus from "@lucide/svelte/icons/plus";
@@ -206,6 +207,8 @@
       <button onclick={() => (doc.question = null)}>Cancel</button>
     </div>
   {/if}
+
+  <AttachmentTask />
 
   {#if inspected}
     <div class="inspector">

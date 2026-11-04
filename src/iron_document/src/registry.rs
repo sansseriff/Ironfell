@@ -170,7 +170,7 @@ static TYPES: &[TypeSpec] = &[
     // One anchor of a contour, in the path's space, with its handles.
     TypeSpec {
         name: "point",
-        facets: &[(K::Transform2d, true), (K::Handles, false), (K::Name, false)],
+        facets: &[(K::Transform2d, true), (K::Handles, false), (K::Name, false), (K::Attachment, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },

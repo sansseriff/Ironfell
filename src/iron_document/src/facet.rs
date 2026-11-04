@@ -519,6 +519,15 @@ facets! {
         wrot: Number = Value::Number(0.0),
     }
 
+    /// A path point controlled by an empty without changing contour ownership.
+    /// Offsets are in the control's local frame. Position bindings use these
+    /// leaves; tangents remain authored in the path's frame.
+    Attachment / "attachment" => Attachment {
+        control: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
+        dx: Number = Value::Number(0.0),
+        dy: Number = Value::Number(0.0),
+    }
+
     /// A placed picture of a component in one composition
     /// (component-model.md §5.1): a `use` node figures its entity, and its
     /// children are the definition's template for `notation`, expanded.

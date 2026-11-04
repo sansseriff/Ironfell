@@ -595,9 +595,37 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
         let a: serde_json::Value = serde_json::from_str(&args).map_err(|e| e.to_string())?;
         let id = |k: &str| -> Result<iron_document::NodeId, String> { a.get(k).and_then(|v| v.as_str()).ok_or_else(|| format!("{k} missing"))?.parse().map_err(|e| format!("{k}: {e}")) };
         let num = |k: &str| a.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let picked_point = app.world().get_resource::<crate::bevy_app::select::PathEdit>().and_then(|e| e.point).map(|p| p.to_string());
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
         let doc = store.0.document();
+        if verb == "attachment_info" {
+            let target = id("target")?;
+            let main = target.path()[0];
+            let template = iron_document::expand::main_template(doc, main).ok_or("Select a main component or one of its parts")?;
+            let name = |n| doc.get::<iron_document::facet::Name>(n).and_then(|v| v.text.constant()).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            let shown = |n| iron_document::NodeId::expanded(main, n).unwrap().to_string();
+            let controls: Vec<_> = doc.descendants(template).into_iter().filter(|&n| !n.is_expanded() && doc.live(n).is_some_and(|v| v.ty.name() == "empty")).map(|n| serde_json::json!({"id": shown(n), "name": name(n), "port": doc.get::<iron_document::facet::Anchor>(n).is_some()})).collect();
+            let paths: Vec<_> = doc.descendants(template).into_iter().filter(|&n| !n.is_expanded() && doc.live(n).is_some_and(|v| v.ty.name() == "path")).map(|n| {
+                let points: Vec<_> = iron_document::contour::contours(&store.0, n).into_iter().flat_map(|c| c.points).enumerate().map(|(i, (p, _))| {
+                    let attachment = doc.get::<iron_document::facet::Attachment>(p).map(|v| serde_json::json!({"control": v.control.constant().and_then(|v| v.as_ref()).map(shown), "dx": store.0.resolved(p, "attachment.dx".parse().unwrap()).and_then(|v| v.as_f64()), "dy": store.0.resolved(p, "attachment.dy".parse().unwrap()).and_then(|v| v.as_f64())}));
+                    serde_json::json!({"id": shown(p), "index": i + 1, "attachment": attachment})
+                }).collect();
+                serde_json::json!({"id": shown(n), "name": name(n), "packed": iron_document::contour::packed(doc, n).is_some(), "points": points})
+            }).collect();
+            return Ok(serde_json::json!({"ok": true, "main": main.to_string(), "name": name(main), "controls": controls, "paths": paths, "picked_point": picked_point}));
+        }
         let (label, ops, made): (String, Vec<iron_document::Op>, Option<iron_document::NodeId>) = match verb.as_str() {
+            "attach_points" | "detach_points" => {
+                let points: Vec<iron_document::NodeId> = serde_json::from_value(a.get("points").cloned().ok_or("points missing")?).map_err(|e| e.to_string())?;
+                let ops = if verb == "attach_points" { iron_document::attachment::attach(&store.0, id("control")?, &points)? }
+                    else { iron_document::attachment::detach(&store.0, &points)? };
+                (verb.replace('_', " "), ops, None)
+            }
+            "expose_control" => ("expose control as port".into(), author::expose_control(doc, id("control")?, a.get("dir").and_then(|v| v.as_str()).unwrap_or("in"), true)?, None),
+            "expand_path_points" => {
+                let path = iron_document::attachment::authored(doc, id("path")?)?;
+                ("expand path points".into(), iron_document::contour::expand_points(&store.0, path), None)
+            }
             "add_port" => {
                 let main = id("main")?;
                 let dir = a.get("dir").and_then(|v| v.as_str()).unwrap_or("in");
@@ -657,7 +685,9 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
         Ok(serde_json::json!({"ok": true, "version": applied.version.0, "made": made.map(|m| m.to_string())}))
     };
     let result = run();
-    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    if verb != "attachment_info" {
+        if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    }
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 

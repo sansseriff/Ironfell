@@ -50,7 +50,8 @@ pub fn set(store: &mut Store, fields: &[(&str, Value)]) -> Result<(), String> {
         store.apply_session(ops).map_err(|e| e.message)?;
     }
     if let Some((_, v)) = fields.iter().find(|(f, _)| *f == "t") {
-        let t = v.as_f64().ok_or("clock.t is a number")?;
+        // Time starts at 0.
+        let t = v.as_f64().ok_or("clock.t is a number")?.max(0.0);
         store.set_time(t);
     }
     Ok(())

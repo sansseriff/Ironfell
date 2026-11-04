@@ -463,6 +463,10 @@ facets! {
         value: Number = Value::Number(0.0),
         origin: Number = Value::Number(0.0),
         scale: Number = Value::Number(1.0),
+        // The range a press or drag keeps `value` in: never below `min`,
+        // and never above `max` unless `max` ≤ `min` (no upper end).
+        min: Number = Value::Number(0.0),
+        max: Number = Value::Number(0.0),
     }
 
     /// One block of a narrative (narrative-panel.md §7.1): a paragraph, a

@@ -414,6 +414,9 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
             track.value = bound(&format!("{clock}.clock.t"));
             track.origin = bound(&format!("{t0} - {lw} / {pps}"));
             track.scale = bound(&format!("1 / {pps}"));
+            // Time starts at 0 and runs on: the playhead never goes before it.
+            track.min = Slot::Const(Value::Number(0.0));
+            track.max = Slot::Const(Value::Number(0.0));
             facets.push(track.wrap());
         }
         out.push(Want { key: group.into(), ty: ty("group"), facets, projects: None, parent: None });

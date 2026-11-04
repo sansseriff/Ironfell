@@ -585,6 +585,19 @@ pub(crate) struct Drive {
     /// A node with a `track` facet maps the pointer to a value absolutely:
     /// the press itself sets `v0` (timeline.md §7, a ruler scrubbing).
     jump: bool,
+    /// The track's range (`track.min`, `track.max`; no upper end when `max`
+    /// ≤ `min`), which the value never leaves.
+    range: Option<(f64, f64)>,
+}
+
+impl Drive {
+    fn clamp(&self, v: f64) -> f64 {
+        match self.range {
+            Some((lo, hi)) if hi > lo => v.clamp(lo, hi),
+            Some((lo, _)) => v.max(lo),
+            None => v,
+        }
+    }
 }
 
 /// What a press on a control does, if a node on the hit's chain (deepest
@@ -630,6 +643,7 @@ fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Po
         // local position along the axis is `origin + x · scale`.
         let track = |f: &str| LeafPath::new(iron_document::FacetKind::Track, f).ok().and_then(|p| geo.store.resolved(id, p)).and_then(|x| x.as_f64());
         let absolute = (drag == "track").then(|| Some((track("origin")?, track("scale")?))).flatten();
+        let range = absolute.and(Some((track("min").unwrap_or(0.0), track("max").unwrap_or(0.0))));
         let (v0, per_px, jump) = match absolute {
             Some((o, scale)) => {
                 let local = m.inverse() * start;
@@ -658,6 +672,7 @@ fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Po
             step,
             label: format!("{verb} {}", drives),
             jump,
+            range,
         }));
     }
     None
@@ -2712,7 +2727,7 @@ pub fn select_tool_system(
                         _ => {
                             store.0.begin_gesture(&[d.id]);
                             // A track jumps to the press, then scrubs.
-                            if d.jump && let Err(why) = store.0.preview_target(d.id, d.leaf, Value::Number(d.v0)) {
+                            if d.jump && let Err(why) = store.0.preview_target(d.id, d.leaf, Value::Number(d.clamp(d.v0))) {
                                 info!("{} cannot follow: {why}", d.id);
                             }
                             tool.gesture = Gesture::Drive(d);
@@ -3069,7 +3084,7 @@ pub fn select_tool_system(
                     }
                     d.v0 + t
                 } else {
-                    d.v0 + (at - d.start).dot(d.dir) * d.per_px
+                    d.clamp(d.v0 + (at - d.start).dot(d.dir) * d.per_px)
                 };
                 if let Err(why) = store.0.preview_target(d.id, d.leaf, Value::Number(v)) {
                     info!("{} cannot follow: {why}", d.id);

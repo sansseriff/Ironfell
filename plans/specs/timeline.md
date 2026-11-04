@@ -632,4 +632,7 @@ composition drew at half its CSS size on Retina while the DOM beside it did not.
 - **Tests.** 253 `iron_document` tests (`timeline_view` 14: scrolling moves the rows
   under a ruler that stays, without history). `timeline.txt` (rows 24 px higher) and the
   full smoke pass; checked at 2× by screenshot, before and after a middle-drag.
+- **The playhead never goes before 0** (found by the user): a `track` has a range
+  (`track.min`, `track.max`, no upper end when `max` ≤ `min`) that a press or drag keeps
+  its value in, and the ruler declares `min` 0; `clock::set` clamps `t` at 0 too.
 

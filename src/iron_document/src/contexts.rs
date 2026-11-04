@@ -156,6 +156,7 @@ pub const FIELDS: &[FieldSpec] = &[
     FieldSpec { domain: "snap", name: "grid", view: true, kind: Kind::Number, options: &["0"], doc: "the grid placement, wiring and moves round to, px; 0 for none (match=\"view\")" },
     FieldSpec { domain: "affords", name: "delete", view: false, kind: Kind::Choice, options: &["self", "subject"], doc: "what deleting it removes: itself, or what it figures (an entity, with every figure of it and the connections on its ports; a connection, with its figures) or projects (a timeline bar's clip)" },
     FieldSpec { domain: "chrome", name: "component", view: true, kind: Kind::Choice, options: &["on", "off"], doc: "whether a component instance wears its authoring chrome: the violet frame, its chip, and its input pins for linking (match=\"view\")" },
+    FieldSpec { domain: "affords", name: "cursor", view: false, kind: Kind::Choice, options: &["auto", "trim-start", "trim-end"], doc: "the cursor over it, when its press does something the arrow would not say: moving where a span starts or ends (a timeline clip's first or last key; auto: what the tool shows)" },
 ];
 
 /// The inspector's sections (contexts.md §2.7): rich widgets the shell draws,
@@ -203,6 +204,7 @@ impl Field {
     pub const GRID: Field = Field(25);
     pub const DELETE: Field = Field(26);
     pub const COMPONENT: Field = Field(27);
+    pub const CURSOR: Field = Field(28);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]

@@ -71,11 +71,9 @@ fn scene() -> Scene {
     g.x = num(100.0);
     g.rot = num(std::f64::consts::FRAC_PI_2);
     let mut timing = Timing::default();
-    timing.dur = num(2.0);
+    timing.start = num(0.0);
     let mut cl = Clip::default();
     cl.prop = Slot::Const(Value::Str("transform2d.x".into()));
-    cl.from = num(0.0);
-    cl.to = num(50.0);
     let rel = store.document().next_relation_id();
     store
         .apply(tx(

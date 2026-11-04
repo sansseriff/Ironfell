@@ -30,6 +30,12 @@ export default defineConfig(({ mode }) => ({
     // would re-optimise and reload. They are plain ESM Svelte, served as is.
     exclude: ['@lucide/svelte'],
   },
+  // Worktrees and agent scratch live in .agents/ (AGENTS.md): another
+  // agent's edits there (a tsconfig, an html) made Vite reload this app
+  // mid-smoke. Nothing the app serves is in it, nor in plans/.
+  server: {
+    watch: { ignored: ['**/.agents/**', '**/plans/**', '**/target/**'] },
+  },
   // Ensure WASM files are treated as assets
   assetsInclude: ['**/*.wasm'],
   worker: {

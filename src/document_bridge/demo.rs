@@ -164,32 +164,27 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("main".into()));
     ops.push(Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: order(), facets: vec![name.wrap()] });
+    // A clip is one property's keyframes (timeline.md §12.1): keys at times
+    // after its start, each easing into the next.
     let mut clip_order = OrderKey::first();
-    let mut clip = |id, label: &str, start: f64, dur: f64, easing: &str, prop: &str, from: Value, to: Value| {
+    // The keys' creates go at the end of the scene, with ids drawn last, so
+    // every other node of the demo keeps the id the scripts know it by.
+    let mut deferred_keys: Vec<(NodeId, (f64, Value, &'static str), (f64, Value))> = Vec::new();
+    let mut clip = |ops: &mut Vec<Op>, deferred: &mut Vec<(NodeId, (f64, Value, &'static str), (f64, Value))>, id: NodeId, label: &str, start: f64, prop: &str, from: (f64, Value, &'static str), to: (f64, Value)| {
         let mut timing = Timing::default();
         timing.start = n(start);
-        timing.dur = n(dur);
-        timing.easing = Slot::Const(Value::Enum(easing.into()));
         let mut c = Clip::default();
         c.prop = Slot::Const(Value::Str(prop.into()));
-        c.from = Slot::Const(from);
-        c.to = Slot::Const(to);
         let mut name = DocName::default();
         name.text = Slot::Const(Value::Str(label.into()));
-        let op = Op::Create {
-            id,
-            ty: ty("clip"),
-            parent: Some(timeline),
-            order: clip_order.clone(),
-            facets: vec![timing.wrap(), c.wrap(), name.wrap()],
-        };
+        ops.push(Op::Create { id, ty: ty("clip"), parent: Some(timeline), order: clip_order.clone(), facets: vec![timing.wrap(), c.wrap(), name.wrap()] });
         clip_order = OrderKey::after(&clip_order);
-        op
+        deferred.push((id, from, to));
     };
     let spin = next();
-    ops.push(clip(spin, "spin", 1.0, 3.0, "ease_in_out", "transform3d.rot", Value::Vec3([0.0, 0.0, 0.0]), Value::Vec3([0.0, std::f64::consts::TAU, 0.0])));
+    clip(&mut ops, &mut deferred_keys, spin, "spin", 1.0, "transform3d.rot", (0.0, Value::Vec3([0.0, 0.0, 0.0]), "ease_in_out"), (3.0, Value::Vec3([0.0, std::f64::consts::TAU, 0.0])));
     let slide = next();
-    ops.push(clip(slide, "slide", 0.5, 2.0, "linear", "transform2d.x", Value::Number(500.0), Value::Number(700.0)));
+    clip(&mut ops, &mut deferred_keys, slide, "slide", 0.5, "transform2d.x", (0.0, Value::Number(500.0), "linear"), (2.0, Value::Number(700.0)));
     ops.push(Op::Link { rel: Relation { id: rel_ids[0], from: spin, to: torus, rel: RelKind::Animates, data: BTreeMap::new() } });
     ops.push(Op::Link { rel: Relation { id: rel_ids[1], from: slide, to: square, rel: RelKind::Animates, data: BTreeMap::new() } });
 
@@ -529,6 +524,22 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     // The component model (plans/specs/component-model.md): the optics
     // definitions placed again as linked instances, in a `components` tab.
     ops.extend(components(store, &ops, model));
+    // The clips' keys, last: their ids follow every other node's.
+    let top = ops.iter().filter_map(|op| match op { Op::Create { id, .. } => Some(*id), _ => None }).max().expect("the demo creates nodes");
+    let mut next_key = 1;
+    for (clip, from, to) in deferred_keys {
+        let key = |t: f64, v: Value, easing: &str| {
+            let mut k = iron_document::facet::Key::default();
+            k.t = n(t);
+            k.value = Slot::Const(v);
+            k.easing = Slot::Const(Value::Enum(easing.into()));
+            k.wrap()
+        };
+        let k0 = OrderKey::first();
+        ops.push(Op::Create { id: top.offset(next_key), ty: ty("key"), parent: Some(clip), order: k0.clone(), facets: vec![key(from.0, from.1, from.2)] });
+        ops.push(Op::Create { id: top.offset(next_key + 1), ty: ty("key"), parent: Some(clip), order: OrderKey::after(&k0), facets: vec![key(to.0, to.1, "linear")] });
+        next_key += 2;
+    }
 
     iron_document::TransactionInput { label: "open demo scene".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false }
 }

@@ -32,7 +32,7 @@
   import { controllerManager } from "../../controller-manager.svelte";
   import type { Tool } from "../../runtime/document_client.svelte";
   import type { ViewSpec } from "../views";
-  import TimelineTransport from "./TimelineTransport.svelte";
+  import TimelinePanel from "./TimelinePanel.svelte";
 
   let { spec, panel = "" }: { spec: ViewSpec; panel?: string } = $props();
 
@@ -61,7 +61,8 @@
 
   const offer = $derived(doc.focus[panel]);
   // The library, the Stats view and the timeline show their own content,
-  // not a world to draw in. The timeline has a transport instead.
+  // not a world to draw in. The timeline has its DOM column instead
+  // (TimelinePanel.svelte, timeline.md §12.3).
   const timeline = $derived(spec.source === "timeline");
   const shown = $derived(!!offer?.palette && spec.source !== "library" && spec.source !== "stats" && !timeline);
   const slots = $derived((offer?.palette ?? "").split(/\s+/).filter(Boolean).map((slot) => slot.split("|").filter((t) => t in TOOLS)).filter((s) => s.length));
@@ -84,7 +85,7 @@
 </script>
 
 {#if timeline}
-  <TimelineTransport />
+  <TimelinePanel {panel} />
 {/if}
 
 {#if shown}

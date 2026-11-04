@@ -128,6 +128,12 @@ macro_rules! id_type {
             pub(crate) fn raw(self) -> u64 {
                 self.0
             }
+
+            /// The id `n` places after this one: for a builder that has
+            /// reserved a run of ids and lays a few more after its last.
+            pub fn offset(self, n: u64) -> Self {
+                Self(self.0 + n)
+            }
             /// In the session tier: never saved, never in undo.
             pub fn is_session(self) -> bool {
                 self.0 >= SESSION_BASE && self.0 & EXPANDED == 0

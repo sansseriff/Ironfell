@@ -246,9 +246,9 @@ redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,4.88…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#3t"}}
+{"ok":true,"version":9,"aliases":{"$n":"#3x"}}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#3t\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#3x\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
 "<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
@@ -268,19 +268,19 @@ true
 ["#l","#Q"]
 clicked Link
 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#3v\" name=\"box\" def=\"#3u\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3v\">"
+"<entity id=\"#3z\" name=\"box\" def=\"#3y\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3z\">"
 clicked Show in assembly
 clicked Show in scene
 focus #Q: panel viewer pans to centre it
 focus #l: panel viewer pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#3x\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#3x\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#41\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#41\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":59348}
+{"roundtrip_equal":true,"bytes":59691}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" run=\"auto\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (302 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "move mesh" (1 ops, Human) -> v3
 applied "undo: move mesh" (1 ops, System) -> v4
@@ -315,7 +315,7 @@ applied "link" (4 ops, Model) -> v23
 "link" by Model: cluster #V re-solved; moved 1 node(s): #W
 applied "link" (5 ops, Model) -> v24
 applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (290 live nodes)
+loaded document v25 (294 live nodes)
 (no page errors)
 {"enabled":false,"guides":[]}
 undefined
@@ -338,10 +338,10 @@ tab Controls
 undefined
 ["closed=\"true\"",3,"smooth point"]
 "closed=\"false\""
-["#3t"]
-"<point id=\"#3x\" x=\"130\" y=\"220\""
+["#3x"]
+"<point id=\"#41\" x=\"130\" y=\"220\""
 "pen-add"
-[4,"<point id=\"#3y\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
+[4,"<point id=\"#42\" x=\"86.9\" y=\"-22.4\" ix=\"-47.2\" iy=\"7.5\" ox=\"47.6\" oy=\"-7.5\"/>"]
 3
 "bend"
 " ox=\"0.0\" oy=\"-63.4\""
@@ -369,22 +369,22 @@ tab Controls
 undefined
 clicked .toolbar button[aria-label="Rectangle"]
 "Rectangle (R)"
-["<rect id=\"#3z\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
-"<ellipse id=\"#40\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
-"<ellipse id=\"#40\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+["<rect id=\"#43\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\"","Move (V)"]
+"<ellipse id=\"#44\" name=\"ellipse\" x=\"740\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"40\" ry=\"40\""
+"<ellipse id=\"#44\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 4
-"<ellipse id=\"#40\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
+"<ellipse id=\"#44\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\""
 tab Main
 {"cuts":["its h is bound to #11.port.signal * 300; the path keeps the current value"],"ok":false}
 ["its h is bound to #11.port.signal * 300; the path keeps the current value"]
 clicked Cancel
 null
 tab Controls
-"<rect id=\"#3z\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
+"<rect id=\"#43\" name=\"rectangle\" x=\"500\" y=\"100\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"140\" h=\"80\" tl=\"30\" tr=\"30\" br=\"30\" bl=\"30\""
 clicked Add effect
 clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
-"<ellipse id=\"#40\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
+"<ellipse id=\"#44\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
 tab Optics
 undefined
 undefined
@@ -421,14 +421,14 @@ undefined
 4
 {"anchors":2,"cuts":["filters are not imported"],"definitions":0,"nodes":4,"ok":true,"references":0}
 [8,4]
-["<rect id=\"#4M\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#4N\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#4O\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\" d=\"1 contour, 2 anchors\"","<rect id=\"#4P\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
+["<rect id=\"#4Q\" x=\"10\" y=\"10\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"100\" h=\"60\" tl=\"8\" tr=\"8\" br=\"8\" bl=\"8\"","<ellipse id=\"#4R\" x=\"150\" y=\"40\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"30\" ry=\"30\"","<path id=\"#4S\" x=\"0\" y=\"0\" rot=\"0\" sx=\"1\" sy=\"1\" fill_rule=\"nonzero\" d=\"1 contour, 2 anchors\"","<rect id=\"#4T\" x=\"140\" y=\"80\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"40\" h=\"40\""]
 " d=\"1 contour, 2 anchors\""
 [true,4]
 4
 undefined
 8
 4
-{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#4U #4V #4W #4X\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
+{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#4Y #4Z #4a #4b\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
 8
 4
 tab Components
@@ -469,7 +469,7 @@ undefined
 [[240,475],["meter 15.88… mW","short fiber 10 mW"]]
 ["meter 15.88… mW","short fiber 0 W"]
 clicked button[title^="Make a component"]
-"component use #4y"
+"component use #52"
 clicked button[title="Shape tools"]
 clicked [role="menuitem"]:has-text("Port")
 "in"
@@ -486,7 +486,7 @@ tab Library
 tab Controls
 "controls"
 ["Render inspector watching controls","Chunks","1 1 in view","Nodes","8"]
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (302 ops, System) -> v1
 applied "resize rect" (2 ops, Human) -> v2
 applied "rotate rect" (3 ops, Human) -> v3
 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -746,7 +746,7 @@ cd -
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
 | `move x y`, `down [button]`, `up [button]`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels; `down right` … `up right` around `move`s orbits a 3D panel's camera |
 | `dmove x y`, `ddrag x0 y0 x1 y1 [steps]` | the same in document 2D space: viewer-panel top-left origin, y-down, the space `transform2d.x/y` are in |
-| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); in the timeline, a drag of the playhead grip (at x = 160 + t·100, y 10) scrubs, and a drag of a segment retimes its clip |
+| `pdrag <panel> x0 y0 x1 y1 [steps]` | drag relative to a named DOM panel (`viewer`, `assembly`, `timeline`); in the timeline, a press or drag anywhere on the ruler (y 0–80, time t at x = 160 + t·100) scrubs, a drag of a bar retimes its clip and a drag of a key diamond moves the key |
 | `key <Key>` | press a key (Playwright key names); `Meta+z` undoes, `Meta+Shift+z` redoes |
 | `keydown <Key>`, `keyup <Key>` | hold and release a key, e.g. `Shift` around a `pclick` to add to the selection |
 | `pclick <panel> x y` | click inside a named panel, panel-relative |
@@ -781,7 +781,7 @@ lives in a 3D composition, `assembly`, seen through `main`'s embed, near
 document (875,200), beside the `card` composition (a 2D card with a dot and
 a bar) shown in the assembly as a plane in perspective; the purple cartoon `box` covers (520,590)–(630,660);
 the pendulum group is a loose root, drawn in the viewer. The "shadow" rect
-at (600,420) has x and y bound to the square's. The timeline holds a "slide" clip (0.5–2.5 s, square x 500→700)
+at (600,420) has x and y bound to the square's. The timeline holds a "slide" clip (keys at 0.5 s and 2.5 s, square x 500→700)
 and a "spin" clip (1–4 s, torus rotation). Any `<attr>.bind` in a view is a
 binding and any `<driven-by>` names a clip.
 
@@ -1082,8 +1082,8 @@ artifacts, which this skill does not run.
 cargo test -p iron_document --target aarch64-apple-darwin
 ```
 
-249 tests pass (verified 2026-11-03 after the timeline's bars became groups,
-`tests/timeline_view.rs` 10; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
+252 tests pass (verified 2026-11-03 after keyframes and auto-keyframe,
+`tests/timeline_view.rs` 13; ~1 min warm), minus the two platform-precision tests noted above on Linux. The host target is required because
 `.cargo/config.toml` defaults the whole workspace to wasm. The solver crate
 has its own: `cargo test -p iron_solve --target aarch64-apple-darwin` (9
 tests), and so does SVG: `cargo test -p iron_svg --target aarch64-apple-darwin`
@@ -2022,94 +2022,104 @@ mentions, markdown both ways, the model view).
 
 ## The timeline as a composition (2026-11-03)
 
-plans/specs/timeline.md §11. The Timeline tab is the session's generated
-`timeline` composition (`iron_document::timeline_view`, notation `timeline`,
-context `std:timeline`), shown like any composition (`{source: 'timeline',
-notation: 'composition'}`); the old Bevy timeline panel is gone. Rows by object,
-then property; a segment per clip and target, its x bound to
-`label_w + (start − t0)·pps` on the composition's `axis`, its y to a literal; the
-playhead and its grip bound to the session clock's `t`. Layout in document px from
-the panel's top-left, before any pan or zoom: `label_w` 160, ruler 80 tall (23 px
-labels, minor ticks, the playhead's head low on it), rows 22 apart from y 84, so
-time t is at x 160 + t·100 and the demo's bars are at
-y 109–125 (spin, torus rot) and y 153–169 (slide, square x, 210–410). Each bar is
-one group (`bar <clip> <target>`, its x the clip's start, its `size.w` `dur·pps`)
-holding its rect, label and end values: `from` right-aligned before it, `to` just
-past it (x + 4).
+plans/specs/timeline.md §11, §12. The Timeline tab is a **hybrid view**: its right
+side is the session's generated `timeline` composition (`iron_document::timeline_view`,
+notation `timeline`, context `std:timeline`), shown like any composition
+(`{source: 'timeline', notation: 'composition'}`); its left column, `label_w` wide,
+is DOM (`TimelinePanel.svelte`, `[data-timeline-column]`) over the canvas's plain
+backdrop. Both are laid out from one plan: the column polls `timeline_rows(panel)`
+for its rows and the canvas view's pan, and its wheel scrolls the canvas
+(`view_pan`). A clip is one property's animation: `timing.start`, `clip.prop` and
+two or more `key` children (`t` after the start, `value`, `easing`).
+
+Canvas layout in document px from the panel's top-left, before any pan or zoom:
+`label_w` 160, ruler 80 tall (23 px labels, minor ticks, the playhead's head low on
+it), rows 22 apart from y 84, so time t is at x 160 + t·100. The demo has an object
+row and a property row per animated object: torus (`rot`, the spin clip, 1–4 s) and
+square (`x`, the slide clip, keys at 0.5 s and 2.5 s, its bar from x 210 to 410 at
+y 150–172). Per property row a bar spans the clip's keys (`bar <clip> <target>`)
+with a diamond per key (`key <key> <target>`, a rect turned π/4); per object row a
+summary bar spans all its keys (display only).
 
 - **What can be pressed is data**: the generator puts each piece in a role group
-  (`backdrop`, `tracks`, `headers`, `ruler`, `overlay`), and each group names a
-  built-in context (`std:timeline-static`, `-tracks`, `-ruler`, `-overlay`; a bar
-  names `std:timeline-bar`) whose `children` rules say what its pieces afford. A
-  bar is one target: a click anywhere on it selects it, a drag retimes, its two
-  ends trim (`affords.grips="ends"`), and Delete deletes its clip
-  (`affords.delete="subject"` follows `projects`). Its end values are reached by
-  entering the bar (double-click), then Enter types. Backdrop, grid
-  and row headers are declared no target (a click clears the selection); segment
-  labels and the playhead's line are `inert`, transparent to the pointer.
+  (`backdrop`, `tracks`, `keys`, `headers`, `ruler`, `overlay`), and each group names
+  a built-in context (`std:timeline-static`, `-tracks`, `-keys`, `-ruler`,
+  `-overlay`) whose `children` rules say what its pieces afford. A bar is one
+  target: a drag retimes its clip ("retime slide"), Delete deletes the clip
+  (`affords.delete="subject"` follows `projects`). A diamond is a target: a drag
+  moves its key ("move key of slide"; the handle rule prefers the leaf of what the
+  piece `projects`), Delete removes it. A clip's first and last diamonds say
+  `affords.cursor` `trim-start` / `trim-end` (the SVG cursors in
+  `src-ui/cursors/`); `grips="ends"` shows the same. Backdrop, grid and headers are
+  declared no target (a click clears the selection); labels and the playhead's line
+  are `inert`, transparent to the pointer.
 - **Press anywhere on the ruler** (y 0–80): the playhead jumps there and a drag
   scrubs (the ruler group is a `track` whose value is the clock's `t`; a session
-  op, no transaction). Below the ruler presses reach the clips. **Drag** a segment:
-  "retime slide". **Select** a segment and drag a box grip: "trim slide" (the right
-  edge changes `dur`, the left `start` and `dur`). **Select** a readout and press
-  Enter to type a value ("edit text" on the clip's `from`/`to`; a double-click does
-  not yet enter it). A selected segment lights what its clip animates in every
-  view, and a selected animated node lights its segments.
+  op, no transaction). A selected bar lights what its clip animates in every view,
+  and a selected animated node lights its bars.
+- **The column**: an object row's name selects its object (hover lights it); a
+  property row carries ‹ ◇ › (`[data-key=prev|toggle|next]`): the previous key,
+  add ("add key") or remove ("remove key") a key at the playhead, the next key.
+- **A drag on an animated object** writes keys by the mode (§12.2, at commit,
+  `timeline_view::key_ops`): on a key (within 1/60 s), that key's value; with
+  **auto-keyframe** on, a new key at the playhead (an unanimated leaf gets a new
+  clip: keys at 0 and the playhead); off, between keys or after the last, every key
+  moves by the drag's delta. Auto-keyframe is the clock's session `autokey`: the
+  transport's ◉ button (`[data-action=autokey]`) or Shift+K from anywhere but a text
+  field; while on, the other 2D views wear a red frame and an "Auto-keyframe" chip.
 - **Keys**, with the pointer over the timeline (the transport takes them before the
   engine): Space, Home, End, ← → (1/30 s; Shift, 1 s), I and O (loop ends), F (fit).
 - **Wheel**: horizontal pans time (`axis.t0`), vertical scrolls the rows,
   Ctrl/Cmd zooms `axis.pps` about the pointer. Shift+1 fits, as F does.
-- **Transport** (`TimelineTransport.svelte`): back to 0, play/pause, loop (all
-  clips), fit, **Animate change** (`[data-action=animate-change]`, or `K` from
-  anywhere but a text field), the time (click to type and seek), the end.
-- **Animate change** (phase 4): the last transaction's number, vector and
-  colour changes to the selection (session nodes ignored; none selected: all it
-  touched) become clips from the old value to the new, starting at the playhead,
-  1 s, ease in-out, and the authored values go back: one "animate change"
-  transaction. A note over the transport says how many clips, or why none.
-- **Engine calls**: `clock_read()` → `{ok, id, t, playing, rate, loop_in, loop_out,
-  end}`; `clock_set(json)`; `timeline_axis(json)`, `{"fit": width}` or `{"pan",
-  "zoom", "at"}`, → `{ok, t0, pps}` (`'{}'` reads); `animate_change(actor)` →
-  `{ok, version, clips, at}`.
+- **Transport** (`TimelineTransport.svelte`, in the column's corner over the
+  ruler): back to 0, play/pause, loop (all clips), fit, auto-keyframe, the time
+  (click to type and seek), the end.
+- **Engine calls**: `clock_read()` → `{ok, id, t, playing, autokey, rate, loop_in,
+  loop_out, end}`; `clock_set(json)`; `timeline_axis(json)`, `{"fit": width}` or
+  `{"pan", "zoom", "at"}`, → `{ok, t0, pps}` (`'{}'` reads); `timeline_rows(panel)`
+  → `{ok, rows: [{kind, label, y, target, prop, clip, error, keyed}], pan_y, zoom,
+  label_w, ruler_h, row_h}`; `timeline_key(action, clip)` (`prev`, `next`,
+  `toggle`); `view_pan(panel, pan_y)`.
 
-`timeline.txt`. Expected, minus `nav`, `ready`, `key`, `sleep` and `screenshot`
-lines:
+`timeline.txt` (it turns smart guides off first). Expected, minus `nav`, `ready`,
+`key`, `sleep` and `screenshot` lines:
 
 ```
-"clock at 0, playing false, last clip ends at 4"
-"scrubbed to 2.60 s; square drawn at x 700; version 2"
-"slide: start=\"1.5\"; version 3"
-"after undo slide: start=\"0.5\""
-"bar selected true"
-"{\"header click selects\":[]}"
-"label click selects the bar: true"
-"tick label click: playhead at 4.05, selection kept true"
-"playing true, advanced true; paused true"
-"trimmed slide: start=\"0.5\" dur 3.000"
-"typed: slide to=\"650\""
+"{}"
+"clock at 0, auto-keyframe false, last key at 4; rows [\"o:torus\",\"p:rot\",\"o:square\",\"p:x\"]"
+"scrubbed to 2.60 s; square at x 700; version 2"
+"slide: start=\"1.5\""
+"over the last key: cursor trim-end"
+"keys after the drag: [\"0\",\"2.5\"]"
+clicked [data-timeline-column] [data-row=object][data-target="#M"] .name
+"name click selects [\"#M\"]"
+"at 1 s"
+clicked [data-timeline-column] [data-prop="transform2d.x"] [data-key=next]
+"› to 2.50, ‹ back to 0.50"
+"at 1.5 s"
+clicked [data-timeline-column] [data-prop="transform2d.x"] [data-key=toggle]
+"◇ added: 3 keys, button on"
+clicked [data-timeline-column] [data-prop="transform2d.x"] [data-key=toggle]
+"◇ again removed it: 2 keys"
+"auto-keyframe off: keys [\"550\",\"750\"]"
+"Shift+K: auto-keyframe true, button on"
+"auto-keyframe on: keys [\"0@500\",\"2@700\",\"1@650\"]"
 "after delete: slide clip gone"
 "after undo: slide clip back"
-"End then a frame back: 3.967"
-"loop 1.033 to 2.033, at 2.033"
-"fitted: t0 0, pps 284.0"
-"panned: t0 0.42"
-"moved: true"
-"clip: start=\"1\" dur=\"1\" from=\"160\" to=\"400\"; ellipse at the playhead  x=\"160\"; note: Animated: 1 clip from 1.00 s"
-"at 2 s the ellipse x=\"400\""
-"undone: 2 clips; ellipse x=\"400\""
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (302 ops, System) -> v1
 applied "open showcase" (189 ops, System) -> v2
 applied "retime slide" (1 ops, Human) -> v3
 applied "undo: retime slide" (1 ops, System) -> v4
-applied "trim slide" (1 ops, Human) -> v5
-applied "undo: trim slide" (1 ops, System) -> v6
-applied "edit text" (1 ops, Human) -> v7
-applied "undo: edit text" (1 ops, System) -> v8
-applied "delete slide" (1 ops, Human) -> v9
-applied "undo: delete slide" (1 ops, System) -> v10
-applied "model edit" (1 ops, Model) -> v11
-applied "animate change" (3 ops, Human) -> v12
-applied "undo: animate change" (3 ops, System) -> v13
+applied "move key of slide" (1 ops, Human) -> v5
+applied "undo: move key of slide" (1 ops, System) -> v6
+applied "add key" (1 ops, Human) -> v7
+applied "remove key" (1 ops, Human) -> v8
+applied "move rect" (2 ops, Human) -> v9
+applied "undo: move rect" (2 ops, System) -> v10
+applied "move rect" (1 ops, Human) -> v11
+applied "undo: move rect" (1 ops, System) -> v12
+applied "delete slide" (1 ops, Human) -> v13
+applied "undo: delete slide" (3 ops, System) -> v14
 (no page errors)
 ```
 
@@ -2119,12 +2129,12 @@ page. `vite.config.ts` now lists the two pages' entries and `bits-ui` in
 `optimizeDeps` and excludes `@lucide/svelte` (icons are deep imports, AGENTS.md),
 so a new icon no longer causes it; a new npm dependency still might. Rerun.
 
-`cargo test … --test clock` (phase 1: the clock, the axis rule) and `--test
-timeline_view` (the generator: rows, segments projecting their clips, retiming by
-drag without regenerating, the static pieces locked, the playhead scrubbing, keyed
-reconcile, end values typed into the clip, pan/zoom/fit without history, the loop
-band, each piece's affordances from its group's context, the ruler's track)
-cover the store side. The smoke's scrub step presses the ruler and drags to 3 s.
+`cargo test … --test clock` (phase 1: the clock, the axis rule), `--test time`
+(sampling keys) and `--test timeline_view` (the generator: rows, bars and diamonds
+projecting their clips and keys, retiming and moving keys by drag, the §12.2 table of
+what a drag on an animated object writes, ‹ ◇ ›, pan/zoom/fit without history, the
+loop band, each piece's affordances and cursor from its group's context, the ruler's
+track, delete following `projects`) cover the store side. The smoke's scrub step presses the ruler and drags to 3 s.
 
 ## Free running and the Stats view (2026-10-18)
 

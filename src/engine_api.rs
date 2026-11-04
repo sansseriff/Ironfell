@@ -2125,6 +2125,7 @@ pub fn clock_read(app: &mut WorkerApp) -> String {
             "id": store.clock().map(|c| c.to_string()).unwrap_or_default(),
             "t": store.time(),
             "playing": clock::playing(store),
+            "autokey": iron_document::timeline_view::autokey(store),
             "rate": if store.clock().is_some() { n("rate") } else { 1.0 },
             "loop_in": n("loop_in"),
             "loop_out": n("loop_out"),
@@ -2141,7 +2142,7 @@ pub fn clock_set(app: &mut WorkerApp, fields: String) -> String {
         let mut out: Vec<(&str, iron_document::Value)> = Vec::new();
         for (k, v) in &map {
             let value = match (k.as_str(), v) {
-                ("playing", serde_json::Value::Bool(b)) => iron_document::Value::Bool(*b),
+                ("playing" | "autokey", serde_json::Value::Bool(b)) => iron_document::Value::Bool(*b),
                 ("t" | "rate" | "loop_in" | "loop_out", serde_json::Value::Number(x)) => iron_document::Value::Number(x.as_f64().unwrap_or(0.0)),
                 _ => return Err(format!("clock_set: bad field {k} = {v}")),
             };
@@ -2172,23 +2173,72 @@ pub fn timeline_axis(app: &mut WorkerApp, fields: String) -> String {
     })
 }
 
-/// "Animate change" (timeline.md §6, phase 4): the last transaction's
-/// number, vector and colour changes to the selection (to whatever it
-/// changed, with nothing selected) become clips from the old value to the
-/// new, starting at the playhead, and the authored values go back: one
-/// transaction. `{"ok", "version", "clips", "at"}`, or why there is nothing
-/// to do.
-pub fn animate_change(app: &mut WorkerApp, actor: String) -> String {
+/// The timeline's rows for its DOM column (timeline.md §12.3): `{"ok",
+/// "rows": [{"kind", "label", "y", "target", "prop", "clip", "error",
+/// "keyed"}], "pan_y", "zoom", "label_w", "ruler_h", "row_h"}`, `y` in
+/// document px (the view's `pan_y` and `zoom` place them on screen), `keyed`
+/// whether a key of the row's clip is at the playhead.
+pub fn timeline_rows(app: &mut WorkerApp, panel: String) -> String {
+    let camera = app.world().get_resource::<crate::document_bridge::ViewCameras>().and_then(|c| c.0.get(&panel).copied()).unwrap_or_default();
     narrative_run(app, |store| {
-        // The timeline's own pieces (session nodes) are not what changed:
-        // with only those selected, animate whatever the change touched.
-        let nodes: Vec<iron_document::NodeId> = store.selection().into_iter().map(|(id, _)| id).filter(|id| !id.is_session()).collect();
-        let at = store.time();
-        let ops = iron_document::timeline_view::animate_change_ops(store, &nodes, at)?;
-        let clips = ops.iter().filter(|op| matches!(op, iron_document::Op::Create { ty, .. } if ty.name() == "clip")).count();
-        let version = narrative_apply(store, "animate change", &actor, ops)?;
-        Ok(serde_json::json!({"ok": true, "version": version, "clips": clips, "at": at}))
+        use iron_document::timeline_view as tv;
+        let clock = store.clock().ok_or("no clock yet")?;
+        let comp = tv::find(store);
+        let plan = tv::plan(store, clock, comp);
+        let doc = store.document();
+        let now = store.time();
+        let rows: Vec<serde_json::Value> = tv::rows(&plan)
+            .into_iter()
+            .map(|r| {
+                let keyed = r.clip.is_some_and(|c| {
+                    let base = iron_document::time::start(doc, c) + doc.relations_from(c).find(|x| x.rel == iron_document::RelKind::Animates).and_then(|x| x.data.get("offset").and_then(|v| v.as_f64())).unwrap_or(0.0);
+                    iron_document::time::keys(doc, c).iter().any(|k| (base + k.t - now).abs() <= tv::AT_KEY)
+                });
+                serde_json::json!({"kind": r.kind, "label": r.label, "y": r.y, "target": r.target.to_string(), "prop": r.prop, "clip": r.clip.map(|c| c.to_string()), "error": r.error, "keyed": keyed})
+            })
+            .collect();
+        let label_w = comp.and_then(|c| iron_document::facet::LeafPath::new(iron_document::facet::FacetKind::Axis, "label_w").ok().and_then(|p| store.resolved(c, p))).and_then(|v| v.as_f64()).unwrap_or(160.0);
+        Ok(serde_json::json!({"ok": true, "rows": rows, "pan_y": camera.pan.y, "zoom": camera.zoom, "label_w": label_w, "ruler_h": tv::RULER_H, "row_h": tv::ROW_H}))
     })
+}
+
+/// A timeline row's key buttons (timeline.md §12.3): `prev` and `next` move
+/// the playhead to the clip's previous or next key (session ops), `toggle`
+/// adds a key at the playhead holding the value shown, or removes the key
+/// there (a transaction). `{"ok", "t"}` or `{"ok", "version"}`.
+pub fn timeline_key(app: &mut WorkerApp, action: String, clip: String) -> String {
+    narrative_run(app, |store| {
+        use iron_document::timeline_view as tv;
+        let clip: iron_document::NodeId = clip.parse().map_err(|_| format!("not a node id: {clip}"))?;
+        match action.as_str() {
+            "prev" | "next" => {
+                let Some(t) = tv::step_key(store, clip, if action == "prev" { -1 } else { 1 }) else { return Ok(serde_json::json!({"ok": true, "t": store.time()})) };
+                crate::document_bridge::clock::set(store, &[("playing", iron_document::Value::Bool(false)), ("t", iron_document::Value::Number(t))])?;
+                Ok(serde_json::json!({"ok": true, "t": t}))
+            }
+            "toggle" => {
+                let ops = tv::toggle_key_ops(store, clip)?;
+                let label = if ops.iter().any(|o| matches!(o, iron_document::Op::Delete { .. })) { "remove key" } else { "add key" };
+                let version = narrative_apply(store, label, "human", ops)?;
+                Ok(serde_json::json!({"ok": true, "version": version}))
+            }
+            _ => Err(format!("timeline_key: unknown action {action:?} (prev, next, toggle)")),
+        }
+    })
+}
+
+/// Scroll a 2D view vertically to `pan_y` (window px; 0 is the top, more
+/// negative is further down): the timeline's DOM column scrolls the canvas
+/// with it (timeline.md §12.3). `{"ok", "pan_y"}`.
+pub fn view_pan(app: &mut WorkerApp, panel: String, pan_y: f64) -> String {
+    let y = (pan_y as f32).min(0.0);
+    if let Some(mut cameras) = app.world_mut().get_resource_mut::<crate::document_bridge::ViewCameras>() {
+        cameras.0.entry(panel).or_default().pan.y = y;
+    }
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        activity.remaining_frames = 10;
+    }
+    serde_json::json!({"ok": true, "pan_y": y}).to_string()
 }
 
 /// Nodes a mention can name (the `#` menu): live, named, not session or

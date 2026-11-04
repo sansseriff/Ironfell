@@ -90,23 +90,24 @@
   <rule match="children" affords.select="none" chrome.lit="none" snap.target="no"/>
 </context>
 
-<!-- Bars: each is one target for its clip. A press selects it, a drag
-     retimes it (its x is bound to the clip's start and its y to a literal,
-     so it moves only in time), its two ends trim it (`ends`: the edges
-     write its own x and width, `dur · pps`), and deleting it deletes the
-     clip it projects (`subject`). -->
+<!-- Bars (timeline.md §12.3): one per clip, from its first key to its last.
+     A press selects it, a drag retimes the clip (its x reads the clip's start;
+     its y is a literal, so it moves only in time), and deleting it deletes the
+     clip it projects (`subject`). A bar's label is inert: a press on the words
+     is a press on the bar. -->
 <context name="std:timeline-tracks">
   <rule match="self" affords.select="window" chrome.lit="none"/>
-  <rule match="children" affords.select="target" affords.drag="point" affords.grips="ends" affords.delete="subject" chrome.lit="frame" snap.target="no"/>
+  <rule match="children type:rect" affords.select="target" affords.drag="point" affords.delete="subject" chrome.lit="shape" snap.target="no"/>
+  <rule match="children type:text" affords.select="inert" chrome.lit="none" snap.target="no"/>
 </context>
 
-<!-- Inside a bar: its rect and label are parts, not targets (entering the
-     bar does not stop on them; the label is transparent to the pointer).
-     Its end values say otherwise inline: they are reached by entering the
-     bar (a double-click) and edit as text. -->
-<context name="std:timeline-bar">
-  <rule match="children type:rect" affords.select="none" chrome.lit="none" snap.target="no"/>
-  <rule match="children type:text" affords.select="inert" chrome.lit="none" snap.target="no"/>
+<!-- Keys: a diamond per keyframe, over the bars. A press selects it, a drag
+     moves the key in time (its x reads the clip's start and the key's time;
+     it projects the key, so the key's time is what moves), and deleting it
+     deletes the key. -->
+<context name="std:timeline-keys">
+  <rule match="self" affords.select="window" chrome.lit="none"/>
+  <rule match="children" affords.select="target" affords.drag="point" affords.delete="subject" chrome.lit="shape" snap.target="no"/>
 </context>
 
 <!-- An electrical schematic (schematic.md §3), in the spirit of a basic

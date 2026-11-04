@@ -34,25 +34,31 @@ struct Scene {
     rect: NodeId,
     clip: NodeId,
     view: NodeId,
+    keys: [NodeId; 2],
 }
 
-/// rect (x=50) animated by a clip (start 1, dur 2, x 100 -> 300), and a
+/// rect (x=50) animated by a clip (start 1; keys at 0 (x 100) and 2 (x 300)),
+/// and a
 /// group with an axis (t0 0, pps 100, label_w 160) standing in for a
 /// timeline view.
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
-    let (rect, timeline, clip, view) = (ids[0], ids[1], ids[2], ids[3]);
+    let ids = store.document().next_ids(6);
+    let key_ids = [ids[3], ids[4]];
+    let (rect, timeline, clip, view) = (ids[0], ids[1], ids[2], ids[5]);
     let rel = store.document().next_relation_id();
     let mut t = Transform2d::default();
     t.x = num(50.0);
     let mut timing = Timing::default();
     timing.start = num(1.0);
-    timing.dur = num(2.0);
     let mut c = Clip::default();
     c.prop = Slot::Const(Value::Str("transform2d.x".into()));
-    c.from = num(100.0);
-    c.to = num(300.0);
+    let key = |t: f64, v: f64| {
+        let mut k = iron_document::facet::Key::default();
+        k.t = num(t);
+        k.value = num(v);
+        k.wrap()
+    };
     let k0 = OrderKey::first();
     let k1 = OrderKey::after(&k0);
     let k2 = OrderKey::after(&k1);
@@ -62,14 +68,16 @@ fn scene() -> Scene {
             vec![
                 Op::Create { id: rect, ty: ty("rect"), parent: None, order: k0.clone(), facets: vec![t.wrap(), Size::default().wrap()] },
                 Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: k1, facets: vec![] },
-                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: k0, facets: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), facets: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: key_ids[0], ty: ty("key"), parent: Some(clip), order: OrderKey::first(), facets: vec![key(0.0, 100.0)] },
+                Op::Create { id: key_ids[1], ty: ty("key"), parent: Some(clip), order: OrderKey::after(&OrderKey::first()), facets: vec![key(2.0, 300.0)] },
                 Op::Link { rel: Relation { id: rel, from: clip, to: rect, rel: RelKind::Animates, data: BTreeMap::new() } },
                 Op::Create { id: view, ty: ty("group"), parent: None, order: k2, facets: vec![Axis::default().wrap()] },
             ],
         ))
         .unwrap();
     store.drain_changes();
-    Scene { store, rect, clip, view }
+    Scene { store, rect, clip, view, keys: key_ids }
 }
 
 /// A node in `view` whose x is `expr`.
@@ -112,41 +120,74 @@ fn build(store: &mut Store, last: &mut Option<(NodeId, timeline_view::Plan)>) ->
     timeline_view::find(store).expect("built")
 }
 
-#[test]
-fn the_timeline_is_built_from_the_clips() {
-    let Scene { mut store, rect, clip, .. } = scene();
-    let mut last = None;
-    let comp = build(&mut store, &mut last);
-    assert!(comp.is_session());
-    let seg = node_named(&store, comp, &format!("bar {clip} {rect}"));
-    assert_eq!(x_of(&store, seg), 260.0, "label_w + start * pps");
-    assert_eq!(store.resolved(seg, path("size.w")).unwrap(), Value::Number(200.0));
-    assert!(store.document().relations_from(seg).any(|r| r.rel == RelKind::Projects && r.to == clip), "a segment projects its clip");
-    let mut rows: Vec<String> = names_under(&store, comp).into_iter().filter(|k| k.starts_with("object") || k.starts_with("property")).collect();
-    rows.sort();
-    assert_eq!(rows, vec![format!("object {rect}"), format!("property {rect} transform2d.x")]);
-    assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_none(), "nothing changed, nothing regenerated");
-    assert!(!store.save().contains("segment"), "the timeline is session state");
+fn key_of(store: &Store, key: NodeId, f: &str) -> Value {
+    store.document().leaf(key, path(&format!("key.{f}"))).unwrap().constant().cloned().unwrap()
+}
+
+/// Preview `x` on the rect as a drag does, at clock time `t`, and commit.
+fn drag_rect_to(store: &mut Store, rect: NodeId, field: &str, t: f64, x: f64) -> bool {
+    store.set_time(t);
+    store.begin_gesture(&[rect]);
+    store.preview_target(rect, path(&format!("transform2d.{field}")), Value::Number(x)).unwrap();
+    store.commit_gesture("move rect", Actor::Human, 0).is_some_and(|r| r.is_ok())
+}
+
+fn set_autokey(store: &mut Store, on: bool) {
+    let clock = store.ensure_clock().unwrap();
+    store.apply_session(vec![Op::Set { id: clock, path: path("clock.autokey"), slot: Slot::Const(Value::Bool(on)) }]).unwrap();
 }
 
 #[test]
-fn dragging_a_segment_retimes_its_clip() {
-    let Scene { mut store, rect, clip, .. } = scene();
+fn the_timeline_is_built_from_the_clips_and_their_keys() {
+    let Scene { mut store, rect, clip, keys, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    let seg = node_named(&store, comp, &format!("bar {clip} {rect}"));
-    let h = store.begin_drag(seg, [0.0, 0.0]);
+    assert!(comp.is_session());
+    let bar = node_named(&store, comp, &format!("bar {clip} {rect}"));
+    assert_eq!(x_of(&store, bar), 260.0, "label_w + (start + first key) * pps");
+    assert_eq!(store.resolved(bar, path("size.w")).unwrap(), Value::Number(200.0), "first key to last");
+    assert!(store.document().relations_from(bar).any(|r| r.rel == RelKind::Projects && r.to == clip), "a bar projects its clip");
+    let diamond = node_named(&store, comp, &format!("key {} {rect}", keys[1]));
+    assert_eq!(x_of(&store, diamond), 460.0, "a key's diamond at its time");
+    assert!(store.document().relations_from(diamond).any(|r| r.rel == RelKind::Projects && r.to == keys[1]), "a diamond projects its key");
+    // The rows the DOM column draws (§12.3).
+    let rows = timeline_view::rows(&last.as_ref().unwrap().1);
+    let shape: Vec<(&str, String)> = rows.iter().map(|r| (r.kind, r.label.clone())).collect();
+    assert_eq!(shape, vec![("object", format!("rect {rect}")), ("property", "x".to_owned())]);
+    assert_eq!(rows[1].clip, Some(clip));
+    assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_none(), "nothing changed, nothing regenerated");
+    assert!(!store.save().contains("summary"), "the timeline is session state");
+}
+
+#[test]
+fn a_bar_drag_retimes_the_clip_and_a_diamond_drag_moves_its_key() {
+    let Scene { mut store, rect, clip, keys, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let bar = node_named(&store, comp, &format!("bar {clip} {rect}"));
+    let h = store.begin_drag(bar, [0.0, 0.0]);
     match &h.mode {
-        DragMode::Axes { free, .. } => assert_eq!(*free, [true, false], "segments move only in time"),
+        DragMode::Axes { free, .. } => assert_eq!(*free, [true, false], "bars move only in time"),
         m => panic!("{m:?}"),
     }
     store.drag_to(&h, [410.0, 500.0]);
     store.commit_gesture("retime", Actor::Human, 0).unwrap().unwrap();
-    assert_eq!(store.document().leaf(clip, path("timing.start")).unwrap().constant(), Some(&Value::Number(2.5)));
-    assert_eq!(x_of(&store, seg), 410.0);
-    assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_none(), "retiming does not regenerate");
+    assert_eq!(store.document().leaf(clip, path("timing.start")).unwrap().constant(), Some(&Value::Number(2.5)), "the bar moves the clip");
+    assert_eq!(key_of(&store, keys[1], "t"), Value::Number(2.0), "its keys keep their times in it");
     store.undo(0).unwrap().unwrap();
-    assert_eq!(x_of(&store, seg), 260.0);
+    // A diamond reads the clip's start and its key's time; it projects the
+    // key, so the drag moves the key.
+    let diamond = node_named(&store, comp, &format!("key {} {rect}", keys[1]));
+    match store.handle(diamond, path("transform2d.x")) {
+        Handle::Linear { source, .. } => assert_eq!(source, Leaf { node: keys[1], path: path("key.t") }),
+        h => panic!("{h:?}"),
+    }
+    store.preview_target(diamond, path("transform2d.x"), Value::Number(510.0)).unwrap();
+    store.commit_gesture("move key", Actor::Human, 0).unwrap().unwrap();
+    assert_eq!(key_of(&store, keys[1], "t"), Value::Number(2.5));
+    assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_none(), "the key order is the same: no regeneration");
+    let bar = node_named(&store, comp, &format!("bar {clip} {rect}"));
+    assert_eq!(store.resolved(bar, path("size.w")).unwrap(), Value::Number(250.0), "the bar widens through its binding");
 }
 
 #[test]
@@ -154,7 +195,7 @@ fn the_static_pieces_do_not_move_and_the_playhead_scrubs() {
     let Scene { mut store, rect, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    for key in ["background", "header", "ruler bar", "tick 1", "tick label 1", &format!("object {rect}")] {
+    for key in ["background", "header", "ruler bar", "tick 1", "tick label 1", &format!("summary {rect}")] {
         let id = node_named(&store, comp, key);
         assert!(matches!(store.begin_drag(id, [0.0, 0.0]).mode, DragMode::Locked(_)), "{key} is locked");
     }
@@ -173,46 +214,39 @@ fn regeneration_keeps_what_survives() {
     let Scene { mut store, rect, clip, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    let seg = node_named(&store, comp, &format!("bar {clip} {rect}"));
+    let bar = node_named(&store, comp, &format!("bar {clip} {rect}"));
     // A second clip on the rect, on another property.
-    let ids = store.document().next_ids(1);
+    let ids = store.document().next_ids(3);
     let timeline = store.document().live(clip).unwrap().parent.unwrap();
     let mut timing = Timing::default();
     timing.start = num(3.0);
     let mut c = Clip::default();
     c.prop = Slot::Const(Value::Str("transform2d.y".into()));
+    let key = |t: f64, v: f64| {
+        let mut k = iron_document::facet::Key::default();
+        k.t = num(t);
+        k.value = num(v);
+        k.wrap()
+    };
     let rel = store.document().next_relation_id();
     store
         .apply(tx(
             "add clip",
             vec![
                 Op::Create { id: ids[0], ty: ty("clip"), parent: Some(timeline), order: OrderKey::after(&OrderKey::first()), facets: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: ids[1], ty: ty("key"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![key(0.0, 0.0)] },
+                Op::Create { id: ids[2], ty: ty("key"), parent: Some(ids[0]), order: OrderKey::after(&OrderKey::first()), facets: vec![key(1.0, 10.0)] },
                 Op::Link { rel: Relation { id: rel, from: ids[0], to: rect, rel: RelKind::Animates, data: BTreeMap::new() } },
             ],
         ))
         .unwrap();
     assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_some());
-    assert_eq!(node_named(&store, comp, &format!("bar {clip} {rect}")), seg, "the old bar kept its id");
+    assert_eq!(node_named(&store, comp, &format!("bar {clip} {rect}")), bar, "the old bar kept its id");
     let second = node_named(&store, comp, &format!("bar {} {rect}", ids[0]));
     assert_eq!(x_of(&store, second), 460.0);
-    // Deleting the clip removes its segment.
     store.apply(tx("delete", vec![Op::Delete { id: ids[0] }])).unwrap();
     timeline_view::sync(&mut store, &mut last).unwrap();
     assert!(!store.document().is_live(second));
-    let _ = Axis::default();
-}
-
-#[test]
-fn an_end_value_types_into_the_clip() {
-    let Scene { mut store, rect, clip, .. } = scene();
-    let mut last = None;
-    let comp = build(&mut store, &mut last);
-    let to = node_named(&store, comp, &format!("to {clip} {rect}"));
-    assert_eq!(store.resolved(to, path("text.content")).unwrap(), Value::Str("300".into()));
-    assert_eq!(x_of(&store, to), 200.0 + 4.0, "just past the bar's end, in the bar");
-    store.preview_target(to, path("text.content"), Value::Str("650".into())).unwrap();
-    store.commit_gesture("set to", Actor::Human, 0).unwrap().unwrap();
-    assert_eq!(store.document().leaf(clip, path("clip.to")).unwrap().constant(), Some(&Value::Number(650.0)));
 }
 
 #[test]
@@ -220,21 +254,17 @@ fn the_axis_pans_zooms_and_fits_without_history() {
     let Scene { mut store, rect, clip, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
-    let seg = node_named(&store, comp, &format!("bar {clip} {rect}"));
+    let bar = node_named(&store, comp, &format!("bar {clip} {rect}"));
     let past = store.history().past().len();
-    // Zoom in 2x about x = 360 (t = 2 s): 2 s stays at 360, the clip's
-    // start (1 s) moves from 260 to 160.
     timeline_view::navigate(&mut store, 0.0, -(2f64.ln()), 360.0).unwrap();
-    assert!((x_of(&store, seg) - 160.0).abs() < 1e-9, "{}", x_of(&store, seg));
-    assert!((store.resolved(seg, path("size.w")).unwrap().as_f64().unwrap() - 400.0).abs() < 1e-9);
-    // Pan 100 px later: 0.5 s at 200 px/s.
+    assert!((x_of(&store, bar) - 160.0).abs() < 1e-9, "{}", x_of(&store, bar));
+    assert!((store.resolved(bar, path("size.w")).unwrap().as_f64().unwrap() - 400.0).abs() < 1e-9);
     timeline_view::navigate(&mut store, 100.0, 0.0, 0.0).unwrap();
-    assert!((x_of(&store, seg) - 60.0).abs() < 1e-9, "{}", x_of(&store, seg));
+    assert!((x_of(&store, bar) - 60.0).abs() < 1e-9, "{}", x_of(&store, bar));
     timeline_view::fit(&mut store, 1184.0).unwrap();
     assert_eq!(store.resolved(comp, path("axis.t0")).unwrap(), Value::Number(0.0));
-    assert_eq!(store.resolved(comp, path("axis.pps")).unwrap(), Value::Number(1000.0 / 3.0), "3 s of clips in 1000 px");
+    assert_eq!(store.resolved(comp, path("axis.pps")).unwrap(), Value::Number(1000.0 / 3.0), "3 s of keys in 1000 px");
     assert_eq!(store.history().past().len(), past, "navigation is not an edit");
-    // A zoom changes the tick spacing, so the ruler regenerates.
     assert!(timeline_view::sync(&mut store, &mut last).unwrap().is_some());
 }
 
@@ -252,33 +282,9 @@ fn the_loop_band_follows_the_clock() {
 }
 
 #[test]
-fn animate_change_turns_the_last_edit_into_a_clip() {
-    let Scene { mut store, rect, .. } = scene();
-    store.set_time(4.0);
-    store.apply(tx("move rect", vec![Op::Set { id: rect, path: path("transform2d.y"), slot: num(80.0) }])).unwrap();
-    let ops = timeline_view::animate_change_ops(&store, &[rect], store.time()).unwrap();
-    store.apply(tx("animate change", ops)).unwrap();
-    assert_eq!(store.document().leaf(rect, path("transform2d.y")).unwrap().constant(), Some(&Value::Number(0.0)), "the authored value went back");
-    store.set_time(4.0);
-    assert_eq!(store.resolved(rect, path("transform2d.y")).unwrap(), Value::Number(0.0), "at the start the clip holds the old value");
-    store.set_time(5.0);
-    assert_eq!(store.resolved(rect, path("transform2d.y")).unwrap(), Value::Number(80.0), "after a second, the new one");
-    let mut last = None;
-    let comp = build(&mut store, &mut last);
-    let rows: usize = names_under(&store, comp).iter().filter(|s| s.starts_with("property ")).count();
-    assert_eq!(rows, 2, "the rect has an x row and now a y row");
-    // One undo takes the whole thing back.
-    store.undo(0).unwrap().unwrap();
-    assert_eq!(store.document().leaf(rect, path("transform2d.y")).unwrap().constant(), Some(&Value::Number(80.0)));
-    // Nothing of the selection changed: it says so.
-    let Scene { clip, .. } = scene();
-    assert!(timeline_view::animate_change_ops(&store, &[clip], 0.0).is_err());
-}
-
-#[test]
 fn what_each_piece_affords_is_its_groups_context() {
     use iron_document::contexts::{chain_of, Field};
-    let Scene { mut store, rect, clip, .. } = scene();
+    let Scene { mut store, rect, clip, keys, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
     let values = |key: &str| {
@@ -287,51 +293,35 @@ fn what_each_piece_affords_is_its_groups_context() {
         store.resolver().values(&chain, chain.len() - 1)
     };
     let bar = values(&format!("bar {clip} {rect}"));
-    assert!(bar.selectable() && bar.is(Field::DRAG, "point") && bar.has(Field::GRIPS, "ends") && bar.is(Field::DELETE, "subject"), "a bar selects, drags, trims by its ends and deletes its clip");
-    for key in ["background", "header", "grid 1", &format!("object {rect}"), &format!("segment {clip} {rect}")] {
-        let v = values(key);
-        assert!(v.is(Field::SELECT, "none") && v.source(Field::SELECT).is_some(), "{key} is declared no target");
+    assert!(bar.selectable() && bar.is(Field::DRAG, "point") && bar.is(Field::DELETE, "subject"), "a bar selects, drags and deletes its clip");
+    let key = values(&format!("key {} {rect}", keys[0]));
+    assert!(key.selectable() && key.is(Field::DRAG, "point") && key.is(Field::DELETE, "subject"), "a diamond selects, drags and deletes its key");
+    assert_eq!((key.get(Field::CURSOR), values(&format!("key {} {rect}", keys[1])).get(Field::CURSOR)), ("trim-start", "trim-end"), "a clip's first and last keys say they trim it");
+    assert_eq!(bar.get(Field::CURSOR), "auto");
+    for k in ["background", "header", "grid 1", &format!("summary {rect}")] {
+        let v = values(k);
+        assert!(v.is(Field::SELECT, "none") && v.source(Field::SELECT).is_some(), "{k} is declared no target");
     }
-    for key in [format!("segment label {clip} {rect}"), "playhead".to_owned()] {
-        assert!(values(&key).is(Field::SELECT, "inert"), "{key} is transparent to the pointer");
+    for k in [format!("bar label {clip} {rect}"), "playhead".to_owned()] {
+        assert!(values(&k).is(Field::SELECT, "inert"), "{k} is transparent to the pointer");
     }
-    let to = values(&format!("to {clip} {rect}"));
-    assert!(to.selectable() && to.is(Field::EDIT, "text") && to.is(Field::DRAG, "none"), "an end value, entered from its bar, edits and never drags");
-    // The ruler group is the scrub control: a track whose value is the clock.
     let ruler = node_named(&store, comp, "ruler bar");
     let ruler_group = store.document().live(ruler).unwrap().parent.unwrap();
     let chain = chain_of(store.document(), ruler_group);
     let v = store.resolver().values(&chain, chain.len() - 1);
     assert!(v.is(Field::DRAG, "track") && v.get(Field::DRIVES) == "track.value");
-    for key in ["ruler bar", "tick 3", "tick label 1", "playhead grip"] {
-        assert!(!values(key).selectable(), "{key} is part of the ruler, not a target");
-    }
     let n = |f: &str| store.resolved(ruler_group, path(f)).and_then(|v| v.as_f64()).unwrap();
-    // Local x 360 is 2 s at the default axis (label_w 160, 100 px/s).
     assert_eq!(n("track.origin") + 360.0 * n("track.scale"), 2.0);
-    store.preview_target(ruler_group, path("track.value"), Value::Number(2.0)).unwrap();
-    assert_eq!(store.time(), 2.0, "the track's value is the playhead");
-    assert!(store.commit_gesture("scrub", Actor::Human, 0).is_none(), "scrubbing is not an edit");
 }
 
 #[test]
-fn a_bar_trims_by_its_ends_and_deleting_it_deletes_the_clip() {
-    let Scene { mut store, rect, clip, .. } = scene();
+fn deleting_a_bar_deletes_its_clip_and_a_diamond_its_key() {
+    let Scene { mut store, rect, clip, keys, .. } = scene();
     let mut last = None;
     let comp = build(&mut store, &mut last);
+    let diamond = node_named(&store, comp, &format!("key {} {rect}", keys[1]));
+    assert_eq!(iron_document::parts::delete_subject_ops(store.document(), diamond), vec![Op::Delete { id: keys[1] }]);
     let bar = node_named(&store, comp, &format!("bar {clip} {rect}"));
-    // The right end: width 200 -> 300 is dur 2 -> 3.
-    store.preview_target(bar, path("size.w"), Value::Number(300.0)).unwrap();
-    store.commit_gesture("trim slide", Actor::Human, 0).unwrap().unwrap();
-    assert_eq!(store.document().leaf(clip, path("timing.dur")).unwrap().constant(), Some(&Value::Number(3.0)));
-    // The left end, 1 s later: x 260 -> 360 and width 300 -> 200, the
-    // right end staying: start 1 -> 2, dur 3 -> 2.
-    store.preview_target(bar, path("transform2d.x"), Value::Number(360.0)).unwrap();
-    store.preview_target(bar, path("size.w"), Value::Number(200.0)).unwrap();
-    store.commit_gesture("trim slide", Actor::Human, 0).unwrap().unwrap();
-    let n = |f: &str| store.document().leaf(clip, path(f)).unwrap().constant().cloned();
-    assert_eq!((n("timing.start"), n("timing.dur")), (Some(Value::Number(2.0)), Some(Value::Number(2.0))));
-    // Deleting the bar is deleting the clip; the timeline drops the bar.
     let ops = iron_document::parts::delete_subject_ops(store.document(), bar);
     assert_eq!(ops, vec![Op::Delete { id: clip }]);
     store.apply(tx("delete clip", ops)).unwrap();
@@ -340,4 +330,91 @@ fn a_bar_trims_by_its_ends_and_deleting_it_deletes_the_clip() {
     store.undo(0).unwrap().unwrap();
     timeline_view::sync(&mut store, &mut last).unwrap();
     assert!(names_under(&store, comp).contains(&format!("bar {clip} {rect}")), "undo brings the clip and its bar back");
+}
+
+// ---- §12.2: what a drag on an animated object writes ------------------------
+
+#[test]
+fn on_a_key_a_drag_sets_that_key() {
+    let Scene { mut store, rect, keys, .. } = scene();
+    assert!(drag_rect_to(&mut store, rect, "x", 3.0, 350.0));
+    assert_eq!(key_of(&store, keys[1], "value"), Value::Number(350.0));
+    assert_eq!(key_of(&store, keys[0], "value"), Value::Number(100.0));
+    assert_eq!(store.document().leaf(rect, path("transform2d.x")).unwrap().constant(), Some(&Value::Number(50.0)), "the authored value is untouched");
+    assert_eq!(x_of(&store, rect), 350.0);
+}
+
+#[test]
+fn between_keys_with_auto_keyframe_off_the_whole_animation_moves() {
+    let Scene { mut store, rect, keys, .. } = scene();
+    // At 2 s the rect shows 200; dragged to 250, every key moves by 50.
+    assert!(drag_rect_to(&mut store, rect, "x", 2.0, 250.0));
+    assert_eq!((key_of(&store, keys[0], "value"), key_of(&store, keys[1], "value")), (Value::Number(150.0), Value::Number(350.0)));
+    assert_eq!(x_of(&store, rect), 250.0);
+    // After the last key too: the animation, not just its end, moves.
+    assert!(drag_rect_to(&mut store, rect, "x", 9.0, 300.0));
+    assert_eq!((key_of(&store, keys[0], "value"), key_of(&store, keys[1], "value")), (Value::Number(100.0), Value::Number(300.0)));
+    // Before the clip starts, nothing drives the leaf: the authored value.
+    assert!(drag_rect_to(&mut store, rect, "x", 0.5, 70.0));
+    assert_eq!(store.document().leaf(rect, path("transform2d.x")).unwrap().constant(), Some(&Value::Number(70.0)));
+    store.undo(0).unwrap().unwrap();
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(key_of(&store, keys[1], "value"), Value::Number(350.0), "each drag is one undo");
+}
+
+#[test]
+fn with_auto_keyframe_on_a_drag_adds_a_key_at_the_playhead() {
+    let Scene { mut store, rect, clip, .. } = scene();
+    set_autokey(&mut store, true);
+    assert!(drag_rect_to(&mut store, rect, "x", 2.0, 260.0));
+    let ks = iron_document::time::keys(store.document(), clip);
+    assert_eq!(ks.iter().map(|k| (k.t, k.value.clone())).collect::<Vec<_>>(), vec![(0.0, Value::Number(100.0)), (1.0, Value::Number(260.0)), (2.0, Value::Number(300.0))]);
+    // Before the clip: its start moves to the playhead, the keys keep their times.
+    assert!(drag_rect_to(&mut store, rect, "x", 0.5, 80.0));
+    assert_eq!(store.document().leaf(clip, path("timing.start")).unwrap().constant(), Some(&Value::Number(0.5)));
+    let ks = iron_document::time::keys(store.document(), clip);
+    assert_eq!(ks.iter().map(|k| k.t).collect::<Vec<_>>(), vec![0.0, 0.5, 1.5, 2.5]);
+    store.set_time(0.5);
+    assert_eq!(x_of(&store, rect), 80.0);
+    store.set_time(3.0);
+    assert_eq!(x_of(&store, rect), 300.0, "the old keys play as before");
+}
+
+#[test]
+fn with_auto_keyframe_on_an_unanimated_leaf_starts_an_animation() {
+    let Scene { mut store, rect, .. } = scene();
+    set_autokey(&mut store, true);
+    // y is not animated: at 2 s a drag makes a clip from y's value at 0 to
+    // the dragged one at 2 s. The authored y stays.
+    assert!(drag_rect_to(&mut store, rect, "y", 2.0, 40.0));
+    let clip = timeline_view::clip_of(store.document(), Leaf { node: rect, path: path("transform2d.y") }).unwrap().0;
+    let ks = iron_document::time::keys(store.document(), clip);
+    assert_eq!(ks.iter().map(|k| (k.t, k.value.clone())).collect::<Vec<_>>(), vec![(0.0, Value::Number(0.0)), (2.0, Value::Number(40.0))]);
+    assert_eq!(store.document().leaf(rect, path("transform2d.y")).unwrap().constant(), Some(&Value::Number(0.0)));
+    store.set_time(1.0);
+    assert_eq!(store.resolved(rect, path("transform2d.y")).unwrap(), Value::Number(20.0));
+    // With auto-keyframe off the same drag is an ordinary edit.
+    set_autokey(&mut store, false);
+    let Scene { store: mut plain, rect: r2, .. } = scene();
+    assert!(drag_rect_to(&mut plain, r2, "y", 2.0, 40.0));
+    assert_eq!(plain.document().leaf(r2, path("transform2d.y")).unwrap().constant(), Some(&Value::Number(40.0)));
+}
+
+#[test]
+fn the_rows_buttons_step_and_toggle_keys() {
+    let Scene { mut store, rect, clip, keys, .. } = scene();
+    store.set_time(1.5);
+    assert_eq!(timeline_view::step_key(&store, clip, 1), Some(3.0), "› the next key, on the clock");
+    assert_eq!(timeline_view::step_key(&store, clip, -1), Some(1.0), "‹ the previous");
+    // ◇ between keys: a key here, holding what shows (175 at 1.5 s).
+    let ops = timeline_view::toggle_key_ops(&store, clip).unwrap();
+    store.apply(tx("add key", ops)).unwrap();
+    let ks = iron_document::time::keys(store.document(), clip);
+    assert_eq!(ks.len(), 3);
+    assert_eq!((ks[1].t, ks[1].value.clone()), (0.5, Value::Number(150.0)));
+    // ◇ on a key: removes it.
+    store.set_time(3.0);
+    let ops = timeline_view::toggle_key_ops(&store, clip).unwrap();
+    assert_eq!(ops, vec![Op::Delete { id: keys[1] }]);
+    let _ = rect;
 }

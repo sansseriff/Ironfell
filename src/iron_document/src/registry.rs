@@ -380,6 +380,13 @@ static TYPES: &[TypeSpec] = &[
         name: "clip",
         facets: &[(K::Timing, true), (K::Clip, true), (K::Name, false)],
         default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["key"]),
+    },
+    // One keyframe of its clip (timeline.md §12.1).
+    TypeSpec {
+        name: "key",
+        facets: &[(K::Key, true), (K::Name, false)],
+        default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
 ];

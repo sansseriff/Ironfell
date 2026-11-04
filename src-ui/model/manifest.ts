@@ -228,10 +228,15 @@ TABLES
   cell's id); preset= or header= there restyle it.
 
 TIME
-  A clip node (child of a timeline) has timing.start, timing.dur, timing.easing and
-  clip.prop (the leaf it drives, e.g. transform2d.x), clip.from, clip.to. It reaches
-  its target through <link from="#clip" to="#target" rel="animates"/>. A leaf may be
-  bound or animated, not both.
+  A clip node (child of a timeline) animates one property: timing.start (where its
+  keys are measured from, seconds on the clock) and clip.prop (the leaf, e.g.
+  transform2d.x), with key children: <create type="key" parent="$clip" t="0"
+  value="500" easing="ease_in_out"/>, t in seconds after the start, value the leaf's
+  kind, easing into the next key (linear, ease_in, ease_out, ease_in_out, hold). A
+  clip needs two keys to move anything; before its first key the authored value
+  shows, after its last it holds that value. It reaches its target through <link
+  from="#clip" to="#target" rel="animates"/>. A leaf may be bound or animated, not
+  both.
 
 NARRATIVES
   A <narrative id="#N" name="…"> in the view is flowing text: each block's first line

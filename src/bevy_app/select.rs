@@ -185,6 +185,24 @@ fn label_outline(text: &str, size: f32) -> Option<(kurbo::BezPath, f64)> {
 /// A component's chip above its box (Figma's main and instance labels): a
 /// violet tab holding the main's four diamonds or the instance's hollow
 /// one, and the name. `at` is the box's top-left, window px.
+/// The auto-keyframe frame: an inset border round the view and a chip at
+/// its top left naming the mode.
+fn draw_autokey(b: &mut crate::vector::DisplayListBuilder<'_>, rect: Rect, k: f64) {
+    let red = peniko::Color::new(AUTOKEY_RED);
+    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(3.0 * k), red, rect.inset(-1.5 * k).to_path(0.1));
+    let size = 11.0 * k;
+    let pad = 5.0 * k;
+    let (text, w) = label_outline("Auto-keyframe", size as f32).unwrap_or_default();
+    let h = size + 2.0 * pad;
+    let chip = Rect::new(rect.x0 + 8.0 * k, rect.y0 + 8.0 * k, rect.x0 + 8.0 * k + w + 2.0 * pad, rect.y0 + 8.0 * k + h);
+    b.fill(Affine::IDENTITY, red, kurbo::RoundedRect::from_rect(chip, 4.0 * k));
+    // The outline's origin is the text's top-left.
+    b.fill(Affine::translate((chip.x0 + pad, chip.y0 + pad)), peniko::Color::new([1.0, 1.0, 1.0, 1.0]), text);
+}
+
+/// Auto-keyframe's colour, After Effects' record red.
+const AUTOKEY_RED: [f32; 4] = [0.9, 0.24, 0.22, 1.0];
+
 fn draw_chip(b: &mut crate::vector::DisplayListBuilder<'_>, at: Point, main: bool, name: &str, k: f64) {
     let size = 11.0 * k;
     let pad = 4.0 * k;
@@ -1760,10 +1778,18 @@ fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, rea
 /// `projects` them, timeline.md §6): "retime slide", "trim clips". `None`
 /// for ordinary nodes.
 fn projected_label(doc: &iron_document::Document, ids: &[NodeId], verb: &str) -> Option<String> {
-    let clips: Vec<NodeId> = ids.iter().filter_map(|&id| doc.relations_from(id).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to)).collect();
-    match clips.as_slice() {
+    let subjects: Vec<NodeId> = ids.iter().filter_map(|&id| doc.relations_from(id).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to)).collect();
+    let name = |id: NodeId| doc.get::<iron_document::facet::Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+    let is_key = |id: NodeId| doc.live(id).is_some_and(|n| n.ty.name() == "key");
+    match subjects.as_slice() {
         [] => None,
-        [clip] => Some(format!("{verb} {}", doc.get::<iron_document::facet::Name>(*clip).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("clip"))),
+        // A key's diamond: the key moves, or goes ("move key of slide").
+        [key] if is_key(*key) => {
+            let clip = doc.live(*key).and_then(|n| n.parent).and_then(name).unwrap_or_else(|| "clip".into());
+            Some(format!("{} key of {clip}", if verb == "retime" { "move" } else { verb }))
+        }
+        [clip] => Some(format!("{verb} {}", name(*clip).unwrap_or_else(|| "clip".into()))),
+        many if many.iter().all(|&k| is_key(k)) => Some(format!("{} keys", if verb == "retime" { "move" } else { verb })),
         _ => Some(format!("{verb} clips")),
     }
 }
@@ -3244,13 +3270,20 @@ pub fn select_tool_system(
                 && let Some(frame) = cached.frame
             {
                 let f = view.affine() * frame;
-                let grip = match cached.ends.then(|| ends_at(f, screen, k * tol.hit)).flatten() {
+                let end = cached.ends.then(|| ends_at(f, screen, k * tol.hit)).flatten();
+                let grip = match end {
                     Some(u) => Some(Grip::Resize(u, 0.5)),
                     None => grip_at(f, screen, cached.resizable, cached.rotatable, k * tol.hit),
                 };
                 on_grip = matches!(grip, Some(Grip::Resize(..) | Grip::Rotate(..)));
                 if !space {
-                    cursor = cursor_for(f, grip);
+                    // An end trims: Figma's trim cursors (timeline.md §12.5),
+                    // kept through the drag.
+                    cursor = match end {
+                        Some(u) if u == 0.0 => "trim-start".into(),
+                        Some(_) => "trim-end".into(),
+                        None => cursor_for(f, grip),
+                    };
                 }
             }
             // A lone shape's corner dots and arc handles.
@@ -3323,6 +3356,17 @@ pub fn select_tool_system(
             }
             _ => None,
         };
+        // What the hovered node's context says its press does, when the arrow
+        // would not say it (`affords.cursor`: a clip's first and last keys).
+        if !space
+            && !on_grip
+            && let Some(r) = &hover
+        {
+            let c = geo.contexts().values(&r.chain, r.chain.len() - 1).get(Field::CURSOR).to_owned();
+            if c != "auto" {
+                cursor = c;
+            }
+        }
         if tool.hover != hover {
             tool.hover = hover;
         }
@@ -3788,10 +3832,16 @@ pub fn draw_select_overlay(
                 }
             }
         }
+        // Auto-keyframe is a visible mode (timeline.md §12.2): every view a
+        // drag could key, the timeline aside, wears its frame and chip.
+        let autokey = iron_document::timeline_view::autokey(geo.store) && view.composition != iron_document::timeline_view::find(geo.store);
         list.rebuild(|b| {
             b.clipped(Affine::IDENTITY, view.rect.to_kurbo(), |b| {
                 for (c, width, path) in lit {
                     b.stroke(Affine::IDENTITY, kurbo::Stroke::new(width), c, path);
+                }
+                if autokey {
+                    draw_autokey(b, view.rect.to_kurbo(), k);
                 }
                 // The hovered node's box, for what has no outline of its own.
                 if let Some(f) = hover_frame {

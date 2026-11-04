@@ -31,8 +31,7 @@ pub fn playing(store: &Store) -> bool {
 pub fn end_of_clips(store: &Store) -> f64 {
     let doc = store.document();
     let Some(clip) = TypeId::lookup("clip") else { return 0.0 };
-    let field = |id: NodeId, f: &str| LeafPath::new(FacetKind::Timing, f).ok().and_then(|p| store.resolved(id, p)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    doc.nodes_of_type(clip).map(|id| field(id, "start") + field(id, "dur")).fold(0.0, f64::max)
+    doc.nodes_of_type(clip).filter(|c| !c.is_session()).map(|c| iron_document::time::start(doc, c) + iron_document::time::length(&iron_document::time::keys(doc, c))).fold(0.0, f64::max)
 }
 
 /// Set clock fields as one session op batch (creating the clock if needed).

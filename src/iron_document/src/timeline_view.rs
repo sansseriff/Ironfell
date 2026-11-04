@@ -17,8 +17,8 @@
 //! survives, so session ids and the selection survive too.
 
 use crate::document::{RelKind, Relation};
-use crate::expr::Expr;
-use crate::facet::{Axis, Composition, ContextOf, Corners, Facet, FacetKind, Fill, Font, LeafPath, LeafStruct, Name, Size, Text, Track, Transform2d};
+use crate::expr::{Expr, Leaf};
+use crate::facet::{Axis, Composition, ContextOf, Corners, Facet, FacetKind, Fill, Font, LeafPath, LeafStruct, Name, Size, Stroke, Text, Track, Transform2d};
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::order::OrderKey;
@@ -69,15 +69,14 @@ pub struct Prop {
     pub segments: Vec<Segment>,
 }
 
-/// A clip on one of its targets, shifted by the relation's stagger offset.
+/// A clip on one of its targets, shifted by the relation's stagger offset,
+/// with its keys in time order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Segment {
     pub clip: NodeId,
     pub offset: f64,
     pub label: String,
-    /// Whether the clip's ends are numbers, shown (and typed) as readouts
-    /// at the segment's ends.
-    pub numeric: bool,
+    pub keys: Vec<NodeId>,
 }
 
 fn ty(n: &str) -> TypeId {
@@ -126,12 +125,12 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
     let clips: Vec<NodeId> = doc.nodes_of_type(ty("clip")).filter(|c| !c.is_session() && !c.is_expanded()).collect();
     for &clip in &clips {
         let prop = doc.get::<crate::facet::Clip>(clip).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()).unwrap_or("").to_owned();
-        let start = number(store, clip, FacetKind::Timing, "start").unwrap_or(0.0);
-        let dur = number(store, clip, FacetKind::Timing, "dur").unwrap_or(0.0);
+        let start = crate::time::start(doc, clip);
+        let keys = crate::time::keys(doc, clip);
         let label = name_of(store, clip).unwrap_or_else(|| "clip".into());
         for r in doc.relations_from(clip).filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to)) {
             let offset = r.data.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            end = end.max(start + offset + dur);
+            end = end.max(start + offset + crate::time::length(&keys));
             let i = match objects.iter().position(|o| o.target == r.to) {
                 Some(i) => i,
                 None => {
@@ -140,8 +139,7 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
                 }
             };
             let o = &mut objects[i];
-            let numeric = doc.get::<crate::facet::Clip>(clip).is_some_and(|c| [&c.from, &c.to].iter().all(|s| s.constant().is_some_and(|v| matches!(v.kind(), crate::value::ValueKind::Number | crate::value::ValueKind::Quantity))));
-            let segment = Segment { clip, offset, label: label.clone(), numeric };
+            let segment = Segment { clip, offset, label: label.clone(), keys: keys.iter().map(|k| k.id).collect() };
             match o.props.iter_mut().find(|p| p.prop == prop) {
                 Some(p) => p.segments.push(segment),
                 None => o.props.push(Prop { prop: prop.clone(), segments: vec![segment] }),
@@ -159,6 +157,48 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
     Plan { clock, objects, end, tick: tick_for(pps), errors }
 }
 
+/// One row of the timeline, for its two halves (§12.3): the canvas draws
+/// its bars and keys at `y`, the DOM column its name and controls.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    /// `object` or `property`.
+    pub kind: &'static str,
+    pub label: String,
+    pub y: f64,
+    pub target: NodeId,
+    /// A property row's leaf path and its first clip.
+    pub prop: Option<String>,
+    pub clip: Option<NodeId>,
+    pub error: bool,
+}
+
+/// The rows, top to bottom, in document px from the composition's top.
+pub fn rows(plan: &Plan) -> Vec<Row> {
+    let mut out = Vec::new();
+    let mut y = RULER_H + 4.0;
+    for o in &plan.objects {
+        let error = o.props.iter().flat_map(|p| &p.segments).any(|s| plan.errors.contains(&s.clip));
+        out.push(Row { kind: "object", label: o.label.clone(), y, target: o.target, prop: None, clip: None, error });
+        y += ROW_H;
+        for p in &o.props {
+            let short = p.prop.rsplit('.').next().unwrap_or(&p.prop).to_owned();
+            let error = p.segments.iter().any(|s| plan.errors.contains(&s.clip));
+            out.push(Row { kind: "property", label: short, y, target: o.target, prop: Some(p.prop.clone()), clip: p.segments.first().map(|s| s.clip), error });
+            y += ROW_H;
+        }
+    }
+    out
+}
+
+/// `min` or `max` of several expressions, nested two at a time.
+fn fold(f: &str, items: &[String]) -> String {
+    match items {
+        [] => "0".into(),
+        [one] => one.clone(),
+        [first, rest @ ..] => format!("{f}({first}, {})", fold(f, rest)),
+    }
+}
+
 /// One node the timeline should have.
 struct Want {
     key: String,
@@ -172,9 +212,10 @@ struct Want {
 
 /// The role groups, bottom to top, and the built-in context each names
 /// (std_contexts.xml): what their children afford is that data.
-const GROUPS: [(&str, &str); 5] = [
+const GROUPS: [(&str, &str); 6] = [
     ("backdrop", "std:timeline-static"),
     ("tracks", "std:timeline-tracks"),
+    ("keys", "std:timeline-keys"),
     ("headers", "std:timeline-static"),
     ("ruler", "std:timeline-ruler"),
     ("overlay", "std:timeline-overlay"),
@@ -243,7 +284,10 @@ const SEGMENT: [f32; 4] = [0.3, 0.55, 0.95, 1.0];
 const ERROR: [f32; 4] = [0.9, 0.3, 0.3, 1.0];
 const PLAYHEAD: [f32; 4] = [1.0, 0.6, 0.2, 1.0];
 const LOOP: [f32; 4] = [1.0, 0.6, 0.2, 0.22];
-const VALUE: [f32; 4] = [0.75, 0.82, 1.0, 1.0];
+const SUMMARY: [f32; 4] = [0.45, 0.47, 0.52, 0.55];
+const KEY: [f32; 4] = [0.92, 0.93, 0.96, 1.0];
+/// A key's diamond: a square this wide, turned 45°.
+const KEY_PX: f64 = 10.0;
 
 /// Every node the plan draws: the role groups, bottom to top, each with its
 /// pieces in drawing order.
@@ -262,8 +306,6 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
         facets.push(named(&key));
         by.entry(group).or_default().push(Want { key, ty: ty(ty_name), facets, projects, parent: Some(group.to_owned()) });
     };
-    // A piece inside a bar (its parent is the bar's key).
-    let mut bars: Vec<Want> = Vec::new();
     let width = at(&lit(plan.end));
 
     // Backdrop and grid.
@@ -297,69 +339,61 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     // The playhead's head, low on the ruler under the labels.
     push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 8"), &lit(RULER_H - 30.0)), sized("16", "26"), rounded(4.0), paint(PLAYHEAD)], None);
 
-    // Rows: headers on the left, segments and their end values along time.
-    let mut y = RULER_H + 4.0;
-    let mut labels = Vec::new();
+    // Rows (their names and controls are the DOM column's, §12.3): per
+    // object a summary of its keys, per property a bar per clip and a
+    // diamond per key.
+    let rows = rows(plan);
+    let mut ri = rows.iter();
+    let key_x = |s: &Segment, k: NodeId| format!("{}.timing.start + {} + {k}.key.t", s.clip, lit(s.offset));
     for o in &plan.objects {
-        // A clip in error marks its object's row (the reason is in the
-        // clip's probe).
-        let bad = o.props.iter().flat_map(|p| &p.segments).any(|s| plan.errors.contains(&s.clip));
-        let (text, colour) = if bad { (format!("⚠ {}", o.label), ERROR) } else { (o.label.clone(), LABEL) };
-        labels.push((format!("object {}", o.target), 8.0, y, text, 12.0, 600.0, colour));
-        y += ROW_H;
+        let row = ri.next().expect("an object row");
+        let all: Vec<String> = o.props.iter().flat_map(|p| &p.segments).flat_map(|s| s.keys.iter().map(move |&k| key_x(s, k))).collect();
+        if !all.is_empty() {
+            let (lo, hi) = (fold("min", &all), fold("max", &all));
+            push("backdrop", format!("summary {}", o.target), "rect", vec![place(&at(&lo), &lit(row.y + 5.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(ROW_H - 10.0)), rounded(3.0), paint(SUMMARY)], None);
+        }
         for p in &o.props {
-            let short = p.prop.rsplit('.').next().unwrap_or(&p.prop).to_owned();
-            labels.push((format!("property {} {}", o.target, p.prop), 22.0, y, short, 11.0, 400.0, DIM));
+            let row = ri.next().expect("a property row");
             for s in &p.segments {
-                let start = if s.offset == 0.0 { format!("{}.timing.start", s.clip) } else { format!("{}.timing.start + {}", s.clip, lit(s.offset)) };
-                let x = at(&start);
                 let colour = if plan.errors.contains(&s.clip) { ERROR } else { SEGMENT };
-                // The bar: one target for its clip (std:timeline-tracks),
-                // at the clip's start and `dur · pps` wide, so a drag
-                // retimes it and its ends trim it. Its pieces sit inside.
-                let bar = format!("bar {} {}", s.clip, o.target);
-                let width = format!("{}.timing.dur * {pps}", s.clip);
-                let mut bc = ContextOf::default();
-                bc.name = Slot::Const(Value::Str("std:timeline-bar".into()));
-                push("tracks", bar.clone(), "group", vec![place(&x, &lit(y + 3.0)), sized(&width, &lit(SEG_H)), bc.wrap()], Some(s.clip));
-                let mut piece = |key: String, ty_name: &str, mut facets: Vec<Facet>| {
-                    facets.push(named(&key));
-                    bars.push(Want { key, ty: ty(ty_name), facets, projects: None, parent: Some(bar.clone()) });
-                };
-                piece(format!("segment {} {}", s.clip, o.target), "rect", vec![place("0", "0"), sized(&width, &lit(SEG_H)), rounded(4.0), paint(colour)]);
-                let mut f = vec![place("6", "1")];
+                let times: Vec<String> = s.keys.iter().map(|&k| format!("{k}.key.t")).collect();
+                let (lo, hi) = (fold("min", &times), fold("max", &times));
+                // The clip's bar: from its first key to its last. A drag
+                // retimes the clip (it projects the clip, so its start is
+                // the leaf the drag moves); Delete deletes the clip.
+                let x = at(&format!("{}.timing.start + {} + {lo}", s.clip, lit(s.offset)));
+                push("tracks", format!("bar {} {}", s.clip, o.target), "rect", vec![place(&x, &lit(row.y + 3.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
+                let mut f = vec![place(&format!("{x} + 8"), &lit(row.y + 4.0))];
                 f.extend(words(&s.label, 11.0, 500.0));
-                f.push(paint([1.0, 1.0, 1.0, 0.95]));
-                piece(format!("segment label {} {}", s.clip, o.target), "text", f);
-                // The ends' values, readouts that invert: typing in one edits
-                // the clip's `from` or `to` (timeline.md §5). Inside the bar
-                // they are reached by entering it (a double-click), and their
-                // inline `affords` makes them editable targets there.
-                if s.numeric {
-                    for (end, x, align) in [("from", "(0 - 64)".to_owned(), "right"), ("to", format!("{width} + 4"), "left")] {
-                        let mut t = Text::default();
-                        t.content = bound(&format!("fmt({}.clip.{end}, 0)", s.clip));
-                        t.sizing = Slot::Const(Value::Enum("fixed".into()));
-                        let mut font = Font::default();
-                        font.size = Slot::Const(Value::Number(10.0));
-                        font.align = Slot::Const(Value::Enum(align.into()));
-                        font.tabular = Slot::Const(Value::Bool(true));
-                        let mut affords = crate::facet::Affords::default();
-                        affords.style = Slot::Const(Value::Str("select: target; edit: text; drag: none".into()));
-                        piece(format!("{end} {} {}", s.clip, o.target), "text", vec![place(&x, "2"), t.wrap(), font.wrap(), sized("60", "14"), paint(VALUE), affords.wrap()]);
+                f.push(paint([1.0, 1.0, 1.0, 0.9]));
+                push("tracks", format!("bar label {} {}", s.clip, o.target), "text", f, None);
+                // A diamond per key: a drag moves the key in time (it
+                // projects the key), Delete deletes it.
+                let side = KEY_PX / std::f64::consts::SQRT_2;
+                for (i, &k) in s.keys.iter().enumerate() {
+                    let mut t = Transform2d::default();
+                    t.x = bound(&at(&key_x(s, k)));
+                    t.y = bound(&lit(row.y + (ROW_H - KEY_PX * std::f64::consts::SQRT_2) / 2.0));
+                    t.rot = bound(&lit(std::f64::consts::FRAC_PI_4));
+                    let mut st = Stroke::default();
+                    st.color = Slot::Const(Value::Color([0.1, 0.12, 0.16, 1.0]));
+                    st.width = Slot::Const(Value::Number(1.0));
+                    let mut facets = vec![t.wrap(), sized(&lit(side * std::f64::consts::SQRT_2), &lit(side * std::f64::consts::SQRT_2)), paint(KEY), st.wrap()];
+                    // The first and last keys are where the clip starts and
+                    // ends: moving them trims it, and the cursor says so
+                    // (Figma's trim cursors, §12.5).
+                    let end = if s.keys.len() < 2 { None } else if i == 0 { Some("trim-start") } else if i + 1 == s.keys.len() { Some("trim-end") } else { None };
+                    if let Some(cursor) = end {
+                        let mut a = crate::facet::Affords::default();
+                        a.style = Slot::Const(Value::Str(format!("cursor: {cursor}")));
+                        facets.push(a.wrap());
                     }
+                    push("keys", format!("key {k} {}", o.target), "rect", facets, Some(k));
                 }
             }
-            y += ROW_H;
         }
     }
     push("headers", "header".into(), "rect", vec![place("0", "0"), sized(&lw, &h), paint(HEADER)], None);
-    for (key, x, y, text, size, weight, colour) in labels {
-        let mut f = vec![place(&lit(x), &lit(y + 3.0))];
-        f.extend(words(&text, size, weight));
-        f.push(paint(colour));
-        push("headers", key, "text", f, None);
-    }
     // The playhead's line, over everything and transparent to the pointer.
     push("overlay", "playhead".into(), "rect", vec![place(&format!("{head} - 1"), "0"), sized("2", &h), paint(PLAYHEAD)], None);
 
@@ -378,12 +412,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
             facets.push(track.wrap());
         }
         out.push(Want { key: group.into(), ty: ty("group"), facets, projects: None, parent: None });
-        for w in by.remove(group).unwrap_or_default() {
-            let key = w.key.clone();
-            out.push(w);
-            // A bar's pieces right after it.
-            out.extend(bars.iter().filter(|p| p.parent.as_deref() == Some(key.as_str())).map(|p| Want { key: p.key.clone(), ty: p.ty, facets: p.facets.clone(), projects: None, parent: p.parent.clone() }));
-        }
+        out.extend(by.remove(group).unwrap_or_default());
     }
     out
 }
@@ -543,83 +572,197 @@ pub fn fit(store: &mut Store, width: f64) -> Result<(), String> {
     let Some(comp) = find(store) else { return Ok(()) };
     let lw = number(store, comp, FacetKind::Axis, "label_w").unwrap_or(160.0);
     let doc = store.document();
-    let field = |id: NodeId, f: &str| number(store, id, FacetKind::Timing, f).unwrap_or(0.0);
-    let end = doc.nodes_of_type(ty("clip")).filter(|c| !c.is_session()).map(|c| field(c, "start") + field(c, "dur")).fold(0.0, f64::max);
+    let end = doc.nodes_of_type(ty("clip")).filter(|c| !c.is_session()).map(|c| crate::time::start(doc, c) + crate::time::length(&crate::time::keys(doc, c))).fold(0.0, f64::max);
     let pps = (width - lw - 24.0).max(40.0) / end.max(1.0);
     let (_, ops) = axis_ops(store, 0.0, pps)?;
     store.apply_session(ops).map_err(|e| e.message)
 }
 
-/// How long a clip "Animate change" makes lasts, seconds.
-pub const ANIMATE_DUR: f64 = 1.0;
+// ---- Keys (§12.2) -------------------------------------------------------------
 
-/// "Animate change" (timeline.md §6, creating clips explicitly): the last
-/// transaction's constant `Set`s of number, vector and colour leaves on
-/// `nodes` (on every content node it touched, when `nodes` is empty) become
-/// clips from the old value to the new, starting at `at` and lasting
-/// [`ANIMATE_DUR`], and each leaf's authored value goes back to the old
-/// one. The ops of one transaction; a `timeline` root is made when the
-/// document has none. `Err` says why there is nothing to animate.
-pub fn animate_change_ops(store: &Store, nodes: &[NodeId], at: f64) -> Result<Vec<Op>, String> {
-    use crate::value::ValueKind as K;
+/// How near the playhead a key counts as at it: half a frame (1/30 s).
+pub const AT_KEY: f64 = 1.0 / 60.0;
+
+/// The first clip animating `leaf`, with the target's stagger offset.
+pub fn clip_of(doc: &crate::document::Document, leaf: Leaf) -> Option<(NodeId, f64)> {
+    let path = leaf.path.to_string();
+    doc.relations_to(leaf.node).filter(|r| r.rel == RelKind::Animates && doc.is_live(r.from)).find_map(|r| {
+        let prop = doc.get::<crate::facet::Clip>(r.from)?.prop.constant()?.as_str()?.to_owned();
+        (prop == path).then(|| (r.from, r.data.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0)))
+    })
+}
+
+/// Whether auto-keyframe is on (the clock's `autokey`).
+pub fn autokey(store: &Store) -> bool {
+    store.clock().and_then(|c| store.resolved(c, LeafPath::new(FacetKind::Clock, "autokey").ok()?)) == Some(Value::Bool(true))
+}
+
+/// `v` moved by `to − from`, for the kinds that move (numbers, quantities,
+/// vectors, colours).
+fn shifted(v: &Value, from: &Value, to: &Value) -> Option<Value> {
+    use Value::*;
+    let d = |v: f64, a: f64, b: f64| v + (b - a);
+    Some(match (v, from, to) {
+        (Number(v), Number(a), Number(b)) => Number(d(*v, *a, *b)),
+        (Quantity { si: v, dim }, Quantity { si: a, .. }, Quantity { si: b, .. }) => Quantity { si: d(*v, *a, *b), dim: *dim },
+        (Vec2(v), Vec2(a), Vec2(b)) => Vec2([d(v[0], a[0], b[0]), d(v[1], a[1], b[1])]),
+        (Vec3(v), Vec3(a), Vec3(b)) => Vec3([d(v[0], a[0], b[0]), d(v[1], a[1], b[1]), d(v[2], a[2], b[2])]),
+        (Color(v), Color(a), Color(b)) => Color(std::array::from_fn(|i| (v[i] + (b[i] - a[i])).clamp(0.0, 1.0))),
+        _ => return None,
+    })
+}
+
+fn key_facet(t: f64, value: Value, easing: &str) -> Facet {
+    let mut k = crate::facet::Key::default();
+    k.t = Slot::Const(Value::Number(t));
+    k.value = Slot::Const(value);
+    k.easing = Slot::Const(Value::Enum(easing.into()));
+    k.wrap()
+}
+
+fn key_path(f: &str) -> LeafPath {
+    LeafPath::new(FacetKind::Key, f).expect("a key field")
+}
+
+/// Ids for the ops a commit makes, handed out in order.
+struct Ids {
+    nodes: std::vec::IntoIter<NodeId>,
+    rels: std::vec::IntoIter<crate::id::RelationId>,
+}
+
+/// A key at clip-local time `u` in `clip`: when `u` is before the clip's
+/// start, the start moves to it and every key shifts to keep its time.
+fn insert_key(doc: &crate::document::Document, clip: NodeId, keys: &[crate::time::KeyAt], u: f64, value: Value, ids: &mut Ids, ops: &mut Vec<Op>) {
+    let mut t = u;
+    if u < 0.0 {
+        let start = crate::time::start(doc, clip);
+        ops.push(Op::Set { id: clip, path: LeafPath::new(FacetKind::Timing, "start").expect("timing.start"), slot: Slot::Const(Value::Number(start + u)) });
+        for k in keys {
+            ops.push(Op::Set { id: k.id, path: key_path("t"), slot: Slot::Const(Value::Number(k.t - u)) });
+        }
+        t = 0.0;
+    }
+    let order = doc.children(clip).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |o| OrderKey::after(&o));
+    let easing = keys.iter().rev().find(|k| k.t <= t).map_or("linear", |k| k.easing.as_str()).to_owned();
+    let id = ids.nodes.next().expect("an id per new node");
+    ops.push(Op::Create { id, ty: ty("key"), parent: Some(clip), order, facets: vec![key_facet(t, value, &easing)] });
+}
+
+/// What committing these previewed leaves writes when they are animated, or
+/// when auto-keyframe is on (§12.2): key ops for each leaf it applies to,
+/// and those leaves. Every other leaf is an ordinary `Set` (the caller's).
+pub fn key_ops(store: &Store, leaves: &[(Leaf, Value)]) -> (Vec<Op>, Vec<Leaf>) {
     let doc = store.document();
-    let tx = store.history().past().last().ok_or("nothing to animate: no change yet")?;
-    // The last write to each leaf, and its value before the transaction.
-    let mut changes: Vec<(NodeId, LeafPath, Value, Value)> = Vec::new();
-    for op in &tx.ops {
-        let Op::Set { id, path, slot: Slot::Const(new) } = op else { continue };
-        if id.is_session() || id.is_expanded() || !doc.is_live(*id) || (!nodes.is_empty() && !nodes.contains(id)) {
-            continue;
-        }
-        if !matches!(new.kind(), K::Number | K::Quantity | K::Vec2 | K::Vec3 | K::Color) {
-            continue;
-        }
-        // Undo applies the inverse in reverse, so its first write to the
-        // leaf is the value the transaction started from.
-        let old = tx.inverse.iter().find_map(|inv| match inv {
-            Op::Set { id: i, path: p, slot: Slot::Const(v) } if i == id && p == path => Some(v.clone()),
-            _ => None,
-        });
-        let Some(old) = old else { continue };
-        if old == *new {
-            continue;
-        }
-        match changes.iter_mut().find(|c| c.0 == *id && c.1 == *path) {
-            Some(c) => c.3 = new.clone(),
-            None => changes.push((*id, *path, old, new.clone())),
-        }
-    }
-    if changes.is_empty() {
-        return Err(format!("nothing to animate: \"{}\" changed no number, vector or colour of the selection", tx.label));
-    }
+    let now = store.time();
+    let auto = autokey(store);
+    let mut ids = Ids { nodes: doc.next_ids(leaves.len() * 3 + 1).into_iter(), rels: doc.next_relation_ids(leaves.len()).into_iter() };
+    let mut timeline: Option<NodeId> = doc.nodes_of_type(ty("timeline")).find(|t| !t.is_session());
     let mut ops = Vec::new();
-    let timeline = match doc.nodes_of_type(ty("timeline")).find(|t| !t.is_session()) {
-        Some(t) => t,
-        None => {
-            let id = doc.next_ids(1)[0];
-            let order = doc.roots().iter().filter(|r| !r.is_session()).last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
-            ops.push(Op::Create { id, ty: ty("timeline"), parent: None, order, facets: vec![named("main")] });
-            id
+    let mut handled = Vec::new();
+    for (leaf, value) in leaves {
+        if leaf.node.is_session() {
+            continue;
         }
-    };
-    let skip = ops.len();
-    let ids = doc.next_ids(skip + changes.len()).into_iter().skip(skip).collect::<Vec<_>>();
-    let rels = doc.next_relation_ids(changes.len());
-    let mut order = doc.children(timeline).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |o| OrderKey::after(&o));
-    for (((node, path, old, new), clip), rel) in changes.into_iter().zip(ids).zip(rels) {
-        let mut timing = crate::facet::Timing::default();
-        timing.start = Slot::Const(Value::Number(at));
-        timing.dur = Slot::Const(Value::Number(ANIMATE_DUR));
-        timing.easing = Slot::Const(Value::Enum("ease_in_out".into()));
-        let mut c = crate::facet::Clip::default();
-        c.prop = Slot::Const(Value::Str(path.to_string()));
-        c.from = Slot::Const(old.clone());
-        c.to = Slot::Const(new);
-        let label = format!("{} {}", name_of(store, node).unwrap_or_else(|| doc.live(node).map_or("node", |n| n.ty.name()).to_owned()), path.field);
-        ops.push(Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: order.clone(), facets: vec![timing.wrap(), c.wrap(), named(&label)] });
-        ops.push(Op::Link { rel: Relation { id: rel, from: clip, to: node, rel: RelKind::Animates, data: BTreeMap::new() } });
-        ops.push(Op::Set { id: node, path, slot: Slot::Const(old) });
-        order = OrderKey::after(&order);
+        // A leaf the gesture carried but did not change (a horizontal drag's
+        // y) writes nothing: no key, no animation.
+        let same = |a: &Value, b: &Value| match (a, b) {
+            (Value::Number(x), Value::Number(y)) => (x - y).abs() < 1e-9,
+            (a, b) => a == b,
+        };
+        let shown = clip_of(doc, *leaf)
+            .and_then(|(clip, offset)| crate::time::value_at(&crate::time::keys(doc, clip), now - crate::time::start(doc, clip) - offset))
+            .or_else(|| doc.leaf(leaf.node, leaf.path).and_then(|s| s.constant()).cloned());
+        if shown.as_ref().is_some_and(|v| same(v, value)) {
+            handled.push(*leaf);
+            continue;
+        }
+        match clip_of(doc, *leaf) {
+            Some((clip, offset)) => {
+                let keys = crate::time::keys(doc, clip);
+                let u = now - crate::time::start(doc, clip) - offset;
+                if let Some(k) = keys.iter().find(|k| (k.t - u).abs() <= AT_KEY) {
+                    // On a key: that key's value.
+                    ops.push(Op::Set { id: k.id, path: key_path("value"), slot: Slot::Const(value.clone()) });
+                } else if auto {
+                    insert_key(doc, clip, &keys, u, value.clone(), &mut ids, &mut ops);
+                } else if keys.first().is_none_or(|k| u < k.t) {
+                    // Before the clip drives it: the authored value.
+                    continue;
+                } else {
+                    // Between keys or after them, auto-keyframe off: the
+                    // whole animation moves by the drag.
+                    let Some(was) = crate::time::value_at(&keys, u) else { continue };
+                    let moved: Vec<Op> = keys.iter().filter_map(|k| Some(Op::Set { id: k.id, path: key_path("value"), slot: Slot::Const(shifted(&k.value, &was, value)?) })).collect();
+                    if moved.len() != keys.len() {
+                        continue;
+                    }
+                    ops.extend(moved);
+                }
+                handled.push(*leaf);
+            }
+            None if auto && now > AT_KEY => {
+                // Auto-keyframe on an unanimated leaf: an animation from its
+                // value now, at 0, to the dragged one at the playhead.
+                let Some(before) = doc.leaf(leaf.node, leaf.path).and_then(|s| s.constant()).cloned() else { continue };
+                if crate::time::lerp(&before, value, 0.5).is_none() {
+                    continue;
+                }
+                let tl = match timeline {
+                    Some(t) => t,
+                    None => {
+                        let id = ids.nodes.next().expect("an id");
+                        let order = doc.roots().iter().filter(|r| !r.is_session()).last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
+                        ops.push(Op::Create { id, ty: ty("timeline"), parent: None, order, facets: vec![named("main")] });
+                        timeline = Some(id);
+                        id
+                    }
+                };
+                let clip = ids.nodes.next().expect("an id");
+                let mut timing = crate::facet::Timing::default();
+                timing.start = Slot::Const(Value::Number(0.0));
+                let mut c = crate::facet::Clip::default();
+                c.prop = Slot::Const(Value::Str(leaf.path.to_string()));
+                let label = format!("{} {}", name_of(store, leaf.node).unwrap_or_else(|| doc.live(leaf.node).map_or("node", |n| n.ty.name()).to_owned()), leaf.path.field);
+                let order = doc.children(tl).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |o| OrderKey::after(&o));
+                ops.push(Op::Create { id: clip, ty: ty("clip"), parent: Some(tl), order, facets: vec![timing.wrap(), c.wrap(), named(&label)] });
+                let k0 = OrderKey::first();
+                ops.push(Op::Create { id: ids.nodes.next().expect("an id"), ty: ty("key"), parent: Some(clip), order: k0.clone(), facets: vec![key_facet(0.0, before, "ease_in_out")] });
+                ops.push(Op::Create { id: ids.nodes.next().expect("an id"), ty: ty("key"), parent: Some(clip), order: OrderKey::after(&k0), facets: vec![key_facet(now, value.clone(), "ease_in_out")] });
+                ops.push(Op::Link { rel: Relation { id: ids.rels.next().expect("a relation id"), from: clip, to: leaf.node, rel: RelKind::Animates, data: BTreeMap::new() } });
+                handled.push(*leaf);
+            }
+            None => {}
+        }
     }
+    (ops, handled)
+}
+
+/// The previous (`dir < 0`) or next key of `clip` from the playhead, as a
+/// clock time (‹ and ›).
+pub fn step_key(store: &Store, clip: NodeId, dir: i32) -> Option<f64> {
+    let doc = store.document();
+    let offset = doc.relations_from(clip).find(|r| r.rel == RelKind::Animates).and_then(|r| r.data.get("offset").and_then(|v| v.as_f64())).unwrap_or(0.0);
+    let base = crate::time::start(doc, clip) + offset;
+    let now = store.time();
+    let times = crate::time::keys(doc, clip).into_iter().map(|k| base + k.t);
+    if dir < 0 { times.filter(|&t| t < now - AT_KEY).fold(None, |a: Option<f64>, t| Some(a.map_or(t, |a| a.max(t)))) } else { times.filter(|&t| t > now + AT_KEY).fold(None, |a: Option<f64>, t| Some(a.map_or(t, |a| a.min(t)))) }
+}
+
+/// ◇: remove the key at the playhead, or add one there holding the value
+/// shown now (the first target's). Removing the last key removes the clip.
+pub fn toggle_key_ops(store: &Store, clip: NodeId) -> Result<Vec<Op>, String> {
+    let doc = store.document();
+    let rel = doc.relations_from(clip).find(|r| r.rel == RelKind::Animates && doc.is_live(r.to)).ok_or("the clip animates nothing")?;
+    let offset = rel.data.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let path: LeafPath = doc.get::<crate::facet::Clip>(clip).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()).ok_or("the clip has no prop")?.parse().map_err(|e| format!("{e}"))?;
+    let keys = crate::time::keys(doc, clip);
+    let u = store.time() - crate::time::start(doc, clip) - offset;
+    if let Some(k) = keys.iter().find(|k| (k.t - u).abs() <= AT_KEY) {
+        return Ok(vec![Op::Delete { id: if keys.len() <= 1 { clip } else { k.id } }]);
+    }
+    let value = store.resolved(rel.to, path).ok_or("no value to key")?;
+    let mut ids = Ids { nodes: doc.next_ids(1).into_iter(), rels: Vec::new().into_iter() };
+    let mut ops = Vec::new();
+    insert_key(doc, clip, &keys, u, value, &mut ids, &mut ops);
     Ok(ops)
 }

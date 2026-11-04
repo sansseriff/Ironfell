@@ -1,111 +1,81 @@
-# The timeline as a composition (plans/specs/timeline.md phase 2): the
-# session's generated `timeline` composition in the Timeline tab. Rows by
-# object then property; a segment per clip and target; the playhead is the
-# session clock. Dragging the playhead grip scrubs (no transaction); dragging
-# a segment retimes its clip (one transaction, undone with Cmd+Z); the
-# transport plays.
+# The timeline (plans/specs/timeline.md §12): a hybrid view. Its left column
+# is DOM (TimelinePanel.svelte: the transport in the corner, a row per object
+# and property with ‹ ◇ ›), its right side the generated `timeline`
+# composition (ruler, bars, key diamonds, playhead). A clip is one property's
+# keys; a drag on an animated object writes keys by the visible mode.
+# Canvas layout (document px from the panel's top-left): label_w 160, ruler
+# 56 tall, time t at x 160 + t*100; the square's x row at y 126-148, its
+# slide bar from 210 to 410 (keys at 0.5 s and 2.5 s).
 nav http://localhost:5173/Ironfell/?gfx=webgl2&demo&bevy=debuglog
 ready
 sleep 1000
-eval (async()=>{const c=await __iron.call('clock_read',[]);return 'clock at '+c.t+', playing '+c.playing+', last clip ends at '+c.end})()
+# No smart guides: a drag's y would snap to a neighbour's edge.
+eval JSON.stringify(__iron.snapping(false))
+eval (async()=>{const c=await __iron.call('clock_read',[]);const r=await __iron.call('timeline_rows',['timeline']);return 'clock at '+c.t+', auto-keyframe '+c.autokey+', last key at '+c.end+'; rows '+JSON.stringify(r.rows.map(x=>x.kind[0]+':'+x.label))})()
 shot timeline-start
-# The ruler (80 px tall) is a track: a press anywhere on it puts the
-# playhead there (label_w 160 + t * 100 px), and a drag scrubs. Press at
-# 1.4 s, away from the grip, and drag to 2.6 s.
+# Press anywhere on the ruler and drag: the playhead follows.
 pdrag timeline 300 20 420 20
 sleep 300
-eval (async()=>{const c=await __iron.call('clock_read',[]);const v=await __iron.view({fidelity:'full'});const x=v.match(/name="square" x="([0-9.]+)"/);return 'scrubbed to '+c.t.toFixed(2)+' s; square drawn at x '+(x?x[1]:'?')+'; version '+__iron.protocolState().version})()
-# Retime: the slide bar (row 4, y 153-169, 0.5 s to 2.5 s) moves 1 s later.
-# Below the ruler a press reaches the clips, not the playhead.
-pdrag timeline 300 161 400 161
+eval (async()=>{const c=await __iron.call('clock_read',[]);const v=await __iron.view({fidelity:'full'});return 'scrubbed to '+c.t.toFixed(2)+' s; square at x '+v.match(/name="square" x="([0-9.]+)"/)[1]+'; version '+__iron.protocolState().version})()
+# A bar retimes its clip; undo.
+pdrag timeline 300 137 400 137
 sleep 400
-eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/);return 'slide: '+(m?m[0].match(/start="[^"]*"/)[0]:'?')+'; version '+__iron.protocolState().version})()
-shot timeline-retimed
-key Meta+z
-sleep 400
-eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/);return 'after undo slide: '+(m?m[0].match(/start="[^"]*"/)[0]:'?')})()
-# What can be pressed is the groups' contexts: the row headers and backdrop
-# are no targets (a click clears the selection), a bar is one target (a
-# click on its words selects the bar), and a click on a tick label is a
-# click on the ruler (the playhead jumps there; nothing is selected).
-eval (()=>{sessionStorage.setItem('segment',__iron.selection()[0]);return 'bar selected '+(__iron.selection().length===1)})()
-pclick timeline 40 150
-eval JSON.stringify({'header click selects':__iron.selection()})
-pclick timeline 228 161
-eval 'label click selects the bar: '+(__iron.selection()[0]===sessionStorage.getItem('segment'))
-pclick timeline 565 15
-eval (async()=>{await new Promise(r=>setTimeout(r,200));const c=await __iron.call('clock_read',[]);return 'tick label click: playhead at '+c.t.toFixed(2)+', selection kept '+(__iron.selection()[0]===sessionStorage.getItem('segment'))})()
-# Play from the start; the clock advances, then pause.
-eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:0})]);[...document.querySelectorAll('.transport button')].find(b=>b.ariaLabel==='Play').click();await new Promise(r=>setTimeout(r,700));const c=await __iron.call('clock_read',[]);[...document.querySelectorAll('.transport button')].find(b=>b.ariaLabel==='Pause').click();await new Promise(r=>setTimeout(r,200));const d=await __iron.call('clock_read',[]);return 'playing '+c.playing+', advanced '+(c.t>0.3)+'; paused '+!d.playing})()
-# Phase 3. Trim: select the slide bar and drag its right end 1 s later
-# (`affords.grips="ends"`: dur 2 -> 3); the square lights in Main while the
-# bar is selected (cross-view, through `projects`). Undo.
-pclick timeline 300 161
-pdrag timeline 410 161 510 161
-sleep 400
-eval (async()=>{const v=await __iron.view({fidelity:'full'});const m=v.match(/<clip[^>]*name="slide"[^>]*>/)[0];return 'trimmed slide: '+m.match(/start="[^"]*"/)[0]+' dur '+Number(m.match(/dur="([^"]*)"/)[1]).toFixed(3)})()
-shot timeline-trimmed
+eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'slide: '+v.match(/<clip[^>]*name="slide"[^>]*>/)[0].match(/start="[^"]*"/)[0]})()
 key Meta+z
 sleep 300
-# An end value is a readout in the bar: with the bar selected, a
-# double-click on the "to" (just past its end) enters it, Enter edits it,
-# and typing sets the clip's `to`. Undo.
-pclick timeline 300 161
+# The slide's last key: the cursor says it trims, and a drag moves the key.
+pmove timeline 410 137
 sleep 300
-pdouble timeline 440 162
-sleep 300
-key Enter
-sleep 300
-key Meta+a
-key 6
-key 5
-key 0
-key Escape
+eval 'over the last key: cursor '+document.getElementById('bevy-canvas').dataset.cursor
+pdrag timeline 410 137 460 137
 sleep 400
-eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'typed: slide '+v.match(/<clip[^>]*name="slide"[^>]*>/)[0].match(/to="[^"]*"/)[0]})()
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const c=v.slice(v.indexOf('name="slide"'));return 'keys after the drag: '+JSON.stringify([...c.slice(0,c.indexOf('</clip>')).matchAll(/<key[^>]* t="([^"]*)"/g)].map(m=>m[1]))})()
 key Meta+z
 sleep 300
-# Delete: with the bar selected, Delete deletes the clip it stands for (its
-# context says `affords.delete="subject"`), and the timeline drops the row.
-# Undo brings both back.
-pclick timeline 300 161
+# The DOM column: a name selects its object; ‹ › step to the keys; ◇ adds a
+# key at the playhead and, there, removes it.
+clickel [data-timeline-column] [data-row=object][data-target="#M"] .name
+sleep 300
+eval 'name click selects '+JSON.stringify(__iron.selection())
+eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:1})]);await new Promise(r=>setTimeout(r,300));return 'at 1 s'})()
+clickel [data-timeline-column] [data-prop="transform2d.x"] [data-key=next]
+sleep 300
+eval (async()=>{const a=(await __iron.call('clock_read',[])).t;document.querySelector('[data-timeline-column] [data-prop="transform2d.x"] [data-key=prev]').click();await new Promise(r=>setTimeout(r,400));const b=(await __iron.call('clock_read',[])).t;return '› to '+a.toFixed(2)+', ‹ back to '+b.toFixed(2)})()
+eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:1.5})]);await new Promise(r=>setTimeout(r,400));return 'at 1.5 s'})()
+clickel [data-timeline-column] [data-prop="transform2d.x"] [data-key=toggle]
+sleep 500
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const c=v.slice(v.indexOf('name="slide"'));const n=[...c.slice(0,c.indexOf('</clip>')).matchAll(/<key /g)].length;const keyed=document.querySelector('[data-timeline-column] [data-prop="transform2d.x"] [data-key=toggle]').dataset.state;return '◇ added: '+n+' keys, button '+keyed})()
+clickel [data-timeline-column] [data-prop="transform2d.x"] [data-key=toggle]
+sleep 500
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const c=v.slice(v.indexOf('name="slide"'));return '◇ again removed it: '+[...c.slice(0,c.indexOf('</clip>')).matchAll(/<key /g)].length+' keys'})()
+# Dragging the animated square in Main (at 1.5 s it shows x 600). With
+# auto-keyframe off and the playhead between keys, the whole animation
+# moves: both keys +50.
+ddrag 660 470 710 470
+sleep 400
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const c=v.slice(v.indexOf('name="slide"'));return 'auto-keyframe off: keys '+JSON.stringify([...c.slice(0,c.indexOf('</clip>')).matchAll(/<key[^>]* value="([^"]*)"/g)].map(m=>m[1]))})()
+key Meta+z
+sleep 300
+# Shift+K turns auto-keyframe on: the canvas views wear a red frame, and the
+# same drag adds a key at the playhead instead.
+key Shift+K
+sleep 400
+eval (async()=>{const c=await __iron.call('clock_read',[]);return 'Shift+K: auto-keyframe '+c.autokey+', button '+document.querySelector('[data-action=autokey]').dataset.state})()
+shot timeline-autokey
+ddrag 660 470 710 470
+sleep 400
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const c=v.slice(v.indexOf('name="slide"'));return 'auto-keyframe on: keys '+JSON.stringify([...c.slice(0,c.indexOf('</clip>')).matchAll(/<key[^>]* t="([^"]*)"[^>]* value="([^"]*)"/g)].map(m=>m[1]+'@'+m[2]))})()
+key Meta+z
+sleep 300
+key Shift+K
+sleep 300
+# Delete: a selected bar deletes its clip; undo brings it back.
+pclick timeline 300 137
 key Delete
 sleep 500
 eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'after delete: slide clip '+(v.includes('name="slide"')?'still there':'gone')})()
 key Meta+z
 sleep 500
 eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'after undo: slide clip '+(v.includes('name="slide"')?'back':'gone')})()
-# The transport's keys, with the pointer over the timeline: End, a frame
-# back, Home, I and O for the loop's ends, F to fit.
-pmove timeline 700 160
-key End
-key ArrowLeft
-eval (async()=>{await new Promise(r=>setTimeout(r,300));const c=await __iron.call('clock_read',[]);return 'End then a frame back: '+c.t.toFixed(3)})()
-key Home
-key ArrowRight
-key Shift+ArrowRight
-key i
-key Shift+ArrowRight
-key o
-eval (async()=>{await new Promise(r=>setTimeout(r,300));const c=await __iron.call('clock_read',[]);return 'loop '+c.loop_in.toFixed(3)+' to '+c.loop_out.toFixed(3)+', at '+c.t.toFixed(3)})()
-key f
-eval (async()=>{await new Promise(r=>setTimeout(r,300));const a=await __iron.call('timeline_axis',['{}']);return 'fitted: t0 '+a.t0+', pps '+a.pps.toFixed(1)})()
-# Wheel: horizontal pans time (t0), Ctrl zooms about the pointer.
-pwheel timeline 700 160 120 0 1 100
-eval (async()=>{await new Promise(r=>setTimeout(r,300));const a=await __iron.call('timeline_axis',['{}']);return 'panned: t0 '+a.t0.toFixed(2)})()
-shot timeline-navigated
-# Phase 4, Animate change: with the playhead at 1 s, move the ellipse
-# (#N, x 160) to 400, then K. The change becomes a clip from 1 s to 2 s and
-# the authored x goes back to 160; at 2 s it reads 400. One undo takes the
-# animation back and leaves the move (x 400, the demo's 2 clips).
-eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:1,playing:false})]);const r=await __iron.edit('<edit><set id="#N" x="400"/></edit>');return 'moved: '+r.ok})()
-pmove viewer 500 300
-key k
-sleep 500
-eval (async()=>{const v=await __iron.view({fidelity:'full'});const clip=[...v.matchAll(/<clip[^>]*>/g)].map(m=>m[0]).find(c=>c.includes('transform2d.x')&&c.includes('from="160"'));const e=v.match(/<ellipse id="#N"[^>]*>/)[0];return 'clip: '+(clip?clip.match(/start="[^"]*" dur="[^"]*"/)[0]+' '+clip.match(/from="[^"]*" to="[^"]*"/)[0]:'none')+'; ellipse at the playhead '+e.match(/ x="[^"]*"/)[0]+'; note: '+document.querySelector('.transport .note')?.textContent})()
-eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:2})]);await new Promise(r=>setTimeout(r,300));const v=await __iron.view({fidelity:'full'});return 'at 2 s the ellipse'+v.match(/<ellipse id="#N"[^>]*>/)[0].match(/ x="[^"]*"/)[0]})()
-key Meta+z
-sleep 400
-eval (async()=>{const v=await __iron.view({fidelity:'full'});const n=[...v.matchAll(/<clip[^>]*>/g)].length;return 'undone: '+n+' clips; ellipse'+v.match(/<ellipse id="#N"[^>]*>/)[0].match(/ x="[^"]*"/)[0]})()
 logs applied
 errors

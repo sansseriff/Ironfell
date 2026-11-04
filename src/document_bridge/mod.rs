@@ -567,6 +567,7 @@ fn report_late_work(
     gestures: Res<GestureRequests>,
     cameras: Res<ViewCameras>,
     views: Res<PanelViews>,
+    dpr: Res<crate::Dpr>,
 ) {
     let mut late: Vec<String> = Vec::new();
     late.extend(pending.0.iter().map(|t| format!("transaction {:?}", t.label)));
@@ -578,7 +579,7 @@ fn report_late_work(
     }
     for v in &views.0 {
         if let Some(c) = cameras.0.get(&v.panel)
-            && (c.pan != v.pan || c.zoom != v.zoom)
+            && (c.pan != v.pan || c.scale(dpr.0) != v.zoom)
         {
             late.push(format!("panel {} pan/zoom", v.panel));
         }

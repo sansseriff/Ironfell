@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 const out=resolve(import.meta.dir,'../../../.agents/attachments');mkdirSync(out,{recursive:true});
 const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true,args:['--use-angle=metal','--enable-gpu','--ignore-gpu-blocklist','--no-sandbox']});
-const page=await browser.newPage({viewport:{width:1680,height:1000},colorScheme:'light'});
+const page=await browser.newPage({viewport:{width:1680,height:1000},deviceScaleFactor:Number(process.env.DPR??1),colorScheme:'light'});
 page.setDefaultTimeout(15000);
 const errors:string[]=[];page.on('pageerror',e=>errors.push(String(e)));page.on('console',m=>{if(m.text().includes('panicked at'))errors.push(m.text());});
 const assert=(ok:unknown,why:string)=>{if(!ok)throw new Error(why);};
@@ -12,7 +12,8 @@ const call=async(name:string,args:unknown[]=[])=>page.evaluate(async({name,args}
 const save=()=>page.evaluate(async()=>JSON.parse(await (window as any).__iron.save()));
 try {
 await page.goto(process.env.URL??'http://localhost:5186/Ironfell/?gfx=webgl2&demo&showcase=0&layout=default');
-await page.waitForSelector('.loading',{state:'detached',timeout:180000});await wait();
+const deadline=Date.now()+180000;
+while(!await page.evaluate(async()=>{try{return (await (window as any).__iron.view({fidelity:'full'})).includes('name="square"');}catch{return false;}})) {assert(Date.now()<deadline,'engine did not become ready');await page.waitForTimeout(100);}
 const r=await page.evaluate(()=>(window as any).__iron.edit(`<edit>
 <create id="$c" type="composition" name="attachment bench" notation="free" dims="2d"/>
 <create id="$f" type="path" parent="$c" name="fiber" x="120" y="100"/><add id="$f" stroke.color="#e9aa27" stroke.width="6"/>

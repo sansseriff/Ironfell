@@ -171,7 +171,7 @@ fn every_op_kind_inverts_exactly() {
     // A clip and a relation so link/unlink have something to work on.
     let clip = store.document().next_id();
     let mut timing = Timing::default();
-    timing.dur = num(2.0);
+    timing.start = num(0.0);
     store
         .apply(tx(
             "add clip",

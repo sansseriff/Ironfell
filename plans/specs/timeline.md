@@ -250,7 +250,7 @@ layouts reset once.
 | **1. Clock and axis** | the `clock` node and facet; `Store::time`/`set_time` through it; the player; the `axis` facet and the handle rule (§4.2) | Rust tests: a session op on `clock.t` resamples; a binding reading `clock.t` follows it; a drag on `x = label_w + (start − t0)·pps` inverts to `start` with the axis held; `clock` is not saved and not undone |
 | **2. Parity, as a composition** | the generator, keyed reconcile, `projects` relations; `std:timeline`; rows by object and property; scrub, play, pause; retime by drag with undo; delete `timeline.rs` | a driving script (`timeline.txt`): scrub moves the square; drag a segment and the clip's start changes; undo restores it; `SKILL.md` updated |
 | **3. Editing** | trim edges, snapping, keys, zoom and pan, end values, easing curves, errors, loop, cross-view selection and highlighting | the script extended to each |
-| **4. Creating** | Animate change; edit an end at the playhead | the script: change a rect's x, animate it, play, see it move |
+| **4. Keyframes** (§12) | keys as children of clips; drags on animated objects write keys by the visible mode (auto-keyframe or not); the hybrid view, its left column in Svelte | the script: with auto-keyframe on, drag a shape at two times and play it; off, drag it and the whole animation moves; ‹ ◇ › |
 | **5. Seekable endpoints** (demo 2 of the note's list) | `from`/`to` may be bound when a trial evaluation at the clip's end reads only document leaves and clocks (note §6.7); otherwise the clip errors with the source that blocked it | Rust tests both ways; the script: a clip whose `to` follows a signal derived from the clock draws its curve; rebinding `to` to a slider is refused, with the reason |
 
 Later, not in this spec: the graph editor mode (value curves for one property, Blender's
@@ -274,6 +274,114 @@ revisited; none is expensive to change.
 5. **Frame steps are 1/30 s**, a constant in the player.
 6. **"Animate change"** is a button in the timeline's toolbar (HTML over the view, as the
    composition settings button is) and a key, `K` ("key it"), in canvas views.
+
+## 12. Keyframes, auto-keyframe and a hybrid view (2026-11-03, replaces §6's "Animate change")
+
+Asked for by the user, after Figma Motion: animations grouped by what they apply to,
+keyframes rather than from/to clips with an invented duration, an auto-keyframe mode, and
+an animated object that can still be moved. Decided with the user: keyframes are the
+stored primitive; with auto-keyframe off and the playhead between keys, a drag moves the
+whole animation. And the timeline becomes a hybrid view: its left column is DOM
+(Svelte), its right side the canvas composition.
+
+### 12.1 What is stored
+
+- **A clip is one property's animation**: `timing.start` (its origin on the clock),
+  `clip.prop`, its `animates` targets with their stagger offsets, and two or more
+  **`key` children**. `timing.dur`, `timing.easing`, `clip.from` and `clip.to` go away;
+  no migration (no old files are kept).
+- **A key** (type `key`, facet `key`): `t` (seconds after the clip's start), `value` (the
+  target leaf's kind), `easing` (into the next key: `linear`, `ease_in`, `ease_out`,
+  `ease_in_out`, `hold`).
+- **Sampling** (`time.rs`): at clock time `T`, for each target, local `u = T − start −
+  offset`. Before the first key's time the clip does not drive the leaf (its authored
+  value shows, as before); between keys it interpolates with the left key's easing;
+  after the last it holds the last value. Durations are the gaps between keys: nothing is
+  invented.
+
+### 12.2 What a drag on an animated object does
+
+A drag (or an inspector edit) of a leaf that a clip animates is redirected by the store
+when the gesture commits (`commit_gesture`), never silently and always by what the visible
+mode says. While dragging, the leaf is previewed as any leaf is, so the object follows
+the pointer.
+
+| Auto-keyframe | Playhead | The drag writes |
+|---|---|---|
+| on or off | on a key (within half a frame) | that key's `value` |
+| on | between, before or after keys | a new key at the playhead (before the first: the clip's start moves to the playhead and every key shifts to keep its time) |
+| off | between keys, or after the last | every key's value moved by the drag's delta: the whole animation moves |
+| off | before the clip starts | the authored value (the clip is not driving it) |
+| on, leaf not animated | after 0 | a new clip at 0 with two keys: the value before (at 0) and the dragged value (at the playhead) |
+| off, leaf not animated | any | the authored value, as today |
+
+`handle.rs` no longer locks a leaf because a clip drives it: an animated constant has a
+direct handle. Leaves *bound* to an animated leaf stay locked (inverting through a clip is
+phase 5's).
+
+**Auto-keyframe** is session state, the clock's `autokey` (never saved, never undone),
+toggled by the transport's button and Shift+K. While it is on, every 2D view other than
+the timeline wears a coloured frame and an "Auto-keyframe" chip, so the mode is visible
+wherever a drag happens (vision 05's corollary). The "Animate change" button, `K` and
+`animate_change` go away: auto-keyframe and the rows' ◇ cover them, without a duration.
+
+### 12.3 The view: a hybrid of DOM and canvas
+
+Figma Motion draws its timeline's left column with DOM and its tracks on a canvas. Iron
+does the same, which makes the timeline the first **advanced hybrid view**: one view, its
+HTML part and its canvas part laid out from one plan.
+
+- **The canvas part** (the generated composition, as now) draws what needs the renderer:
+  the ruler, the bars, the keys, the playhead, the grid, with bindings, caching and
+  picking. Time starts at `label_w`; the canvas draws only a plain backdrop under the
+  left column.
+- **The DOM part** (`TimelinePanel.svelte`, replacing the floating transport) draws the
+  left column, `label_w` wide: the transport in the corner over the ruler, then one row
+  per object and per property, at the y the plan gives it. Object rows name what the
+  animation applies to (a shape, a component instance, an iterator's targets as one
+  group); property rows name the leaf (`x`, `y`, `rot`, a colour) and carry **‹ ◇ ›**:
+  the previous key, add or remove a key at the playhead (the value as it is now), the
+  next key. Text, menus and editing are Svelte's; nothing there is drawn twice.
+- **One layout, one scroll.** The plan's rows (key, kind, label, y, height, the clip and
+  target) are served by an engine call, `timeline_rows`, with the view's vertical pan;
+  the DOM column positions its rows from them, and its wheel scrolls the canvas camera
+  (`view_pan`), so both halves move together.
+
+On the canvas: per property row, a **bar** spanning the clip's keys (drag: retime the clip;
+Delete: delete the clip) and a **diamond per key** (drag: the key's time; Delete: the key).
+Per object row, a **summary bar** spanning all its keys (display only for now). A diamond's
+x reads both the clip's start and its own `t`; the handle rule prefers the leaf of the node
+the dragged piece `projects` (a new rule in `handle.rs`, generally: a view of something
+edits that thing), so a diamond drag moves the key, a bar drag the clip.
+
+### 12.4 Not in this step
+
+Dragging an object's summary bar (it would move several clips); keys' values in the
+inspector (selection through `projects`); the graph editor; snapping keys to each other and
+to the playhead; phase 5's seekable keys.
+
+### 12.5 Trim cursors (2026-11-03; wired the same day, §11)
+
+The user captured Figma's two cursors for dragging the start and end of an object's
+timeline duration. Use them for a bar's `ends` grips (and any later begin/end trim in the
+timeline creation flow) in place of the resize arrow those grips show today.
+
+| File | Look | Use |
+|---|---|---|
+| `src-ui/cursors/trim-start.svg` | ‹ `(` › | over or dragging a bar's **left** end (`start`; the end stays) |
+| `src-ui/cursors/trim-end.svg` | ‹ `)` › | over or dragging a bar's **right** end (`dur`; `start` stays) |
+
+- **They are SVGs, not 8× PNGs** like the other cursors: 32×32 viewBox in CSS px, with
+  their own drop shadow (`feGaussianBlur` 1.5, 1 px down). Import them as URLs and use
+  them directly; they are sharp at any pixel ratio without `image-set`. They don't turn,
+  so they belong in `fixed` in `src-ui/cursors/index.ts`, not `turned`. Check the native
+  (WKWebView) path, which re-rasterises `fixed` entries to 2× PNGs.
+- **Hotspot not captured**: the capture held only the image. Use the arrows' centre,
+  about (16, 15.5), and fall back to `ew-resize`.
+- **Where the name comes from:** `select.rs` maps an `ends` hit to `Grip::Resize(u, 0.5)`
+  (`u` 0 = left, 1 = right; see `ends_at`), so `cursor_for` gives `resize:<deg>`. Name
+  `trim-start` / `trim-end` there instead, for both hover and the live `Ends` gesture.
+- The raw captures were removed; the SVG files above are the decoded captures, unchanged.
 
 ## 11. Done
 
@@ -466,4 +574,65 @@ selectable and deletable; a bar should select and delete as a whole, deleting it
 - **Tests.** `tests/timeline_view.rs` 10 (a bar trims by its ends and deleting it deletes
   the clip, then undo); `timeline.txt` selects the bar from its words, trims by the end,
   enters the bar to type a value, and deletes and restores the clip.
+
+### Keyframes, auto-keyframe and the hybrid view: §12 (2026-11-03)
+
+Built as §12.1–12.3 say, with §12.5's cursors.
+
+- **Storage** (`facet.rs`, `registry.rs`, `time.rs`): a clip is `timing.start`, `clip.prop`
+  and `key` children (`key` facet: `t`, `value` of any kind, `easing`); `time::keys`,
+  `start`, `value_at`, `length`; sampling holds the authored value before the first key
+  and the last value after the last. The demo's clips are keys (its op count 298 → 302).
+- **A drag on an animated object** (`timeline_view::key_ops`, called first by
+  `commit_gesture`): §12.2's table, each row a test. A leaf the gesture did not change
+  writes nothing. `handle.rs`: a clip-driven constant is Direct, and a "projects"
+  preference picks the source leaf of what the dragged piece projects (a diamond its
+  key's `t`, a bar its clip's `start`).
+- **Auto-keyframe**: the clock's session `autokey`; the transport's ◉ and Shift+K; a red
+  frame and an "Auto-keyframe" chip on the other 2D views (`select.rs`,
+  `draw_autokey`). Animate change, `K` and `animate_change` are gone.
+- **The hybrid view**: the canvas composition draws the ruler, bars (one per clip and
+  target, spanning its keys), diamonds (`keys` group, `std:timeline-keys`: target, drag,
+  delete) and object summary bars; `TimelinePanel.svelte` draws the left column (the
+  transport in the corner, a row per object and property, names that select and light
+  their object, ‹ ◇ ›) from `timeline_rows(panel)`, and its wheel scrolls the canvas
+  view (`view_pan`). `timeline_key(action, clip)` steps to and toggles keys.
+- **Trim cursors** (§12.5): `affords.cursor` (new field: `auto`, `trim-start`,
+  `trim-end`), which a clip's first and last diamonds carry inline, and the `ends` grips'
+  hover and drag name the same; `src-ui/cursors/index.ts` serves the SVGs (hotspot
+  16,15.5, `ew-resize` fallback; native rasterises them at 2×).
+- **Tests.** 252 `iron_document` tests (`timeline_view` 13, rewritten: the §12.2 table,
+  the row buttons, the cursor data). `timeline.txt` rewritten: the ruler scrub, a bar
+  retimed, the last key's cursor and drag, the column's name, ‹ › and ◇, a drag on the
+  square with auto-keyframe off (both keys move) and on (a key added), delete and undo.
+  The full smoke passes; its expected ids after the demo moved by the four new keys.
+- **Also:** `vite.config.ts` stops watching `.agents/`, `plans/` and `target/`: another
+  agent's worktree edits had reloaded the app mid-smoke.
+
+### CSS px views; the timeline's own scroll (2026-11-03)
+
+Found by the user on a 2× display: the DOM column was half its intended width and the
+transport did not fit, because a 2D view mapped 1 document px to 1 *device* px, so every
+composition drew at half its CSS size on Retina while the DOM beside it did not.
+
+- **A view's zoom is CSS px per document px** (`ViewCamera::zoom`; `PanelView.zoom` is
+  that times the pixel ratio, `ViewCamera::scale`), for every 2D view: 100% now means 1
+  document px per CSS px, Figma's 100%, and a hybrid view's DOM half places itself at
+  `document px · zoom` with no `devicePixelRatio`. The zoom keys, fit, pinch and "Show
+  in" work in it; 3D views (a field of view) and the gizmo (already scaled) are
+  unchanged. At 1× nothing changes, so the smoke's expected output does not.
+- **The ruler at CSS size**: 56 tall (the transport's height), 13 px labels, ticks and
+  the playhead's head to match: what the user had on a 2× display, plus room for the
+  transport.
+- **The timeline never pans in 2D.** Its rows scroll on the axis (`axis.y0`, a session
+  leaf, `timeline_view::scroll`): row pieces are bound to `y − y0` and pass under the
+  ruler, which stays. The wheel, the column's wheel (`timeline_axis` `{"scroll": dy}`,
+  replacing `view_pan`), middle-drag and Space-drag all scroll rows on y and pan time on
+  x; a camera pan left on the timeline is reset.
+- **Tests.** 253 `iron_document` tests (`timeline_view` 14: scrolling moves the rows
+  under a ruler that stays, without history). `timeline.txt` (rows 24 px higher) and the
+  full smoke pass; checked at 2× by screenshot, before and after a middle-drag.
+- **The playhead never goes before 0** (found by the user): a `track` has a range
+  (`track.min`, `track.max`, no upper end when `max` ≤ `min`) that a press or drag keeps
+  its value in, and the ruler declares `min` 0; `clock::set` clamps `t` at 0 too.
 

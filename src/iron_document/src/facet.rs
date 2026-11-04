@@ -406,20 +406,25 @@ facets! {
         value: Number = Value::Number(0.5),
     }
 
-    /// Scripted time (doc 05 §2): a start and a duration on a track.
+    /// Scripted time (doc 05 §2): where a clip's keys are measured from, on
+    /// the clock. Its length is its keys' (timeline.md §12.1).
     Timing / "timing" => Timing {
         start: Number = Value::Number(0.0),
-        dur: Number = Value::Number(1.0),
-        easing: Enum = Value::Enum("linear".to_owned()) => ["linear", "ease_in", "ease_out", "ease_in_out"],
     }
 
-    /// What a clip does to its target. Endpoints stay literal (doc 05 §2.1)
-    /// and take the target leaf's kind. The target itself is a relation, not
-    /// a field (doc 05 §3).
+    /// What a clip animates: one property of its targets (`animates`
+    /// relations, doc 05 §3), through its `key` children.
     Clip / "clip" => Clip {
         prop: Str = Value::Str(String::new()),
-        from: Any = Value::Number(0.0),
-        to: Any = Value::Number(1.0),
+    }
+
+    /// One keyframe of a clip (timeline.md §12.1): `t` seconds after the
+    /// clip's start, `value` (the target leaf's kind), and the easing into
+    /// the next key (`hold` keeps this value until it).
+    Key / "key" => Key {
+        t: Number = Value::Number(0.0),
+        value: Any = Value::Number(0.0),
+        easing: Enum = Value::Enum("linear".to_owned()) => ["linear", "ease_in", "ease_out", "ease_in_out", "hold"],
     }
 
     /// The playhead (timeline.md §4.1): the time clips are sampled at, and
@@ -429,6 +434,9 @@ facets! {
     Clock / "clock" => Clock {
         t: Number = Value::Number(0.0),
         playing: Bool = Value::Bool(false),
+        // Auto-keyframe (timeline.md §12.2): a drag on an animated leaf adds
+        // or sets a key at `t`; on an unanimated one, starts an animation.
+        autokey: Bool = Value::Bool(false),
         rate: Number = Value::Number(1.0),
         loop_in: Number = Value::Number(0.0),
         loop_out: Number = Value::Number(0.0),
@@ -436,12 +444,14 @@ facets! {
 
     /// How a projection is being looked at along one axis (timeline.md
     /// §4.2): `t0` at the left edge, `pps` units per second (pixels per
-    /// unit), `label_w` the header column's width. A drag holds these
-    /// fixed: it edits what a view shows, never how it is looked at.
+    /// unit), `label_w` the header column's width, `y0` how far its rows
+    /// are scrolled up under the ruler (px). A drag holds these fixed: it
+    /// edits what a view shows, never how it is looked at.
     Axis / "axis" => Axis {
         t0: Number = Value::Number(0.0),
         pps: Number = Value::Number(100.0),
         label_w: Number = Value::Number(160.0),
+        y0: Number = Value::Number(0.0),
     }
 
     /// A value laid along a node (timeline.md §7): with `affords.drag=
@@ -453,6 +463,10 @@ facets! {
         value: Number = Value::Number(0.0),
         origin: Number = Value::Number(0.0),
         scale: Number = Value::Number(1.0),
+        // The range a press or drag keeps `value` in: never below `min`,
+        // and never above `max` unless `max` ≤ `min` (no upper end).
+        min: Number = Value::Number(0.0),
+        max: Number = Value::Number(0.0),
     }
 
     /// One block of a narrative (narrative-panel.md §7.1): a paragraph, a

@@ -27,6 +27,11 @@ The app follows the system's light/dark appearance unless Settings forces one.
 imported per icon (`@lucide/svelte/icons/<name>`). Colours are the tokens in
 `src-ui/app.css`; shared component styles are in `src-ui/ui.css`.
 
+**Stress test:** click **+** in any tab bar and pick a size under *Stress test*
+(1,000–20,000 shapes). It opens a Stress tab there; the slider at its top rotates
+the whole field. Picking another size replaces the scene. `?stress=N` in the URL,
+or `await __iron.stress(N)` in the console, does the same.
+
 ## Shared controls for a fiber and its shadow
 
 Attach points from separate paths to the same empty controls so a fiber and its
@@ -57,10 +62,21 @@ until **Attach**; **Done** or **Cancel pending picks** closes the task while
 keeping edits already applied. Attachments are authored on the main and shared
 by its instances; nested-instance attachment authoring is not supported yet.
 
-See the [authoring workflow specification](plans/specs/authoring-workflows.md#10-first-implementation-shared-point-controls-2026-11-03)
+See the [authoring workflow specification](plans/specs/authoring-workflows.md)
 for implementation details and remaining workflow work.
 
-**Stress test:** click **+** in any tab bar and pick a size under *Stress test*
-(1,000–20,000 shapes). It opens a Stress tab there; the slider at its top rotates
-the whole field. Picking another size replaces the scene. `?stress=N` in the URL,
-or `await __iron.stress(N)` in the console, does the same.
+## Browser checks
+
+With the app running locally, run the fast smoke from the repo root:
+
+```sh
+cd .claude/skills/run-iron
+GPU=1 SIZE=1680x1000@1 bun run drive.ts < smoke.txt
+URL='http://localhost:5173/Ironfell/?gfx=webgl2&demo&showcase=0&layout=default' bun run attachments.ts
+```
+
+The default smoke checks startup, dragging, bindings, undo/redo, rejected edits and
+save/reload in about five seconds on a warm local GPU. The attachment fixture
+checks the shared-control workflow in about ten seconds. The comprehensive suite
+remains available as `smoke-full.txt` (about four minutes); use it for broad
+regression checks and use focused fixtures for the feature being changed.

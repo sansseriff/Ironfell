@@ -1,7 +1,7 @@
 # Authoring workflows: from a drawing to a linked, computed component
 
 **Status:** design investigation requested 2026-10-28; first shared point-control
-implementation built 2026-11-03 (§10), following explicit user authorization. The
+implementation built 2026-11-03 (§10), integrated into `master` 2026-11-04. The
 broader workflow and panel design remains open. No new panels, APIs, schema or computational backend
 are approved merely by their appearance here. The direction is agreed: make the
 semantic operations behind the demos explicit and usable from the UI and model surface.

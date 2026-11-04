@@ -16,6 +16,15 @@ which plans are historical. Where plans disagree, that index decides.
   "Typical durations" table (marked ⏱); say which step and its estimate, and add or
   correct a row when a step's time is new or off.
 
+## Council review
+
+The `council` skill (from tstack) runs when the user says "council". This setup has
+two providers, Anthropic and OpenAI, so do not require a third provider and do not
+report a missing one. Council members: the latest Claude Opus and the latest GPT Sol,
+both at high reasoning effort. Resolve the exact models with `orchestrator_capabilities`
+and start each one with `delegate_task`. If either member is unavailable, report it
+instead of substituting.
+
 ## Svelte frontend: components and icons
 
 These rules apply to every agent (Claude, Codex, or otherwise) adding or changing
@@ -63,6 +72,15 @@ UI in `src-ui/`, including new panels such as the Document panel.
   as `src-ui/lib/ui/IconButton.svelte` takes `icon`. `vite.config.ts` excludes
   `@lucide/svelte` from `optimizeDeps`, so a newly used icon is served as is
   instead of making Vite re-optimise and reload the page; keep that.
+
+- **Size Svelte UI in CSS px, and never scale it by `devicePixelRatio`.** A 2D
+  canvas view's zoom is CSS px per document px (the engine applies the pixel
+  ratio itself, `ViewCamera::scale`), so DOM laid over or beside a canvas view
+  (a hybrid view, such as the timeline's column) places itself at
+  `document px × zoom` from what the engine serves, in CSS px. If you find
+  yourself dividing by `devicePixelRatio` in Svelte, the engine call should
+  answer in CSS px instead. Check such UI by screenshot at 2× as well as 1×
+  (`SIZE=…@2`, the run-iron skill).
 
 ## Worktrees
 

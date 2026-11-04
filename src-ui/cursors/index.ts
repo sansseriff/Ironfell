@@ -7,7 +7,8 @@
  * add a point), `pen-close` (on the first point, to close), `pen-remove` (on
  * a point, to remove it), `point` (Cmd over a path's point: a drag pulls out
  * its handles), `bend` (Cmd over a segment: a drag bends it), `radius` (a
- * shape's corner or arc handle), `crosshair`, `resize:<axis degrees>` and `rotate:<degrees
+ * shape's corner or arc handle), `trim-start` and `trim-end` (a timeline span's start
+ * or end: an `ends` grip, a clip's first or last key), `crosshair`, `resize:<axis degrees>` and `rotate:<degrees
  * toward the grabbed corner>`. The last two turn with the shape, as Figma's
  * do: `resize.png` and `rotate.png` are the arrows without their shadow,
  * rotated on a canvas and given the shadow again beneath, so it always falls
@@ -25,6 +26,10 @@ import pointUrl from './point.png';
 import radiusUrl from './radius.png';
 import resizeUrl from './resize.png';
 import rotateUrl from './rotate.png';
+// Figma's trim cursors (plans/specs/timeline.md §12.5): SVGs at 32 CSS px,
+// shadow included, so sharp at any ratio and not 8x PNGs like the rest.
+import trimStartUrl from './trim-start.svg';
+import trimEndUrl from './trim-end.svg';
 import { isNativeHost } from '../runtime/native_host';
 
 /** Device px per CSS px the PNGs are drawn for. */
@@ -51,6 +56,15 @@ const fixed: Record<string, [string, number, number, string]> = {
   radius: [radiusUrl, 4, 4, 'pointer'],
 };
 
+/** Vector cursors, drawn at CSS px (32 px SVGs with their shadow): no
+ *  density to declare in the browser; the native host gets a 2x raster.
+ *  The trim cursors' hotspot was not captured: the arrows' centre. */
+const vector: Record<string, [string, number, number, string]> = {
+  'trim-start': [trimStartUrl, 16, 15.5, 'ew-resize'],
+  'trim-end': [trimEndUrl, 16, 15.5, 'ew-resize'],
+};
+const nativeVector = new Map<string, string>();
+
 /** The turnable arrows: image, the angle it is drawn at, its loaded pixels. */
 const turned: Record<string, { url: string; base: number; img?: HTMLImageElement }> = {
   // Its axis runs top-left to bottom-right.
@@ -74,6 +88,16 @@ if (NATIVE) for (const [name, [url]] of Object.entries(fixed)) {
     const c = document.createElement('canvas'); c.width = c.height = SIZE;
     c.getContext('2d')!.drawImage(img, 0, 0);
     nativeFixed.set(name, encodeCursor(c));
+    for (const f of waiting.splice(0)) f();
+  };
+  img.src = url;
+}
+if (NATIVE) for (const [name, [url]] of Object.entries(vector)) {
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    c.getContext('2d')!.drawImage(img, 0, 0, 64, 64);
+    nativeVector.set(name, c.toDataURL());
     for (const f of waiting.splice(0)) f();
   };
   img.src = url;
@@ -135,6 +159,21 @@ export function applyCursor(el: HTMLElement, name: string) {
       return;
     }
     el.style.cursor = imageSet(nativeFixed.get(name) ?? f[0], f[1], f[2], f[3]);
+    return;
+  }
+  const v = vector[name];
+  if (v) {
+    el.style.cursor = v[3];
+    if (!NATIVE) {
+      el.style.cursor = `url("${v[0]}") ${v[1]} ${v[2]}, ${v[3]}`;
+      return;
+    }
+    const raster = nativeVector.get(name);
+    if (!raster) {
+      waiting.push(() => el.dataset.cursor === name && applyCursor(el, name));
+      return;
+    }
+    el.style.cursor = `image-set(url("${raster}") 2x) ${v[1]} ${v[2]}, ${v[3]}`;
     return;
   }
   const [kind, arg] = name.split(':');

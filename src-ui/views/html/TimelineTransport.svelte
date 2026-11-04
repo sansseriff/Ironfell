@@ -1,21 +1,22 @@
 <script lang="ts">
-  // The timeline's transport (plans/specs/timeline.md §5, §6): play and
-  // pause, back to the start, loop, fit, and the time readout, as HTML over
-  // the timeline composition's view. The playhead is the session clock
-  // (`clock_read`, `clock_set`): never saved, never undone. Typing a time in
-  // the readout seeks. With the pointer over the timeline its keys are the
-  // transport's: Space plays and pauses, Home and End go to 0 and to the
-  // last clip's end, ← and → step a frame (1/30 s; with Shift, 1 s), I and
-  // O set the loop's ends at the playhead, F fits the clips. K ("key it",
-  // from anywhere but a text field) is Animate change: the last change to
-  // the selection becomes clips from the playhead (timeline.md §6).
+  // The timeline's transport (plans/specs/timeline.md §5, §6, §12), in the
+  // corner of its DOM column (TimelinePanel.svelte) over the ruler: play and
+  // pause, back to the start, loop, fit, auto-keyframe, and the time. The
+  // playhead is the session clock (`clock_read`, `clock_set`): never saved,
+  // never undone. Typing a time in the readout seeks. With the pointer over
+  // the timeline its keys are the transport's: Space plays and pauses, Home
+  // and End go to 0 and to the last clip's end, ← and → step a frame
+  // (1/30 s; with Shift, 1 s), I and O set the loop's ends at the playhead,
+  // F fits the clips. Shift+K (anywhere but a text field) toggles
+  // auto-keyframe, Figma's key: while it is on, a drag on an object keys it
+  // at the playhead (§12.2), and the canvas views wear a red frame.
   import { onDestroy } from "svelte";
   import Play from "@lucide/svelte/icons/play";
   import Pause from "@lucide/svelte/icons/pause";
   import SkipBack from "@lucide/svelte/icons/skip-back";
   import Repeat from "@lucide/svelte/icons/repeat";
   import Maximize from "@lucide/svelte/icons/maximize-2";
-  import DiamondPlus from "@lucide/svelte/icons/diamond-plus";
+  import CircleDot from "@lucide/svelte/icons/circle-dot";
   import { controllerManager } from "../../controller-manager.svelte";
   import Button from "../../lib/ui/Button.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
@@ -23,10 +24,12 @@
 
   const doc = controllerManager.docClient;
 
-  type Clock = { ok: boolean; t: number; playing: boolean; rate: number; end: number; loop_in: number; loop_out: number };
-  let clock: Clock = $state({ ok: false, t: 0, playing: false, rate: 1, end: 0, loop_in: 0, loop_out: 0 });
+  /** The timeline view's box, and whether the pointer is over it. */
+  let { area, over }: { area: () => DOMRect | undefined; over: () => boolean } = $props();
+
+  type Clock = { ok: boolean; t: number; playing: boolean; autokey: boolean; rate: number; end: number; loop_in: number; loop_out: number };
+  let clock: Clock = $state({ ok: false, t: 0, playing: false, autokey: false, rate: 1, end: 0, loop_in: 0, loop_out: 0 });
   const looping = $derived(clock.loop_out > clock.loop_in);
-  let root: HTMLDivElement | undefined = $state();
   let editing = $state(false);
   let draft = $state("");
 
@@ -57,29 +60,12 @@
   const timer = setInterval(read, 100);
   read();
 
-  /** The timeline view's box: the overlay this sits in covers it. */
-  const area = () => root?.parentElement?.getBoundingClientRect();
-  let over = false;
-  const onMove = (e: PointerEvent) => {
-    const r = area();
-    over = !!r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
-  };
   const FRAME = 1 / 30;
   function fit() {
     const r = area();
-    if (r) doc.command({ op: "timeline_axis", fields: JSON.stringify({ fit: r.width * devicePixelRatio }) });
+    if (r) doc.command({ op: "timeline_axis", fields: JSON.stringify({ fit: r.width }) });
   }
-  let note = $state("");
-  let noteTimer: ReturnType<typeof setTimeout> | undefined;
-  function say(text: string) {
-    note = text;
-    clearTimeout(noteTimer);
-    noteTimer = setTimeout(() => (note = ""), 3500);
-  }
-  async function animateChange() {
-    const r = await doc.command<{ ok: boolean; clips?: number; at?: number; error?: string }>({ op: "animate_change", actor: "human" });
-    say(r.ok ? `Animated: ${r.clips} clip${r.clips === 1 ? "" : "s"} from ${(r.at ?? 0).toFixed(2)} s` : (r.error ?? "Nothing to animate"));
-  }
+  const toggleAutokey = () => set({ autokey: !clock.autokey });
   function toggleLoop() {
     if (looping) set({ loop_in: 0, loop_out: 0 });
     else set({ loop_in: 0, loop_out: clock.end });
@@ -90,13 +76,13 @@
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-    if (e.key.toLowerCase() === "k" && !e.shiftKey) {
+    if (e.key.toLowerCase() === "k" && e.shiftKey) {
       e.preventDefault();
       e.stopImmediatePropagation();
-      void animateChange();
+      toggleAutokey();
       return;
     }
-    if (!over) return;
+    if (!over()) return;
     const step = e.shiftKey ? 1 : FRAME;
     const actions: Record<string, () => void> = {
       " ": toggle,
@@ -114,11 +100,9 @@
     e.stopImmediatePropagation();
     act();
   };
-  window.addEventListener("pointermove", onMove, true);
   window.addEventListener("keydown", onKey, true);
   onDestroy(() => {
     clearInterval(timer);
-    window.removeEventListener("pointermove", onMove, true);
     window.removeEventListener("keydown", onKey, true);
   });
 
@@ -139,78 +123,74 @@
   }
 </script>
 
-<div class="transport canvas-ui" role="toolbar" aria-label="Transport" bind:this={root}>
-  <IconButton icon={SkipBack} label="Back to start" large onclick={() => set({ t: 0 })} />
-  <IconButton icon={clock.playing ? Pause : Play} label={clock.playing ? "Pause" : "Play"} title={clock.playing ? "Pause (Space)" : "Play (Space)"} large onclick={toggle} />
-  <IconButton icon={Repeat} label="Loop" title={looping ? "Loop off" : "Loop every clip (I, O set its ends)"} large pressed={looping} onPressedChange={toggleLoop} />
-  <IconButton icon={Maximize} label="Fit" title="Fit the clips (F)" large onclick={fit} />
-  <IconButton icon={DiamondPlus} label="Animate change" title="Animate change (K): the last change to the selection becomes a clip from the playhead" large onclick={animateChange} data-action="animate-change" />
-  {#if editing}
-    <!-- svelte-ignore a11y_autofocus -->
-    <TextInput
-      class="time"
-      autofocus
-      aria-label="Seek to time"
-      bind:value={draft}
-      onkeydown={(e: KeyboardEvent) => {
-        if (e.key === "Enter") {
-          seek(draft);
-          editing = false;
-        } else if (e.key === "Escape") editing = false;
-      }}
-      onblur={() => (editing = false)}
-    />
-  {:else}
-    <Button
-      class="time"
-      title="Type a time to seek"
-      onclick={() => {
-        draft = clock.t.toFixed(2);
-        editing = true;
-      }}>{fmt(clock.t)}</Button
-    >
-  {/if}
-  <span class="end">/ {fmt(clock.end)}</span>
-  {#if note}<span class="note" role="status">{note}</span>{/if}
+<div class="transport" role="toolbar" aria-label="Transport">
+  <div class="buttons">
+    <IconButton icon={SkipBack} label="Back to start" title="Back to start (Home)" onclick={() => set({ t: 0 })} />
+    <IconButton icon={clock.playing ? Pause : Play} label={clock.playing ? "Pause" : "Play"} title={clock.playing ? "Pause (Space)" : "Play (Space)"} onclick={toggle} />
+    <IconButton icon={Repeat} label="Loop" title={looping ? "Loop off" : "Loop every clip (I, O set its ends)"} pressed={looping} onPressedChange={toggleLoop} />
+    <IconButton icon={Maximize} label="Fit" title="Fit the clips (F)" onclick={fit} />
+    <IconButton icon={CircleDot} label="Auto-keyframe" title={clock.autokey ? "Turn off auto-keyframe (⇧K)" : "Turn on auto-keyframe (⇧K): a drag keys the object at the playhead"} pressed={clock.autokey} onPressedChange={toggleAutokey} class="autokey" data-action="autokey" />
+  </div>
+  <div class="time-row">
+    {#if editing}
+      <!-- svelte-ignore a11y_autofocus -->
+      <TextInput
+        class="time"
+        autofocus
+        aria-label="Seek to time"
+        bind:value={draft}
+        onkeydown={(e: KeyboardEvent) => {
+          if (e.key === "Enter") {
+            seek(draft);
+            editing = false;
+          } else if (e.key === "Escape") editing = false;
+        }}
+        onblur={() => (editing = false)}
+      />
+    {:else}
+      <Button
+        class="time"
+        title="Type a time to seek"
+        onclick={() => {
+          draft = clock.t.toFixed(2);
+          editing = true;
+        }}>{fmt(clock.t)}</Button
+      >
+    {/if}
+    <span class="end">/ {fmt(clock.end)}</span>
+  </div>
 </div>
 
 <style>
   .transport {
-    position: absolute;
-    right: 12px;
-    bottom: 10px;
     display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 4px 8px 4px 4px;
-    border: 1px solid var(--border-strong);
-    border-radius: 10px;
-    background: var(--bg);
-    box-shadow: var(--menu-shadow);
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    height: 100%;
+    padding: 0 8px;
     user-select: none;
     font-variant-numeric: tabular-nums;
   }
+  .buttons,
+  .time-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
   .transport :global(.time) {
     width: 68px;
-    min-height: 26px;
-    justify-content: flex-end;
-    text-align: right;
+    min-height: 24px;
+    justify-content: flex-start;
+    font-size: 13px;
   }
   .transport :global(button.time) {
     cursor: text;
   }
-  .note {
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 6px);
-    padding: 4px 8px;
-    border: 1px solid var(--border-strong);
-    border-radius: 6px;
-    background: var(--bg);
-    box-shadow: var(--menu-shadow);
-    color: var(--fg);
-    font-size: 12px;
-    white-space: nowrap;
+  /* Auto-keyframe on: record red, as the canvas frame is. */
+  .transport :global(.autokey[data-state="on"]) {
+    background: rgba(230, 61, 56, 0.2);
+    color: rgb(240, 90, 84);
   }
   .end {
     font-size: 12px;

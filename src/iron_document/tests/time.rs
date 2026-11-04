@@ -1,6 +1,6 @@
 //! Scripted time: clips sampled at the playhead through relations.
 
-use iron_document::facet::{Clip, Fill, Size, Timing, Transform2d};
+use iron_document::facet::{Clip, Fill, Key, Size, Timing, Transform2d};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -30,14 +30,16 @@ struct Scene {
     bar: NodeId,
     clip: NodeId,
     rel: RelationId,
+    keys: [NodeId; 2],
 }
 
 /// rect (x=50); bar.size.h bound to rect.x * 2; timeline > clip(start 1,
-/// dur 2, transform2d.x 100 -> 300) animating rect.
+/// keys at 0 (100) and 2 (300) on transform2d.x) animating rect.
 fn scene(easing: &str) -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.document().next_ids(6);
     let (rect, bar, timeline, clip) = (ids[0], ids[1], ids[2], ids[3]);
+    let keys = [ids[4], ids[5]];
     let rel = store.document().next_relation_id();
     let mut t = Transform2d::default();
     t.x = num(50.0);
@@ -45,12 +47,15 @@ fn scene(easing: &str) -> Scene {
     s.h = Slot::Bound(Expr::parse(&format!("{rect}.transform2d.x * 2")).unwrap());
     let mut timing = Timing::default();
     timing.start = num(1.0);
-    timing.dur = num(2.0);
-    timing.easing = Slot::Const(Value::Enum(easing.into()));
     let mut c = Clip::default();
     c.prop = Slot::Const(Value::Str("transform2d.x".into()));
-    c.from = num(100.0);
-    c.to = num(300.0);
+    let key = |t: f64, v: f64| {
+        let mut k = Key::default();
+        k.t = num(t);
+        k.value = num(v);
+        k.easing = Slot::Const(Value::Enum(easing.into()));
+        k.wrap()
+    };
     let k0 = OrderKey::first();
     store
         .apply(tx(
@@ -65,13 +70,15 @@ fn scene(easing: &str) -> Scene {
                     facets: vec![Transform2d::default().wrap(), s.wrap(), Fill::default().wrap()],
                 },
                 Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::after(&OrderKey::after(&k0)), facets: vec![] },
-                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: k0, facets: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: k0.clone(), facets: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: keys[0], ty: ty("key"), parent: Some(clip), order: k0.clone(), facets: vec![key(0.0, 100.0)] },
+                Op::Create { id: keys[1], ty: ty("key"), parent: Some(clip), order: OrderKey::after(&k0), facets: vec![key(2.0, 300.0)] },
                 Op::Link { rel: Relation { id: rel, from: clip, to: rect, rel: RelKind::Animates, data: BTreeMap::new() } },
             ],
         ))
         .unwrap();
     store.drain_changes();
-    Scene { store, rect, bar, clip, rel }
+    Scene { store, rect, bar, clip, rel, keys }
 }
 
 #[test]
@@ -143,7 +150,7 @@ fn gesture_preview_wins_over_the_clip() {
 
 #[test]
 fn bad_clips_are_reported_not_applied() {
-    let Scene { mut store, rect, bar, clip, .. } = scene("linear");
+    let Scene { mut store, rect, bar, clip, keys, .. } = scene("linear");
     // Retarget onto a bound leaf: reported.
     let rel2 = store.document().next_relation_id();
     let mut c = Clip::default();
@@ -166,8 +173,8 @@ fn bad_clips_are_reported_not_applied() {
             "kinds",
             vec![
                 Op::Set { id: clip, path: path("clip.prop"), slot: Slot::Const(Value::Str("transform2d.x".into())) },
-                Op::Set { id: clip, path: path("clip.from"), slot: Slot::Const(Value::Vec3([0.0; 3])) },
-                Op::Set { id: clip, path: path("clip.to"), slot: Slot::Const(Value::Vec3([1.0; 3])) },
+                Op::Set { id: keys[0], path: path("key.value"), slot: Slot::Const(Value::Vec3([0.0; 3])) },
+                Op::Set { id: keys[1], path: path("key.value"), slot: Slot::Const(Value::Vec3([1.0; 3])) },
             ],
         ))
         .unwrap();
@@ -183,6 +190,6 @@ fn views_answer_why_is_this_moving() {
     assert!(v.contains(&format!("<driven-by ref=\"{clip}\" rel=\"animates\" prop=\"transform2d.x\"/>")), "{v}");
     let v = store.view(&ViewQuery { expand: Vec::new(), relation: Default::default(), scope: Some(clip), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!("<animates to=\"{rect}\"/>")), "{v}");
-    assert!(v.contains("from=\"100\" to=\"300\""), "{v}");
+    assert!(v.contains("value=\"100\"") && v.contains("value=\"300\""), "the clip's keys: {v}");
     assert_eq!(store.document().relations_to(rect).count(), 1);
 }

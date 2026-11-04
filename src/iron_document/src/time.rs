@@ -1,17 +1,20 @@
-//! Scripted time (vision doc 05): clips on a track, sampled at a playhead.
+//! Scripted time (vision doc 05, timeline.md §12.1): clips of keyframes,
+//! sampled at a playhead.
 //!
-//! A clip is a node with `Timing { start, dur, easing }` and
-//! `Clip { prop, from, to }`, linked to its targets by `animates` relations
-//! whose `data.offset` staggers the start. Sampling produces, for one time,
-//! the value each targeted leaf should show. Those values sit in the reactive
-//! graph's animated layer, beneath the gesture overlay and above the authored
-//! constant, so bindings that read an animated leaf follow it.
+//! A clip is a node with `Timing { start }` and `Clip { prop }`, linked to its
+//! targets by `animates` relations whose `data.offset` staggers it, holding
+//! `key` children (`t` after the start, `value`, `easing` into the next).
+//! Sampling produces, for one time, the value each targeted leaf shows. Those
+//! values sit in the reactive graph's animated layer, beneath the gesture
+//! overlay and above the authored constant, so bindings that read an animated
+//! leaf follow it.
 //!
-//! Before a clip starts the leaf shows its authored value; after the clip
-//! ends it holds `to`. Targets must be constants: a bound leaf has no slot
-//! for a sampled value, and the conflict is reported rather than resolved.
+//! Before the first key the leaf shows its authored value; between keys it
+//! interpolates with the left key's easing; after the last it holds that
+//! key's value. Targets must be constants: a bound leaf has no slot for a
+//! sampled value, and the conflict is reported rather than resolved.
 
-use crate::facet::{Clip, LeafPath, Timing};
+use crate::facet::{Clip, Key, LeafPath, Timing};
 use crate::document::{Document, RelKind};
 use crate::expr::Leaf;
 use crate::id::NodeId;
@@ -69,17 +72,66 @@ pub fn lerp(from: &Value, to: &Value, u: f64) -> Option<Value> {
     })
 }
 
+/// One key of a clip, as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyAt {
+    pub id: NodeId,
+    pub t: f64,
+    pub value: Value,
+    pub easing: String,
+}
+
+/// A clip's keys with constant values, in time order.
+pub fn keys(doc: &Document, clip: NodeId) -> Vec<KeyAt> {
+    let mut out: Vec<KeyAt> = doc
+        .children(clip)
+        .iter()
+        .filter_map(|&k| {
+            let key = doc.get::<Key>(k)?;
+            Some(KeyAt {
+                id: k,
+                t: key.t.constant().and_then(|v| v.as_f64()).unwrap_or(0.0),
+                value: key.value.constant()?.clone(),
+                easing: key.easing.constant().and_then(|v| v.as_str()).unwrap_or("linear").to_owned(),
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.t.total_cmp(&b.t).then(a.id.cmp(&b.id)));
+    out
+}
+
+/// A clip's start on the clock.
+pub fn start(doc: &Document, clip: NodeId) -> f64 {
+    doc.get::<Timing>(clip).and_then(|t| t.start.constant()).and_then(|v| v.as_f64()).unwrap_or(0.0)
+}
+
+/// The clip's value `u` seconds after its start: `None` before its first key
+/// (it does not drive the leaf then) or with no keys.
+pub fn value_at(keys: &[KeyAt], u: f64) -> Option<Value> {
+    let first = keys.first()?;
+    if u < first.t {
+        return None;
+    }
+    let i = keys.iter().rposition(|k| k.t <= u).unwrap_or(0);
+    let a = &keys[i];
+    let Some(b) = keys.get(i + 1) else { return Some(a.value.clone()) };
+    if a.easing == "hold" || b.t <= a.t {
+        return Some(a.value.clone());
+    }
+    lerp(&a.value, &b.value, ease(&a.easing, (u - a.t) / (b.t - a.t)))
+}
+
+/// Where a clip's keys end, after its start (0 with none).
+pub fn length(keys: &[KeyAt]) -> f64 {
+    keys.iter().map(|k| k.t).fold(0.0, f64::max)
+}
+
 pub fn sample(doc: &Document, t: f64) -> Sample {
     let mut out = Sample::default();
     let Some(clip_ty) = TypeId::lookup("clip") else { return out };
     for clip_id in doc.nodes_of_type(clip_ty) {
-        let (Some(timing), Some(clip)) = (doc.get::<Timing>(clip_id), doc.get::<Clip>(clip_id)) else {
-            continue;
-        };
-        let num = |s: &crate::value::Slot, d: f64| s.constant().and_then(|v| v.as_f64()).unwrap_or(d);
-        let start = num(&timing.start, 0.0);
-        let dur = num(&timing.dur, 0.0);
-        let easing = timing.easing.constant().and_then(|v| v.as_str()).unwrap_or("linear").to_owned();
+        let Some(clip) = doc.get::<Clip>(clip_id) else { continue };
+        let start = start(doc, clip_id);
         let prop = clip.prop.constant().and_then(|v| v.as_str()).unwrap_or("");
         let path: LeafPath = match prop.parse() {
             Ok(p) => p,
@@ -88,20 +140,20 @@ pub fn sample(doc: &Document, t: f64) -> Sample {
                 continue;
             }
         };
-        let (Some(from), Some(to)) = (clip.from.constant(), clip.to.constant()) else {
-            out.errors.insert(clip_id, "from/to must be constants".into());
+        let keys = keys(doc, clip_id);
+        if keys.is_empty() {
+            out.errors.insert(clip_id, "a clip needs keys".into());
             continue;
-        };
+        }
+        if let Some(k) = keys.iter().find(|k| k.value.kind() != keys[0].value.kind()) {
+            out.errors.insert(clip_id, format!("its keys are {} and {}", keys[0].value.kind().name(), k.value.kind().name()));
+            continue;
+        }
         for rel in doc.relations_from(clip_id).filter(|r| r.rel == RelKind::Animates) {
             if !doc.is_live(rel.to) {
                 continue;
             }
             let offset = rel.data.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let s = start + offset;
-            if t < s {
-                continue;
-            }
-            let u = if dur <= 0.0 { 1.0 } else { ((t - s) / dur).min(1.0) };
             let leaf = Leaf { node: rel.to, path };
             match doc.leaf(rel.to, path) {
                 None => {
@@ -114,21 +166,13 @@ pub fn sample(doc: &Document, t: f64) -> Sample {
                 }
                 Some(slot) => {
                     let kind = slot.constant().map(|v| v.kind());
-                    if from.kind() != to.kind() || Some(from.kind()) != kind {
-                        out.errors.insert(
-                            clip_id,
-                            format!(
-                                "from/to are {}/{}, but {leaf} is {}",
-                                from.kind().name(),
-                                to.kind().name(),
-                                kind.map(|k| k.name()).unwrap_or("?")
-                            ),
-                        );
+                    if Some(keys[0].value.kind()) != kind {
+                        out.errors.insert(clip_id, format!("its keys are {}, but {leaf} is {}", keys[0].value.kind().name(), kind.map(|k| k.name()).unwrap_or("?")));
                         continue;
                     }
                 }
             }
-            if let Some(v) = lerp(from, to, ease(&easing, u)) {
+            if let Some(v) = value_at(&keys, t - start - offset) {
                 out.values.insert(leaf, v);
             }
         }

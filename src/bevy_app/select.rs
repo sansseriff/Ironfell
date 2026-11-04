@@ -185,6 +185,24 @@ fn label_outline(text: &str, size: f32) -> Option<(kurbo::BezPath, f64)> {
 /// A component's chip above its box (Figma's main and instance labels): a
 /// violet tab holding the main's four diamonds or the instance's hollow
 /// one, and the name. `at` is the box's top-left, window px.
+/// The auto-keyframe frame: an inset border round the view and a chip at
+/// its top left naming the mode.
+fn draw_autokey(b: &mut crate::vector::DisplayListBuilder<'_>, rect: Rect, k: f64) {
+    let red = peniko::Color::new(AUTOKEY_RED);
+    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(3.0 * k), red, rect.inset(-1.5 * k).to_path(0.1));
+    let size = 11.0 * k;
+    let pad = 5.0 * k;
+    let (text, w) = label_outline("Auto-keyframe", size as f32).unwrap_or_default();
+    let h = size + 2.0 * pad;
+    let chip = Rect::new(rect.x0 + 8.0 * k, rect.y0 + 8.0 * k, rect.x0 + 8.0 * k + w + 2.0 * pad, rect.y0 + 8.0 * k + h);
+    b.fill(Affine::IDENTITY, red, kurbo::RoundedRect::from_rect(chip, 4.0 * k));
+    // The outline's origin is the text's top-left.
+    b.fill(Affine::translate((chip.x0 + pad, chip.y0 + pad)), peniko::Color::new([1.0, 1.0, 1.0, 1.0]), text);
+}
+
+/// Auto-keyframe's colour, After Effects' record red.
+const AUTOKEY_RED: [f32; 4] = [0.9, 0.24, 0.22, 1.0];
+
 fn draw_chip(b: &mut crate::vector::DisplayListBuilder<'_>, at: Point, main: bool, name: &str, k: f64) {
     let size = 11.0 * k;
     let pad = 4.0 * k;
@@ -567,6 +585,19 @@ pub(crate) struct Drive {
     /// A node with a `track` facet maps the pointer to a value absolutely:
     /// the press itself sets `v0` (timeline.md §7, a ruler scrubbing).
     jump: bool,
+    /// The track's range (`track.min`, `track.max`; no upper end when `max`
+    /// ≤ `min`), which the value never leaves.
+    range: Option<(f64, f64)>,
+}
+
+impl Drive {
+    fn clamp(&self, v: f64) -> f64 {
+        match self.range {
+            Some((lo, hi)) if hi > lo => v.clamp(lo, hi),
+            Some((lo, _)) => v.max(lo),
+            None => v,
+        }
+    }
 }
 
 /// What a press on a control does, if a node on the hit's chain (deepest
@@ -612,6 +643,7 @@ fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Po
         // local position along the axis is `origin + x · scale`.
         let track = |f: &str| LeafPath::new(iron_document::FacetKind::Track, f).ok().and_then(|p| geo.store.resolved(id, p)).and_then(|x| x.as_f64());
         let absolute = (drag == "track").then(|| Some((track("origin")?, track("scale")?))).flatten();
+        let range = absolute.and(Some((track("min").unwrap_or(0.0), track("max").unwrap_or(0.0))));
         let (v0, per_px, jump) = match absolute {
             Some((o, scale)) => {
                 let local = m.inverse() * start;
@@ -640,6 +672,7 @@ fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Po
             step,
             label: format!("{verb} {}", drives),
             jump,
+            range,
         }));
     }
     None
@@ -1760,10 +1793,18 @@ fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, rea
 /// `projects` them, timeline.md §6): "retime slide", "trim clips". `None`
 /// for ordinary nodes.
 fn projected_label(doc: &iron_document::Document, ids: &[NodeId], verb: &str) -> Option<String> {
-    let clips: Vec<NodeId> = ids.iter().filter_map(|&id| doc.relations_from(id).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to)).collect();
-    match clips.as_slice() {
+    let subjects: Vec<NodeId> = ids.iter().filter_map(|&id| doc.relations_from(id).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to)).collect();
+    let name = |id: NodeId| doc.get::<iron_document::facet::Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+    let is_key = |id: NodeId| doc.live(id).is_some_and(|n| n.ty.name() == "key");
+    match subjects.as_slice() {
         [] => None,
-        [clip] => Some(format!("{verb} {}", doc.get::<iron_document::facet::Name>(*clip).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("clip"))),
+        // A key's diamond: the key moves, or goes ("move key of slide").
+        [key] if is_key(*key) => {
+            let clip = doc.live(*key).and_then(|n| n.parent).and_then(name).unwrap_or_else(|| "clip".into());
+            Some(format!("{} key of {clip}", if verb == "retime" { "move" } else { verb }))
+        }
+        [clip] => Some(format!("{verb} {}", name(*clip).unwrap_or_else(|| "clip".into()))),
+        many if many.iter().all(|&k| is_key(k)) => Some(format!("{} keys", if verb == "retime" { "move" } else { verb })),
         _ => Some(format!("{verb} clips")),
     }
 }
@@ -2290,7 +2331,14 @@ pub fn select_tool_system(
             }));
         }
         (true, Some(Some(m))) => {
-            view_cameras.0.entry(m.panel.clone()).or_default().pan = m.pan + (pointer.screen - m.start);
+            let (panel, start, pan) = (m.panel.clone(), m.start, m.pan);
+            if views.get(&panel).is_some_and(|v| drag_pan_timeline(&mut store.0, v, pointer.screen - start)) {
+                if let Some(Some(m)) = tool.middle.as_mut() {
+                    m.start = pointer.screen;
+                }
+            } else {
+                view_cameras.0.entry(panel).or_default().pan = pan + (pointer.screen - start);
+            }
         }
         (false, Some(_)) => tool.middle = None,
         _ => {}
@@ -2679,7 +2727,7 @@ pub fn select_tool_system(
                         _ => {
                             store.0.begin_gesture(&[d.id]);
                             // A track jumps to the press, then scrubs.
-                            if d.jump && let Err(why) = store.0.preview_target(d.id, d.leaf, Value::Number(d.v0)) {
+                            if d.jump && let Err(why) = store.0.preview_target(d.id, d.leaf, Value::Number(d.clamp(d.v0))) {
                                 info!("{} cannot follow: {why}", d.id);
                             }
                             tool.gesture = Gesture::Drive(d);
@@ -3016,7 +3064,11 @@ pub fn select_tool_system(
         }
         match &mut tool.gesture {
             Gesture::Pan { panel, start, pan } => {
-                view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
+                if views.get(panel).is_some_and(|v| drag_pan_timeline(&mut store.0, v, pointer.screen - *start)) {
+                    *start = pointer.screen;
+                } else {
+                    view_cameras.0.entry(panel.clone()).or_default().pan = *pan + (pointer.screen - *start);
+                }
             }
             Gesture::Library { at, .. } => *at = screen,
             Gesture::Drive(d) => {
@@ -3032,7 +3084,7 @@ pub fn select_tool_system(
                     }
                     d.v0 + t
                 } else {
-                    d.v0 + (at - d.start).dot(d.dir) * d.per_px
+                    d.clamp(d.v0 + (at - d.start).dot(d.dir) * d.per_px)
                 };
                 if let Err(why) = store.0.preview_target(d.id, d.leaf, Value::Number(v)) {
                     info!("{} cannot follow: {why}", d.id);
@@ -3244,13 +3296,20 @@ pub fn select_tool_system(
                 && let Some(frame) = cached.frame
             {
                 let f = view.affine() * frame;
-                let grip = match cached.ends.then(|| ends_at(f, screen, k * tol.hit)).flatten() {
+                let end = cached.ends.then(|| ends_at(f, screen, k * tol.hit)).flatten();
+                let grip = match end {
                     Some(u) => Some(Grip::Resize(u, 0.5)),
                     None => grip_at(f, screen, cached.resizable, cached.rotatable, k * tol.hit),
                 };
                 on_grip = matches!(grip, Some(Grip::Resize(..) | Grip::Rotate(..)));
                 if !space {
-                    cursor = cursor_for(f, grip);
+                    // An end trims: Figma's trim cursors (timeline.md §12.5),
+                    // kept through the drag.
+                    cursor = match end {
+                        Some(u) if u == 0.0 => "trim-start".into(),
+                        Some(_) => "trim-end".into(),
+                        None => cursor_for(f, grip),
+                    };
                 }
             }
             // A lone shape's corner dots and arc handles.
@@ -3323,6 +3382,17 @@ pub fn select_tool_system(
             }
             _ => None,
         };
+        // What the hovered node's context says its press does, when the arrow
+        // would not say it (`affords.cursor`: a clip's first and last keys).
+        if !space
+            && !on_grip
+            && let Some(r) = &hover
+        {
+            let c = geo.contexts().values(&r.chain, r.chain.len() - 1).get(Field::CURSOR).to_owned();
+            if c != "auto" {
+                cursor = c;
+            }
+        }
         if tool.hover != hover {
             tool.hover = hover;
         }
@@ -3788,10 +3858,16 @@ pub fn draw_select_overlay(
                 }
             }
         }
+        // Auto-keyframe is a visible mode (timeline.md §12.2): every view a
+        // drag could key, the timeline aside, wears its frame and chip.
+        let autokey = iron_document::timeline_view::autokey(geo.store) && view.composition != iron_document::timeline_view::find(geo.store);
         list.rebuild(|b| {
             b.clipped(Affine::IDENTITY, view.rect.to_kurbo(), |b| {
                 for (c, width, path) in lit {
                     b.stroke(Affine::IDENTITY, kurbo::Stroke::new(width), c, path);
+                }
+                if autokey {
+                    draw_autokey(b, view.rect.to_kurbo(), k);
                 }
                 // The hovered node's box, for what has no outline of its own.
                 if let Some(f) = hover_frame {
@@ -4144,6 +4220,23 @@ pub fn draw_select_overlay(
 /// Zoom limits, window px per document px.
 const ZOOM: (f32, f32) = (0.05, 64.0);
 
+/// Drag-pan `view` by `d` window px since the last frame. The timeline
+/// (timeline.md §6) never pans in 2D, so its ruler and headers stay put:
+/// a drag's x pans time on its axis and its y scrolls the rows (`axis.y0`),
+/// as grabbing the content would. Returns whether it was the timeline.
+fn drag_pan_timeline(store: &mut iron_document::Store, view: &PanelView, d: Vec2) -> bool {
+    let timeline = iron_document::timeline_view::find(store);
+    if timeline.is_none() || view.composition != timeline {
+        return false;
+    }
+    let s = view.zoom.max(1e-6) as f64;
+    let r = iron_document::timeline_view::navigate(store, -d.x as f64 / s, 0.0, 0.0).and_then(|_| iron_document::timeline_view::scroll(store, -d.y as f64 / s));
+    if let Err(e) = r {
+        warn!("timeline pan: {e}");
+    }
+    true
+}
+
 /// Keep `doc` (document px) under `screen` (window px) at zoom `z`.
 fn pan_keeping(view: &PanelView, doc: Vec2, screen: Vec2, z: f32) -> Vec2 {
     screen - Vec2::new(view.rect.x, view.rect.y) - doc * z
@@ -4167,12 +4260,25 @@ pub fn navigate_views(
     mut store: ResMut<DocumentStore>,
     spatial: Res<crate::document_bridge::SpatialScene>,
     drawables: Res<crate::document_bridge::Drawables>,
+    dpr: Res<crate::Dpr>,
 ) {
     let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
     // The timeline (timeline.md §6) navigates time on its axis, so text
     // and corners never stretch: the wheel's horizontal part pans `t0`,
     // Ctrl/Cmd zooms `pps` about the pointer, and only the rows scroll.
     let timeline = iron_document::timeline_view::find(&store.0);
+    // A camera's zoom is CSS px per document px; `k` is window px per CSS px.
+    let k = dpr.0 as f32;
+    // The timeline's camera never moves: it scrolls on its axis instead.
+    if timeline.is_some() {
+        for view in views.0.iter().filter(|v| v.composition == timeline) {
+            if let Some(c) = cameras.0.get_mut(&view.panel)
+                && (c.pan != Vec2::ZERO || c.zoom != 1.0)
+            {
+                *c = Default::default();
+            }
+        }
+    }
     if let Some(view) = under
         && scroll.delta != Vec2::ZERO
         && timeline.is_some()
@@ -4183,13 +4289,14 @@ pub fn navigate_views(
             bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta,
         };
         let camera = cameras.0.entry(view.panel.clone()).or_default();
-        let at = ((pointer.screen.x - view.rect.x - camera.pan.x) / camera.zoom) as f64;
+        let at = ((pointer.screen.x - view.rect.x - camera.pan.x) / camera.scale(dpr.0)) as f64;
         let result = if pointer.modifiers.ctrl || pointer.modifiers.meta {
             iron_document::timeline_view::navigate(&mut store.0, 0.0, scroll.zoom as f64, at)
         } else {
             let d = if pointer.modifiers.shift && px.x == 0.0 { Vec2::new(px.y, 0.0) } else { px };
-            camera.pan.y = (camera.pan.y - d.y).min(0.0);
-            if d.x != 0.0 { iron_document::timeline_view::navigate(&mut store.0, (d.x / camera.zoom) as f64, 0.0, at) } else { Ok(()) }
+            let s = camera.scale(dpr.0);
+            let r = if d.x != 0.0 { iron_document::timeline_view::navigate(&mut store.0, (d.x / s) as f64, 0.0, at) } else { Ok(()) };
+            r.and_then(|_| if d.y != 0.0 { iron_document::timeline_view::scroll(&mut store.0, (d.y / s) as f64) } else { Ok(()) })
         };
         if let Err(e) = result {
             warn!("timeline navigation: {e}");
@@ -4203,9 +4310,9 @@ pub fn navigate_views(
         };
         let camera = cameras.0.entry(view.panel.clone()).or_default();
         if pointer.modifiers.ctrl || pointer.modifiers.meta {
-            let doc = (pointer.screen - Vec2::new(view.rect.x, view.rect.y) - camera.pan) / camera.zoom;
+            let doc = (pointer.screen - Vec2::new(view.rect.x, view.rect.y) - camera.pan) / camera.scale(dpr.0);
             let z = (camera.zoom * (-scroll.zoom).exp()).clamp(ZOOM.0, ZOOM.1);
-            camera.pan = pan_keeping(view, doc, pointer.screen, z);
+            camera.pan = pan_keeping(view, doc, pointer.screen, z * k);
             camera.zoom = z;
         } else {
             let d = if pointer.modifiers.shift && px.x == 0.0 { Vec2::new(px.y, 0.0) } else { px };
@@ -4223,17 +4330,18 @@ pub fn navigate_views(
         .cloned();
     let mut rest = Vec::new();
     for (key, m) in std::mem::take(&mut keys.0) {
-        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoomfit" | "zoomsel" | "zoom100" | "zoomin" | "zoomout")) else {
+        let on_timeline = timeline.is_some() && target.as_ref().is_some_and(|v| v.composition == timeline);
+        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoomfit" | "zoomsel" | "zoom100" | "zoomin" | "zoomout") && (key == "zoomfit" || !on_timeline)) else {
             rest.push((key, m));
             continue;
         };
         let size = Vec2::new(view.rect.w, view.rect.h);
         let centre = Vec2::new(view.rect.x, view.rect.y) + size * 0.5;
         let camera = cameras.0.entry(view.panel.clone()).or_default();
-        let at_centre = (size * 0.5 - camera.pan) / camera.zoom;
+        let at_centre = (size * 0.5 - camera.pan) / camera.scale(dpr.0);
         // Fitting the timeline fits its clips in time (`F`, Shift+1).
         if key == "zoomfit" && timeline.is_some() && view.composition == timeline {
-            if let Err(e) = iron_document::timeline_view::fit(&mut store.0, (size.x / camera.zoom) as f64) {
+            if let Err(e) = iron_document::timeline_view::fit(&mut store.0, (size.x / camera.scale(dpr.0)) as f64) {
                 warn!("timeline fit: {e}");
             }
             camera.pan = Vec2::ZERO;
@@ -4256,18 +4364,18 @@ pub fn navigate_views(
                 else {
                     continue;
                 };
-                let z = ((size.x / (r.width() as f32 * 1.1)).min(size.y / (r.height() as f32 * 1.1))).clamp(ZOOM.0, ZOOM.1);
+                let z = ((size.x / (r.width() as f32 * 1.1)).min(size.y / (r.height() as f32 * 1.1)) / k).clamp(ZOOM.0, ZOOM.1);
                 let c = Vec2::new(r.center().x as f32, r.center().y as f32);
-                camera.pan = pan_keeping(view, c, centre, z);
+                camera.pan = pan_keeping(view, c, centre, z * k);
                 camera.zoom = z;
             }
             "zoom100" => {
-                camera.pan = pan_keeping(view, at_centre, centre, 1.0);
+                camera.pan = pan_keeping(view, at_centre, centre, k);
                 camera.zoom = 1.0;
             }
             _ => {
                 let z = (camera.zoom * if key == "zoomin" { 2.0 } else { 0.5 }).clamp(ZOOM.0, ZOOM.1);
-                camera.pan = pan_keeping(view, at_centre, centre, z);
+                camera.pan = pan_keeping(view, at_centre, centre, z * k);
                 camera.zoom = z;
             }
         }

@@ -41,18 +41,22 @@ struct Scene {
 /// timeline view.
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
-    let (rect, timeline, clip, view) = (ids[0], ids[1], ids[2], ids[3]);
+    let ids = store.document().next_ids(6);
+    let key_ids = [ids[3], ids[4]];
+    let (rect, timeline, clip, view) = (ids[0], ids[1], ids[2], ids[5]);
     let rel = store.document().next_relation_id();
     let mut t = Transform2d::default();
     t.x = num(50.0);
     let mut timing = Timing::default();
     timing.start = num(1.0);
-    timing.dur = num(2.0);
     let mut c = Clip::default();
     c.prop = Slot::Const(Value::Str("transform2d.x".into()));
-    c.from = num(100.0);
-    c.to = num(300.0);
+    let key = |t: f64, v: f64| {
+        let mut k = iron_document::facet::Key::default();
+        k.t = num(t);
+        k.value = num(v);
+        k.wrap()
+    };
     let k0 = OrderKey::first();
     let k1 = OrderKey::after(&k0);
     let k2 = OrderKey::after(&k1);
@@ -62,7 +66,9 @@ fn scene() -> Scene {
             vec![
                 Op::Create { id: rect, ty: ty("rect"), parent: None, order: k0.clone(), facets: vec![t.wrap(), Size::default().wrap()] },
                 Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: k1, facets: vec![] },
-                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: k0, facets: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), facets: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: key_ids[0], ty: ty("key"), parent: Some(clip), order: OrderKey::first(), facets: vec![key(0.0, 100.0)] },
+                Op::Create { id: key_ids[1], ty: ty("key"), parent: Some(clip), order: OrderKey::after(&OrderKey::first()), facets: vec![key(2.0, 300.0)] },
                 Op::Link { rel: Relation { id: rel, from: clip, to: rect, rel: RelKind::Animates, data: BTreeMap::new() } },
                 Op::Create { id: view, ty: ty("group"), parent: None, order: k2, facets: vec![Axis::default().wrap()] },
             ],

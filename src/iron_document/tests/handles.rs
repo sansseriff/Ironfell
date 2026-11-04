@@ -204,37 +204,40 @@ fn everything_else_is_locked_with_a_reason() {
 }
 
 #[test]
-fn clip_driven_leaves_lock_the_target_and_the_source() {
+fn an_animated_constant_is_direct_and_what_binds_it_is_locked() {
     let Scene { mut store, rect, v, .. } = scene();
-    let ids = store.document().next_ids(2);
+    let ids = store.document().next_ids(4);
     let (timeline, clip) = (ids[0], ids[1]);
     let rel = store.document().next_relation_id();
     let mut timing = Timing::default();
     timing.start = num(0.0);
-    timing.dur = num(10.0);
     let mut c = Clip::default();
     c.prop = Slot::Const(Value::Str("slider.value".into()));
-    c.from = num(0.0);
-    c.to = num(100.0);
+    let key = |t: f64, x: f64| {
+        let mut k = iron_document::facet::Key::default();
+        k.t = num(t);
+        k.value = num(x);
+        k.wrap()
+    };
     store
         .apply(tx(
             "animate v",
             vec![
                 Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::first(), facets: vec![] },
                 Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: OrderKey::first(), facets: vec![timing.wrap(), c.wrap()] },
+                Op::Create { id: ids[2], ty: ty("key"), parent: Some(clip), order: OrderKey::first(), facets: vec![key(0.0, 0.0)] },
+                Op::Create { id: ids[3], ty: ty("key"), parent: Some(clip), order: OrderKey::after(&OrderKey::first()), facets: vec![key(10.0, 100.0)] },
                 Op::Link { rel: Relation { id: rel, from: clip, to: v, rel: RelKind::Animates, data: BTreeMap::new() } },
             ],
         ))
         .unwrap();
     store.set_time(5.0);
-    // v is clip-driven: the rect's x (bound to v) has no free leaf, and v itself is locked.
+    // v is clip-driven: a gesture on it previews it directly and writes keys
+    // on commit (timeline.md §12.2); the rect's x, bound to v, reads no free
+    // leaf and stays locked (inverting through a clip is phase 5's).
+    assert_eq!(store.handle(v, path("slider.value")), Handle::Direct);
     assert!(store.handle(rect, path("transform2d.x")).is_locked());
-    let Handle::Locked(reason) = store.handle(v, path("slider.value")) else { panic!() };
-    assert!(reason.contains("clip"), "{reason}");
-    store.set_time(20.0);
-    // After the clip ends it still holds `to`, so the leaf stays locked.
-    assert!(store.handle(v, path("slider.value")).is_locked());
-    // Before the clip starts nothing drives it.
+    // Before the clip starts nothing drives v: the rect inverts onto it.
     store
         .apply(tx("later", vec![Op::Set { id: clip, path: path("timing.start"), slot: num(30.0) }]))
         .unwrap();

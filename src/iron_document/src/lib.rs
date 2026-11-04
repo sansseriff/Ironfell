@@ -1060,11 +1060,22 @@ impl Store {
             self.ended = Some((g.id, GestureStatus::Committed));
         }
         let mut ops = Vec::new();
+        // Animated leaves (and with auto-keyframe on, any leaf) write keys,
+        // by the visible mode (timeline.md §12.2), not their authored value.
+        let driven: Vec<(Leaf, Value)> = self
+            .reactive
+            .overlay()
+            .iter()
+            .filter(|(l, _)| self.drivers.contains(l) && self.doc.leaf(l.node, l.path).is_some_and(|s| s.expr().is_none()))
+            .map(|(l, v)| (*l, v.clone()))
+            .collect();
+        let (key_ops, keyed) = timeline_view::key_ops(self, &driven);
+        ops.extend(key_ops);
         // Leaves of facets the node lacks but allows: the facet is
         // added, defaults with the previewed fields set, before the `Set`s.
         let mut added: BTreeMap<(NodeId, FacetKind), Facet> = BTreeMap::new();
         for (leaf, value) in self.reactive.overlay() {
-            if !self.drivers.contains(leaf) {
+            if !self.drivers.contains(leaf) || keyed.contains(leaf) {
                 continue;
             }
             let Some(slot) = self.doc.leaf(leaf.node, leaf.path) else {

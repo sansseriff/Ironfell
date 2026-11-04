@@ -33,9 +33,9 @@ impl Handle {
     }
 }
 
-/// The handle for `leaf` now: roles are read at the moment of the grab, so a
-/// leaf that a clip drives at this playhead is locked even though it is an
-/// authored constant.
+/// The handle for `leaf` now: roles are read at the moment of the grab. A
+/// constant a clip drives is direct: the gesture previews it, and its commit
+/// writes keys by the visible mode (timeline.md §12.2, `Store::commit_gesture`).
 pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
     let Some(slot) = doc.leaf(leaf.node, leaf.path) else {
         // A leaf of a facet the node may have but lacks (a rect's
@@ -47,6 +47,9 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
         return Handle::Locked(format!("{leaf} does not exist"));
     };
     if let Some(signal) = reactive.signal(leaf) {
+        if signal.producer == ProducerId::CLIPS && slot.expr().is_none() {
+            return Handle::Direct;
+        }
         return Handle::Locked(match signal.producer {
             ProducerId::CLIPS => format!("{leaf} is driven by a clip at the current time"),
             ProducerId::NETWORK => format!("{leaf} is solved by its across/through network; change a source or a parameter instead"),
@@ -96,6 +99,13 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
                 .filter_map(|&s| linear(&inlined, s, &read).filter(|(a, b)| *a != 0.0 && a.is_finite() && b.is_finite()).map(|(a, b)| (s, a, b)))
                 .collect();
             if let [(source, a, b)] = linear_in.as_slice() {
+                return Handle::Linear { source: *source, a: *a, b: *b };
+            }
+            // A view of something edits that thing: a node that `projects`
+            // its subject (a timeline key's diamond, a clip's bar) moves the
+            // subject's leaf (timeline.md §12.3).
+            let projected: Vec<&(Leaf, f64, f64)> = doc.relations_from(leaf.node).filter(|r| r.rel == crate::document::RelKind::Projects).flat_map(|r| linear_in.iter().filter(move |(s, ..)| s.node == r.to)).collect();
+            if let [(source, a, b)] = projected.as_slice() {
                 return Handle::Linear { source: *source, a: *a, b: *b };
             }
             // Still several: prefer what a person placed over what an

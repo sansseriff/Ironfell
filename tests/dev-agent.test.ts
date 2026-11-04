@@ -16,6 +16,17 @@ async function appFixture() {
   return root;
 }
 
+async function unusedPort() {
+  const probe = createServer();
+  probe.listen(0, '127.0.0.1');
+  await once(probe, 'listening');
+  const port = (probe.address() as { port: number }).port;
+  const closed = once(probe, 'close');
+  probe.close();
+  await closed;
+  return port;
+}
+
 test('launcher resolves explicit, PATH and bundled Codex without silently replacing an invalid override', async () => {
   const home = await mkdtemp(join(tmpdir(), 'iron-launcher-'));
   try {
@@ -34,7 +45,7 @@ test('launcher resolves explicit, PATH and bundled Codex without silently replac
 
 test('one launcher serves Iron and a trusted-origin paired bridge, then closes both', async () => {
   const root = await appFixture();
-  const session = await startAgentDev({ root, codexBin: fixture, appPort: 0, bridgePort: 0, demo: true });
+  const session = await startAgentDev({ root, codexBin: fixture, appPort: await unusedPort(), bridgePort: 0, demo: true });
   try {
     assert.equal(new URL(session.url).search, '?demo');
     assert.equal((await fetch(session.url)).status, 200);

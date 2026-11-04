@@ -195,6 +195,10 @@ unverified; frontend native-mode builds do not imply packaged-native validation.
 Validation logs and fixture evidence are retained in the main checkout's ignored
 `.agents/agent-runtimes-validation/`. Nothing is pushed.
 
+Post-merge test isolation: Vite treats port 0 as its default port, not an ephemeral
+listener. Launcher tests now reserve an explicit ephemeral app port, so an unrelated
+dev server on 5173 cannot satisfy a post-shutdown request and produce a false failure.
+
 ## 6. Follow-up plan
 
 1. Explicit Stop and cancellation through all adapter lifetimes; panel progress

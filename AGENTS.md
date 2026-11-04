@@ -16,6 +16,15 @@ which plans are historical. Where plans disagree, that index decides.
   "Typical durations" table (marked ⏱); say which step and its estimate, and add or
   correct a row when a step's time is new or off.
 
+## Council review
+
+The `council` skill (from tstack) runs when the user says "council". This setup has
+two providers, Anthropic and OpenAI, so do not require a third provider and do not
+report a missing one. Council members: the latest Claude Opus and the latest GPT Sol,
+both at high reasoning effort. Resolve the exact models with `orchestrator_capabilities`
+and start each one with `delegate_task`. If either member is unavailable, report it
+instead of substituting.
+
 ## Svelte frontend: components and icons
 
 These rules apply to every agent (Claude, Codex, or otherwise) adding or changing

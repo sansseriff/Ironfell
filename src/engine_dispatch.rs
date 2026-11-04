@@ -50,6 +50,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "context" => { arity(args,1)?; crate::engine_api::document_context(app,argument::<String>(args,0)?) },
         "computed" => { arity(args,1)?; crate::engine_api::document_computed(app,argument::<String>(args,0)?) },
         "view_context" => { arity(args,1)?; crate::engine_api::document_view_context(app,argument::<String>(args,0)?) },
+        "demo" => { arity(args,0)?; crate::engine_api::document_demo(app) },
         "showcase" => { arity(args,0)?; crate::engine_api::document_showcase(app) },
         "contexts" => { arity(args,0)?; crate::engine_api::document_contexts(app) },
         "circuit" => { arity(args,1)?; crate::engine_api::document_circuit(app,argument::<String>(args,0)?) },

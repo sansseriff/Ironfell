@@ -218,7 +218,7 @@ the document now.
 | **1. Identity** | `ScopeId`; schema 9 header; import of ≤ 8 as a new scope; `DocumentOrigin` from the scope id | Rust round-trip and migration tests; every golden view unchanged; smoke unchanged |
 | **2. Durable scopes** | `ScopeStorage` over OPFS and memory; transaction feed; segments, compaction, load with replay; `Store::clear_history`; the per-scope lock; boot into the last scope; `?demo` | Edit, reload, see the edit; kill the tab mid-edit and lose at most the last batch; a second tab opens read-only; a Rust test that load + replay of a saved log equals the live store (including after undo and redo); a JS test of segments, compaction and a gap in the feed; `drive.ts`'s default URL gains `&demo`, so scripts that reload still see the demo, and the smoke passes |
 | **3. The scope menu** | New, open, rename, duplicate, delete, import, export | Driving script covering each action; `SKILL.md` updated |
-| **4. Workspace per scope** | `workspace.json`; each view's pan and zoom (the panels open item) | Switching scopes restores each one's layout and views |
+| **4. Workspace per scope** | `workspace.json`; each view's pan and zoom (the panels open item) | Switching scopes restores each one's layout and views. **Done 2026-11-04 (layout; pan and zoom not yet), §10.3** |
 | **5. Assets** | `assets/<sha256>`, `putAsset`/`getAsset`, reachability GC at compaction, zip export | Unblocks clipboard-and-assets phase 4 |
 
 Phases 1–2 are the core and are worth doing together; 3–5 can follow in any order.
@@ -407,4 +407,50 @@ Tests: `tests/scopes.test.ts` (11: boot targets and `close`; the library's opera
 `scopes.txt` now starts on the empty page and opens a scope from it; `scope-menu.txt`
 ends with All scopes; `narrative.txt`'s reloads use `&scope=last`.
 
+### 10.3 Phase 4, layouts per scope (2026-11-04)
 
+Asked for by the user after a new empty scope opened with the demo's Pendulum tab,
+where tools drew previews that committed nowhere (the view had no composition, so
+`pen.rs` `drop_target` returned none): the demo's tabs are the demo document's, not
+the app's. Built with it, also asked for: making and naming compositions from the UI.
+
+- **The engine starts empty.** `demo::queue_demo_scene` is gone from `Startup`, so the
+  demo no longer runs before a stored scope replaces it. A new engine call, `demo`,
+  applies the demo scene to an empty document (refused otherwise). The shell starts the
+  document on `enginePrepared` (`DocumentClient.startDocument`), no longer on the first
+  `documentChanged`: the scope the URL names (the boot's `prepare` makes the demo with
+  `demo` and `showcase` when a new demo scope is wanted), or on an unsaved page the demo,
+  `stress`/`meters` and the showcase; a settings restart reopens the scope or loads what
+  it carried.
+- **`workspace.json`** beside each scope (`ScopeStorage.writeWorkspace`, read with the
+  scope; Duplicate and the scopes page's duplicate copy it). `Scopes.onOpened` fires
+  once the engine holds the document (after `installed`), for every open, new scope
+  and switch; `saveWorkspace` writes through the serial queue (not from a read-only
+  tab). An unsaved page keeps its layout in browser storage (`iron.workspace.v9`); the
+  old global `iron.workspace.v8` is removed.
+- **The app's layout** (`baseLayout`) is only what every document has: Main, Timeline,
+  Stats, Document, Model, Library, Inspector (and Stress/Meters for the benchmarks). A
+  scope with no saved layout gets one tab per document composition and narrative
+  (`addDocumentViews`), so the demo's tabs come from the demo document. A tab names a
+  document composition by **id** (its view id from the name, so scripts keep `pendulum`);
+  its title follows the name. `compositions` gained `session`.
+- **Making compositions**: the "+" menu's *New composition…* dialog (name, unique; 2D
+  drawing, 3D scene or schematic) applies `author` `new_composition`; a composition
+  tab's title renames it on double-click; its context menu renames, deletes
+  (`delete_composition`, undoable) or closes. A view onto a composition the scope
+  lacks shows a placeholder (Create, when the tab names it; Close tab) instead of a
+  canvas.
+
+Deviations and choices:
+
+1. **Pan and zoom are not saved yet**: the layout is dockview's JSON, as before.
+2. **The demo's tabs now include Cylinder** (the piston's embedded composition), which
+   the old hard-coded list skipped; the order is the document's.
+3. **Delete closes the tab it was chosen in**; other tabs onto the composition show the
+   placeholder, and recover on undo. An undone delete does not reopen the closed tab.
+4. **Lesson** (the showcase's narrative) appears only when the document has a narrative;
+   with `?showcase=0` there is none, so no tab (before, an empty one offered to make it).
+
+Tests: `tests/scopes.test.ts` (11, unchanged, pass); `.claude/skills/run-iron/
+workspace.txt` (new); `scopes.txt`, `scope-menu.txt`, `narrative.txt`, `showcase.txt` and
+`timeline.txt` match `master` run for run.

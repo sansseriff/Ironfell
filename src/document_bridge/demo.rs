@@ -1,18 +1,15 @@
-//! The starting scene, as a transaction. Replaces the ad-hoc demo systems: a
-//! draggable rect, a field of small rects, a circle, and the torus. Until a
-//! file can be loaded (plan step 4) this is what the app opens with.
+//! The demo scene, as a transaction: a draggable rect, a field of small
+//! rects, a circle, the torus and the rest. It is document content like any
+//! other: the engine starts empty, and the shell asks for it (`engine_api::
+//! document_demo`) on a page that shows the demo, or a new scope is made
+//! from it (`template_snapshot("demo")`).
 
-use super::PendingTransactions;
 use bevy::prelude::*;
 use iron_document::facet::{Composition, Constraint, Embed, Template, Fill, Mesh, Name as DocName, Radius, Size, Stroke, Transform2d, Transform3d};
 use iron_document::facet::{Clip, Slider, Timing};
 use iron_document::definition::{self, Placement};
 use iron_document::{Actor, Expr, LeafPath, LeafStruct, NodeId, Op, OrderKey, RelKind, Relation, Slot, TypeId, Value};
 use std::collections::BTreeMap;
-
-pub(super) fn queue_demo_scene(store: Res<super::DocumentStore>, mut pending: ResMut<PendingTransactions>) {
-    pending.0.push(demo_scene(&store.0));
-}
 
 /// An `in` port_spec's facet: a definition's input with its default
 /// (component-model.md §4).

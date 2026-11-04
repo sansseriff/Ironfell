@@ -204,8 +204,9 @@ tracked in [`handoff-product.md`](../handoff-product.md).
 
 - `views.ts`: `ViewSpec` (source, notation) and the notation registry.
 - `workspace.ts`: dockview-core 8.5.1, its stylesheet vendored as `dockview.css`, the
-  default layout, and the saved layout (browser storage, `iron.workspace.v1`;
-  `?layout=default` or **Reset layout** forgets it).
+  app's base layout, and each scope's saved layout (`workspace.json` beside the scope,
+  scopes.md §10.3; an unsaved page in browser storage; `?layout=default` or **Reset
+  layout** lays it out again, with a tab per document composition).
 - `ViewPanel.svelte`: one view in a tab. It renders the canvas part only while the tab is
   visible, so a hidden tab posts no rectangle and Rust draws nothing for it.
 - `AddViewMenu.svelte`: "+" in every tab bar opens any composition (`document_compositions`)

@@ -5,7 +5,7 @@
   // being dragged, when the drop targets over canvas views must see it.
   import { onMount, onDestroy } from "svelte";
   import type { DockviewApi } from "dockview-core";
-  import { createWorkspace } from "./workspace";
+  import { createWorkspace, destroyWorkspace } from "./workspace";
   import { controllerManager } from "../controller-manager.svelte";
 
   let el: HTMLDivElement;
@@ -31,6 +31,7 @@
   onDestroy(() => {
     document.removeEventListener("pointerup", stop, true);
     document.removeEventListener("pointercancel", stop, true);
+    destroyWorkspace();
     api?.dispose();
   });
 </script>

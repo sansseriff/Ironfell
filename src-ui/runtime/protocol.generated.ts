@@ -39,6 +39,7 @@ export type DocumentCommand =
   | { op: 'context'; markup: string }
   | { op: 'computed'; node: string }
   | { op: 'view_context'; panel: string }
+  | { op: 'demo' }
   | { op: 'showcase' }
   | { op: 'contexts' }
   | { op: 'circuit'; markup: string }
@@ -114,6 +115,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'context': return { fn: command.op, args: [command.markup] };
     case 'computed': return { fn: command.op, args: [command.node] };
     case 'view_context': return { fn: command.op, args: [command.panel] };
+    case 'demo': return { fn: command.op, args: [] };
     case 'showcase': return { fn: command.op, args: [] };
     case 'contexts': return { fn: command.op, args: [] };
     case 'circuit': return { fn: command.op, args: [command.markup] };

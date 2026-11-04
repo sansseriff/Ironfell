@@ -3,7 +3,8 @@
    theme tokens in app.css. */
 
 .ui-menu {
-  z-index: 1000;
+  /* Above dialogs (1000–1001), so a select opened inside one shows. */
+  z-index: 1100;
   min-width: 180px;
   max-height: var(--bits-dropdown-menu-content-available-height, 70vh);
   overflow: auto;

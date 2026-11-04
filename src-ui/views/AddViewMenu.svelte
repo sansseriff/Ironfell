@@ -1,24 +1,31 @@
 <script lang="ts">
   // "+" in a tab group's header: open a view here. Every composition in the
-  // document, then the views that are not compositions, then the render
-  // benchmark's stress scene at a few sizes (src/document_bridge/stress.rs).
+  // document, or a new one (named in a dialog), then the views that are not
+  // compositions, then the render benchmark's stress scene at a few sizes
+  // (src/document_bridge/stress.rs).
   import type { DockviewApi, DockviewGroupPanel } from "dockview-core";
   import { DropdownMenu } from "bits-ui";
   import Plus from "@lucide/svelte/icons/plus";
   import Settings from "@lucide/svelte/icons/settings";
+  import NewCompositionDialog from "./NewCompositionDialog.svelte";
+  import { addCompositionView } from "./workspace";
+  import type { CompositionEntry } from "../runtime/document_client.svelte";
   import { controllerManager } from "../controller-manager.svelte";
   import { FIXED_VIEWS, SETTINGS_VIEW, titleOf, viewId, type ViewSpec } from "./views";
 
   let { api, group }: { api: DockviewApi; group: DockviewGroupPanel } = $props();
 
   let open = $state(false);
-  let compositions: { id: string; name: string | null; dims: string }[] = $state([]);
+  let compositions: CompositionEntry[] = $state([]);
+  let naming = $state(false);
   let narratives: { id: string; name: string }[] = $state([]);
 
   async function opened(now: boolean) {
     if (!now) return;
     try {
-      compositions = await controllerManager.docClient.command({ op: 'compositions' });
+      // The document's first, then the session's (timeline, Stats, library).
+      const list = await controllerManager.docClient.refreshCompositions();
+      compositions = [...list.filter((c) => !c.session), ...list.filter((c) => c.session)];
     } catch {
       compositions = [];
     }
@@ -34,6 +41,12 @@
     open = false;
     const id = viewId(spec, (candidate) => !!api.getPanel(candidate));
     api.addPanel({ id, component: "view", title, params: { spec }, position: { referenceGroup: group } });
+  }
+
+  /** A view of composition `c` in this group, in front. */
+  function show(c: CompositionEntry) {
+    open = false;
+    addCompositionView(api, c, { referenceGroup: group });
   }
 
   /** The gear: show the one Settings view, or open it here. */
@@ -73,10 +86,11 @@
         <DropdownMenu.Group>
           <DropdownMenu.GroupHeading class="ui-menu-heading">Compositions</DropdownMenu.GroupHeading>
           {#each compositions as c (c.id)}
-            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(titleOf(c.name ?? c.id), { source: c.name ?? c.id, notation: "composition" })}>
-              {titleOf(c.name ?? c.id)} <span class="ui-hint">{c.dims}</span>
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => show(c)}>
+              {titleOf(c.name ?? c.id)} <span class="ui-hint">{c.session ? "session" : c.dims}</span>
             </DropdownMenu.Item>
           {/each}
+          <DropdownMenu.Item class="ui-menu-item" onSelect={() => { open = false; naming = true; }}>New composition…</DropdownMenu.Item>
         </DropdownMenu.Group>
         <DropdownMenu.Separator class="ui-menu-separator" />
         <DropdownMenu.Group>
@@ -103,6 +117,7 @@
       </DropdownMenu.Content>
     </DropdownMenu.Portal>
   </DropdownMenu.Root>
+  <NewCompositionDialog bind:open={naming} onCreated={(c) => addCompositionView(api, c, { referenceGroup: group })} />
 </div>
 
 <style>

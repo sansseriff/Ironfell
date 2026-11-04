@@ -68,6 +68,16 @@ export interface ViewQuery {
 /** The pointer's tools and their keys (Figma's). */
 export type Tool = 'select' | 'pen' | 'rect' | 'ellipse' | 'text' | 'port' | 'empty' | 'table' | 'wire' | `place:${string}`;
 
+/** A composition root of the document, or of the session (the timeline,
+ *  Stats, the library's), as `compositions` lists them. */
+export interface CompositionEntry { id: string; name: string | null; dims: string; session: boolean }
+
+/** What the dock shows views of: a stored scope (its id and saved layout),
+ *  or an unsaved page (`page`, its layout in browser storage). */
+export interface OpenedDocument { key: string; saved: string | null }
+
+const PAGE_LAYOUT_KEY = 'iron.workspace.v9';
+
 export class DocumentClient {
   view = $state('');
   version = $state(0);
@@ -122,13 +132,24 @@ export class DocumentClient {
   private viewGeneration = 0;
   private counterpartGeneration = 0;
   private stopCounterparts: (() => void) | null = null;
-  /** A document to load once the next app has opened its demo: what a
-   *  restart (the Settings view) carries over. */
+  /** A document to load into the next engine: what a restart (the
+   *  Settings view) carries over on an unsaved page. */
   private carried: string | null = null;
-  /** Whether `?stress=N` has been acted on (once per page). */
-  private stressed = false;
-  /** Whether this session's engine has sent its first `documentChanged`. */
+  /** Whether the page has made its first document (the boot: a scope, or
+   *  the demo with `?stress=`, `?meters=` and the showcase). */
+  private booted = false;
+  /** Whether this session's engine has been given its document. */
   private sessionStarted = false;
+  /** Every composition root, kept current while the engine runs (the
+   *  dock's tab titles and its missing-composition views read it).
+   *  `compositionsKnown` turns true at the first answer for this document. */
+  compositions: CompositionEntry[] = $state([]);
+  compositionsKnown = $state(false);
+  private compositionWatchers = new Set<(list: CompositionEntry[]) => void>();
+  private stopCompositions: (() => void) | null = null;
+  /** The document the dock last laid out, and who wants to know. */
+  private openedDocument: OpenedDocument | null = null;
+  private openedWatchers = new Set<(opened: OpenedDocument) => void>();
   /** The open scope, kept durable; null on an ephemeral page. One per page,
    *  across engine restarts. */
   readonly scopes: Scopes | null = persistent()
@@ -149,6 +170,7 @@ export class DocumentClient {
       this.pageHooks = true;
       // The address names the open scope, so a reload reopens it.
       this.scopes.onChange = state => { this.scope = state; if (state.current) showScope(state.current.id); };
+      this.scopes.onOpened = (meta, workspace) => void this.documentOpened({ key: meta.id, saved: workspace });
       // Write the last batch when the tab is hidden or closed (§4.2).
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void this.scopes!.flush(); });
       window.addEventListener('pagehide', () => void this.scopes!.flush());
@@ -353,6 +375,127 @@ export class DocumentClient {
     if (node) this.stopCounterparts = this.subscribe<typeof this.counterparts>({ op: 'counterparts', node }, result => { this.counterparts = result; });
   }
 
+  /** Give a new engine its document, which starts empty (no demo precedes
+   *  a scope). The first time on a page: the scope the URL names, or on an
+   *  unsaved page the demo, the benchmarks' compositions and the showcase.
+   *  After a settings restart: the scope reopened from storage, or what
+   *  the old engine held (`carryOver`). */
+  private async startDocument() {
+    const first = !this.booted;
+    this.booted = true;
+    const q = new URLSearchParams(location.search);
+    // The contexts showcase (plans/specs/contexts.md): its outline, pitch
+    // and dials compositions. `?showcase=0` leaves it out (the driver does,
+    // so its scripts' ids stay those after the demo scene).
+    const demo = async () => {
+      const r = await this.command<{ ok: boolean; error?: string }>({ op: 'demo' });
+      if (!r.ok) throw new Error(r.error ?? 'the demo was refused');
+      if (q.get('showcase') !== '0') await this.command({ op: 'showcase' });
+    };
+    if (this.scopes) {
+      if (!first) return this.scopes.reopen();
+      // Boot (scopes.md D11, §10.2): open the scope the URL names
+      // (route.ts); one that no longer exists goes back to the scopes
+      // page. `&export` downloads it once open (the scopes page's Export,
+      // for a scope whose log needs replaying). Read before the boot
+      // rewrites the address to the open scope.
+      const exporting = q.has('export');
+      const r = await this.scopes.boot(demo, target());
+      if (r === 'missing') location.replace(scopesUrl());
+      else if (exporting) void this.download();
+      return;
+    }
+    if (this.carried !== null) {
+      const text = this.carried;
+      this.carried = null;
+      await this.load(text);
+    } else {
+      await demo();
+      // The benchmarks (`?stress=N`, `?meters=N`) add their composition to
+      // the demo, once per page; their tabs are in the default layout.
+      const shapes = Number(q.get('stress'));
+      if (first && shapes > 0) await this.command({ op: 'stress', shapes: shapes });
+      const meters = Number(q.get('meters'));
+      if (first && meters > 0) await this.command({ op: 'meters', n: meters });
+    }
+    let saved: string | null = null;
+    try {
+      saved = q.get('layout') === 'default' ? null : localStorage.getItem(PAGE_LAYOUT_KEY);
+    } catch {
+      // storage unavailable: the default layout
+    }
+    await this.documentOpened({ key: 'page', saved });
+  }
+
+  /** The document is in the engine: refresh the composition list (so no
+   *  view briefly reads as missing), then tell the dock. */
+  private async documentOpened(opened: OpenedDocument) {
+    await this.settled();
+    await this.refreshCompositions();
+    this.openedDocument = opened;
+    for (const watcher of this.openedWatchers) watcher(opened);
+  }
+
+  /** Wait until a load the engine is holding for its next frame is in. */
+  private async settled() {
+    for (let i = 0; i < 600; i++) {
+      // Past every version: only `pending` matters, not the log itself.
+      const r = await this.call('scope_log', [Number.MAX_SAFE_INTEGER]);
+      if (!r.pending) return;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+
+  /** Call `fn` with each document the dock should lay out: now, if one is
+   *  open, and at every later open or scope switch. */
+  onDocumentOpened(fn: (opened: OpenedDocument) => void): () => void {
+    this.openedWatchers.add(fn);
+    if (this.openedDocument) fn(this.openedDocument);
+    return () => this.openedWatchers.delete(fn);
+  }
+
+  /** Keep the dock's layout with the open document: the scope's
+   *  `workspace.json`, or browser storage on an unsaved page. */
+  writeWorkspace(key: string, json: string) {
+    if (key === 'page') {
+      try { localStorage.setItem(PAGE_LAYOUT_KEY, json); } catch { /* this session only */ }
+    } else if (this.scopes?.state().current?.id === key) {
+      void this.scopes.saveWorkspace(json).catch(e => console.warn('[scopes] layout not saved', e));
+    }
+  }
+
+  /** Forget the open document's saved layout (Reset layout). */
+  forgetWorkspace(key: string) {
+    if (key === 'page') {
+      try { localStorage.removeItem(PAGE_LAYOUT_KEY); } catch { /* nothing saved */ }
+    }
+  }
+
+  private watchCompositionList() {
+    this.stopCompositions?.();
+    this.stopCompositions = this.subscribe<CompositionEntry[]>({ op: 'compositions' }, list => this.setCompositions(list));
+  }
+
+  private setCompositions(list: CompositionEntry[]) {
+    this.compositions = list;
+    this.compositionsKnown = true;
+    for (const watcher of this.compositionWatchers) watcher(list);
+  }
+
+  /** Read the composition list now, rather than at the next change. */
+  async refreshCompositions(): Promise<CompositionEntry[]> {
+    const list = await this.command<CompositionEntry[]>({ op: 'compositions' });
+    this.setCompositions(list);
+    return list;
+  }
+
+  /** Call `fn` whenever the composition list changes (a composition made,
+   *  renamed or deleted, a scope switched). */
+  watchCompositions(fn: (list: CompositionEntry[]) => void): () => void {
+    this.compositionWatchers.add(fn);
+    return () => this.compositionWatchers.delete(fn);
+  }
+
   /** Returns true if the message was one of ours. */
   /** Bold, italic, underline or strikethrough on the selected characters
    *  of the canvas text edit (the engine decides on or off). */
@@ -376,6 +519,11 @@ export class DocumentClient {
         return true;
       case 'enginePrepared':
         this.subscriptions.start();
+        this.watchCompositionList();
+        if (!this.sessionStarted) {
+          this.sessionStarted = true;
+          void this.startDocument().catch(e => { console.error('[boot] the document did not open', e); this.error = String(e); });
+        }
         return true;
       case 'stateChanged':
         if (data.reset) this.documentEpoch++;
@@ -387,54 +535,10 @@ export class DocumentClient {
         this.scopes?.changed(data.version);
         this.subscriptions.invalidate(data);
         return true;
-      case 'documentChanged': {
+      case 'documentChanged':
         this.version = data.version;
         this.scopes?.changed(data.version);
-        const first = !this.sessionStarted;
-        this.sessionStarted = true;
-        if (this.carried !== null) {
-          const text = this.carried;
-          this.carried = null;
-          void this.load(text);
-        } else if (first && this.scopes?.active) {
-          // A settings restart: the new engine reopens the scope.
-          void this.scopes.reopen();
-        }
-        // `?stress=N`: add the benchmark composition once the demo scene
-        // exists (its tab is in the default layout, src-ui/views/workspace.ts).
-        if (!this.stressed) {
-          this.stressed = true;
-          const shapes = Number(new URLSearchParams(location.search).get('stress'));
-          if (shapes > 0) void this.command({ op: 'stress', shapes: shapes });
-          const meters = Number(new URLSearchParams(location.search).get('meters'));
-          if (meters > 0) void this.command({ op: 'meters', n: meters });
-          // The contexts showcase (plans/specs/contexts.md): its outline,
-          // pitch and dials tabs. `?showcase=0` leaves it out (the driver does,
-          // so its scripts' ids stay those after the demo scene).
-          const showcase = async () => {
-            if (new URLSearchParams(location.search).get('showcase') !== '0') await this.command({ op: 'showcase' });
-          };
-          // Boot (scopes.md D11): open the last scope, or make one of the
-          // demo. An opened scope already holds the showcase.
-          // Boot (scopes.md D11, §10.2): open the scope the URL names
-          // (route.ts); one that no longer exists goes back to the scopes
-          // page. `&export` downloads it once open (the scopes page's
-          // Export, for a scope whose log needs replaying).
-          if (this.scopes) {
-            // Read before the boot rewrites the address to the open scope.
-            const exporting = new URLSearchParams(location.search).has('export');
-            void this.scopes
-              .boot(showcase, target())
-              .then(r => {
-                if (r === 'missing') location.replace(scopesUrl());
-                else if (exporting) void this.download();
-              })
-              .catch(e => { console.error('[scopes] boot failed', e); this.error = String(e); });
-          }
-          else void showcase();
-        }
         return true;
-      }
       case 'documentSaved':
       case 'documentLoaded':
       case 'documentView':
@@ -460,6 +564,9 @@ export class DocumentClient {
     this.pending.dispose();
     this.stopCounterparts?.();
     this.stopCounterparts = null;
+    this.stopCompositions?.();
+    this.stopCompositions = null;
+    this.compositionsKnown = false;
     this.subscriptions.dispose();
     this.canUndo = false;
     this.canRedo = false;

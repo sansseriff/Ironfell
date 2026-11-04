@@ -12,6 +12,9 @@
  *     scopes/<id>/snapshot-<v>.json   the canonical document; normally one
  *     scopes/<id>/log/<first>.ndjson  one segment per batch
  *     scopes/<id>/log-broken-<time>/  segments a replay could not apply
+ *     scopes/<id>/workspace.json      the dock layout (D10): which views are
+ *                                     open, where; workspace state, never
+ *                                     in the document or its undo
  */
 
 export interface ScopeMeta {
@@ -33,6 +36,8 @@ export interface StoredScope {
   log: string[];
   /** Bytes of log, for the compaction threshold. */
   logBytes: number;
+  /** The dock layout last saved with it (`workspace.json`), if any. */
+  workspace: string | null;
 }
 
 export interface ScopeStorage {
@@ -51,6 +56,8 @@ export interface ScopeStorage {
   /** Move every segment to `log-broken-<time>/`, kept for inspection. */
   setAside(id: string): Promise<void>;
   writeMeta(meta: ScopeMeta): Promise<void>;
+  /** Replace the scope's dock layout (`workspace.json`). */
+  writeWorkspace(id: string, json: string): Promise<void>;
   remove(id: string): Promise<void>;
   /** Bytes the scope's files hold (snapshots, log, set-aside segments). */
   size(id: string): Promise<number>;
@@ -90,7 +97,7 @@ const lines = (ndjson: string) => ndjson.split('\n').filter(l => l.trim() !== ''
 
 // ---- memory ---------------------------------------------------------------
 
-interface MemoryScope { meta: ScopeMeta; snapshots: Map<number, string>; segments: Map<number, string>; broken: Map<string, Map<number, string>> }
+interface MemoryScope { meta: ScopeMeta; snapshots: Map<number, string>; segments: Map<number, string>; broken: Map<string, Map<number, string>>; workspace: string | null }
 
 export class MemoryScopeStorage implements ScopeStorage {
   readonly kind = 'memory' as const;
@@ -101,7 +108,7 @@ export class MemoryScopeStorage implements ScopeStorage {
   async last() { return this.lastId && this.scopes.has(this.lastId) ? this.lastId : null; }
   async setLast(id: string) { this.lastId = id; }
   async create(meta: ScopeMeta, snapshot: string, version: number) {
-    this.scopes.set(meta.id, { meta: { ...meta }, snapshots: new Map([[version, snapshot]]), segments: new Map(), broken: new Map() });
+    this.scopes.set(meta.id, { meta: { ...meta }, snapshots: new Map([[version, snapshot]]), segments: new Map(), broken: new Map(), workspace: null });
   }
   async read(id: string): Promise<StoredScope | null> {
     const s = this.scopes.get(id);
@@ -109,7 +116,7 @@ export class MemoryScopeStorage implements ScopeStorage {
     const snap = [...s.snapshots].sort((a, b) => b[0] - a[0]).find(([, t]) => parses(t));
     if (!snap) return null;
     const segs = [...s.segments].sort((a, b) => a[0] - b[0]).map(([, t]) => t);
-    return { meta: { ...s.meta }, snapshot: snap[1], version: snap[0], log: segs.flatMap(lines), logBytes: segs.reduce((n, t) => n + t.length, 0) };
+    return { meta: { ...s.meta }, snapshot: snap[1], version: snap[0], log: segs.flatMap(lines), logBytes: segs.reduce((n, t) => n + t.length, 0), workspace: s.workspace };
   }
   async append(id: string, first: number, ndjson: string) {
     this.scopes.get(id)?.segments.set(first, ndjson);
@@ -131,12 +138,16 @@ export class MemoryScopeStorage implements ScopeStorage {
     const s = this.scopes.get(meta.id);
     if (s) s.meta = { ...meta };
   }
+  async writeWorkspace(id: string, json: string) {
+    const s = this.scopes.get(id);
+    if (s) s.workspace = json;
+  }
   async remove(id: string) { this.scopes.delete(id); }
   async size(id: string) {
     const s = this.scopes.get(id);
     if (!s) return 0;
     const sum = (m: Map<number, string>) => [...m.values()].reduce((n, t) => n + t.length, 0);
-    return sum(s.snapshots) + sum(s.segments) + [...s.broken.values()].reduce((n, m) => n + sum(m), 0) + JSON.stringify(s.meta).length;
+    return sum(s.snapshots) + sum(s.segments) + [...s.broken.values()].reduce((n, m) => n + sum(m), 0) + JSON.stringify(s.meta).length + (s.workspace?.length ?? 0);
   }
   async estimate() { return null; }
 
@@ -241,7 +252,7 @@ export class OpfsScopeStorage implements ScopeStorage {
       logBytes += text.length;
       out.push(...lines(text));
     }
-    return { meta: JSON.parse(metaText), snapshot, version, log: out, logBytes };
+    return { meta: JSON.parse(metaText), snapshot, version, log: out, logBytes, workspace: await this.readText(dir, 'workspace.json') };
   }
 
   async append(id: string, first: number, ndjson: string) {
@@ -281,6 +292,11 @@ export class OpfsScopeStorage implements ScopeStorage {
   async writeMeta(meta: ScopeMeta) {
     const dir = await this.scopeDir(meta.id);
     if (dir) await this.write(dir, 'meta.json', JSON.stringify(meta));
+  }
+
+  async writeWorkspace(id: string, json: string) {
+    const dir = await this.scopeDir(id);
+    if (dir) await this.write(dir, 'workspace.json', json);
   }
 
   async remove(id: string) {

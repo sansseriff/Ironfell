@@ -677,6 +677,41 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                 let shown = if iron_document::expand::main_definition(doc, parent).is_some() { iron_document::NodeId::expanded(parent, e) } else { None };
                 ("add empty".into(), vec![iron_document::Op::Create { id: e, ty: iron_document::TypeId::lookup("empty").expect("registered"), parent: Some(parent), order, facets: vec![t.wrap(), name.wrap()] }], Some(shown.unwrap_or(e)))
             }
+            "new_composition" => {
+                // A root composition (ECM §5), made from the "+" menu's New
+                // composition: a name no other composition has, 2D or 3D, and
+                // its notation (free or schematic).
+                let name = a.get("name").and_then(|v| v.as_str()).map(str::trim).filter(|n| !n.is_empty()).ok_or("a name is needed")?;
+                let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
+                if iron_document::composition::compositions(doc).into_iter().any(|c| name_of(c).as_deref() == Some(name)) {
+                    return Err(format!("a composition named {name:?} already exists"));
+                }
+                let dims = a.get("dims").and_then(|v| v.as_str()).unwrap_or("2d");
+                if !matches!(dims, "2d" | "3d") {
+                    return Err(format!("dims {dims:?}: 2d or 3d"));
+                }
+                let notation = a.get("notation").and_then(|v| v.as_str()).unwrap_or("free");
+                if !matches!(notation, "free" | "schematic") || (notation == "schematic" && dims == "3d") {
+                    return Err(format!("notation {notation:?}: free, or schematic in 2D"));
+                }
+                use iron_document::LeafStruct;
+                let mut c = iron_document::facet::Composition::default();
+                c.dims = iron_document::Slot::Const(iron_document::Value::Enum(dims.into()));
+                c.notation = iron_document::Slot::Const(iron_document::Value::Str(notation.into()));
+                let mut n = iron_document::facet::Name::default();
+                n.text = iron_document::Slot::Const(iron_document::Value::Str(name.into()));
+                let id = doc.next_id();
+                let order = doc.roots().iter().filter(|r| !r.is_session()).filter_map(|&r| doc.live(r)).map(|r| r.order.clone()).max().map_or_else(iron_document::OrderKey::first, |k| iron_document::OrderKey::after(&k));
+                ("new composition".into(), vec![iron_document::Op::Create { id, ty: iron_document::TypeId::lookup("composition").expect("registered"), parent: None, order, facets: vec![n.wrap(), c.wrap()] }], Some(id))
+            }
+            "delete_composition" => {
+                // The composition and everything in it, as one undoable entry.
+                let node = id("node")?;
+                if node.is_session() || !iron_document::composition::compositions(doc).contains(&node) {
+                    return Err(format!("{node} is not a composition of the document"));
+                }
+                ("delete composition".into(), vec![iron_document::Op::Delete { id: node }], None)
+            }
             other => return Err(format!("no authoring verb {other:?}")),
         };
         let applied = store.0
@@ -897,6 +932,26 @@ pub fn document_view_context(app: &mut WorkerApp, panel: String) -> String {
         }))
     };
     run().unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// Fill the open document with the demo scene (`document_bridge::
+/// demo_scene`), one transaction: what a page showing the demo (`?demo`, a
+/// benchmark, the native build) opens with. The engine starts empty; a
+/// stored scope is never preceded by the demo. Refused when the document
+/// already holds anything, so it cannot land on top of a scope.
+pub fn document_demo(app: &mut WorkerApp) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        if store.0.document().live_nodes().any(|n| !n.id.is_session()) {
+            return Err("the document is not empty".into());
+        }
+        let tx = crate::document_bridge::demo_scene(&store.0);
+        let applied = store.0.apply(tx).map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
 /// Add the contexts showcase (`document_bridge::demo::showcase`): the
@@ -1503,7 +1558,7 @@ pub fn document_compositions(app: &mut WorkerApp) -> String {
                 Some(Dims::Three) => "3d",
                 _ => "2d",
             };
-            serde_json::json!({"id": c.to_string(), "name": name, "dims": dims})
+            serde_json::json!({"id": c.to_string(), "name": name, "dims": dims, "session": c.is_session()})
         })
         .collect();
     serde_json::Value::Array(list).to_string()

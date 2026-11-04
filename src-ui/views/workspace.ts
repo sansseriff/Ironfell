@@ -1,8 +1,13 @@
 /**
  * The workspace: how views are laid out, as dockview tabs and splits
  * (plans/specs/panels-and-session.md, the dock presenter). Layout is workspace
- * state: kept across reloads (browser storage for now; the store's workspace
- * root later), never in the document or its undo.
+ * state, never in the document or its undo: saved with each scope
+ * (`workspace.json`, scopes.md D10 and phase 4), or in browser storage on an
+ * unsaved page. The app's own layout holds only what every document has
+ * (the Main view, the timeline, Stats, the document, model, library and
+ * inspector views); a tab onto one of the document's compositions or
+ * narratives belongs to the document's layout, so a new scope opens without
+ * the demo's, and a scope with no saved layout gets one tab per composition.
  */
 import "./dockview.css";
 import { createDockview, themeLight, type DockviewApi, type IContentRenderer, type IHeaderActionsRenderer, type ITabRenderer } from 'dockview-core';
@@ -11,37 +16,18 @@ import ViewPanel from './ViewPanel.svelte';
 import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
-import type { ViewSpec } from './views';
+import { titleOf, type ViewSpec } from './views';
+import { controllerManager } from '../controller-manager.svelte';
+import type { CompositionEntry, OpenedDocument } from '../runtime/document_client.svelte';
 
-const STORAGE_KEY = 'iron.workspace.v8';
-
-/** The layout to start from: the main viewer with each composition in a
- *  tab beside it, HTML views left and right, the timeline across the bottom.
- *  The viewer's view id stays `viewer` (Rust draws loose nodes there). */
-function defaultLayout(api: DockviewApi) {
+/** The layout every document starts from: the Main view (the `main`
+ *  composition and loose nodes; its view id stays `viewer`), the session's
+ *  views and the HTML views. The document's own compositions and narratives
+ *  are added by `addDocumentViews`. */
+function baseLayout(api: DockviewApi) {
   const view = (id: string, title: string, spec: ViewSpec, position?: any, extra: Record<string, unknown> = {}) =>
     api.addPanel({ id, component: 'view', title, params: { spec }, position, ...extra });
   view('viewer', 'Main', { source: 'main', notation: 'composition' });
-  for (const [id, title] of [
-    ['scene', 'Scene'],
-    ['pendulum', 'Pendulum'],
-    ['controls', 'Controls'],
-    ['assembly', 'Assembly'],
-    ['card', 'Card'],
-    ['optics', 'Optics'],
-    ['schematic', 'Schematic'],
-    ['thermal', 'Thermal'],
-    ['piston', 'Piston'],
-    ['components', 'Components'],
-    // The contexts showcase (absent with `?showcase=0`).
-    ['outline', 'Outline'],
-    ['pitch', 'Pitch'],
-    ['dials', 'Dials'],
-    ['data', 'Data'],
-    ['circuit', 'Circuit'],
-  ]) {
-    view(id, title, { source: id, notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' }, { inactive: true });
-  }
   // The render benchmark's composition (`?stress=N`), shown in front.
   if (new URLSearchParams(location.search).has('stress')) {
     view('stress', 'Stress', { source: 'stress', notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' });
@@ -58,16 +44,79 @@ function defaultLayout(api: DockviewApi) {
   view('stats', 'Stats', { source: 'stats', notation: 'composition' }, { referencePanel: 'timeline', direction: 'right' }, { initialWidth: 360 });
   view('document', 'Document', { source: 'document', notation: 'markup' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
   view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
-  // The demo's narrative (plans/specs/narrative-panel.md), part of the
-  // showcase: with `?showcase=0` it offers to make one.
-  view('lesson', 'Lesson', { source: 'lesson', notation: 'narrative' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
   // The standard components (component-authoring.md §6): a view onto the
   // session's library composition; drag one onto a canvas to place it.
   view('library', 'Library', { source: 'library', notation: 'composition' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
   view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 280 });
 }
 
+/** A readable view id from a name, unique among the open views. */
+function freshId(api: DockviewApi, name: string): string {
+  const base = name.replace(/[^a-zA-Z0-9_-]/g, '') || 'view';
+  if (!api.getPanel(base)) return base;
+  for (let i = 2; ; i++) if (!api.getPanel(`${base}-${i}`)) return `${base}-${i}`;
+}
+
+function specOf(panel: { params?: unknown }): ViewSpec | undefined {
+  return (panel.params as { spec?: ViewSpec } | undefined)?.spec;
+}
+
+/** Open a view of the composition `c`. A document composition's view names
+ *  it by id, so renaming it (or undoing a rename) keeps the tab; its title
+ *  follows the name (`syncTitles`). The session's are named, as fixed. */
+export function addCompositionView(api: DockviewApi, c: CompositionEntry, position?: any, inactive = false): string {
+  const name = c.name ?? c.id;
+  const id = freshId(api, name);
+  api.addPanel({ id, component: 'view', title: titleOf(name), params: { spec: { source: c.session ? name : c.id, notation: 'composition' } }, position, inactive });
+  return id;
+}
+
+/** A tab for each of the document's compositions and narratives that no
+ *  view shows yet: a scope's layout before it has saved one. */
+async function addDocumentViews(api: DockviewApi) {
+  const doc = controllerManager.docClient;
+  const shown = new Set(api.panels.map(specOf).filter((v): v is ViewSpec => !!v).map((v) => `${v.notation}:${v.source}`));
+  const viewer = api.getPanel('viewer') ? { referencePanel: 'viewer', direction: 'within' } : undefined;
+  for (const c of doc.compositions) {
+    if (c.session || c.name === 'main') continue;
+    if (shown.has(`composition:${c.id}`) || (c.name && shown.has(`composition:${c.name}`))) continue;
+    addCompositionView(api, c, viewer, true);
+  }
+  let narratives: { id: string; name: string }[] = [];
+  try {
+    const r = await doc.command<{ ok: boolean; narratives: { id: string; name: string }[] }>({ op: 'narrative_list' });
+    narratives = r.ok ? r.narratives : [];
+  } catch {
+    narratives = [];
+  }
+  const beside = api.getPanel('document') ? { referencePanel: 'document', direction: 'within' } : undefined;
+  for (const n of narratives) {
+    const source = n.name || n.id;
+    if (shown.has(`narrative:${source}`)) continue;
+    // A narrative's view (plans/specs/narrative-panel.md) beside the document's.
+    api.addPanel({ id: freshId(api, source), component: 'view', title: titleOf(source), params: { spec: { source, notation: 'narrative' } }, position: beside, inactive: true });
+  }
+}
+
+/** Tab titles follow their compositions' names. */
+function syncTitles(api: DockviewApi, list: CompositionEntry[]) {
+  for (const p of api.panels) {
+    const spec = specOf(p);
+    if (spec?.notation !== 'composition' || !spec.source.startsWith('#')) continue;
+    const c = list.find((e) => e.id === spec.source);
+    const title = c?.name ? titleOf(c.name) : null;
+    if (title && p.api.title !== title) p.api.setTitle(title);
+  }
+}
+
 let current: DockviewApi | null = null;
+/** Whose layout the dock shows: a scope's id, `page` for an unsaved page,
+ *  null until the first document is open. */
+let openedKey: string | null = null;
+/** Laying out programmatically: not the person's change, not saved yet. */
+let applying = 0;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let unwatch: (() => void)[] = [];
 
 export function createWorkspace(el: HTMLElement): DockviewApi {
   const api = createDockview(el, {
@@ -84,8 +133,8 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
       return {
         element,
         init(params) {
-          const notation = (params.params as { spec?: ViewSpec } | undefined)?.spec?.notation;
-          instance = mount(ViewTab, { target: element, props: { api: params.api, notation } });
+          const spec = (params.params as { spec?: ViewSpec } | undefined)?.spec;
+          instance = mount(ViewTab, { target: element, props: { api: params.api, notation: spec?.notation, spec } });
         },
         dispose() {
           if (instance) unmount(instance);
@@ -146,32 +195,76 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
   });
   current = api;
 
-  let restored = false;
-  const fresh = new URLSearchParams(location.search).get('layout') === 'default';
-  try {
-    const saved = fresh ? null : localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      api.fromJSON(JSON.parse(saved));
-      restored = api.panels.length > 0;
-    }
-  } catch (e) {
-    console.warn('workspace: saved layout unreadable, using the default', e);
-  }
-  if (!restored) {
-    api.clear();
-    defaultLayout(api);
-  }
-  api.onDidLayoutChange(save);
+  // The one layout every scope used to share, before layouts were per scope.
+  try { localStorage.removeItem('iron.workspace.v8'); } catch { /* nothing saved */ }
+  // The app's views at once; the document's once it is open (`open`).
+  applying++;
+  baseLayout(api);
+  applying--;
+  api.onDidLayoutChange(scheduleSave);
+  const doc = controllerManager.docClient;
+  unwatch = [
+    doc.onDocumentOpened((o) => void open(api, o)),
+    doc.watchCompositions((list) => syncTitles(api, list)),
+  ];
   return api;
 }
 
-function save() {
-  if (!current) return;
+/** The dock is going away (Workspace.svelte). */
+export function destroyWorkspace() {
+  for (const stop of unwatch) stop();
+  unwatch = [];
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
+  current = null;
+  openedKey = null;
+}
+
+/** Lay out the document just opened: its saved layout, or the app's views
+ *  plus a tab for each of its compositions and narratives. A settings
+ *  restart reopening the same scope leaves the dock alone. */
+async function open(api: DockviewApi, o: OpenedDocument) {
+  if (o.key === openedKey) return;
+  const first = openedKey === null;
+  openedKey = o.key;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
+  applying++;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(current.toJSON()));
-  } catch {
-    // storage unavailable: the layout lasts this session only
+    let restored = false;
+    if (o.saved) {
+      try {
+        api.fromJSON(JSON.parse(o.saved));
+        restored = api.panels.length > 0;
+      } catch (e) {
+        console.warn('workspace: saved layout unreadable, using the default', e);
+      }
+    }
+    if (!restored) {
+      if (!first || o.saved) {
+        api.clear();
+        baseLayout(api);
+      }
+      await addDocumentViews(api);
+    }
+    syncTitles(api, controllerManager.docClient.compositions);
+  } finally {
+    applying--;
   }
+  if (!o.saved) saveNow();
+}
+
+function scheduleSave() {
+  if (applying || openedKey === null) return;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveNow, 300);
+}
+
+function saveNow() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
+  if (!current || openedKey === null) return;
+  controllerManager.docClient.writeWorkspace(openedKey, JSON.stringify(current.toJSON()));
 }
 
 /** Open or close a composition view's render inspector, drawn in the same
@@ -179,7 +272,7 @@ function save() {
  *  part of the width, `undefined` closes it. Kept with the layout. */
 export function setInspecting(panel: string, share: number | undefined) {
   current?.getPanel(panel)?.api.updateParameters({ inspect: share });
-  save();
+  scheduleSave();
 }
 
 /** Close every render inspector (developer mode turned off). */
@@ -189,17 +282,22 @@ export function closeRenderInspectors() {
   }
 }
 
-/** Forget the saved layout and start again from the default. */
-export function resetWorkspace() {
+/** Forget the open document's layout and start again: the app's views
+ *  and a tab for each of the document's compositions and narratives. */
+export async function resetWorkspace() {
+  if (!current || openedKey === null) return;
+  const api = current;
+  controllerManager.docClient.forgetWorkspace(openedKey);
+  applying++;
   try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // nothing saved
+    api.clear();
+    baseLayout(api);
+    await addDocumentViews(api);
+    syncTitles(api, controllerManager.docClient.compositions);
+  } finally {
+    applying--;
   }
-  if (current) {
-    current.clear();
-    defaultLayout(current);
-  }
+  saveNow();
 }
 
 /** Show the composition `source` (a name or id): its open view becomes the
@@ -208,19 +306,19 @@ export function resetWorkspace() {
  *  view's id, or null with no workspace. */
 export function showComposition(source: string): string | null {
   if (!current || !source) return null;
+  const c = controllerManager.docClient.compositions.find((e) => e.id === source || e.name === source);
   const existing = current.panels.find((p) => {
-    const spec = (p.params as { spec?: ViewSpec } | undefined)?.spec;
-    return spec?.notation === 'composition' && spec.source === source;
+    const spec = specOf(p);
+    return spec?.notation === 'composition' && (spec.source === source || (!!c && (spec.source === c.id || spec.source === c.name)));
   });
   if (existing) {
     existing.api.setActive();
     return existing.id;
   }
-  const spec: ViewSpec = { source, notation: 'composition' };
-  let id = source.replace(/[^a-zA-Z0-9_-]/g, '') || 'view';
-  for (let i = 2; current.getPanel(id); i++) id = `${source.replace(/[^a-zA-Z0-9_-]/g, '')}-${i}`;
-  const viewer = current.getPanel('viewer');
-  current.addPanel({ id, component: 'view', title: source[0].toUpperCase() + source.slice(1), params: { spec }, position: viewer ? { referencePanel: 'viewer', direction: 'within' } : undefined });
+  const viewer = current.getPanel('viewer') ? { referencePanel: 'viewer', direction: 'within' } : undefined;
+  if (c) return addCompositionView(current, c, viewer);
+  const id = freshId(current, source);
+  current.addPanel({ id, component: 'view', title: titleOf(source), params: { spec: { source, notation: 'composition' } }, position: viewer });
   return id;
 }
 

@@ -54,6 +54,10 @@ export class Scopes {
   /** The longest a committed transaction waits to be written. */
   batchMs = 500;
   onChange: (state: ScopeState) => void = () => {};
+  /** A scope is open and its document installed in the engine: the dock
+   *  shows its saved layout (`workspace`, null for none yet). Called for
+   *  every open, new scope and switch (scopes.md phase 4). */
+  onOpened: (meta: ScopeMeta, workspace: string | null) => void = () => {};
 
   private current: ScopeMeta | null = null;
   private readOnly = false;
@@ -61,6 +65,8 @@ export class Scopes {
   private release: (() => void) | null = null;
   /** The newest version the storage holds, in the snapshot or the log. */
   private persisted = 0;
+  /** The open scope's dock layout as last saved, carried by Duplicate. */
+  private workspace: string | null = null;
   private logCount = 0;
   private logBytes = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -215,8 +221,17 @@ export class Scopes {
       const name = `${this.current.name} copy`;
       await this.drain();
       const snapshot = await this.engine.save();
-      await this.adopt(snapshot, name);
+      await this.adopt(snapshot, name, this.workspace);
     });
+  }
+
+  /** Save the dock layout with the open scope. A read-only tab saves
+   *  nothing: the tab holding the scope owns its layout too. */
+  saveWorkspace(json: string): Promise<void> {
+    if (!this.current || this.readOnly) return Promise.resolve();
+    const id = this.current.id;
+    this.workspace = json;
+    return this.serial(() => this.storage.writeWorkspace(id, json));
   }
 
   /** Delete a scope; it cannot be undone. Deleting the open one opens the
@@ -295,10 +310,18 @@ export class Scopes {
     }
     if (!this.readOnly) await this.storage.setLast(id);
     this.emit();
+    await this.opened(stored.meta, stored.workspace);
+  }
+
+  /** Tell the dock, once the engine holds the scope's document. */
+  private async opened(meta: ScopeMeta, workspace: string | null) {
+    await this.installed();
+    this.workspace = workspace;
+    if (this.current?.id === meta.id) this.onOpened(meta, workspace);
   }
 
   /** Make `text` a new scope and open it (inside `serial`). */
-  private async adopt(text: string, name: string) {
+  private async adopt(text: string, name: string, workspace: string | null = null) {
     await this.leave();
     const id = newScopeId();
     const r = await this.engine.call('scope_open', [id, text, []]);
@@ -312,7 +335,9 @@ export class Scopes {
     this.notice = '';
     this.persisted = r.version;
     this.logCount = this.logBytes = 0;
+    if (workspace) await this.storage.writeWorkspace(id, workspace);
     this.emit();
+    await this.opened(meta, workspace);
   }
 
   private async createFromOpen(name: string) {
@@ -330,6 +355,7 @@ export class Scopes {
     this.persisted = version;
     this.logCount = this.logBytes = 0;
     this.emit();
+    await this.opened(meta, null);
   }
 
   /** The engine's feed, until it has nothing newer. */
@@ -472,6 +498,7 @@ export class ScopeLibrary {
     const now = Date.now();
     await this.storage.create({ id: copy, name: `${stored.meta.name} copy`, created: now, modified: now }, stored.snapshot, stored.version);
     if (stored.log.length) await this.storage.append(copy, stored.version + 1, stored.log.join('\n') + '\n');
+    if (stored.workspace) await this.storage.writeWorkspace(copy, stored.workspace);
     return copy;
   }
 

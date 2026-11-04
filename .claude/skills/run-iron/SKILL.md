@@ -60,6 +60,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `chrome.txt` | ~30 s |
 | `schematic.txt` | ~40 s |
 | `scopes.txt` | ~15 s |
+| `workspace.txt` | ~25 s |
 | `scope-menu.txt` | ~20 s |
 | `narrative.txt` | ~25 s |
 | `timeline.txt` | ~30 s |
@@ -177,11 +178,14 @@ tabs and splits, each a view onto a composition or an HTML view. The
 document-space commands below address the **Main** tab, whose view id is
 `viewer`; it shows the `main` composition, which embeds the scene, the
 pendulum, the controls and the 3D assembly where they sat before the split.
-The other tabs (Scene, Pendulum, Controls, Assembly, Card) show one
-composition each. A hidden tab has no panel rectangle (`panel <id>` prints
-zeros). Each driver run starts with a fresh browser profile, so the default
-layout; in a normal browser the layout is saved, and `?layout=default` or
-the Document view's **Reset layout** restores the default.
+The other tabs (Scene, Pendulum, Controls, Assembly, Card, …) are the
+document's: a layout with none saved gets one tab per composition, named
+after it, so their view ids are the compositions' names (`pendulum`). A
+hidden tab has no panel rectangle (`panel <id>` prints zeros). Each driver
+run starts with a fresh browser profile, so the derived layout; in a normal
+browser each scope saves its own (`workspace.json`; an unsaved page in
+browser storage), and `?layout=default` or the Settings view's **Reset
+layout** lays it out again (see "Layouts per scope" below).
 
 ### Fast default smoke
 
@@ -1778,10 +1782,10 @@ tab Dials
 ["affords.drag=\"ring\" affords.drag.by=\"inline on #…\"","affords.drives=\"transform2d.rot\" affords.drives.by=\"inline on #…\""]
 tab Data
 undefined
-["0.40","north  | {= fmt(#4a.slider.value * 100, 0)}"]
-["0.60","north  | {= fmt(#4a.slider.value * 100, 0)}"]
+["0.40","north  | {= fmt(#4e.slider.value * 100, 0)}"]
+["0.60","north  | {= fmt(#4e.slider.value * 100, 0)}"]
 "90"
-["0.90","north  | {= fmt(#4a.slider.value * 100, 0)}"]
+["0.90","north  | {= fmt(#4e.slider.value * 100, 0)}"]
 applied "open demo scene" (298 ops, System) -> v1
 applied "open showcase" (176 ops, System) -> v2
 applied "set size.h" (1 ops, Human) -> v3
@@ -1998,6 +2002,75 @@ confirmation dialog; refused while another tab has it open, which the row
 says). New and an Export whose log needs replaying open the app to do it.
 
 The menu shifts the top-left group's tabs right; the smoke is unchanged by it.
+
+## Layouts per scope and New composition (2026-11-04)
+
+plans/specs/scopes.md phase 4. **The engine starts empty**: no demo is
+queued at startup, so a stored scope opens with nothing applied before it.
+On `enginePrepared` the shell gives the engine its document
+(`DocumentClient.startDocument`): the scope the URL names, or on an unsaved
+page (`&demo`, the benchmarks, the native build) the `demo` engine call, then
+`stress`/`meters` and the `showcase`. **The app's own layout** is the Main view
+(`viewer`), Timeline, Stats, Document, Model, Library and Inspector
+(`baseLayout` in `src-ui/views/workspace.ts`). Once the document is installed,
+the dock shows the scope's saved layout (`workspace.json` beside it in OPFS,
+copied by Duplicate), or the app's plus **one tab per document composition and
+narrative** (`addDocumentViews`): a new empty scope has no Pendulum tab, the
+demo's tabs come from the demo document (they now include Cylinder, the
+piston's embedded composition). Each scope saves its own layout as it changes;
+switching scopes restores each one's. A tab onto a document composition names
+it by **id** (`source: "#4"`), so renaming or undoing a rename keeps it; the
+title follows the name. `compositions` lists `{id, name, dims, session}`.
+
+**New composition…** in the "+" menu opens a dialog (`NewCompositionDialog.svelte`:
+a unique name, 2D drawing, 3D scene or schematic) that applies one undoable
+"new composition" (`author` verb `new_composition`) and opens its tab in that
+group. **Double-click** a document composition's tab title to rename it
+(`rename`); its **context menu** has Rename composition, Delete composition
+(`delete_composition`, the composition and its contents in one entry, the tab
+closed; Cmd+Z brings it back) and Close tab. A composition view onto a
+composition the scope lacks (a tab from another layout, a deleted one) shows
+`MissingComposition.svelte` instead of a canvas: Create (when the tab names
+it) or Close tab; before, tools there drew previews that committed nowhere.
+
+`workspace.txt` drives all of it. After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < workspace.txt; cd -
+```
+
+Expected, minus `nav`, `ready`, `clicked` and bare `1` lines:
+
+```
+applied "open demo scene" (302 ops, System) -> v1
+"demo page: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components timeline stats document model library selection"
+(no new console output)
+"empty scope: viewer timeline stats document model library selection"
+"suggested name: composition"
+"made: Pendulum=#4:Pendulum; active Pendulum"
+"renamed: Swing (#4)"
+applied "new composition" (1 ops, Human) -> v2
+applied "draw rectangle" (1 ops, Human) -> v3
+applied "rename" (1 ops, Human) -> v4
+"flushed"
+(no new console output)
+"reloaded: Pendulum document library model selection stats timeline viewer; active Pendulum"
+"after delete: tab open false"
+applied "delete composition" (1 ops, Human) -> v5
+applied "undo: delete composition" (2 ops, System) -> v6
+"after undo: [\"main\",\"Swing\"]"
+"missing view shown: true"
+"after Create: missing view shown false"
+applied "new composition" (1 ops, Human) -> v7
+"new demo scope: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components outline pitch dials data circuit timeline stats document model library lesson selection"
+"back in Untitled: document ghost library model selection stats timeline viewer"
+(no page errors)
+```
+
+The `(no new console output)` after the reload is the point: nothing is
+applied before a stored scope. Old WebGPU artifacts (built before this) still
+queue the demo at startup and lack the `demo` call, so rebuild both backends
+(`bun run wasm` / `wasm:fast`) after pulling this.
 
 ## The narrative panel (2026-11-03)
 

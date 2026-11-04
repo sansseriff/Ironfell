@@ -22,7 +22,7 @@
 pub mod chunks;
 pub mod clock;
 mod demo;
-pub use demo::{showcase, template_snapshot};
+pub use demo::{demo_scene, showcase, template_snapshot};
 pub mod inspector;
 pub mod gas;
 mod highlight;
@@ -316,7 +316,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<liveness::LiveSources>()
             .init_resource::<liveness::Liveness>()
             .add_plugins(planes::PlanePlugin)
-            .add_systems(Startup, (materialize::setup_mesh_assets, demo::queue_demo_scene, text::want_default_font))
+            .add_systems(Startup, (materialize::setup_mesh_assets, text::want_default_font))
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking. Producers publish first, so
             // their signals reconcile with everything else this frame.

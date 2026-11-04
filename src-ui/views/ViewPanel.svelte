@@ -16,12 +16,21 @@
   import BevyPanel from "../lib/BevyPanel.svelte";
   import CompositionSettings from "./html/CompositionSettings.svelte";
   import RenderInspector from "./html/RenderInspector.svelte";
+  import MissingComposition from "./html/MissingComposition.svelte";
+  import { controllerManager } from "../controller-manager.svelte";
   import { NOTATIONS, type ViewSpec } from "./views";
   import { setInspecting } from "./workspace";
 
   let { id, spec, api }: { id: string; spec: ViewSpec; api: DockviewPanelApi } = $props();
 
   const def = $derived(NOTATIONS[spec.notation]);
+  // A composition view onto a composition this document lacks (another
+  // scope's tab, a deleted one): said so, with no canvas to draw into.
+  const doc = controllerManager.docClient;
+  const missing = $derived(
+    spec.notation === "composition" && doc.compositionsKnown && !!spec.source && !spec.source.startsWith("inspect:")
+      && !doc.compositions.some((c) => c.id === spec.source || c.name === spec.source),
+  );
   let visible = $state(api.isVisible);
   const sub = api.onDidVisibilityChange((e) => (visible = e.isVisible));
   const shareOf = (p: unknown) => (p as { inspect?: number } | undefined)?.inspect;
@@ -56,6 +65,9 @@
 </script>
 
 <div class="row" bind:this={row}>
+  {#if missing}
+    <MissingComposition {spec} {api} />
+  {:else}
   <div class="view" class:hybrid={def.canvas && def.html} style:flex-basis={inspecting ? `${share! * 100}%` : "100%"}>
     {#if def.canvas && visible}
       <div class="canvas-part">
@@ -87,6 +99,7 @@
   {/if}
   {#if spec.notation === "composition"}
     <CompositionSettings {spec} {inspecting} onInspect={() => setInspecting(id, inspecting ? undefined : 0.5)} />
+  {/if}
   {/if}
 </div>
 

@@ -1,0 +1,73 @@
+# Layouts per scope (plans/specs/scopes.md phase 4) and making compositions
+# from the UI. The engine starts empty: an unsaved page asks for the demo, and
+# a scope opens with nothing before it. The app's layout holds only its own
+# views; a scope with no saved layout gets a tab per composition; each scope
+# saves its own (`workspace.json`). New composition (the "+" menu's dialog),
+# rename by double-clicking the tab, delete from its context menu, and a view
+# whose composition this scope lacks.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog
+ready
+logs applied
+eval "demo page: " + __dock.panels.map(p => p.id).join(' ')
+nav http://localhost:5173/Ironfell/?gfx=webgl2&new=empty&bevy=debuglog
+ready
+sleep 500
+logs applied
+eval "empty scope: " + __dock.panels.map(p => p.id).join(' ')
+clickel .dv-groupview:has(.dv-tab:has-text("Main")) button[aria-label="Open a view"]
+sleep 300
+clickel [role=menuitem]:has-text("New composition")
+sleep 400
+eval "suggested name: " + document.querySelector('input[aria-label="Composition name"]').value
+key Backspace
+key P
+key e
+key n
+key d
+key u
+key l
+key u
+key m
+key Enter
+sleep 800
+eval "made: " + __dock.panels.map(p => p.id + '=' + p.params.spec.source + ':' + p.api.title).filter(s => s.startsWith('Pendulum')).join(' ') + "; active " + __dock.activePanel?.id
+key r
+pdrag Pendulum 100 100 250 200 10
+sleep 500
+eval (() => { const t = [...document.querySelectorAll('.dv-tab .title')].find(e => e.textContent === 'Pendulum'); t.dispatchEvent(new MouseEvent('dblclick', {bubbles: true})); return 1 })()
+sleep 300
+key Backspace
+key S
+key w
+key i
+key n
+key g
+key Enter
+sleep 600
+eval "renamed: " + __dock.getPanel('Pendulum').api.title + " (" + __dock.getPanel('Pendulum').params.spec.source + ")"
+logs applied
+eval (async () => { await __iron.flush(); await new Promise(r => setTimeout(r, 600)); return "flushed" })()
+nav http://localhost:5173/Ironfell/?gfx=webgl2&scope=last&bevy=debuglog
+ready
+sleep 800
+logs applied
+eval "reloaded: " + __dock.panels.map(p => p.id).sort().join(' ') + "; active " + __dock.activePanel?.id
+eval (() => { const t = [...document.querySelectorAll('.dv-tab .view-tab')].find(e => e.textContent.includes('Swing')); const r = t.getBoundingClientRect(); t.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, clientX: r.x + 10, clientY: r.y + 10, button: 2})); return 1 })()
+sleep 300
+clickel [role=menuitem]:has-text("Delete composition")
+sleep 600
+eval "after delete: tab open " + !!__dock.getPanel('Pendulum')
+key Meta+z
+sleep 600
+logs applied
+eval (async () => "after undo: " + JSON.stringify((await __iron.call('compositions', [])).filter(c => !c.session).map(c => c.name)))()
+eval (() => { __dock.addPanel({ id: 'ghost', component: 'view', title: 'Ghost', params: { spec: { source: 'ghost', notation: 'composition' } } }); return 1 })()
+sleep 500
+eval "missing view shown: " + !!document.querySelector('.missing')
+clickel .missing .ui-button.is-primary
+sleep 700
+eval "after Create: missing view shown " + !!document.querySelector('.missing')
+logs applied
+eval (async () => { await __iron.scopes.create('demo'); await new Promise(r => setTimeout(r, 800)); return "new demo scope: " + __dock.panels.map(p => p.id).join(' ') })()
+eval (async () => { const id = (await __iron.scopes.list()).find(s => s.name === 'Untitled').id; await __iron.scopes.open(id); await new Promise(r => setTimeout(r, 800)); return "back in Untitled: " + __dock.panels.map(p => p.id).sort().join(' ') })()
+errors

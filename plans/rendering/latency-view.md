@@ -138,8 +138,8 @@ person was working on a second display); their p50s match the clean runs.
 
 Two LG UltraFine 6K displays (3008×1692 pt at 2×, 60 Hz), laptop lid closed,
 Chrome worker runtime, measured on the main display. "Late" columns are the
-share of frames, from the probe's per-frame CSV
-(`/tmp/iron-lat-probe/late.py` logic: at 600 pt/s one frame is 10 pt).
+share of frames, computed from the probe's per-frame CSV
+(a gap over 5 pt between trackers; at 600 pt/s one frame is 10 pt).
 
 | Window, render scale | Engine tick p50 / p95 (ms) | Vello behind the DOM | DOM late | Screen update interval, mean |
 |---|---|---|---|---|

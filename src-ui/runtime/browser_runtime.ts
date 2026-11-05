@@ -2,6 +2,7 @@
  * https://github.com/jinleili/bevy-in-web-worker.
  * Ordinary input/control semantics live in Rust's engine_protocol. */
 import { loadGlue, type Glue } from './glue';
+import { FrameHoldWriter } from './frame_hold';
 import { CadenceProbe } from './cadence_probe';
 import { dispatchEngineMessage } from './engine_messages';
 import { FontLoader } from './font_loader';
@@ -46,6 +47,12 @@ export class BrowserRuntime {
         return;
       case 'init':
         this.tickOnInput = data.tick !== 'raf';
+        this.tickBusy = data.tickBusy ?? 0;
+        if (data.hold) {
+          const writer = new FrameHoldWriter(data.hold);
+          this.hold = writer;
+          this.release.port1.onmessage = () => writer.sent();
+        }
         this.attachCanvas(data.canvas, data.devicePixelRatio);
         return;
       case 'resize':
@@ -143,6 +150,17 @@ export class BrowserRuntime {
    * `?workerTick=raf` turns this off (SessionAdapter).
    */
   private tickOnInput = true;
+  /**
+   * Holding the page's frame (frame_hold.ts): the page spins while a tick
+   * runs, until the frame it renders has been handed to the compositor. A
+   * worker canvas's frame goes out at the worker's next frame push, right
+   * after its rAF callback, so `sent` is posted as a task from that callback.
+   */
+  private hold: FrameHoldWriter | null = null;
+  private releasePending = false;
+  private release = new MessageChannel();
+  /** `?workerTickBusy=N` (dev): N ms of extra work per tick, a heavier scene. */
+  private tickBusy = 0;
   /** A pointer message already ran the tick for the coming frame. */
   private tickedSinceRaf = false;
 
@@ -156,6 +174,10 @@ export class BrowserRuntime {
         const covered = this.tickedSinceRaf && this.pointer === null;
         this.tickedSinceRaf = false;
         if (!covered) this.tick(timestamp);
+        if (this.releasePending) {
+          this.releasePending = false;
+          this.release.port2.postMessage(0);
+        }
       } else {
         this.checkPrepared();
       }
@@ -170,6 +192,8 @@ export class BrowserRuntime {
   private tick(timestamp: number): void {
     try {
       const start = performance.now();
+      this.hold?.begin();
+      if (this.tickBusy > 0) while (performance.now() < start + this.tickBusy) { /* a heavier tick */ }
       if (this.mode === 'worker') {
         // Only the latest motion is sampled at a worker tick. Main-thread
         // motion has already entered the engine synchronously.
@@ -184,6 +208,10 @@ export class BrowserRuntime {
         this.engine.enter_frame(this.appHandle);
       }
       this.probe.record(timestamp, performance.now() - start, start);
+      if (this.hold) {
+        this.hold.measured(performance.now() - start);
+        this.releasePending = true;
+      }
     } catch (error) {
       this.stop();
       this.emit({ ty: 'runtimeError', error: String(error) });
@@ -192,6 +220,7 @@ export class BrowserRuntime {
 
   private stop(): void {
     this.running = false;
+    this.hold?.idle();
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.rafId = null;
   }

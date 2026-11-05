@@ -1,6 +1,7 @@
 import type { UiRequest, UiEvent } from './protocol';
 import { pixelRatio } from './settings.svelte';
 import { AdapterBridge } from './adapter_bridge';
+import { FrameHold, HOLD_BYTES } from './frame_hold';
 import type { Backend } from './backend_policy';
 
 export type RuntimeMode = 'worker' | 'main' | 'native';
@@ -34,6 +35,7 @@ export class SessionAdapter {
   private workerIsReady = false;
   private enginePrepared = false;
   private disposed = false;
+  private frameHold: FrameHold | null = null;
 
   private pendingInit: { canvas: HTMLCanvasElement; dpr: number } | null = null;
   private latestCanvasSize: { width: number; height: number; dpr: number } | null = null;
@@ -122,6 +124,8 @@ export class SessionAdapter {
 
   dispose(): void {
     if (this.disposed) return;
+    this.frameHold?.stop();
+    this.frameHold = null;
     try { this.stop(); } catch { }
     // Release the Bevy app (main mode frees GPU resources in-place; the worker is
     // torn down with terminate() inside bridge.dispose()).
@@ -159,9 +163,23 @@ export class SessionAdapter {
     if (this.mode === 'worker') {
       try {
         const offscreen: OffscreenCanvas = (canvas as any).transferControlToOffscreen();
+        const params = new URLSearchParams(location.search);
         // `?workerTick=raf`: tick only at rAF, not on pointer motion (BrowserRuntime.tickOnInput).
-        const tick = new URLSearchParams(location.search).get('workerTick') ?? undefined;
-        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio: dpr, tick }, [offscreen as any]);
+        const tick = params.get('workerTick') ?? undefined;
+        // `?workerTickBusy=N` (dev): N ms of extra work per worker tick.
+        const tickBusy = Number(params.get('workerTickBusy') ?? 0) || 0;
+        // `?frameHold=on|always` (prototype, plans/rendering/worker-frame-hold.md):
+        // the page holds its frame for the worker's. Needs cross-origin isolation.
+        const holdMode = params.get('frameHold');
+        let hold: SharedArrayBuffer | undefined;
+        if ((holdMode === 'on' || holdMode === 'always') && globalThis.crossOriginIsolated) {
+          hold = new SharedArrayBuffer(HOLD_BYTES);
+          this.frameHold = new FrameHold(hold, Number(params.get('holdCap') ?? 4.5) || 4.5, holdMode === 'always');
+          this.frameHold.start();
+        } else if (holdMode) {
+          console.warn('frameHold needs cross-origin isolation (serve with IRON_COI=1); not holding');
+        }
+        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio: dpr, tick, tickBusy, hold }, [offscreen as any]);
         return;
       } catch (e: any) {
         console.error('Offscreen transfer failed, falling back to direct canvas:', e);

@@ -1,6 +1,7 @@
 # Holding the page's frame for the worker (adaptive frame hold)
 
-**Status:** planned 2026-11-05; nothing built. Follows the worker tick-on-input
+**Status:** Phase 0's limit check and the Phase 1 prototype done 2026-11-05
+(§6b): `?frameHold=on` on a dev server with `IRON_COI=1`. Phase 2 next. Follows the worker tick-on-input
 fix in [`latency-view.md`](latency-view.md) §7. Timelines of the problem, the fix
 and this proposal: [`latency-timelines.html`](latency-timelines.html).
 
@@ -191,6 +192,36 @@ See `latency-view.md` §5, "On a 6K display". For this plan:
   itself drops frames of a heavier page).
 - An earlier reading, that the GPU was saturated at full resolution, was the
   Latency view's own five full-view canvases, not Iron.
+
+## 6b. Results so far (2026-11-05)
+
+Large window on a 6K display (3008×1660 pt, 60 Hz), Chrome, worker `solo`,
+`?latencyTrackers=light`, 2 runs per row, p50 lags; "behind" is the share of
+frames with the square a frame behind the DOM.
+
+**Chrome's limit (Phase 0), blind hold `?latencyBusy=N`:** 4 ms: Vello behind
+in 0% of frames (3–5% with no hold), DOM unchanged; 6 ms: 0.7%, slight drops
+(screen interval 17.2 ms); 7 ms: drops (26 ms) and DOM p90 52 ms; 8 ms: the
+whole page a frame late (≈52 ms). The limit is ~6 ms after vsync; the
+prototype's cap is 4.5 ms.
+
+**Prototype (Phase 1).** `src-ui/runtime/frame_hold.ts` (the page's rAF hold
+and the worker's writer); `BrowserRuntime` marks each tick and posts `sent`
+as a task from its next rAF callback; `?workerTickBusy=N` lengthens ticks.
+
+| Tick | Hold off: square / behind | Hold on: square / behind | Hold p50 / p90 |
+|---|---|---|---|
+| ~4 ms | 35.5–35.9 ms / 0.7–4.9% | 35.2–35.4 ms / 1.1–1.4% | 0.2–0.5 / 1.0–2.2 ms |
+| ~6 ms (`workerTickBusy=2`) | 52 ms / 97–98% | 35.6–35.9 ms / 0–1.1% | 1.7–1.9 / 2.5–2.7 ms |
+| ~8 ms (`workerTickBusy=4`) | 52 ms / 98% | 35.7–35.9 ms / 9–13% | 3.1 / 3.7 ms |
+
+The DOM's lag (≈35.5 ms) and the screen's update interval (16.7 ms) were
+unchanged in every run. Trace (`hold-tb2`): the worker's frame was sent before
+the page let go in 173 of 176 held frames (release ~0.04 ms after it), and
+made the draw in 175. With the 8 ms tick, 107–121 frames were not held because
+the prediction passed the cap; those are the remaining misses. Main-thread
+time spent holding: ~8% of the run at a 6 ms tick, ~10% at 8 ms.
+`latency-view.ts` and the fast smoke pass with and without `frameHold=on`.
 
 ## 7. Risks and open questions
 

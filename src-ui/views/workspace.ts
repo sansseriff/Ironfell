@@ -16,7 +16,7 @@ import ViewPanel from './ViewPanel.svelte';
 import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
-import { titleOf, type ViewSpec } from './views';
+import { LATENCY_VIEW, titleOf, type ViewSpec } from './views';
 import { controllerManager } from '../controller-manager.svelte';
 import type { CompositionEntry, OpenedDocument } from '../runtime/document_client.svelte';
 
@@ -106,6 +106,32 @@ function syncTitles(api: DockviewApi, list: CompositionEntry[]) {
     const c = list.find((e) => e.id === spec.source);
     const title = c?.name ? titleOf(c.name) : null;
     if (title && p.api.title !== title) p.api.setTitle(title);
+  }
+}
+
+/**
+ * `?latency=<layout>` (plans/rendering/latency-view.md): open the Latency view
+ * in a fixed layout for repeatable measurements, and never save the layout
+ * over the scope's own.
+ *   solo    the Latency view alone
+ *   panels  the Model view left, the Latency view, the Inspector right
+ *   full    the app's usual views, with the Latency view in front of Main
+ */
+const latencyLayout = new URLSearchParams(location.search).get('latency');
+
+function arrangeLatency(api: DockviewApi, layout: string) {
+  const view = (id: string, title: string, spec: ViewSpec, position?: any, extra: Record<string, unknown> = {}) =>
+    api.addPanel({ id, component: 'view', title, params: { spec }, position, ...extra });
+  if (layout === 'full') {
+    if (!api.getPanel('latency')) view('latency', 'Latency', LATENCY_VIEW, api.getPanel('viewer') ? { referencePanel: 'viewer', direction: 'within' } : undefined);
+    api.getPanel('latency')?.api.setActive();
+    return;
+  }
+  api.clear();
+  view('latency', 'Latency', LATENCY_VIEW);
+  if (layout === 'panels') {
+    view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'latency', direction: 'left' }, { initialWidth: 380 });
+    view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'latency', direction: 'right' }, { initialWidth: 300 });
   }
 }
 
@@ -248,6 +274,7 @@ async function open(api: DockviewApi, o: OpenedDocument) {
       await addDocumentViews(api);
     }
     syncTitles(api, controllerManager.docClient.compositions);
+    if (latencyLayout && first) arrangeLatency(api, latencyLayout);
   } finally {
     applying--;
   }
@@ -263,7 +290,7 @@ function scheduleSave() {
 function saveNow() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
-  if (!current || openedKey === null) return;
+  if (!current || openedKey === null || latencyLayout) return;
   controllerManager.docClient.writeWorkspace(openedKey, JSON.stringify(current.toJSON()));
 }
 

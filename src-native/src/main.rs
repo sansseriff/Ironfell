@@ -429,7 +429,8 @@ fn native_test(
 fn main() {
     let mut expose_diagnostic = std::env::var_os("IRON_NATIVE_LAYER_PROBE").is_some()
         || std::env::var_os("IRON_NATIVE_SELF_TEST").is_some()
-        || std::env::var_os("IRON_NATIVE_PACING_TRACE").is_some();
+        || std::env::var_os("IRON_NATIVE_PACING_TRACE").is_some()
+        || std::env::var_os("IRON_NATIVE_LATENCY").is_some();
     let bridge = Arc::new(Bridge::default());
     let setup_bridge = bridge.clone();
     let app = tauri::Builder::default()
@@ -477,6 +478,18 @@ fn main() {
                 if std::env::var_os("IRON_NATIVE_LAYER_PROBE").is_none() {
                     native.set_title(&format!("Iron — filming · {render} / {pacing}"))?;
                 }
+            }
+            // The Latency view in a fixed layout (plans/rendering/latency-view.md):
+            // `IRON_NATIVE_LATENCY=solo|panels|full`, as `?latency=` on the web.
+            if let Ok(layout) = std::env::var("IRON_NATIVE_LATENCY") {
+                let mut url = native.url()?;
+                url.query_pairs_mut().append_pair("latency", &layout);
+                native.navigate(url)?;
+                let render = std::env::var("IRON_NATIVE_RENDER_MODE").unwrap_or("pipelined".into());
+                let pacing = std::env::var("IRON_NATIVE_PACING").unwrap_or("display".into());
+                native.set_title(&format!("Iron — latency · {layout} · {render} / {pacing}"))?;
+                // Room for the sweep beside the Model and Inspector views.
+                native.set_size(tauri::LogicalSize::new(1600.0, 1000.0))?;
             }
             let owner = native.clone();
             let bridge = setup_bridge.clone();

@@ -282,12 +282,19 @@ pub enum HistoryOp {
 #[derive(Resource, Default)]
 pub struct HistoryRequests(pub Vec<HistoryOp>);
 
+/// Whether a Latency view has asked for its session composition
+/// (`standard::latency_ops`, `engine_api::document_latency`). Once set it
+/// stays set, so the composition is rebuilt after a load replaces the store.
+#[derive(Resource, Default)]
+pub struct LatencyRequested(pub bool);
+
 pub struct DocumentPlugin;
 
 impl Plugin for DocumentPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(DocumentStore(Store::new()))
             .init_resource::<PendingTransactions>()
+            .init_resource::<LatencyRequested>()
             .init_resource::<NodeMap>()
             .init_resource::<Drawables>()
             .init_resource::<Modes>()
@@ -377,14 +384,17 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes, mut ui, mut timeline): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>),
+    (mut drawables, modes, mut ui, mut timeline, latency): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<LatencyRequested>),
 ) {
+    let session_named = |doc: &iron_document::Document, name: &str| doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name));
+    let build_latency = latency.0 && !session_named(store.0.document(), iron_document::standard::LATENCY);
     if pending.0.is_empty()
         && history.0.is_empty()
         && load.0.is_none()
         && gestures.0.is_empty()
         && !store.0.has_changes()
         && store.0.document().version() == synced.0
+        && !build_latency
     {
         return;
     }
@@ -497,10 +507,12 @@ pub(crate) fn sync_document(
     // The Library tab's composition (component-authoring.md §6) and the
     // Stats composition (free-running.md §4): session state, built when
     // missing (at start, and after a load replaces the store).
-    for (name, build) in [(iron_document::standard::LIBRARY, iron_document::standard::library_ops as fn(NodeId, iron_document::OrderKey) -> Vec<Op>), (iron_document::standard::STATS, iron_document::standard::stats_ops)] {
-        let doc = store.0.document();
-        let has = doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name));
-        if !has {
+    // The Latency view's (rendering/latency-view.md) only once a Latency
+    // view has asked for it (`LatencyRequested`).
+    let latency_build: Option<(&str, fn(NodeId, iron_document::OrderKey) -> Vec<Op>)> = latency.0.then_some((iron_document::standard::LATENCY, iron_document::standard::latency_ops));
+    for (name, build) in [(iron_document::standard::LIBRARY, iron_document::standard::library_ops as fn(NodeId, iron_document::OrderKey) -> Vec<Op>), (iron_document::standard::STATS, iron_document::standard::stats_ops)].into_iter().chain(latency_build) {
+        if !session_named(store.0.document(), name) {
+            let doc = store.0.document();
             let first = doc.next_session_ids(1)[0];
             let order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(iron_document::OrderKey::first, |n| iron_document::OrderKey::after(&n.order));
             let ops = build(first, order);

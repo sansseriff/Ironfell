@@ -19,6 +19,7 @@ pub(crate) mod scene3d;
 mod ui_panels;
 mod alpha_stress;
 mod latency_film;
+mod latency_view;
 
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
@@ -231,6 +232,9 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
     app.add_systems(Update, ui_panels::render_ui_panels);
     app.add_systems(PostUpdate, crate::panels::sync_panel_vector_views);
     app.add_systems(PostUpdate, latency_film::draw
+        .after(select::draw_select_overlay)
+        .after(crate::panels::sync_panel_vector_views));
+    app.add_systems(PostUpdate, latency_view::draw
         .after(select::draw_select_overlay)
         .after(crate::panels::sync_panel_vector_views));
 

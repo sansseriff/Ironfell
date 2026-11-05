@@ -95,6 +95,11 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `validate-layers.py`, six native GPU readback controls | ~25 s when drawables are available |
 | five-second Metal HUD report, including startup/menu/countdown | ~15–30 s |
 | `latency-film.ts`, three runtime/DPR configurations per backend | ~10–15 s |
+| `latency-view.ts`, two runtimes × two layouts, DPR 2, plus the menu | ~15 s (15.4 s, 2026-11-05) |
+| `latency-measure.ts`, one run (OS pointer, hands off) | ~15 s (Chrome launch, 6 s sweep, analysis) |
+| ⏱ `latency-measure.ts`, Chrome `REPEAT=2` (8 runs) | ~3 min |
+| `scripts/latency/build.sh` (Swift probe) | ~5 s |
+| ⏱ `cargo build -p iron-native` cold in a fresh worktree (`dev-opt`) | ~6 min (5m 43s, 2026-11-05) |
 | `check-latency-film.py`, six screenshots | ~2 s |
 | `appearance.ts` (DPR 1, warm) | ~30 s |
 | ⏱ `raster-pixels.txt` (with the Prussia import, then the meters) | ~1.5 min |
@@ -2596,6 +2601,57 @@ and native package compile; frontend check remains zero errors/ten existing warn
 These are functional/pixel checks, not measured optical latency. Setup export records
 camera sampling rate but does not calculate a photon-latency value.
 
+
+### Latency view and measured latency — 2026-11-05
+
+Owning plan: [`plans/rendering/latency-view.md`](../../../plans/rendering/latency-view.md).
+A developer view (Settings → Developer, then "+" → Developer → **Latency**) with a
+yellow square dragged through the select tool and four pointer trackers (Vello
+engine ring, Canvas2D in the event, Canvas2D on rAF, SVG), all concentric at rest.
+`?latency=solo|panels|full` opens it in a fixed layout and does not save the
+layout; `?runtime=worker|main` overrides the stored runtime for one page; native:
+`IRON_NATIVE_LATENCY=solo|panels|full` with any native launch.
+
+Functional check (headless Chrome, no OS input), from `.claude/skills/run-iron`
+with the worktree's Vite on 5185:
+
+```sh
+bun run latency-view.ts          # DPR=1, RUNTIMES=worker, LAYOUTS=panels narrow it
+```
+
+Expected (six lines):
+
+```text
+PASS LATENCY VIEW worker/solo/dpr2: opens, concentric at rest and held, drag outside history, recentre; no page errors
+PASS LATENCY VIEW worker/panels/dpr2: opens, concentric at rest and held, drag outside history, recentre; no page errors
+PASS LATENCY VIEW main/solo/dpr2: opens, concentric at rest and held, drag outside history, recentre; no page errors
+PASS LATENCY VIEW main/panels/dpr2: opens, concentric at rest and held, drag outside history, recentre; no page errors
+PASS LATENCY VIEW menu/developer-on: opens from the + menu; no page errors
+PASS LATENCY VIEW menu/developer-off: not offered; no page errors
+```
+
+Measured latency drives the **real OS pointer** and records the screen, so the
+calling app needs Accessibility (macOS 27: "Device Control and Data Access") and
+Screen Recording, the display must be awake, and nobody may touch the mouse
+(~15 s a run). Never script System Events for it: that raises an Automation
+prompt over the screen. Build the probe once, then from `.claude/skills/run-iron`:
+
+```sh
+../../../scripts/latency/build.sh
+URL='http://127.0.0.1:5185/Ironfell/?demo' REPEAT=2 bun run latency-measure.ts      # Chrome (own profile), worker+main × solo+panels
+BROWSER=safari URL='http://127.0.0.1:5185/Ironfell/?demo' bun run latency-measure.ts
+BROWSER=native MODES=baseline,adaptive LAYOUTS=solo,panels bun run latency-measure.ts   # after native:ui + cargo build -p iron-native
+../../../scripts/latency/summarize.py ../../../.agents/latency/measure/*.json
+```
+
+`CONTINUOUS=1` turns on the view's Continuous rendering first (Chrome); `TAG=x`
+suffixes labels. Each run prints `label: p50 ms …` and writes JSON and per-frame CSV
+to `.agents/latency/measure/`; a run that cannot find the square saves the still it
+searched (`<label>-still.png`). Reference values (60 Hz built-in display, 2026-11-05),
+p50 ms, DOM / engine ring / square: Chrome ≈36 / 50 / 52 (solo, panels) and
+≈36 / 36 / 36 (`full`); Safari ≈52 / 67 / 68; native baseline ≈52 / 52 / 52 (varies
+by a frame between runs); native adaptive ≈52 / 38 / 36. All trackers must report
+`concentric at rest: yes`.
 
 ### Native layer / presentation controls — 2026-10-27
 

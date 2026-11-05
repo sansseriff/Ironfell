@@ -3,6 +3,11 @@ import { PanelManager } from "./panel_manager";
 import type { RuntimeMode } from "./runtime/session_adapter";
 import { saveSettings, settings } from "./runtime/settings.svelte";
 
+function urlRuntime(): RuntimeMode | null {
+  const r = new URLSearchParams(location.search).get('runtime');
+  return r === 'worker' || r === 'main' ? r : null;
+}
+
 /**
  * Thin reactive wrapper around PanelManager for Svelte components.
  */
@@ -11,7 +16,9 @@ class ControllerManagerClass {
   showBackendWarning = $state(false);
   loadingInProgress = $state(false);
   backendSupported = $state(true);
-  runtimeMode: RuntimeMode = $state(isNativeHost() ? 'native' : settings.runtime);
+  // `?runtime=worker|main` overrides the stored setting for this page only
+  // (repeatable measurements, plans/rendering/latency-view.md).
+  runtimeMode: RuntimeMode = $state(isNativeHost() ? 'native' : urlRuntime() ?? settings.runtime);
 
   private manager = new PanelManager();
 

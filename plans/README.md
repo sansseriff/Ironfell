@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-04 for local agent/chat integration. Update this file whenever a plan is added,
+**Updated:** 2026-11-05 for the Latency view (`rendering/latency-view.md`). Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -77,6 +77,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`render-benchmark.md`](rendering/render-benchmark.md) | In-app measurements and protocol; raw runs in [`benchmarks/`](rendering/benchmarks/) |
 | [`renderer-sanity-checks.md`](rendering/renderer-sanity-checks.md) | Build/DPR pitfalls, Canvas2D/ThorVG/standalone Vello controls, renderer-family experiments (§10) |
 | [`native-frame-pacing.md`](rendering/native-frame-pacing.md) | Native (macOS) frame loop: where input-to-display latency comes from, what helped and what didn't, measurement traps, open questions |
+| [`latency-view.md`](rendering/latency-view.md) | The in-app Latency view (developer mode, `?latency=`), the OS-pointer + screen-capture probe for regression checks, and measured web/native results (2026-11-05) |
 
 ## 5. Archive (do not build from these)
 

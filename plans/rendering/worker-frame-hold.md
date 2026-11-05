@@ -1,7 +1,8 @@
 # Holding the page's frame for the worker (adaptive frame hold)
 
-**Status:** Phase 0's limit check and the Phase 1 prototype done 2026-11-05
-(§6b): `?frameHold=on` on a dev server with `IRON_COI=1`. Phase 2 next. Follows the worker tick-on-input
+**Status:** Phases 0–2 done 2026-11-05 (§6b, §6c): `?frameHold=on` on a dev
+server with `IRON_COI=1`, adaptive by default. Phase 3 (isolation in
+deployment, default on) next. Follows the worker tick-on-input
 fix in [`latency-view.md`](latency-view.md) §7. Timelines of the problem, the fix
 and this proposal: [`latency-timelines.html`](latency-timelines.html).
 
@@ -222,6 +223,43 @@ made the draw in 175. With the 8 ms tick, 107–121 frames were not held because
 the prediction passed the cap; those are the remaining misses. Main-thread
 time spent holding: ~8% of the run at a 6 ms tick, ~10% at 8 ms.
 `latency-view.ts` and the fast smoke pass with and without `frameHold=on`.
+
+## 6c. Phase 2: adaptive cap, learned limit, back-off (2026-11-05)
+
+Built in `FrameHold` (`src-ui/runtime/frame_hold.ts`):
+
+- **Cap** = vsync + limit − the page's work after the hold (p90 of recent
+  frames, timed from the end of the hold's rAF callback to the next task) −
+  0.3 ms. No room left: no hold (`noRoom`).
+- **Limit** starts at 4.5 ms, grows 0.02 ms per held frame that lands and
+  drops 1 ms after a missed one, within 2.5–5.5 ms; both bounds scale with the
+  frame interval (a 120 Hz frame halves them).
+- **Back-off:** two misses after holds in one interaction switch the hold off
+  until input has been quiet for 100 ms.
+- `&holdAdapt=0` keeps Phase 1's fixed cap for comparison.
+
+Large window, light trackers, Chrome worker `solo`, 2 runs per row:
+
+| Case | Square behind the DOM | Screen interval, mean | Notes |
+|---|---|---|---|
+| 6 ms tick, adaptive | 0–2.2% | 16.7 ms | limit grew to the 5.5 ms ceiling |
+| 6 ms tick, fixed cap | 0.4–2.4% | 16.7–16.8 ms | same as adaptive |
+| heavy page (3 ms of page work) + 8 ms tick, no hold | 0% / 47% (by session) | 16.7 ms | the slow page delays the draw, so Vello often makes it |
+| same, fixed cap | 2.3–28% | **18.9–22.6 ms** | the hold plus the page's work passes Chrome's limit: dropped frames |
+| same, adaptive | 0–2.1% | 16.7 ms | measured 3 ms after the hold, so it almost never held |
+| **acceptance:** 6 ms tick, 20 s sweeps, adaptive | **0.5–0.6%** (hold off: 99.6%) | 16.68–16.70 ms (off: 16.67) | DOM p50/p90 unchanged; 1–2 single dropped frames per run with the hold, none without |
+
+- **Acceptance (§6, Phase 2): met** for Vello = DOM (≥95%: 99.4–99.5%) and the
+  DOM's lag; dropped frames were 1–2 per ~1350 with the hold against none.
+- **Main-thread cost:** 1.9–2.0 s of holding in a ~22 s run with a 6 ms tick
+  (~9%), hold p50 1.6 / p90 2.4 ms.
+- **The miss detector is blind to presentation drops.** In the fixed-cap heavy
+  runs the screen dropped frames while rAF intervals stayed regular (0 misses
+  counted), so the learned limit does not discover Chrome's limit by itself;
+  the ceiling and the measured after-hold work are what protect the page.
+  Raising the ceiling needs a measured limit per browser, not learning.
+- Not measured yet: hover (the probe drags), wheel and pinch, Safari, the
+  `full` layout, 120 Hz.
 
 ## 7. Risks and open questions
 

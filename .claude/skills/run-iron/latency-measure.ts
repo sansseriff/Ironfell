@@ -81,7 +81,7 @@ if (browserName === 'chrome') {
       const hold = await page.evaluate(() => (window as any).__frameHold?.stats() ?? null);
       if (result && hold) {
         writeFileSync(`${out}/${label}-hold.json`, JSON.stringify(hold, null, 2));
-        console.log(`  frame hold: ${hold.pending} frames with a tick running at rAF of ${hold.frames}; held ${hold.held} (released ${hold.released}, timed out ${hold.timedOut}), skipped ${hold.skipped}, disarmed ${hold.disarmed}; hold p50 ${hold.holdMs.p50} / p90 ${hold.holdMs.p90} / max ${hold.holdMs.max} ms, total ${hold.holdMs.total} ms; cap ${hold.capMs} ms`);
+        console.log(`  frame hold${hold.adaptive ? '' : ' (fixed cap)'}: ${hold.pending} of ${hold.frames} frames with a tick running at rAF; held ${hold.held} (released ${hold.released}, timed out ${hold.timedOut}); not held: skipped ${hold.skipped}, no room ${hold.noRoom}, backed off ${hold.backedOff}, disarmed ${hold.disarmed}; hold p50 ${hold.holdMs.p50} / p90 ${hold.holdMs.p90} ms, total ${hold.holdMs.total} ms; missed frames ${hold.missed} (${hold.missedAfterHold} after a hold), backoffs ${hold.backoffs}; limit ${hold.limitMs} ms, page work after p50 ${hold.afterMs.p50} / p90 ${hold.afterMs.p90} ms`);
       }
       const rafHz = await page.evaluate(() => Number(document.querySelector('[data-latency-stats]')?.textContent?.match(/rAF (\d+)/)?.[1] ?? 0));
       if (rafHz && rafHz < 55) console.log(`  WARNING page rAF ${rafHz} Hz: the page was throttled; discard this run`);

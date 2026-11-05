@@ -174,7 +174,8 @@ export class SessionAdapter {
         let hold: SharedArrayBuffer | undefined;
         if ((holdMode === 'on' || holdMode === 'always') && globalThis.crossOriginIsolated) {
           hold = new SharedArrayBuffer(HOLD_BYTES);
-          this.frameHold = new FrameHold(hold, Number(params.get('holdCap') ?? 4.5) || 4.5, holdMode === 'always');
+          // `&holdCap=ms`: the starting limit; `&holdAdapt=0`: Phase 1's fixed cap.
+          this.frameHold = new FrameHold(hold, { limitMs: Number(params.get('holdCap') ?? 4.5) || 4.5, always: holdMode === 'always', adaptive: params.get('holdAdapt') !== '0' });
           this.frameHold.start();
         } else if (holdMode) {
           console.warn('frameHold needs cross-origin isolation (serve with IRON_COI=1); not holding');

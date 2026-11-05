@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Worker Frame Timelines</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6b6b70; --grid: #e2e2e5; --card: #ffffff; --border: #dcdce0;
+    --input: #7a7a85; --main: #1f9d55; --worker: #c2258f; --viz: #2f6fdb; --hold: #e07a10; --bad: #d23b3b; --budget: #2f6fdb;
+    --flag: #8a5cf6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151517; --fg: #ececf0; --muted: #9a9aa3; --grid: #2c2c31; --card: #1c1c1f; --border: #34343a;
+      --input: #a0a0ab; --main: #3fcf7c; --worker: #f05cc0; --viz: #6d9cf5; --hold: #f59a3c; --bad: #f06a6a; --budget: #6d9cf5;
+      --flag: #a98bff;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #151517; --fg: #ececf0; --muted: #9a9aa3; --grid: #2c2c31; --card: #1c1c1f; --border: #34343a;
+    --input: #a0a0ab; --main: #3fcf7c; --worker: #f05cc0; --viz: #6d9cf5; --hold: #f59a3c; --bad: #f06a6a; --budget: #6d9cf5;
+    --flag: #a98bff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 24px; max-width: 760px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 18px 12px; margin: 0 0 22px; }
+  .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 99px; margin-left: 8px; vertical-align: 2px; }
+  .tag.measured { background: color-mix(in srgb, var(--main) 18%, transparent); color: var(--main); }
+  .tag.proposal { background: color-mix(in srgb, var(--hold) 20%, transparent); color: var(--hold); }
+  .sub { color: var(--muted); margin: 0 0 10px; font-size: 14px; }
+  svg { width: 100%; height: auto; display: block; overflow: visible; }
+  svg text { fill: var(--fg); font-size: 11.5px; font-family: inherit; }
+  svg .muted { fill: var(--muted); }
+  svg .lane-label { font-size: 12.5px; font-weight: 600; }
+  ol.steps { margin: 8px 0 6px; padding-left: 22px; }
+  ol.steps li { margin: 3px 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); margin: 0 0 22px; }
+  .legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  .scroll { overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+  .note { font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Why the worker's Vello frame was late, and how to keep it on time</h1>
+  <p class="lede">Chrome on macOS, 60 Hz, a light page (the Latency view alone). Times are in ms, measured from Chrome traces
+  (<code>plans/rendering/latency-view.md</code> §7). One drag event is followed from the OS to the screen. Arrows show
+  what triggers what. The DOM trackers set the bar: Vello should appear on screen at the same vsync they do.</p>
+
+  <div class="legend">
+    <span style="--c: var(--input)">browser input</span>
+    <span style="--c: var(--main)">page main thread, DOM</span>
+    <span style="--c: var(--worker)">Iron worker, Vello</span>
+    <span style="--c: var(--viz)">compositor (viz) draw</span>
+    <span style="--c: var(--hold)">main thread holds its frame (proposal)</span>
+    <span style="--c: var(--flag)">shared flag (proposal)</span>
+  </div>
+
+  <section>
+    <h2>1. Before: the worker ticks at rAF <span class="tag measured">measured</span></h2>
+    <p class="sub">Vello ≈50–52 ms against the DOM's ≈36 ms: one frame late. The tick was ready after the draw in 192 of 192 frames.</p>
+    <div id="before"></div>
+    <ol class="steps">
+      <li>The browser delivers one coalesced drag event per frame, about 12.4 ms in. The page's <code>pointerrawupdate</code> posts it to the worker, which only stores it.</li>
+      <li>At vsync 1 the DOM trackers draw (<code>pointermove</code>). The page's light frame is committed by ~17.6 ms.</li>
+      <li>The compositor draws as soon as the <em>page's</em> frame is ready (~17.9 ms). It does not wait for the worker's canvas, which is a separate surface.</li>
+      <li>The worker's rAF starts its tick only at vsync 1. Its frame is sent at ~21.5 ms, too late for that draw, so the draw after vsync 2 picks it up.</li>
+    </ol>
+    <p class="note">It was on time in the full layout by accident: the Document view's forced layout made the page's frame slow (~5 ms), so the draw waited until after the worker's frame.</p>
+  </section>
+
+  <section>
+    <h2>2. The fix: tick when the motion arrives <span class="tag measured">measured</span></h2>
+    <p class="sub">Vello ≈36 ms, the same vsync as the DOM, in every layout in Chrome and Safari. Ready before the draw in 190 of 190 frames. Built: <code>BrowserRuntime.tickOnInput</code>.</p>
+    <div id="fix"></div>
+    <ol class="steps">
+      <li>The pointer message starts the tick at once (~12.7 ms), at most once per frame.</li>
+      <li>The tick (~4 ms) finishes before vsync 1. The worker's next BeginFrame sends the frame (~16.9 ms).</li>
+      <li>At vsync 1 the worker's rAF skips its tick: the motion has already been rendered.</li>
+      <li>The compositor's draw at ~17.9 ms already has the new Vello frame, as well as the new DOM.</li>
+    </ol>
+    <p class="note">The budget runs from the motion's arrival to the draw: ≈5.2 ms, of which the tick uses ≈4 ms. A longer tick (dashed) misses the draw and is one frame late, the same as before the fix, never worse.</p>
+  </section>
+
+  <section>
+    <h2>3. Proposal: hold the page's frame for the worker <span class="tag proposal">not built</span></h2>
+    <p class="sub">Needs cross-origin isolation (COOP + COEP headers) for <code>SharedArrayBuffer</code>. Shown with a heavier, 8.3 ms tick that the fix alone would miss.</p>
+    <div id="proposal"></div>
+    <ol class="steps">
+      <li>When the pointer message starts a tick, the worker sets a shared flag to <b>pending</b> (<code>Atomics.store</code>).</li>
+      <li>At vsync 1 the DOM trackers draw as usual. Then the page's rAF reads the flag. While it is pending, it spins on <code>Atomics.load</code>; the main thread can't use <code>Atomics.wait</code>. The spin stops at a cap.</li>
+      <li>The worker finishes, its BeginFrame sends the frame, and it sets the flag to <b>done</b>.</li>
+      <li>The page's rAF returns and its frame commits. The compositor, which waits for the page, draws with both new.</li>
+      <li>If the tick finished before vsync (the normal case), the flag is already done and nothing is held.</li>
+    </ol>
+    <p class="note">The cap matters. A fixed hold of 6 ms past vsync kept everything on time (<code>?latencyBusy=6</code>); 9 ms made Chrome draw without the page, putting the whole page, DOM included, a frame late. The limit is somewhere in that shaded band, and Safari's is unmeasured. The budget grows from ≈5 ms to roughly 10–11 ms. While the main thread holds, it handles no input; the DOM still lands in the same vsync.</p>
+  </section>
+
+  <section>
+    <h2>Side by side</h2>
+    <div class="scroll">
+    <table>
+      <tr><th></th><th>Vello vs DOM</th><th>Tick budget during a drag</th><th>Cost</th></tr>
+      <tr><td><b>Before</b> (rAF tick)</td><td>+1 frame (≈50 vs 36 ms)</td><td>≈1.2 ms after vsync: never met on a light page</td><td>—</td></tr>
+      <tr><td><b>Fix</b> (tick on arrival)</td><td>Same frame (≈36 ms)</td><td>≈5.2 ms from arrival; tick ≈4 ms</td><td>Ticks during drags happen when the motion arrives, not at vsync</td></tr>
+      <tr><td><b>Proposal</b> (fix + hold)</td><td>Same frame for heavier ticks</td><td>≈10–11 ms, if Chrome's limit is ~6 ms past vsync</td><td>COOP/COEP headers (popups, cross-origin assets); main thread spins up to the cap; overrunning the cap makes the whole page late</td></tr>
+    </table>
+    </div>
+    <p class="note">Before building the proposal, the hold can be simulated without isolation: sweep <code>?latencyBusy</code> from 6 to 9 ms to find the exact limit, then use a heavier document so that the tick is longer than 5 ms.</p>
+  </section>
+</main>
+
+<script>
+// Timeline renderer: lanes, vsync lines, bars, point marks, causal arrows, brackets.
+// A broken axis: 11–26 ms (where the work happens) gets most of the width,
+// 26–32.5 ms is cut, 32.5–53 ms (what reaches the screen) is compressed.
+const W = 1000, LX = 150, RX = W - 16;
+const A0 = 11, A1 = 26, B0 = 32.5, B1 = 53, GAP = 34;
+const AW = (RX - LX - GAP) * 0.72, BW = RX - LX - GAP - AW;
+const LANES = ['Browser input', 'Main thread', 'Worker (Iron)', 'Compositor', 'On screen'];
+const LANE_H = 70, TOP = 40;
+const x = (t) => t <= A1 ? LX + (t - A0) / (A1 - A0) * AW
+  : t < B0 ? LX + AW + (t - A1) / (B0 - A1) * GAP
+  : LX + AW + GAP + (t - B0) / (B1 - B0) * BW;
+const ly = (i) => TOP + i * LANE_H + LANE_H / 2;
+const NS = 'http://www.w3.org/2000/svg';
+function el(name, attrs, parent, text) {
+  const e = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text != null) e.textContent = text;
+  parent.appendChild(e);
+  return e;
+}
+function render(id, items) {
+  const H = TOP + LANES.length * LANE_H + 26;
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `timeline: ${id}` }, document.getElementById(id));
+  const defs = el('defs', {}, svg);
+  for (const c of ['input', 'main', 'worker', 'viz', 'hold', 'bad', 'flag', 'muted']) {
+    const m = el('marker', { id: `${id}-arrow-${c}`, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, defs);
+    el('path', { d: 'M0,0 L10,5 L0,10 z', fill: `var(--${c === 'muted' ? 'muted' : c})` }, m);
+  }
+  // lanes
+  LANES.forEach((name, i) => {
+    el('line', { x1: LX, x2: RX, y1: ly(i), y2: ly(i), stroke: 'var(--grid)', 'stroke-width': 1 }, svg);
+    el('text', { x: 0, y: ly(i) + 4, class: 'lane-label' }, svg, name);
+  });
+  // time axis
+  for (const t of [12, 14, 16, 18, 20, 22, 24, 26, 35, 40, 45, 50]) {
+    el('text', { x: x(t), y: H - 6, 'text-anchor': 'middle', class: 'muted' }, svg, `${t}`);
+  }
+  el('text', { x: x(A0) - 6, y: H - 6, 'text-anchor': 'end', class: 'muted' }, svg, 'ms');
+  // the cut
+  el('rect', { x: x(A1), y: TOP - 4, width: GAP, height: LANES.length * LANE_H + 4, fill: 'var(--card)' }, svg);
+  for (const dx of [10, 20]) el('line', { x1: x(A1) + dx - 4, x2: x(A1) + dx + 4, y1: H - 26, y2: H - 14, stroke: 'var(--muted)', 'stroke-width': 1.3 }, svg);
+  el('text', { x: x(A1) + GAP / 2, y: TOP + LANES.length * LANE_H / 2, 'text-anchor': 'middle', class: 'muted', transform: `rotate(-90 ${x(A1) + GAP / 2} ${TOP + LANES.length * LANE_H / 2})` }, svg, 'axis cut 26–32.5 ms');
+  // vsyncs
+  [[16.67, 'vsync 1'], [33.33, 'vsync 2'], [50, 'vsync 3']].forEach(([t, l]) => {
+    el('line', { x1: x(t), x2: x(t), y1: TOP - 8, y2: TOP + LANES.length * LANE_H, stroke: 'var(--muted)', 'stroke-dasharray': '3 4', 'stroke-width': 1 }, svg);
+    el('text', { x: x(t), y: TOP - 14, 'text-anchor': 'middle', class: 'muted' }, svg, l);
+  });
+  for (const it of items) draw(svg, id, it);
+}
+function labelAt(svg, it, cx, cy) {
+  if (!it.label) return;
+  const pos = it.pos ?? 'above';
+  const dy = pos === 'above' ? -13 : pos === 'below' ? 22 : 4;
+  const anchor = pos === 'right' ? 'start' : it.anchor ?? 'middle';
+  const lines = it.label.split('\n');
+  lines.forEach((line, k) => {
+    const y = cy + dy + (pos === 'above' ? (k - lines.length + 1) * 13 : k * 13);
+    const attrs = { x: cx + (it.dx ?? 0), y, 'text-anchor': anchor, class: it.muted ? 'muted' : '' };
+    if (pos === 'inside') attrs.style = 'fill:#fff;font-weight:600';
+    el('text', attrs, svg, line);
+  });
+}
+function draw(svg, id, it) {
+  const color = `var(--${it.c})`;
+  if (it.band) { // shaded time band across lanes
+    el('rect', { x: x(it.t), y: TOP, width: x(it.t2) - x(it.t), height: LANES.length * LANE_H, fill: color, opacity: 0.1 }, svg);
+    el('text', { x: (x(it.t) + x(it.t2)) / 2, y: TOP + 12, 'text-anchor': 'middle', style: `fill:${color};font-weight:600` }, svg, it.label);
+    return;
+  }
+  if (it.bar) {
+    const y = ly(it.lane) + (it.offset ?? 0);
+    const h = it.h ?? 16;
+    el('rect', { x: x(it.t), y: y - h / 2, width: Math.max(2, x(it.t2) - x(it.t)), height: h, rx: 3, fill: it.dashed ? 'none' : color, stroke: color, 'stroke-width': it.dashed ? 1.5 : 0, 'stroke-dasharray': it.dashed ? '4 3' : 'none', opacity: it.faint ? 0.45 : 1 }, svg);
+    labelAt(svg, it, it.pos === 'right' ? x(it.t2) + 6 : it.anchor === 'start' ? x(it.t) : it.anchor === 'end' ? x(it.t2) : (x(it.t) + x(it.t2)) / 2, y);
+    return;
+  }
+  if (it.mark) {
+    const cx = x(it.t), cy = ly(it.lane) + (it.offset ?? 0);
+    el('path', { d: `M${cx},${cy - 6} L${cx + 6},${cy} L${cx},${cy + 6} L${cx - 6},${cy} z`, fill: color, stroke: 'var(--card)', 'stroke-width': 1 }, svg);
+    labelAt(svg, it, it.pos === 'right' ? cx + 10 : cx, cy);
+    return;
+  }
+  if (it.arrow) {
+    const x1 = x(it.t), y1 = ly(it.lane) + (it.o1 ?? 0), x2 = x(it.t2), y2 = ly(it.lane2) + (it.o2 ?? 0);
+    const sx = y1 < y2 ? 1 : -1;
+    const mx = (x1 + x2) / 2;
+    const d = Math.abs(x2 - x1) < 30
+      ? `M${x1},${y1 + sx * 7} L${x2},${y2 - sx * 8}`
+      : `M${x1},${y1 + sx * 7} C${mx},${y1 + sx * 7} ${mx},${y2 - sx * 8} ${x2},${y2 - sx * 8}`;
+    el('path', { d, fill: 'none', stroke: color, 'stroke-width': 1.4, 'stroke-dasharray': it.dashed ? '4 3' : 'none', 'marker-end': `url(#${id}-arrow-${it.c})`, opacity: 0.9 }, svg);
+    if (it.label) el('text', { x: (x1 + x2) / 2 + (it.dx ?? 0), y: (y1 + y2) / 2 + (it.dy ?? 0), 'text-anchor': 'middle', style: `fill:${color};font-size:11px` }, svg, it.label);
+    return;
+  }
+  if (it.bracket) {
+    const y = ly(it.lane) + (it.offset ?? -24);
+    el('path', { d: `M${x(it.t)},${y + 5} L${x(it.t)},${y} L${x(it.t2)},${y} L${x(it.t2)},${y + 5}`, fill: 'none', stroke: color, 'stroke-width': 1.5 }, svg);
+    el('text', { x: (x(it.t) + x(it.t2)) / 2, y: y - 5, 'text-anchor': 'middle', style: `fill:${color};font-weight:600` }, svg, it.label);
+  }
+}
+
+// Shared opening: the event and its hand-off to the worker.
+const opening = [
+  { mark: 1, lane: 0, t: 12.4, c: 'input', label: 'drag event\n(one per frame)', pos: 'above' },
+  { arrow: 1, lane: 0, t: 12.4, lane2: 1, t2: 12.6, c: 'input' },
+  { bar: 1, lane: 1, t: 12.6, t2: 12.9, c: 'main', label: 'pointerrawupdate\n→ postMessage', pos: 'above', anchor: 'start' },
+  { arrow: 1, lane: 1, t: 12.9, lane2: 2, t2: 13.0, c: 'main' },
+];
+const domFrame = (t) => [
+  { bar: 1, lane: 1, t, t2: t + 0.8, c: 'main', label: 'pointermove: DOM trackers,\nthen the page commits', pos: 'above', anchor: 'start' },
+];
+
+render('before', [
+  ...opening,
+  { mark: 1, lane: 2, t: 13.0, c: 'worker', label: 'stores pointer', pos: 'below' },
+  ...domFrame(16.8),
+  { arrow: 1, lane: 1, t: 17.6, lane2: 3, t2: 17.9, c: 'main', dx: 22, dy: 0 },
+  { mark: 1, lane: 2, t: 16.75, c: 'worker', label: 'rAF', pos: 'above' },
+  { bar: 1, lane: 2, t: 16.85, t2: 21.5, c: 'worker', label: 'tick ≈4.7 ms', pos: 'inside' },
+  { mark: 1, lane: 2, t: 21.6, c: 'worker', label: 'frame sent', pos: 'below', anchor: 'start', dx: 6 },
+  { mark: 1, lane: 3, t: 17.9, c: 'viz', label: 'draw: DOM new,\nVello old', pos: 'below', anchor: 'start', dx: 10 },
+  { arrow: 1, lane: 2, t: 21.6, lane2: 3, t2: 34.6, c: 'bad', label: 'waits a whole frame', dy: 2 },
+  { mark: 1, lane: 3, t: 34.6, c: 'viz', label: 'draw: Vello new', pos: 'below' },
+  { bar: 1, lane: 4, t: 33.33, t2: 53, c: 'main', h: 15, offset: -9, label: 'DOM visible', pos: 'inside', anchor: 'start', dx: 8 },
+  { bar: 1, lane: 4, t: 50, t2: 53, c: 'worker', h: 15, offset: 9, label: 'Vello visible: one frame later', pos: 'below', anchor: 'end' },
+  { arrow: 1, lane: 3, t: 17.9, lane2: 4, t2: 33.33, c: 'muted', dashed: true, o2: -9 },
+  { arrow: 1, lane: 3, t: 34.6, lane2: 4, t2: 50, c: 'muted', dashed: true, o2: 9 },
+]);
+
+render('fix', [
+  ...opening,
+  { bar: 1, lane: 2, t: 13.0, t2: 16.6, c: 'worker', label: 'tick on arrival ≈4 ms', pos: 'inside' },
+  { bar: 1, lane: 2, t: 13.0, t2: 18.6, c: 'bad', dashed: true, h: 9, offset: 19, label: 'tick over ≈5 ms: misses this draw (as before)', pos: 'right' },
+  { bracket: 1, lane: 2, t: 13.0, t2: 17.9, c: 'budget', label: 'budget ≈5 ms', offset: -22 },
+  { mark: 1, lane: 2, t: 16.9, c: 'worker', label: 'rAF skips its tick; frame sent', pos: 'right', dx: 46 },
+  ...domFrame(16.8),
+  { arrow: 1, lane: 1, t: 17.6, lane2: 3, t2: 17.9, c: 'main' },
+  { arrow: 1, lane: 2, t: 16.9, lane2: 3, t2: 17.85, c: 'worker' },
+  { mark: 1, lane: 3, t: 17.9, c: 'viz', label: 'draw: DOM and Vello new', pos: 'below', anchor: 'start', dx: 10 },
+  { bar: 1, lane: 4, t: 33.33, t2: 53, c: 'main', h: 15, offset: -9, label: 'DOM visible', pos: 'inside', anchor: 'start', dx: 8 },
+  { bar: 1, lane: 4, t: 33.33, t2: 53, c: 'worker', h: 15, offset: 9, label: 'Vello visible: same vsync', pos: 'inside', anchor: 'start', dx: 8 },
+  { arrow: 1, lane: 3, t: 17.9, lane2: 4, t2: 33.33, c: 'muted', dashed: true, o2: -9 },
+]);
+
+render('proposal', [
+  { band: 1, t: 22.7, t2: 25.7, c: 'bad', label: 'limit: 6–9 ms past vsync' },
+  ...opening,
+  { bar: 1, lane: 2, t: 13.0, t2: 21.0, c: 'worker', label: 'heavier tick ≈8 ms', pos: 'inside' },
+  { bracket: 1, lane: 2, t: 13.0, t2: 22.9, c: 'budget', label: 'budget ≈10 ms (cap ≈6 ms past vsync)', offset: -22 },
+  { mark: 1, lane: 2, t: 13.0, c: 'flag', label: 'flag = pending', pos: 'below', anchor: 'start', dx: 2 },
+  { mark: 1, lane: 2, t: 21.15, c: 'flag', label: 'frame sent;\nflag = done', pos: 'below', anchor: 'start', dx: 16 },
+  { bar: 1, lane: 1, t: 16.8, t2: 17.15, c: 'main', label: 'pointermove:\nDOM trackers', pos: 'above', anchor: 'start' },
+  { bar: 1, lane: 1, t: 17.2, t2: 21.25, c: 'hold', label: 'rAF: spin on shared flag', pos: 'inside' },
+  { arrow: 1, lane: 2, t: 21.15, lane2: 1, t2: 21.25, c: 'flag', label: 'release', dx: 26, dy: -8 },
+  { bar: 1, lane: 1, t: 21.35, t2: 21.8, c: 'main', label: 'page commits', pos: 'above', anchor: 'start' },
+  { arrow: 1, lane: 1, t: 21.8, lane2: 3, t2: 22.1, c: 'main' },
+  { arrow: 1, lane: 2, t: 21.15, lane2: 3, t2: 22.05, c: 'worker', o1: 0 },
+  { mark: 1, lane: 3, t: 22.1, c: 'viz', label: 'draw waits for the page:\nDOM and Vello new', pos: 'below', anchor: 'start', dx: 10 },
+  { mark: 1, lane: 3, t: 17.9, c: 'viz', muted: true, label: 'no draw here:\npage not ready', pos: 'below', anchor: 'end', dx: -8 },
+  { bar: 1, lane: 4, t: 33.33, t2: 53, c: 'main', h: 15, offset: -9, label: 'DOM visible', pos: 'inside', anchor: 'start', dx: 8 },
+  { bar: 1, lane: 4, t: 33.33, t2: 53, c: 'worker', h: 15, offset: 9, label: 'Vello visible: same vsync', pos: 'inside', anchor: 'start', dx: 8 },
+  { arrow: 1, lane: 3, t: 22.1, lane2: 4, t2: 33.33, c: 'muted', dashed: true, o2: -9 },
+]);
+</script>
+</body>
+</html>

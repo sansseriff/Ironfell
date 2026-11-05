@@ -205,6 +205,9 @@ one measurement, for questions the lags alone cannot answer.
 
 ## 7. Why Vello was a frame behind the DOM, and the fix
 
+Timelines of the three cases (before, the fix, the cross-origin-isolated hold
+proposed in §8): [`latency-timelines.html`](latency-timelines.html).
+
 Traced with `latency-trace.ts` (Chrome 2026-11 on macOS; viz, cc, blink, GPU and
 input categories), with times relative to the display compositor's (viz)
 BeginFrame for each vsync, 16.7 ms apart:
@@ -267,4 +270,8 @@ Limits:
 - Native baseline pacing in `full` (Vello +1 frame in round 2).
 - A way to hold the page's frame for the worker (SharedArrayBuffer and
   `Atomics`, which need cross-origin isolation) was not tried; tick-on-input
-  made it unnecessary at this scene size.
+  made it unnecessary at this scene size. It would roughly double the tick
+  budget (≈5 → ≈10 ms) if Chrome waits ~6 ms past vsync for the page (a fixed
+  6 ms hold kept everything on time, 9 ms made the whole page late). First
+  step, no isolation needed: sweep `?latencyBusy` 6–9 ms for the exact limit,
+  with a document heavy enough that the tick exceeds 5 ms.

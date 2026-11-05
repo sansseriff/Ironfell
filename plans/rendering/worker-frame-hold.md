@@ -179,18 +179,18 @@ What that touches here (audit, 2026-11-05):
 
 See `latency-view.md` §5, "On a 6K display". For this plan:
 
-- The hold addresses one of the two large-window problems: Vello missing the
-  draw when motion arrives late and the tick runs long. With motion ~1.6 ms
-  before vsync and ticks to 6.8 ms at p90, the tick-on-input budget is often
-  gone; a hold of a few ms recovers it.
-- It does not address the other: the whole page dropping frames because the
-  GPU is saturated at full resolution. Holding the main thread cannot add GPU
-  time and could make the page later. That needs less GPU work per frame:
-  at most one tick per displayed frame (the extra ticks above), not rendering
-  an unchanged frame, and Vello's cost at large canvas sizes.
-- Phase 0 adds: the extra-tick fix (one tick per frame, the latest motion),
-  measured on the large window; and the large window at 1× and 2× as standing
-  cases for every later phase.
+- With the test's own canvas load removed (`?latencyTrackers=light`), the page
+  presents every frame on a large window; the remaining stutter is Vello alone
+  missing the draw in 1–17% of frames (`solo`, large window) and ~4% (small).
+- The cause is the margin this plan widens: Chrome draws a light page ~0.7 ms
+  after vsync, motion arrives ~12 ms in, and the tick takes ~4.1 ms (p90 to
+  5 ms), leaving about 1 ms.
+- Phase 0 adds the large window (3008×1660 pt) as a standing case, measured
+  with `?latencyTrackers=light`, and Chrome's presentation feedback from a
+  trace as a second, recording-free measure of dropped frames (the recording
+  itself drops frames of a heavier page).
+- An earlier reading, that the GPU was saturated at full resolution, was the
+  Latency view's own five full-view canvases, not Iron.
 
 ## 7. Risks and open questions
 

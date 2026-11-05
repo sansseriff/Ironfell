@@ -115,12 +115,16 @@
 
   onMount(() => {
     const [, , canvasT, rafT, , konvaT, webgpuT, webglT] = TRACKERS;
+    // `?latencyTrackers=light`: only the engine, the square and the SVG ring.
+    // Each canvas tracker is a full-view layer redrawn every frame of motion;
+    // on a large display five of them cost the GPU more than the engine does.
+    const light = new URLSearchParams(location.search).get("latencyTrackers") === "light";
     // Konva and the GPU controls; a missing API leaves its ring out.
-    const extra: Tracker[] = [konvaTracker(konvaBox, konvaT.color, konvaT.radius, STROKE)];
-    const gl = webglTracker(webglCanvas, webglT.color, webglT.radius, STROKE);
+    const extra: Tracker[] = light ? [] : [konvaTracker(konvaBox, konvaT.color, konvaT.radius, STROKE)];
+    const gl = light ? null : webglTracker(webglCanvas, webglT.color, webglT.radius, STROKE);
     if (gl) extra.push(gl);
     let alive = true;
-    void webgpuTracker(webgpuCanvas, webgpuT.color, webgpuT.radius, STROKE).then((t) => {
+    if (!light) void webgpuTracker(webgpuCanvas, webgpuT.color, webgpuT.radius, STROKE).then((t) => {
       if (!t) return;
       if (!alive) return t.destroy();
       t.resize(rect.width, rect.height, window.devicePixelRatio || 1);
@@ -135,8 +139,8 @@
       rect = stage.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
       for (const c of [eventCanvas, rafCanvas]) {
-        c.width = Math.max(1, Math.round(rect.width * dpr));
-        c.height = Math.max(1, Math.round(rect.height * dpr));
+        c.width = light ? 1 : Math.max(1, Math.round(rect.width * dpr));
+        c.height = light ? 1 : Math.max(1, Math.round(rect.height * dpr));
       }
       for (const t of extra) t.resize(rect.width, rect.height, dpr);
     };
@@ -164,7 +168,7 @@
       events++;
       ages.push(performance.now() - event.timeStamp);
       // In the handler, no Svelte update and no frame wait.
-      ring(ectx, x, y, canvasT.radius, canvasT.color);
+      if (!light) ring(ectx, x, y, canvasT.radius, canvasT.color);
       svgRing.style.visibility = inside ? "visible" : "hidden";
       svgRing.setAttribute("transform", `translate(${lx} ${ly})`);
       for (const t of extra) t.move(x, y);
@@ -181,7 +185,7 @@
         while (performance.now() < until) { /* spin */ }
       }
       if (!drawn) {
-        ring(rctx, x, y, rafT.radius, rafT.color);
+        if (!light) ring(rctx, x, y, rafT.radius, rafT.color);
         drawn = true;
       }
       raf = requestAnimationFrame(frame);

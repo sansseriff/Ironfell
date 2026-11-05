@@ -18,12 +18,17 @@ export async function launchChrome(): Promise<{ context: BrowserContext; close: 
   mkdirSync(join(dir, 'Default'), { recursive: true });
   // performance_tuning.battery_saver_mode.state 0: Energy Saver off (not effective in testing; see above).
   writeFileSync(join(dir, 'Default', 'Preferences'), JSON.stringify({ performance_tuning: { battery_saver_mode: { state: 0 } } }));
+  // PLAIN_CHROME=1: without Playwright's default switches (field trials off,
+  // automation, background throttling off, forced sRGB, …), closer to a
+  // person's Chrome. Playwright still needs its debugging pipe.
+  const plain = !!process.env.PLAIN_CHROME;
   const context = await chromium.launchPersistentContext(dir, {
+    ...(plain ? { ignoreDefaultArgs: true } : {}),
     executablePath: process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     headless: false,
     viewport: null,
     // CHROME_WINDOW=w,h (points; default 1710,1080, the built-in display's usable area).
-    args: ['--window-position=0,0', `--window-size=${process.env.CHROME_WINDOW ?? '1710,1080'}`, '--enable-gpu', '--ignore-gpu-blocklist', '--disable-features=Translate', '--no-first-run'],
+    args: ['--window-position=0,0', `--window-size=${process.env.CHROME_WINDOW ?? '1710,1080'}`, '--enable-gpu', '--ignore-gpu-blocklist', '--disable-features=Translate', '--no-first-run', ...(plain ? ['--remote-debugging-pipe', `--user-data-dir=${dir}`, '--no-default-browser-check'] : [])],
   });
   return {
     context,

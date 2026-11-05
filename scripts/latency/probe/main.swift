@@ -41,6 +41,10 @@ let amplitude = num("amplitude", 180)  // pt either side of the start
 let duration = num("duration", 6)      // s of sweeping
 let rate = num("rate", 250)            // drag events per second
 let settle = num("settle", 0.6)        // s held still before and after
+// `--no-capture=1`: drive the pointer only, no screen recording during the sweep
+// (to measure the recording's own cost; frame timing then comes from elsewhere,
+// such as a browser trace). Prints the events posted and exits.
+let capture = args["no-capture"] == nil
 
 // The trackers (src-ui/views/html/LatencyView.svelte TRACKERS): hue (°) and
 // radius in CSS px; the square is filled.
@@ -237,7 +241,7 @@ config.colorSpaceName = CGColorSpace.sRGB
 let recorder = Recorder(origin: region.origin, cy: start.y)
 let stream = SCStream(filter: filter, configuration: config, delegate: nil)
 try stream.addStreamOutput(recorder, type: .screen, sampleHandlerQueue: DispatchQueue(label: "capture", qos: .userInteractive))
-try await stream.startCapture()
+if capture { try await stream.startCapture() }
 
 // ---- input ------------------------------------------------------------------
 
@@ -284,6 +288,12 @@ for i in 0...steps {
 wait(settle)
 let rest = recorder.set(false)
 post(.leftMouseUp, CGPoint(x: samples.last!.x, y: start.y))
+if !capture {
+    let out: [String: Any] = ["label": label, "capture": false, "events": samples.count, "interference": interference,
+                              "sweep_s": samples.last!.t - samples.first!.t]
+    print(String(data: try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys]), encoding: .utf8)!)
+    exit(0)
+}
 try await stream.stopCapture()
 
 // ---- analysis ---------------------------------------------------------------

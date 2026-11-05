@@ -30,7 +30,7 @@ try {
   cdp.on('Tracing.dataCollected', (e: any) => events.push(...e.value));
   const done = new Promise<void>((resolve) => cdp.once('Tracing.tracingComplete', () => resolve()));
   await cdp.send('Tracing.start', { traceConfig: { includedCategories: categories, recordMode: 'recordAsMuchAsPossible' }, transferMode: 'ReportEvents' });
-  const probe = spawn('../../../scripts/latency/latency-probe', ['--label', name, '--out', `${out}/${name}-probe.json`, '--csv', `${out}/${name}-probe.csv`, '--duration', process.env.DURATION ?? '3'], { stdio: ['ignore', 'ignore', 'inherit'] });
+  const probe = spawn('../../../scripts/latency/latency-probe', ['--label', name, '--out', `${out}/${name}-probe.json`, '--csv', `${out}/${name}-probe.csv`, '--duration', process.env.DURATION ?? '3', ...(process.env.NO_CAPTURE ? ['--no-capture=1'] : [])], { stdio: ['ignore', 'ignore', 'inherit'] });
   await new Promise((r) => probe.on('exit', r));
   await cdp.send('Tracing.end');
   await done;

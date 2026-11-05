@@ -137,39 +137,48 @@ person was working on a second display); their p50s match the clean runs.
 ### On a 6K display (2026-11-05, after the fix)
 
 Two LG UltraFine 6K displays (3008×1692 pt at 2×, 60 Hz), laptop lid closed,
-Chrome worker runtime, measured on the main display. "Late" columns are the
-share of frames, computed from the probe's per-frame CSV
-(a gap over 5 pt between trackers; at 600 pt/s one frame is 10 pt).
+Chrome worker runtime, measured on the main display, small window 1710×1080 pt
+and large 3008×1660 pt. "Behind" is the share of frames where the square sits a
+frame behind the DOM, computed from the probe's per-frame CSV (a gap over 5 pt;
+at 600 pt/s one frame is 10 pt). "Presented" is Chrome's own presentation
+feedback in a trace (`SwapEndToPresentationCompositorFrame`), independent of
+the screen recording.
 
-| Window, render scale | Engine tick p50 / p95 (ms) | Vello behind the DOM | DOM late | Screen update interval, mean |
-|---|---|---|---|---|
-| built-in display, 1710×1080, 2× (round 2) | 3.9 / 4.4 | 1–7% | 0–1.5% | 16.7 ms |
-| 6K, 1710×1080, 2× | 3.9 / 4.3 | 0.4–2% (one run 9%) | 0.7% | 16.7 ms |
-| 6K, 3008×1660, 2× | 4.8–5.0 / 6.5–7.5 | 0–69% by run | 18–30% | 19–24.5 ms |
-| 6K, 3008×1660, 1× | 4.3–4.4 / 6.5–6.8 | 26–85% by run | 10–14% | 16.7 ms |
+**First pass, all trackers: the test's own load.** With the large window, the
+page presented only 108–133 of ~161 frames, input reached Chrome irregularly
+(gaps p10 9 / p90 24 ms) and GPU swaps slowed (p50 1.6 ms, spikes to 27 ms).
+Neither the recording (`--no-capture`) nor Playwright's switches
+(`PLAIN_CHROME=1`) changed that. The cause was the view's five canvas trackers
+(WebGL2, WebGPU, Konva, two Canvas2D): each a full-view layer, ~6000×3300
+device px at this size, redrawn every frame of motion. With
+`?latencyTrackers=light` (engine, square and SVG ring only) the large window
+presents every frame (157–163 of ~161) with steady input (16–17 ms gaps). Use
+it on large displays.
 
-What the traces show for the large window (`trace/6k-big`, `6k-big-s1`,
-against `6k-small` on the same display):
+**Light trackers:**
 
-- **The whole page drops frames at full resolution.** At 2× the GPU
-  process's `SwapBuffers` takes 1.6 ms at p50 (0.27 ms with the small window)
-  and up to 27 ms, and the screen updates at 41–52 Hz. At 1× the screen holds
-  60 Hz. The GPU cost of a ~6000×3200 px Vello canvas is the cause; the 6K
-  display itself is not (the small window on it matches the built-in).
-- **Input delivery becomes irregular and late under that load.** Gaps between
-  the drag events Chrome receives: p10 9 / p90 24 ms (15.9 / 17.3 ms with the
-  small window), and the event arrives ~15 ms into the frame instead of ~12.5.
-  Chrome's browser thread is idle, so the delay is before Chrome (WindowServer,
-  sharing the GPU). The probe's cursor read-back lags too, so its
-  interference warning fires on every large-window run: there, it is a sign of
-  load, not of someone moving the mouse.
-- **Vello misses the draw more often** because the tick-on-input budget
-  shrinks from both ends: motion arrives later (~1.6 ms before vsync) and the
-  tick is longer (p90 6.8 ms). At 2× the page's own frame is slow enough that
-  the draw is late and Vello often makes it, but the page drops frames instead.
-- **Extra ticks.** With irregular input, two pointer messages can land in one
-  frame, and the rAF tick then runs as well: 61–70 ticks/s, about 20% of
-  frames with two or three ticks, wasted GPU work at the worst time.
+| Window, layout | Engine tick p50 / p95 | Square behind the DOM | Lags p50 (SVG / square) |
+|---|---|---|---|
+| small, `solo` (3 runs) | 3.4–3.5 / 4.3–4.4 ms | 3.5–4.6% | 34.9–36.1 / same |
+| large, `solo` (3 runs) | 4.0–4.1 / 4.5–4.7 ms | 1.0–17.1% | 35.6 / 35.6–36.0 |
+| large, `full` (3 runs) | 4.0–4.1 / 4.6–5.1 ms | 0.5–2.2% | 35.4–36.0 / same |
+
+- **Vello's remaining misses are the tick-on-input margin.** With a light page
+  Chrome draws ~0.7 ms after vsync; motion arrives ~12 ms into the frame and the
+  tick takes ~4.1 ms (p90 to 5 ms in some sessions), which leaves about 1 ms.
+  A session with motion a millisecond later or a slower tick misses often (17%
+  in one run). This is what `worker-frame-hold.md` would widen.
+- **The recording costs a heavier page frames.** In `full`, the large window
+  presented 163 of 162 vsyncs without the recording and 140 with it (47 gaps
+  over 25 ms); the probe's screen-update interval for `full` (≈22 ms) is
+  therefore the recording's doing. In `solo` the recording made no measurable
+  difference.
+- **Without the recording, `full` was drawn at BeginFrame** (p50 0.01 ms after
+  it, the main thread's rAF at ~4 ms): Chrome showed the page's previous frame
+  each vsync, smooth but probably a frame later for DOM and Vello alike. One
+  trace; the probe cannot measure lag without recording, so this is unverified.
+- The probe's interference warning fired on many large-window runs with nobody
+  at the mouse: under load its cursor read-back lags.
 
 ### Round 1: before the fix (Canvas2D, SVG, engine and square only)
 

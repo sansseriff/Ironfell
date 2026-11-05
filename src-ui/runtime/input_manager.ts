@@ -106,6 +106,8 @@ export class InputManager {
             refreshRect();
             moveMsg.x = cx - rect.left;
             moveMsg.y = cy - rect.top;
+            // When it left this thread, on the shared clock (cadence probe).
+            moveMsg.t = performance.timeOrigin + performance.now();
             this.latestPick = [];
             this.post(moveMsg);
         };

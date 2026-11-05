@@ -20,6 +20,12 @@
 
 const CAP = 7200;
 
+function summary(values: number[]) {
+  const s = [...values].sort((a, b) => a - b);
+  const at = (p: number) => +(s[Math.min(s.length - 1, Math.floor(p * s.length))] ?? 0).toFixed(2);
+  return { p50: at(0.5), p95: at(0.95), p99: at(0.99), max: +(s[s.length - 1] ?? 0).toFixed(2) };
+}
+
 export interface CadenceStats {
   frames: number;
   elapsedMs: number;
@@ -28,22 +34,43 @@ export interface CadenceStats {
   /** counts of rAF deltas by bucket: <18ms (healthy 60), 18-24, 24-36 (~30fps), 36-60 (~20fps), >60 */
   rafDeltaBuckets: { under18: number; d18to24: number; d24to36: number; d36to60: number; over60: number };
   tickMs: { p50: number; p95: number; p99: number; max: number };
+  /** When the tick started and ended, ms after its rAF timestamp (the
+   *  frame's vsync-aligned time): how close to the frame's deadline the
+   *  engine finished (plans/rendering/latency-view.md §7). */
+  startMs: { p50: number; p95: number; p99: number; max: number };
+  endMs: { p50: number; p95: number; p99: number; max: number };
+  /** Worker runtime: for the pointer a tick consumed, ms since the main
+   *  thread posted it and since it arrived in the worker. */
+  pointerAgeMs?: { p50: number; p95: number; p99: number; max: number };
+  pointerWaitMs?: { p50: number; p95: number; p99: number; max: number };
 }
 
 export class CadenceProbe {
   private rafTs = new Float64Array(CAP);
   private tick = new Float64Array(CAP);
+  private start = new Float64Array(CAP);
+  private ages: number[] = [];
+  private waits: number[] = [];
   private n = 0;
 
-  record(rafTimestamp: number, tickDurationMs: number): void {
+  record(rafTimestamp: number, tickDurationMs: number, startedAt = rafTimestamp): void {
     const i = this.n % CAP;
     this.rafTs[i] = rafTimestamp;
     this.tick[i] = tickDurationMs;
+    this.start[i] = startedAt - rafTimestamp;
     this.n++;
+  }
+
+  recordPointer(ageMs: number, waitMs: number): void {
+    if (this.ages.length >= CAP) return;
+    this.ages.push(ageMs);
+    this.waits.push(waitMs);
   }
 
   reset(): void {
     this.n = 0;
+    this.ages = [];
+    this.waits = [];
   }
 
   stats(): CadenceStats | { frames: number } {
@@ -54,10 +81,12 @@ export class CadenceProbe {
     const first = this.n >= CAP ? this.n % CAP : 0;
     const ts: number[] = new Array(count);
     const tick: number[] = new Array(count);
+    const start: number[] = new Array(count);
     for (let k = 0; k < count; k++) {
       const i = (first + k) % CAP;
       ts[k] = this.rafTs[i];
       tick[k] = this.tick[i];
+      start[k] = this.start[i];
     }
 
     const deltas: number[] = new Array(count - 1);
@@ -95,6 +124,9 @@ export class CadenceProbe {
         p99: pct(sortedT, 0.99),
         max: +sortedT[sortedT.length - 1].toFixed(2),
       },
+      startMs: summary(start),
+      endMs: summary(start.map((s, k) => s + tick[k])),
+      ...(this.ages.length ? { pointerAgeMs: summary(this.ages), pointerWaitMs: summary(this.waits) } : {}),
     };
   }
 }

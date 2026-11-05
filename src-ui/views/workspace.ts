@@ -125,10 +125,27 @@ function arrangeLatency(api: DockviewApi, layout: string) {
   if (layout === 'full') {
     if (!api.getPanel('latency')) view('latency', 'Latency', LATENCY_VIEW, api.getPanel('viewer') ? { referencePanel: 'viewer', direction: 'within' } : undefined);
     api.getPanel('latency')?.api.setActive();
+    // `&without=stats,timeline,…`: close some of them (latency-view.md §7).
+    const without = (new URLSearchParams(location.search).get('without') ?? '').split(',').filter(Boolean);
+    // `without=all`: every other tab, closed one by one (not `api.clear()`).
+    for (const p of [...api.panels]) if (p.id !== 'latency' && (without.includes('all') || without.includes(p.id))) p.api.close();
     return;
   }
   api.clear();
   view('latency', 'Latency', LATENCY_VIEW);
+  // `&with=stats,timeline,…`: add some of the app's views beside it, to find
+  // which of them changes the measurement (latency-view.md §7).
+  const extras: Record<string, [string, ViewSpec]> = {
+    viewer: ['Main', { source: 'main', notation: 'composition' }],
+    timeline: ['Timeline', { source: 'timeline', notation: 'composition' }],
+    stats: ['Stats', { source: 'stats', notation: 'composition' }],
+    document: ['Document', { source: 'document', notation: 'markup' }],
+    library: ['Library', { source: 'library', notation: 'composition' }],
+  };
+  for (const key of (new URLSearchParams(location.search).get('with') ?? '').split(',').filter((k) => k in extras)) {
+    const [title, spec] = extras[key];
+    view(key, title, spec, { referencePanel: 'latency', direction: 'below' }, { initialHeight: 200 });
+  }
   if (layout === 'panels') {
     view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'latency', direction: 'left' }, { initialWidth: 380 });
     view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'latency', direction: 'right' }, { initialWidth: 300 });

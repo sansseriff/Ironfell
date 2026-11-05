@@ -1,6 +1,7 @@
 # The Latency view: built-in input-latency checks
 
 **Status:** built and measured 2026-11-05 (web: Chrome, Safari; native: Tauri).
+The worker runtime's extra Vello frame is found and fixed (§7).
 Owning record for the Latency view, its probe and its measurements. Background
 on native frame pacing: [`native-frame-pacing.md`](native-frame-pacing.md).
 
@@ -29,6 +30,13 @@ concentric; while it moves each trails by its own latency.
 | Canvas2D, event | a main-thread `<canvas>` redrawn inside the `pointermove` handler | green `#00e000` | r 44 |
 | Canvas2D, rAF | a second `<canvas>` redrawn on the next `requestAnimationFrame` | orange `#ff7a00` | r 54 |
 | SVG | an `<svg>` ring moved inside the handler | violet `#9a4dff` | r 64 |
+| Konva | a Konva stage (its own canvas, `listening: false`), `batchDraw()` from the handler (`latency_trackers.ts`) | red `#ff2a2a` | r 74 |
+| WebGPU | a raw main-thread WebGPU canvas, drawn on the next rAF | cyan `#00e5ff` | r 84 |
+| WebGL2 | a raw main-thread WebGL2 canvas, drawn on the next rAF | lime `#a0ff00` | r 94 |
+
+Konva, WebGPU and WebGL2 are controls: a GPU canvas on the page's own thread,
+so a difference between them and the engine is the engine's path, not the GPU
+API. (WebGPU is absent where the browser has none, such as headless Chrome.)
 
 The square is 40 px, under the select tool's 48 px threshold for corner-radius
 dots, so a press anywhere on it is a move. Colours keep clear of the accent blue
@@ -47,7 +55,7 @@ rate).
   Latency view in front of Main. `?runtime=worker|main` overrides the stored
   runtime for that page.
 - **Native:** `IRON_NATIVE_LATENCY=solo|panels|full` with any native script (the
-  window opens at 1600×1000 pt, centred).
+  window opens at 1600×1000 pt on the main display).
 
 ### Engine changes it needed
 
@@ -95,11 +103,38 @@ checks that every tracker comes to rest on the final pointer position
 ## 5. Results, 2026-11-05
 
 MacBook Pro built-in Liquid Retina display only (1710×1107 pt at 2×, 60 Hz),
-macOS 27.2, Chrome (WebGPU) and Safari (WebGL2) on this worktree's dev-opt wasm.
-p50 lag in ms (p90 within 2 ms of p50 for the DOM trackers, within ~4 ms for
-Vello unless noted). 43 runs; raw JSON and per-frame CSV in `.agents/latency/measure/` (local).
+macOS 27.2, on AC power, Chrome (WebGPU) and Safari (WebGL2) on this worktree's
+dev-opt wasm. p50 lag in ms; p90 is within 2 ms of p50 unless noted. Raw JSON
+and per-frame CSV are in `.agents/latency/measure/` (round 1),
+`measure2/` (experiments) and `measure3/` (round 2), all local.
 
-### Web
+### Round 2: after the worker fix (§7), all trackers
+
+"DOM" is the five page-thread trackers (Canvas2D event and rAF, SVG, Konva,
+WebGPU, WebGL2), which agreed within 0.4 ms in every run.
+
+| Setup | DOM | Engine ring | Square | Vello − DOM |
+|---|---|---|---|---|
+| Chrome worker, `solo` `panels` `full` (6 runs) | 35.2–36.0 | 35.2–36.0 | 35.2–36.0 | 0 |
+| Chrome worker, `?workerTick=raf` (the old tick), `solo` `panels` | 35.1–35.6 | 49.7 | 51.8–52.2 | +1 frame |
+| Chrome worker, `?workerTick=raf`, `full` | 35.9–36.3 | 36.3 | 36.3 | 0 |
+| Chrome main, `solo` (2 runs) | 35.7–36.1 | 35.7–36.1 | 35.7–36.1 | 0 |
+| Chrome main, `panels` `full` (4 runs) | 51.8–53.0 | 51.8–53.0 | 51.8–53.0 | 0 (whole page +1 frame) |
+| Safari worker, `solo` `panels` | 52.2–52.4 | 52.3–52.4 | 52.3–52.4 | 0 |
+| Safari worker, `?workerTick=raf`, `solo` | 52.3–52.6 | 66.4 | 67.8 | +1 frame |
+| Safari main, `solo` `panels` | 67.9–69.7 | 67.9–68.9 | 67.9–69.7 | 0 (whole page +1 frame) |
+| Native baseline, `solo` `panels` | 51.9–52.3 | 51.9–52.1 | 51.9–52.1 | 0 |
+| Native baseline, `full` | 52.8–53.2 | 67.2 | 69.1 | +1 frame |
+| Native adaptive, `solo` `panels` `full` | 52.4–53.3 | 37.4–38.3 | 35.2–35.9 | −1 frame |
+
+Konva behaves exactly like a plain Canvas2D canvas: it adds no latency, and it
+cannot remove any either, since the page's own frame bounds every DOM tracker.
+In native `full` runs the p90 of the DOM trackers is unreliable (it climbs by
+~17 ms per ring, outermost worst, a detection artefact of the busier layout);
+their p50s are sound. Several round-2 runs logged cursor interference (the
+person was working on a second display); their p50s match the clean runs.
+
+### Round 1: before the fix (Canvas2D, SVG, engine and square only)
 
 | Setup | DOM trackers (canvas / rAF / SVG) | Engine ring | Square | Vello − DOM |
 |---|---|---|---|---|
@@ -109,72 +144,127 @@ Vello unless noted). 43 runs; raw JSON and per-frame CSV in `.agents/latency/mea
 | Chrome, Continuous rendering on, main `solo` | 35.6 | 35.6 | 35.6 | 0 |
 | Chrome, Continuous rendering on, worker `solo`/`panels` (5 runs) | 35.1–35.6 | 35.4 ×3, 49.4–49.7 ×2 | 35.4 ×3, 51.7–51.8 ×2 | 0 or +1 frame |
 | Safari, worker or main, `solo` or `panels` (4 runs) | 52.0–52.5 | 66.5–67.1 | 67.9–68.7 | +1 frame |
+| Native baseline, `solo` `panels` `full` (10 runs) | 51.6–52.8 | 51.0–52.5 ×7; 38.2, 39.4 ×2; 66.2 ×1 | 51.2–52.5 ×7; 35.7, 36.8 ×2; 68.7 ×1 | usually 0; −1 or +1 frame by run |
+| Native adaptive, `solo` `panels` `full` (6 runs) | 51.8–52.7 | 37.5–38.5 | 35.0–36.0 | −1 frame |
 
-### Native (Tauri, WKWebView over the Bevy/Metal layer)
-
-The dev-opt `iron-native` binary launched directly; `baseline` is the default
-(pipelined render, display pacing), `adaptive` the recommended `native:adaptive`
-(sync render, just-in-time presentation while dragging).
-
-| Setup | DOM trackers (WKWebView) | Engine ring | Square | Vello − DOM |
-|---|---|---|---|---|
-| baseline, `solo` `panels` `full` (10 runs) | 51.6–52.8 | 51.0–52.5 ×7; 38.2, 39.4 ×2; 66.2 ×1 | 51.2–52.5 ×7; 35.7, 36.8 ×2; 68.7 ×1 | usually 0; −1 or +1 frame by run |
-| adaptive, `solo` `panels` `full` (6 runs) | 51.8–52.7 | 37.5–38.5 | 35.0–36.0 | −1 frame |
-
-With adaptive pacing the dragged square is the fastest thing on screen in any
-setup measured: ~36 ms, a frame ahead of the web view's own DOM. Its p90 stays
-within 2 ms of p50 except in `solo`, where it reaches the next frame (51.8 ms).
-The engine ring trails the square by ~2.5 ms with adaptive pacing, which is
-less than a frame; not investigated. A likely cause is that the two read the
-pointer at different points of the frame (the select tool's drag versus the
-ring's `PostUpdate` system), so the ring more often shows the previous sample.
+Round 1's main-runtime "+1 frame" in `solo` was a whole-page startup state, not
+Vello alone: in later runs of the same session (`SESSION=4`) the page was on
+time in 11 of 12.
 
 ### What it shows
 
-- **The Model and Inspector views cost nothing measurable.** `panels` (the
-  Inspector redrawing the square's position every frame of the drag, the Model
-  view idle) matches `solo` in every browser and runtime, run for run.
-- **Vello is exactly 0 or 1 frame behind the DOM**, never in between, and the
-  document drag (square) adds ~2 ms over the bare engine pointer (engine ring),
-  not a frame.
-- **The extra Vello frame depends on the engine's run state, not on the
-  views beside it.** In the app's usual layout (`full`) Vello matches the DOM in
-  all 7 runs; with the Latency view alone or with the Model and Inspector it is a
-  frame late in all 9 runs. Turning the view's composition to Continuous
-  rendering removes the frame on the main thread and in 3 of 5 worker runs. Why
-  `full` is reliably same-frame while Continuous alone is not (in the worker) is
-  open; candidates are what else free-runs there (the Stats view, the timeline)
-  and the phase of the worker's rAF against input delivery.
-- **Safari is one frame slower than Chrome for everything**, DOM included, and
-  the native app's WKWebView DOM matches Safari (~52 ms).
-- **Natively, adaptive pacing puts Vello a frame ahead of the DOM** (~36 ms),
-  as fast as Chrome's DOM and faster than anything in Safari. The default
-  baseline pacing lands Vello in the DOM's frame in most runs, but the frame
-  it lands in varies from run to run (36, 52 or 68 ms): the phase of its
-  pipelined frame against input is not controlled.
-- **The worker and the main thread are equal** in Chrome and in Safari.
+- **The extra Vello frame was the worker's tick timing**, not the views beside
+  it, the GPU API or the document drag (§7). Ticking the worker when the motion
+  arrives removes it in Chrome and Safari, in every layout.
+- **The Model and Inspector views cost nothing measurable** in the worker
+  runtime. On the main runtime they can make the whole page, DOM included, a
+  frame late, since Iron then renders inside the page's own frame.
+- **The document drag adds ~2 ms over the bare engine pointer** (square versus
+  ring), never a frame, except natively (below).
+- **Safari is one frame slower than Chrome for everything**, DOM included; the
+  native app's WKWebView DOM matches Safari (~52 ms).
+- **Natively, adaptive pacing puts Vello a frame ahead of the DOM** (~36 ms).
+  Baseline pacing lands in the DOM's frame, but in round 2's `full` layout the
+  square and ring were a frame later (67–69 ms); its phase against input is
+  not controlled. The engine ring trails the square by ~2.5 ms with adaptive
+  pacing; not investigated (likely the two read the pointer at different
+  points of the frame).
 
 ## 6. Regression procedure
 
 ```sh
 scripts/latency/build.sh
-.claude/skills/run-iron/serve.sh start   # or any Vite on the worktree
+# Vite on the worktree; restart it after every edit (a worktree under .agents/
+# is outside Vite's watch), e.g. bunx vite --port 5185 --strictPort --force
 cd .claude/skills/run-iron
-URL='http://127.0.0.1:5173/Ironfell/?demo' REPEAT=2 bun run latency-measure.ts
-BROWSER=safari URL=… RUNTIMES=worker,main bun run latency-measure.ts
+bun run latency-view.ts                       # functional, headless
+REPEAT=2 bun run latency-measure.ts           # Chrome, worker and main
+BROWSER=safari RUNTIMES=worker,main bun run latency-measure.ts
 BROWSER=native MODES=baseline,adaptive LAYOUTS=solo,panels bun run latency-measure.ts
 ../../../scripts/latency/summarize.py ../../../.agents/latency/measure/*.json
 ```
 
-Hands off the mouse while it runs (~15 s a run). Compare the DOM trackers first:
+Hands off the mouse while it runs (~15 s a run); the probe reads the cursor back
+and flags a run that something else moved. Run on AC power: on battery at or
+below 20% Chrome's Energy Saver halves the page's frame rate, and the driver
+warns when the page's rAF falls under 55 Hz. Compare the DOM trackers first:
 they bound what the platform allows; a change in the Vello columns with the DOM
-unchanged is Iron's.
+unchanged is Iron's. Expect Vello = DOM in the worker runtime everywhere.
 
-## 7. Open
+Driver settings: `URL` (base page), `OUT` (output directory), `TAG` (label
+suffix), `REPEAT`, `SESSION=k` (k runs in one browser session), `CONTINUOUS=1`.
+Page parameters for experiments (all dev-only):
 
-- Why Continuous rendering in the worker sometimes still leaves Vello a frame
-  late, and what in `full` prevents it; whether an auto-mode view could keep that
-  same-frame behaviour during drags without rendering when idle.
+- `?workerTick=raf` — the worker ticks only at rAF (the old behaviour).
+- `?latencyBusy=N` — the Latency view spins N ms in its rAF (a slow page frame).
+- `&with=viewer,timeline,stats,document,library` — add views below the Latency
+  view (`solo`, `panels`); `&without=<view ids>|all` — close tabs in `full`.
+
+`latency-trace.ts` records a Chrome trace (compositor, GPU, canvas, input) of
+one measurement, for questions the lags alone cannot answer.
+
+## 7. Why Vello was a frame behind the DOM, and the fix
+
+Traced with `latency-trace.ts` (Chrome 2026-11 on macOS; viz, cc, blink, GPU and
+input categories), with times relative to the display compositor's (viz)
+BeginFrame for each vsync, 16.7 ms apart:
+
+1. **Input arrives late in the frame.** However fast the probe posts (250 Hz),
+   the browser forwards one coalesced drag event per frame, ~12 ms after
+   BeginFrame (`RenderWidgetHostImpl::ForwardMouseEvent` p50 12.0–12.4 ms in
+   every trace). The page's `pointerrawupdate` runs at ~12.6 ms and its
+   rAF-aligned `pointermove` at the next BeginFrame. DOM trackers drawn from
+   either appear in the next vsync's draw.
+2. **The compositor does not wait for a worker canvas.** viz draws as soon as
+   the page's own frame is ready; an OffscreenCanvas in a worker is a separate
+   surface (`CanvasResourceDispatcher::DispatchFrame`), and nothing holds the
+   draw for it. A light page is drawn ~1.2 ms after BeginFrame.
+3. **The worker ticked at rAF.** It started at BeginFrame +0.05 ms with the
+   motion that had arrived at ~12.7 ms and dispatched its frame at ~4.8 ms:
+   after the 1.2 ms draw in 192 of 192 frames, so the next draw showed it. That
+   is the extra frame (~16 ms: engine ring 49.7 against DOM 35.6).
+4. **Why it was absent in some setups.** When the page's own frame is slow, the
+   draw waits for it, and the worker's frame makes it. In the `full` layout the
+   Document view's forced style and layout in pointer handlers (~150 ms/s)
+   pushed the draw to ~5.5 ms, after the worker's ~4.1 ms dispatch (180–185 of 191
+   frames). The same happens artificially: `?latencyBusy=6` made Vello
+   same-frame with the DOM unchanged; 3 ms was too little; 9 ms made the whole
+   page a frame late. Continuous rendering helped only by chance of phase.
+5. **Starting the tick earlier at a fixed time does not help.** A timer ~7 ms
+   before vsync (a `workerLead` prototype, removed) ran at ~10.4 ms, before
+   that frame's motion arrived at ~12.7 ms: its frame was ready before the draw
+   in 188 of 190 frames but carried the previous frame's motion, so the lag
+   was unchanged (49.6 ms).
+6. **The fix: tick when the motion arrives** (`BrowserRuntime.tickOnInput`,
+   the default in the worker runtime). A pointer message runs the engine frame
+   at once, at most once per frame; the next rAF skips its tick unless more
+   motion has come since. Trace: the worker's frame dispatched at BeginFrame
+   +0.2 ms and was ready before the 1.1 ms draw in 190 of 190 frames; the lags
+   match the DOM in every layout in Chrome and Safari (§5). Without motion the
+   worker ticks at rAF as before.
+
+Limits:
+
+- **Slack is ~1 ms on this machine.** Motion at ~12.5 ms plus a ~4 ms tick
+  finishes just before the next vsync. A tick longer than ~5 ms (a heavier
+  document, a slower GPU) misses again, back to the old +1 frame, not worse.
+  Keeping the drag tick short is now what keeps Vello in the DOM's frame.
+- **The main runtime cannot be a frame behind the DOM** (Iron renders inside
+  the page's rAF) **but makes the whole page late** once the frame is heavy:
+  Chrome with `panels` or `full` (4 of 4 runs) and Safari in every layout. A
+  late Chrome frame is drawn at ~0.3 ms without that frame's commit (traces
+  `main1`–`main3`). Prefer the worker runtime.
+- Measured at 60 Hz only, with one coalesced event per frame. At 120 Hz the
+  frame is 8.3 ms and the slack tighter; a platform that delivers motion
+  earlier in the frame has more.
+
+## 8. Open
+
 - 120 Hz (ProMotion at variable refresh) was not available on this display
   setting; the display ran at 60 Hz.
-- Pointer prediction; heavier documents under the view.
+- Heavier documents under the view: how long a drag tick can be before the
+  worker misses the draw again, and whether pointer prediction should cover it.
+- Native baseline pacing in `full` (Vello +1 frame in round 2).
+- A way to hold the page's frame for the worker (SharedArrayBuffer and
+  `Atomics`, which need cross-origin isolation) was not tried; tick-on-input
+  made it unnecessary at this scene size.

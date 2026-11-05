@@ -32,6 +32,9 @@ const TRACKERS = [
   { key: 'canvas', hue: 120, radius: 44 },
   { key: 'raf', hue: 28.8, radius: 54 },
   { key: 'svg', hue: 265, radius: 64 },
+  { key: 'konva', hue: 0, radius: 74 },
+  { key: 'webgpu', hue: 186, radius: 84 },
+  { key: 'webgl', hue: 82, radius: 94 },
 ];
 type Centre = { x: number; y: number; n: number };
 /** Each tracker's centre in a screenshot (CSS px), from the horizontal and
@@ -41,7 +44,7 @@ let decoder: import('playwright-core').Page;
 async function centres(png: Buffer, dpr: number, around: { x: number; y: number }): Promise<Record<string, Centre>> {
   return decoder.evaluate(async ({ b64, dpr, around, trackers }) => {
     const img = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
-    const span = Math.round(90 * dpr), x0 = Math.max(0, Math.round(around.x * dpr) - span), y0 = Math.max(0, Math.round(around.y * dpr) - span);
+    const span = Math.round(115 * dpr), x0 = Math.max(0, Math.round(around.x * dpr) - span), y0 = Math.max(0, Math.round(around.y * dpr) - span);
     const w = Math.min(img.width - x0, 2 * span), h = Math.min(img.height - y0, 2 * span);
     const c = new OffscreenCanvas(w, h).getContext('2d')!;
     c.drawImage(img, -x0, -y0);
@@ -101,7 +104,9 @@ try {
       await page.mouse.move(centre.x, centre.y);
       await page.waitForTimeout(400);
       let c = await centres(await page.screenshot({ path: `${out}/view-${runtime}-${layout}-still.png` }), dpr, centre);
-      for (const t of TRACKERS) {
+      // Headless Chrome may have no WebGPU: its control ring is then absent.
+      const drawn = TRACKERS.filter((t) => t.key !== 'webgpu' || c.webgpu.n > 0);
+      for (const t of drawn) {
         assert.ok(c[t.key].n > 20, `${label}: ${t.key} drawn (${c[t.key].n} px)`);
         assert.ok(Math.hypot(c[t.key].x - centre.x, c[t.key].y - centre.y) <= 1.5, `${label}: ${t.key} centred at rest: ${JSON.stringify(c[t.key])} vs ${JSON.stringify(centre)}`);
       }
@@ -112,7 +117,7 @@ try {
       await page.waitForTimeout(400);
       const held = { x: centre.x + 150, y: centre.y };
       c = await centres(await page.screenshot({ path: `${out}/view-${runtime}-${layout}-held.png` }), dpr, held);
-      for (const t of TRACKERS) assert.ok(Math.hypot(c[t.key].x - held.x, c[t.key].y - held.y) <= 1.5, `${label}: ${t.key} centred while held: ${JSON.stringify(c[t.key])}`);
+      for (const t of drawn) assert.ok(Math.hypot(c[t.key].x - held.x, c[t.key].y - held.y) <= 1.5, `${label}: ${t.key} centred while held: ${JSON.stringify(c[t.key])}`);
       await page.mouse.up();
       await page.waitForTimeout(200);
       assert.equal(await history(), v0, `${label}: dragging the square is not a document edit`);

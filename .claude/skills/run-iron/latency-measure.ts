@@ -14,11 +14,11 @@
  * Each run's JSON goes to .agents/latency/measure/<label>.json, and a table
  * of p50 lags (ms) is printed at the end.
  */
-import { chromium } from 'playwright-core';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { launchChrome, powerState } from './latency-chrome';
 
-const out = '../../../.agents/latency/measure';
+const out = process.env.OUT ?? '../../../.agents/latency/measure';
 mkdirSync(out, { recursive: true });
 const probe = '../../../scripts/latency/latency-probe';
 const browserName = process.env.BROWSER ?? 'chrome';
@@ -42,6 +42,7 @@ function measure(label: string, meta: Record<string, unknown>, wait = 0): Result
   results.push(j);
   const lag = Object.entries(j.lag_ms).map(([k, v]) => `${k} ${v.p50?.toFixed(1) ?? '–'}`).join(' · ');
   console.log(`${label}: p50 ms ${lag} · frame ${j.frame_interval_ms.p50?.toFixed(1)} ms`);
+  if ((j as any).interference) console.log(`  WARNING ${label}: the cursor was moved by something else during the sweep; discard this run`);
   return j;
 }
 
@@ -54,14 +55,9 @@ function url(runtime: string, layout: string) {
 
 if (browserName === 'chrome') {
   for (let n = 0; n < repeat; n++) for (const runtime of runtimes) for (const layout of layouts) {
-    const browser = await chromium.launch({
-      executablePath: process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      headless: false,
-      args: ['--window-position=0,0', '--window-size=1710,1080', '--enable-gpu', '--ignore-gpu-blocklist', '--disable-features=Translate', '--no-first-run'],
-    });
+    const { context, close } = await launchChrome();
     try {
-      const context = await browser.newContext({ viewport: null });
-      const page = await context.newPage();
+      const page = context.pages()[0] ?? await context.newPage();
       await page.goto(url(runtime, layout));
       await page.waitForFunction(() => document.querySelector('[data-latency-view]')?.getAttribute('data-ready') === 'true', {}, { timeout: 60000 });
       const build = await page.evaluate(async () => { try { return JSON.parse(await (window as any).__iron.call('build_info', [])); } catch { return null; } });
@@ -69,11 +65,29 @@ if (browserName === 'chrome') {
       if (process.env.CONTINUOUS) await page.getByRole('switch', { name: 'Continuous rendering' }).click();
       await page.bringToFront();
       await page.waitForTimeout(1500);
-      measure(`chrome-${runtime}-${layout}${process.env.CONTINUOUS ? '-continuous' : ''}${tag}${repeat > 1 ? `-${n + 1}` : ''}`, { browser: 'chrome', runtime, layout, continuous: !!process.env.CONTINUOUS, build, ua: await page.evaluate(() => navigator.userAgent) });
+      // SESSION=k: k runs in this one browser session (does a state persist?).
+      for (let k = 0; k < Number(process.env.SESSION ?? 1); k++) {
+      const label = `chrome-${runtime}-${layout}${process.env.CONTINUOUS ? '-continuous' : ''}${tag}${repeat > 1 ? `-${n + 1}` : ''}${process.env.SESSION ? `-s${k + 1}` : ''}`;
+      const ua = await page.evaluate(() => navigator.userAgent);
+      // The engine's own frame timing over the run (CadenceProbe): when each
+      // tick started and ended after its rAF timestamp.
+      await page.evaluate(() => (window as any).__probeReset?.());
+      const result = measure(label, { browser: 'chrome', runtime, layout, continuous: !!process.env.CONTINUOUS, build, ua, power: powerState(), url: page.url() });
+      // The page's own frame rate during the run (the view's readout): 60 here, or Chrome throttled it.
+      const rafHz = await page.evaluate(() => Number(document.querySelector('[data-latency-stats]')?.textContent?.match(/rAF (\d+)/)?.[1] ?? 0));
+      if (rafHz && rafHz < 55) console.log(`  WARNING page rAF ${rafHz} Hz: the page was throttled; discard this run`);
+      await page.evaluate(() => { (window as any).__lastProbeStats = null; (window as any).__probe?.(); });
+      await page.waitForFunction(() => !!(window as any).__lastProbeStats, {}, { timeout: 5000 }).catch(() => {});
+      const cadence = await page.evaluate(() => (window as any).__lastProbeStats);
+      if (result && cadence) {
+        writeFileSync(`${out}/${label}-cadence.json`, JSON.stringify(cadence, null, 2));
+        console.log(`  engine tick: start p50 ${cadence.startMs?.p50} ms, end p50 ${cadence.endMs?.p50} / p95 ${cadence.endMs?.p95} ms after rAF; tick p50 ${cadence.tickMs?.p50} ms; ${cadence.effectiveFps} fps${cadence.pointerAgeMs ? `; pointer age at tick p50 ${cadence.pointerAgeMs.p50} ms (waited in worker ${cadence.pointerWaitMs.p50} ms)` : ''}`);
+      }
+      }
     } catch (e) {
       console.log(`FAIL chrome-${runtime}-${layout}: ${(e as Error).message}`);
     } finally {
-      await browser.close();
+      await close();
     }
   }
 } else if (browserName === 'safari') {
@@ -110,8 +124,8 @@ if (browserName === 'chrome') {
 }
 
 writeFileSync(`${out}/summary-${browserName}${tag}.json`, JSON.stringify(results, null, 2));
-console.log('\nlabel | square | engine | canvas | raf | svg  (p50 / p90 ms)');
+console.log('\nlabel | square | engine | canvas | raf | svg | konva | webgpu | webgl  (p50 / p90 ms)');
 for (const r of results) {
   const cell = (k: string) => `${r.lag_ms[k]?.p50?.toFixed(1) ?? '–'} / ${r.lag_ms[k]?.p90?.toFixed(1) ?? '–'}`;
-  console.log(`${r.label} | ${['square', 'engine', 'canvas', 'raf', 'svg'].map(cell).join(' | ')}`);
+  console.log(`${r.label} | ${['square', 'engine', 'canvas', 'raf', 'svg', 'konva', 'webgpu', 'webgl'].map(cell).join(' | ')}`);
 }

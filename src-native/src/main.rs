@@ -510,6 +510,13 @@ fn main() {
                 // Run after window creation/launch, without borrowing HOST
                 // across AppKit calls. Off-screen/hidden views do not tick.
                 let _ = window.center();
+                // The latency probe captures the main display only; with a
+                // second display attached, `center` may pick that one.
+                if std::env::var_os("IRON_NATIVE_LATENCY").is_some() {
+                    if let Ok(Some(monitor)) = window.primary_monitor() {
+                        let _ = window.set_position(*monitor.position());
+                    }
+                }
                 let _ = window.show();
                 // Bounded GPU-readback controls need an unoccluded drawable.
                 // Keep only these automated test windows above other apps.

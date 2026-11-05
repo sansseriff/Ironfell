@@ -10,6 +10,11 @@
     { key: "canvas", label: "Canvas2D, drawn in the event", color: "#00e000", radius: 44 },
     { key: "raf", label: "Canvas2D, drawn on rAF", color: "#ff7a00", radius: 54 },
     { key: "svg", label: "SVG, moved in the event", color: "#9a4dff", radius: 64 },
+    { key: "konva", label: "Konva, batchDraw", color: "#ff2a2a", radius: 74 },
+    // Controls outside Iron: the browser's GPU canvases drawn on rAF, to
+    // tell what a GPU canvas costs from what Iron's engine adds.
+    { key: "webgpu", label: "WebGPU canvas, rAF (control)", color: "#00e5ff", radius: 84 },
+    { key: "webgl", label: "WebGL2 canvas, rAF (control)", color: "#a0ff00", radius: 94 },
   ] as const;
 </script>
 
@@ -29,6 +34,7 @@
   import Crosshair from "@lucide/svelte/icons/crosshair";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { ViewSpec } from "../views";
+  import { konvaTracker, webglTracker, webgpuTracker, type Tracker } from "./latency_trackers";
 
   let { spec, panel }: { spec: ViewSpec; panel?: string } = $props();
 
@@ -40,6 +46,9 @@
   let eventCanvas: HTMLCanvasElement;
   let rafCanvas: HTMLCanvasElement;
   let svgRing: SVGGElement;
+  let konvaBox: HTMLDivElement;
+  let webgpuCanvas: HTMLCanvasElement;
+  let webglCanvas: HTMLCanvasElement;
   let ready = $state(false);
   let error = $state("");
   let continuous = $state(false);
@@ -105,7 +114,18 @@
   }
 
   onMount(() => {
-    const [, , canvasT, rafT] = TRACKERS;
+    const [, , canvasT, rafT, , konvaT, webgpuT, webglT] = TRACKERS;
+    // Konva and the GPU controls; a missing API leaves its ring out.
+    const extra: Tracker[] = [konvaTracker(konvaBox, konvaT.color, konvaT.radius, STROKE)];
+    const gl = webglTracker(webglCanvas, webglT.color, webglT.radius, STROKE);
+    if (gl) extra.push(gl);
+    let alive = true;
+    void webgpuTracker(webgpuCanvas, webgpuT.color, webgpuT.radius, STROKE).then((t) => {
+      if (!t) return;
+      if (!alive) return t.destroy();
+      t.resize(rect.width, rect.height, window.devicePixelRatio || 1);
+      extra.push(t);
+    }).catch(() => {});
     const ectx = eventCanvas.getContext("2d")!;
     const rctx = rafCanvas.getContext("2d")!;
     let rect = stage.getBoundingClientRect();
@@ -118,6 +138,7 @@
         c.width = Math.max(1, Math.round(rect.width * dpr));
         c.height = Math.max(1, Math.round(rect.height * dpr));
       }
+      for (const t of extra) t.resize(rect.width, rect.height, dpr);
     };
     size();
     const observer = new ResizeObserver(size);
@@ -146,11 +167,19 @@
       ring(ectx, x, y, canvasT.radius, canvasT.color);
       svgRing.style.visibility = inside ? "visible" : "hidden";
       svgRing.setAttribute("transform", `translate(${lx} ${ly})`);
+      for (const t of extra) t.move(x, y);
       drawn = false;
     };
     let raf = 0;
+    // Experiment (plans/rendering/latency-view.md §7): `?latencyBusy=N` keeps the
+    // main thread busy N ms in each frame, delaying the page's own frame.
+    const busy = Number(new URLSearchParams(location.search).get("latencyBusy") ?? 0);
     const frame = () => {
       frames++;
+      if (busy > 0) {
+        const until = performance.now() + busy;
+        while (performance.now() < until) { /* spin */ }
+      }
       if (!drawn) {
         ring(rctx, x, y, rafT.radius, rafT.color);
         drawn = true;
@@ -171,6 +200,8 @@
     }, 500);
     window.addEventListener("pointermove", move, { capture: true, passive: true });
     return () => {
+      alive = false;
+      for (const t of extra) t.destroy();
       observer.disconnect();
       cancelAnimationFrame(raf);
       clearInterval(tick);
@@ -180,6 +211,9 @@
 </script>
 
 <div class="latency" bind:this={stage} data-latency-view data-ready={ready} data-visible={active?.() ?? true}>
+  <canvas class="layer" bind:this={webglCanvas} aria-hidden="true"></canvas>
+  <canvas class="layer" bind:this={webgpuCanvas} aria-hidden="true"></canvas>
+  <div class="layer" bind:this={konvaBox} aria-hidden="true"></div>
   <canvas class="layer" bind:this={rafCanvas} aria-hidden="true"></canvas>
   <canvas class="layer" bind:this={eventCanvas} aria-hidden="true"></canvas>
   <svg class="layer" aria-hidden="true">

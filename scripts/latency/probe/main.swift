@@ -51,6 +51,9 @@ let trackers = [
     Tracker(key: "canvas", hue: 120, radius: 44),
     Tracker(key: "raf", hue: 28.8, radius: 54),
     Tracker(key: "svg", hue: 265, radius: 64),
+    Tracker(key: "konva", hue: 0, radius: 74),
+    Tracker(key: "webgpu", hue: 186, radius: 84),
+    Tracker(key: "webgl", hue: 82, radius: 94),
 ]
 
 // ---- time -------------------------------------------------------------------
@@ -153,7 +156,8 @@ func centres(_ bm: Bitmap, cy: Double) -> [Double] {
 // ---- capture ----------------------------------------------------------------
 
 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first else { fail("no display") }
+// The built-in display (others may be in use by a person), else the main one.
+guard let display = content.displays.first(where: { CGDisplayIsBuiltin($0.displayID) != 0 }) ?? content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first else { fail("no display") }
 let scale = Double(NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID })?.backingScaleFactor ?? 2)
 let filter = SCContentFilter(display: display, excludingWindows: [])
 
@@ -259,6 +263,7 @@ func offset(_ t: Double) -> Double {
     if u < 0.75 { return amplitude * (2 - u * 4) }
     return amplitude * (u * 4 - 4)
 }
+var interference = 0
 let steps = Int(duration * rate)
 let t0 = machNow()
 let dt = 1 / rate
@@ -268,6 +273,12 @@ for i in 0...steps {
     let now = machNow()
     post(.leftMouseDragged, CGPoint(x: x, y: start.y))
     samples.append(Sample(t: seconds(now), x: x))
+    // Someone else moving the mouse would corrupt the run: check where the
+    // cursor is now and then (it should be where the previous event put it).
+    if i % 25 == 24, let at = CGEvent(source: nil)?.location, i > 0 {
+        let expected = samples[samples.count - 2].x
+        if abs(at.y - start.y) > 2 || (abs(at.x - x) > 2 && abs(at.x - expected) > 2) { interference += 1 }
+    }
 }
 // Back to the start and held: every tracker should come to rest there.
 wait(settle)
@@ -341,10 +352,12 @@ var summary: [String: Any] = [
     "frame_interval_ms": stats(intervals),
     "lag_ms": Dictionary(uniqueKeysWithValues: trackers.enumerated().map { ($1.key, stats(lags[$0])) }),
     "rest_offset_pt": restOffsets,
+    "interference": interference,
     "note": "frame display time (ScreenCaptureKit) minus the time the OS pointer was where the tracker is drawn; excludes panel scanout",
 ]
 if let extra = args["meta"], let d = extra.data(using: .utf8), let m = try? JSONSerialization.jsonObject(with: d) { summary["meta"] = m }
 let json = try JSONSerialization.data(withJSONObject: summary, options: [.prettyPrinted, .sortedKeys])
+if interference > 0 { FileHandle.standardError.write("WARNING: the cursor was moved by something else \(interference) times during the sweep; discard this run\n".data(using: .utf8)!) }
 FileHandle.standardOutput.write(json)
 FileHandle.standardOutput.write("\n".data(using: .utf8)!)
 if let out = args["out"] { try json.write(to: URL(fileURLWithPath: out)) }

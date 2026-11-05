@@ -159,7 +159,9 @@ export class SessionAdapter {
     if (this.mode === 'worker') {
       try {
         const offscreen: OffscreenCanvas = (canvas as any).transferControlToOffscreen();
-        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio: dpr }, [offscreen as any]);
+        // `?workerTick=raf`: tick only at rAF, not on pointer motion (BrowserRuntime.tickOnInput).
+        const tick = new URLSearchParams(location.search).get('workerTick') ?? undefined;
+        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio: dpr, tick }, [offscreen as any]);
         return;
       } catch (e: any) {
         console.error('Offscreen transfer failed, falling back to direct canvas:', e);

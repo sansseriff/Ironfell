@@ -18,6 +18,8 @@ const name = process.env.NAME ?? 'trace';
 const { context, close } = await launchChrome();
 try {
   const page = context.pages()[0] ?? await context.newPage();
+  // RENDER_SCALE: as in latency-measure.ts.
+  if (process.env.RENDER_SCALE) await context.addInitScript((renderScale) => localStorage.setItem('iron.settings.v1', JSON.stringify({ renderScale })), process.env.RENDER_SCALE);
   await page.goto(process.env.URL!);
   await page.waitForFunction(() => document.querySelector('[data-latency-view]')?.getAttribute('data-ready') === 'true', {}, { timeout: 60000 });
   await page.bringToFront();

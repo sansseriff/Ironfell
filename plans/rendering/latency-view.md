@@ -134,6 +134,43 @@ In native `full` runs the p90 of the DOM trackers is unreliable (it climbs by
 their p50s are sound. Several round-2 runs logged cursor interference (the
 person was working on a second display); their p50s match the clean runs.
 
+### On a 6K display (2026-11-05, after the fix)
+
+Two LG UltraFine 6K displays (3008×1692 pt at 2×, 60 Hz), laptop lid closed,
+Chrome worker runtime, measured on the main display. "Late" columns are the
+share of frames, from the probe's per-frame CSV
+(`/tmp/iron-lat-probe/late.py` logic: at 600 pt/s one frame is 10 pt).
+
+| Window, render scale | Engine tick p50 / p95 (ms) | Vello behind the DOM | DOM late | Screen update interval, mean |
+|---|---|---|---|---|
+| built-in display, 1710×1080, 2× (round 2) | 3.9 / 4.4 | 1–7% | 0–1.5% | 16.7 ms |
+| 6K, 1710×1080, 2× | 3.9 / 4.3 | 0.4–2% (one run 9%) | 0.7% | 16.7 ms |
+| 6K, 3008×1660, 2× | 4.8–5.0 / 6.5–7.5 | 0–69% by run | 18–30% | 19–24.5 ms |
+| 6K, 3008×1660, 1× | 4.3–4.4 / 6.5–6.8 | 26–85% by run | 10–14% | 16.7 ms |
+
+What the traces show for the large window (`trace/6k-big`, `6k-big-s1`,
+against `6k-small` on the same display):
+
+- **The whole page drops frames at full resolution.** At 2× the GPU
+  process's `SwapBuffers` takes 1.6 ms at p50 (0.27 ms with the small window)
+  and up to 27 ms, and the screen updates at 41–52 Hz. At 1× the screen holds
+  60 Hz. The GPU cost of a ~6000×3200 px Vello canvas is the cause; the 6K
+  display itself is not (the small window on it matches the built-in).
+- **Input delivery becomes irregular and late under that load.** Gaps between
+  the drag events Chrome receives: p10 9 / p90 24 ms (15.9 / 17.3 ms with the
+  small window), and the event arrives ~15 ms into the frame instead of ~12.5.
+  Chrome's browser thread is idle, so the delay is before Chrome (WindowServer,
+  sharing the GPU). The probe's cursor read-back lags too, so its
+  interference warning fires on every large-window run: there, it is a sign of
+  load, not of someone moving the mouse.
+- **Vello misses the draw more often** because the tick-on-input budget
+  shrinks from both ends: motion arrives later (~1.6 ms before vsync) and the
+  tick is longer (p90 6.8 ms). At 2× the page's own frame is slow enough that
+  the draw is late and Vello often makes it, but the page drops frames instead.
+- **Extra ticks.** With irregular input, two pointer messages can land in one
+  frame, and the rAF tick then runs as well: 61–70 ticks/s, about 20% of
+  frames with two or three ticks, wasted GPU work at the worst time.
+
 ### Round 1: before the fix (Canvas2D, SVG, engine and square only)
 
 | Setup | DOM trackers (canvas / rAF / SVG) | Engine ring | Square | Vello − DOM |

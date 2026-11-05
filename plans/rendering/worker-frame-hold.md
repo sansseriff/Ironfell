@@ -175,6 +175,23 @@ What that touches here (audit, 2026-11-05):
 - Regression: the Latency view procedure (`latency-view.md` §6) gains a
   heavy-tick run (`workerTickBusy`), expecting Vello equal to the DOM.
 
+## 6a. Findings on a 6K display (2026-11-05)
+
+See `latency-view.md` §5, "On a 6K display". For this plan:
+
+- The hold addresses one of the two large-window problems: Vello missing the
+  draw when motion arrives late and the tick runs long. With motion ~1.6 ms
+  before vsync and ticks to 6.8 ms at p90, the tick-on-input budget is often
+  gone; a hold of a few ms recovers it.
+- It does not address the other: the whole page dropping frames because the
+  GPU is saturated at full resolution. Holding the main thread cannot add GPU
+  time and could make the page later. That needs less GPU work per frame:
+  at most one tick per displayed frame (the extra ticks above), not rendering
+  an unchanged frame, and Vello's cost at large canvas sizes.
+- Phase 0 adds: the extra-tick fix (one tick per frame, the latest motion),
+  measured on the large window; and the large window at 1× and 2× as standing
+  cases for every later phase.
+
 ## 7. Risks and open questions
 
 - **A late frame for the whole page.** Overrunning Chrome's limit makes the

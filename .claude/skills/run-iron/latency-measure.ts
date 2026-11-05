@@ -58,6 +58,8 @@ if (browserName === 'chrome') {
     const { context, close } = await launchChrome();
     try {
       const page = context.pages()[0] ?? await context.newPage();
+      // RENDER_SCALE=auto|panel4k|2|1.5|1: the Settings view's render scale (canvas px per CSS px).
+      if (process.env.RENDER_SCALE) await context.addInitScript((renderScale) => localStorage.setItem('iron.settings.v1', JSON.stringify({ renderScale })), process.env.RENDER_SCALE);
       await page.goto(url(runtime, layout));
       await page.waitForFunction(() => document.querySelector('[data-latency-view]')?.getAttribute('data-ready') === 'true', {}, { timeout: 60000 });
       const build = await page.evaluate(async () => { try { return JSON.parse(await (window as any).__iron.call('build_info', [])); } catch { return null; } });

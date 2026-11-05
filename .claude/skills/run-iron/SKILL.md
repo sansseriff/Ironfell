@@ -2662,7 +2662,7 @@ times in one browser session. Chrome runs also print the engine's own tick timin
 `latency-chrome.ts` (own temporary profile). `latency-trace.ts` (`URL=… NAME=x`)
 records a Chrome trace of one measurement to `.agents/latency/trace/`. Page
 parameters for experiments: `?workerTick=raf` (the worker's old rAF-only tick),
-`?latencyBusy=N` (N ms of extra work in the page's rAF), `&with=…`/`&without=…`
+`?latencyBusy=N` (N ms of extra work in the page's rAF); driver settings `CHROME_WINDOW=w,h` (window size in points, default 1710,1080) and `RENDER_SCALE=1|1.5|2|auto|panel4k` (the Settings view's render scale) for large-display runs, where the probe's interference warning also fires from load alone, `&with=…`/`&without=…`
 (views added to or closed from the measurement layout); see the plan's §6. Each run prints `label: p50 ms …` and writes JSON and per-frame CSV
 to `.agents/latency/measure/`; a run that cannot find the square saves the still it
 searched (`<label>-still.png`). Reference values (60 Hz built-in display, 2026-11-05),

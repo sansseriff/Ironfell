@@ -268,7 +268,7 @@ Limits:
 - Heavier documents under the view: how long a drag tick can be before the
   worker misses the draw again, and whether pointer prediction should cover it.
 - Native baseline pacing in `full` (Vello +1 frame in round 2).
-- A way to hold the page's frame for the worker (SharedArrayBuffer and
+- A way to hold the page's frame for the worker (planned: [`worker-frame-hold.md`](worker-frame-hold.md)) (SharedArrayBuffer and
   `Atomics`, which need cross-origin isolation) was not tried; tick-on-input
   made it unnecessary at this scene size. It would roughly double the tick
   budget (≈5 → ≈10 ms) if Chrome waits ~6 ms past vsync for the page (a fixed

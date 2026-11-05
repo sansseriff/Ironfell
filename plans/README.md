@@ -78,6 +78,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`renderer-sanity-checks.md`](rendering/renderer-sanity-checks.md) | Build/DPR pitfalls, Canvas2D/ThorVG/standalone Vello controls, renderer-family experiments (§10) |
 | [`native-frame-pacing.md`](rendering/native-frame-pacing.md) | Native (macOS) frame loop: where input-to-display latency comes from, what helped and what didn't, measurement traps, open questions |
 | [`latency-view.md`](rendering/latency-view.md) | The in-app Latency view (developer mode, `?latency=`), the OS-pointer + screen-capture probe for regression checks, and measured web/native results (2026-11-05) |
+| [`worker-frame-hold.md`](rendering/worker-frame-hold.md) | **Planned:** hold the page's frame (SharedArrayBuffer, cross-origin isolation) so heavier worker ticks still land in the DOM's frame; phases, measurements first |
 
 ## 5. Archive (do not build from these)
 

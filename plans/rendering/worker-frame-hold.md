@@ -3,7 +3,10 @@
 **Status:** Phases 0–2 done 2026-11-05 (§6b, §6c): `?frameHold=on` on a dev
 server with `IRON_COI=1`, adaptive by default, Chromium only (Safari: §6d).
 Phase 3 (isolation in deployment, default on) is **deferred to the app's own
-backend server** (decided 2026-11-05, §6e). Follows the worker tick-on-input
+backend server** (decided 2026-11-05, §6e).
+**Next: Phase 4, frame modes** (§6g, planned 2026-11-06): early (the hold)
+by default, a late gate as the fallback, ahead rendering for playback, half
+rate for slow ticks, and the mode shown in the FPS readout. Follows the worker tick-on-input
 fix in [`latency-view.md`](latency-view.md) §7. Timelines of the problem, the fix
 and this proposal: [`latency-timelines.html`](latency-timelines.html).
 
@@ -419,6 +422,188 @@ does not act during plain playback, now for the other reason: the page's
 later work is 0.15 ms, but the worker's tick, started at vsync, takes ~7 ms
 on this window, so it is predicted past the cap (`skipped`). In a drag the
 tick starts at the input, earlier, as in §6b–c.
+
+## 6g. Frame modes: early by default, late gate as the fallback (plan, 2026-11-06)
+
+The hold (§2–§4) makes Vello appear in the same draw as the DOM when the
+worker can finish in time. When it cannot, today nothing decides where the
+worker's frame lands: it races the page's frame, and if the two finish near
+the same moment the order flips frame to frame and Vello judders (§6f, and
+the diagram in [`playback-race.html`](playback-race.html)). Iron also has to
+run on weaker hardware, where both threads are slower. So the order is now
+chosen on purpose, per interaction, and kept.
+
+**Decision:** lowest latency is the default whenever the hardware can deliver
+it. Late is a fallback that is smooth everywhere, not the default.
+
+### Modes
+
+| Mode | What happens | Vello vs the DOM | Used when |
+|---|---|---|---|
+| **Early** (default) | the page's rAF waits for the worker's frame (the hold), filling the wait with its own work (below) | same draw | the worker's frame plus the page's later work fit Chrome's limit (~5–6 ms after vsync at 60 Hz, learned, §4) |
+| **Ahead** | during playback without input, the worker renders the frame for the *next* vsync's time right after pushing the previous one | same draw, no hold | playback; also the best mode on a taxed machine, since a playback tick then has a whole frame |
+| **Late** (gate, fallback) | the worker finishes its frame, then hands it to the compositor only after the page's frame for that vsync is out | always one frame behind the DOM, never flipping | early failed (misses), the page is heavy or uneven (a chat layout), or the device is known to be slow |
+| **Half rate** | the worker draws on every second vsync, steadily | late, at 30 fps | the worker's tick no longer fits one frame; a steady 30 beats alternating 60/30 |
+
+Lowering the render scale (Settings) is the other lever on weak hardware and
+stays with the person, not this controller.
+
+### Time budgets per mode (60 Hz)
+
+- **Early:** the page must have its frame out by the learned limit, ~5–6 ms
+  after vsync, including the time it waits. The worker's tick starts at the
+  input (~12 ms into the previous frame, tick-on-input) and must end before
+  that limit: ~10 ms. Both are the lowest-latency budgets any page has in
+  Chrome; the hold only lets the worker use the page's share.
+- **Late:** the worker's frame has to reach the compositor before the *next*
+  draw, so a tick can take about a whole frame (~16 ms, less Chrome's own
+  work), as long as ticks average no more than one per frame. The page gets
+  the ordinary web budget: under ~16 ms to stay smooth; past ~5–6 ms its own
+  DOM is a frame later, as for any page, and the gate follows it, so the two
+  stay one frame apart and consistent. Confidence: the worker's budget holds
+  by construction. Two things to measure (Phase 4a): (1) a vsync where the
+  page has nothing new: Chrome may draw without waiting for a page frame, and
+  a gated worker frame could then land in that draw on quiet frames and the
+  next on busy ones, which is the flip again. If so, the page makes a frame
+  every vsync while the gate is on (any small style change in its rAF) so the
+  order is always defined. (2) That a frame handed over right after the page's
+  frame is reliably excluded from that draw (Chrome may still catch it); the
+  gate adds a margin if not.
+- **Ahead:** the worker has a whole frame per playback tick and does not
+  depend on the page at all.
+- **Half rate:** two frames per tick.
+
+### When the page is heavy but the worker is fast
+
+If the worker's frame is ready before the page's (a fast tick, or ahead
+mode), the draw that carries the page's frame also carries the worker's: the
+two are composited together, with no jitter. If the page then misses Chrome's
+limit, Chrome may draw without waiting for it, at its deadline, with the
+worker's new frame and the page's previous one: Vello on time, the DOM a
+frame late. That is smooth as long as the page is late consistently (if not,
+it is the DOM's own judder, as in any web app). Unmeasured; Phase 4a's traces
+will show it. Not a goal: a page that heavy usually means a slow machine,
+where the worker is slower too and late mode applies.
+
+### Choosing the mode
+
+Measured each frame, as the hold already does (§4): the worker's tick start
+and a p90 of its length (shared memory), the page's work after its rAF (p90),
+the learned limit, misses (rAF intervals), and the page's own rAF cost.
+
+1. **Down at once, up slowly.** Early → late after the second miss in an
+   interaction (the existing back-off), and late → half rate when ticks exceed
+   a frame in 5 of the last 30. Up only on evidence: 30 frames where the
+   predicted worker finish plus a 1.5 ms margin fits the cap (early), or ticks
+   comfortably under a frame (from half rate).
+2. **Hysteresis.** Enter early with a 1.5 ms margin; leave only on actual
+   misses. Jitter alone cannot flap the mode.
+3. **Switch where it cannot be seen:** at an interaction's start (press, or
+   hover after 100 ms quiet) or end, playback start or stop, a window resize,
+   a render scale change, a view opening or closing. The exception is the
+   downgrade after misses mid-gesture, since staying is worse. Each switch is
+   one repeated (early → late) or skipped (late → early) frame.
+4. **Back off retries.** After a downgrade, wait before trying early again:
+   2 s, then 4, 8, up to 60 s; reset after a minute of success.
+5. **Remember per device.** Keep the outcome (did early hold up, the learned
+   limit, tick p90) in local storage, keyed by backend, window size bucket
+   and render scale. A weak laptop starts late instead of failing its first
+   drag; a fast machine starts early. Retest when the key changes.
+
+### Early mode as a working wait
+
+The main thread cannot sleep (`Atomics.wait` throws on it) and can only
+delay its frame from inside rAF, so today the hold spins. Instead:
+
+1. In rAF, do the frame's UI work first: DOM updates, then force layout (read
+   a layout property) so the layout Chrome would do after rAF happens now.
+2. Then, while the worker's flag says ticking, run deferrable work in slices
+   of ≤0.5 ms (a queue the app's views can post to: chat parsing, text
+   measuring, preparing the next frame's data), checking the flag between
+   slices.
+3. Spin only for what is left; stop at the cap.
+
+The page may overshoot the worker by one slice, which the cap's margin
+covers. Input events, worker messages and timers still wait behind rAF, as
+behind any long callback.
+
+### Ahead mode for playback
+
+Without input the next frame's animation time is known. After the worker
+pushes frame N it starts frame N+1 at once, for vsync N+2's display time:
+the engine's clock advances to the target display time, not the time of the
+tick. The frame is waiting before any draw, so it always lands early, however
+heavy the page. Input ends ahead mode (an interaction switches to early or
+late), and playback stopping ends it.
+
+### The indicator
+
+When the composition view's FPS readout (`FpsCounter.svelte`, "Show FPS") is
+on screen, it shows the frame mode beside the frame rate whenever it is not
+early: **late**, **half** (and **ahead** during playback, muted), in the
+warning colour for late and half. Its tooltip gives the mode, why (misses,
+heavy page, slow tick, remembered for this device), since when, and the
+early-mode numbers (limit, tick p90, page after p90). Hidden with the
+readout; the controller reports its state through `frame_stats`.
+
+### Shared memory, and without it
+
+The hold and the gate both need `SharedArrayBuffer`, so cross-origin
+isolation (§5, §6e). Without it (GitHub Pages today) there is no early mode.
+A message-based gate is possible there: the page posts "frame out" after its
+rAF and the worker pushes its frame only on that message (a worker canvas's
+frame goes out when the worker's task ends). It costs a message hop per frame
+and is late only; worth building only if the deployment without isolation
+stays long.
+
+### Rejected: bitmaps through the main thread
+
+Rendering in the worker, `transferToImageBitmap()`, posting the bitmap and
+showing it with a `bitmaprenderer` canvas in the page's rAF keeps Vello and
+the DOM in one page frame by construction. It is the path the API's designers
+describe for frames that must match the DOM, but not used here:
+
+- Every Vello frame would pass through a main-thread task, so a long
+  main-thread task (the heavy UI the worker exists to make room for) would
+  stall Vello. A transferred canvas's frames go to the compositor without the
+  main thread, which is why the Bevy-in-a-worker guides use it.
+- A page blocked in rAF cannot receive a message, so it cannot wait for a
+  bitmap within the frame: a frame finished after rAF shows a frame later.
+  Synchronized, but late only; it cannot give early mode's latency.
+- Firefox and Safari read the pixels back in `transferToImageBitmap` (Flutter
+  issue #145420, still open; Mozilla bug 1788206), and Iron uses WebGL2 there.
+
+Sources: [web.dev OffscreenCanvas](https://web.dev/articles/offscreen-canvas),
+[WICG thread](https://discourse.wicg.io/t/offscreencanvas-animations-in-workers/1989/),
+[Remotion #12074](https://github.com/remotion-dev/remotion/issues/12074),
+[Flutter #145420](https://github.com/flutter/flutter/issues/145420),
+[Mozilla 1788206](https://bugzilla.mozilla.org/show_bug.cgi?id=1788206).
+
+### Phase 4: build it (next)
+
+- **4a. Late gate.** Shared flag: the page marks "frame out" (the existing
+  post-rAF task); the worker, after its tick, `Atomics.wait`s on it (with a
+  timeout of one frame) before returning from its rAF. Trace: the worker's
+  `DispatchFrame` follows the page's draw, every frame; measure the two
+  unknowns above (quiet page frames, the margin).
+- **4b. Mode controller.** One state machine on the page holding the rules
+  above, driving the hold (early), the gate (late) and the worker's rate
+  (half); stats through `__frameHold.stats()` and `frame_stats`.
+- **4c. Working wait.** The rAF ordering and the slice queue; first user:
+  whatever per-frame UI work exists in that view.
+- **4d. Ahead playback.** Worker scheduling and the engine clock's target
+  time; acceptance with `latency-anim.ts`: page draw unchanged, the worker's
+  frame before the draw in every frame, 0 flips.
+- **4e. Half rate.**
+- **4f. Indicator** in the FPS readout.
+- **4g. Per-device memory.**
+- **Tests for weaker hardware on this machine.** `?workerTickBusy=N` for a
+  slow worker; a new `?latencyBusy=a-b` (a random page load between a and b
+  ms each frame) for an uneven page. Expected: early while it fits; one
+  switch to late when it stops fitting; late smooth (judder ~0) where free
+  running judders; half rate steady when the tick passes a frame. Measured
+  with `latency-anim.ts` (playback) and `latency-measure.ts` with the hold
+  stats (drags), on the 6K monitor and the built-in display.
 
 ## 7. Risks and open questions
 

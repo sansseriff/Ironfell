@@ -48,6 +48,7 @@ export class BrowserRuntime {
       case 'init':
         this.tickOnInput = data.tick !== 'raf';
         this.tickBusy = data.tickBusy ?? 0;
+        this.halfRateAllowed = data.halfRate ?? false;
         if (data.hold) {
           const writer = new FrameHoldWriter(data.hold);
           this.hold = writer;
@@ -77,9 +78,10 @@ export class BrowserRuntime {
         if (this.mode === 'worker') {
           this.pointer = { x: data.x, y: data.y, sent: (data as { t?: number }).t, arrived: performance.timeOrigin + performance.now() };
           // See `tickOnInput`: the frame for this motion starts now, once per frame.
-          if (this.tickOnInput && !this.tickedSinceRaf && this.prepared && this.running && this.appHandle !== 0n) {
+          if (this.tickOnInput && !this.late() && !this.tickedSinceRaf && this.prepared && this.running && this.appHandle !== 0n) {
             this.tickedSinceRaf = true;
-            this.tick(performance.now());
+            if (this.ahead) { this.engine.set_frame_time(this.appHandle, NaN); this.ahead = false; }
+            this.tick(performance.now(), true);
           }
         } else if (this.appHandle !== 0n) this.engine.mouse_move(this.appHandle, data.x, data.y);
         return;
@@ -161,6 +163,69 @@ export class BrowserRuntime {
   private release = new MessageChannel();
   /** `?workerTickBusy=N` (dev): N ms of extra work per tick, a heavier scene. */
   private tickBusy = 0;
+  /** Late mode's tick, run as a task after the rAF callback. */
+  private lateTick = (() => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (e: MessageEvent<number>) => {
+      if (this.disposed || !this.running || this.appHandle === 0n || !this.prepared) return;
+      // Ahead (§6g): this frame is shown at the next vsync, so it is drawn
+      // for that vsync's time; playback lands on time and steps evenly.
+      const frames = this.halfRate ? 2 : 1;
+      this.engine.set_frame_time(this.appHandle, e.data + frames * this.interval() - performance.now());
+      this.ahead = true;
+      const start = performance.now();
+      this.tick(e.data);
+      this.judgeRate(performance.now() - start);
+      // No page waits on this tick; leave no stale "ticking" for early mode.
+      this.releasePending = false;
+      this.hold?.idle();
+    };
+    return channel;
+  })();
+  /**
+   * Half rate (§6g, experiment): in late mode a tick has about a frame; when ticks keep
+   * running past that, frames would go out at 60 and 30 fps by turns, so
+   * the worker draws every second vsync instead, steadily, until its ticks
+   * are comfortably short again.
+   */
+  private halfRate = false;
+  /**
+   * `?halfRate=1` only. Measured 2026-11-06 (§6g): with ~16–20 ms ticks it ran
+   * at 30 fps but not evenly (steps of 0–3 frames), and late mode's ticks run
+   * longer than input ticks, so it also engaged where free running kept 60.
+   */
+  private halfRateAllowed = false;
+  private lateTicks: number[] = [];
+  private judgeRate(ms: number): void {
+    if (!this.halfRateAllowed) return;
+    this.lateTicks.push(ms);
+    if (this.lateTicks.length > 30) this.lateTicks.shift();
+    const interval = this.interval();
+    // Only ticks past a whole frame drop frames (a ~16 ms tick still kept
+    // 60 fps at 16.7 ms, measured 2026-11-06), so that is the line.
+    const slow = this.lateTicks.filter((t) => t > 1.05 * interval).length;
+    const next = this.halfRate
+      ? !(this.lateTicks.length >= 30 && this.lateTicks.every((t) => t < 0.75 * interval))
+      : slow >= 5;
+    if (next !== this.halfRate) {
+      this.halfRate = next;
+      this.lateTicks = [];
+      this.hold?.half(next);
+    }
+  }
+  /** The engine's clock is set ahead (late mode); reset when ticking otherwise. */
+  private ahead = false;
+  private rafIntervals: number[] = [];
+  private lastRaf = NaN;
+  /** The display's frame interval: median of recent rAF intervals (16.7 ms until known). */
+  private interval(): number {
+    if (this.rafIntervals.length < 5) return 1000 / 60;
+    return [...this.rafIntervals].sort((a, b) => a - b)[this.rafIntervals.length >> 1];
+  }
+  /** Late mode (frame_hold.ts): set by the page through shared memory. */
+  private late(): boolean {
+    return this.hold?.late() ?? false;
+  }
   /** A pointer message already ran the tick for the coming frame. */
   private tickedSinceRaf = false;
 
@@ -169,14 +234,37 @@ export class BrowserRuntime {
     if (this.disposed || !this.running || this.appHandle === 0n) return;
     try {
       if (this.prepared) {
-        // Skip this tick when motion already ran it, unless more motion
-        // arrived after that tick (it would otherwise wait for the next move).
-        const covered = this.tickedSinceRaf && this.pointer === null;
-        this.tickedSinceRaf = false;
-        if (!covered) this.tick(timestamp);
-        if (this.releasePending) {
-          this.releasePending = false;
-          this.release.port2.postMessage(0);
+        if (!Number.isNaN(this.lastRaf)) {
+          const dt = timestamp - this.lastRaf;
+          if (dt > 2 && dt < 40) { this.rafIntervals.push(dt); if (this.rafIntervals.length > 30) this.rafIntervals.shift(); }
+        }
+        this.lastRaf = timestamp;
+        if (this.late()) {
+          // Late mode (frame_hold.ts): draw in a task after this callback, not
+          // in it. A frame drawn outside rAF is pushed at the canvas's next
+          // BeginFrame, ~0.1 ms after the next vsync, so it always makes that
+          // vsync's draw: one frame behind the DOM, every frame, with nearly a
+          // whole frame for the tick. Returning at once also keeps the
+          // compositor from waiting on this callback (a callback held ~5 ms
+          // made Chrome draw the whole page at its deadline, §6g).
+          this.tickedSinceRaf = false;
+          // Half rate: every second vsync, by the vsync's number so a late
+          // callback does not shift the beat.
+          if (!this.halfRate || (Math.round(timestamp / this.interval()) & 1) === 0) this.lateTick.port2.postMessage(timestamp);
+        } else {
+          if (this.ahead) { this.engine.set_frame_time(this.appHandle, NaN); this.ahead = false; }
+          // Skip this tick when motion already ran one for this frame. Motion
+          // that arrived during that tick waits for the next frame's (on the
+          // next move, or at the next rAF when the pointer stops): ticking
+          // again here doubled the worker's work under fast input and made its
+          // frames alternate between two timings (§6g).
+          const covered = this.tickedSinceRaf;
+          this.tickedSinceRaf = false;
+          if (!covered) this.tick(timestamp);
+          if (this.releasePending) {
+            this.releasePending = false;
+            this.release.port2.postMessage(0);
+          }
         }
       } else {
         this.checkPrepared();
@@ -189,7 +277,8 @@ export class BrowserRuntime {
   };
 
   /** One engine frame; `timestamp` is the vsync it is for. */
-  private tick(timestamp: number): void {
+  /** `input`: started by pointer motion (early mode's estimate counts only these). */
+  private tick(timestamp: number, input = false): void {
     try {
       const start = performance.now();
       this.hold?.begin();
@@ -209,7 +298,7 @@ export class BrowserRuntime {
       }
       this.probe.record(timestamp, performance.now() - start, start);
       if (this.hold) {
-        this.hold.measured(performance.now() - start);
+        this.hold.measured(performance.now() - start, input);
         this.releasePending = true;
       }
     } catch (error) {

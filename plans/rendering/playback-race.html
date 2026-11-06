@@ -45,7 +45,7 @@
 
   <section>
     <h2>1. The rule: one draw per vsync, and it takes whatever worker frame is already there</h2>
-    <p>The compositor draws when the <b>page's own frame</b> arrives (green dot, ~5.9 ms after vsync here). It does not wait for the worker. The worker's tick for frame <i>k</i> starts at vsync <i>k</i> and finishes ~6.5 ms later (magenta). If the worker frame lands <b class="good">before</b> the draw, that draw shows frame <i>k</i>. If it lands <b class="bad">after</b>, the draw shows the previous frame again, and frame <i>k</i> waits for the next draw, where it is usually replaced by frame <i>k</i>+1 before anyone sees it.</p>
+    <p>The compositor draws when the <b>page's own frame</b> arrives (blue dot, ~5.9 ms after vsync here). It does not wait for the worker. The worker's tick for frame <i>k</i> starts at vsync <i>k</i> and finishes ~6.5 ms later (magenta). If the worker frame lands <b class="good">before</b> the draw, that draw shows frame <i>k</i>. If it lands <b class="bad">after</b>, the draw shows the previous frame again, and frame <i>k</i> waits for the next draw, where it is usually replaced by frame <i>k</i>+1 before anyone sees it.</p>
     <p>Both times wobble by about ±0.5 ms from frame to frame. Because they are nearly equal, the wobble alone decides the order, so it flips at random. The traces counted 120–167 flips in 7 s on stuttering runs, and 1 on a smooth one.</p>
     <svg id="race" viewBox="0 0 1040 330" role="img" aria-label="Six frames: the worker frame lands before or after the page draw, and the screen shows repeats and skips"></svg>
     <div class="key">
@@ -96,9 +96,9 @@
   // ---- 1. Race timeline ----
   {
     const svg = document.getElementById('race');
-    const x0 = 90, W = 150, ms = W / 16.7; // px per ms
+    const x0 = 90, W = 135, ms = W / 16.7;
     const draw = [5.9, 5.8, 6.0, 5.9, 5.8, 6.0];
-    const done = [5.4, 6.6, 5.5, 6.8, 6.5, 5.5];
+    const done = [5.4, 5.5, 6.6, 5.5, 6.8, 6.5];
     const N = draw.length;
     const yPage = 60, yWork = 110, yDraw = 160, yScreen = 230;
     el(svg, 'text', { x: 0, y: yPage + 14 }, 'page');
@@ -125,7 +125,7 @@
       el(svg, 'line', { x1: dx, x2: dx, y1: yPage, y2: yDraw + 20, stroke: css('viz'), 'stroke-width': 1.5, 'stroke-dasharray': '3 3' });
       el(svg, 'circle', { cx: dx, cy: yDraw + 10, r: 6, fill: css('viz') });
       const early = done[k] < draw[k];
-      if (early) shown = k;
+      shown = early ? k : k - 1; // a late frame is still the newest at the next draw
       shownAt.push(shown);
       el(svg, 'text', { x: x + done[k] * ms + 4, y: yWork + 36, style: `fill:${early ? css('good') : css('bad')}` }, early ? 'before draw' : 'after draw');
       // screen: shown at next vsync
@@ -149,7 +149,7 @@
       ['late every time', [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8], 'good'],
       ['flipping', [0, 0, 2, 2, 3, 5, 5, 7, 8, 8], 'bad'],
     ];
-    const x0 = 170, dx = 78;
+    const x0 = 210, dx = 74;
     rows.forEach(([name, pos, tone], r) => {
       const y = 40 + r * 75;
       el(svg, 'text', { x: 0, y: y + 5 }, name);
@@ -159,11 +159,11 @@
         const step = i ? p - pos[i - 1] : 1;
         const isBad = step !== 1;
         el(svg, 'rect', { x: cx - 9, y: y - 9 - (i % 2) * 0, width: 18, height: 18, rx: 3, fill: '#ffd600', stroke: isBad ? css('bad') : 'none', 'stroke-width': 2.5, opacity: 0.35 + 0.65 * ((i + 1) / pos.length) });
-        el(svg, 'text', { x: cx - 4, y: y + 28, class: 'm' }, `${i}`);
+        if (pos.indexOf(p) === i) { const all = pos.map((q, j) => q === p ? j : -1).filter((j) => j >= 0); el(svg, 'text', { x: cx - 4 * all.length, y: y + 30, class: 'm', style: all.length > 1 ? `fill:${css('bad')}` : '' }, all.join(',')); }
       });
       el(svg, 'text', { x: x0 + 9 * dx + 46, y: y + 5, style: `fill:${css(tone)}` }, tone === 'good' ? 'even' : 'judder');
     });
-    el(svg, 'text', { x: 0, y: 240, class: 'm' }, 'Small numbers: displayed frame (vsync). Faint to solid: older to newer. Red outline: repeated or doubled step.');
+    el(svg, 'text', { x: 0, y: 240, class: 'm' }, 'Small numbers: the vsync(s) that position was on screen. Faint to solid: older to newer. Red outline: repeated or doubled step.');
   }
 
   // ---- 3. Hold ----

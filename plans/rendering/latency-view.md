@@ -180,6 +180,16 @@ it on large displays.
 - The probe's interference warning fired on many large-window runs with nobody
   at the mouse: under load its cursor read-back lags.
 
+### Safari against Chrome on a plain page (2026-11-05)
+
+`scripts/latency/bare/index.html` (served at `/Ironfell/scripts/latency/bare/`;
+the yellow square is a plain DOM element, plus Canvas2D, SVG and Konva rings,
+all moved in `pointermove`; no Iron), 3 runs each, a 1710×1080 pt window on
+the 6K display, 60 Hz. p50: Chrome 35.5–36.2 ms for every tracker, Safari
+51.9–52.7 ms for every tracker. Safari is one frame later than Chrome for
+plain web content too, so its extra frame throughout this plan is WebKit's
+pipeline, not Iron's.
+
 ### Round 1: before the fix (Canvas2D, SVG, engine and square only)
 
 | Setup | DOM trackers (canvas / rAF / SVG) | Engine ring | Square | Vello − DOM |

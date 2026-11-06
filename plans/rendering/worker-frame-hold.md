@@ -364,9 +364,8 @@ layout; `latency-probe --watch=1` records it with no input;
 - **Why the page is that late:** ~4 ms of Blink layout every frame of
   playback (240–255 ms/s), half of it text shaping, a full (non-partial)
   layout of all 766 layout objects with 31 dirty each frame. Something on
-  the page changes text every frame while the clock runs (candidates: the
-  Document view's XML, Inspector values, the timeline's readout; not yet
-  isolated).
+  the page changes text every frame while the clock runs: the Document
+  view's markup (isolated below, and fixed).
 
 What would fix it, best first:
 
@@ -386,6 +385,40 @@ What would fix it, best first:
 3. **Arm the hold during playback.** It would make the worker consistently
    catch the draw, but the page is already ~6 ms in, at Chrome's limit, so a
    hold would risk dropped frames. Not recommended.
+
+### Fix 2 done (2026-11-05): the Document view follows commits
+
+`.claude/skills/run-iron/latency-churn.ts` records DOM mutations by dock
+panel during playback and reads Chrome's layout time with each panel hidden
+in turn. The whole cost was the **Document view**: its `<pre>` holds the
+whole document's markup (~68 KB, 758 lines, at `full` fidelity) with
+resolved values, so every frame of playback (and of a drag, before release)
+replaced it, and Blink re-shaped all of it. Hidden: layout 241 → 1 ms/s.
+The **Inspector** was not a cost: with the square selected and playing it
+adds ~10 ms/s of layout (~0.2 ms a frame) and ~20 ms/s of script, since it
+reads one node and Svelte updates only the fields that changed.
+
+Change (`src-ui/runtime/query_subscriptions.ts`): whole-document reads
+refresh at once on a commit (new authored version: an edit, a drag's
+release, undo, redo, load, structure) and, for live values alone (playback,
+a drag in progress, a simulation), once they have been quiet for 250 ms
+(`SETTLE_MS`). A drag keeps the document version until release (checked:
+one version step per drag), so the view updates once, at release.
+
+Result on the 6K monitor (3008×1660 window, no input, tracing on):
+
+| | page draw after vsync p50 | made/missed flips (7 s) | bad steps |
+|---|---|---|---|
+| before | 5.7–6.1 ms | 120–167 | 0–20% (by run) |
+| after (3 runs) | 0.36–0.40 ms | 0 | 0%, 0.2%, 0% |
+
+The worker's frame now misses the draw every frame, consistently: smooth,
+one frame behind (fix 1 would make it a frame earlier). Layout during
+playback with the square selected: 238 → 11 ms/s. The hold (`always`) still
+does not act during plain playback, now for the other reason: the page's
+later work is 0.15 ms, but the worker's tick, started at vsync, takes ~7 ms
+on this window, so it is predicted past the cap (`skipped`). In a drag the
+tick starts at the input, earlier, as in §6b–c.
 
 ## 7. Risks and open questions
 

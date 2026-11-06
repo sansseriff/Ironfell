@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PendingRequests } from '../src-ui/runtime/pending_requests';
-import { QuerySubscriptions, type StateChange } from '../src-ui/runtime/query_subscriptions';
+import { QuerySubscriptions, SETTLE_MS, type StateChange } from '../src-ui/runtime/query_subscriptions';
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const change = (nodes: string[], extra = {}): StateChange => ({ version: 1, sessionVersion: 0, resolvedVersion: 1, nodes, authored: true, structure: false, compositions: false, reset: false, canUndo: true, canRedo: false, ...extra });
 test('replacement, failed sends, timeouts and disposal settle promises; stale sessions cannot reply', async () => {
@@ -62,6 +62,14 @@ test('whole-document readers watch authored changes without mirroring every node
   queries.invalidate(change(['#session'], { authored: false, sessionVersion: 2, resolvedVersion: 9 })); await tick();
   assert.equal(reads, before);
   assert.deepEqual(interests.at(-1), { all: true, compositions: false, nodes: [] });
-  queries.invalidate(change(['#a'], { authored: true, resolvedVersion: 10 })); await tick();
+  // Live values alone (playback, a drag before release) wait until they settle:
+  // one read after a burst, none during it.
+  for (let i = 0; i < 5; i++) { queries.invalidate(change(['#a'], { authored: true, resolvedVersion: 10 + i })); await tick(); }
+  assert.equal(reads, before);
+  await new Promise(resolve => setTimeout(resolve, SETTLE_MS + 50));
   assert.equal(reads, before + 1);
+  // A commit (a new authored version) reads at once.
+  queries.invalidate(change(['#a'], { version: 2, resolvedVersion: 20 })); await tick();
+  assert.equal(reads, before + 2);
+  queries.dispose();
 });

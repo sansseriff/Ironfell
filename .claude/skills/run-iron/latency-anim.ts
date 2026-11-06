@@ -10,7 +10,8 @@
  * CASES: frame hold off | on (armed only by input) | always (holds with no
  * input). Also: REPEAT, RATE (playback rate, default 4), DURATION (s, default 8),
  * EXTRA (more URL parameters, e.g. `&workerTick=raf`), TRACE=1 (a Chrome trace
- * of each run beside its CSV), OUT.
+ * of each run beside its CSV), OUT, PROBE_ARGS (e.g. `--display=largest` with
+ * CHROME_POS on a monitor).
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -56,7 +57,7 @@ for (let n = 0; n < repeat; n++) for (const hold of cases) {
       cdp.on('Tracing.dataCollected', (e: any) => events.push(...e.value));
       await cdp.send('Tracing.start', { traceConfig: { includedCategories: ['viz', 'gpu', 'cc', 'benchmark', 'blink', 'devtools.timeline', 'disabled-by-default-devtools.timeline.frame'], recordMode: 'recordAsMuchAsPossible' }, transferMode: 'ReportEvents' });
     }
-    const probe = spawn('../../../scripts/latency/latency-probe', ['--watch=1', '--label', label, '--out', `${out}/${label}.json`, '--csv', `${out}/${label}.csv`, '--duration', duration, '--amplitude', '500'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const probe = spawn('../../../scripts/latency/latency-probe', ['--watch=1', '--label', label, '--out', `${out}/${label}.json`, '--csv', `${out}/${label}.csv`, '--duration', duration, '--amplitude', '500', ...(process.env.PROBE_ARGS ? process.env.PROBE_ARGS.split(' ') : [])], { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     probe.stderr.on('data', (d) => { err += d; });
     const code = await new Promise((r) => probe.on('exit', r));

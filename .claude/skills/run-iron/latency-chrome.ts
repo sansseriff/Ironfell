@@ -27,8 +27,9 @@ export async function launchChrome(): Promise<{ context: BrowserContext; close: 
     executablePath: process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     headless: false,
     viewport: null,
-    // CHROME_WINDOW=w,h (points; default 1710,1080, the built-in display's usable area).
-    args: ['--window-position=0,0', `--window-size=${process.env.CHROME_WINDOW ?? '1710,1080'}`, '--enable-gpu', '--ignore-gpu-blocklist', '--disable-features=Translate', '--no-first-run', ...(plain ? ['--remote-debugging-pipe', `--user-data-dir=${dir}`, '--no-default-browser-check'] : [])],
+    // CHROME_WINDOW=w,h (points; default 1710,1080, the built-in display's usable area);
+    // CHROME_POS=x,y (global points, top-left; e.g. 1710,0 for a monitor right of it).
+    args: [`--window-position=${process.env.CHROME_POS ?? '0,0'}`, `--window-size=${process.env.CHROME_WINDOW ?? '1710,1080'}`, '--enable-gpu', '--ignore-gpu-blocklist', '--disable-features=Translate', '--no-first-run', ...(plain ? ['--remote-debugging-pipe', `--user-data-dir=${dir}`, '--no-default-browser-check'] : [])],
   });
   return {
     context,

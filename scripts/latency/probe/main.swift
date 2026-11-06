@@ -166,7 +166,10 @@ func centres(_ bm: Bitmap, cy: Double) -> [Double] {
 
 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 // The built-in display (others may be in use by a person), else the main one.
-guard let display = content.displays.first(where: { CGDisplayIsBuiltin($0.displayID) != 0 }) ?? content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first else { fail("no display") }
+// `--display=largest`: the display with the most points (an external monitor)
+// instead of the built-in one.
+let largest = args["display"] == "largest" ? content.displays.max(by: { $0.width * $0.height < $1.width * $1.height }) : nil
+guard let display = largest ?? content.displays.first(where: { CGDisplayIsBuiltin($0.displayID) != 0 }) ?? content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first else { fail("no display") }
 let scale = Double(NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID })?.backingScaleFactor ?? 2)
 let filter = SCContentFilter(display: display, excludingWindows: [])
 

@@ -700,6 +700,11 @@ fn prepare_scene(
             continue;
         }
         extracted.dirty.remove(&key);
+        if let Some(e) = key
+            && !overlay
+        {
+            crate::view_rates::rendered_2d(e);
+        }
         let started = bevy::platform::time::Instant::now();
         // `Scene::new` takes u16; a 5K display is well inside that, but a bad
         // size should clamp rather than wrap.

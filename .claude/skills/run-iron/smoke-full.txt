@@ -215,7 +215,7 @@ sleep 1000
 eval (async () => { const a = await __iron.save(); await __iron.load(a); await new Promise(r => setTimeout(r, 800)); const b = await __iron.save(); return { roundtrip_equal: a === b, bytes: a.length }; })()
 sleep 500
 shot after-load
-eval document.querySelector("pre.view")?.textContent.split("\n").slice(0, 4).join(" | ")
+eval (async () => (await __iron.view({fidelity:'full'})).split("\n").slice(0, 4).join(" | "))()
 logs applied|rejected|loaded document|nothing to|panicked|binding|locked|differs|by Human|by Model
 errors
 # Stage E, the select tool (plans/specs/select-tool.md), on a fresh app so the

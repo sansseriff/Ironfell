@@ -543,7 +543,11 @@ pub(crate) fn sync_view_images(
         let want = bucket(size);
         let rect = Vec4::new(screen.pos.x as f32, screen.pos.y as f32, size.x as f32, size.y as f32);
         let params = Vec4::new(want.x as f32, want.y as f32, MODE_STRAIGHT_SRGB, 0.0);
-        let mut dirty = live || screen.is_changed() || pose.is_changed() || projection.is_changed() || removed_any;
+        // The app's clear colour follows the light/dark theme
+        // (`engine_api::set_dark_mode`). Decided here, before the version
+        // below moves, so the 2D view drawing an embed's texture redraws too.
+        let clear_changed = !matches!(camera.clear_color, ClearColorConfig::Custom(c) if c == clear.0);
+        let mut dirty = live || clear_changed || screen.is_changed() || pose.is_changed() || projection.is_changed() || removed_any;
         let mut awake: Option<u8> = None;
         match view {
             Some(mut v) if v.bucket == want => {
@@ -634,13 +638,13 @@ pub(crate) fn sync_view_images(
         if camera.viewport.as_ref().is_none_or(|v| v.physical_size != size || v.physical_position != UVec2::ZERO) {
             camera.viewport = Some(viewport);
         }
-        // The app's clear colour, which follows the light/dark theme
-        // (`web_ffi::set_dark_mode`): a change re-renders the view.
-        if !matches!(camera.clear_color, ClearColorConfig::Custom(c) if c == clear.0) {
+        if clear_changed {
             camera.clear_color = ClearColorConfig::Custom(clear.0);
-            dirty = true;
         }
         let active = dirty || awake.is_some_and(|a| a > 0);
+        if active && let Some(p) = panel {
+            crate::view_rates::rendered_3d(&p.panel);
+        }
         if camera.is_active != active {
             camera.is_active = active;
         }

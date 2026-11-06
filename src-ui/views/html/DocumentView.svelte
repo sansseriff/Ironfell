@@ -3,8 +3,14 @@
   // the model reads, with save and load. Runtime switches are in Settings.
   import { getContext } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
-  import Github from "../../lib/Github.svelte";
   import Select from "../../lib/ui/Select.svelte";
+  import Button from "../../lib/ui/Button.svelte";
+  import IconButton from "../../lib/ui/IconButton.svelte";
+  import Undo2 from "@lucide/svelte/icons/undo-2";
+  import Redo2 from "@lucide/svelte/icons/redo-2";
+  import Download from "@lucide/svelte/icons/download";
+  import FolderOpen from "@lucide/svelte/icons/folder-open";
+  import Copy from "@lucide/svelte/icons/copy";
   import type { ViewSpec } from "../views";
   import { beginCopy, copied } from "../../runtime/clipboard";
 
@@ -61,10 +67,10 @@
     <p>{controllerManager.loadingInProgress ? "Loading..." : "Starting up..."}</p>
   {:else}
     <div class="row">
-      <button onclick={() => doc.download()}>Save</button>
-      <button onclick={() => doc.undo()} disabled={!doc.canUndo}>Undo</button>
-      <button onclick={() => doc.redo()} disabled={!doc.canRedo}>Redo</button>
-      <button onclick={() => fileInput?.click()}>Load</button>
+      <Button variant="outline" onclick={() => doc.download()} title="Save the document as a file"><Download size={13} strokeWidth={1.75} />Save</Button>
+      <Button variant="outline" onclick={() => fileInput?.click()} title="Open a saved document or an .svg"><FolderOpen size={13} strokeWidth={1.75} />Load</Button>
+      <IconButton icon={Undo2} label="Undo" title="Undo (⌘Z)" onclick={() => doc.undo()} disabled={!doc.canUndo} />
+      <IconButton icon={Redo2} label="Redo" title="Redo (⇧⌘Z)" onclick={() => doc.redo()} disabled={!doc.canRedo} />
       <input type="file" accept=".json,application/json,.svg,image/svg+xml" bind:this={fileInput} hidden onchange={onFile} />
       <label class="small">
         view
@@ -78,20 +84,19 @@
           }}
         />
       </label>
-      <span class="version">v{doc.version}</span>
+      <span class="version" title="Document version">v{doc.version}</span>
     </div>
     <div class="row">
       <label class="small">
         SVG of
         <Select label="What to export as SVG" value={svgScope} items={scopeItems} onChange={(v) => (svgScope = v)} />
       </label>
-      <button onclick={() => doc.downloadSvg(svgScope, scopeName())}>Export SVG</button>
-      <button title="Copy as SVG (Alt+Shift+C copies the selection)" onclick={copySvg}>Copy SVG</button>
+      <Button variant="outline" onclick={() => doc.downloadSvg(svgScope, scopeName())} title="Download as SVG"><Download size={13} strokeWidth={1.75} />Export SVG</Button>
+      <Button variant="outline" title="Copy as SVG (Alt+Shift+C copies the selection)" onclick={copySvg}><Copy size={13} strokeWidth={1.75} />Copy SVG</Button>
     </div>
     {#if doc.error}<p class="error">{doc.error}</p>{/if}
     <pre class="view">{doc.view}</pre>
-    <p class="hint">Cmd/Ctrl+Z undoes, with Shift redoes. Shift-click a second picture to Link. Paste or drop SVG on the canvas to import it; Load opens an .svg too.</p>
-    <Github></Github>
+    <p class="doc-footer">Paste or drop SVG on the canvas to import it.</p>
   {/if}
 </section>
 
@@ -108,6 +113,10 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     white-space: pre;
+  }
+  .doc-footer {
+    font-size: 11px;
+    color: var(--fg-faint);
   }
   .version {
     font-size: 11px;

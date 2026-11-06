@@ -70,8 +70,8 @@ bun run wasm:smallfast  # the shipped build (LTO, wasm-opt -Oz, SIMD), both back
 bun run dev         # serves http://localhost:5173/Ironfell/
 ```
 
-`bun run dev` serves whichever wasm build ran last. The Stats view (right of the
-timeline) says which: `Build wasm-bench (opt 3, SIMD)`, or `Build dev-opt … SLOW`.
+`bun run dev` serves whichever wasm build ran last. Settings names it, as does the
+tooltip on a view's FPS readout (composition settings → **Show FPS**).
 After switching builds, hard-reload the page.
 
 **Settings:** the gear beside **+** in any tab bar. Render scale (canvas pixels per

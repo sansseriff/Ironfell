@@ -404,6 +404,27 @@ pub fn document_build_info(_app: &mut WorkerApp) -> String {
     .to_string()
 }
 
+/// The FPS readout's data (a composition view's settings menu, "Show FPS"):
+/// every panel's render count so far (`view_rates`; the shell divides two
+/// readings' difference by their `t`s), the app's tick rate, and what draws.
+pub fn document_frame_stats(app: &mut WorkerApp) -> String {
+    use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+    let world = app.world_mut();
+    let t = world.get_resource::<Time<Real>>().map_or(0.0, |t| t.elapsed_secs_f64());
+    let tick = world.get_resource::<DiagnosticsStore>().and_then(|d| d.get(&FrameTimeDiagnosticsPlugin::FPS)).and_then(|d| d.smoothed());
+    let canvas = world.query_filtered::<&bevy::window::Window, With<bevy::window::PrimaryWindow>>().iter(world).next().map(|w| [w.physical_size().x, w.physical_size().y]);
+    let panel_of: Vec<(Entity, String)> = world.query::<(Entity, &crate::document_bridge::render::DocumentPanelLayer)>().iter(world).map(|(e, l)| (e, l.panel.clone())).collect();
+    let (profile, opt, simd, fast) = crate::document_bridge::stats::build_profile();
+    serde_json::json!({
+        "t": t,
+        "views": crate::view_rates::counts(&panel_of),
+        "tick_fps": tick,
+        "canvas": canvas,
+        "build": {"profile": profile, "opt": opt, "simd": simd, "fast": fast, "gfx": crate::host_services::graphics_backend()},
+    })
+    .to_string()
+}
+
 /// The instance-cache benchmark's `meters` composition (`?meters=N`,
 /// `__iron.meters(n)`): `n` dial meters, the first driven by a slider.
 pub fn document_meters(app: &mut WorkerApp, n: u32) -> String {

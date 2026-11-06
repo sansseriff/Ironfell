@@ -17,9 +17,10 @@
   import CompositionSettings from "./html/CompositionSettings.svelte";
   import RenderInspector from "./html/RenderInspector.svelte";
   import MissingComposition from "./html/MissingComposition.svelte";
+  import FpsCounter from "./html/FpsCounter.svelte";
   import { controllerManager } from "../controller-manager.svelte";
   import { NOTATIONS, type ViewSpec } from "./views";
-  import { setInspecting } from "./workspace";
+  import { setInspecting, setShowFps } from "./workspace";
 
   let { id, spec, api }: { id: string; spec: ViewSpec; api: DockviewPanelApi } = $props();
 
@@ -34,8 +35,13 @@
   let visible = $state(api.isVisible);
   const sub = api.onDidVisibilityChange((e) => (visible = e.isVisible));
   const shareOf = (p: unknown) => (p as { inspect?: number } | undefined)?.inspect;
+  const fpsOf = (p: unknown) => !!(p as { fps?: boolean } | undefined)?.fps;
   let share = $state(shareOf(api.getParameters()));
-  const params = api.onDidParametersChange((p) => (share = shareOf(p)));
+  let showFps = $state(fpsOf(api.getParameters()));
+  const params = api.onDidParametersChange((p) => {
+    share = shareOf(p);
+    showFps = fpsOf(p);
+  });
   onDestroy(() => {
     sub.dispose();
     params.dispose();
@@ -98,7 +104,8 @@
     </div>
   {/if}
   {#if spec.notation === "composition"}
-    <CompositionSettings {spec} {inspecting} onInspect={() => setInspecting(id, inspecting ? undefined : 0.5)} />
+    <CompositionSettings {spec} {inspecting} onInspect={() => setInspecting(id, inspecting ? undefined : 0.5)} {showFps} onShowFps={() => setShowFps(id, !showFps)} />
+    {#if showFps && visible}<FpsCounter panel={id} />{/if}
   {/if}
   {/if}
 </div>

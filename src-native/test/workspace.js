@@ -64,10 +64,8 @@
         summary.renderSimulationOverlapIntervals);
       await core.invoke('native_test', {action:'trace',report:after.simulation});
     } else {
-      // Stats is a live composition since free-running.md landed. Disable its
-      // continuous redraw before measuring an otherwise idle workspace.
-      const stopped = await timed(__iron.runMode('stats', 'on_demand'));
-      if (!stopped.ok) throw new Error('could not stop Stats: ' + JSON.stringify(stopped));
+      // Nothing in the default workspace is live (the Stats view, which was,
+      // became each view's optional FPS readout), so an idle wait is enough.
       await sleep(2000); __probe(); await sleep(150); const idle=window.__lastProbeStats;
       await sleep(1200); __probe(); await sleep(150);
       check('idle submits no GPU frames', window.__lastProbeStats.renderedFrames===idle.renderedFrames, {before:idle.renderedFrames,after:window.__lastProbeStats.renderedFrames,timings:await __iron.timings(false)});

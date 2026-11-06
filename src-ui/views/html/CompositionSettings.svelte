@@ -4,7 +4,8 @@
   // or anything it shows is live, as the engine reports), Always, or On
   // demand (never; what it shows does not bubble out, and producers seen
   // only through it pause). In developer mode, the render inspector toggle
-  // (plans/specs/render-inspector.md §8), which splits the tab.
+  // (plans/specs/render-inspector.md §8), which splits the tab. "Show FPS"
+  // turns on the view's frame-rate readout, in its lower right corner.
   import { DropdownMenu } from "bits-ui";
   import Check from "@lucide/svelte/icons/check";
   import Settings2 from "@lucide/svelte/icons/settings-2";
@@ -13,7 +14,7 @@
   import { settings } from "../../runtime/settings.svelte";
   import type { ViewSpec } from "../views";
 
-  let { spec, inspecting, onInspect }: { spec: ViewSpec; inspecting: boolean; onInspect: () => void } = $props();
+  let { spec, inspecting, onInspect, showFps, onShowFps }: { spec: ViewSpec; inspecting: boolean; onInspect: () => void; showFps: boolean; onShowFps: () => void } = $props();
 
   const doc = controllerManager.docClient;
 
@@ -46,8 +47,10 @@
     void spec.source;
     refresh();
   });
+  // Also until the first answer: a view mounted before the engine is ready
+  // gets none, and the button would never appear.
   const poll = setInterval(() => {
-    if (open) refresh();
+    if (open || !info) refresh();
   }, 500);
   onDestroy(() => { queryGeneration++; clearInterval(poll); });
 
@@ -62,7 +65,7 @@
 </script>
 
 {#if info}
-  <div class="settings canvas-ui">
+  <div class="settings canvas-ui" class:below-ruler={spec.source === "timeline"}>
     <DropdownMenu.Root bind:open onOpenChange={(o) => o && refresh()}>
       <DropdownMenu.Trigger class="trigger" title="Composition settings" aria-label="Composition settings">
         <Settings2 size={16} strokeWidth={1.75} />
@@ -80,6 +83,12 @@
           {/each}
           <div class="ui-menu-separator"></div>
           <div class="ui-menu-heading status" data-status>{status}</div>
+          <div class="ui-menu-separator"></div>
+          <DropdownMenu.Item class="ui-menu-item" onSelect={onShowFps} data-show-fps>
+            <span class="check">{#if showFps}<Check size={14} strokeWidth={2} />{/if}</span>
+            <span>Show FPS</span>
+            <span class="ui-hint">Frames this view renders per second</span>
+          </DropdownMenu.Item>
           {#if settings.developer}
             <div class="ui-menu-separator"></div>
             <div class="ui-menu-heading">Developer</div>
@@ -100,6 +109,11 @@
     position: absolute;
     top: 8px;
     right: 8px;
+  }
+  /* The timeline's ruler runs the full width at the top, labels and all:
+     its button sits just under the ruler (TimelinePanel's 56 px). */
+  .settings.below-ruler {
+    top: 64px;
   }
   .settings :global(.trigger) {
     position: relative;

@@ -17,6 +17,8 @@
   import Minus from "@lucide/svelte/icons/minus";
   import Square from "@lucide/svelte/icons/square";
   import X from "@lucide/svelte/icons/x";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import Button from "../../lib/ui/Button.svelte";
   import Unlink from "@lucide/svelte/icons/unlink";
   import type { ViewSpec } from "../views";
 
@@ -182,14 +184,18 @@
 <section class="html-view properties">
   <header class="panel-heading"><span>Design</span><SlidersHorizontal size={15} strokeWidth={1.5} /></header>
 
-  <div class="row">
-    <button onclick={() => link()} disabled={doc.selection.length !== 2}>Link</button>
-    <button onclick={makeComponent} disabled={doc.selection.length === 0} title="Make a component: shapes become a new definition shown by its main; instances become one component holding them">Make component</button>
-    <button onclick={() => author("wrap", { ids: doc.selection })} disabled={doc.selection.length === 0} title="Wrap the selection in an empty at its centre (⌘⌥G)">Wrap in empty</button>
-    {#each showIn as f (f.node)}
-      <button onclick={() => doc.command({ op: 'focus', node: f.node })}>Show in {f.name ?? f.composition} ▸</button>
-    {/each}
-  </div>
+  {#if doc.selection.length || showIn.length}
+    <div class="row actions">
+      {#if doc.selection.length}
+        <Button small variant="outline" onclick={() => link()} disabled={doc.selection.length !== 2} title="Link two pictures (Shift-click a second picture)">Link</Button>
+        <Button small variant="outline" onclick={makeComponent} title="Make a component: shapes become a new definition shown by its main; instances become one component holding them">Make component</Button>
+        <Button small variant="outline" onclick={() => author("wrap", { ids: doc.selection })} title="Wrap the selection in an empty at its centre (⌘⌥G)">Wrap in empty</Button>
+      {/if}
+      {#each showIn as f (f.node)}
+        <Button small onclick={() => doc.command({ op: 'focus', node: f.node })}>Show in {f.name ?? f.composition}<ChevronRight size={12} strokeWidth={1.75} /></Button>
+      {/each}
+    </div>
+  {/if}
   {#if linkError}<p class="error">{linkError}</p>{/if}
   {#if makeError}<p class="error">{makeError}</p>{/if}
   {#if doc.question}
@@ -200,11 +206,11 @@
           <strong>{e.name ?? e.entity}</strong> <span class="mono">{e.entity}</span> · {e.def ?? "no definition"}
           <div class="mono">args: {e.args.length ? e.args.map((p: [string, string]) => `${p[0]}=${p[1]}`).join(", ") : "none"}</div>
           <div class="mono">figures: {e.figures.join(" ")}{e.ports.length ? ` · ports: ${e.ports.join(", ")}` : ""}</div>
-          <button onclick={() => link(e.entity)}>Keep {e.name ?? e.entity}</button>
+          <Button small variant="outline" onclick={() => link(e.entity)}>Keep {e.name ?? e.entity}</Button>
         </div>
       {/each}
       {#if doc.question.port_collisions.length}<p class="error">Ports on both: {doc.question.port_collisions.join(", ")}</p>{/if}
-      <button onclick={() => (doc.question = null)}>Cancel</button>
+      <Button small onclick={() => (doc.question = null)}>Cancel</Button>
     </div>
   {/if}
 
@@ -391,7 +397,7 @@
   {:else}
     <div class="empty"><MousePointer2 size={28} strokeWidth={1.25} /><strong>Make a selection</strong><span>Select an object to see its properties.</span></div>
   {/if}
-  <footer>Alt + drag a number to adjust <span>⇧ Precision</span></footer>
+  {#if inspected}<footer>Alt + drag a number to adjust <span>⇧ Precision</span></footer>{/if}
 </section>
 
 <style>
@@ -399,11 +405,11 @@
   .panel-heading { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
   .panel-heading span { border-bottom: 2px solid var(--accent); padding-bottom: 4px; }
   .row { padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 4px; }
-  .row:has(button:only-child:disabled) { display: none; }
+  .actions { padding-top: 10px; padding-bottom: 2px; }
   .inspector { display: flex; flex-direction: column; }
   .title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
   .title strong { font-size: 13px; flex: 1; }
-  .mono { font-family: monospace; font-size: 10px; color: var(--fg-faint); }
+  .mono { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; color: var(--fg-faint); }
   .property-section { padding: 16px; border-bottom: 1px solid var(--border); }
   .component { display: flex; justify-content: space-between; align-items: center; min-height: 22px; margin-bottom: 14px; font-size: 12px; font-weight: 600; }
   .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 8px; }

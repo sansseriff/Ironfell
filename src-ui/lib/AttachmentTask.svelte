@@ -82,7 +82,7 @@
   }
 </script>
 
-<div class="authoring" data-attachment-task>
+<div class="authoring" class:idle={!owner && !doc.selection.length} data-attachment-task>
   {#if !owner}
     <Button disabled={!doc.selection.length || busy} onclick={start} title="Select a main component or an empty in its main to begin"><Link size={14} /> Attach points to control</Button>
   {:else}
@@ -149,7 +149,8 @@
 </div>
 
 <style>
-  .authoring { padding: 10px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+  .authoring.idle { display: none; }
+  .authoring { padding: 4px 0 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
   .heading, .actions, .point-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .heading { justify-content: space-between; }
   p { margin: 0; color: var(--fg-muted); line-height: 1.5; }

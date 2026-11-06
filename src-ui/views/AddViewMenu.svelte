@@ -23,7 +23,7 @@
   async function opened(now: boolean) {
     if (!now) return;
     try {
-      // The document's first, then the session's (timeline, Stats, library).
+      // The document's first, then the session's (timeline, library).
       const list = await controllerManager.docClient.refreshCompositions();
       compositions = [...list.filter((c) => !c.session), ...list.filter((c) => c.session)];
     } catch {

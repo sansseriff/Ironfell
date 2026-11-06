@@ -240,7 +240,7 @@ table's column edges), with a mechanism to read it.
 the `order::TIMELINE_*` constants, the `timeline` notation and its entry in
 `views.ts` (`NOTATIONS`, `FIXED_VIEWS`). The default layout's Timeline view becomes
 `{ source: 'timeline', notation: 'composition' }`, the session composition's name, as
-Stats is `{ source: 'stats', notation: 'composition' }`. The layout key bumps so saved
+Stats was `{ source: 'stats', notation: 'composition' }` (removed 2026-11-04, free-running.md §4a). The layout key bumps so saved
 layouts reset once.
 
 ## 9. Phases

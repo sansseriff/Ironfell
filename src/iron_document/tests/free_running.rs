@@ -2,7 +2,6 @@
 //! through embeds, and `on_demand` stopping it.
 
 use iron_document::composition::{self, RunMode};
-use iron_document::standard;
 use iron_document::facet::{Composition, Embed, Name, Transform2d};
 use iron_document::*;
 use std::collections::BTreeSet;
@@ -142,22 +141,4 @@ fn the_run_mode_is_undoable_and_saved() {
     assert_eq!(composition::run_mode(loaded.document(), n.middle), RunMode::OnDemand);
     n.store.undo(1).expect("something to undo").expect("undo applies");
     assert_eq!(composition::run_mode(n.store.document(), n.middle), RunMode::Auto);
-}
-
-#[test]
-fn the_stats_composition_is_session_state_its_lines_take_signals() {
-    let mut store = Store::new();
-    let first = store.document().next_session_ids(1)[0];
-    let ops = standard::stats_ops(first, OrderKey::first());
-    store.apply_session(ops).expect("stats composition applies as session ops");
-    let doc = store.document();
-    let comp = composition::compositions(doc).into_iter().find(|&c| c.is_session()).expect("a session composition");
-    let line = |name: &str| doc.children(comp).iter().copied().find(|&k| doc.get::<Name>(k).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).expect("line");
-    let fps = line("fps");
-    assert_eq!(standard::STATS_LINES.len(), 4);
-    assert!(!store.save().contains("JetBrains Mono"), "session nodes are never saved");
-    let producer = store.register_producer("stats");
-    store.publish(producer, std::collections::BTreeMap::from([(Leaf { node: fps, path: "text.content".parse().unwrap() }, Value::Str("FPS 60.0".into()))]));
-    assert!(store.signal_errors().is_empty(), "{:?}", store.signal_errors());
-    assert_eq!(store.signals().len(), 1);
 }

@@ -34,7 +34,7 @@ pub use materialize::EMPTY_HALF;
 pub mod nest;
 mod panel_views;
 pub mod planes;
-mod render;
+pub(crate) mod render;
 mod spatial;
 pub mod stats;
 pub mod stress;
@@ -320,7 +320,7 @@ impl Plugin for DocumentPlugin {
             // Before input collection, so a transaction queued last frame is
             // visible to this frame's picking. Producers publish first, so
             // their signals reconcile with everything else this frame.
-            .add_systems(PreUpdate, (gas::step_and_publish, stats::step_and_publish, motion::advance, clock::advance, text::refresh_text, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
+            .add_systems(PreUpdate, (gas::step_and_publish, motion::advance, clock::advance, text::refresh_text, sync_document, materialize::decide_modes, materialize::sync_live, panel_views::resolve_panel_views).chain())
             .add_systems(Update, materialize::assign_mesh_materials)
             .add_systems(
                 PostUpdate,
@@ -377,9 +377,13 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes, mut ui, mut timeline): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>),
+    (mut drawables, modes, mut ui, mut timeline, clear): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>),
 ) {
+    // The timeline follows the shell's theme, which sets the clear colour
+    // (`engine_api::set_dark_mode`).
+    let light = clear.0 == crate::bevy_app::CANVAS_LIGHT;
     if pending.0.is_empty()
+        && timeline.as_ref().is_none_or(|(_, p)| p.light == light)
         && history.0.is_empty()
         && load.0.is_none()
         && gestures.0.is_empty()
@@ -494,10 +498,9 @@ pub(crate) fn sync_document(
             structure |= collect_ids(op, &mut affected);
         }
     }
-    // The Library tab's composition (component-authoring.md §6) and the
-    // Stats composition (free-running.md §4): session state, built when
-    // missing (at start, and after a load replaces the store).
-    for (name, build) in [(iron_document::standard::LIBRARY, iron_document::standard::library_ops as fn(NodeId, iron_document::OrderKey) -> Vec<Op>), (iron_document::standard::STATS, iron_document::standard::stats_ops)] {
+    // The Library tab's composition (component-authoring.md §6): session
+    // state, built when missing (at start, and after a load replaces the store).
+    for (name, build) in [(iron_document::standard::LIBRARY, iron_document::standard::library_ops as fn(NodeId, iron_document::OrderKey) -> Vec<Op>)] {
         let doc = store.0.document();
         let has = doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name));
         if !has {
@@ -519,7 +522,7 @@ pub(crate) fn sync_document(
     }
     // The timeline (timeline.md §4.3): a session composition generated from
     // the clips, regenerated when what it shows changes.
-    match iron_document::timeline_view::sync(&mut store.0, &mut timeline) {
+    match iron_document::timeline_view::sync_themed(&mut store.0, &mut timeline, light) {
         Ok(Some(ids)) => {
             affected.extend(ids);
             structure = true;

@@ -70,6 +70,9 @@ mod camera_controller;
 // Per-phase CPU timings for the render benchmark (`__iron.timings`).
 pub mod perf;
 
+// How often each view renders, for the FPS readout (`frame_stats`).
+mod view_rates;
+
 pub struct WorkerApp {
     pub app: App,
     /// 手动包装事件需要

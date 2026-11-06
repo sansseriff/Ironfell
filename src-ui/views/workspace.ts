@@ -4,8 +4,8 @@
  * state, never in the document or its undo: saved with each scope
  * (`workspace.json`, scopes.md D10 and phase 4), or in browser storage on an
  * unsaved page. The app's own layout holds only what every document has
- * (the Main view, the timeline, Stats, the document, model, library and
- * inspector views); a tab onto one of the document's compositions or
+ * (the Main view, the timeline, the model, library and inspector
+ * views; the Document view opens from the add-view menu); a tab onto one of the document's compositions or
  * narratives belongs to the document's layout, so a new scope opens without
  * the demo's, and a scope with no saved layout gets one tab per composition.
  */
@@ -39,14 +39,12 @@ function baseLayout(api: DockviewApi) {
   // The timeline: the session's generated `timeline` composition
   // (plans/specs/timeline.md), drawn like any other.
   view('timeline', 'Timeline', { source: 'timeline', notation: 'composition' }, { direction: 'below' }, { initialHeight: 220 });
-  // Frame rate, renderer, build and canvas size (free-running.md §4): the
-  // session's stats composition, where the FPS overlay used to sit.
-  view('stats', 'Stats', { source: 'stats', notation: 'composition' }, { referencePanel: 'timeline', direction: 'right' }, { initialWidth: 360 });
-  view('document', 'Document', { source: 'document', notation: 'markup' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
-  view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
+  // The Document view (the document as markup) is not open by default; the
+  // add-view menu opens it.
+  view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
   // The standard components (component-authoring.md §6): a view onto the
   // session's library composition; drag one onto a canvas to place it.
-  view('library', 'Library', { source: 'library', notation: 'composition' }, { referencePanel: 'document', direction: 'within' }, { inactive: true });
+  view('library', 'Library', { source: 'library', notation: 'composition' }, { referencePanel: 'model', direction: 'within' }, { inactive: true });
   view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 280 });
 }
 
@@ -89,13 +87,20 @@ async function addDocumentViews(api: DockviewApi) {
   } catch {
     narratives = [];
   }
-  const beside = api.getPanel('document') ? { referencePanel: 'document', direction: 'within' } : undefined;
+  const left = api.getPanel('document') ? 'document' : api.getPanel('model') ? 'model' : undefined;
+  const beside = left ? { referencePanel: left, direction: 'within' as const } : undefined;
+  // The first narrative opens in front: a fresh layout's left group shows
+  // the writing view (prose and the chat composer), Model and Library beside it.
+  let front = ![...shown].some((k) => k.startsWith('narrative:'));
   for (const n of narratives) {
     const source = n.name || n.id;
     if (shown.has(`narrative:${source}`)) continue;
-    // A narrative's view (plans/specs/narrative-panel.md) beside the document's.
-    api.addPanel({ id: freshId(api, source), component: 'view', title: titleOf(source), params: { spec: { source, notation: 'narrative' } }, position: beside, inactive: true });
+    // A narrative's view (plans/specs/narrative-panel.md) beside the Model's.
+    api.addPanel({ id: freshId(api, source), component: 'view', title: titleOf(source), params: { spec: { source, notation: 'narrative' } }, position: beside && front ? { ...beside, index: 0 } : beside, inactive: !front });
+    front = false;
   }
+  // Main stays the focused view; the narrative is only its group's front tab.
+  api.getPanel('viewer')?.api.setActive();
 }
 
 /** Tab titles follow their compositions' names. */
@@ -272,6 +277,13 @@ function saveNow() {
  *  part of the width, `undefined` closes it. Kept with the layout. */
 export function setInspecting(panel: string, share: number | undefined) {
   current?.getPanel(panel)?.api.updateParameters({ inspect: share });
+  scheduleSave();
+}
+
+/** Show or hide a composition view's FPS readout (its lower right corner,
+ *  off by default). Kept with the layout. */
+export function setShowFps(panel: string, on: boolean) {
+  current?.getPanel(panel)?.api.updateParameters({ fps: on || undefined });
   scheduleSave();
 }
 

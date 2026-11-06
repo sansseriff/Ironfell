@@ -42,12 +42,12 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | step | typical time |
 |---|---|
 | `BACKENDS=webgl2 build.sh`, warm, after a source change | ~45 s (cargo ~25 s) |
-| ⏱ `build.sh` (both backends), warm | ~1.5 min |
+| ⏱ `build.sh` (both backends), warm | ~1–1.5 min (1m 04s, 2026-11-04) |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
 | ⏱ `build.sh` cold | ~5 min |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4 min (cargo 3m 25s, plus binding generation; 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |
-| ⏱ `smoke-full.txt` (`GPU=1`), broad regression | ~3.5–4 min (3m 54s, 2026-11-03) |
+| ⏱ `smoke-full.txt` (`GPU=1`), broad regression | ~3.5–4 min (3m 34s, 2026-11-04) |
 | `piston.txt` | ~1 min |
 | `snapping.txt` | ~30 s |
 | `layout.txt` | ~35 s |
@@ -289,7 +289,7 @@ cd .claude/skills/run-iron && bun install && cd -
 
 `bun run wasm` and `bun run wasm:fast` (repo root) run this script for dev-opt
 and wasm-bench; `bun run wasm:smallfast` runs `build-wasm.sh` (the shipped
-build) for both backends. The Stats view, docked right of the timeline, names
+build) for both backends. Settings (and the tooltip on a view's FPS readout) names
 the running build (`Build dev-opt (opt 1, no SIMD) - SLOW` or `Build
 wasm-bench (opt 3, SIMD)`).
 
@@ -2178,8 +2178,10 @@ On `enginePrepared` the shell gives the engine its document
 (`DocumentClient.startDocument`): the scope the URL names, or on an unsaved
 page (`&demo`, the benchmarks, the native build) the `demo` engine call, then
 `stress`/`meters` and the `showcase`. **The app's own layout** is the Main view
-(`viewer`), Timeline, Stats, Document, Model, Library and Inspector
-(`baseLayout` in `src-ui/views/workspace.ts`). Once the document is installed,
+(`viewer`), Timeline, Model, Library and Inspector (`baseLayout` in
+`src-ui/views/workspace.ts`; since 2026-11-04 the Document view opens from the
+add-view menu, there is no Stats view, and a fresh layout's left group shows the
+document's first narrative, Lesson in the demo, in front). Once the document is installed,
 the dock shows the scope's saved layout (`workspace.json` beside it in OPFS,
 copied by Duplicate), or the app's plus **one tab per document composition and
 narrative** (`addDocumentViews`): a new empty scope has no Pendulum tab, the
@@ -2210,9 +2212,9 @@ Expected, minus `nav`, `ready`, `clicked` and bare `1` lines:
 
 ```
 applied "open demo scene" (302 ops, System) -> v1
-"demo page: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components timeline stats document model library selection"
+"demo page: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components timeline model library selection"
 (no new console output)
-"empty scope: viewer timeline stats document model library selection"
+"empty scope: viewer timeline model library selection"
 "suggested name: composition"
 "made: Pendulum=#4:Pendulum; active Pendulum"
 "renamed: Swing (#4)"
@@ -2221,7 +2223,7 @@ applied "draw rectangle" (1 ops, Human) -> v3
 applied "rename" (1 ops, Human) -> v4
 "flushed"
 (no new console output)
-"reloaded: Pendulum document library model selection stats timeline viewer; active Pendulum"
+"reloaded: Pendulum library model selection timeline viewer; active Pendulum"
 "after delete: tab open false"
 applied "delete composition" (1 ops, Human) -> v5
 applied "undo: delete composition" (2 ops, System) -> v6
@@ -2403,13 +2405,15 @@ what a drag on an animated object writes, ‹ ◇ ›, pan/zoom/fit without hist
 loop band, each piece's affordances and cursor from its group's context, the ruler's
 track, delete following `projects`) cover the store side. The smoke's scrub step presses the ruler and drags to 3 s.
 
-## Free running and the Stats view (2026-10-18)
+## Free running and per-view FPS (2026-10-18; Stats removed 2026-11-04)
 
-`plans/specs/free-running.md`. The Stats view right of the timeline is the
-session's `stats` composition: four Vello text lines the `stats` producer
-publishes (`FPS … avg … ema …`, `2D vello_gpu (sparse strips)`, the build,
-the canvas size). It is a live source, so while it shows, the window renders
-every frame. Each composition view has a settings button (top right,
+`plans/specs/free-running.md`. The Stats view is gone (§4a): each composition
+view's settings menu has **Show FPS** (`[data-show-fps]`), a readout in the
+view's lower right corner (`[data-fps="<panel>"]`) of the frames that view
+rendered per second, from the `frame_stats` engine call
+(`__iron.call('frame_stats', [])`: per-panel render counts and `t`). Checked
+2026-11-04: idle, Main and Timeline read 0; playing, both 60 and a hidden tab
+0. Nothing in the default layout is a live source now. Each composition view has a settings button (top right,
 `aria-label="Composition settings"`) with Run: Auto / Always / On demand;
 `await __iron.runMode(source, mode)` and `await __iron.compositionInfo(source)`
 do the same from the console (`source` is an id or a name).

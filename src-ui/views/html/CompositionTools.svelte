@@ -60,11 +60,11 @@
   };
 
   const offer = $derived(doc.focus[panel]);
-  // The library, the Stats view and the timeline show their own content,
+  // The library and the timeline show their own content,
   // not a world to draw in. The timeline has its DOM column instead
   // (TimelinePanel.svelte, timeline.md §12.3).
   const timeline = $derived(spec.source === "timeline");
-  const shown = $derived(!!offer?.palette && spec.source !== "library" && spec.source !== "stats" && !timeline);
+  const shown = $derived(!!offer?.palette && spec.source !== "library" && !timeline);
   const slots = $derived((offer?.palette ?? "").split(/\s+/).filter(Boolean).map((slot) => slot.split("|").filter((t) => t in TOOLS)).filter((s) => s.length));
   // `key:tool`, where a tool may hold colons itself (`r:place:resistor`).
   const keyOf = $derived(Object.fromEntries((offer?.keys ?? "").split(/\s+/).filter(Boolean).map((p) => [p.slice(p.indexOf(":") + 1), p.slice(0, p.indexOf(":")).toUpperCase()])));

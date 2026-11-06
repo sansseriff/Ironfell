@@ -4303,3 +4303,75 @@
   top: 0px;
   bottom: auto;
 }
+/* Iron (UI polish, 2026-11-04): a tab strip that overflows reads as intended.
+   No scrollbar under the tabs, the strip's edges fade so a tab cut by the
+   edge does not end mid-word, and the overflow control is a bordered button
+   in Iron's look (its chevron and the hidden-tab count). */
+@property --iron-fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --iron-fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+/* The fades follow the strip's scroll: none on a strip that fits, the start
+   fade once scrolled, the end fade until scrolled to the end. */
+@keyframes iron-tab-fades {
+  from { --iron-fade-start: 0px; --iron-fade-end: 36px; }
+  8% { --iron-fade-start: 36px; }
+  92% { --iron-fade-end: 36px; }
+  to { --iron-fade-start: 36px; --iron-fade-end: 0px; }
+}
+.dv-tabs-container {
+  scrollbar-width: none;
+  animation: iron-tab-fades linear both;
+  animation-timeline: scroll(self inline);
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--iron-fade-start), #000 calc(100% - var(--iron-fade-end)), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 var(--iron-fade-start), #000 calc(100% - var(--iron-fade-end)), transparent 100%);
+}
+.dv-tabs-container::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+.dv-tabs-overflow-dropdown-default {
+  height: 22px;
+  margin: 0 4px;
+  padding: 0 6px 0 4px;
+  gap: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.dv-tabs-overflow-dropdown-default > span {
+  padding-left: 0;
+}
+.dv-tabs-overflow-dropdown-default > svg {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  fill: currentColor;
+}
+/* The control's root is a block the header's height: centre the pill in it. */
+.dv-tabs-overflow-dropdown-root {
+  display: flex;
+  align-items: center;
+}
+.dv-tabs-overflow-dropdown-default:hover {
+  border-radius: 5px;
+  background: var(--hover);
+  color: var(--fg);
+}
+/* The strip's own scrollbar thumb only while the pointer is over the strip:
+   not after a tab is activated programmatically and scrolled into view. */
+.dv-tabs-and-actions-container .dv-scrollable.dv-scrollable-scrolling:not(:hover) .dv-scrollbar {
+  background-color: transparent;
+}
+.dv-tabs-and-actions-container .dv-scrollable .dv-scrollbar-horizontal {
+  height: 2px;
+}

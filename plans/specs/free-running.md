@@ -1,4 +1,4 @@
-# Free-running compositions and the Stats composition
+# Free-running compositions and the Stats composition (since replaced by per-view FPS)
 
 **Status:** Approved and built 2026-10-18 (decisions taken with the user in
 conversation). Amends `view-textures.md`'s render on demand.
@@ -74,7 +74,27 @@ resolves to ("running: gas"). Choosing one sets `composition.run` in one transac
 (`document_set_run_mode`; a session composition is set with a session op).
 `document_composition_info` reports a composition's mode and whether it is live.
 
-## 4. The Stats composition
+## 4a. Per-view FPS readouts (2026-11-04, replaces §4)
+
+The Stats composition is gone. Each composition view's settings menu has **Show FPS**
+(off by default; the panel's `fps` layout parameter), which shows a small readout in
+the view's lower right corner: how many frames per second *that view* rendered.
+Views render on demand into their own textures, so a frozen view reads 0 while an
+animating one reads the display's rate (playing the timeline: Main and Timeline 60,
+a hidden tab 0).
+
+- `src/view_rates.rs` counts renders: the 2D renderer per view entity (render
+  world, `hybrid.rs`, where a view's scene is rebuilt), and 3D panel cameras per
+  panel (`scene3d::sync_view_images`, when the camera is active).
+- The `frame_stats` engine call returns every panel's count, the engine time, the
+  app's tick rate, the canvas size and the build; `src-ui/runtime/frame_stats.svelte.ts`
+  polls it twice a second while any readout is open and divides the differences.
+- The readout's tooltip carries what Stats showed besides FPS (tick rate, build,
+  canvas). Settings names the build too.
+- Unlike Stats, a readout is not a live source: showing it never makes the window
+  free running, so it measures the views rather than changing what they do.
+
+## 4. The Stats composition (superseded by §4a)
 
 The FPS overlay becomes a composition, drawn by Vello like everything else:
 

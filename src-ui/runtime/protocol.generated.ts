@@ -24,6 +24,7 @@ export type DocumentCommand =
   | { op: 'view'; query_json: string }
   | { op: 'apply'; transaction_json: string; expect_version: number }
   | { op: 'build_info' }
+  | { op: 'frame_stats' }
   | { op: 'stress'; shapes: number }
   | { op: 'meters'; n: number }
   | { op: 'snapping'; enabled: boolean }
@@ -100,6 +101,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'view': return { fn: command.op, args: [command.query_json] };
     case 'apply': return { fn: command.op, args: [command.transaction_json, command.expect_version] };
     case 'build_info': return { fn: command.op, args: [] };
+    case 'frame_stats': return { fn: command.op, args: [] };
     case 'stress': return { fn: command.op, args: [command.shapes] };
     case 'meters': return { fn: command.op, args: [command.n] };
     case 'snapping': return { fn: command.op, args: [command.enabled] };

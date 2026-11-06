@@ -35,6 +35,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "view" => { arity(args,1)?; crate::engine_api::document_view(app,argument::<String>(args,0)?)? },
         "apply" => { arity(args,2)?; crate::engine_api::document_apply(app,argument::<String>(args,0)?,argument::<u32>(args,1)?) },
         "build_info" => { arity(args,0)?; crate::engine_api::document_build_info(app) },
+        "frame_stats" => { arity(args,0)?; crate::engine_api::document_frame_stats(app) },
         "stress" => { arity(args,1)?; crate::engine_api::document_stress(app,argument::<u32>(args,0)?) },
         "meters" => { arity(args,1)?; crate::engine_api::document_meters(app,argument::<u32>(args,0)?) },
         "snapping" => { arity(args,1)?; crate::engine_api::document_snapping(app,argument::<bool>(args,0)?) },

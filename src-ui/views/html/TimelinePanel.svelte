@@ -119,9 +119,24 @@
 </div>
 
 <style>
-  /* The column matches the canvas half's dark surface (timeline_view.rs's
-     HEADER and RULER colours), whatever the app's theme. */
+  /* The column matches the canvas half's surface (timeline_view.rs's
+     LIGHT and DARK palettes' header and ruler), in the app's theme. */
   .timeline-column {
+    --tl-header: #f3f3f3;
+    --tl-ruler: #f3f3f3;
+    --tl-line: var(--border);
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    overflow: hidden;
+    background: var(--tl-header);
+    border-right: 1px solid var(--tl-line);
+    color: var(--fg);
+    pointer-events: auto;
+    user-select: none;
+  }
+  :global(:root[data-theme="dark"]) .timeline-column {
     --fg: #d9d9e0;
     --fg-muted: #9d9da6;
     --fg-faint: #6e6e78;
@@ -132,24 +147,34 @@
     --bg-input: #222226;
     --accent-soft: rgba(0, 120, 212, 0.3);
     --accent: #4aa3ff;
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    overflow: hidden;
-    background: #2b2b2e;
-    border-right: 1px solid #3a3a40;
-    color: var(--fg);
-    pointer-events: auto;
-    user-select: none;
+    --tl-header: #2b2b2e;
+    --tl-ruler: #333337;
+    --tl-line: #3a3a40;
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme="light"])) .timeline-column {
+    --fg: #d9d9e0;
+    --fg-muted: #9d9da6;
+    --fg-faint: #6e6e78;
+    --hover: rgba(255, 255, 255, 0.08);
+    --border-strong: #45454c;
+    --bg: #2b2b2e;
+    --bg-sunken: #222226;
+    --bg-input: #222226;
+    --accent-soft: rgba(0, 120, 212, 0.3);
+    --accent: #4aa3ff;
+    --tl-header: #2b2b2e;
+    --tl-ruler: #333337;
+    --tl-line: #3a3a40;
+    }
   }
   .corner {
     position: absolute;
     left: 0;
     right: 0;
     top: 0;
-    background: #333337;
-    border-bottom: 1px solid #3a3a40;
+    background: var(--tl-ruler);
+    border-bottom: 1px solid var(--tl-line);
   }
   .rows {
     position: absolute;

@@ -55,6 +55,8 @@ pub struct Plan {
     /// Seconds between ticks.
     pub tick: f64,
     pub errors: BTreeSet<NodeId>,
+    /// Drawn in the light theme's colours (the shell's appearance).
+    pub light: bool,
 }
 
 /// One animated node: a row naming it, then a row per property.
@@ -156,7 +158,7 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
     // leave the structure alone.
     let seen = t0 + 2400.0 / pps.max(1.0);
     let end = ((end.max(seen) / 5.0).ceil() * 5.0 + 5.0).max(10.0);
-    Plan { clock, objects, end, tick: tick_for(pps), errors }
+    Plan { clock, objects, end, tick: tick_for(pps), errors, light: false }
 }
 
 /// One row of the timeline, for its two halves (§12.3): the canvas draws
@@ -275,19 +277,50 @@ fn words(content: &str, size: f64, weight: f64) -> [Facet; 2] {
     [t.wrap(), f.wrap()]
 }
 
-const BG: [f32; 4] = [0.145, 0.145, 0.152, 1.0];
-const HEADER: [f32; 4] = [0.17, 0.17, 0.18, 1.0];
-const RULER: [f32; 4] = [0.2, 0.2, 0.21, 1.0];
-const GRID: [f32; 4] = [1.0, 1.0, 1.0, 0.06];
-const TICK: [f32; 4] = [0.55, 0.55, 0.58, 1.0];
-const LABEL: [f32; 4] = [0.85, 0.85, 0.88, 1.0];
-const DIM: [f32; 4] = [0.6, 0.6, 0.64, 1.0];
 const SEGMENT: [f32; 4] = [0.3, 0.55, 0.95, 1.0];
 const ERROR: [f32; 4] = [0.9, 0.3, 0.3, 1.0];
 const PLAYHEAD: [f32; 4] = [1.0, 0.6, 0.2, 1.0];
 const LOOP: [f32; 4] = [1.0, 0.6, 0.2, 0.22];
-const SUMMARY: [f32; 4] = [0.45, 0.47, 0.52, 0.55];
-const KEY: [f32; 4] = [0.92, 0.93, 0.96, 1.0];
+
+/// The timeline's colours for one theme: the dark set matches the shell's
+/// dark tokens, the light set its light ones (src-ui/app.css), and the DOM
+/// column (TimelinePanel.svelte) uses the same values.
+struct Palette {
+    bg: [f32; 4],
+    header: [f32; 4],
+    ruler: [f32; 4],
+    grid: [f32; 4],
+    tick: [f32; 4],
+    label: [f32; 4],
+    dim: [f32; 4],
+    summary: [f32; 4],
+    key: [f32; 4],
+    key_edge: [f32; 4],
+}
+const DARK: Palette = Palette {
+    bg: [0.145, 0.145, 0.152, 1.0],
+    header: [0.17, 0.17, 0.18, 1.0],
+    ruler: [0.2, 0.2, 0.21, 1.0],
+    grid: [1.0, 1.0, 1.0, 0.06],
+    tick: [0.55, 0.55, 0.58, 1.0],
+    label: [0.85, 0.85, 0.88, 1.0],
+    dim: [0.6, 0.6, 0.64, 1.0],
+    summary: [0.45, 0.47, 0.52, 0.55],
+    key: [0.92, 0.93, 0.96, 1.0],
+    key_edge: [0.1, 0.12, 0.16, 1.0],
+};
+const LIGHT: Palette = Palette {
+    bg: [1.0, 1.0, 1.0, 1.0],
+    header: [0.953, 0.953, 0.953, 1.0],
+    ruler: [0.953, 0.953, 0.953, 1.0],
+    grid: [0.0, 0.0, 0.0, 0.06],
+    tick: [0.55, 0.55, 0.55, 1.0],
+    label: [0.38, 0.38, 0.38, 1.0],
+    dim: [0.78, 0.78, 0.78, 1.0],
+    summary: [0.55, 0.57, 0.62, 0.35],
+    key: [1.0, 1.0, 1.0, 1.0],
+    key_edge: [0.23, 0.23, 0.23, 1.0],
+};
 /// A key's diamond: a square this wide, turned 45°.
 const KEY_PX: f64 = 10.0;
 
@@ -305,6 +338,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     // one surface however it is sized or scrolled.
     let h = lit(FAR);
     let clock = plan.clock;
+    let pal = if plan.light { &LIGHT } else { &DARK };
     let mut by: BTreeMap<&'static str, Vec<Want>> = BTreeMap::new();
     let mut push = |group: &'static str, key: String, ty_name: &str, facets: Vec<Facet>, projects: Option<NodeId>| {
         let mut facets = facets;
@@ -314,16 +348,16 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let width = at(&lit(plan.end));
 
     // Backdrop and grid.
-    push("backdrop", "background".into(), "rect", vec![place("0", "0"), sized(&lit(FAR), &h), paint(BG)], None);
+    push("backdrop", "background".into(), "rect", vec![place("0", "0"), sized(&lit(FAR), &h), paint(pal.bg)], None);
     let ticks = (plan.end / plan.tick).round() as usize;
     for k in 0..=ticks {
         let x = at(&lit(k as f64 * plan.tick));
-        push("backdrop", format!("grid {k}"), "rect", vec![place(&x, &lit(RULER_H)), sized("1", &lit(FAR - RULER_H)), paint(GRID)], None);
+        push("backdrop", format!("grid {k}"), "rect", vec![place(&x, &lit(RULER_H)), sized("1", &lit(FAR - RULER_H)), paint(pal.grid)], None);
     }
 
     // The ruler: a track laying the clock's time along it (std:timeline-
     // ruler), so a press anywhere on it moves the playhead there.
-    push("ruler", "ruler bar".into(), "rect", vec![place(&lw, "0"), sized(&format!("({}) - {lw}", width), &lit(RULER_H)), paint(RULER)], None);
+    push("ruler", "ruler bar".into(), "rect", vec![place(&lw, "0"), sized(&format!("({}) - {lw}", width), &lit(RULER_H)), paint(pal.ruler)], None);
     push("ruler", "loop".into(), "rect", vec![place(&at(&format!("{clock}.clock.loop_in")), "0"), sized(&format!("max({clock}.clock.loop_out - {clock}.clock.loop_in, 0) * {pps}"), &lit(RULER_H)), paint(LOOP)], None);
     const MINOR: usize = 5;
     for k in 0..=ticks * MINOR {
@@ -331,12 +365,12 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
         let x = at(&lit(t));
         let major = k % MINOR == 0;
         let len = if major { 14.0 } else { 6.0 };
-        push("ruler", format!("tick {k}"), "rect", vec![place(&x, &lit(RULER_H - len)), sized("1", &lit(len)), paint(if major { TICK } else { DIM })], None);
+        push("ruler", format!("tick {k}"), "rect", vec![place(&x, &lit(RULER_H - len)), sized("1", &lit(len)), paint(if major { pal.tick } else { pal.dim })], None);
         if major {
             let text = if plan.tick < 1.0 { format!("{t:.1}s") } else { format!("{t}s") };
             let mut f = vec![place(&format!("{x} + 4"), "8")];
             f.extend(words(&text, LABEL_PX, 500.0));
-            f.push(paint(LABEL));
+            f.push(paint(pal.label));
             push("ruler", format!("tick label {}", k / MINOR), "text", f, None);
         }
     }
@@ -355,7 +389,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
         let all: Vec<String> = o.props.iter().flat_map(|p| &p.segments).flat_map(|s| s.keys.iter().map(move |&k| key_x(s, k))).collect();
         if !all.is_empty() {
             let (lo, hi) = (fold("min", &all), fold("max", &all));
-            push("backdrop", format!("summary {}", o.target), "rect", vec![place(&at(&lo), &ry(row.y + 5.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(ROW_H - 10.0)), rounded(3.0), paint(SUMMARY)], None);
+            push("backdrop", format!("summary {}", o.target), "rect", vec![place(&at(&lo), &ry(row.y + 5.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(ROW_H - 10.0)), rounded(3.0), paint(pal.summary)], None);
         }
         for p in &o.props {
             let row = ri.next().expect("a property row");
@@ -381,9 +415,9 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                     t.y = bound(&ry(row.y + (ROW_H - KEY_PX * std::f64::consts::SQRT_2) / 2.0));
                     t.rot = bound(&lit(std::f64::consts::FRAC_PI_4));
                     let mut st = Stroke::default();
-                    st.color = Slot::Const(Value::Color([0.1, 0.12, 0.16, 1.0]));
+                    st.color = Slot::Const(Value::Color(pal.key_edge));
                     st.width = Slot::Const(Value::Number(1.0));
-                    let mut facets = vec![t.wrap(), sized(&lit(side * std::f64::consts::SQRT_2), &lit(side * std::f64::consts::SQRT_2)), paint(KEY), st.wrap()];
+                    let mut facets = vec![t.wrap(), sized(&lit(side * std::f64::consts::SQRT_2), &lit(side * std::f64::consts::SQRT_2)), paint(pal.key), st.wrap()];
                     // The first and last keys are where the clip starts and
                     // ends: moving them trims it, and the cursor says so
                     // (Figma's trim cursors, §12.5).
@@ -398,7 +432,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
             }
         }
     }
-    push("headers", "header".into(), "rect", vec![place("0", "0"), sized(&lw, &h), paint(HEADER)], None);
+    push("headers", "header".into(), "rect", vec![place("0", "0"), sized(&lw, &h), paint(pal.header)], None);
     // The playhead's line, over everything and transparent to the pointer.
     push("overlay", "playhead".into(), "rect", vec![place(&format!("{head} - 1"), "0"), sized("2", &h), paint(PLAYHEAD)], None);
 
@@ -525,9 +559,15 @@ pub fn reconcile(store: &Store, plan: &Plan) -> Vec<Op> {
 /// clock is created when missing. Returns the ids the ops touched, `None`
 /// when nothing changed.
 pub fn sync(store: &mut Store, last: &mut Option<(NodeId, Plan)>) -> Result<Option<Vec<NodeId>>, String> {
+    sync_themed(store, last, false)
+}
+
+/// `sync`, drawn in the light theme's colours when `light`.
+pub fn sync_themed(store: &mut Store, last: &mut Option<(NodeId, Plan)>, light: bool) -> Result<Option<Vec<NodeId>>, String> {
     let clock = store.ensure_clock().map_err(|e| e.message)?;
     let comp = find(store);
-    let plan = plan(store, clock, comp);
+    let mut plan = plan(store, clock, comp);
+    plan.light = light;
     if let (Some(c), Some((lc, lp))) = (comp, last.as_ref())
         && *lc == c
         && *lp == plan

@@ -188,7 +188,8 @@ all moved in `pointermove`; no Iron), 3 runs each, a 1710×1080 pt window on
 the 6K display, 60 Hz. p50: Chrome 35.5–36.2 ms for every tracker, Safari
 51.9–52.7 ms for every tracker. Safari is one frame later than Chrome for
 plain web content too, so its extra frame throughout this plan is WebKit's
-pipeline, not Iron's.
+pipeline, not Iron's. Firefox 156 measured the same on that page: 52.1–52.9 ms for
+every tracker (3 runs). Chrome is the outlier, a frame faster than both.
 
 ### Round 1: before the fix (Canvas2D, SVG, engine and square only)
 

@@ -122,6 +122,34 @@ if (browserName === 'chrome') {
       await Bun.sleep(1000);
     }
   }
+} else if (browserName === 'firefox') {
+  // A separate Firefox instance with its own temporary profile per run
+  // (-no-remote -new-instance), so a person's Firefox and its session are
+  // untouched. Launched through `open` (LaunchServices): spawned directly from
+  // a sandboxed shell it cannot load the profile. The profile lives in
+  // /private/tmp: under ~/Documents macOS asks for folder access.
+  const { mkdirSync, rmSync } = await import('node:fs');
+  for (let n = 0; n < repeat; n++) for (const runtime of runtimes) for (const layout of layouts) {
+    const dir = `/private/tmp/iron-latency-firefox-${process.pid}-${n}-${runtime}-${layout}`;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(`${dir}/user.js`, [
+      'user_pref("browser.shell.checkDefaultBrowser", false);',
+      'user_pref("browser.aboutwelcome.enabled", false);',
+      'user_pref("browser.startup.homepage_override.mstone", "ignore");',
+      'user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);',
+      'user_pref("browser.sessionstore.resume_from_crash", false);',
+      'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);',
+    ].join('\n'));
+    spawnSync('open', ['-na', process.env.FIREFOX_APP ?? 'Firefox', '--args', '-no-remote', '-new-instance', '-profile', dir, url(runtime, layout)]);
+    try {
+      await Bun.sleep(6000);
+      measure(`firefox-${runtime}-${layout}${tag}${repeat > 1 ? `-${n + 1}` : ''}`, { browser: 'firefox', runtime, layout, url: url(runtime, layout) }, 40);
+    } finally {
+      spawnSync('pkill', ['-f', dir]);
+      await Bun.sleep(1500);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 } else if (browserName === 'native') {
   // The Tauri host's dev binary (bun run native:ui, then cargo build -p
   // iron-native --profile dev-opt), launched directly with the Latency view

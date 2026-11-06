@@ -292,6 +292,15 @@ the dev headers). The DOM is ≈52 ms throughout, a frame later than Chrome's.
 |---|---|---|---|---|
 | Chrome (Blink), macOS | no | yes | ~6 ms | ~5 ms without the hold, ~8 ms with it |
 | Safari (WebKit), macOS | no | **no** | 8–10 ms | ~8 ms |
+| Firefox 156 (Gecko), macOS | not needed so far | no difference (`force`) | over 14 ms | ~12 ms |
+
+Firefox (2026-11-05, same window and settings as Safari, a separate instance
+with a temporary profile per run): the DOM ≈52 ms throughout, like Safari. The
+square matched it (≈52 ms) for ticks of 4, 6, 8 and 12 ms, with or without
+`frameHold=force`; a 16 ms tick was a frame late (68 ms). A blind hold of 6, 10
+or 14 ms left the DOM unchanged. Firefox gives both the page and the worker
+far more room than Chrome, at a frame more latency for everything. The hold
+stays Chromium only.
 
 - The first measured run after Safari launches is slow for the dragged square
   (≈88 ms, the engine ring ≈52 ms) in two of two batches; later runs are not.

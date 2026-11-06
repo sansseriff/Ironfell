@@ -4,9 +4,13 @@
 server with `IRON_COI=1`, adaptive by default, Chromium only (Safari: §6d).
 Phase 3 (isolation in deployment, default on) is **deferred to the app's own
 backend server** (decided 2026-11-05, §6e).
-**Next: Phase 4, frame modes** (§6g, planned 2026-11-06): early (the hold)
-by default, a late gate as the fallback, ahead rendering for playback, half
-rate for slow ticks, and the mode shown in the FPS readout. Follows the worker tick-on-input
+**Phase 4, frame modes, built 2026-11-06 (§6g, results at its end):** on by
+default wherever it can work (Chromium with cross-origin isolation, e.g.
+`bun run dev:hold`): early (the hold) per interaction, late as the fallback
+(drawn after the worker's rAF, so it goes out at the next vsync), late with
+the clock set ahead between interactions, the mode in the FPS readout, and a
+per-device memory. Half rate is an experiment (`?halfRate=1`); the working
+wait is not built. Follows the worker tick-on-input
 fix in [`latency-view.md`](latency-view.md) §7. Timelines of the problem, the fix
 and this proposal: [`latency-timelines.html`](latency-timelines.html).
 
@@ -423,7 +427,7 @@ later work is 0.15 ms, but the worker's tick, started at vsync, takes ~7 ms
 on this window, so it is predicted past the cap (`skipped`). In a drag the
 tick starts at the input, earlier, as in §6b–c.
 
-## 6g. Frame modes: early by default, late gate as the fallback (plan, 2026-11-06)
+## 6g. Frame modes: early by default, late as the fallback (planned and built 2026-11-06)
 
 The hold (§2–§4) makes Vello appear in the same draw as the DOM when the
 worker can finish in time. When it cannot, today nothing decides where the
@@ -442,8 +446,8 @@ it. Late is a fallback that is smooth everywhere, not the default.
 |---|---|---|---|
 | **Early** (default) | the page's rAF waits for the worker's frame (the hold), filling the wait with its own work (below) | same draw | the worker's frame plus the page's later work fit Chrome's limit (~5–6 ms after vsync at 60 Hz, learned, §4) |
 | **Ahead** | during playback without input, the worker renders the frame for the *next* vsync's time right after pushing the previous one | same draw, no hold | playback; also the best mode on a taxed machine, since a playback tick then has a whole frame |
-| **Late** (gate, fallback) | the worker finishes its frame, then hands it to the compositor only after the page's frame for that vsync is out | always one frame behind the DOM, never flipping | early failed (misses), the page is heavy or uneven (a chat layout), or the device is known to be slow |
-| **Half rate** | the worker draws on every second vsync, steadily | late, at 30 fps | the worker's tick no longer fits one frame; a steady 30 beats alternating 60/30 |
+| **Late** (fallback) | as planned, a gate: the worker finishes its frame, then hands it over only after the page's frame is out. **As built:** the worker draws in a task right after its rAF callback, so the frame goes out at the canvas's next BeginFrame (results below) | always one frame behind the DOM, never flipping | early failed (misses), the page is heavy or uneven (a chat layout), or the device is known to be slow |
+| **Half rate** (experiment, `?halfRate=1`) | the worker draws on every second vsync, steadily | late, at 30 fps | the worker's tick no longer fits one frame; a steady 30 beats alternating 60/30. Not steady yet (results below) |
 
 Lowering the render scale (Settings) is the other lever on weak hardware and
 stays with the person, not this controller.
@@ -579,7 +583,7 @@ Sources: [web.dev OffscreenCanvas](https://web.dev/articles/offscreen-canvas),
 [Flutter #145420](https://github.com/flutter/flutter/issues/145420),
 [Mozilla 1788206](https://bugzilla.mozilla.org/show_bug.cgi?id=1788206).
 
-### Phase 4: build it (next)
+### Phase 4: the build plan (as planned; results follow)
 
 - **4a. Late gate.** Shared flag: the page marks "frame out" (the existing
   post-rAF task); the worker, after its tick, `Atomics.wait`s on it (with a
@@ -604,6 +608,95 @@ Sources: [web.dev OffscreenCanvas](https://web.dev/articles/offscreen-canvas),
   running judders; half rate steady when the tick passes a frame. Measured
   with `latency-anim.ts` (playback) and `latency-measure.ts` with the hold
   stats (drags), on the 6K monitor and the built-in display.
+
+### Phase 4 results (2026-11-06)
+
+Measured on the built-in display (1710×1080 window, 2×, 60 Hz, M5, Chrome,
+WebGPU), the worker's tick ~3.8 ms for a drag, ~5.8 ms for playback.
+`?workerTickBusy=N` adds N ms to every tick (a slower machine's worker);
+`?pageBusy=a-b` spins a random a–b ms in the page's rAF (a busy UI). Drags:
+`latency-measure.ts` (worker, solo), classified per displayed frame by
+`scripts/latency/flips.py` (Vello's document square against the DOM's SVG
+ring: same frame, one behind, further); playback: `latency-anim.ts` with
+`scripts/latency/judder.py` and the trace analysis `scripts/latency/animtrace.py`.
+
+**What changed from the plan, and why.**
+
+1. **Late is not a gate.** The planned gate (the worker blocks in its rAF
+   until the page's frame is out, then its frame is pushed) made the whole
+   page late: with the worker's rAF callback held ~5 ms, Chrome drew
+   everything at its deadline, the DOM at 52–69 ms instead of 36. And frames
+   the worker draws on input go out at its next BeginFrame, before its rAF,
+   so a gate there never held them. What works: in late mode the worker does
+   not tick on input; its rAF callback returns at once and the tick runs in a
+   task right after, so the frame goes out at the canvas's next BeginFrame
+   (~0.1 ms after the next vsync) and makes that vsync's draw. Late needs no
+   page signal at all (the planned page-out flag and 1 px change are gone).
+2. **The 1 px change is harmful.** Changing a 1 px element every frame (to
+   give the page a frame each vsync) moved Chrome to a pipeline one to two
+   frames later for the whole page. Not used; `pageBusy` no longer does it.
+3. **Chrome sometimes waits for the worker's canvas on its own** (the draw
+   comes right after the worker's dispatch, at 1–4 ms), sometimes not. So a
+   frame the hold did not wait for can still carry Vello. The controller
+   judges each early-mode frame by what it can see: the worker's frame was
+   already out at the page's rAF, the hold released, or the worker's frame
+   counter moved before the page's frame went out.
+4. **One tick per frame.** Under fast input the worker ticked on input and
+   again in its rAF when more motion had arrived, doubling its work and
+   alternating its timing (the estimate read 8.6 ms for a 6 ms tick). Motion
+   that arrives during the input tick now waits for the next frame's.
+5. **The estimate.** Early mode predicts with ticks started by input only, a
+   75th percentile, restarted (after 3 ticks) each time late mode ends.
+6. **Settling.** The first 8 early frames after a switch are not judged (the
+   worker may still finish a late-mode tick); judging needs 20 frames, and
+   early ends when more than 20% of the last 40 lacked the worker's frame.
+7. **Half rate** engaged at 0.85 of a frame and ran at 30 fps where free
+   running kept 60 (a ~16 ms tick fits at 16.7 ms), and its 30 was uneven
+   (steps of 0–3 frames). Behind `?halfRate=1` until it is steady.
+8. **The working wait (4c)** is not built: holds measured p50 0.6–0.8 ms,
+   p90 1.5–3.5 ms, and the app has no deferrable per-frame work to put in
+   them yet. Worth building when a view has such work.
+
+**Drags, the default against free running (`?frameHold=off`):**
+
+| worker tick | free | default (mode chosen) | DOM |
+|---|---|---|---|
+| ~3.8 ms (+0) | 99–100% same | early, 99.4% same | 35–36 ms |
+| ~5.8 ms (+2) | 48–66% same, 17–21 flips (the race) | early, 98.6% same | unchanged |
+| ~6.8–7.8 ms (+3, +4) | varies: 100% same in one run, 43/57 racing with the hold forced on | late after ~0.45 s, 95% one behind, 2 flips | unchanged |
+| ~11.8 ms (+8) | 99% one behind | late, 99.7% one behind | unchanged |
+| ~15.8 ms (+12) | 94% one behind, 5 repeats and 13 doubles in 260 steps | late, two behind, 0 repeats, 0 doubles | unchanged |
+| ~19.8 ms (+16) | uneven | uneven (both runs probe-flagged) | unchanged |
+
+With uneven page work (`pageBusy` 0–4 and 2–6 ms) the DOM stayed at 35–36
+ms in every run; at +0 the default stayed early (99–100% same); at +2 with
+2–6 ms it stayed early (99.4% same: the worker's frame went out before the
+busy page's), and with 0–4 ms it fell back to late (93% one behind, 4 flips).
+
+**Playback** (no input; the default is late with the clock one frame ahead):
+smooth in every run (judder 0% for +0, page 3–6 ms, worker +4; 0.3% at +12
+where free running had 1.1%). The worker's frame goes out ~0.13 ms after
+vsync and makes that vsync's draw; with a page drawing at 4–6 ms after vsync
+(the §6f race) 310 of 310 frames made the draw, 0 flips. A few frames went
+out at the end of their tick instead of at the next BeginFrame (the canvas's
+BeginFrame was queued behind the tick); they landed on the same vsync. At a
+~20 ms tick (+16) neither mode keeps 60 fps evenly (default 16% bad, free 54%
+uneven steps): past what frame modes can fix; the render scale is the lever.
+
+**The indicator.** With the FPS readout on: `late` (warning colour) during a
+fallback or a fixed `?frameHold=late`, `ahead` (muted) while the view
+animates between interactions, nothing in early mode; the tooltip gives the
+reason, and in early mode the learned limit and estimates.
+
+**Defaults.** `src-ui/runtime/session_adapter.ts`: `frameHold` is `auto`
+when the page is Chromium and cross-origin isolated (`bun run dev:hold`, or
+the future backend's headers), otherwise off; `?frameHold=off|on|late|always`
+override. Per device: `localStorage['iron.frameModes.v1']`, keyed by canvas
+size (256 px buckets) and backend; two fallbacks in a row without a minute
+of early mode since start the next session late, retrying after a cooldown.
+
+**Open.** Windows and other GPUs; 120 Hz; Safari and Firefox (frame modes
+stay off there, §6d); half rate; the ~20 ms tick case; the working wait.
 
 ## 7. Risks and open questions
 

@@ -5,6 +5,7 @@
   // with the layout (the panel's `fps` parameter).
   import { onDestroy } from "svelte";
   import { frameStats } from "../../runtime/frame_stats.svelte";
+  import { frameMode } from "../../runtime/frame_mode.svelte";
 
   let { panel }: { panel: string } = $props();
 
@@ -13,9 +14,24 @@
 
   const fps = $derived(frameStats.fps[panel]);
   const idle = $derived(fps !== undefined && fps < 0.5);
+  // The worker canvas's frame mode (plans/rendering/worker-frame-hold.md §6g),
+  // shown when it is not the default: late and half rate in the warning colour.
+  // "ahead" only while this view animates (playback); idle, it says nothing.
+  const modeLabel = $derived(frameMode.mode === "late" ? "late" : frameMode.mode === "half" ? "half" : frameMode.mode === "ahead" && fps !== undefined && fps >= 0.5 ? "ahead" : null);
+  const modeDetail = $derived.by(() => {
+    const m = frameMode.mode;
+    if (m === "free") return "";
+    const what = m === "early" ? "Frame mode: early (Vello in the same frame as the page)"
+      : m === "late" ? "Frame mode: late (Vello one frame behind the page, steady)"
+      : m === "half" ? "Frame mode: half rate (Vello every second frame, steady)"
+      : "Frame mode: ahead (playback rendered for the next frame)";
+    const n = frameMode.numbers;
+    return [what, frameMode.reason, n && m === "early" ? `Limit ${n.limit.toFixed(1)} ms · tick p90 ${n.tick.toFixed(1)} ms · page after p90 ${n.after.toFixed(1)} ms` : ""].filter(Boolean).join("\n");
+  });
   const detail = $derived.by(() => {
     const b = frameStats.build;
     const lines = [
+      modeDetail,
       "Frames this view rendered per second. A view renders only when what it shows changes.",
       frameStats.tick != null ? `App frame rate ${frameStats.tick.toFixed(1)}` : "",
       b ? `Build ${b.profile} (opt ${b.opt}, ${b.simd ? "SIMD" : "no SIMD"})${b.fast ? "" : " - slow build"} · ${b.gfx}` : "",
@@ -28,6 +44,7 @@
 <div class="fps canvas-ui" class:idle title={detail} data-fps={panel}>
   <span class="value">{fps === undefined ? "–" : fps.toFixed(0)}</span>
   <span class="unit">fps</span>
+  {#if modeLabel}<span class="mode" class:warn={modeLabel !== "ahead"} data-frame-mode={modeLabel}>{modeLabel}</span>{/if}
 </div>
 
 <style>
@@ -59,5 +76,15 @@
   }
   .idle .value {
     color: var(--fg-faint);
+  }
+  .mode {
+    margin-left: 3px;
+    padding-left: 6px;
+    border-left: 1px solid var(--border);
+    color: var(--fg-muted);
+  }
+  .mode.warn {
+    color: var(--warning);
+    font-weight: 600;
   }
 </style>

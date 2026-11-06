@@ -8,7 +8,7 @@
  *   CASES='off,on,always' CHROME_WINDOW=3008,1660 bun run latency-anim.ts
  *
  * CASES: frame hold off | on (armed only by input) | always (holds with no
- * input). Also: REPEAT, RATE (playback rate, default 4), DURATION (s, default 8),
+ * input) | late (the worker a frame later, §6g) | auto (the mode controller). Also: REPEAT, RATE (playback rate, default 4), DURATION (s, default 8),
  * EXTRA (more URL parameters, e.g. `&workerTick=raf`), TRACE=1 (a Chrome trace
  * of each run beside its CSV), OUT, PROBE_ARGS (e.g. `--display=largest` with
  * CHROME_POS on a monitor).
@@ -27,7 +27,8 @@ const duration = process.env.DURATION ?? '8';
 const tag = process.env.TAG ? `-${process.env.TAG}` : '';
 
 for (let n = 0; n < repeat; n++) for (const hold of cases) {
-  const label = `anim-${hold}${tag}-${n + 1}`;
+  // A case may carry more parameters (`late&gateTouch=0`); the label keeps them, filename-safe.
+  const label = `anim-${hold.replace(/[^\w.-]+/g, '_')}${tag}-${n + 1}`;
   const url = `${base}&frameHold=${hold}${process.env.EXTRA ?? ''}`;
   const { context, close } = await launchChrome();
   try {
@@ -72,7 +73,7 @@ for (let n = 0; n < repeat; n++) for (const hold of cases) {
     const fps = await page.evaluate(() => new Promise<number>((resolve) => { let k = 0; const t0 = performance.now(); const f = () => { if (++k === 60) resolve(Math.round(60000 / (performance.now() - t0))); else requestAnimationFrame(f); }; requestAnimationFrame(f); }));
     if (hold_) writeFileSync(`${out}/${label}-hold.json`, JSON.stringify(hold_, null, 2));
     const j = spawnSync('python3', ['../../../scripts/latency/judder.py', `${out}/${label}.csv`], { encoding: 'utf8' }).stdout.trim().split('\n').pop();
-    console.log(`${j}  | page rAF ${fps} Hz${hold_ ? ` | hold: held ${hold_.held} of ${hold_.pending}, disarmed ${hold_.disarmed}, p50 ${hold_.holdMs.p50} ms` : ' | no hold'}`);
+    console.log(`${j}  | page rAF ${fps} Hz${hold_ ? ` | mode ${hold_.mode} | hold: held ${hold_.held} of ${hold_.pending}, disarmed ${hold_.disarmed}, p50 ${hold_.holdMs.p50} ms` : ' | no hold'}`);
   } catch (e) {
     console.log(`FAIL ${label}: ${(e as Error).message}`);
   } finally {

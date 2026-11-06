@@ -2,6 +2,7 @@ import type { UiRequest, UiEvent } from './protocol';
 import { pixelRatio } from './settings.svelte';
 import { AdapterBridge } from './adapter_bridge';
 import { FrameHold, HOLD_BYTES } from './frame_hold';
+import { startPageBusy } from './page_busy';
 import type { Backend } from './backend_policy';
 
 export type RuntimeMode = 'worker' | 'main' | 'native';
@@ -36,6 +37,9 @@ export class SessionAdapter {
   private enginePrepared = false;
   private disposed = false;
   private frameHold: FrameHold | null = null;
+  private stopPageBusy: (() => void) | null = null;
+  /** The wasm backend, for the frame modes' per-device memory. */
+  private backendName: Backend | null = null;
 
   private pendingInit: { canvas: HTMLCanvasElement; dpr: number } | null = null;
   private latestCanvasSize: { width: number; height: number; dpr: number } | null = null;
@@ -71,6 +75,7 @@ export class SessionAdapter {
       return;
     }
     this.bridge = new AdapterBridge(this.mode, canvas);
+    this.backendName = backend;
     this.bridge.setHandler((data: any) => this.handleBridgeMessage(data));
     this.pendingInit = { canvas, dpr: pixelRatio() };
     if (import.meta.env.MODE !== 'native' && this.mode !== 'native') {
@@ -126,6 +131,8 @@ export class SessionAdapter {
     if (this.disposed) return;
     this.frameHold?.stop();
     this.frameHold = null;
+    this.stopPageBusy?.();
+    this.stopPageBusy = null;
     try { this.stop(); } catch { }
     // Release the Bevy app (main mode frees GPU resources in-place; the worker is
     // torn down with terminate() inside bridge.dispose()).
@@ -168,25 +175,39 @@ export class SessionAdapter {
         const tick = params.get('workerTick') ?? undefined;
         // `?workerTickBusy=N` (dev): N ms of extra work per worker tick.
         const tickBusy = Number(params.get('workerTickBusy') ?? 0) || 0;
-        // `?frameHold=on|always|force` (prototype, plans/rendering/worker-frame-hold.md):
+        // `?frameHold=on|always|force|late` (prototype, plans/rendering/worker-frame-hold.md):
         // the page holds its frame for the worker's. Needs cross-origin isolation,
         // and helps only where the compositor draws the worker's canvas with the
         // page's frame: Chromium (§6d). Safari shows the worker's frames on their
         // own, so holding there only delays the DOM; `force` holds in any engine.
-        const holdMode = params.get('frameHold');
         const chromium = !!(navigator as any).userAgentData?.brands?.some((b: { brand: string }) => b.brand === 'Chromium');
+        // On by default (§6g): the mode controller wherever it can work, Chromium
+        // with cross-origin isolation (`bun run dev:hold`, or a server sending
+        // the headers). `?frameHold=off` turns it off.
+        const holdMode = params.get('frameHold') ?? (chromium && globalThis.crossOriginIsolated ? 'auto' : null);
         let hold: SharedArrayBuffer | undefined;
         if (holdMode && holdMode !== 'off' && !chromium && holdMode !== 'force') {
           console.warn('frameHold: not Chromium, where holding the page does not carry the worker\'s frame; not holding (frameHold=force to override)');
-        } else if ((holdMode === 'on' || holdMode === 'always' || holdMode === 'force') && globalThis.crossOriginIsolated) {
+        } else if ((holdMode === 'on' || holdMode === 'always' || holdMode === 'force' || holdMode === 'late' || holdMode === 'auto') && globalThis.crossOriginIsolated) {
           hold = new SharedArrayBuffer(HOLD_BYTES);
           // `&holdCap=ms`: the starting limit; `&holdAdapt=0`: Phase 1's fixed cap.
-          this.frameHold = new FrameHold(hold, { limitMs: Number(params.get('holdCap') ?? 4.5) || 4.5, always: holdMode === 'always', adaptive: params.get('holdAdapt') !== '0' });
+          // `auto` (§6g): the mode controller, early by default, late as the fallback.
+          // `late` (§6g): the worker draws a frame later instead, one frame
+          // behind the DOM, steady.
+          this.frameHold = new FrameHold(hold, {
+            limitMs: Number(params.get('holdCap') ?? 4.5) || 4.5, always: holdMode === 'always', adaptive: params.get('holdAdapt') !== '0',
+            auto: holdMode === 'auto', profileKey: `${(canvas as HTMLCanvasElement).width >> 8}x${(canvas as HTMLCanvasElement).height >> 8}@${this.backendName ?? 'gpu'}`, mode: holdMode === 'late' ? 'late' : 'early',
+          });
           this.frameHold.start();
         } else if (holdMode) {
           console.warn('frameHold needs cross-origin isolation (serve with IRON_COI=1); not holding');
         }
-        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio: dpr, tick, tickBusy, hold }, [offscreen as any]);
+        // `?pageBusy=a-b` (dev): a random a–b ms of main-thread work per frame (page_busy.ts).
+        this.stopPageBusy = startPageBusy(params.get('pageBusy'));
+        // `?halfRate=1` (experiment, §6g): late mode draws every second vsync
+        // when ticks pass a frame. Off by default: not yet steady.
+        const halfRate = params.get('halfRate') === '1';
+        this.bridge.post({ ty: 'init', canvas: offscreen, devicePixelRatio: dpr, tick, tickBusy, hold, halfRate }, [offscreen as any]);
         return;
       } catch (e: any) {
         console.error('Offscreen transfer failed, falling back to direct canvas:', e);

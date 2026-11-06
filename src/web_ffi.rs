@@ -79,6 +79,26 @@ pub fn is_preparation_completed(ptr: u64) -> u32 {
     0
 }
 
+/// The time the next frame is for (plans/rendering/worker-frame-hold.md §6g),
+/// as `ahead_ms` from now: the worker's late mode draws a frame a vsync before
+/// it is shown, so it renders for the vsync it will be shown at and playback
+/// lands on time. `NaN`: the clock at the tick (Bevy's default). A step back
+/// when it is turned off counts as a zero-length frame (`Time<Real>`
+/// saturates).
+#[wasm_bindgen]
+pub fn set_frame_time(ptr: u64, ahead_ms: f64) {
+    let app = unsafe { &mut *(ptr as *mut WorkerApp) };
+    let strategy = if ahead_ms.is_finite() {
+        let now = bevy::platform::time::Instant::now();
+        let offset = std::time::Duration::from_secs_f64(ahead_ms.abs() / 1000.0);
+        let at = if ahead_ms >= 0.0 { now + offset } else { now.checked_sub(offset).unwrap_or(now) };
+        bevy::time::TimeUpdateStrategy::ManualInstant(at)
+    } else {
+        bevy::time::TimeUpdateStrategy::Automatic
+    };
+    app.world_mut().insert_resource(strategy);
+}
+
 #[wasm_bindgen]
 pub fn enter_frame_with_mouse(ptr: u64, mouse_x: f32, mouse_y: f32, has_mouse_update: bool) {
     let app = unsafe { &mut *(ptr as *mut WorkerApp) };

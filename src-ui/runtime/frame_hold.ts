@@ -360,7 +360,7 @@ export class FrameHold {
     this.guard?.disconnect();
     this.guard = null;
     cancelAnimationFrame(this.raf);
-    frameMode.set('free', '');
+    frameMode.set('off', 'frame modes stopped');
     for (const type of ['pointermove', 'pointerdown', 'wheel', 'keydown'] as const) {
       window.removeEventListener(type, this.onInput, true);
     }

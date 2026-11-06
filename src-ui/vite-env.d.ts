@@ -12,3 +12,6 @@ declare module '*.wasm?url' {
     const src: string;
     export default src;
 }
+
+/** The commit the frontend was served or built from (vite.config.ts). */
+declare const __IRON_FRONTEND_VERSION__: string;

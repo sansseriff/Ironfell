@@ -1,6 +1,19 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { fileURLToPath } from 'node:url'
+import { execSync } from 'node:child_process'
+
+// The frontend's version for the FPS readout's tooltip: the commit it was
+// served or built from, and `+changes` when the working tree differed.
+function frontendVersion(): string {
+  try {
+    const sha = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim()
+    const dirty = execSync('git status --porcelain --untracked-files=no', { encoding: 'utf8' }).trim() !== ''
+    return `${sha}${dirty ? '+changes' : ''} (${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC)`
+  } catch {
+    return 'unknown'
+  }
+}
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
@@ -8,6 +21,7 @@ export default defineConfig(({ mode }) => ({
   // index.html, so the scopes page fetched the engine it exists to avoid
   // (scopes.md §10.2). The app's dynamic import preloads its own chunks.
   plugins: [svelte()],
+  define: { __IRON_FRONTEND_VERSION__: JSON.stringify(frontendVersion()) },
   base: mode === 'native' ? './' : '/Ironfell/', // Updated to match the actual repository name
   root: '.',
   cacheDir: '.agents/vite',

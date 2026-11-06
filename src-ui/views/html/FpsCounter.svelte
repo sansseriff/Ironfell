@@ -6,6 +6,7 @@
   import { onDestroy } from "svelte";
   import { frameStats } from "../../runtime/frame_stats.svelte";
   import { frameMode } from "../../runtime/frame_mode.svelte";
+  import { settings } from "../../runtime/settings.svelte";
 
   let { panel }: { panel: string } = $props();
 
@@ -14,17 +15,23 @@
 
   const fps = $derived(frameStats.fps[panel]);
   const idle = $derived(fps !== undefined && fps < 0.5);
-  // The worker canvas's frame mode (plans/rendering/worker-frame-hold.md §6g),
-  // shown when it is not the default: late and half rate in the warning colour.
-  // "ahead" only while this view animates (playback); idle, it says nothing.
-  const modeLabel = $derived(frameMode.mode === "late" ? "late" : frameMode.mode === "half" ? "half" : frameMode.mode === "ahead" && fps !== undefined && fps >= 0.5 ? "ahead" : null);
+  // The worker canvas's frame mode (plans/rendering/worker-frame-hold.md §6g).
+  // Normally shown only when it is worth knowing: late and half rate (warning
+  // colour), and ahead while this view animates. In developer mode always,
+  // including early and off, so it is plain whether frame modes are running.
+  const modeLabel = $derived.by(() => {
+    const m = frameMode.mode;
+    if (settings.developer) return m;
+    if (m === "late" || m === "half") return m;
+    return m === "ahead" && fps !== undefined && fps >= 0.5 ? m : null;
+  });
   const modeDetail = $derived.by(() => {
     const m = frameMode.mode;
-    if (m === "free") return "";
-    const what = m === "early" ? "Frame mode: early (Vello in the same frame as the page)"
+    const what = m === "off" ? "Frame mode: off (frame modes are not running)"
+      : m === "early" ? "Frame mode: early (Vello in the same frame as the page)"
       : m === "late" ? "Frame mode: late (Vello one frame behind the page, steady)"
       : m === "half" ? "Frame mode: half rate (Vello every second frame, steady)"
-      : "Frame mode: ahead (playback rendered for the next frame)";
+      : "Frame mode: ahead (between interactions: frames drawn for the frame they are shown at)";
     const n = frameMode.numbers;
     return [what, frameMode.reason, n && m === "early" ? `Limit ${n.limit.toFixed(1)} ms · tick p90 ${n.tick.toFixed(1)} ms · page after p90 ${n.after.toFixed(1)} ms` : ""].filter(Boolean).join("\n");
   });
@@ -34,7 +41,8 @@
       modeDetail,
       "Frames this view rendered per second. A view renders only when what it shows changes.",
       frameStats.tick != null ? `App frame rate ${frameStats.tick.toFixed(1)}` : "",
-      b ? `Build ${b.profile} (opt ${b.opt}, ${b.simd ? "SIMD" : "no SIMD"})${b.fast ? "" : " - slow build"} · ${b.gfx}` : "",
+      b ? `Engine build ${b.profile} (opt ${b.opt}, ${b.simd ? "SIMD" : "no SIMD"})${b.fast ? "" : " - slow build"} · ${b.gfx}` : "",
+      `Frontend ${__IRON_FRONTEND_VERSION__}`,
       frameStats.canvas ? `Canvas ${frameStats.canvas[0]}×${frameStats.canvas[1]} px` : "",
     ];
     return lines.filter(Boolean).join("\n");
@@ -44,7 +52,7 @@
 <div class="fps canvas-ui" class:idle title={detail} data-fps={panel}>
   <span class="value">{fps === undefined ? "–" : fps.toFixed(0)}</span>
   <span class="unit">fps</span>
-  {#if modeLabel}<span class="mode" class:warn={modeLabel !== "ahead"} data-frame-mode={modeLabel}>{modeLabel}</span>{/if}
+  {#if modeLabel}<span class="mode" class:warn={modeLabel === "late" || modeLabel === "half"} class:off={modeLabel === "off"} data-frame-mode={modeLabel}>{modeLabel}</span>{/if}
 </div>
 
 <style>
@@ -86,5 +94,9 @@
   .mode.warn {
     color: var(--warning);
     font-weight: 600;
+  }
+  .mode.off {
+    color: var(--fg-faint);
+    text-decoration: line-through;
   }
 </style>

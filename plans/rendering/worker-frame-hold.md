@@ -727,7 +727,13 @@ uneven steps): past what frame modes can fix; the render scale is the lever.
 **The indicator.** With the FPS readout on: `late` (warning colour) during a
 fallback or a fixed `?frameHold=late`, `ahead` (muted) while the view
 animates between interactions, nothing in early mode; the tooltip gives the
-reason, and in early mode the learned limit and estimates.
+reason, and in early mode the learned limit and estimates. In developer
+mode (Settings) the readout always shows the mode, `early` and `off`
+(struck through) included; `off` says why in the tooltip (not cross-origin
+isolated, not Chromium, the main-thread runtime, `?frameHold=off`). The
+tooltip also names the engine build and the frontend's commit (`+changes`
+when the working tree differed), so it is plain what is running (added
+2026-11-06).
 
 **Defaults.** `src-ui/runtime/session_adapter.ts`: `frameHold` is `auto`
 when the page is Chromium and cross-origin isolated (`bun run dev:hold`, or

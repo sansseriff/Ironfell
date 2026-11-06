@@ -10,7 +10,8 @@ which plans are historical. Where plans disagree, that index decides.
 - Run the run-iron smoke script before committing behaviour changes, and keep its
   expected output in `.claude/skills/run-iron/SKILL.md` current.
 - Record completed work in `plans/roadmap.md`'s Status table and the owning plan.
-- Don't push. End commit messages with the `Co-Authored-By` line the session gives you.
+- End commit messages with the `Co-Authored-By` line the session gives you. Git
+  workflow (branches, pushing, PRs) is under "Branches, pushing and merging" below.
 - Check in with the user before running a step that takes over a minute: rebuilds,
   the full smoke, cold test runs. Typical times are in the run-iron skill's
   "Typical durations" table (marked ⏱); say which step and its estimate, and add or
@@ -82,47 +83,61 @@ UI in `src-ui/`, including new panels such as the Document panel.
   answer in CSS px instead. Check such UI by screenshot at 2× as well as 1×
   (`SIZE=…@2`, the run-iron skill).
 
+## Branches, pushing and merging
+
+`origin/master` is the base for every new worktree, so keep it current and working.
+
+- **Push whenever you commit,** whatever branch you are on. A pushed branch is the
+  backup, and how the user and other agents see the work; a pushed `master` is
+  what new worktrees start from. Never force-push `master`, or a branch you did not
+  create.
+- **In a worktree thread** (its own `t3/<task>` branch), open a PR to `master` when
+  the task is done (`gh pr create`), unless the user says otherwise. Before that,
+  rebase onto `origin/master` and re-run the checks your change touches (the
+  run-iron smoke for behaviour changes).
+- **Merge only when the user asks.** Merging the PR is what lets T3 delete the
+  worktree ("Delete merged worktrees").
+- **In a local thread** on `master`, commit there as before and push each commit.
+
 ## Worktrees
 
 Do work in the currently checked-out branch. Only do work in a worktree if the user
 requests one; don't ask.
 
-Worktrees for this repo live in **`.agents/worktrees/<name>`**, inside the repo and
-gitignored. Never create a worktree in `/tmp`, in a session scratchpad, or anywhere
-else outside the repo: those directories are invisible from the editor, get orphaned
-when the session ends, and quietly hold on to multi-gigabyte Rust/wasm build caches.
+**T3 Code creates and owns worktrees.** A worktree T3 creates is bound to its thread,
+so T3's diff view, PR links and cleanup all work. A worktree an agent makes with
+`git worktree add` is invisible to T3 and nothing ever cleans it up. So:
 
-### Creating one
+- **New work in a worktree:** the user starts a worktree thread in T3, or you start
+  one with `t3_thread_launch` and `workspaceStrategy: { type: "worktree" }`.
+- **Move this thread's work into a worktree:** `t3_worktree_handoff`.
+- **Never** create one with `git worktree add`, Claude Code's `EnterWorktree`, or
+  `Agent` with `isolation: "worktree"`. The last two put it in `.claude/worktrees/`
+  or a `/tmp` scratchpad.
 
-The `EnterWorktree` tool's `name` parameter hardcodes `.claude/worktrees/` and cannot
-be pointed elsewhere. Do not use it. Create the worktree explicitly, then enter it by
-path:
-
-```sh
-git worktree add .agents/worktrees/<name> -b <branch>   # add an explicit base ref as the last arg if not branching from HEAD
-```
-
-then `EnterWorktree` with `path: .agents/worktrees/<name>`.
-
-Do not use subagent worktree isolation (`Agent` with `isolation: "worktree"`) for work
-that should outlive the session — it places the worktree in the session scratchpad
-under `/tmp`, which is exactly what this policy exists to prevent.
+T3 puts worktrees in the folder set under Settings → Worktrees → Worktree location
+(default `~/.t3/worktrees/<project>/<name>`), branching from `origin/master`. On
+creation it runs `t3.json`'s setup script, `scripts/setup-worktree.sh`: `bun install`
+and the gitignored `assets/` copied from the main checkout. It builds nothing; run
+the build your task needs (run-iron skill), and expect a cold Rust/wasm build there
+(see "Typical durations").
 
 ### Cleaning up
 
-Each worktree in this project carries its own `target/` and `node_modules/`, which
-together have measured over 13 GB. Remove worktrees when the work is merged or
-abandoned, rather than leaving them to accumulate:
+Each worktree carries its own `target/` and `node_modules/`, which together have
+measured over 13 GB. T3's cleanup settings remove worktrees whose PR merged, whose
+thread was deleted, or that went inactive; it keeps any with local changes. To remove
+one by hand:
 
 ```sh
-git worktree list                              # what exists
-git worktree remove .agents/worktrees/<name>   # --force if only ignored build artifacts remain
-git worktree prune                             # clears bookkeeping if a directory vanished on its own
+git worktree list                     # what exists
+git worktree remove <path>            # --force if only ignored build artifacts remain
+git worktree prune                    # clears bookkeeping if a directory vanished on its own
 ```
 
 A branch checked out in a worktree cannot be checked out in the main repo — that is the
 cause of "already used by worktree" errors. Remove the worktree to free the branch.
 
 Before deleting a branch whose worktree you removed, confirm its commits are reachable
-from `master` (`git merge-base --is-ancestor <tip> master`). If they are, the commits
-survive deletion and only the name is lost.
+from `master` (`git merge-base --is-ancestor <tip> master`), or that the branch is
+pushed. Then the commits survive deletion and only the name is lost.

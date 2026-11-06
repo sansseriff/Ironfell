@@ -3,9 +3,12 @@
 Do work in the currently checked-out branch. Only do work in a worktree if the user
 requests one; don't ask.
 
-If the user requests a worktree, use `.agents/worktrees/<name>` — never `/tmp`, a
-session scratchpad, or `.claude/worktrees/`. Create it with `git worktree add`, enter
-it with `EnterWorktree`'s `path` parameter, and remove it when the work is done.
+If the user requests a worktree, T3 Code creates it: `t3_thread_launch` with a
+`worktree` workspaceStrategy for new work, or `t3_worktree_handoff` to move this
+thread. Never `git worktree add`, `EnterWorktree`, or `Agent` worktree isolation.
+
+Push every commit. In a worktree thread, open a PR to `master` when done; merge only
+when the user asks (AGENTS.md, "Branches, pushing and merging").
 
 Icons: import each Lucide icon from its own path only,
 `import Plus from "@lucide/svelte/icons/plus"`, never `{ Plus }` from

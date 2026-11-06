@@ -263,7 +263,7 @@ Large window, light trackers, Chrome worker `solo`, 2 runs per row:
 
 ## 6d. Safari (2026-11-05)
 
-Safari on macOS 27 (WebGPU), worker `solo`, `?latencyTrackers=light`, a
+Safari on macOS 27, worker `solo` (WebGL2: `backend_policy.ts` gives WebGPU to Chromium only; Firefox below too), `?latencyTrackers=light`, a
 1710×1073 pt window on the 6K display, 2 runs per row after a discarded
 warm-up. Cross-origin isolation works there (`crossOriginIsolated` true with
 the dev headers). The DOM is ≈52 ms throughout, a frame later than Chrome's.

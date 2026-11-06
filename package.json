@@ -7,6 +7,7 @@
     "agent:serve": "bun scripts/agent-bridge/server.ts",
     "agent:test": "bun test tests/agent-runtime.test.ts",
     "dev": "vite --host 0.0.0.0",
+    "dev:hold": "IRON_COI=1 vite --host 0.0.0.0",
     "dev:agent": "bun scripts/dev-agent.ts",
     "dev:agent:demo": "bun scripts/dev-agent.ts --demo",
     "native:agent": "bun scripts/native-agent.ts",

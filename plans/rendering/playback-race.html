@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playback Stutter Race</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6b6b70; --grid: #e2e2e5; --card: #ffffff; --border: #dcdce0;
+    --main: #1f9d55; --worker: #c2258f; --viz: #2f6fdb; --hold: #e07a10; --bad: #d23b3b; --good: #1f9d55;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151517; --fg: #ececf0; --muted: #9a9aa3; --grid: #2c2c31; --card: #1c1c1f; --border: #34343a;
+      --main: #3fcf7c; --worker: #f05cc0; --viz: #6d9cf5; --hold: #f59a3c; --bad: #f06a6a; --good: #3fcf7c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #151517; --fg: #ececf0; --muted: #9a9aa3; --grid: #2c2c31; --card: #1c1c1f; --border: #34343a;
+    --main: #3fcf7c; --worker: #f05cc0; --viz: #6d9cf5; --hold: #f59a3c; --bad: #f06a6a; --good: #3fcf7c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 19px; margin: 0 0 4px; }
+  p { max-width: 780px; }
+  .lede { color: var(--muted); margin: 0 0 24px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 0 0 20px; }
+  .note { color: var(--muted); font-size: 14px; }
+  svg { width: 100%; height: auto; display: block; }
+  svg text { fill: var(--fg); font: 12px -apple-system, system-ui, sans-serif; }
+  svg .m { fill: var(--muted); }
+  .key { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  .key span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+  ul { padding-left: 20px; max-width: 780px; }
+  li { margin: 4px 0; }
+  b.good { color: var(--good); } b.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Why playback stutters when the two frames finish together</h1>
+  <p class="lede">Chrome, 6K window, the demo square playing by itself (no mouse). The hold is not acting in any of this; section 3 shows why.</p>
+
+  <section>
+    <h2>1. The rule: one draw per vsync, and it takes whatever worker frame is already there</h2>
+    <p>The compositor draws when the <b>page's own frame</b> arrives (green dot, ~5.9 ms after vsync here). It does not wait for the worker. The worker's tick for frame <i>k</i> starts at vsync <i>k</i> and finishes ~6.5 ms later (magenta). If the worker frame lands <b class="good">before</b> the draw, that draw shows frame <i>k</i>. If it lands <b class="bad">after</b>, the draw shows the previous frame again, and frame <i>k</i> waits for the next draw, where it is usually replaced by frame <i>k</i>+1 before anyone sees it.</p>
+    <p>Both times wobble by about ±0.5 ms from frame to frame. Because they are nearly equal, the wobble alone decides the order, so it flips at random. The traces counted 120–167 flips in 7 s on stuttering runs, and 1 on a smooth one.</p>
+    <svg id="race" viewBox="0 0 1040 330" role="img" aria-label="Six frames: the worker frame lands before or after the page draw, and the screen shows repeats and skips"></svg>
+    <div class="key">
+      <span style="--c: var(--main)">page main thread (rAF, style, layout, paint)</span>
+      <span style="--c: var(--worker)">worker tick</span>
+      <span style="--c: var(--viz)">compositor draw (shown next vsync)</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. Early every time or late every time is smooth. Flipping is the stutter</h2>
+    <p>Square position on screen, one mark per displayed frame. A late-every-time worker is just one frame behind, evenly. A flip from early to late shows the same position twice (a <b class="bad">repeat</b>), and a flip back jumps two steps (a <b class="bad">double</b>). That is exactly what the probe counts.</p>
+    <svg id="steps" viewBox="0 0 1040 250" role="img" aria-label="Square positions per displayed frame for always early, always late, and flipping"></svg>
+  </section>
+
+  <section>
+    <h2>3. Why the hold doesn't fix it (or cause it) here</h2>
+    <p>Your intuition is right: if the hold <i>could</i> run, it would force "early every time" and fix this. It never runs during playback:</p>
+    <ul>
+      <li><code>frameHold=on</code>: no input in the last 100 ms, so it is disarmed. Off and on behave identically.</li>
+      <li><code>frameHold=always</code>: still held 0 of ~490 frames. Every pending frame was <b>noRoom</b>. The page's own work after its rAF callback is 4.8–5.5 ms (p50, 5.8–6.3 ms p90) during playback, so the page alone already reaches Chrome's ~5–6 ms limit. There is no time left to wait for the worker.</li>
+    </ul>
+    <svg id="hold" viewBox="0 0 1040 250" role="img" aria-label="One frame: holding until the worker is done would push the page's commit past Chrome's limit"></svg>
+    <p class="note">The cap the hold computes is vsync + limit (~5.1) − page work after hold (p90 ~5.8) − 0.3 ≈ vsync − 1 ms, which is already in the past when rAF runs, so it declines. Holding anyway would make the <b>whole page</b> miss its vsync, which is worse than a Vello repeat.</p>
+  </section>
+
+  <section>
+    <h2>4. What makes it smooth</h2>
+    <svg id="fix" viewBox="0 0 1040 250" role="img" aria-label="Two fixes: render ahead, or make the page light"></svg>
+    <ul>
+      <li><b>Render playback a frame ahead.</b> With no input, the next frame's animation time is known. The worker renders frame <i>k</i>+1 as soon as frame <i>k</i> is pushed, so it is waiting long before the next draw: early every time, whatever the page does.</li>
+      <li><b>Stop the per-frame layout.</b> Something re-lays out the whole page (766 objects, about half the time text shaping) every frame while the clock runs. Without it the page draws ~1–2 ms after vsync, the worker is late every time, and playback is smooth but one frame behind. That also gives the hold room during drags.</li>
+      <li>The small window was mostly smooth for the same reason: a shorter tick lands before the draw nearly every time.</li>
+    </ul>
+  </section>
+</main>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (svg, tag, attrs, text) => {
+    const n = document.createElementNS(NS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    svg.appendChild(n);
+    return n;
+  };
+  const css = (v) => `var(--${v})`;
+
+  // ---- 1. Race timeline ----
+  {
+    const svg = document.getElementById('race');
+    const x0 = 90, W = 150, ms = W / 16.7; // px per ms
+    const draw = [5.9, 5.8, 6.0, 5.9, 5.8, 6.0];
+    const done = [5.4, 6.6, 5.5, 6.8, 6.5, 5.5];
+    const N = draw.length;
+    const yPage = 60, yWork = 110, yDraw = 160, yScreen = 230;
+    el(svg, 'text', { x: 0, y: yPage + 14 }, 'page');
+    el(svg, 'text', { x: 0, y: yWork + 14 }, 'worker');
+    el(svg, 'text', { x: 0, y: yDraw + 14 }, 'draw');
+    el(svg, 'text', { x: 0, y: yScreen + 14 }, 'screen');
+    el(svg, 'text', { x: 0, y: yScreen + 30, class: 'm' }, 'shows frame');
+    let shown = -1;
+    const shownAt = [];
+    for (let k = 0; k <= N; k++) {
+      const x = x0 + k * W;
+      el(svg, 'line', { x1: x, x2: x, y1: 30, y2: 290, stroke: css('grid'), 'stroke-width': 1.5 });
+      el(svg, 'text', { x: x + 3, y: 24, class: 'm' }, `vsync ${k}`);
+    }
+    for (let k = 0; k < N; k++) {
+      const x = x0 + k * W;
+      // page: rAF + work until draw
+      el(svg, 'rect', { x: x + 0.3 * ms, y: yPage, width: (draw[k] - 0.3) * ms, height: 20, rx: 3, fill: css('main'), opacity: 0.85 });
+      // worker tick
+      el(svg, 'rect', { x, y: yWork, width: done[k] * ms, height: 20, rx: 3, fill: css('worker'), opacity: 0.85 });
+      el(svg, 'text', { x: x + 4, y: yWork + 14, fill: '#fff', style: 'fill:#fff' }, `frame ${k}`);
+      // draw marker
+      const dx = x + draw[k] * ms;
+      el(svg, 'line', { x1: dx, x2: dx, y1: yPage, y2: yDraw + 20, stroke: css('viz'), 'stroke-width': 1.5, 'stroke-dasharray': '3 3' });
+      el(svg, 'circle', { cx: dx, cy: yDraw + 10, r: 6, fill: css('viz') });
+      const early = done[k] < draw[k];
+      if (early) shown = k;
+      shownAt.push(shown);
+      el(svg, 'text', { x: x + done[k] * ms + 4, y: yWork + 36, style: `fill:${early ? css('good') : css('bad')}` }, early ? 'before draw' : 'after draw');
+      // screen: shown at next vsync
+      const sx = x + W;
+      const prev = k ? shownAt[k - 1] : shown - 1;
+      const step = shown - prev;
+      const bad = step !== 1;
+      el(svg, 'rect', { x: sx + 6, y: yScreen, width: W - 12, height: 22, rx: 4, fill: 'none', stroke: bad ? css('bad') : css('border'), 'stroke-width': bad ? 2 : 1 });
+      el(svg, 'text', { x: sx + 14, y: yScreen + 15 }, `${shown}`);
+      if (k > 0) el(svg, 'text', { x: sx + 34, y: yScreen + 15, style: `fill:${bad ? css('bad') : css('muted')}` }, step === 0 ? 'repeat' : step === 2 ? 'skips ' + (shown - 1) : 'ok');
+      el(svg, 'line', { x1: dx, y1: yDraw + 16, x2: sx + 10, y2: yScreen - 2, stroke: css('viz'), 'stroke-width': 1, opacity: 0.5 });
+    }
+    el(svg, 'text', { x: x0, y: 318, class: 'm' }, 'Times in ms after each vsync (illustrative, from the trace medians: page draw 5.7–6.1, worker done 6.5–6.7, each ±0.5).');
+  }
+
+  // ---- 2. Steps ----
+  {
+    const svg = document.getElementById('steps');
+    const rows = [
+      ['early every time', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 'good'],
+      ['late every time', [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8], 'good'],
+      ['flipping', [0, 0, 2, 2, 3, 5, 5, 7, 8, 8], 'bad'],
+    ];
+    const x0 = 170, dx = 78;
+    rows.forEach(([name, pos, tone], r) => {
+      const y = 40 + r * 75;
+      el(svg, 'text', { x: 0, y: y + 5 }, name);
+      el(svg, 'line', { x1: x0 - 20, x2: x0 + 9 * dx + 40, y1: y, y2: y, stroke: css('grid') });
+      pos.forEach((p, i) => {
+        const cx = x0 + p * dx;
+        const step = i ? p - pos[i - 1] : 1;
+        const isBad = step !== 1;
+        el(svg, 'rect', { x: cx - 9, y: y - 9 - (i % 2) * 0, width: 18, height: 18, rx: 3, fill: '#ffd600', stroke: isBad ? css('bad') : 'none', 'stroke-width': 2.5, opacity: 0.35 + 0.65 * ((i + 1) / pos.length) });
+        el(svg, 'text', { x: cx - 4, y: y + 28, class: 'm' }, `${i}`);
+      });
+      el(svg, 'text', { x: x0 + 9 * dx + 46, y: y + 5, style: `fill:${css(tone)}` }, tone === 'good' ? 'even' : 'judder');
+    });
+    el(svg, 'text', { x: 0, y: 240, class: 'm' }, 'Small numbers: displayed frame (vsync). Faint to solid: older to newer. Red outline: repeated or doubled step.');
+  }
+
+  // ---- 3. Hold ----
+  {
+    const svg = document.getElementById('hold');
+    const x0 = 120, ms = 52;
+    const axis = (y) => {
+      for (let t = 0; t <= 16; t += 2) {
+        el(svg, 'line', { x1: x0 + t * ms, x2: x0 + t * ms, y1: 30, y2: 200, stroke: css('grid') });
+        el(svg, 'text', { x: x0 + t * ms - 6, y: 220, class: 'm' }, `${t}`);
+      }
+      el(svg, 'text', { x: x0 + 16 * ms - 70, y: 238, class: 'm' }, 'ms after vsync');
+    };
+    axis();
+    const limit = 5.5;
+    el(svg, 'rect', { x: x0, y: 30, width: limit * ms, height: 170, fill: css('viz'), opacity: 0.07 });
+    el(svg, 'line', { x1: x0 + limit * ms, x2: x0 + limit * ms, y1: 30, y2: 200, stroke: css('viz'), 'stroke-width': 2 });
+    el(svg, 'text', { x: x0 + limit * ms + 4, y: 44, style: `fill:${css('viz')}` }, "Chrome's limit (~5–6 ms): commit by here to make this vsync");
+    // worker
+    el(svg, 'text', { x: 0, y: 74 }, 'worker');
+    el(svg, 'rect', { x: x0, y: 60, width: 6.6 * ms, height: 20, rx: 3, fill: css('worker'), opacity: 0.85 });
+    // today
+    el(svg, 'text', { x: 0, y: 114 }, 'page today');
+    el(svg, 'rect', { x: x0 + 0.3 * ms, y: 100, width: 5.6 * ms, height: 20, rx: 3, fill: css('main'), opacity: 0.85 });
+    el(svg, 'text', { x: x0 + 0.3 * ms + 6, y: 114, style: 'fill:#fff' }, 'own work ≈ 5.5 ms (layout ~4)');
+    // held
+    el(svg, 'text', { x: 0, y: 160 }, 'page if held');
+    el(svg, 'rect', { x: x0 + 0.3 * ms, y: 146, width: 6.3 * ms, height: 20, rx: 3, fill: css('hold'), opacity: 0.85 });
+    el(svg, 'text', { x: x0 + 0.3 * ms + 6, y: 160, style: 'fill:#fff' }, 'spin until worker done');
+    el(svg, 'rect', { x: x0 + 6.6 * ms, y: 146, width: 5.6 * ms, height: 20, rx: 3, fill: css('main'), opacity: 0.85 });
+    el(svg, 'text', { x: x0 + 12.3 * ms + 6, y: 160, style: `fill:${css('bad')}` }, 'commits ~12 ms: page misses vsync');
+    el(svg, 'text', { x: x0, y: 192, class: 'm' }, 'The hold sees this coming (its cap is already in the past) and declines: noRoom on every frame.');
+  }
+
+  // ---- 4. Fixes ----
+  {
+    const svg = document.getElementById('fix');
+    const x0 = 150, W = 200, ms = W / 16.7;
+    for (let k = 0; k <= 4; k++) {
+      el(svg, 'line', { x1: x0 + k * W, x2: x0 + k * W, y1: 20, y2: 220, stroke: css('grid'), 'stroke-width': 1.5 });
+      el(svg, 'text', { x: x0 + k * W + 3, y: 16, class: 'm' }, `vsync ${k}`);
+    }
+    // render ahead
+    el(svg, 'text', { x: 0, y: 50 }, 'render ahead');
+    el(svg, 'text', { x: 0, y: 66, class: 'm' }, 'page as today');
+    for (let k = 0; k < 4; k++) {
+      const x = x0 + k * W;
+      el(svg, 'rect', { x: x + 0.3 * ms, y: 36, width: 5.6 * ms, height: 16, rx: 3, fill: css('main'), opacity: 0.85 });
+      el(svg, 'circle', { cx: x + 5.9 * ms, cy: 44, r: 5, fill: css('viz') });
+      // worker for frame k+1 starts right after its previous push (~6.6 ms)
+      el(svg, 'rect', { x: x + 6.8 * ms, y: 58, width: 6.5 * ms, height: 16, rx: 3, fill: css('worker'), opacity: 0.85 });
+      el(svg, 'text', { x: x + 6.8 * ms + 4, y: 70, style: 'fill:#fff' }, `for vsync ${k + 2}`);
+    }
+    el(svg, 'text', { x: x0, y: 98, style: `fill:${css('good')}` }, 'Each worker frame is ready ~9 ms before the draw that needs it: early every time.');
+    // light page
+    el(svg, 'text', { x: 0, y: 150 }, 'light page');
+    el(svg, 'text', { x: 0, y: 166, class: 'm' }, 'no per-frame layout');
+    for (let k = 0; k < 4; k++) {
+      const x = x0 + k * W;
+      el(svg, 'rect', { x: x + 0.3 * ms, y: 136, width: 1.2 * ms, height: 16, rx: 3, fill: css('main'), opacity: 0.85 });
+      el(svg, 'circle', { cx: x + 1.5 * ms, cy: 144, r: 5, fill: css('viz') });
+      el(svg, 'rect', { x, y: 158, width: 6.5 * ms, height: 16, rx: 3, fill: css('worker'), opacity: 0.85 });
+    }
+    el(svg, 'text', { x: x0, y: 198, style: `fill:${css('good')}` }, 'Draw at ~1.5 ms, worker done at ~6.5: late every time, so even (one frame behind).');
+    el(svg, 'text', { x: x0, y: 216, class: 'm' }, 'And during a drag the hold now has ~4 ms of room to make it early instead.');
+  }
+</script>
+</body>
+</html>

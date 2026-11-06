@@ -348,8 +348,10 @@ layout; `latency-probe --watch=1` records it with no input;
 `scripts/latency/judder.py` counts repeated and doubled screen steps).
 
 - **Not the hold.** With `frameHold=on` it is disarmed (no input); with
-  `always` it held 0 of ~490 frames (the rAF tick starts at vsync, so its
-  predicted end is past the cap). Repeated plus doubled steps were 0–2.9% with
+  `always` it held 0 of ~490 frames, every one `noRoom`: the page's own work
+  after its rAF is 4.8–5.5 ms p50 (5.8–6.3 p90) during playback, so the cap
+  (vsync + limit − that − 0.3) is already past when rAF runs. Holding anyway
+  would make the whole page miss vsync. Diagram: `playback-race.html`. Repeated plus doubled steps were 0–2.9% with
   the hold off, on or always, by run, in both window sizes (small window:
   0–4%).
 - **The cause is a race.** Traces of stuttering runs (with tracing load, 8% and

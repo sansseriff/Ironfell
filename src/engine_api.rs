@@ -2370,3 +2370,58 @@ pub fn narrative_targets(app: &mut WorkerApp, query: String) -> String {
         Ok(serde_json::json!({"ok": true, "targets": targets}))
     })
 }
+
+// ---- the Latency view (plans/rendering/latency-view.md) ---------------------
+
+/// The Latency view's composition and square, for panel `panel`. Builds the
+/// session composition on first use (`document_bridge::LatencyRequested`).
+/// `fields` may hold `{"place": [x, y]}`: put the square's centre at that
+/// panel-local CSS point (a session op, never in history). Answers
+/// `{"ok", "ready", "composition", "target", "centre": [x, y]}`, the centre
+/// in panel-local CSS px, or `ready: false` until the composition and the
+/// panel exist.
+pub fn document_latency(app: &mut WorkerApp, panel: String, fields: String) -> String {
+    use iron_document::{Op, Slot, Value, facet::{Name, Transform2d}};
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    let v: serde_json::Value = if fields.trim().is_empty() { serde_json::json!({}) } else {
+        match serde_json::from_str(&fields) { Ok(v) => v, Err(e) => return fail(format!("latency: {e}")) }
+    };
+    if let Some(mut active) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active.remaining_frames = 10;
+    }
+    let Some(mut wanted) = app.world_mut().get_resource_mut::<crate::document_bridge::LatencyRequested>() else { return fail("no document bridge".into()) };
+    wanted.0 = true;
+    let dpr = app.world().get_resource::<crate::Dpr>().map_or(1.0, |d| d.0);
+    let view = app.world().get_resource::<crate::document_bridge::PanelViews>().and_then(|v| v.get(&panel).cloned());
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    let doc = store.0.document();
+    let Some(comp) = find_composition(doc, iron_document::standard::LATENCY).filter(|c| c.is_session()) else {
+        return serde_json::json!({"ok": true, "ready": false}).to_string();
+    };
+    let Some(target) = doc.children(comp).iter().copied().find(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(iron_document::standard::LATENCY_TARGET)) else {
+        return fail("latency composition has no target".into());
+    };
+    let Some(view) = view.filter(|v| v.composition == Some(comp)) else {
+        return serde_json::json!({"ok": true, "ready": false, "composition": comp.to_string(), "target": target.to_string()}).to_string();
+    };
+    let half = iron_document::standard::LATENCY_TARGET_SIZE / 2.0;
+    // Window px to the view's document px, and back (`PanelView::affine`).
+    let affine = view.affine();
+    if let Some(p) = v.get("place").and_then(|p| p.as_array()) {
+        let (Some(x), Some(y)) = (p.first().and_then(|x| x.as_f64()), p.get(1).and_then(|y| y.as_f64())) else { return fail("place: [x, y]".into()) };
+        let window = kurbo::Point::new(view.rect.x as f64 + x * dpr, view.rect.y as f64 + y * dpr);
+        let d = affine.inverse() * window;
+        let set = |path: &str, n: f64| Op::Set { id: target, path: path.parse().expect("declared leaf"), slot: Slot::Const(Value::Number(n)) };
+        let ops = vec![set("transform2d.x", d.x - half), set("transform2d.y", d.y - half), set("transform2d.rot", 0.0)];
+        if let Err(e) = store.0.apply_session(ops) {
+            return fail(e.to_string());
+        }
+    }
+    let doc = store.0.document();
+    let t = doc.get::<Transform2d>(target);
+    let leaf = |s: Option<&Slot>| s.and_then(|s| s.constant()).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let (tx, ty) = (leaf(t.map(|t| &t.x)), leaf(t.map(|t| &t.y)));
+    let w = affine * kurbo::Point::new(tx + half, ty + half);
+    let centre = [(w.x - view.rect.x as f64) / dpr, (w.y - view.rect.y as f64) / dpr];
+    serde_json::json!({"ok": true, "ready": true, "composition": comp.to_string(), "target": target.to_string(), "centre": centre}).to_string()
+}

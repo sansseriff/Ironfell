@@ -11,7 +11,8 @@
   import { addCompositionView } from "./workspace";
   import type { CompositionEntry } from "../runtime/document_client.svelte";
   import { controllerManager } from "../controller-manager.svelte";
-  import { FIXED_VIEWS, SETTINGS_VIEW, titleOf, viewId, type ViewSpec } from "./views";
+  import { FIXED_VIEWS, LATENCY_VIEW, SETTINGS_VIEW, titleOf, viewId, type ViewSpec } from "./views";
+  import { settings as appSettings } from "../runtime/settings.svelte";
 
   let { api, group }: { api: DockviewApi; group: DockviewGroupPanel } = $props();
 
@@ -25,7 +26,9 @@
     try {
       // The document's first, then the session's (timeline, library).
       const list = await controllerManager.docClient.refreshCompositions();
-      compositions = [...list.filter((c) => !c.session), ...list.filter((c) => c.session)];
+      // The Latency view's composition is offered as that view (Developer).
+      const listed = list.filter((c) => !(c.session && c.name === "latency"));
+      compositions = [...listed.filter((c) => !c.session), ...listed.filter((c) => c.session)];
     } catch {
       compositions = [];
     }
@@ -107,6 +110,13 @@
             <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(v.title, v.spec)}>{v.title}</DropdownMenu.Item>
           {/each}
         </DropdownMenu.Group>
+        {#if appSettings.developer}
+          <DropdownMenu.Separator class="ui-menu-separator" />
+          <DropdownMenu.Group>
+            <DropdownMenu.GroupHeading class="ui-menu-heading">Developer</DropdownMenu.GroupHeading>
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add("Latency", LATENCY_VIEW)}>Latency <span class="ui-hint">input to screen</span></DropdownMenu.Item>
+          </DropdownMenu.Group>
+        {/if}
         <DropdownMenu.Separator class="ui-menu-separator" />
         <DropdownMenu.Group>
           <DropdownMenu.GroupHeading class="ui-menu-heading">Stress test</DropdownMenu.GroupHeading>

@@ -97,6 +97,14 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `validate-layers.py`, six native GPU readback controls | ~25 s when drawables are available |
 | five-second Metal HUD report, including startup/menu/countdown | ~15–30 s |
 | `latency-film.ts`, three runtime/DPR configurations per backend | ~10–15 s |
+| `latency-view.ts`, two runtimes × two layouts, DPR 2, plus the menu | ~15 s (15.4 s, 2026-11-05) |
+| `latency-measure.ts`, one run (OS pointer, hands off) | ~15 s (Chrome launch, 6 s sweep, analysis) |
+| ⏱ `latency-measure.ts`, Chrome `REPEAT=2` (8 runs) | ~3 min |
+| ⏱ `latency-measure.ts`, Chrome `REPEAT=2`, worker+main × solo+panels+full (12 runs) | ~4 min |
+| `latency-trace.ts`, one 3 s traced measurement | ~30 s |
+| ⏱ `cargo build -p iron-native`, warm, after a `main.rs` edit (`dev-opt`) | ~1 min (58.7 s, 2026-11-05) |
+| `scripts/latency/build.sh` (Swift probe) | ~5 s |
+| ⏱ `cargo build -p iron-native` cold in a fresh worktree (`dev-opt`) | ~6 min (5m 43s, 2026-11-05) |
 | `check-latency-film.py`, six screenshots | ~2 s |
 | `appearance.ts` (DPR 1, warm) | ~30 s |
 | ⏱ `raster-pixels.txt` (with the Prussia import, then the meters) | ~1.5 min |
@@ -2654,6 +2662,75 @@ and native package compile; frontend check remains zero errors/ten existing warn
 These are functional/pixel checks, not measured optical latency. Setup export records
 camera sampling rate but does not calculate a photon-latency value.
 
+
+### Latency view and measured latency — 2026-11-05
+
+Owning plan: [`plans/rendering/latency-view.md`](../../../plans/rendering/latency-view.md).
+A developer view (Settings → Developer, then "+" → Developer → **Latency**) with a
+yellow square dragged through the select tool and seven pointer trackers (Vello
+engine ring, Canvas2D in the event, Canvas2D on rAF, SVG, and the controls Konva,
+raw WebGPU and raw WebGL2), all concentric at rest.
+`?latency=solo|panels|full` opens it in a fixed layout and does not save the
+layout; `?runtime=worker|main` overrides the stored runtime for one page; native:
+`IRON_NATIVE_LATENCY=solo|panels|full` with any native launch.
+
+Functional check (headless Chrome, no OS input), from `.claude/skills/run-iron`
+with the worktree's Vite on 5185. A worktree under `.agents/` is outside Vite's
+watch (`watch.ignored`), so **restart Vite with `--force` after every edit** and
+check the served file with curl; otherwise every run measures the old code:
+
+```sh
+bun run latency-view.ts          # DPR=1, RUNTIMES=worker, LAYOUTS=panels narrow it
+```
+
+Expected (six lines):
+
+```text
+PASS LATENCY VIEW worker/solo/dpr2: opens, concentric at rest and held, drag outside history, recentre; no page errors
+PASS LATENCY VIEW worker/panels/dpr2: opens, concentric at rest and held, drag outside history, recentre; no page errors
+PASS LATENCY VIEW main/solo/dpr2: opens, concentric at rest and held, drag outside history, recentre; no page errors
+PASS LATENCY VIEW main/panels/dpr2: opens, concentric at rest and held, drag outside history, recentre; no page errors
+PASS LATENCY VIEW menu/developer-on: opens from the + menu; no page errors
+PASS LATENCY VIEW menu/developer-off: not offered; no page errors
+```
+
+Measured latency drives the **real OS pointer** and records the screen, so the
+calling app needs Accessibility (macOS 27: "Device Control and Data Access") and
+Screen Recording, the display must be awake, and nobody may touch the mouse
+(~15 s a run). The probe captures the built-in display only (with a second
+display attached too), reads the cursor back and warns `the cursor was moved by
+something else` when someone did. Run on AC power: on battery at or below 20%
+Chrome's Energy Saver throttles the page to 30 Hz and the driver warns
+`page rAF … throttled`. Never script System Events for it: that raises an
+Automation prompt over the screen. Build the probe once, then from
+`.claude/skills/run-iron`:
+
+```sh
+../../../scripts/latency/build.sh
+URL='http://127.0.0.1:5185/Ironfell/?demo' REPEAT=2 bun run latency-measure.ts      # Chrome (own profile), worker+main × solo+panels
+BROWSER=safari URL='http://127.0.0.1:5185/Ironfell/?demo' bun run latency-measure.ts
+BROWSER=native MODES=baseline,adaptive LAYOUTS=solo,panels bun run latency-measure.ts   # after native:ui + cargo build -p iron-native
+../../../scripts/latency/summarize.py ../../../.agents/latency/measure/*.json
+```
+
+`CONTINUOUS=1` turns on the view's Continuous rendering first (Chrome); `TAG=x`
+suffixes labels; `OUT=dir` changes the output directory; `SESSION=k` measures k
+times in one browser session. Chrome runs also print the engine's own tick timing
+(`engine tick: start … after rAF … pointer age at tick …`). Chrome comes from
+`latency-chrome.ts` (own temporary profile). `latency-trace.ts` (`URL=… NAME=x`)
+records a Chrome trace of one measurement to `.agents/latency/trace/`. Page
+parameters for experiments: `?workerTick=raf` (the worker's old rAF-only tick),
+`?latencyBusy=N` (N ms of extra work in the page's rAF); driver settings `CHROME_WINDOW=w,h` (window size in points, default 1710,1080) and `RENDER_SCALE=1|1.5|2|auto|panel4k` (the Settings view's render scale) for large-display runs, where the probe's interference warning also fires from load alone. On a large window add `&latencyTrackers=light` (engine, square, SVG ring): the five canvas trackers are full-view layers that, at 6K, load the GPU more than Iron and make the whole page drop frames. The probe's `--no-capture=1` (`NO_CAPTURE=1` for `latency-trace.ts`) drives the pointer without recording, and `PLAIN_CHROME=1` launches Chrome without Playwright's default switches; dropped frames then come from the trace's presentation feedback. Safari runs launch a fresh Safari per run when it was not already running, and close all its windows and quit after each (`scripts/latency/latency-key --only com.apple.Safari`, a key press only while Safari is frontmost), so no test tabs are restored later; the first run after a launch can be slow for the square, so add a discarded warm-up. `URL=http://127.0.0.1:5185/Ironfell/scripts/latency/bare/index.html` measures a plain page with no Iron (DOM square, Canvas2D, SVG, Konva) as each browser's baseline (2026-11-05: Chrome ≈36 ms, Safari and Firefox ≈52 ms). `BROWSER=firefox` runs a separate Firefox instance per run with a temporary profile in `/private/tmp` (under `~/Documents` macOS asks for folder access; spawned directly from a sandboxed shell Firefox cannot load the profile, so it goes through `open -na`), quit by profile path after the run. Playback smoothness without input: `latency-anim.ts` (`CASES=off,on,always`, `CHROME_WINDOW`, `REPEAT`, `RATE`, `DURATION`, `TRACE=1`) loops the demo square's clip recoloured yellow while `latency-probe --watch=1` records it; `scripts/latency/judder.py` reports repeated and doubled steps (worker-frame-hold.md §6f). `latency-churn.ts` (`SELECT=1` selects the square first) lists DOM mutations by dock panel during playback and Chrome's layout/style/script ms/s with each panel hidden in turn. With the built-in display open, run on a monitor with `CHROME_POS=x,y` (global top-left points; 1710,0 for the LG right of a 1710-pt built-in) and `PROBE_ARGS=--display=largest` (the probe's `--display=largest`; default is the built-in display). Frame hold prototype (plans/rendering/worker-frame-hold.md): serve with `IRON_COI=1 bunx vite …` (cross-origin isolation headers), then `&frameHold=on` (Chromium only; `always`: hold without recent input; `force`: in any engine; `&holdCap=ms`, the starting limit, default 4.5; `&holdAdapt=0`, the fixed cap) and `&workerTickBusy=N` for heavier ticks; the driver prints `frame hold: … held … released … skipped …` per run, `&with=…`/`&without=…`
+(views added to or closed from the measurement layout); see the plan's §6. Each run prints `label: p50 ms …` and writes JSON and per-frame CSV
+to `.agents/latency/measure/`; a run that cannot find the square saves the still it
+searched (`<label>-still.png`). Reference values (60 Hz built-in display, 2026-11-05),
+p50 ms, DOM / engine ring / square, after the worker tick-on-input fix: Chrome
+worker ≈36 / 36 / 36 in every layout (with `?workerTick=raf`: ≈36 / 50 / 52 in
+`solo` and `panels`); Chrome main ≈36 in `solo`, ≈52 for everything with panels
+(the whole page a frame late); Safari worker ≈52 / 52 / 52; native baseline
+≈52 / 52 / 52 (varies by a frame between runs and layouts); native adaptive
+≈52 / 38 / 36. The five page-thread trackers agree within 0.4 ms. All trackers must report
+`concentric at rest: yes`.
 
 ### Native layer / presentation controls — 2026-10-27
 

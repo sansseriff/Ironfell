@@ -35,6 +35,10 @@ export default defineConfig(({ mode }) => ({
   // agent's edits there (a tsconfig, an html) made Vite reload this app
   // mid-smoke. Nothing the app serves is in it, nor in plans/.
   server: {
+    // IRON_COI=1: cross-origin isolation, for SharedArrayBuffer (the frame
+    // hold prototype, plans/rendering/worker-frame-hold.md). Dev only for now;
+    // GitHub Pages cannot send these headers.
+    headers: process.env.IRON_COI ? { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' } : undefined,
     watch: { ignored: ['**/.agents/**', '**/plans/**', '**/target/**'] },
   },
   // Ensure WASM files are treated as assets

@@ -62,6 +62,7 @@ export type DocumentCommand =
   | { op: 'inspect_set'; node: string; leaf: string; text: string }
   | { op: 'compositions' }
   | { op: 'composition_info'; source: string }
+  | { op: 'latency'; panel: string; fields: string }
   | { op: 'render_inspector'; panel: string }
   | { op: 'render_inspector_options'; panel: string; options: string }
   | { op: 'set_run_mode'; source: string; mode: string }
@@ -139,6 +140,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'inspect_set': return { fn: command.op, args: [command.node, command.leaf, command.text] };
     case 'compositions': return { fn: command.op, args: [] };
     case 'composition_info': return { fn: command.op, args: [command.source] };
+    case 'latency': return { fn: command.op, args: [command.panel, command.fields] };
     case 'render_inspector': return { fn: command.op, args: [command.panel] };
     case 'render_inspector_options': return { fn: command.op, args: [command.panel, command.options] };
     case 'set_run_mode': return { fn: command.op, args: [command.source, command.mode] };

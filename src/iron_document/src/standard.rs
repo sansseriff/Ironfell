@@ -314,6 +314,30 @@ impl crate::Store {
     }
 }
 
+/// The name of the Latency view's session composition (src-ui/views/html/LatencyView.svelte).
+pub const LATENCY: &str = "latency";
+/// The draggable square in [`LATENCY`], by name.
+pub const LATENCY_TARGET: &str = "latency target";
+/// The square's side, in document px (CSS px at 100%). Under the select
+/// tool's 48 px for corner-radius dots, so a press anywhere on it moves it.
+pub const LATENCY_TARGET_SIZE: f64 = 40.0;
+
+/// The ops building the Latency view's composition: a session-tier 2D
+/// composition, never saved and never in history, holding one yellow
+/// square the view's tests drag through the ordinary select tool. The view
+/// recentres it (`engine_api::document_latency`).
+pub fn latency_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
+    let mut ids = Ids(first.raw());
+    let comp = ids.id();
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    let side = LATENCY_TARGET_SIZE;
+    vec![
+        Op::Create { id: comp, ty: ty("composition"), parent: None, order, facets: vec![named(LATENCY), c.wrap()] },
+        Op::Create { id: ids.id(), ty: ty("rect"), parent: Some(comp), order: OrderKey::first(), facets: vec![at(200.0, 200.0).wrap(), size(side, side), paint([1.0, 0.84, 0.0, 1.0]), named(LATENCY_TARGET)] },
+    ]
+}
+
 /// The ops building the Library tab's session composition: a grid of
 /// cells, each an `empty` named for its entry's key holding a baked preview
 /// (scaled to fit) and a label. Ids from `first`, a session id. Previews are

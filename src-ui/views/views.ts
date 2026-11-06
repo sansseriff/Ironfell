@@ -20,8 +20,9 @@ import ModelView from './html/ModelView.svelte';
 import SettingsView from './html/SettingsView.svelte';
 import CompositionTools from './html/CompositionTools.svelte';
 import NarrativeView from './html/NarrativeView.svelte';
+import LatencyView from './html/LatencyView.svelte';
 
-export type Notation = 'composition' | 'markup' | 'selection' | 'conversation' | 'narrative' | 'settings';
+export type Notation = 'composition' | 'markup' | 'selection' | 'conversation' | 'narrative' | 'settings' | 'latency';
 
 export interface ViewSpec {
   source: string;
@@ -45,10 +46,16 @@ export const NOTATIONS: Record<Notation, NotationDef> = {
   // the narrative's name or id.
   narrative: { label: 'Narrative', html: NarrativeView },
   settings: { label: 'Settings', html: SettingsView },
+  // A developer view (plans/rendering/latency-view.md): the session
+  // `latency` composition with input-latency trackers over it.
+  latency: { label: 'Latency', canvas: 'composition', html: LatencyView },
 };
 
 /** The app's settings (views/html/SettingsView.svelte): not a document view. */
 export const SETTINGS_VIEW: ViewSpec = { source: 'app', notation: 'settings' };
+
+/** The Latency view: offered in developer mode, or opened by `?latency=`. */
+export const LATENCY_VIEW: ViewSpec = { source: 'latency', notation: 'latency' };
 
 /** Views that are not compositions, for the "open a view" menu. */
 export const FIXED_VIEWS: { title: string; spec: ViewSpec }[] = [

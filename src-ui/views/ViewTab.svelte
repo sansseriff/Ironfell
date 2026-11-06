@@ -14,6 +14,7 @@
   import Bot from "@lucide/svelte/icons/bot";
   import BookOpen from "@lucide/svelte/icons/book-open";
   import Settings from "@lucide/svelte/icons/settings";
+  import Timer from "@lucide/svelte/icons/timer";
   import X from "@lucide/svelte/icons/x";
   import Pencil from "@lucide/svelte/icons/pencil";
   import Trash from "@lucide/svelte/icons/trash-2";
@@ -67,6 +68,7 @@
     conversation: Bot,
     narrative: BookOpen,
     settings: Settings,
+    latency: Timer,
   };
   const Icon = $derived(notation ? ICONS[notation] : Shapes);
 

@@ -2,6 +2,7 @@
  * https://github.com/jinleili/bevy-in-web-worker.
  * Ordinary input/control semantics live in Rust's engine_protocol. */
 import { loadGlue, type Glue } from './glue';
+import { FrameHoldWriter } from './frame_hold';
 import { CadenceProbe } from './cadence_probe';
 import { dispatchEngineMessage } from './engine_messages';
 import { FontLoader } from './font_loader';
@@ -22,7 +23,7 @@ export class BrowserRuntime {
   private running = true;
   private disposed = false;
   private rafId: number | null = null;
-  private pointer: { x: number; y: number } | null = null;
+  private pointer: { x: number; y: number; sent?: number; arrived: number } | null = null;
   private probe = new CadenceProbe();
   private fonts = new FontLoader(
     bytes => this.engine.register_font(bytes),
@@ -45,6 +46,13 @@ export class BrowserRuntime {
         this.emit({ ty: 'workerIsReady' });
         return;
       case 'init':
+        this.tickOnInput = data.tick !== 'raf';
+        this.tickBusy = data.tickBusy ?? 0;
+        if (data.hold) {
+          const writer = new FrameHoldWriter(data.hold);
+          this.hold = writer;
+          this.release.port1.onmessage = () => writer.sent();
+        }
         this.attachCanvas(data.canvas, data.devicePixelRatio);
         return;
       case 'resize':
@@ -66,8 +74,14 @@ export class BrowserRuntime {
         this.releaseApp();
         return;
       case 'mousemove':
-        if (this.mode === 'worker') this.pointer = { x: data.x, y: data.y };
-        else if (this.appHandle !== 0n) this.engine.mouse_move(this.appHandle, data.x, data.y);
+        if (this.mode === 'worker') {
+          this.pointer = { x: data.x, y: data.y, sent: (data as { t?: number }).t, arrived: performance.timeOrigin + performance.now() };
+          // See `tickOnInput`: the frame for this motion starts now, once per frame.
+          if (this.tickOnInput && !this.tickedSinceRaf && this.prepared && this.running && this.appHandle !== 0n) {
+            this.tickedSinceRaf = true;
+            this.tick(performance.now());
+          }
+        } else if (this.appHandle !== 0n) this.engine.mouse_move(this.appHandle, data.x, data.y);
         return;
       case 'probeStats':
         this.emit({ ty: 'probeStats', stats: this.probe.stats() });
@@ -124,22 +138,46 @@ export class BrowserRuntime {
     }
   }
 
+  /**
+   * Worker only (plans/rendering/latency-view.md §7): run the engine tick when
+   * pointer motion arrives, at most once per frame, instead of at the next
+   * rAF. The browser hands the page each frame's coalesced motion a few ms
+   * before vsync (~12 ms into a 16.7 ms frame on macOS Chrome); the DOM shows
+   * it at the next vsync's draw. A worker canvas is a separate surface the
+   * compositor does not wait for, and a light page is drawn ~1.2 ms after
+   * vsync, so a tick that starts at the rAF (ready ~4.5 ms in) shows a frame
+   * after the DOM. Started on arrival, it is ready before that draw.
+   * `?workerTick=raf` turns this off (SessionAdapter).
+   */
+  private tickOnInput = true;
+  /**
+   * Holding the page's frame (frame_hold.ts): the page spins while a tick
+   * runs, until the frame it renders has been handed to the compositor. A
+   * worker canvas's frame goes out at the worker's next frame push, right
+   * after its rAF callback, so `sent` is posted as a task from that callback.
+   */
+  private hold: FrameHoldWriter | null = null;
+  private releasePending = false;
+  private release = new MessageChannel();
+  /** `?workerTickBusy=N` (dev): N ms of extra work per tick, a heavier scene. */
+  private tickBusy = 0;
+  /** A pointer message already ran the tick for the coming frame. */
+  private tickedSinceRaf = false;
+
   private frame = (timestamp: number): void => {
     this.rafId = null;
     if (this.disposed || !this.running || this.appHandle === 0n) return;
     try {
       if (this.prepared) {
-        const start = performance.now();
-        if (this.mode === 'worker') {
-          // Only the latest motion is sampled at a worker tick. Main-thread
-          // motion has already entered the engine synchronously.
-          const pointer = this.pointer;
-          this.pointer = null;
-          this.engine.enter_frame_with_mouse(this.appHandle, pointer?.x ?? 0, pointer?.y ?? 0, pointer !== null);
-        } else {
-          this.engine.enter_frame(this.appHandle);
+        // Skip this tick when motion already ran it, unless more motion
+        // arrived after that tick (it would otherwise wait for the next move).
+        const covered = this.tickedSinceRaf && this.pointer === null;
+        this.tickedSinceRaf = false;
+        if (!covered) this.tick(timestamp);
+        if (this.releasePending) {
+          this.releasePending = false;
+          this.release.port2.postMessage(0);
         }
-        this.probe.record(timestamp, performance.now() - start);
       } else {
         this.checkPrepared();
       }
@@ -150,8 +188,39 @@ export class BrowserRuntime {
     }
   };
 
+  /** One engine frame; `timestamp` is the vsync it is for. */
+  private tick(timestamp: number): void {
+    try {
+      const start = performance.now();
+      this.hold?.begin();
+      if (this.tickBusy > 0) while (performance.now() < start + this.tickBusy) { /* a heavier tick */ }
+      if (this.mode === 'worker') {
+        // Only the latest motion is sampled at a worker tick. Main-thread
+        // motion has already entered the engine synchronously.
+        const pointer = this.pointer;
+        this.pointer = null;
+        if (pointer?.sent) {
+          const at = performance.timeOrigin + start;
+          this.probe.recordPointer(at - pointer.sent, at - pointer.arrived);
+        }
+        this.engine.enter_frame_with_mouse(this.appHandle, pointer?.x ?? 0, pointer?.y ?? 0, pointer !== null);
+      } else {
+        this.engine.enter_frame(this.appHandle);
+      }
+      this.probe.record(timestamp, performance.now() - start, start);
+      if (this.hold) {
+        this.hold.measured(performance.now() - start);
+        this.releasePending = true;
+      }
+    } catch (error) {
+      this.stop();
+      this.emit({ ty: 'runtimeError', error: String(error) });
+    }
+  }
+
   private stop(): void {
     this.running = false;
+    this.hold?.idle();
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     this.rafId = null;
   }

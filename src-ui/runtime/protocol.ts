@@ -8,7 +8,7 @@ export type UiRequest = (Exclude<EngineRequest, { ty: 'resize' }> |
   // The artifact's bytes (transferred), or the module compiled ahead of time
   // on the scopes page (`prefetchWasm`; structured-cloned, not transferred).
   { ty: 'wasmData'; backend: Backend; wasmData: ArrayBuffer | WebAssembly.Module; variantFlags: number } |
-  { ty: 'init'; canvas: HTMLCanvasElement | OffscreenCanvas; devicePixelRatio: number } |
+  { ty: 'init'; canvas: HTMLCanvasElement | OffscreenCanvas; devicePixelRatio: number; tick?: string; hold?: SharedArrayBuffer; tickBusy?: number } |
   { ty: 'modelEdit'; requestId: number; xml: string; label?: string } |
   ({ ty: 'modelAsk'; requestId: number; instruction: string } & ModelOptions)
 ) & { sessionId?: number };

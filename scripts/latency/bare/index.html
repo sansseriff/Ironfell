@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bare Latency Page</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; user-select: none; -webkit-user-select: none; touch-action: none; }
+  .layer { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
+  #square { position: fixed; left: 0; top: 0; width: 40px; height: 40px; background: #ffd600; pointer-events: none; will-change: transform; }
+</style>
+</head>
+<body data-latency-view data-ready="true">
+<!-- No Iron: the Latency view's trackers, by colour (latency probe), on a plain page.
+     Yellow square: a DOM element moved in pointermove. Green: Canvas2D drawn in
+     pointermove. Violet: SVG moved in pointermove. Red: Konva, batchDraw() in pointermove. -->
+<canvas id="canvas" class="layer"></canvas>
+<div id="konva" class="layer"></div>
+<svg class="layer"><circle id="ring" r="64" fill="none" stroke="#9a4dff" stroke-width="3" /></svg>
+<div id="square"></div>
+<script type="module">
+  import Konva from 'konva';
+  const dpr = devicePixelRatio || 1;
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const square = document.getElementById('square');
+  const ring = document.getElementById('ring');
+  const stage = new Konva.Stage({ container: 'konva', width: innerWidth, height: innerHeight, listening: false });
+  const layer = new Konva.Layer({ listening: false });
+  const circle = new Konva.Circle({ radius: 74, stroke: '#ff2a2a', strokeWidth: 3, listening: false });
+  layer.add(circle); stage.add(layer);
+  const size = () => {
+    canvas.width = Math.round(innerWidth * dpr); canvas.height = Math.round(innerHeight * dpr);
+    stage.size({ width: innerWidth, height: innerHeight });
+  };
+  size(); addEventListener('resize', size);
+  const place = (x, y) => {
+    square.style.transform = `translate(${x - 20}px, ${y - 20}px)`;
+    ring.setAttribute('transform', `translate(${x} ${y})`);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.beginPath(); ctx.arc(x * dpr, y * dpr, 44 * dpr, 0, Math.PI * 2);
+    ctx.lineWidth = 3 * dpr; ctx.strokeStyle = '#00e000'; ctx.stroke();
+    circle.position({ x, y }); layer.batchDraw();
+  };
+  place(innerWidth / 2, innerHeight / 2);
+  addEventListener('pointermove', (e) => {
+    const list = e.getCoalescedEvents?.();
+    const p = list?.length ? list[list.length - 1] : e;
+    place(p.clientX, p.clientY);
+  }, { passive: true });
+</script>
+</body>
+</html>

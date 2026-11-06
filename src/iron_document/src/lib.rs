@@ -1169,11 +1169,24 @@ impl Store {
                 _ => false,
             };
         }
+        // The spatial scene learns of session nodes as of any other: a
+        // session composition built after the last transaction (the Latency
+        // view's) is otherwise never indexed, so presses miss it.
+        self.geometry.note_ops(ops.iter());
         if structural {
             self.reactive.rebuild(&self.doc);
         } else {
             let changed: Vec<Leaf> = ops.iter().filter_map(|op| match op { Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }), _ => None }).collect();
             if !changed.is_empty() {
+                // Report each written leaf as changed, as a preview does, so
+                // the reconciler and the spatial scene see a session node
+                // move even when nothing binds to it (the Latency view's
+                // square, recentred by `engine_api::document_latency`).
+                for &leaf in &changed {
+                    if let Some(v) = self.reactive.read(&self.doc, leaf) {
+                        self.reactive.mark(leaf, v);
+                    }
+                }
                 self.reactive.invalidate(&self.doc, changed);
             }
         }

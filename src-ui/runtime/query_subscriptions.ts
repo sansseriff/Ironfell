@@ -19,6 +19,7 @@ export class QuerySubscriptions {
   private interest = '';
   private contentVersion: number | undefined;
   private reads = new Map<string, number>();
+  private settleTimer: ReturnType<typeof setTimeout> | undefined;
   constructor(private request: (command: DocumentCommand) => Promise<string>, private observe: (interest: { all: boolean; compositions: boolean; nodes: string[] }) => void = () => {}) {}
   start() { this.active = true; this.interest = ''; this.publishInterests(); this.schedule(); }
   subscribe<T>(command: DocumentCommand, value: (result: T) => void, error?: (error: unknown) => void): () => void {
@@ -42,11 +43,25 @@ export class QuerySubscriptions {
     };
   }
   invalidate(change: StateChange) {
-    const content = change.authored || change.version !== this.contentVersion;
+    // The whole document's markup (the Document view) is ~70 KB that Blink
+    // re-lays out in full, ~4 ms a frame on a large window. It follows
+    // commits (authored version, undo, redo, load) at once; live values alone
+    // (playback, a drag before release, a simulation) refresh it once they
+    // have been quiet for SETTLE_MS (plans/rendering/worker-frame-hold.md §6f).
+    const committed = change.reset || change.structure || change.version !== this.contentVersion;
+    const live = !committed && change.authored;
     this.contentVersion = change.version;
+    if (live && [...this.queries.values()].some(q => wholeDocument(q.command))) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = setTimeout(() => {
+        this.settleTimer = undefined;
+        for (const query of this.queries.values()) if (wholeDocument(query.command)) { query.dirty = true; query.generation++; }
+        this.schedule();
+      }, SETTLE_MS);
+    }
     for (const query of this.queries.values()) {
       const op = query.command.op;
-      const relevant = change.reset || (wholeDocument(query.command) ? content : op === 'compositions' ? change.compositions
+      const relevant = change.reset || (wholeDocument(query.command) ? committed : op === 'compositions' ? change.compositions
         : change.structure || (op === 'composition_info' ? change.compositions
         : !query.dependencies.size || change.nodes.some(node => query.dependencies.has(node))));
       if (relevant) { query.dirty = true; query.generation++; }
@@ -56,6 +71,7 @@ export class QuerySubscriptions {
   stats() { return { active: this.queries.size, reads: Object.fromEntries(this.reads) }; }
   dispose() {
     this.active = false; this.epoch++;
+    clearTimeout(this.settleTimer); this.settleTimer = undefined;
     this.contentVersion = undefined;
     for (const query of this.queries.values()) query.generation++;
     this.queries.clear();
@@ -106,6 +122,9 @@ export class QuerySubscriptions {
     }
   }
 }
+/** How long live-only changes must pause before the whole document's markup refreshes. */
+export const SETTLE_MS = 250;
+
 function references(text: string): Set<string> {
   return new Set(text.match(/#[A-Za-z0-9]+(?:\/[A-Za-z0-9]+)*/g) ?? []);
 }

@@ -16,7 +16,7 @@ import ViewPanel from './ViewPanel.svelte';
 import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
-import { titleOf, type ViewSpec } from './views';
+import { LATENCY_VIEW, titleOf, type ViewSpec } from './views';
 import { controllerManager } from '../controller-manager.svelte';
 import type { CompositionEntry, OpenedDocument } from '../runtime/document_client.svelte';
 
@@ -111,6 +111,48 @@ function syncTitles(api: DockviewApi, list: CompositionEntry[]) {
     const c = list.find((e) => e.id === spec.source);
     const title = c?.name ? titleOf(c.name) : null;
     if (title && p.api.title !== title) p.api.setTitle(title);
+  }
+}
+
+/**
+ * `?latency=<layout>` (plans/rendering/latency-view.md): open the Latency view
+ * in a fixed layout for repeatable measurements, and never save the layout
+ * over the scope's own.
+ *   solo    the Latency view alone
+ *   panels  the Model view left, the Latency view, the Inspector right
+ *   full    the app's usual views, with the Latency view in front of Main
+ */
+const latencyLayout = new URLSearchParams(location.search).get('latency');
+
+function arrangeLatency(api: DockviewApi, layout: string) {
+  const view = (id: string, title: string, spec: ViewSpec, position?: any, extra: Record<string, unknown> = {}) =>
+    api.addPanel({ id, component: 'view', title, params: { spec }, position, ...extra });
+  if (layout === 'full') {
+    if (!api.getPanel('latency')) view('latency', 'Latency', LATENCY_VIEW, api.getPanel('viewer') ? { referencePanel: 'viewer', direction: 'within' } : undefined);
+    api.getPanel('latency')?.api.setActive();
+    // `&without=timeline,library,…`: close some of them (latency-view.md §7).
+    const without = (new URLSearchParams(location.search).get('without') ?? '').split(',').filter(Boolean);
+    // `without=all`: every other tab, closed one by one (not `api.clear()`).
+    for (const p of [...api.panels]) if (p.id !== 'latency' && (without.includes('all') || without.includes(p.id))) p.api.close();
+    return;
+  }
+  api.clear();
+  view('latency', 'Latency', LATENCY_VIEW);
+  // `&with=timeline,library,…`: add some of the app's views beside it, to find
+  // which of them changes the measurement (latency-view.md §7).
+  const extras: Record<string, [string, ViewSpec]> = {
+    viewer: ['Main', { source: 'main', notation: 'composition' }],
+    timeline: ['Timeline', { source: 'timeline', notation: 'composition' }],
+    document: ['Document', { source: 'document', notation: 'markup' }],
+    library: ['Library', { source: 'library', notation: 'composition' }],
+  };
+  for (const key of (new URLSearchParams(location.search).get('with') ?? '').split(',').filter((k) => k in extras)) {
+    const [title, spec] = extras[key];
+    view(key, title, spec, { referencePanel: 'latency', direction: 'below' }, { initialHeight: 200 });
+  }
+  if (layout === 'panels') {
+    view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'latency', direction: 'left' }, { initialWidth: 380 });
+    view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'latency', direction: 'right' }, { initialWidth: 300 });
   }
 }
 
@@ -253,6 +295,7 @@ async function open(api: DockviewApi, o: OpenedDocument) {
       await addDocumentViews(api);
     }
     syncTitles(api, controllerManager.docClient.compositions);
+    if (latencyLayout && first) arrangeLatency(api, latencyLayout);
   } finally {
     applying--;
   }
@@ -268,7 +311,7 @@ function scheduleSave() {
 function saveNow() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
-  if (!current || openedKey === null) return;
+  if (!current || openedKey === null || latencyLayout) return;
   controllerManager.docClient.writeWorkspace(openedKey, JSON.stringify(current.toJSON()));
 }
 

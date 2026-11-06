@@ -73,6 +73,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "inspect_set" => { arity(args,3)?; crate::engine_api::document_inspect_set(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "compositions" => { arity(args,0)?; crate::engine_api::document_compositions(app) },
         "composition_info" => { arity(args,1)?; crate::engine_api::document_composition_info(app,argument::<String>(args,0)?) },
+        "latency" => { arity(args,2)?; crate::engine_api::document_latency(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "render_inspector" => { arity(args,1)?; crate::engine_api::document_render_inspector(app,argument::<String>(args,0)?) },
         "render_inspector_options" => { arity(args,2)?; crate::engine_api::document_render_inspector_options(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "set_run_mode" => { arity(args,2)?; crate::engine_api::document_set_run_mode(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },

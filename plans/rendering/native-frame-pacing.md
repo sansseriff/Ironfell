@@ -130,6 +130,10 @@ only during drags, where one repeated frame is hard to see and latency matters m
 
 ## 8. Where things live
 
+- In-app measurement (2026-11-05): the Latency view and its OS-pointer probe,
+  [`latency-view.md`](latency-view.md); `native:adaptive` measured there at ≈36 ms
+  for a document drag versus ≈52 ms for the WKWebView DOM, 60 Hz.
+
 - Host: `src-native/src/{pacing,frame_budget,vsync_clock,present_feedback,gpu_timing,display_link,motion_3d}.rs`.
   Modes: `native:baseline`, `native:low-latency` (old), `native:late-fifo`, `native:adaptive`.
   Knobs: `IRON_NATIVE_PACING_MARGIN_MS`, `IRON_NATIVE_GPU_BUDGET=0`, `IRON_NATIVE_FRAME_CLOCK=wall`,

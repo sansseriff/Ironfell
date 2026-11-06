@@ -339,6 +339,52 @@ stays Chromium only.
   and quits after it (`latency-key --only com.apple.Safari`), so relaunches
   restore no test tabs.
 
+## 6f. Stutter during timeline playback (2026-11-05)
+
+Reported on the 6K display: a shape animating by itself (timeline playback,
+no pointer) stutters. Test: `.claude/skills/run-iron/latency-anim.ts` (the
+demo square recoloured yellow, its clip looped at 4× speed, the default
+layout; `latency-probe --watch=1` records it with no input;
+`scripts/latency/judder.py` counts repeated and doubled screen steps).
+
+- **Not the hold.** With `frameHold=on` it is disarmed (no input); with
+  `always` it held 0 of ~490 frames (the rAF tick starts at vsync, so its
+  predicted end is past the cap). Repeated plus doubled steps were 0–2.9% with
+  the hold off, on or always, by run, in both window sizes (small window:
+  0–4%).
+- **The cause is a race.** Traces of stuttering runs (with tracing load, 8% and
+  20% bad steps): the page's own frame is drawn 5.7–6.1 ms after vsync, and
+  the worker's frame, ticked at vsync (tick p50 ~6.5 ms in the large window),
+  is dispatched 6.5–6.7 ms after it. Some frames make that draw and some miss
+  it, flipping 120–167 times in ~7 s; each flip is a repeated or doubled
+  step on screen. A smooth run flipped once: consistently early or
+  consistently late both look smooth.
+- **Why the page is that late:** ~4 ms of Blink layout every frame of
+  playback (240–255 ms/s), half of it text shaping, a full (non-partial)
+  layout of all 766 layout objects with 31 dirty each frame. Something on
+  the page changes text every frame while the clock runs (candidates: the
+  Document view's XML, Inspector values, the timeline's readout; not yet
+  isolated).
+
+What would fix it, best first:
+
+1. **Render playback a frame ahead.** Without input, the next frame's
+   animation time is known: the worker can tick right after its previous
+   frame is pushed, for the next vsync's time, so its frame is ready at the
+   next BeginFrame and always makes the draw (as the `workerLead` timer did
+   for input, which failed there only because input arrives late). Smooth and
+   on time, whatever the page costs. Needs the engine's clock to advance to
+   the target display time rather than the time of the tick.
+2. **Stop the per-frame layout.** Find the view that rewrites text every
+   frame and update it without a full layout (only when its text changes, at
+   a lower rate, or contained with CSS `contain`). Then the page draws ~1 ms
+   after vsync, the worker consistently misses it, and playback is smooth but
+   a frame later (which does not matter without input). Worth doing anyway:
+   it is ~25% of the main thread during playback.
+3. **Arm the hold during playback.** It would make the worker consistently
+   catch the draw, but the page is already ~6 ms in, at Chrome's limit, so a
+   hold would risk dropped frames. Not recommended.
+
 ## 7. Risks and open questions
 
 - **A late frame for the whole page.** Overrunning Chrome's limit makes the

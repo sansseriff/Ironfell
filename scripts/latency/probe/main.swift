@@ -45,6 +45,11 @@ let settle = num("settle", 0.6)        // s held still before and after
 // (to measure the recording's own cost; frame timing then comes from elsewhere,
 // such as a browser trace). Prints the events posted and exits.
 let capture = args["no-capture"] == nil
+// `--watch=1`: no input at all. Record the strip around the yellow square for
+// `--duration` s while something else moves it (an animation playing), and
+// write each frame's tracker positions (`--csv`) for a smoothness analysis
+// (scripts/latency/judder.py). Any yellow blob 10–400 pt across counts.
+let watch = args["watch"] != nil
 
 // The trackers (src-ui/views/html/LatencyView.svelte TRACKERS): hue (°) and
 // radius in CSS px; the square is filled.
@@ -125,7 +130,7 @@ func findSquare(_ bm: Bitmap) -> CGPoint? {
             }
         }
         let side = Double((maxX - minX + 1) * cell) / bm.scale
-        if (28.0...60.0).contains(side) && n > (best?.n ?? 0) { best = (n, minX, maxX, minY, maxY) }
+        if (watch ? 10.0...400.0 : 28.0...60.0).contains(side) && n > (best?.n ?? 0) { best = (n, minX, maxX, minY, maxY) }
     }
     guard let b = best else { return nil }
     // Refine on full pixels around the blob.
@@ -242,6 +247,26 @@ let recorder = Recorder(origin: region.origin, cy: start.y)
 let stream = SCStream(filter: filter, configuration: config, delegate: nil)
 try stream.addStreamOutput(recorder, type: .screen, sampleHandlerQueue: DispatchQueue(label: "capture", qos: .userInteractive))
 if capture { try await stream.startCapture() }
+if watch {
+    _ = recorder.set(true)
+    mach_wait_until(machNow() + machTicks(duration))
+    _ = recorder.set(false)
+    try await stream.stopCapture()
+    let frames = recorder.all().sorted { $0.t < $1.t }
+    var csv = "t_ms," + trackers.map(\.key).joined(separator: ",") + "\n"
+    for f in frames {
+        csv += String(format: "%.3f", (f.t - frames[0].t) * 1000)
+        for x in f.x { csv += x.isNaN ? "," : String(format: ",%.2f", x) }
+        csv += "\n"
+    }
+    if let path = args["csv"] { try csv.write(toFile: path, atomically: true, encoding: .utf8) }
+    let out: [String: Any] = ["label": label, "watch": true, "frames": frames.count, "duration_s": duration,
+                              "display": ["id": display.displayID, "points": [display.width, display.height], "scale": scale]]
+    let json = String(data: try JSONSerialization.data(withJSONObject: out, options: [.prettyPrinted, .sortedKeys]), encoding: .utf8)!
+    if let path = args["out"] { try json.write(toFile: path, atomically: true, encoding: .utf8) }
+    print(json)
+    exit(0)
+}
 
 // ---- input ------------------------------------------------------------------
 

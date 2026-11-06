@@ -32,6 +32,7 @@ const START = 0, ESTIMATE = 1;
 const ints = (b: SharedArrayBuffer) => new Int32Array(b, 0, 4);
 const floats = (b: SharedArrayBuffer) => new Float64Array(b, 16, 2);
 const clock = () => performance.timeOrigin + performance.now();
+import { flushSync } from 'svelte';
 import { frameMode } from './frame_mode.svelte';
 
 /** The worker's side: mark a tick running, then sent; read the mode. */
@@ -129,6 +130,11 @@ export interface FrameHoldStats {
   events: string[];
   /** Recent skipped frames: when the tick started, its estimate, the cap (ms after vsync). */
   skips: string[];
+  /** Work first: the forced layout before a hold (ms). */
+  layoutMs: { p50: number; p90: number };
+  /** Work first, development builds: DOM changes made after the hold began, in the same frame (each costs a second layout). */
+  lateWrites: number;
+  workFirst: boolean;
 }
 
 export interface FrameHoldOptions {
@@ -149,6 +155,13 @@ export interface FrameHoldOptions {
    * between interactions.
    */
   auto?: boolean;
+  /**
+   * Work, then wait (§6g, default true): the hold runs after the page's
+   * other rAF callbacks, applies Svelte's pending updates and forces layout
+   * first, then waits only for what the worker still needs. false: the
+   * Phase 1–4 order (wait, then the page's work), for comparison.
+   */
+  workFirst?: boolean;
   /**
    * `auto`: what to remember this device's outcome under (backend and canvas
    * size), so a machine where early mode keeps failing starts late (§6g, 4g).
@@ -251,12 +264,24 @@ export class FrameHold {
   /** Recent skipped frames' prediction (ms after vsync), for stats. */
   private skips: string[] = [];
   private readonly profileKey: string | null;
+  private readonly workFirst: boolean;
+  private frameCallback: ((vsync: number) => void) | null = null;
+  private running = false;
+  /** Work first: between the forced layout and the frame going out (the guard's window). */
+  private holdWindow = false;
+  private layouts: number[] = [];
+  private lateWrites = 0;
+  private guard: MutationObserver | null = null;
 
   constructor(buffer: SharedArrayBuffer, options: FrameHoldOptions = {}) {
     this.i32 = ints(buffer);
     this.f64 = floats(buffer);
     Atomics.store(this.i32, MODE, options.mode === 'late' ? LATE : EARLY);
-    this.limit = options.limitMs ?? 4.5;
+    this.workFirst = options.workFirst ?? true;
+    // Work first leaves only paint and commit after the hold (~0.5 ms
+    // measured), so the starting limit can sit nearer Chrome's (~6 ms):
+    // 5.5 ms kept the DOM unchanged with no missed frames (2026-11-06, §6g).
+    this.limit = options.limitMs ?? (this.workFirst ? 5.5 : 4.5);
     this.floor = options.floorMs ?? 2.5;
     this.ceiling = options.ceilingMs ?? 5.5;
     this.always = options.always ?? false;
@@ -283,6 +308,10 @@ export class FrameHold {
     this.channel.port1.onmessage = (e: MessageEvent<number>) => {
       this.after.push(performance.now() - e.data);
       if (this.after.length > 30) this.after.shift();
+      this.holdWindow = false;
+      // Work first: ask for the next frame now, after every other rAF callback
+      // of this frame asked for theirs, so the hold runs last in it.
+      if (this.workFirst && this.running && this.frameCallback) this.raf = requestAnimationFrame(this.frameCallback);
       // A frame the hold did not wait for still carries the worker's frame if
       // that was sent before the page's frame went out (this task runs after).
       if (this.unheldSeq !== null) {
@@ -300,15 +329,36 @@ export class FrameHold {
     const frame = (vsync: number) => {
       this.frame(vsync);
       this.channel.port2.postMessage(performance.now());
-      this.raf = requestAnimationFrame(frame);
+      if (!this.workFirst) this.raf = requestAnimationFrame(frame);
     };
+    this.running = true;
+    this.frameCallback = frame;
     this.raf = requestAnimationFrame(frame);
+    // Development: any DOM change after the hold began, before the frame goes
+    // out, means a second layout; count it and say where once.
+    if (this.workFirst && import.meta.env.DEV) {
+      let warned = false;
+      this.guard = new MutationObserver((records) => {
+        if (!this.holdWindow) return;
+        this.lateWrites += records.length;
+        if (!warned) {
+          warned = true;
+          const t = records[0].target;
+          const where = (t instanceof Element ? t : t.parentElement)?.closest('[data-panel-id], .dv-groupview, [class]');
+          console.warn('frame hold: the DOM changed after the hold began (a second layout this frame):', records[0].type, where ?? t);
+        }
+      });
+      this.guard.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+    }
     // The readout shows the mode from the start (`auto` updates it as it changes).
     this.publish(this.auto ? '' : 'fixed by ?frameHold');
     (globalThis as any).__frameHold = { stats: () => this.stats(), reset: () => this.reset(), setMode: (m: 'free' | 'early' | 'late') => { this.mode = m; } };
   }
 
   stop(): void {
+    this.running = false;
+    this.guard?.disconnect();
+    this.guard = null;
     cancelAnimationFrame(this.raf);
     frameMode.set('free', '');
     for (const type of ['pointermove', 'pointerdown', 'wheel', 'keydown'] as const) {
@@ -454,6 +504,18 @@ export class FrameHold {
 
   /** Hold this frame if the worker can finish within the cap; true if it did and the frame was sent. */
   private hold(now: number, vsync: number, ceiling: number): boolean {
+    if (this.workFirst) {
+      // The page's work first: Svelte's pending updates, then layout now
+      // rather than after the hold, so the wait overlaps it and what is left
+      // after the hold is only paint and commit (measured by \`after\`).
+      const t0 = performance.now();
+      flushSync();
+      void document.body.offsetWidth;
+      now = performance.now();
+      this.layouts.push(now - t0);
+      if (this.layouts.length > 60) this.layouts.shift();
+      this.holdWindow = true;
+    }
     const cap = this.adaptive
       ? vsync + Math.min(this.limit, ceiling) - quantile(this.after, 0.9) - 0.3
       : vsync + this.limit;
@@ -488,12 +550,17 @@ export class FrameHold {
       adaptive: this.adaptive,
       mode: this.mode,
       events: this.events.slice(-20),
+      layoutMs: { p50: r(quantile(this.layouts, 0.5)), p90: r(quantile(this.layouts, 0.9)) },
+      lateWrites: this.lateWrites,
+      workFirst: this.workFirst,
       skips: this.skips.slice(),
     };
   }
 
   reset(): void {
     this.holds = [];
+    this.layouts = [];
+    this.lateWrites = 0;
     for (const k of Object.keys(this.counts) as (keyof typeof this.counts)[]) this.counts[k] = 0;
   }
 }

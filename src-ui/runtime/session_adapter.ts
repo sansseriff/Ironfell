@@ -2,7 +2,7 @@ import type { UiRequest, UiEvent } from './protocol';
 import { pixelRatio } from './settings.svelte';
 import { AdapterBridge } from './adapter_bridge';
 import { FrameHold, HOLD_BYTES } from './frame_hold';
-import { startPageBusy } from './page_busy';
+import { startPageBusy, startPageLayout } from './page_busy';
 import type { Backend } from './backend_policy';
 
 export type RuntimeMode = 'worker' | 'main' | 'native';
@@ -38,6 +38,7 @@ export class SessionAdapter {
   private disposed = false;
   private frameHold: FrameHold | null = null;
   private stopPageBusy: (() => void) | null = null;
+  private stopPageLayout: (() => void) | null = null;
   /** The wasm backend, for the frame modes' per-device memory. */
   private backendName: Backend | null = null;
 
@@ -133,6 +134,8 @@ export class SessionAdapter {
     this.frameHold = null;
     this.stopPageBusy?.();
     this.stopPageBusy = null;
+    this.stopPageLayout?.();
+    this.stopPageLayout = null;
     try { this.stop(); } catch { }
     // Release the Bevy app (main mode frees GPU resources in-place; the worker is
     // torn down with terminate() inside bridge.dispose()).
@@ -192,11 +195,12 @@ export class SessionAdapter {
           hold = new SharedArrayBuffer(HOLD_BYTES);
           // `&holdCap=ms`: the starting limit; `&holdAdapt=0`: Phase 1's fixed cap.
           // `auto` (§6g): the mode controller, early by default, late as the fallback.
+          // `&holdOrder=first`: the hold before the page's work (Phase 1–4), for comparison.
           // `late` (§6g): the worker draws a frame later instead, one frame
           // behind the DOM, steady.
           this.frameHold = new FrameHold(hold, {
-            limitMs: Number(params.get('holdCap') ?? 4.5) || 4.5, always: holdMode === 'always', adaptive: params.get('holdAdapt') !== '0',
-            auto: holdMode === 'auto', profileKey: `${(canvas as HTMLCanvasElement).width >> 8}x${(canvas as HTMLCanvasElement).height >> 8}@${this.backendName ?? 'gpu'}`, mode: holdMode === 'late' ? 'late' : 'early',
+            limitMs: Number(params.get('holdCap')) || undefined, always: holdMode === 'always', adaptive: params.get('holdAdapt') !== '0',
+            workFirst: params.get('holdOrder') !== 'first', auto: holdMode === 'auto', profileKey: `${(canvas as HTMLCanvasElement).width >> 8}x${(canvas as HTMLCanvasElement).height >> 8}@${this.backendName ?? 'gpu'}`, mode: holdMode === 'late' ? 'late' : 'early',
           });
           this.frameHold.start();
         } else if (holdMode) {
@@ -204,6 +208,8 @@ export class SessionAdapter {
         }
         // `?pageBusy=a-b` (dev): a random a–b ms of main-thread work per frame (page_busy.ts).
         this.stopPageBusy = startPageBusy(params.get('pageBusy'));
+        // `?pageLayout=a-b` (dev): a random a–b ms of layout per frame (page_busy.ts).
+        this.stopPageLayout = startPageLayout(params.get('pageLayout'));
         // `?halfRate=1` (experiment, §6g): late mode draws every second vsync
         // when ticks pass a frame. Off by default: not yet steady.
         const halfRate = params.get('halfRate') === '1';

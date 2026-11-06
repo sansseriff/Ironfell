@@ -8,14 +8,15 @@
  *   behind the DOM, never flipping.
  * - `half`: the worker draws every second vsync (its tick no longer fits).
  * - `ahead`: playback rendered for the next vsync.
- * - `free`: no frame modes (no cross-origin isolation, or not Chromium).
+ * - `off`: no frame modes; `reason` says why (not cross-origin isolated, not
+ *   Chromium, the main-thread runtime, or `?frameHold=off`).
  */
-export type FrameModeName = 'free' | 'early' | 'late' | 'half' | 'ahead';
+export type FrameModeName = 'off' | 'early' | 'late' | 'half' | 'ahead';
 
 class FrameMode {
-  mode: FrameModeName = $state('free');
-  /** Why the mode is what it is, in a few words (for the tooltip). */
-  reason = $state('');
+  mode: FrameModeName = $state('off');
+  /** Why frame modes are off, until something sets it. */
+  reason = $state('frame modes not started');
   /** When it last changed (performance.now()). */
   since = $state(0);
   /** Early-mode numbers for the tooltip: learned limit, tick p90, page's later work p90 (ms). */

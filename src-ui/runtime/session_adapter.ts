@@ -3,6 +3,7 @@ import { pixelRatio } from './settings.svelte';
 import { AdapterBridge } from './adapter_bridge';
 import { FrameHold, HOLD_BYTES } from './frame_hold';
 import { startPageBusy, startPageLayout } from './page_busy';
+import { frameMode } from './frame_mode.svelte';
 import type { Backend } from './backend_policy';
 
 export type RuntimeMode = 'worker' | 'main' | 'native';
@@ -189,7 +190,10 @@ export class SessionAdapter {
         // the headers). `?frameHold=off` turns it off.
         const holdMode = params.get('frameHold') ?? (chromium && globalThis.crossOriginIsolated ? 'auto' : null);
         let hold: SharedArrayBuffer | undefined;
+        if (holdMode === 'off') frameMode.set('off', 'turned off by ?frameHold=off');
+        else if (!holdMode) frameMode.set('off', chromium ? 'the page is not cross-origin isolated: serve with `bun run dev:hold`' : 'not Chromium: frame modes work in Chromium only');
         if (holdMode && holdMode !== 'off' && !chromium && holdMode !== 'force') {
+          frameMode.set('off', 'not Chromium: frame modes work in Chromium only');
           console.warn('frameHold: not Chromium, where holding the page does not carry the worker\'s frame; not holding (frameHold=force to override)');
         } else if ((holdMode === 'on' || holdMode === 'always' || holdMode === 'force' || holdMode === 'late' || holdMode === 'auto') && globalThis.crossOriginIsolated) {
           hold = new SharedArrayBuffer(HOLD_BYTES);
@@ -203,7 +207,8 @@ export class SessionAdapter {
             workFirst: params.get('holdOrder') !== 'first', auto: holdMode === 'auto', profileKey: `${(canvas as HTMLCanvasElement).width >> 8}x${(canvas as HTMLCanvasElement).height >> 8}@${this.backendName ?? 'gpu'}`, mode: holdMode === 'late' ? 'late' : 'early',
           });
           this.frameHold.start();
-        } else if (holdMode) {
+        } else if (holdMode && holdMode !== 'off') {
+          frameMode.set('off', 'the page is not cross-origin isolated: serve with `bun run dev:hold`');
           console.warn('frameHold needs cross-origin isolation (serve with IRON_COI=1); not holding');
         }
         // `?pageBusy=a-b` (dev): a random a–b ms of main-thread work per frame (page_busy.ts).
@@ -219,6 +224,8 @@ export class SessionAdapter {
         console.error('Offscreen transfer failed, falling back to direct canvas:', e);
       }
     }
+    // The engine draws on the page itself: there is no worker frame to time.
+    frameMode.set('off', this.mode === 'worker' ? 'the canvas could not move to the worker' : 'the main-thread runtime (Settings → Runtime: worker for frame modes)');
     this.bridge.post({ ty: 'init', canvas, devicePixelRatio: dpr });
   }
 }

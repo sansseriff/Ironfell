@@ -4,6 +4,7 @@
   // default; the composition settings menu's "Show FPS" turns it on, kept
   // with the layout (the panel's `fps` parameter).
   import { onDestroy } from "svelte";
+  import { Tooltip } from "bits-ui";
   import { frameStats } from "../../runtime/frame_stats.svelte";
   import { frameMode } from "../../runtime/frame_mode.svelte";
   import { settings } from "../../runtime/settings.svelte";
@@ -49,11 +50,25 @@
   });
 </script>
 
-<div class="fps canvas-ui" class:idle title={detail} data-fps={panel}>
-  <span class="value">{fps === undefined ? "–" : fps.toFixed(0)}</span>
-  <span class="unit">fps</span>
-  {#if modeLabel}<span class="mode" class:warn={modeLabel === "late" || modeLabel === "half"} class:off={modeLabel === "off"} data-frame-mode={modeLabel}>{modeLabel}</span>{/if}
-</div>
+<!-- A Bits UI tooltip, not a `title`: the detail is re-read twice a second,
+     and the browser closes (or never opens) a native tooltip whose text
+     changes under the pointer. This one updates in place. -->
+<Tooltip.Provider delayDuration={300}>
+  <Tooltip.Root>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <div {...props} class="fps canvas-ui" class:idle data-fps={panel}>
+          <span class="value">{fps === undefined ? "–" : fps.toFixed(0)}</span>
+          <span class="unit">fps</span>
+          {#if modeLabel}<span class="mode" class:warn={modeLabel === "late" || modeLabel === "half"} class:off={modeLabel === "off"} data-frame-mode={modeLabel}>{modeLabel}</span>{/if}
+        </div>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Tooltip.Portal>
+      <Tooltip.Content class="ui-tooltip" side="top" align="end" sideOffset={6} data-fps-detail={panel}>{detail}</Tooltip.Content>
+    </Tooltip.Portal>
+  </Tooltip.Root>
+</Tooltip.Provider>
 
 <style>
   .fps {

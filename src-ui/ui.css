@@ -17,6 +17,22 @@
   font-size: 13px;
   outline: none;
 }
+/* A hover tooltip with more than a word or two in it (the FPS readout's). */
+.ui-tooltip {
+  z-index: 1100;
+  max-width: 380px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: var(--menu-shadow);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-line;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
 .ui-menu-heading {
   padding: 6px 8px 2px;
   font-size: 10px;

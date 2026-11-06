@@ -2,7 +2,8 @@
 
 **Status:** Phases 0–2 done 2026-11-05 (§6b, §6c): `?frameHold=on` on a dev
 server with `IRON_COI=1`, adaptive by default, Chromium only (Safari: §6d).
-Phase 3 (isolation in deployment, default on) next. Follows the worker tick-on-input
+Phase 3 (isolation in deployment, default on) is **deferred to the app's own
+backend server** (decided 2026-11-05, §6e). Follows the worker tick-on-input
 fix in [`latency-view.md`](latency-view.md) §7. Timelines of the problem, the fix
 and this proposal: [`latency-timelines.html`](latency-timelines.html).
 
@@ -169,13 +170,42 @@ What that touches here (audit, 2026-11-05):
 - Main-thread cost: report time spent holding per second of interaction.
   Power: a `powermetrics` comparison run by the user (it needs `sudo`).
 
-**Phase 3: ship.**
+**Phase 3: ship** (deferred, §6e).
 
-- Isolation in deployment (the service-worker approach), with the fallback.
+- Isolation in deployment: the two headers sent by the app's own server (§6e);
+  the fallback when `crossOriginIsolated` is false stays.
 - Default on in the worker runtime once Phase 2's acceptance holds in Chrome and
   Safari, with `?frameHold=off` to compare.
 - Regression: the Latency view procedure (`latency-view.md` §6) gains a
   heavy-tick run (`workerTickBusy`), expecting Vello equal to the DOM.
+
+## 6e. Deployment decision (2026-11-05)
+
+GitHub Pages cannot send response headers. The workaround is a service worker
+that re-serves the app's responses with them; a page cannot become isolated
+after it has loaded (isolation is decided at navigation), so the first visit
+is never isolated and the usual script reloads once. Because the hold is an
+enhancement, a quiet variant (install the worker, no reload; isolated from the
+next visit) would also do.
+
+Neither is built: the app is to move to its own backend server (for saving
+projects and scopes to a database), and that server will send the headers
+with the first response, so no service worker and no reload. What that server
+needs:
+
+- `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp` on the app's HTML (all responses
+  is simplest); `credentialless` is not supported by Safari.
+- The app's own files (wasm, worker, fonts) from the same origin, as today. An
+  API on the same origin needs nothing more; on another origin it must answer
+  with CORS headers (CORS-mode requests are allowed under COEP).
+- Anything else loaded from another origin needs CORS or
+  `Cross-Origin-Resource-Policy`, or it stops loading. A popup the app opens
+  (an OAuth sign-in, say) cannot talk back under `same-origin`; that case
+  needs `same-origin-allow-popups`.
+- Until then the hold runs only on a dev server with `IRON_COI=1`
+  (`vite.config.ts`), and real users get tick-on-input alone (Vello in the
+  DOM's frame for ticks up to ~5 ms in Chrome).
 
 ## 6a. Findings on a 6K display (2026-11-05)
 

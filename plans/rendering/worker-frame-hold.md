@@ -1,8 +1,8 @@
 # Holding the page's frame for the worker (adaptive frame hold)
 
 **Status:** Phases 0–2 done 2026-11-05 (§6b, §6c): `?frameHold=on` on a dev
-server with `IRON_COI=1`, adaptive by default. Phase 3 (isolation in
-deployment, default on) next. Follows the worker tick-on-input
+server with `IRON_COI=1`, adaptive by default, Chromium only (Safari: §6d).
+Phase 3 (isolation in deployment, default on) next. Follows the worker tick-on-input
 fix in [`latency-view.md`](latency-view.md) §7. Timelines of the problem, the fix
 and this proposal: [`latency-timelines.html`](latency-timelines.html).
 
@@ -260,6 +260,45 @@ Large window, light trackers, Chrome worker `solo`, 2 runs per row:
   Raising the ceiling needs a measured limit per browser, not learning.
 - Not measured yet: hover (the probe drags), wheel and pinch, Safari, the
   `full` layout, 120 Hz.
+
+## 6d. Safari (2026-11-05)
+
+Safari on macOS 27 (WebGPU), worker `solo`, `?latencyTrackers=light`, a
+1710×1073 pt window on the 6K display, 2 runs per row after a discarded
+warm-up. Cross-origin isolation works there (`crossOriginIsolated` true with
+the dev headers). The DOM is ≈52 ms throughout, a frame later than Chrome's.
+
+| Case | Square p50 | Behind the DOM |
+|---|---|---|
+| 4 ms tick, hold off / on | 52.2–52.7 / 52.0–53.1 ms | 1–2.5% |
+| 6 ms tick (`workerTickBusy=2`), hold off / on | 52.4–52.9 / 52.0–52.4 ms | 0.7–1.8% |
+| 8 ms tick (`=4`), hold off / on | 52.1–52.4 / 52.4–52.7 ms | 6% / 8.5–10% |
+| 12 ms tick (`=8`), hold off / on | 69.0 / 68.9–69.0 ms | a frame behind either way |
+| 16 ms tick (`=12`), hold off | 85.5 ms | two frames behind |
+| blind hold (`latencyBusy`) 4–8 ms | 52–53 ms; DOM unchanged | — |
+| blind hold 10–14 ms | 52–53 ms; **DOM 68–69 ms** | Vello a frame *ahead* of the DOM |
+
+- **Safari shows the worker's frames independently of the page's.** Holding the
+  page past ~8–10 ms makes the DOM a frame late while Vello stays on time, and
+  `frameHold=on` changes nothing for a long tick. Holding the page cannot carry
+  the worker's frame here: the mechanism is Chromium's alone.
+- **Safari's worker has more slack:** ticks to ~8 ms land in the DOM's frame
+  with no hold (Chrome: ~5 ms); 12 ms is a frame late.
+- So `frameHold=on` is Chromium only (`navigator.userAgentData` brands);
+  elsewhere it warns and does nothing (`frameHold=force` overrides, for
+  measurement). Per-engine table so far:
+
+| Engine | Compositor waits for the worker canvas? | Holding the page carries it? | Page limit after vsync (60 Hz) | Worker tick that still lands (light page) |
+|---|---|---|---|---|
+| Chrome (Blink), macOS | no | yes | ~6 ms | ~5 ms without the hold, ~8 ms with it |
+| Safari (WebKit), macOS | no | **no** | 8–10 ms | ~8 ms |
+
+- The first measured run after Safari launches is slow for the dragged square
+  (≈88 ms, the engine ring ≈52 ms) in two of two batches; later runs are not.
+  Not investigated; the runs above follow a discarded warm-up.
+- The Safari driver now launches a fresh Safari per run and closes all windows
+  and quits after it (`latency-key --only com.apple.Safari`), so relaunches
+  restore no test tabs.
 
 ## 7. Risks and open questions
 

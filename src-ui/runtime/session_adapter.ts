@@ -168,11 +168,17 @@ export class SessionAdapter {
         const tick = params.get('workerTick') ?? undefined;
         // `?workerTickBusy=N` (dev): N ms of extra work per worker tick.
         const tickBusy = Number(params.get('workerTickBusy') ?? 0) || 0;
-        // `?frameHold=on|always` (prototype, plans/rendering/worker-frame-hold.md):
-        // the page holds its frame for the worker's. Needs cross-origin isolation.
+        // `?frameHold=on|always|force` (prototype, plans/rendering/worker-frame-hold.md):
+        // the page holds its frame for the worker's. Needs cross-origin isolation,
+        // and helps only where the compositor draws the worker's canvas with the
+        // page's frame: Chromium (§6d). Safari shows the worker's frames on their
+        // own, so holding there only delays the DOM; `force` holds in any engine.
         const holdMode = params.get('frameHold');
+        const chromium = !!(navigator as any).userAgentData?.brands?.some((b: { brand: string }) => b.brand === 'Chromium');
         let hold: SharedArrayBuffer | undefined;
-        if ((holdMode === 'on' || holdMode === 'always') && globalThis.crossOriginIsolated) {
+        if (holdMode && holdMode !== 'off' && !chromium && holdMode !== 'force') {
+          console.warn('frameHold: not Chromium, where holding the page does not carry the worker\'s frame; not holding (frameHold=force to override)');
+        } else if ((holdMode === 'on' || holdMode === 'always' || holdMode === 'force') && globalThis.crossOriginIsolated) {
           hold = new SharedArrayBuffer(HOLD_BYTES);
           // `&holdCap=ms`: the starting limit; `&holdAdapt=0`: Phase 1's fixed cap.
           this.frameHold = new FrameHold(hold, { limitMs: Number(params.get('holdCap') ?? 4.5) || 4.5, always: holdMode === 'always', adaptive: params.get('holdAdapt') !== '0' });

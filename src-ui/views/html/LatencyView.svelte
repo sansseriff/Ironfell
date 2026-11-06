@@ -53,6 +53,9 @@
   let error = $state("");
   let continuous = $state(false);
   let stats = $state({ rate: 0, age: 0, raf: 0 });
+  // The frame hold's state (plans/rendering/worker-frame-hold.md), readable in
+  // a screenshot where page script is not (Safari without remote automation).
+  let hold = $state('');
 
   /** The panel's id in the engine's protocol; ViewPanel passes it. */
   const id = $derived(panel ?? "");
@@ -198,6 +201,8 @@
       last = now;
       ages.sort((a, b) => a - b);
       stats = { rate: Math.round(events / dt), age: ages.length ? ages[ages.length >> 1] : 0, raf: Math.round(frames / dt) };
+      const h = (globalThis as any).__frameHold?.stats();
+      hold = `isolated ${globalThis.crossOriginIsolated ? 'yes' : 'no'} · ` + (h ? `hold: held ${h.held} of ${h.pending} (released ${h.released}, skipped ${h.skipped}, no room ${h.noRoom}), p50 ${h.holdMs.p50} ms, limit ${h.limitMs} ms, missed ${h.missed}` : 'no frame hold');
       events = 0;
       frames = 0;
       ages = [];
@@ -245,6 +250,7 @@
     </div>
     <p class="readout" data-latency-stats>
       {stats.rate} events/s · event age p50 {stats.age.toFixed(1)} ms · rAF {stats.raf} Hz
+      {#if hold}<br />{hold}{/if}
     </p>
     <p class="note" class:error={!!error} role={error ? "alert" : "status"}>
       {error || (ready ? "Grab the square at its centre and drag. Lag shows as rings sliding off centre." : "Preparing…")}

@@ -100,14 +100,28 @@ if (browserName === 'chrome') {
     }
   }
 } else if (browserName === 'safari') {
+  // Safari restores its last session's tabs on launch, so each run uses a
+  // fresh Safari: open the page, measure, then close every window and quit, so
+  // the next launch restores nothing (and a person's next Safari does not
+  // reopen test pages). Key presses only while Safari is frontmost
+  // (latency-key --only): scripting Safari would raise an Automation prompt.
   const wasRunning = spawnSync('pgrep', ['-x', 'Safari']).status === 0;
+  if (wasRunning) console.log('  Safari is already running: runs open tabs in it, and it is left running');
+  const key = (...args: string[]) => spawnSync('../../../scripts/latency/latency-key', ['--only', 'com.apple.Safari', ...args]).status === 0;
   for (let n = 0; n < repeat; n++) for (const runtime of runtimes) for (const layout of layouts) {
     spawnSync('open', ['-a', 'Safari', url(runtime, layout)]);
     // The probe waits for the square to appear, then lets the page settle.
     await Bun.sleep(4000);
-    measure(`safari-${runtime}-${layout}${tag}${repeat > 1 ? `-${n + 1}` : ''}`, { browser: 'safari', runtime, layout }, 40);
+    measure(`safari-${runtime}-${layout}${tag}${repeat > 1 ? `-${n + 1}` : ''}`, { browser: 'safari', runtime, layout, url: url(runtime, layout) }, 40);
+    if (!wasRunning) {
+      if (!key('13', 'cmd', 'alt', 'shift')) console.log('  WARNING Safari was not frontmost; its window was left open');
+      await Bun.sleep(800);
+      key('12', 'cmd');
+      for (let i = 0; i < 20 && spawnSync('pgrep', ['-x', 'Safari']).status === 0; i++) await Bun.sleep(250);
+      if (spawnSync('pgrep', ['-x', 'Safari']).status === 0) spawnSync('killall', ['Safari']);
+      await Bun.sleep(1000);
+    }
   }
-  if (!wasRunning) spawnSync('killall', ['Safari']);
 } else if (browserName === 'native') {
   // The Tauri host's dev binary (bun run native:ui, then cargo build -p
   // iron-native --profile dev-opt), launched directly with the Latency view

@@ -28,17 +28,40 @@ bridge receives instructions and document context, not a browser API key. It
 neither owns nor mutates the document.
 
 - `scripts/agent-bridge/server.ts`: `POST /complete` with `provider`, `system`,
-  `messages` and optional `model`.
+  `messages` and optional `model`; `POST /models` with `provider` lists what each
+  runtime offers (token-checked, cached five minutes, outside the one-at-a-time
+  completion lock).
+- `scripts/agent-bridge/resolve.ts`: finds each CLI (`IRON_CODEX_BIN` /
+  `IRON_CLAUDE_BIN`, PATH, then its installer's place: the Codex app's bundled CLI,
+  `~/.local/bin/claude`). `dev:agent` and `agent:serve` both use it; Claude is
+  optional (a missing one fails only when asked).
 - `scripts/agent-bridge/runtimes.ts`: independent provider adapters.
 - Codex: `codex app-server`, JSON-lines stdio, initialize/initialized, ephemeral
   thread/start, turn/start, completed agent-message items and turn/completed.
   Uses existing CLI auth. Live-tested with `codex-cli 0.166.0-alpha.5.1`, signed
   in using ChatGPT; no API key was supplied.
-- Claude: `claude -p --bare --output-format json`, no built-in tools, strict
-  empty MCP configuration, no settings discovery or persisted session.
-  Requires `ANTHROPIC_API_KEY` in the bridge environment. Never assumes a
-  claude.ai subscription funds third-party integration. Installed CLI
-  `2.1.317` supports these flags. Protocol tested with a fixture only.
+- Claude: `claude -p --output-format json`, no built-in tools, strict empty MCP
+  configuration, no settings sources or persisted session. **By default it runs on
+  the signed-in Claude Code login (the user's Claude subscription)**, with
+  `--safe-mode` (every customization off: CLAUDE.md, skills, plugins, hooks,
+  agents, output styles; auth and model selection kept), and without
+  `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` or a surrounding Claude Code session's
+  variables (`CLAUDECODE`, `CLAUDE_CODE_*`, …) in its environment (decided by the
+  user 2026-11-04: development uses subscriptions). `IRON_CLAUDE_AUTH=api-key`
+  selects the old path, `--bare` and `ANTHROPIC_API_KEY`. Live-tested 2026-11-04
+  with Claude Code `2.1.318` signed in via claude.ai: Haiku answered through the
+  bridge in 2.6 s with no key. Claude Code adds two short account-level notes of
+  its own (the account email, a downloaded-files rule) to the context even in safe
+  mode; they go only to Anthropic, which has the prompt anyway. This is personal
+  use of one's own Claude Code; distributing Iron with claude.ai login for other
+  people would need Anthropic's approval (see the Agent SDK reference below).
+- Models: the composer has a model picker beside the runtime picker, filled from
+  `/models`: Codex's own list for the login (`model/list` on its app-server, its
+  default marked), Claude Code's aliases (opus, sonnet, haiku, fable: each the
+  latest of its family), the Claude API's ids for the API-key path. "Default" is
+  the runtime's own; a model typed in Agent settings that is not listed shows as
+  custom. The runtime and each runtime's model are remembered in browser storage
+  (`iron.agent.v1`).
 - Existing `AnthropicTransport` remains available as “Claude · browser API”.
 - Shared `AgentSettings.svelte` in conversation and narrative panels supplies
   provider, endpoint, in-memory bridge token and optional runtime model. Blank
@@ -91,9 +114,76 @@ request immediately; it can continue until timeout, but cannot edit that dead
 generation. End-to-end cancellation and a UI Stop action remain follow-ups.
 
 Native CSP allows the default loopback port; its adapter uses the same factory.
-Native packaging/parity is untested. Other native ports require a CSP change.
+Native launcher/pairing and packaged smoke are verified below; full native
+provider-edit parity and a distributable bundled sidecar remain follow-ups.
+Other native ports require a CSP change.
 
 ## 4. Bootstrap
+
+### Native launcher (2026-11-04)
+
+`bun run native:agent:adaptive` runs the same managed agents and second Claude
+profile with the existing `native:adaptive` preset: synchronous rendering,
+adaptive pacing, and frame latency 2. The alias is regression-tested against
+that preset, and a subprocess fixture verifies all three settings reach the
+native child without changing the profile. No separate bridge setup is needed.
+
+`bun run native:agent` starts an authenticated loopback bridge on 4318 and
+builds/runs Tauri via `native:run`, requesting the last saved scope when native
+persistence is enabled (otherwise the existing unsaved-workspace fallback).
+It requires the second Claude profile at
+`~/.claude_2nd`, uses subscription auth regardless of parent API-key defaults,
+and passes that profile only to its own runtime processes. An explicit
+`IRON_CLAUDE_CONFIG_DIR` overrides the profile; `IRON_CLAUDE_BIN` overrides the
+executable. Codex is optional and remains selectable. No default-account fallback
+or paid inference happens at startup. Both services stop on Ctrl+C, native exit
+or startup failure, without killing an existing port owner.
+
+The launcher passes a fresh token, fixed loopback endpoint and default provider
+to the native process through its environment. The `agent_connection` Tauri
+command returns only those connection fields to the local main webview, not
+provider credentials. It rejects non-local origins and unexpected endpoints.
+The UI uses this IPC path in production/native mode, selects Claude on first
+pairing, and reacquires the same connection after webview reload. Token snapshots
+still protect manual edits and stale sessions. Native bridge browser pairing is
+disabled. Finder-launched builds without the launcher retain manual fallback;
+this is a development supervisor, not a bundled Bun/CLI sidecar installer.
+
+Validation: 51 JS tests pass, including five native launcher/IPC/profile fixtures;
+frontend checking has zero errors (10 existing warnings), launcher TypeScript
+passes, and the Rust native-connection validation test passes. Fresh native
+package builds succeed (warm ~30–33 s; shared-engine rebuild ~2 min). The packaged
+app smoke and exact `bun run native:agent` entrypoint pass: native workspace,
+private connection, Model tab, document reads with Model active, automatic
+client pairing, Claude default, authenticated model listing, no token storage,
+private connection after reload, editor readiness, client auto-pairing after
+reload and native document reads after reload. All 12 checks pass without errors.
+The second profile's subscription login was confirmed without logging account
+details or invoking a model; profile routing is also verified in a subprocess
+fixture. No paid inference from the second account was performed.
+
+The initial test incorrectly waited for an editor on the new scope-picker route;
+normal agent launches now open the last scope and tests explicitly open an
+ephemeral demo. Native readiness is published when the control session wakes,
+independent of a display callback, preventing loading-overlay/display-clock
+startup and reload stalls. Initial document-change notification still follows
+the first frame. Native IPC uses asynchronous dispatch. `__iron.agentState()`
+reports connection readiness without returning the token; tests use it rather
+than relying on popup visibility/timing. Test windows are kept drawable only in
+the opt-in self-test mode.
+
+Logs: `.agents/native-agent-{tests,check,build,selftest,command,rust-tests}.log`.
+Local-only changes; unrelated main-checkout edits are preserved. Nothing pushed.
+
+Commit validation 2026-11-05 used an isolated snapshot containing only agent and
+native-launcher changes plus required native boot/reload support: 52 JS tests,
+frontend checking (0 errors / 9 existing warnings), and the fast run-iron smoke
+(six assertions, no page errors) pass. Smoke expected output is unchanged.
+Cached wasm was reused; native build and 12-check evidence above are retained.
+Unrelated scope/persistence, FPS, timeline and other UI edits remain uncommitted.
+Logs: `.agents/native-agent-commit-{tests,check,smoke}.log` in the main checkout.
+
+### Browser launcher
 
 Recommended: one terminal in the main repository after integration:
 
@@ -139,9 +229,10 @@ Lesson; otherwise that tab offers to create a narrative.
 Ask for a shape in a named 2D composition. Demo pages are ephemeral; export
 valuable persisted scopes before experimenting.
 
-For Claude, set `ANTHROPIC_API_KEY` in the bridge environment and optionally
-`IRON_CLAUDE_BIN`, then select Claude · local runtime. Never enter the provider
-key in the bridge-token field. A CLI supporting `--bare` is required.
+For Claude, sign in once with `claude auth login` (Claude Code), then pick Claude
+and a model in the composer; `IRON_CLAUDE_BIN` overrides the executable. To bill an
+API key instead, start the bridge with `IRON_CLAUDE_AUTH=api-key` and
+`ANTHROPIC_API_KEY`. Never enter a provider key in the bridge-token field.
 
 Default allowed origins are Vite on port 5173 (localhost and 127.0.0.1),
 `tauri://localhost` and `http://tauri.localhost`. Override the exact
@@ -208,9 +299,11 @@ dev server on 5173 cannot satisfy a post-shutdown request and produce a false fa
 3. Shared Iron tools (schema, scoped reads, validated edits) over provider-native
    MCP/dynamic tools, with explicit user approval policy. Preserve the same
    transaction boundary; no arbitrary repository access.
-4. Native sidecar supervision/packaging and lifecycle tests; live Claude
-   API-backed parity once credentials are supplied.
-5. Packaged-native parity before distributing the local bridge integration.
+4. Distributable native sidecar packaging and broader provider-edit parity;
+   managed native startup, lifecycle and IPC pairing are implemented above.
+5. Reasoning effort per turn (both CLIs take one: Codex per model, Claude Code
+   `--effort`).
+6. Packaged-native parity before distributing the local bridge integration.
 
 ## 7. Primary references
 

@@ -1,4 +1,5 @@
 //! Tauri owns the window/event loop; the shared Iron engine owns all product state.
+mod agent;
 mod bridge;
 mod display_link;
 mod frame_budget;
@@ -24,6 +25,7 @@ struct Host {
     driver: display_link::DisplayDriver,
     frames: u64,
     rendered_frames: u64,
+    session_opened: bool,
     trace: Option<simulation_probe::Trace>,
     surface: native_surface::NativeSurface,
     input: Option<native_input::NativeInput>,
@@ -109,6 +111,7 @@ impl Host {
             driver,
             frames: 0,
             rendered_frames: 0,
+            session_opened: false,
             trace,
             surface,
             input,
@@ -121,7 +124,15 @@ impl Host {
             layer_probe,
         })
     }
+    fn prepare_session(&mut self) {
+        if self.bridge.prepare(self.input.is_some()) {
+            ironfell::engine_api::reset_host_session(&mut self.app);
+            self.deferred_release = None;
+            self.session_opened = true;
+        }
+    }
     fn wake(&mut self) {
+        self.prepare_session();
         self.driver.wake();
     }
     fn resize(&mut self, width: u32, height: u32) {
@@ -191,11 +202,8 @@ impl Host {
                 }
             }
         }
-        let opened = self.bridge.prepare(self.input.is_some());
-        if opened {
-            ironfell::engine_api::reset_host_session(&mut self.app);
-            self.deferred_release = None;
-        }
+        self.prepare_session();
+        let opened = std::mem::take(&mut self.session_opened);
         for _ in 0..256 {
             let deferred = self.deferred_release.is_some();
             let Some(request) = self.deferred_release.take().or_else(|| self.bridge.pop()) else {
@@ -438,6 +446,7 @@ fn main() {
             open_session,
             close_session,
             send_batch,
+            agent::agent_connection,
             native_test
         ])
         .on_page_load(|webview, payload| {
@@ -448,20 +457,38 @@ fn main() {
                 if film && !payload.url().query_pairs().any(|(k,v)| k == "latencyFilm" && v == "1") {
                     return;
                 }
-                let script = if film {
+                let script = if std::env::var_os("IRON_NATIVE_AGENT_TEST").is_some() {
+                    println!("IRON_NATIVE_AGENT_PHASE page-loaded");
+                    include_str!("../test/agent.js")
+                } else if film {
                     include_str!("../test/film.js")
                 } else if std::env::var_os("IRON_NATIVE_CURSOR_TEST").is_some() {
                     include_str!("../test/cursors.js")
                 } else {
                     include_str!("../test/workspace.js")
                 };
-                let _ = webview.eval(script);
+                if let Err(error) = webview.eval(script) {
+                    eprintln!("IRON_NATIVE_SELF_TEST_EVAL_ERROR {error}");
+                }
             }
         })
         .setup(move |app| {
             let native = app
                 .get_webview_window("main")
                 .ok_or("missing native window")?;
+            if std::env::var_os("IRON_NATIVE_AGENT_TOKEN").is_some()
+                && std::env::var_os("IRON_NATIVE_FILM").is_none()
+            {
+                let mut url = native.url()?;
+                if std::env::var_os("IRON_NATIVE_AGENT_TEST").is_some() {
+                    url.query_pairs_mut().append_pair("demo", "");
+                } else {
+                    url.query_pairs_mut().append_pair("scope", "last");
+                }
+                native.navigate(url)?;
+                app.handle().show()?;
+                native.set_focus()?;
+            }
             if std::env::var_os("IRON_NATIVE_FILM").is_some() {
                 let mut url = native.url()?;
                 let render = std::env::var("IRON_NATIVE_RENDER_MODE").unwrap_or("pipelined".into());
@@ -500,7 +527,9 @@ fn main() {
                 let _ = window.show();
                 // Bounded GPU-readback controls need an unoccluded drawable.
                 // Keep only these automated test windows above other apps.
-                if std::env::var_os("IRON_NATIVE_PROBE_CAPTURE_DIR").is_some() {
+                if std::env::var_os("IRON_NATIVE_PROBE_CAPTURE_DIR").is_some()
+                    || std::env::var_os("IRON_NATIVE_AGENT_TEST").is_some()
+                {
                     let _ = window.set_always_on_top(true);
                 }
                 let _ = window.unminimize();

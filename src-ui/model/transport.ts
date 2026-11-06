@@ -7,7 +7,18 @@
  * - `LocalRuntimeTransport`: a loopback bridge to Codex or Claude runtimes.
  */
 import Anthropic from '@anthropic-ai/sdk';
-import { localEndpoint, type ModelOptions, type LocalRuntimeOptions } from './runtime-options';
+import { localEndpoint, type ModelEntry, type ModelOptions, type LocalRuntimeOptions } from './runtime-options';
+
+/** The models a local runtime offers, from the bridge (`POST /models`). */
+export async function listLocalModels(endpoint: string, token: string, provider: 'codex' | 'claude'): Promise<ModelEntry[]> {
+  const response = await fetch(new URL('/models', localEndpoint(endpoint)), {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ provider }), signal: AbortSignal.timeout(20000),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error ?? `Agent bridge returned ${response.status}`);
+  return Array.isArray(result.models) ? result.models : [];
+}
 
 export function makeModelTransport(options: ModelOptions): ModelTransport {
   return options.runtime ? new LocalRuntimeTransport(options.runtime) : new AnthropicTransport(options.apiKey, options.model);

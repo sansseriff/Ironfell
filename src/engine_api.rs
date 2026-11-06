@@ -937,13 +937,14 @@ pub fn document_view_context(app: &mut WorkerApp, panel: String) -> String {
 /// Fill the open document with the demo scene (`document_bridge::
 /// demo_scene`), one transaction: what a page showing the demo (`?demo`, a
 /// benchmark, the native build) opens with. The engine starts empty; a
-/// stored scope is never preceded by the demo. Refused when the document
-/// already holds anything, so it cannot land on top of a scope.
+/// stored scope is never preceded by the demo. A document that already
+/// holds anything is left alone (`already`): the native engine keeps its
+/// document across webview reloads, and the demo never lands on top of one.
 pub fn document_demo(app: &mut WorkerApp) -> String {
     let mut run = || -> Result<serde_json::Value, String> {
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
         if store.0.document().live_nodes().any(|n| !n.id.is_session()) {
-            return Err("the document is not empty".into());
+            return Ok(serde_json::json!({"ok": true, "already": true}));
         }
         let tx = crate::document_bridge::demo_scene(&store.0);
         let applied = store.0.apply(tx).map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;

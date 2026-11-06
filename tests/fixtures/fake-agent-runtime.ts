@@ -10,6 +10,11 @@ if (process.argv.includes('app-server')) {
     if (mode === 'exit') process.exit(2);
     if (mode === 'malformed') { process.stdout.write('not json\n'); return; }
     if (message.method === 'initialize') reply({ id: message.id, result: {} });
+    else if (message.method === 'model/list') reply({ id: message.id, result: { data: [
+      { id: 'fixture-default', model: 'fixture-default', displayName: 'Fixture Default', isDefault: true, hidden: false },
+      { id: 'fixture-other', model: 'fixture-other', displayName: 'Fixture Other', isDefault: false, hidden: false },
+      { id: 'fixture-hidden', model: 'fixture-hidden', displayName: 'Hidden', isDefault: false, hidden: true },
+    ] } });
     else if (message.method === 'thread/start') {
       if (message.params.sandbox !== 'read-only' || message.params.approvalPolicy !== 'never' || !message.params.ephemeral) process.exit(3);
       reply({ id: message.id, result: { thread: { id: 'fixture-thread' } } });
@@ -40,6 +45,12 @@ if (process.argv.includes('app-server')) {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
   if (!process.argv.includes('--tools') || process.argv[process.argv.indexOf('--tools') + 1] !== '') process.exit(3);
-  if (!process.argv.includes('--bare') || !process.argv.includes('--strict-mcp-config')) process.exit(3);
+  if (!process.argv.includes('--strict-mcp-config')) process.exit(3);
+  // A subscription runs in safe mode with no API key and nothing from a
+  // surrounding Claude Code session; an API key runs bare.
+  const bare = process.argv.includes('--bare'), safe = process.argv.includes('--safe-mode');
+  if (bare === safe) process.exit(3);
+  if (bare && !process.env.ANTHROPIC_API_KEY) process.exit(3);
+  if (safe && (process.env.ANTHROPIC_API_KEY || process.env.CLAUDECODE || Object.keys(process.env).some(k => k.startsWith('CLAUDE_CODE_')))) process.exit(4);
   reply({ result: '<edit/>', is_error: false, usage: { input_tokens: input.length } });
 }

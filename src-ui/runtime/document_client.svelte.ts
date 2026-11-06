@@ -53,8 +53,10 @@ import { Scopes, webLocks, type ScopeState } from './scopes';
 import { OpfsScopeStorage } from './scope_storage';
 import { persistent, scopesUrl, showScope, target } from '../route';
 import { isNativeHost } from './native_host';
-import { isLoopbackOrigin, localEndpoint, type AgentProvider } from '../model/runtime-options';
+import { ANTHROPIC_API_MODELS, isLoopbackOrigin, localEndpoint, type AgentProvider, type ModelEntry } from '../model/runtime-options';
+import { listLocalModels } from '../model/transport';
 import { discoverLocalAgent } from '../model/local-pairing';
+import { discoverNativeAgent } from '../model/native-pairing';
 import type { ConversationOptions } from '../model/conversation';
 
 /** Whether this page keeps its document (scopes.md D11). */
@@ -80,6 +82,8 @@ export interface CompositionEntry { id: string; name: string | null; dims: strin
 export interface OpenedDocument { key: string; saved: string | null }
 
 const PAGE_LAYOUT_KEY = 'iron.workspace.v9';
+/** The agent runtime and the model picked for each (the composer's pickers). */
+const AGENT_CHOICE_KEY = 'iron.agent.v1';
 
 export class DocumentClient {
   view = $state('');
@@ -95,10 +99,17 @@ export class DocumentClient {
   agentEndpoint = $state('http://127.0.0.1:4318');
   agentToken = $state('');
   agentModel = $state('');
+  /** What the chosen runtime offers, for the model picker; `agentModelsFor`
+   *  says whose list it is (empty until the bridge answers). */
+  agentModels: ModelEntry[] = $state([]);
+  agentModelsFor: AgentProvider | null = $state(null);
+  /** The model picked for each runtime, remembered in this browser. */
+  private modelChoices: Partial<Record<AgentProvider, string>> = {};
   agentPairing = $state(false);
   private pairedToken = $state('');
   private pairedEndpoint = $state('');
   private pairingSequence = 0;
+  private nativeAgentPaired = false;
   agentAutoPaired = $derived(!!this.agentToken && this.agentToken === this.pairedToken && this.agentEndpoint === this.pairedEndpoint);
   canAsk = $derived(this.agentProvider === 'anthropic' ? !!this.apiKey : !!this.agentToken);
   asking = $state(false);
@@ -191,9 +202,17 @@ export class DocumentClient {
     this.error = '';
     try {
       this.apiKey = localStorage.getItem('iron.anthropicKey') ?? '';
+      const saved = JSON.parse(localStorage.getItem(AGENT_CHOICE_KEY) ?? 'null');
+      if (saved && ['codex', 'claude', 'anthropic'].includes(saved.provider)) {
+        this.modelChoices = saved.models ?? {};
+        this.agentProvider = saved.provider;
+        this.agentModel = saved.provider === 'anthropic' ? '' : this.modelChoices[saved.provider as AgentProvider] ?? '';
+        if (this.modelChoices.anthropic) this.modelName = this.modelChoices.anthropic;
+      }
     } catch {
       // storage unavailable; the key is entered per session
     }
+    void this.loadAgentModels();
     void this.connectLocalAgent();
     (window as any).__iron = {
       // Diagnostic access to JSON-returning operations, including contract errors.
@@ -221,6 +240,7 @@ export class DocumentClient {
       edit: (xml: string, label?: string) => this.edit(xml, label),
       ask: (instruction: string) => this.ask(instruction),
       configureAgent: (options: { provider: AgentProvider; endpoint?: string; token?: string; model?: string }) => this.configureAgent(options),
+      agentState: () => ({ provider: this.agentProvider, endpoint: this.agentEndpoint, paired: this.agentAutoPaired, connecting: this.agentPairing, hasToken: !!this.agentToken, canAsk: this.canAsk }),
       bench: async (iterations = 20, repeats = 200) =>
         JSON.parse(await this.request('solveBench', { iterations, repeats })),
       selection: () => [...this.selection],
@@ -303,23 +323,69 @@ export class DocumentClient {
     this.agentProvider = options.provider;
     if (options.endpoint !== undefined) this.agentEndpoint = options.endpoint;
     if (options.token !== undefined) this.agentToken = options.token;
-    this.agentModel = options.model ?? '';
-    if (options.provider !== 'anthropic' && options.token === undefined) void this.connectLocalAgent();
+    this.agentModel = options.model ?? (options.provider === 'anthropic' ? '' : this.modelChoices[options.provider] ?? '');
+    this.saveAgentChoice();
+    if (options.provider !== 'anthropic' && options.token === undefined) void this.connectLocalAgent().then(() => this.loadAgentModels());
+    else void this.loadAgentModels();
+  }
+
+  /** The model for the chosen runtime (`''`: the runtime's default). */
+  setAgentModel(model: string) {
+    if (this.agentProvider === 'anthropic') this.modelName = model || ANTHROPIC_API_MODELS[0].id;
+    else this.agentModel = model;
+    this.modelChoices = { ...this.modelChoices, [this.agentProvider]: this.agentProvider === 'anthropic' ? this.modelName : model };
+    this.saveAgentChoice();
+  }
+
+  private saveAgentChoice() {
+    try {
+      localStorage.setItem(AGENT_CHOICE_KEY, JSON.stringify({ provider: this.agentProvider, models: this.modelChoices }));
+    } catch {
+      // storage unavailable: the choice lasts this page
+    }
+  }
+
+  /** Ask what the chosen runtime offers: the bridge lists Codex's models
+   *  for this login and Claude Code's aliases; the API path has its own. */
+  async loadAgentModels(): Promise<void> {
+    const provider = this.agentProvider;
+    if (provider === 'anthropic') {
+      this.agentModels = ANTHROPIC_API_MODELS;
+      this.agentModelsFor = provider;
+      return;
+    }
+    if (!this.agentToken) return;
+    try {
+      const models = await listLocalModels(this.agentEndpoint, this.agentToken, provider);
+      if (provider === this.agentProvider) { this.agentModels = models; this.agentModelsFor = provider; }
+    } catch (e) {
+      console.warn(`[agent] could not list ${provider} models`, e);
+    }
   }
 
   async connectLocalAgent(): Promise<boolean> {
-    if (!import.meta.env.DEV || isNativeHost() || !isLoopbackOrigin(location.origin) || this.agentProvider === 'anthropic') return false;
+    const native = isNativeHost();
+    if (!native && (!import.meta.env.DEV || !isLoopbackOrigin(location.origin))) return false;
+    if (this.agentProvider === 'anthropic' && (!native || this.nativeAgentPaired)) return false;
     const sequence = ++this.pairingSequence;
     const generation = this.generation;
     const endpoint = this.agentEndpoint;
     const previousToken = this.agentToken;
+    const provider = this.agentProvider;
     this.agentPairing = true;
     try {
-      const token = await discoverLocalAgent(endpoint);
-      if (!token || sequence !== this.pairingSequence || generation !== this.generation || endpoint !== this.agentEndpoint || previousToken !== this.agentToken) return false;
+      const connection = native ? await discoverNativeAgent(command => (window as any).__TAURI__.core.invoke(command)) : null;
+      const token = native ? (connection?.endpoint === endpoint ? connection.token : null) : await discoverLocalAgent(endpoint);
+      if (!token || sequence !== this.pairingSequence || generation !== this.generation || endpoint !== this.agentEndpoint || previousToken !== this.agentToken || provider !== this.agentProvider) return false;
+      if (connection && !this.nativeAgentPaired) {
+        this.agentProvider = connection.provider;
+        this.agentModel = this.modelChoices[connection.provider] ?? '';
+        this.nativeAgentPaired = true;
+      }
       this.agentToken = token;
       this.pairedToken = token;
       this.pairedEndpoint = endpoint;
+      void this.loadAgentModels();
       return true;
     } finally { if (sequence === this.pairingSequence) this.agentPairing = false; }
   }
@@ -435,10 +501,14 @@ export class DocumentClient {
     // The contexts showcase (plans/specs/contexts.md): its outline, pitch
     // and dials compositions. `?showcase=0` leaves it out (the driver does,
     // so its scripts' ids stay those after the demo scene).
+    // An engine that already holds a document (the native engine across a
+    // webview reload) keeps it: `demo` answers `already`, and so does the
+    // showcase, so neither lands on top of it.
     const demo = async () => {
-      const r = await this.command<{ ok: boolean; error?: string }>({ op: 'demo' });
+      const r = await this.command<{ ok: boolean; already?: boolean; error?: string }>({ op: 'demo' });
       if (!r.ok) throw new Error(r.error ?? 'the demo was refused');
-      if (q.get('showcase') !== '0') await this.command({ op: 'showcase' });
+      if (!r.already && q.get('showcase') !== '0') await this.command({ op: 'showcase' });
+      return !r.already;
     };
     if (this.scopes) {
       if (!first) return this.scopes.reopen();
@@ -448,7 +518,7 @@ export class DocumentClient {
       // for a scope whose log needs replaying). Read before the boot
       // rewrites the address to the open scope.
       const exporting = q.has('export');
-      const r = await this.scopes.boot(demo, target());
+      const r = await this.scopes.boot(async () => { await demo(); }, target());
       if (r === 'missing') location.replace(scopesUrl());
       else if (exporting) void this.download();
       return;
@@ -457,8 +527,7 @@ export class DocumentClient {
       const text = this.carried;
       this.carried = null;
       await this.load(text);
-    } else {
-      await demo();
+    } else if (await demo()) {
       // The benchmarks (`?stress=N`, `?meters=N`) add their composition to
       // the demo, once per page; their tabs are in the default layout.
       const shapes = Number(q.get('stress'));

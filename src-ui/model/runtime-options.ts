@@ -15,6 +15,18 @@ export interface ModelOptions extends ConversationOptions {
   runtime?: LocalRuntimeOptions;
 }
 
+/** A model a runtime offers (the bridge's `POST /models`): `id` is what
+ *  `CompletionRequest.model` takes; `default` marks the runtime's own. */
+export interface ModelEntry { id: string; label: string; default?: boolean }
+
+/** The Claude API's models, for the API-key path (no bridge to ask). */
+export const ANTHROPIC_API_MODELS: ModelEntry[] = [
+  { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+  { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
+  { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
+  { id: 'claude-fable-5-1', label: 'Claude Fable 5.1' },
+];
+
 export interface CompletionRequest {
   provider: 'codex' | 'claude';
   system: string;

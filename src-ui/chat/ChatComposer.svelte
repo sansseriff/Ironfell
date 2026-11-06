@@ -12,9 +12,28 @@
 
   let { value = $bindable(''), busy = false, compact = false, target, targetControl, submit }: { value?: string; busy?: boolean; compact?: boolean; target: string; targetControl?: Snippet; submit: () => void } = $props();
   const doc = controllerManager.docClient;
-  const providers: { value: AgentProvider; label: string }[] = [{ value: 'codex', label: 'Codex' }, { value: 'claude', label: 'Claude' }, { value: 'anthropic', label: 'Claude API' }];
+  const providers: { value: AgentProvider; label: string; hint?: string }[] = [
+    { value: 'codex', label: 'Codex', hint: 'ChatGPT login' },
+    { value: 'claude', label: 'Claude', hint: 'Claude login' },
+    { value: 'anthropic', label: 'Claude API', hint: 'API key' },
+  ];
   const blocked = $derived(busy || doc.asking || !doc.canAsk || !value.trim());
-  const model = $derived(doc.agentProvider === 'anthropic' ? doc.modelName : doc.agentModel || 'Runtime default');
+  // The model picker: what the runtime offers (its default first, for the
+  // local runtimes), plus a model typed in Agent settings that it does not list.
+  const DEFAULT = 'default';
+  const current = $derived(doc.agentProvider === 'anthropic' ? doc.modelName : doc.agentModel);
+  const listed = $derived(doc.agentModelsFor === doc.agentProvider ? doc.agentModels : []);
+  const modelItems = $derived.by(() => {
+    const items: { value: string; label: string; hint?: string }[] = [];
+    if (doc.agentProvider !== 'anthropic') {
+      const own = listed.find((m) => m.default);
+      items.push({ value: DEFAULT, label: 'Default', hint: own?.label });
+    }
+    for (const m of listed) items.push({ value: m.id, label: m.label, hint: m.default ? 'default' : undefined });
+    if (current && !items.some((i) => i.value === current)) items.push({ value: current, label: current, hint: 'custom' });
+    return items;
+  });
+  const modelValue = $derived(current || DEFAULT);
 </script>
 
 <form class="composer" class:compact aria-label="Chat composer" onsubmit={(event) => { event.preventDefault(); if (!blocked) submit(); }}>
@@ -23,7 +42,11 @@
     <TextInput multiline aria-label="Agent instruction" rows={compact ? 2 : 3} placeholder="Ask, explain, or change something…" bind:value onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); if (!blocked) submit(); } }} />
     <div class="footer">
       <Select value={doc.agentProvider} items={providers} label="Agent runtime" disabled={busy || doc.asking} onChange={(provider) => doc.configureAgent({ provider })} />
-      <span class="model" title={model}>{model}</span>
+      {#if modelItems.length > 1 || doc.agentProvider === 'anthropic'}
+        <Select value={modelValue} items={modelItems} label="Model" disabled={busy || doc.asking} onChange={(v) => doc.setAgentModel(v === DEFAULT ? '' : v)} />
+      {:else}
+        <span class="model" title="The runtime's default model">{current || 'Runtime default'}</span>
+      {/if}
       <AgentSettings />
       <Button variant="primary" small type="submit" disabled={blocked} aria-label={busy ? 'Agent working' : 'Send message'} title="Send · Cmd/Ctrl+Enter">{#if busy}<LoaderCircle size={14} strokeWidth={1.75} />Working…{:else}<ArrowUp size={14} strokeWidth={1.75} />Send{/if}</Button>
     </div>

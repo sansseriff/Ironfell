@@ -3,10 +3,12 @@ import { createInterface } from 'node:readline';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { CompletionRequest } from '../../src-ui/model/runtime-options';
+import type { CompletionRequest, ModelEntry } from '../../src-ui/model/runtime-options';
+export type { ModelEntry };
 
 export interface RuntimeResult { text: string; usage?: unknown }
 export type Runtime = (request: CompletionRequest, signal: AbortSignal) => Promise<RuntimeResult>;
+export type ModelLister = (signal: AbortSignal) => Promise<ModelEntry[]>;
 
 export class JsonLinesProcess {
   private nextId = 0;
@@ -123,14 +125,69 @@ export function codexRuntime(command = process.env.IRON_CODEX_BIN ?? 'codex'): R
   };
 }
 
-export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude'): Runtime {
-  return async (request, signal) => {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error('Claude runtime requires ANTHROPIC_API_KEY on the bridge; subscription login is not assumed');
+/** The models Codex offers this login, from its app-server (`model/list`). */
+export function codexModels(command = process.env.IRON_CODEX_BIN ?? 'codex'): ModelLister {
+  return async signal => {
     const cwd = await mkdtemp(join(tmpdir(), 'iron-agent-'));
-    const child = spawn(command, ['-p', '--bare', '--output-format', 'json', '--tools', '',
+    const rpc = new JsonLinesProcess(command, ['app-server', '--listen', 'stdio://'], cwd, signal);
+    try {
+      await rpc.request('initialize', { clientInfo: { name: 'iron', title: 'Iron', version: '0.0.0' } });
+      rpc.send({ method: 'initialized', params: {} });
+      const result = await rpc.request('model/list', {});
+      const data: any[] = Array.isArray(result?.data) ? result.data : [];
+      return data.filter(m => !m.hidden && typeof (m.model ?? m.id) === 'string')
+        .map(m => ({ id: m.model ?? m.id, label: m.displayName ?? m.model ?? m.id, ...(m.isDefault ? { default: true } : {}) }));
+    } finally {
+      await rpc.close();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  };
+}
+
+/** Claude Code's aliases, each the latest of its family (`claude --model`). */
+export const claudeModels: ModelLister = async () => [
+  { id: 'opus', label: 'Opus' },
+  { id: 'sonnet', label: 'Sonnet' },
+  { id: 'haiku', label: 'Haiku' },
+  { id: 'fable', label: 'Fable' },
+];
+
+/** How Claude Code is paid for: the signed-in Claude subscription (the
+ *  default, what `claude login` set up), or `ANTHROPIC_API_KEY` with
+ *  `IRON_CLAUDE_AUTH=api-key`. */
+export type ClaudeAuth = 'subscription' | 'api-key';
+
+export function claudeAuth(value = process.env.IRON_CLAUDE_AUTH): ClaudeAuth {
+  if (!value || value === 'subscription') return 'subscription';
+  if (value === 'api-key') return 'api-key';
+  throw new Error(`IRON_CLAUDE_AUTH=${value}: use subscription (the default) or api-key`);
+}
+
+/** Claude Code's environment: the bridge's, without what a surrounding
+ *  Claude Code session sets (`CLAUDECODE`, `CLAUDE_CODE_*`, …: the child
+ *  would join that session and see its context), and on a subscription
+ *  without API credentials, so the login is what pays. */
+export function claudeEnv(auth: ClaudeAuth, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...base };
+  for (const key of Object.keys(env)) {
+    if (key === 'CLAUDECODE' || key === 'CLAUDE_PID' || key === 'CLAUDE_EFFORT' || key.startsWith('CLAUDE_CODE_') || key.startsWith('CLAUDE_AGENT_SDK')) delete env[key];
+  }
+  if (auth === 'subscription') { delete env.ANTHROPIC_API_KEY; delete env.ANTHROPIC_AUTH_TOKEN; }
+  return env;
+}
+
+/** Claude Code, headless, with no tools, MCP servers or settings. On a
+ *  subscription `--safe-mode` turns off every customization (CLAUDE.md,
+ *  skills, plugins, hooks, agents) and keeps the login; with an API key
+ *  `--bare` does the same and reads only the key. */
+export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude', auth: ClaudeAuth = claudeAuth(), baseEnv: NodeJS.ProcessEnv = process.env): Runtime {
+  return async (request, signal) => {
+    if (auth === 'api-key' && !baseEnv.ANTHROPIC_API_KEY) throw new Error('IRON_CLAUDE_AUTH=api-key needs ANTHROPIC_API_KEY on the bridge; unset IRON_CLAUDE_AUTH to use your Claude subscription');
+    const cwd = await mkdtemp(join(tmpdir(), 'iron-agent-'));
+    const child = spawn(command, ['-p', auth === 'api-key' ? '--bare' : '--safe-mode', '--output-format', 'json', '--tools', '',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
       '--no-session-persistence', '--system-prompt', request.system,
-      ...(request.model ? ['--model', request.model] : [])], { cwd, stdio: 'pipe', signal });
+      ...(request.model ? ['--model', request.model] : [])], { cwd, stdio: 'pipe', signal, env: claudeEnv(auth, baseEnv) });
     child.stderr.resume();
     try {
       return await new Promise<RuntimeResult>((resolve, reject) => {
@@ -143,7 +200,9 @@ export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude')
         child.on('error', reject);
         child.on('close', code => {
           try {
-            if (code !== 0) throw new Error(`Claude exited (${code}); check local runtime authentication`);
+            if (code !== 0) throw new Error(auth === 'api-key'
+              ? `Claude exited (${code}); check ANTHROPIC_API_KEY`
+              : `Claude exited (${code}); check that Claude Code is signed in (\`claude auth status\`, \`claude login\`)`);
             const result = JSON.parse(output);
             if (result.is_error || typeof result.result !== 'string') throw new Error('Claude did not return a successful text result');
             resolve({ text: result.result, usage: result.usage });

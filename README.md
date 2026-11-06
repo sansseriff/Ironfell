@@ -4,7 +4,7 @@ Technical and scientific communication in age of AI
 
 ## Run it
 
-### Iron + Codex (one terminal)
+### Iron + Codex and Claude (one terminal)
 
 From the repository root, after dependencies and wasm are built:
 
@@ -15,18 +15,50 @@ bun run dev:agent --open       # your last saved scope
 ```
 
 These start Iron on **127.0.0.1:5175** and the local agent bridge on
-**127.0.0.1:4318**. Choose **Codex** in the Model or Lesson composer; the bridge
-token fills automatically. Keep the terminal open; **Ctrl+C stops both**.
+**127.0.0.1:4318**. Choose **Codex** or **Claude**, and a model, in the Model or
+Lesson composer; the bridge token fills automatically. Keep the terminal open; **Ctrl+C stops both**.
 Demo changes are temporary, so export anything you want to keep.
 
-The launcher finds `codex` on PATH or the local Codex app's bundled CLI. An
-explicit `IRON_CODEX_BIN=/path/to/codex` takes precedence. It uses that CLI's
-existing login; if sign-in is needed, run the login command printed at startup.
+The launcher finds `codex` on PATH or the local Codex app's bundled CLI, and
+`claude` (Claude Code) on PATH or `~/.local/bin`. `IRON_CODEX_BIN` and
+`IRON_CLAUDE_BIN` take precedence. Each uses its CLI's existing login, so Codex
+runs on your ChatGPT plan and Claude on your Claude subscription; if sign-in is
+needed, run the login commands printed at startup. To bill Claude to an API key
+instead, set `IRON_CLAUDE_AUTH=api-key` and `ANTHROPIC_API_KEY`.
 No model call, wasm rebuild or login happens merely by starting the servers.
 Occupied ports cause a clear failure, never killing or reusing another server.
 Run `bun run dev:agent --help` for options.
 
 `bun run dev` remains frontend-only; `bun run agent:serve` remains bridge-only.
+
+### Tauri + agents (second Claude profile)
+
+```sh
+bun run native:agent
+```
+
+For adaptive rendering, use this instead:
+
+```sh
+bun run native:agent:adaptive
+```
+
+This starts the local bridge, builds/runs Tauri, and connects it automatically
+with **Claude selected**, using **`~/.claude_2nd`** and its subscription login.
+It requests the last saved scope when native persistence is enabled; older
+native builds retain their existing unsaved-workspace fallback.
+No token to paste. Closing Tauri or pressing Ctrl+C stops the app and bridge.
+Codex remains available in the provider menu. No model inference runs at startup.
+The token travels through native IPC, not the URL or browser storage; the bridge
+does not expose browser pairing in this mode. An occupied bridge port fails
+without stopping the existing server.
+
+`IRON_CLAUDE_CONFIG_DIR=/absolute/profile/path` explicitly changes the profile;
+`IRON_CLAUDE_BIN` changes the executable. The launcher deliberately defaults to
+`.claude_2nd`, even if the parent shell's `CLAUDE_CONFIG_DIR` points elsewhere.
+If needed, sign in with `CLAUDE_CONFIG_DIR="$HOME/.claude_2nd" claude auth login`.
+Launching an app directly from Finder does not start the bridge; use this command
+for the managed app/agent lifecycle.
 
 ### Initial build / frontend only
 

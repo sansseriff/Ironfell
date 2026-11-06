@@ -84,7 +84,9 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ `bun run native:build`, cold native Bevy/Tauri graph (`dev-opt`) | ~6 min (6m 04s in a fresh worktree, 2026-10-27) |
 | `bun run native:build`, warm, after workspace test changes | ~21 s |
 | `bun run native:build`, warm, after native Rust / plugin-selection changes | ~20–45 s |
+| ⏱ `bun run native:build`, after shared engine + native IPC changes | ~2 min (1m 59s, 2026-11-04) |
 | native Rust bin tests, warm (2 mailbox + 5 frame-budget checks) | ~3 s |
+| ⏱ native Rust bin tests, cold test/build feature graph | ~2 min (2m 00s for native connection test, 2026-11-04) |
 | ⏱ first standalone Bevy/winit dependency build | ~3 min |
 | standalone Bevy control rebuild, warm | ~2 s |
 | ⏱ `cargo build -p iron-native`, warm, after adding a native dependency (objc2-core-video) | ~2 min (2m 02s, 2026-10-27) |
@@ -107,6 +109,54 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 
 ## Local agent runtime bootstrap
 
+Native with the second Claude profile: `bun run native:agent` (warm native
+build/run, then stays open). Expected banner includes `Native agent bridge ready`,
+`Claude profile: …/.claude_2nd`, automatic connection guidance and the Ctrl+C
+instruction. Claude is selected automatically; no bridge token is printed or
+pasted. Closing the window or Ctrl+C stops the app/process group and bridge.
+`IRON_CLAUDE_CONFIG_DIR` overrides the default profile explicitly. No inference
+at startup; `bun run native:agent --help` lists profile/executable overrides.
+
+Adaptive variant: `bun run native:agent:adaptive` preserves the same profile and
+pairing/lifecycle, setting `IRON_NATIVE_RENDER_MODE=sync`,
+`IRON_NATIVE_PACING=adaptive`, and `IRON_NATIVE_FRAME_LATENCY=2`, exactly like
+`native:adaptive`. The launcher fixture tests verify preset parity and delivery
+to the child process; no native rebuild is needed just to change these runtime
+settings (the usual launcher still refreshes/builds the native app).
+
+`bun test tests/native-agent.test.ts` exercises second-profile isolation, IPC
+validation, authenticated requests, child exit/stop and occupied-port safety
+with fixtures, not paid inference. `IRON_NATIVE_SELF_TEST=1` and
+`IRON_NATIVE_AGENT_TEST=1` select the native pairing/reload test (`agent.js`):
+the report contains only boolean checks, never tokens or account details.
+
+Native agent verification (2026-11-04): fresh packaged app and the exact command
+below pass **12 checks** without errors. Normal launches request the last saved
+scope when native persistence is enabled; this test uses an ephemeral demo and closes itself, leaving saved scopes
+alone. No paid inference is performed.
+
+```sh
+IRON_NATIVE_SELF_TEST=1 IRON_NATIVE_AGENT_TEST=1 bun run native:agent
+```
+
+The final `IRON_NATIVE_TEST` report must contain 12 true checks and an empty
+`errors` array; do not treat exit code alone or the initial phase report as a
+pass. Coverage: workspace and Model readiness, private connection, document
+reads with Model active, client automatic pairing/Claude selection, authenticated
+model listing, no token in URL/storage, and connection/client/document reads
+after webview reload. The test uses credential-free `__iron.agentState()` for
+pairing readiness, not popup timing. Logs: `.agents/native-agent-command.log`
+and `.agents/native-agent-selftest.log`. Unit suite: 51 JS tests; native connection
+Rust test passes; frontend check: 0 errors / 10 existing warnings. Initial engine
+readiness is now independent of display callbacks, so loading/occlusion cannot
+prevent the control handshake.
+
+Commit validation 2026-11-05: the isolated agent/native-launcher snapshot passes
+52 JS tests, frontend checking (0 errors / 9 existing warnings), and fast smoke
+with six `assertion passed` lines and `(no page errors)`. Expected output is
+unchanged. Cached wasm was reused; unrelated scope, FPS, timeline and UI edits
+were excluded. Logs: main checkout `.agents/native-agent-commit-{tests,check,smoke}.log`.
+
 The owning plan is [`plans/specs/agent-runtimes.md`](../../../plans/specs/agent-runtimes.md).
 For manual testing, use **one terminal** in the repository root:
 
@@ -115,10 +165,14 @@ bun run dev:agent:demo --open  # ephemeral demo
 # bun run dev:agent --open    # last saved scope instead
 ```
 
-Expected startup banner: `Iron + Codex ready`, followed by the app URL on
-127.0.0.1:5175, bridge URL on 127.0.0.1:4318, detected Codex executable,
+Expected startup banner: `Iron + Codex + Claude ready`, followed by the app URL on
+127.0.0.1:5175, bridge URL on 127.0.0.1:4318, detected Codex executable, the
+Claude Code executable with `(your Claude subscription)` (or `not found`; with
+`IRON_CLAUDE_AUTH=api-key`, `(ANTHROPIC_API_KEY)`),
 automatic-pairing/login guidance and `Ctrl+C stops both services.` No token is
-printed by this launcher. It checks Codex executability, not login validity;
+printed by this launcher. Claude runs on the Claude Code login unless
+`IRON_CLAUDE_AUTH=api-key`; the composer's model picker lists each runtime's
+models (`POST /models`). It checks executability, not login validity;
 an authenticated model turn remains the login test. It reuses built wasm,
 does not perform inference at startup, and never kills an occupied-port owner.
 `--open` is optional; Ctrl+C stops both services. `bun run dev` remains UI-only.

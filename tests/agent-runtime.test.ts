@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { resolve } from 'node:path';
 import { createAgentBridge, validateRequest } from '../scripts/agent-bridge/server';
-import { codexRuntime, claudeRuntime, type Runtime } from '../scripts/agent-bridge/runtimes';
+import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type Runtime } from '../scripts/agent-bridge/runtimes';
 import { LocalRuntimeTransport } from '../src-ui/model/transport';
 import { localEndpoint, type CompletionRequest } from '../src-ui/model/runtime-options';
 import { ask } from '../src-ui/model/agent';
@@ -159,17 +159,47 @@ test('Codex app-server handshake, final items, failures, approvals, exit and can
   } finally { delete process.env.IRON_TEST_RUNTIME_MODE; }
 });
 
-test('Claude adapter is tool-free and requires explicit API-key authentication', async () => {
-  const previous = process.env.ANTHROPIC_API_KEY;
+test('Claude adapter is tool-free, uses the subscription login by default and an API key only when asked', async () => {
+  const saved = { key: process.env.ANTHROPIC_API_KEY, auth: process.env.IRON_CLAUDE_AUTH, session: process.env.CLAUDE_CODE_SESSION_ID, code: process.env.CLAUDECODE };
+  const restore = (k: string, v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
   try {
-    delete process.env.ANTHROPIC_API_KEY;
-    await assert.rejects(() => claudeRuntime(fixture)(payload, AbortSignal.timeout(3000)), /ANTHROPIC_API_KEY/);
+    delete process.env.IRON_CLAUDE_AUTH;
+    assert.equal(claudeAuth(), 'subscription');
+    assert.throws(() => claudeAuth('keychain'), /subscription|api-key/);
+    // Subscription: safe mode, and neither a key nor a surrounding Claude
+    // Code session's variables reach the child (the fixture exits 4 if so).
     process.env.ANTHROPIC_API_KEY = 'fixture-not-a-real-key';
+    process.env.CLAUDE_CODE_SESSION_ID = 'outer-session';
+    process.env.CLAUDECODE = '1';
     assert.equal((await claudeRuntime(fixture)(payload, AbortSignal.timeout(3000))).text, '<edit/>');
+    // API key: bare, and only with a key.
+    assert.equal((await claudeRuntime(fixture, 'api-key')(payload, AbortSignal.timeout(3000))).text, '<edit/>');
+    delete process.env.ANTHROPIC_API_KEY;
+    await assert.rejects(() => claudeRuntime(fixture, 'api-key')(payload, AbortSignal.timeout(3000)), /ANTHROPIC_API_KEY/);
   } finally {
-    if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
-    else process.env.ANTHROPIC_API_KEY = previous;
+    restore('ANTHROPIC_API_KEY', saved.key); restore('IRON_CLAUDE_AUTH', saved.auth);
+    restore('CLAUDE_CODE_SESSION_ID', saved.session); restore('CLAUDECODE', saved.code);
   }
+});
+
+test('bridge lists each runtime\'s models behind the token, Codex from its app-server', async () => {
+  assert.deepEqual(await codexModels(fixture)(AbortSignal.timeout(3000)), [
+    { id: 'fixture-default', label: 'Fixture Default', default: true },
+    { id: 'fixture-other', label: 'Fixture Other' },
+  ]);
+  assert.deepEqual((await claudeModels(AbortSignal.timeout(1000))).map(m => m.id), ['opus', 'sonnet', 'haiku', 'fable']);
+  const token = 'm'.repeat(32);
+  const bridge = createAgentBridge({ token, origins: ['http://localhost:5173'], runtimes: { codex: codexRuntime(fixture), claude: claudeRuntime(fixture) }, models: { codex: codexModels(fixture), claude: claudeModels } });
+  bridge.server.listen(0, '127.0.0.1');
+  await once(bridge.server, 'listening');
+  const url = `http://127.0.0.1:${(bridge.server.address() as { port: number }).port}/models`;
+  const ask = (provider: string, auth = `Bearer ${token}`) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify({ provider }) });
+  try {
+    assert.equal((await ask('codex', 'Bearer wrong')).status, 401);
+    assert.deepEqual((await (await ask('codex')).json()).models.map((m: { id: string }) => m.id), ['fixture-default', 'fixture-other']);
+    assert.equal((await (await ask('claude')).json()).models[0].id, 'opus');
+    assert.equal((await ask('gemini')).status, 400);
+  } finally { bridge.stop(); }
 });
 
 function documentFixture() {

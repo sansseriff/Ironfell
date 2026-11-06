@@ -3,12 +3,12 @@
  * which lists the stored scopes and needs only browser storage, and the
  * **app**, the engine and its dock, opened on one scope. One static SPA, so
  * the route is in the query: `?scope=<id>` (or `?new=empty|demo`, or
- * `?scope=last`) is the app; no scope is the scopes page. Pages that are not
- * saved (`?demo`, the benchmarks, the native build, no OPFS) are always the
- * app, as before scopes had a page. Other parameters (`gfx`, `bevy`,
+ * `?scope=last`) is the app; no scope is the scopes page. The native build
+ * routes the same way, its scopes in the webview's OPFS (WKWebView has it).
+ * Pages that are not saved (`?demo`, the benchmarks, no usable OPFS) are
+ * always the app, as before scopes had a page. Other parameters (`gfx`, `bevy`,
  * `showcase`, …) carry over between the pages.
  */
-import { isNativeHost } from './runtime/native_host';
 import { opfsAvailable } from './runtime/scope_storage';
 
 /** Parameters that say which scope the app opens, dropped between pages. */
@@ -18,7 +18,7 @@ const ROUTE_KEYS = ['scope', 'new', 'export'];
 export function persistent(): boolean {
   const q = new URLSearchParams(location.search);
   if (q.has('demo') || Number(q.get('stress')) > 0 || Number(q.get('meters')) > 0) return false;
-  return !isNativeHost() && opfsAvailable();
+  return opfsAvailable();
 }
 
 export type Page = 'scopes' | 'app';

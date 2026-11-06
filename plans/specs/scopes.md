@@ -173,10 +173,10 @@ interface ScopeStorage {
 ```
 
 The web implementation is OPFS, developed and tested on Chromium. A memory
-implementation serves tests, `?demo` and the native build. No filesystem implementation
-for Tauri and no work for other browsers' OPFS support: when a server arrives, local
-storage becomes a cache in front of it (§8), and the interface is where a server-backed
-implementation plugs in.
+implementation serves tests and `?demo`. No filesystem implementation for Tauri: the
+native build's WKWebView has OPFS too (§10.4), so it uses the web implementation, and
+when a server arrives local storage becomes a cache in front of it (§8) on both, with
+the interface where a server-backed implementation plugs in.
 
 Request persistent storage (`navigator.storage.persist()`) on first save, so the browser
 does not evict scopes under storage pressure, and show `navigator.storage.estimate()`
@@ -454,3 +454,25 @@ Deviations and choices:
 Tests: `tests/scopes.test.ts` (11, unchanged, pass); `.claude/skills/run-iron/
 workspace.txt` (new); `scopes.txt`, `scope-menu.txt`, `narrative.txt`, `showcase.txt` and
 `timeline.txt` match `master` run for run.
+
+### 10.4 The native build keeps scopes (2026-11-04)
+
+Asked for by the user: the Tauri app opens on the scopes page, as the web does, without
+native file system code. WKWebView (macOS 27.2, checked with a WKWebView test under both
+`tauri://localhost` and https) has everything `OpfsScopeStorage` and `Scopes` use:
+`navigator.storage.getDirectory`, `createWritable`, directory `entries()`, recursive
+`removeEntry`, Web Locks and `persist`. So `route.persistent()` no longer excludes the
+native host: native routes and stores exactly as the web does, its scopes in the
+webview's data store for the app's identifier. `opfsAvailable` now also requires
+`createWritable`, so an older WebKit (the bundle's minimum is macOS 14) gets an unsaved
+demo page, as before, instead of failing. The scopes page warms only the app's code on
+native (the engine is the Rust process, no wasm to prefetch).
+
+Two native details: the engine keeps its document across webview reloads, so the `demo`
+call answers `already` for a document that holds anything rather than refusing; and
+`native:run` (and the scripts built on it) now rebuilds `dist-native` first, which the
+window loads: a stale one ran October's shell against an engine that no longer opens
+the demo by itself, so nothing was drawn into a composition.
+
+Not yet checked in the running native app: that OPFS survives quitting and relaunching
+it (WKWebView's default data store is persistent, so it should).

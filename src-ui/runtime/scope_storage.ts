@@ -159,8 +159,12 @@ export class MemoryScopeStorage implements ScopeStorage {
 
 // ---- OPFS -----------------------------------------------------------------
 
+/** OPFS with writable files: Chromium, and WebKit (Safari, the native
+ *  build's WKWebView) where `createWritable` exists; older WebKit has the
+ *  directory but not the writer, and gets an unsaved page instead. */
 export function opfsAvailable(): boolean {
-  return typeof navigator !== 'undefined' && typeof navigator.storage?.getDirectory === 'function';
+  return typeof navigator !== 'undefined' && typeof navigator.storage?.getDirectory === 'function'
+    && typeof FileSystemFileHandle !== 'undefined' && typeof FileSystemFileHandle.prototype.createWritable === 'function';
 }
 
 export class OpfsScopeStorage implements ScopeStorage {

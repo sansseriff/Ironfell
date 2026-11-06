@@ -8,6 +8,7 @@
  * data.
  */
 import { chooseBackend } from './backend_policy';
+import { isNativeHost } from './native_host';
 
 let started: Promise<void> | null = null;
 
@@ -18,9 +19,14 @@ export function warmEngine(): Promise<void> {
   started = new Promise<void>(resolve => {
     const run = async () => {
       try {
-        const backend = await chooseBackend();
-        const { prefetchWasm } = await import('./wasm_loader');
-        await Promise.all([prefetchWasm(backend), import('../App.svelte')]);
+        // The native build's engine is the Rust process: only the app's code.
+        if (isNativeHost()) {
+          await import('../App.svelte');
+        } else {
+          const backend = await chooseBackend();
+          const { prefetchWasm } = await import('./wasm_loader');
+          await Promise.all([prefetchWasm(backend), import('../App.svelte')]);
+        }
       } catch (e) {
         // Only a head start: opening a scope fetches whatever is missing.
         console.warn('[scopes] could not warm the engine', e);

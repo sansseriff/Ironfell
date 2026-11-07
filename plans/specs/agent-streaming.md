@@ -271,3 +271,36 @@ Verified: 79 bun tests (10 new in `tests/revise.test.ts`); both logged edits
 replayed through `__iron.edit` on the engine apply, attempt 1 with its live
 bindings (inversion 0.838, gain 20.27 dB, out 10.64 mW); `chat-ui.ts`,
 `agent-runtime.ts`, `agent-components.ts` worker and main; fast smoke.
+
+## 9. Merging an agent's edit with changes made while it worked (2026-11-06)
+
+The second logged build (a Mach–Zehnder modulator, 298 s, 31.7k output
+tokens, 169 ops) was thrown away unapplied: the person drew a rectangle and
+moved the fiber while it worked (version 14 to 18), and `ask` refused any
+edit once the version moved. Replayed on a fresh document, the edit applies.
+
+`src-ui/model/merge.ts` replaces that refusal. At apply time, if the version
+moved since the agent read it, `changesSince` reads the transactions after
+it from the store's log (`scope_log`, now `DocumentApi.logSince`): leaves
+set (solver `derived_ops` included), facets added or removed, nodes moved or
+reordered, deleted (a re-create is a restore). `conflicts` checks the
+agent's parsed ops against them: a leaf both set, a node or a create's
+parent the person deleted, a node both moved, a facet both changed, or a
+delete of a node the person changed. None: the edit is applied at the
+current version, the turn's `merged` counts the transactions it sits on
+(the chat's footer says "merged with N changes made while it worked"), and a
+change landing between check and apply is checked again (twice). Conflicts:
+`kind="conflict"` errors at the agent's ops, saying what the person set, read
+in the agent's terms like any rejection; the agent revises (`<drop op>` keeps
+the person's change; an empty `<revise/>` resends its own), and the resend is
+judged against the version it was told of. Store-built edits (place,
+make-component, circuit, table, context, import, narrative) are refused only
+if a node they name was deleted. If the log no longer reaches back
+(compaction), the turn ends with an error rather than a retry. Everything
+else the store still checks, as ordinary rejections.
+
+Verified: 84 bun tests (5 in `tests/merge.test.ts`: merged apply at the
+current version, a conflict dropped or kept by revise, conflict rules, the
+log reader, the check-apply race and a log gap); the engine's `scope_log`
+shape checked live; `agent-runtime.ts`, `agent-components.ts`, `chat-ui.ts`
+worker and main; fast smoke.

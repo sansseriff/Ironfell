@@ -298,5 +298,9 @@ the rest as you wrote it; send a whole new <edit> only when most of it must chan
     <text old="0.5 mw" new="0.5 mW" all="true"/>   exact text, once unless all
   </revise>
 op names a verb by the $alias it created or its number in the rejected edit as sent;
-<text> runs last. <revise expect-version="N"> updates the version.`;
+<text> runs last. <revise expect-version="N"> updates the version.
+The person may edit while you work; your edit is merged with their changes. An error
+kind="conflict" means they changed what that op changes, and says to what: <drop op>
+keeps their change; an empty <revise/> resends your edit as is, overriding them, which
+you do only when the request needs that op.`;
 }

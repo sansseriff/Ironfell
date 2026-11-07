@@ -39,6 +39,9 @@ export interface DocumentApi {
   /** Order keys under `parent` ('' = roots) after `after` ('' = front, 'end' = back). */
   place(parent: string, after: string, count: number): MaybePromise<string[]>;
   apply(transaction: object, expectVersion: number): MaybePromise<ApplyResult>;
+  /** The transactions after `since`, one JSON object a line, or `gap` when the
+   *  log no longer reaches back that far (`scope_log`; merge.ts). */
+  logSince?(since: number): MaybePromise<{ gap: boolean; ndjson: string; version: number }>;
   /** Link two pictures to one entity as `actor` (ECM §7.2). */
   link(a: string, b: string, keep: string, actor: 'human' | 'model'): MaybePromise<LinkResult>;
   /** What the person has selected, in pick order (the session tier). */
@@ -115,6 +118,10 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
     nextRelationIds: n => json({ op: 'next_relation_ids', n }),
     place: (parent, after, count) => json({ op: 'place', parent, after, count }),
     apply: (tx, expect) => json({ op: 'apply', transaction_json: JSON.stringify(tx), expect_version: expect }),
+    logSince: async since => {
+      const r = await json<{ pending?: boolean; gap?: boolean; ndjson?: string; version?: number }>({ op: 'scope_log', since });
+      return { gap: !!r.pending || !!r.gap, ndjson: r.ndjson ?? '', version: r.version ?? 0 };
+    },
     link: (a, b, keep, actor) => json({ op: 'link', a, b, keep, actor }),
     selection: () => json({ op: 'selection' }),
     importSvg: (text, parent, x, y, actor) => json({ op: 'import_svg_at', text, parent, x, y, actor }),

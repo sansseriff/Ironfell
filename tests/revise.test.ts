@@ -122,7 +122,7 @@ test('revise errors say which handle or step is wrong', () => {
   assert.match(err('<revise><drop op="1"/><change op="1" x="1"/></revise>'), /op 1 was dropped earlier/);
   assert.match(err('<revise><text old="missing" new="x"/></revise>'), /"missing" is not in the rejected edit/);
   assert.match(err('<revise><frob op="1"/></revise>'), /unknown revise step <frob>/);
-  assert.match(err('<revise></revise>'), /<revise> is empty/);
+  assert.deepEqual(revise(rejected, '<revise/>'), { ok: true, edit: rejected });
   assert.equal(extractRevise('Fixing it.\n<revise><drop op="1"/></revise>'), '<revise><drop op="1"/></revise>');
 });
 

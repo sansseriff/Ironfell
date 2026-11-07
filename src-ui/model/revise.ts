@@ -16,7 +16,9 @@
  *   </revise>
  *
  * `<revise expect-version="N">` (or `exact=`) changes the edit's own
- * attribute. `<text>` runs last, over the revised markup, in order.
+ * attribute. `<text>` runs last, over the revised markup, in order. An
+ * empty `<revise/>` resends the edit as it was: after a merge conflict
+ * (merge.ts), that keeps the agent's values over the person's.
  */
 
 export type ReviseResult = { ok: true; edit: string } | { ok: false; error: string };
@@ -145,7 +147,6 @@ export function revise(rejected: string, markup: string): ReviseResult {
 function reviseOrThrow(rejected: string, markup: string): string {
   const draft = split(rejected, 'edit');
   const patch = split(markup, 'revise');
-  if (!patch.items.length) throw new Error('<revise> is empty; give <change>, <replace>, <drop>, <insert> or <text>');
 
   // Each verb of the rejected edit, by handle, as sent.
   const handle = (raw: string | undefined, where: string): number => {

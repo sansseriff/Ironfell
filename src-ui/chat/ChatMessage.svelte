@@ -53,7 +53,7 @@
       {/each}
       {#if live?.edit}
         <div class="forming" data-edit-forming>
-          <div class="forming-head"><PencilLine size={12} strokeWidth={1.75} />Writing the edit · {live.verbs.length} command{live.verbs.length === 1 ? '' : 's'}</div>
+          <div class="forming-head"><PencilLine size={12} strokeWidth={1.75} />{live.edit?.startsWith('<revise') ? 'Revising the edit' : 'Writing the edit'} · {live.verbs.length} command{live.verbs.length === 1 ? '' : 's'}</div>
           {#if live.verbs.length}
             <ul class="verbs">
               {#if live.verbs.length > SHOWN_VERBS}<li class="earlier">{live.verbs.length - SHOWN_VERBS} earlier</li>{/if}
@@ -82,7 +82,7 @@
           <Collapsible.Content><pre class="edit">{turn.result.edit}{turn.result.outcome?.failure ? `\n${turn.result.outcome.failure}` : ''}</pre></Collapsible.Content>
         </Collapsible.Root>
       {/if}
-      <div class="meta"><span>{turn.result?.transport ?? 'Runtime error'}{turn.completedAt ? ` · ${Math.max(0.1, (turn.completedAt - turn.startedAt) / 1000).toFixed(1)}s` : ''}</span><span class="actions"><IconButton icon={logCopied ? Check : ClipboardList} label={logCopied ? 'Turn log copied' : 'Copy turn log (for a bug report)'} onclick={copyLog} /><IconButton icon={copied ? Check : Copy} label={copied ? 'Message copied' : 'Copy assistant message'} onclick={copy} /></span></div>
+      <div class="meta"><span>{turn.result?.transport ?? 'Runtime error'}{turn.completedAt ? ` · ${Math.max(0.1, (turn.completedAt - turn.startedAt) / 1000).toFixed(1)}s` : ''}{turn.result?.merged ? ` · merged with ${turn.result.merged} change${turn.result.merged === 1 ? '' : 's'} made while it worked` : ''}</span><span class="actions"><IconButton icon={logCopied ? Check : ClipboardList} label={logCopied ? 'Turn log copied' : 'Copy turn log (for a bug report)'} onclick={copyLog} /><IconButton icon={copied ? Check : Copy} label={copied ? 'Message copied' : 'Copy assistant message'} onclick={copy} /></span></div>
       {#if copyError}<p class="error" role="status">{copyError}</p>{/if}
     {/if}
   </div>

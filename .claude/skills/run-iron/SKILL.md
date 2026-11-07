@@ -134,10 +134,12 @@ use it with no settings; `IRON_NATIVE_RENDER_MODE`, `IRON_NATIVE_PACING` and
 The launcher fixture tests verify these reach the child process.
 Checked 2026-11-06 after `bun run native:build` (1m 45s): with no settings the
 packaged app reports `renderMode` `sync` and `pacing` `adaptive`. The packaged
-workspace self-test (`IRON_NATIVE_SELF_TEST=1`) fails its first check, `shared
-workspace ready` (`window.__iron` absent or `.loading` still shown after ~34 s),
-with the new default and with `pipelined`/`display` alike, screen unlocked:
-a break that predates this change, not yet investigated.
+self-tests had been failing their first check, `shared workspace ready`, since
+`1a0c992` (2026-11-05: the native app routes like the web, so a URL with no scope
+is the scopes page, which loads no engine). The host now opens the workspace and
+cursor self-tests, and `IRON_NATIVE_LATENCY` runs, on `?demo` (the agent test
+already did). After that fix: workspace 23/23 (default and `pipelined`/`display`),
+100k simulation 25/25, cursor 6/6, each ~20 s, no errors.
 
 `bun test tests/native-agent.test.ts` exercises second-profile isolation, IPC
 validation, authenticated requests, child exit/stop and occupied-port safety

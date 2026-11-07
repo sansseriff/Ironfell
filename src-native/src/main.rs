@@ -490,6 +490,18 @@ fn main() {
                 app.handle().show()?;
                 native.set_focus()?;
             }
+            // A URL with no scope is the scopes page, which loads no engine
+            // (src-ui/route.ts). The workspace and cursor self-tests, like the
+            // agent test above, run on an unsaved demo, as web scripts do.
+            if std::env::var_os("IRON_NATIVE_SELF_TEST").is_some()
+                && std::env::var_os("IRON_NATIVE_AGENT_TOKEN").is_none()
+                && std::env::var_os("IRON_NATIVE_FILM").is_none()
+                && std::env::var_os("IRON_NATIVE_LATENCY").is_none()
+            {
+                let mut url = native.url()?;
+                url.query_pairs_mut().append_pair("demo", "");
+                native.navigate(url)?;
+            }
             if std::env::var_os("IRON_NATIVE_FILM").is_some() {
                 let mut url = native.url()?;
                 let render = pacing::render_mode();
@@ -510,7 +522,9 @@ fn main() {
             // `IRON_NATIVE_LATENCY=solo|panels|full`, as `?latency=` on the web.
             if let Ok(layout) = std::env::var("IRON_NATIVE_LATENCY") {
                 let mut url = native.url()?;
-                url.query_pairs_mut().append_pair("latency", &layout);
+                // Unsaved, like the web's `?latency=…&demo`: a measurement
+                // neither opens the scopes page nor writes to a stored scope.
+                url.query_pairs_mut().append_pair("latency", &layout).append_pair("demo", "");
                 native.navigate(url)?;
                 let render = pacing::render_mode();
                 let pacing = pacing::pacing_mode();

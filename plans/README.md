@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-05 for the Latency view (`rendering/latency-view.md`). Update this file whenever a plan is added,
+**Updated:** 2026-11-06 for the Layers panel spec (`specs/layers-panel.md`). Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -67,6 +67,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`model-interop.md`](specs/model-interop.md) | External computational Models: jobs, live sessions, optional local acceleration; shared web/native data and lifecycle semantics | Proposal drafted 2026-10-16; pending user approval. No implementation; conditional work order in `handoff-product.md` §4.2 |
 | [`scopes.md`](specs/scopes.md) | Durable local storage and global identity: scope ids, schema 9, snapshot plus op log in OPFS, boot into the last scope, the scope menu, workspace and assets per scope; replaces `clipboard-and-assets.md` §6 | Approved 2026-11-02; **phases 1–2 done 2026-11-02** (§10: durable OPFS scopes, boot into the last scope, `&demo` for scripts); **phase 3 done 2026-11-03** (the scope menu, §10.1); phases 4–5 (workspace, assets) later. Background in `notes/narrative-layer-and-storage-primitives.md` |
 | [`narrative-panel.md`](specs/narrative-panel.md) | ProseMirror narrative, references and model block edits; shared T3-inspired Model/Lesson conversation components and layout modes | Narrative built 2026-11-03 (§7–8); shared chat built in `agent-runtimes` (§9): worker/main UI tests and real Codex prose/visual/edit pass; full smoke/native pending |
+| [`layers-panel.md`](specs/layers-panel.md) | A Figma-style layers panel: one composition's drawing tree per panel (following the view or pinned), rows keyed by the select tool's chain, entity chips linking to the other compositions that picture an entity, Show in that opens the tab and selects, HTML with virtualised rows | Proposed 2026-11-06; phase 1 (browse and select) is the agreed first slice; no code |
 | [`timeline.md`](specs/timeline.md) | The timeline as a session composition: what a clip is, a session `clock` node, `axis` leaves fixed during drags, generated rows by object and property bound to clips, `std:timeline`, retiming, explicit clip creation | Phases 1–2, most of 3 and Animate change (4) done 2026-11-03 (§11); snapping, easing curves, ends at the playhead, phase 5 next |
 
 ## 4. Rendering

@@ -184,7 +184,7 @@ tracked in [`handoff-product.md`](../handoff-product.md).
 2. **A right-hand inspector** for the selection, with controls for `transform2d`, `size`,
    `radius`, `fill`, `stroke`, `slider` and `params`. Build it alongside the pen tool, as
    stage F's laser → fiber → meter demo needs parameter controls.
-3. **The outliner** on the left, from the model and composition views. It replaces the
+3. **The outliner** on the left (now [`layers-panel.md`](layers-panel.md), 2026-11-06: one composition per panel, built in HTML from its own query), from the model and composition views. It replaces the
    current Document panel.
 4. **Workspace root:** panel layout, splits and types, pins, saved beside the document.
 5. **Selection in undo**, with merging and restore-on-undo.

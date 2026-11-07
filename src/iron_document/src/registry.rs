@@ -490,7 +490,13 @@ pub fn schema_json() -> serde_json::Value {
         .iter()
         .map(|f| json!({"field": format!("{}.{}", f.domain, f.name), "options": f.options, "doc": f.doc}))
         .collect();
-    json!({ "facets": facets, "types": types, "options": options, "contexts": contexts })
+    // The standard components a model may place as `std:<key>`
+    // (`compose.rs`), read from the definitions they build.
+    let standard: Vec<Value> = crate::standard::interfaces()
+        .into_iter()
+        .map(|(key, ports)| json!({"key": key, "ports": ports.iter().map(|p| json!({"name": p.name, "dir": p.dir, "kind": p.kind, "default": p.default})).collect::<Vec<_>>()}))
+        .collect();
+    json!({ "facets": facets, "types": types, "options": options, "contexts": contexts, "standard": standard })
 }
 
 impl fmt::Display for TypeId {

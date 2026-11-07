@@ -77,20 +77,20 @@ pub fn find(key: &str) -> Option<&'static Part> {
 
 /// An element of the markup: its name, attributes and children.
 #[derive(Debug)]
-struct El {
-    name: String,
-    attrs: Vec<(String, String)>,
-    children: Vec<El>,
+pub(crate) struct El {
+    pub(crate) name: String,
+    pub(crate) attrs: Vec<(String, String)>,
+    pub(crate) children: Vec<El>,
 }
 
 impl El {
-    fn attr(&self, k: &str) -> Option<&str> {
+    pub(crate) fn attr(&self, k: &str) -> Option<&str> {
         self.attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
     }
-    fn need(&self, k: &str) -> Result<&str, String> {
+    pub(crate) fn need(&self, k: &str) -> Result<&str, String> {
         self.attr(k).ok_or_else(|| format!("<{}> needs {k}", self.name))
     }
-    fn num(&self, k: &str) -> Result<f64, String> {
+    pub(crate) fn num(&self, k: &str) -> Result<f64, String> {
         match self.attr(k) {
             None => Ok(0.0),
             Some(v) => v.trim().parse().map_err(|_| format!("<{}> {k}=\"{v}\": expected a number", self.name)),
@@ -100,7 +100,7 @@ impl El {
 
 /// Elements in `src`, comments skipped. No text content: everything is in
 /// attributes.
-fn elements(src: &str) -> Result<Vec<El>, String> {
+pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
     fn level(rest: &mut &str, closing: Option<&str>) -> Result<Vec<El>, String> {
         let mut out = Vec::new();
         loop {
@@ -971,7 +971,7 @@ pub fn wire_between(store: &crate::Store, sheet: NodeId, from: Terminal, to: Ter
 }
 
 /// The sheet a model names: a composition's id or name.
-fn sheet_named(doc: &crate::document::Document, s: &str) -> Result<NodeId, String> {
+pub(crate) fn sheet_named(doc: &crate::document::Document, s: &str) -> Result<NodeId, String> {
     if let Some(id) = s.starts_with('#').then(|| s.parse::<NodeId>().ok()).flatten() {
         return doc.live(id).filter(|n| n.ty.name() == "composition").map(|_| id).ok_or_else(|| format!("{s} is not a composition"));
     }

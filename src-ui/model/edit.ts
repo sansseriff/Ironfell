@@ -20,6 +20,7 @@
  *   <edit><import-svg to="#4" x="100" y="50"><svg …>…</svg></import-svg></edit>   (alone too)
  *   <edit><table to="#4" x="80" y="400" preset="light">a | b\n1 | 2</table></edit>   (alone too)
  *   <edit><circuit sheet="circuit"><place part="resistor" x="200" y="100"/>…</circuit></edit>   (alone too)
+ *   <edit><make-component of="#a #b" name="pump" as="$p"/><place def="$p" in="#C" x="10" y="20"/></edit>   (component verbs, only with each other)
  *   <edit><write narrative="#N" after="#B">markdown</write>…</edit>   (narrative verbs, only with each other)
  *   <edit><rewrite block="#B">markdown</rewrite></edit>
  */
@@ -370,6 +371,20 @@ async function circuit(api: DocumentApi, markup: string): Promise<EditOutcome> {
   return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <circuit>${r.summary}</circuit>\n</applied>${net.ok ? `\n<netlist sheet="${sheet}">\n${net.netlist}\n</netlist>` : ''}` };
 }
 
+/** `<place>` and `<make-component>` (src/iron_document/src/compose.rs):
+ *  instances of definitions pictured in any 2D composition, another picture
+ *  of an entity, a component made of a selection. Several in one edit, only
+ *  with each other; `as="$x"` names what one made for the verbs after it.
+ *  The store computes the ops, as one transaction, and answers with what
+ *  each verb made. */
+const ONLY_COMPOSE = /^\s*<edit(?:\s[^>]*)?>((?:\s*<(?:place|make-component)\s[^>]*?\/>)+)\s*<\/edit>\s*$/;
+
+async function compose(api: DocumentApi, markup: string): Promise<EditOutcome> {
+  const r = await api.compose(markup);
+  if (!r.ok) return { ok: false, failure: failed(await api.version(), [{ op: 0, kind: 'compose', message: r.error ?? 'compose failed' }]) };
+  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n${r.summary ?? ''}\n</applied>` };
+}
+
 /** `<write narrative after>` and `<rewrite block>` (plans/specs/narrative-
  *  panel.md §4): markdown with directives into a narrative, each verb one
  *  history entry. They may be several in one edit, but only with each other;
@@ -423,6 +438,11 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
   if (circ) return circuit(api, circ[1]);
   if (/<circuit[\s/>]/.test(xml)) {
     return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<circuit> must be the only verb in its <edit>' }]) };
+  }
+  const comp = xml.match(ONLY_COMPOSE);
+  if (comp) return compose(api, comp[1]);
+  if (/<(?:place|make-component)[\s/>]/.test(xml)) {
+    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<place> and <make-component> go in an <edit> of their own (only with each other, each a self-closing tag); outside a <circuit>, <place> takes def= or entity=, not part=' }]) };
   }
   const tbl = xml.match(TABLE);
   if (tbl) return table(api, tbl[1] ?? '', tbl[2]);

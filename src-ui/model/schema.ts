@@ -10,6 +10,8 @@ export interface Schema {
   options?: Record<string, string[]>;
   /** What a context's rules may declare (plans/specs/contexts.md). */
   contexts?: { field: string; options: string[]; doc: string }[];
+  /** The standard components a model may place as `std:<key>`, with their ports. */
+  standard?: { key: string; ports: { name: string; dir: string; kind: string; default: string | null }[] }[];
   types: Record<
     string,
     {

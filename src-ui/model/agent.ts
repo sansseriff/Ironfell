@@ -44,6 +44,7 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
   let lastEdit: string | null = null;
   let lastOutcome: EditOutcome | null = null;
   let note = '';
+  let looks = 0;
   while (attempts < 2) {
     attempts += 1;
     let text: string;
@@ -51,6 +52,16 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
       text = (await transport.complete(system, messages)).text;
     } catch (e) {
       return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: String(e) };
+    }
+    // `<look expand="#u #e"/>` with no edit: show those instances' derived
+    // insides (component-model.md §9) and ask again; not a repair attempt.
+    const look = lookRequest(text);
+    if (look && !extractEdit(text) && looks < MAX_LOOKS) {
+      looks += 1;
+      attempts -= 1;
+      messages.push({ role: 'assistant', content: text });
+      messages.push({ role: 'user', content: await lookView(api, look) });
+      continue;
     }
     const edit = extractEdit(options.allowTextReply ? executableReply(text) : text);
     note = text.replace(edit ?? '', '').trim();
@@ -69,4 +80,28 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
     messages.push({ role: 'user', content: `${lastOutcome.failure}\n\nSend one corrected <edit>.` });
   }
   return { ok: !!lastOutcome?.ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name };
+}
+
+/** Looks one request may take before it must answer. */
+const MAX_LOOKS = 2;
+
+/** The ids a reply's `<look expand="…"/>` names, if it has one. */
+export function lookRequest(text: string): string[] | null {
+  const m = text.match(/<look\s[^>]*?expand="([^"]*)"[^>]*\/?>/);
+  if (!m) return null;
+  const ids = m[1].split(/\s+/).filter(Boolean).map((id) => (id.startsWith('#') ? id : `#${id}`));
+  return ids.length ? ids : null;
+}
+
+/** The view a look asks for: each named instance's subtree with what it
+ *  derives shown, marked `derived`. */
+async function lookView(api: DocumentApi, ids: string[]): Promise<string> {
+  const parts = await Promise.all(ids.map(async (id) => {
+    try {
+      return await api.view({ fidelity: 'full', scope: id, expand: [id] });
+    } catch (e) {
+      return `<look-failed id="${id}">${String(e).replace(/[<>&]/g, '')}</look-failed>`;
+    }
+  }));
+  return `LOOK\n${parts.join('\n')}\n\nNow answer the REQUEST: one <edit>, or prose if no change is needed.`;
 }

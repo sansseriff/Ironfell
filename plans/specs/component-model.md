@@ -1,6 +1,6 @@
 # The component model
 
-**Status:** Approved 2026-10-18. Phases 0–4 done 2026-10-18 (with anchors, §4.2; plugging and mates, §4.3; nested overrides, §5.3); phases 5–6 open.
+**Status:** Approved 2026-10-18. Phases 0–4 done 2026-10-18 (with anchors, §4.2; plugging and mates, §4.3; nested overrides, §5.3); phase 6 done 2026-10-24; phase 7 (the model's component verbs) done 2026-11-06; phase 5 open. 3D pictures: [`component-3d.md`](component-3d.md), proposed.
 **Scope:** Reusable components: what a component is, what the document stores for a
 placed one, how its insides are derived, its interface, overrides, scope, libraries,
 the views a model reads, and the render analysis the component boundary makes possible.
@@ -781,6 +781,41 @@ was refused here and is built since (§5.3, "Nested targets").
 *Exit:* a project opens offline with an imported component; updating its pin is one
 undoable transaction listing the overrides it made stale; make local keeps instances
 linked.
+
+**Phase 7 — The model's component verbs.** *Done 2026-11-06*
+(`compose.rs`; `<place>`, `<make-component>` and `<look expand>` in `src-ui/model/`).
+Before this, a model could place a component only on a schematic sheet (`<circuit>`):
+anywhere else it had to hand-write the entity, its args, a `use` per composition with
+the matching notation, and a `figures` relation each; make component was a button only;
+and it could not ask to see an instance's picture. Now, in an `<edit>` of their own:
+
+- `<place def="#d|std:<key>|$x" in="#comp|name" x y rot? notation? name? as="$e" k="v"…/>`
+  makes a linked instance under the model root and its `use` in a 2D composition (or a
+  group in one), `use.notation` from the composition unless given; other attributes are
+  arguments (a constant of the input's kind or `{= expr}`). `std:<key>` copies a
+  standard component in on first use.
+- `<place entity="#e|$e" in=… x y/>` pictures an entity it already has in another
+  composition (`definition::place_figures`).
+- `<make-component of="#a #b" name as="$d"/>` is `Store::make_component` as the model.
+- `as="$x"` names what a verb made for later verbs, so one edit can make a component
+  of shapes and picture it in two compositions: one transaction, one undo. The reply
+  lists each `<made>` and `<placed>` entity, use and definition.
+- A reply of only `<look expand="#use #entity"/>` returns those instances' subtrees with
+  what they derive (`ViewQuery::expand`, §9; the TS API now passes `expand`), and does
+  not count as a repair attempt (at most two looks per request).
+- The schema lists each standard component's ports (`standard::interfaces`), and the
+  manifest prints them, so the prompt cannot drift from what `std:<key>` places.
+
+A 3D composition is refused with a pointer to `<link-figures>`; 3D pictures are
+[`component-3d.md`](component-3d.md) (proposed). Fixed along the way: `make_main` gave a
+library it created the fourth id before the first three, so make component from plain
+shapes failed in a document with no library. Tested natively (`tests/compose.rs`: made
+and pictured in two compositions in one transaction and one undo, a standard laser with
+a constant and a bound argument, refusals and atomicity, the schema's standard ports),
+by `tests/compose-edit.test.ts` (routing, refusing other verbs, the look loop, the
+manifest) and in the browser by `agent-components.ts` (fixture runtime, worker and
+main). Not yet: obligations (an entity missing a picture in a composition, ECM phase 4),
+and a live-model run of the new verbs.
 
 **Phase 6 — Render analysis.** §11, consumed by the render track's chunk and bake work.
 **Done 2026-10-24** as [`instance-cache.md`](instance-cache.md) phases A and C: two

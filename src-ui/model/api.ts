@@ -29,6 +29,9 @@ export interface DocumentApi {
     depth?: number | null;
     /** 'tree' (default), 'model', or { composition: '#4' } (ECM §11). */
     relation?: 'tree' | 'model' | { composition: string };
+    /** Instances (an entity, or a use) whose derived insides to show, marked
+     *  `derived` (component-model.md §9). */
+    expand?: string[];
   }): MaybePromise<string>;
   version(): MaybePromise<number>;
   nextIds(n: number): MaybePromise<string[]>;
@@ -53,6 +56,9 @@ export interface DocumentApi {
   /** Place and wire parts from a `<circuit>` (plans/specs/schematic.md §5),
    *  as one history entry. */
   circuit(markup: string): MaybePromise<{ ok: boolean; version?: number; summary?: string; error?: string }>;
+  /** The model's component verbs, `<place>` and `<make-component>`
+   *  (`compose::compose_ops`), as one history entry. */
+  compose(markup: string): MaybePromise<{ ok: boolean; version?: number; summary?: string; error?: string }>;
   /** A schematic sheet's netlist, SPICE-like, with each net's solved
    *  voltage; `sheet` is a composition's id or name. */
   netlist(sheet: string): MaybePromise<{ ok: boolean; netlist?: string; error?: string }>;
@@ -115,6 +121,7 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
     table: spec => json({ op: 'table', spec }),
     context: markup => json({ op: 'context', markup }),
     circuit: markup => json({ op: 'circuit', markup }),
+    compose: markup => json({ op: 'compose', markup }),
     netlist: sheet => json({ op: 'netlist', sheet }),
     narrativeWrite: (source, after, markdown) => json({ op: 'narrative_write', source, after, markdown, actor: 'model' }),
     narrativeRewrite: (block, markdown) => json({ op: 'narrative_rewrite', block, markdown, actor: 'model' }),

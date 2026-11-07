@@ -402,12 +402,16 @@ pub fn make_main(doc: &Document, selection: &[NodeId], top_left: [f64; 2], name:
     roots.sort_by(|a, b| doc.live(*a).map(|n| n.order.clone()).cmp(&doc.live(*b).map(|n| n.order.clone())));
 
     let mut ops = Vec::new();
+    // Ids in creation order (the applier refuses one below its counter):
+    // a library made here comes first.
+    let existing = doc.roots().iter().copied().find(|&r| doc.live(r).is_some_and(|n| n.ty.name() == "library"));
     let mut ids = doc.next_ids(4).into_iter();
+    let new_library = existing.is_none().then(|| ids.next().expect("id"));
     let (def, template, main) = (ids.next().expect("id"), ids.next().expect("id"), ids.next().expect("id"));
-    let library = match doc.roots().iter().copied().find(|&r| doc.live(r).is_some_and(|n| n.ty.name() == "library")) {
+    let library = match existing {
         Some(l) => l,
         None => {
-            let l = ids.next().expect("id");
+            let l = new_library.expect("allocated above");
             let after = doc.roots().iter().filter_map(|&r| doc.live(r)).map(|n| n.order.clone()).max();
             ops.push(Op::Create { id: l, ty: ty("library"), parent: None, order: after.map_or_else(OrderKey::first, |k| OrderKey::after(&k)), facets: vec![] });
             l

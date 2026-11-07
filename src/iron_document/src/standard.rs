@@ -238,6 +238,47 @@ pub(crate) fn after_last(doc: &Document, parent: Option<NodeId>) -> OrderKey {
     kids.iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k))
 }
 
+/// One port of a standard component, for the model's manifest: its name,
+/// `in` or `out`, its kind, and an input's default as the views print it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PortInfo {
+    pub name: String,
+    pub dir: String,
+    pub kind: String,
+    pub default: Option<String>,
+}
+
+/// Every standard component's ports, read from the definition it builds,
+/// so the manifest cannot drift from what `std:<key>` places.
+pub fn interfaces() -> Vec<(&'static str, Vec<PortInfo>)> {
+    ENTRIES
+        .iter()
+        .map(|e| {
+            let mut store = crate::Store::new();
+            let doc = store.document();
+            let (library, first) = (doc.next_id(), doc.next_id().raw() + 1);
+            let mut ops = vec![Op::Create { id: library, ty: ty("library"), parent: None, order: OrderKey::first(), facets: vec![] }];
+            let (def_ops, def) = definition_ops(e.key, library, OrderKey::first(), first).expect("standard definition");
+            ops.extend(def_ops);
+            store.apply(crate::TransactionInput { label: "interface".into(), actor: crate::Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).expect("standard definition applies");
+            let doc = store.document();
+            let ports = doc
+                .children(def)
+                .iter()
+                .filter_map(|&c| {
+                    let p = doc.get::<Port>(c)?;
+                    let name = doc.get::<Name>(c)?.text.constant()?.as_str()?.to_owned();
+                    let text = |s: &Slot| s.constant().and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                    let dir = text(&p.dir);
+                    let default = (dir == "in").then(|| p.signal.constant().map(ToString::to_string)).flatten();
+                    Some(PortInfo { name, dir, kind: text(&p.kind), default })
+                })
+                .collect();
+            (e.key, ports)
+        })
+        .collect()
+}
+
 impl crate::Store {
     /// Place standard component `key` in `composition` at `at` (its
     /// picture's origin), as one history entry: its definition copied in on

@@ -70,6 +70,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `bun run attachments.ts` | ~10 s (9.52 s, 2026-11-04) |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `agent-runtime.ts`, fixture runtime, worker or main | ~2 s (1.90 s, 2026-11-03) |
+| `agent-components.ts`, fixture runtime, worker or main | ~3 s (2.71 s, 2026-11-06) |
 | `agent-runtime.ts`, live Codex, worker or main | ~10–30 s; capped at 55 s |
 | `agent-pairing.ts`, local fixture | ~3–5 s; capped at 55 s |
 | `bun test tests/dev-agent.test.ts`, warm launcher tests | <1 s (2026-11-04) |
@@ -230,6 +231,33 @@ hooks/plugins takes 10.86 s. Token-free readback evidence is saved under
 `.agents/agent-runtime/`. These checks use copied cached wasm; they do not
 replace a fresh build or the full smoke. The existing full smoke expected
 output is unchanged. Unit suite: 31 pass including 11 new runtime tests.
+
+### Agent component verbs
+
+Owning plan: `plans/specs/component-model.md` §14, phase 7. With Vite serving this
+checkout (`URL` must include `?demo`; 5175 is the default, `serve.sh start` gives 5173):
+
+```sh
+bun .claude/skills/run-iron/agent-components.ts
+RUNTIME=main bun .claude/skills/run-iron/agent-components.ts
+```
+
+The scripted runtime (`tests/fixtures/fake-agent-runtime.ts`) answers one request with
+`<make-component>` of a rect and an ellipse, `<place>` of it in one composition,
+`<place entity>` in a second and a `std:laser` with `power="5 mW"`, then a second with
+`<look expand>` at one picture, and renames the entity only if the look showed its
+derived picture. The test checks the model view lists both figures, each `use` sits
+where it was placed, the look took no repair attempt, and undo removes the placement
+and returns the shapes. Expected output:
+
+```text
+PASS FIXTURE COMPONENTS worker: make, place in two compositions, std:laser with an argument, look expand, one undo each; no page errors
+PASS FIXTURE COMPONENTS main: make, place in two compositions, std:laser with an argument, look expand, one undo each; no page errors
+```
+
+Both pass 2026-11-06 on a fresh webgl2 build. Evidence: `.agents/agent-runtime/components-fixture-*.json`.
+On the same day `chat-ui.ts` times out waiting for the Lesson tab, with or without this
+change (it predates it; not yet investigated).
 
 ## Shared Model/Lesson chat
 

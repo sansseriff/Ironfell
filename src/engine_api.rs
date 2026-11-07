@@ -896,6 +896,23 @@ pub fn document_circuit(app: &mut WorkerApp, markup: String) -> String {
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
+/// The model's component verbs (`compose::compose_ops`): `<place>` and
+/// `<make-component>`, as one history entry. The summary names what each
+/// verb made.
+pub fn document_compose(app: &mut WorkerApp, markup: String) -> String {
+    let mut run = || -> Result<serde_json::Value, String> {
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        let (ops, summary) = iron_document::compose::compose_ops(&store.0, &markup)?;
+        let applied = store.0
+            .apply(iron_document::TransactionInput { label: "model: components".into(), actor: iron_document::Actor::Model, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
+            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "summary": summary}))
+    };
+    let result = run();
+    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
 /// A sheet's netlist, SPICE-like, with each net's solved voltage
 /// (schematic.md §5; `parts::netlist`). `sheet` is a composition's id or
 /// name.

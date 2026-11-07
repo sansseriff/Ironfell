@@ -1,0 +1,69 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { documentArguments } from '../src-ui/runtime/protocol.generated';
+import { makeDocumentApi } from '../src-ui/model/api';
+import { applyEdit } from '../src-ui/model/edit';
+import { ask, lookRequest } from '../src-ui/model/agent';
+import { manifest } from '../src-ui/model/manifest';
+
+/** A document API whose engine records each call and answers from `answer`. */
+function fake(answer: (name: string, args: unknown[]) => unknown = () => ({ ok: true })) {
+  const calls: [string, unknown[]][] = [];
+  const api = makeDocumentApi(command => {
+    const { fn: name, args } = documentArguments(command);
+    calls.push([name, args]);
+    if (name === 'view') return `<document version="3"/>${JSON.stringify(args)}`;
+    if (name === 'schema') return JSON.stringify({ types: {}, facets: {}, standard: [{ key: 'laser', ports: [{ name: 'power', dir: 'in', kind: 'value', default: '10 mW' }] }] });
+    if (name === 'selection') return '[]';
+    return JSON.stringify(answer(name, args));
+  });
+  return { api, calls };
+}
+
+test('component verbs go to the engine as one compose call', async () => {
+  const { api, calls } = fake(name => (name === 'compose' ? { ok: true, version: 4, summary: '  <placed entity="#9"/>' } : { ok: true }));
+  const markup = '<make-component of="#a #b" name="pump" as="$p"/>\n  <place def="$p" in="#C" x="10" y="20"/>';
+  const out = await applyEdit(api, `<edit expect-version="3">\n  ${markup}\n</edit>`);
+  assert.equal(out.ok, true);
+  assert.match(out.summary ?? '', /<placed entity="#9"\/>/);
+  assert.deepEqual(calls.filter(([n]) => n === 'compose'), [['compose', [`\n  ${markup}`]]]);
+});
+
+test('component verbs refuse company, and a schematic place without its circuit', async () => {
+  const { api, calls } = fake();
+  const mixed = await applyEdit(api, '<edit><place def="#d" in="#C"/><create id="$r" type="rect"/></edit>');
+  assert.equal(mixed.ok, false);
+  assert.match(mixed.failure ?? '', /an &lt;edit&gt; of their own/);
+  const part = await applyEdit(api, '<edit><place part="resistor" x="10" y="10"></place></edit>');
+  assert.equal(part.ok, false);
+  assert.match(part.failure ?? '', /not part=/);
+  assert.equal(calls.filter(([n]) => n === 'compose' || n === 'apply').length, 0);
+});
+
+test('a look shows the named instances expanded, and is not a repair attempt', async () => {
+  const { api, calls } = fake(name => (name === 'compose' ? { ok: true, version: 4, summary: '' } : { ok: true }));
+  const replies = ['<look expand="#u #3B"/>', '<edit><place entity="#3B" in="#C"/></edit>'];
+  const seen: string[] = [];
+  const transport = {
+    name: 'script',
+    complete: async (_system: string, messages: { role: string; content: string }[]) => {
+      seen.push(messages[messages.length - 1].content);
+      return { text: replies.shift() ?? '' };
+    },
+  };
+  const result = await ask(api, transport as never, 'picture it again');
+  assert.equal(result.ok, true);
+  assert.equal(result.attempts, 1);
+  const looked = calls.filter(([n, a]) => n === 'view' && String(a[0]).includes('"expand"')).map(([, a]) => JSON.parse(String(a[0])));
+  assert.deepEqual(looked.map(q => [q.scope, q.expand]), [['#u', ['#u']], ['#3B', ['#3B']]]);
+  assert.match(seen[1], /^LOOK\n/);
+  assert.deepEqual(lookRequest('<look expand="u7"/>'), ['#u7']);
+  assert.equal(lookRequest('no look here'), null);
+});
+
+test('the manifest lists the standard components from the schema', () => {
+  const text = manifest({ types: {}, facets: {}, standard: [{ key: 'laser', ports: [{ name: 'power', dir: 'in', kind: 'value', default: '10 mW' }, { name: 'out', dir: 'out', kind: 'optical_power', default: null }] }] });
+  assert.match(text, /std:laser\s+in power value 10 mW; out out optical_power/);
+  assert.match(text, /<look expand="#use"\/>/);
+  assert.doesNotMatch(text, /only when asked/);
+});

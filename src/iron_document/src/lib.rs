@@ -19,6 +19,7 @@
 pub mod facet;
 pub mod analysis;
 pub mod composition;
+pub mod compose;
 pub mod constraint;
 pub mod contexts;
 pub mod contour;

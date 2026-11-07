@@ -17,6 +17,9 @@ export function manifest(schema: Schema, conversation = false): string {
     .map(([name, fields]) => `  ${name.padEnd(12)} ${Object.entries(fields).map(([f, k]) => { const o = schema.options?.[`${name}.${f}`]; return o ? `${f}:${o.join('|')}` : `${f}:${k}`; }).join(' ')}`)
     .join('\n');
   const contextFields = (schema.contexts ?? []).map((f) => `  ${f.field}: ${f.options.join('|')}\n      ${f.doc} (default ${f.options[0]})`).join('\n');
+  const standard = (schema.standard ?? [])
+    .map((e) => `    std:${e.key.padEnd(8)} ${e.ports.map((p) => `${p.dir} ${p.name} ${p.kind}${p.default ? ` ${p.default}` : ''}`).join('; ')}`)
+    .join('\n');
   const response = conversation
     ? `You are a companion for a scientific-visualisation document. You are given the current document as an XML-ish VIEW, recent conversation, and a request. Answer questions in readable Markdown. When the request needs a document change, include ONE executable <edit> block outside Markdown code fences, with any explanation in prose. Code examples inside Markdown are display-only, not document edits. Never claim to have changed the document without an edit. `
     : `You edit a scene document for a scientific-visualisation tool. You are given the
@@ -163,11 +166,38 @@ DEFINITIONS
   entity. A linked instance (instance.mode="linked") stores only the entity, its
   args and its uses: its ports and each use's picture are derived from the
   definition, with ids like #3B/1A (instance/definition node); the views show its
-  ports, and its picture only when asked. Setting a value inside one sets what it
+  ports, not its picture. To see a picture, reply with only <look expand="#use"/>
+  (several ids allowed; a use shows its picture, an entity its ports): the view
+  comes back with what they derive marked derived, and you answer then. Setting a
+  value inside one sets what it
   is derived from when it can (an argument, a slider), else makes an override child
   of the instance; a binding may not reach inside an instance (read its ports), and
   a definition's bindings read only its own nodes. Setting an unknown or wrongly
   typed argument is rejected.
+
+COMPONENT VERBS  (place instances and pictures; in an <edit> of their own, any number)
+    <edit>
+      <make-component of="#rect #dot" name="pump" as="$pump"/>
+      <place def="$pump" in="#bench" x="300" y="80" name="P1" as="$p1"/>
+      <place entity="$p1" in="#overview" x="40" y="40"/>
+      <place def="std:laser" in="#bench" x="40" y="200" power="5 mW"/>
+    </edit>
+  place def= puts a new linked instance of a definition (an id, std:<key>, or an
+  earlier verb's $alias) under the model root, named name=, and its picture (a use)
+  in= a 2D composition (id or name) or a group in one, at x, y (rot in degrees).
+  place entity= adds another picture of an entity a linked instance already is, in
+  another composition: one thing, drawn in each. The use's notation is the
+  composition's unless notation= picks another of the definition's templates.
+  Other attributes (k= or args.k=) are arguments: a value of the input's kind or
+  {= expr}. make-component of= turns shapes side by side into a definition shown by
+  its main (edit the main to edit the definition; place instances of it), or uses
+  of linked instances into one instance of a new definition nesting them. as="$x"
+  names what a verb made for the verbs after it. The answer lists each <placed>
+  entity, use and definition, and each <made> definition. A component cannot be
+  pictured in a 3D composition yet: draw a mesh there and <link-figures> it.
+  Standard components (std:<key>, copied in once; each port: name, its kind, an
+  input's default):
+${standard}
 
 PORTS AND SIGNALS
   An entity has port children (name; port.kind, port.dir in|out, port.signal), one per

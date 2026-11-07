@@ -35,6 +35,19 @@ if (process.argv.includes('app-server')) {
         await new Promise(resolve => setTimeout(resolve, 500));
         text = '### More detail\n\n' + Array.from({ length: 18 }, (_, index) => `Paragraph ${index + 1}: a longer explanation that lets the reader inspect earlier conversation without being pulled back to the end.`).join('\n\n');
       }
+      // Components pictured in two compositions (.claude/skills/run-iron/agent-components.ts).
+      if (input.includes('component-test-place')) {
+        const [a, b] = (input.match(/SHAPES (#\w+) (#\w+)/) ?? []).slice(1);
+        const [bench, overview] = (input.match(/IN (#\w+) (#\w+)/) ?? []).slice(1);
+        text = `Making a pump and drawing it in both.\n<edit><make-component of="${a} ${b}" name="pump" as="$pump"/><place def="$pump" in="${bench}" x="300" y="80" name="P1" as="$p1"/><place entity="$p1" in="${overview}" x="40" y="40"/><place def="std:laser" in="${bench}" x="40" y="200" power="5 mW" name="L1"/></edit>`;
+      }
+      if (input.includes('component-test-look')) {
+        const use = input.match(/USE (#\w+)/)?.[1];
+        const entity = input.match(/ENTITY (#\w+)/)?.[1];
+        const look = input.split('\nLOOK\n')[1];
+        text = !look ? `<look expand="${use}"/>`
+          : /derived/.test(look) && look.includes('name="dot"') ? `<edit><set id="${entity}" name="P1 seen"/></edit>` : 'ERROR: the look showed no derived picture';
+      }
       const failed = mode === 'failed' || input.trimEnd().endsWith('chat-test-failure');
       if (failed) await new Promise(resolve => setTimeout(resolve, 250));
       reply({ method: 'item/completed', params: { item: { id: 'answer', type: 'agentMessage', text } } });

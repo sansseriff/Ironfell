@@ -6,7 +6,8 @@ if (process.argv.includes('--safe-mode')) {
   assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
   assert.equal(process.env.ANTHROPIC_AUTH_TOKEN, undefined);
   for await (const chunk of process.stdin) { void chunk; }
-  process.stdout.write(JSON.stringify({ result: 'alternate-profile-confirmed', is_error: false }));
+  // Claude Code's stream-json: the last line is the result.
+  process.stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success', result: 'alternate-profile-confirmed', is_error: false })}\n`);
 } else {
   assert.equal(process.env.IRON_NATIVE_AGENT_PROVIDER, 'claude');
   if (process.env.IRON_TEST_ADAPTIVE === '1') {

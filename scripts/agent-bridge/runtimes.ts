@@ -7,7 +7,9 @@ import type { CompletionRequest, ModelEntry } from '../../src-ui/model/runtime-o
 export type { ModelEntry };
 
 export interface RuntimeResult { text: string; usage?: unknown }
-export type Runtime = (request: CompletionRequest, signal: AbortSignal) => Promise<RuntimeResult>;
+/** A delta of the reply, or of the model's reasoning (summaries or thinking). */
+export interface RuntimeEvent { type: 'text' | 'reasoning'; delta: string }
+export type Runtime = (request: CompletionRequest, signal: AbortSignal, onEvent?: (event: RuntimeEvent) => void) => Promise<RuntimeResult>;
 export type ModelLister = (signal: AbortSignal) => Promise<ModelEntry[]>;
 
 export class JsonLinesProcess {
@@ -84,7 +86,7 @@ function transcript(request: CompletionRequest) {
 }
 
 export function codexRuntime(command = process.env.IRON_CODEX_BIN ?? 'codex'): Runtime {
-  return async (request, signal) => {
+  return async (request, signal, onEvent = () => {}) => {
     const cwd = await mkdtemp(join(tmpdir(), 'iron-agent-'));
     const rpc = new JsonLinesProcess(command, ['app-server', '--listen', 'stdio://',
       '-c', 'features.shell_tool=false', '-c', 'features.unified_exec=false',
@@ -96,8 +98,25 @@ export function codexRuntime(command = process.env.IRON_CODEX_BIN ?? 'codex'): R
     const completed = new Promise<RuntimeResult>((resolve, reject) => { settle = resolve; fail = reject; });
     void completed.catch(() => {});
     const messages = new Map<string, string>();
+    // Deltas, so the panel shows the reply and the reasoning summary as they
+    // form; a new message or summary part starts on its own paragraph, as the
+    // final join does.
+    let textItem = '';
+    let reasoningPart = '';
     rpc.onFailure = error => fail?.(error);
     rpc.onNotification = message => {
+      const params = message.params ?? {};
+      if (message.method === 'item/agentMessage/delta' && typeof params.delta === 'string' && params.delta) {
+        const delta = textItem && textItem !== params.itemId ? `\n${params.delta}` : params.delta;
+        textItem = params.itemId;
+        onEvent({ type: 'text', delta });
+      }
+      if (message.method === 'item/reasoning/summaryTextDelta' && typeof params.delta === 'string' && params.delta) {
+        const part = `${params.itemId}:${params.summaryIndex}`;
+        const delta = reasoningPart && reasoningPart !== part ? `\n\n${params.delta}` : params.delta;
+        reasoningPart = part;
+        onEvent({ type: 'reasoning', delta });
+      }
       if (message.method === 'item/completed' && message.params.item.type === 'agentMessage') {
         messages.set(message.params.item.id, message.params.item.text);
       }
@@ -116,7 +135,7 @@ export function codexRuntime(command = process.env.IRON_CODEX_BIN ?? 'codex'): R
         developerInstructions: 'Follow the Iron response format in the supplied instructions: return edit markup for document changes, or Markdown for an allowed conversational reply. Do not use tools, access files, execute commands, or research. All needed document data is in the prompt.',
         ...(request.model ? { model: request.model } : {}),
       });
-      await rpc.request('turn/start', { threadId: thread.id, input: [{ type: 'text', text: transcript(request) }] });
+      await rpc.request('turn/start', { threadId: thread.id, summary: 'auto', input: [{ type: 'text', text: transcript(request) }] });
       return await completed;
     } finally {
       await rpc.close();
@@ -172,7 +191,9 @@ export function claudeEnv(auth: ClaudeAuth, base: NodeJS.ProcessEnv = process.en
   for (const key of Object.keys(env)) {
     if (key === 'CLAUDECODE' || key === 'CLAUDE_PID' || key === 'CLAUDE_EFFORT' || key.startsWith('CLAUDE_CODE_') || key.startsWith('CLAUDE_AGENT_SDK')) delete env[key];
   }
-  if (auth === 'subscription') { delete env.ANTHROPIC_API_KEY; delete env.ANTHROPIC_AUTH_TOKEN; }
+  // A base URL routes to whoever holds that token (a host's proxy, say);
+  // without the token it only fails, so the subscription drops both.
+  if (auth === 'subscription') { delete env.ANTHROPIC_API_KEY; delete env.ANTHROPIC_AUTH_TOKEN; delete env.ANTHROPIC_BASE_URL; }
   return env;
 }
 
@@ -181,10 +202,10 @@ export function claudeEnv(auth: ClaudeAuth, base: NodeJS.ProcessEnv = process.en
  *  skills, plugins, hooks, agents) and keeps the login; with an API key
  *  `--bare` does the same and reads only the key. */
 export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude', auth: ClaudeAuth = claudeAuth(), baseEnv: NodeJS.ProcessEnv = process.env): Runtime {
-  return async (request, signal) => {
+  return async (request, signal, onEvent = () => {}) => {
     if (auth === 'api-key' && !baseEnv.ANTHROPIC_API_KEY) throw new Error('IRON_CLAUDE_AUTH=api-key needs ANTHROPIC_API_KEY on the bridge; unset IRON_CLAUDE_AUTH to use your Claude subscription');
     const cwd = await mkdtemp(join(tmpdir(), 'iron-agent-'));
-    const child = spawn(command, ['-p', auth === 'api-key' ? '--bare' : '--safe-mode', '--output-format', 'json', '--tools', '',
+    const child = spawn(command, ['-p', auth === 'api-key' ? '--bare' : '--safe-mode', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--tools', '',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
       '--no-session-persistence', '--system-prompt', request.system,
       ...(request.model ? ['--model', request.model] : [])], { cwd, stdio: 'pipe', signal, env: claudeEnv(auth, baseEnv) });
@@ -192,19 +213,46 @@ export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude',
     try {
       return await new Promise<RuntimeResult>((resolve, reject) => {
         child.stdin.on('error', reject);
-        let output = '';
+        // stream-json: one JSON object a line. `stream_event` lines carry the
+        // Messages API's deltas; the last line is the `result`.
+        let bytes = 0;
+        let result: any = null;
+        let thinkingBlocks = 0;
+        let shownBlock = 0;
+        const lines = createInterface({ input: child.stdout });
         child.stdout.on('data', chunk => {
-          output += chunk.toString();
-          if (output.length > 2_000_000) { child.kill(); reject(new Error('Claude response exceeds limit')); }
+          bytes += chunk.length;
+          if (bytes > 4_000_000) { child.kill(); reject(new Error('Claude response exceeds limit')); }
+        });
+        lines.on('line', line => {
+          if (!line.trim()) return;
+          let message: any;
+          try { message = JSON.parse(line); } catch { return; }
+          if (message.type === 'result') { result = message; return; }
+          if (message.type !== 'stream_event') return;
+          const event = message.event ?? {};
+          // A new thinking block starts a paragraph, once thinking text has been shown.
+          if (event.type === 'content_block_start' && event.content_block?.type === 'thinking') thinkingBlocks++;
+          if (event.type === 'content_block_delta') {
+            const delta = event.delta ?? {};
+            if (delta.type === 'text_delta' && typeof delta.text === 'string' && delta.text) onEvent({ type: 'text', delta: delta.text });
+            if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string' && delta.thinking) {
+              onEvent({ type: 'reasoning', delta: shownBlock && shownBlock !== thinkingBlocks ? `\n\n${delta.thinking}` : delta.thinking });
+              shownBlock = thinkingBlocks;
+            }
+          }
         });
         child.on('error', reject);
-        child.on('close', code => {
+        // Settle once the process has exited and its last line is read: the
+        // result line can be delivered after the child's own close.
+        const exited = new Promise<number | null>(done => child.on('close', code => done(code)));
+        const drained = new Promise<void>(done => lines.on('close', () => done()));
+        void Promise.all([exited, drained]).then(([code]) => {
           try {
-            if (code !== 0) throw new Error(auth === 'api-key'
+            if (code !== 0 && !result) throw new Error(auth === 'api-key'
               ? `Claude exited (${code}); check ANTHROPIC_API_KEY`
               : `Claude exited (${code}); check that Claude Code is signed in (\`claude auth status\`, \`claude login\`)`);
-            const result = JSON.parse(output);
-            if (result.is_error || typeof result.result !== 'string') throw new Error('Claude did not return a successful text result');
+            if (!result || result.is_error || typeof result.result !== 'string') throw new Error('Claude did not return a successful text result');
             resolve({ text: result.result, usage: result.usage });
           } catch (error) { reject(error); }
         });

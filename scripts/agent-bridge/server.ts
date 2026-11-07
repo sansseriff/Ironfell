@@ -33,7 +33,12 @@ export function createAgentBridge(options: {
   runtimes?: Record<'codex' | 'claude', Runtime>;
   /** What each runtime offers, for the model picker (`POST /models`). */
   models?: Partial<Record<'codex' | 'claude', ModelLister>>;
+  /** How long a runtime may go without producing anything (default 90 s). */
   timeoutMs?: number;
+  /** How long one completion may take in all (default 10 min). */
+  totalTimeoutMs?: number;
+  /** How often a streamed completion pings while the runtime is quiet. */
+  pingMs?: number;
   allowPairing?: boolean;
 }) {
   if (options.token.length < 32) throw new Error('Bridge token must be at least 32 characters');
@@ -92,19 +97,41 @@ export function createAgentBridge(options: {
     busy = true;
     const controller = new AbortController();
     active.add(controller);
+    // A runtime that is producing output may run long (a big component
+    // build); one that has gone quiet is stuck. Each event resets the idle clock.
     let timedOut = false;
-    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? 45000);
+    const expire = () => { timedOut = true; controller.abort(); };
+    let idle = setTimeout(expire, options.timeoutMs ?? 90000);
+    const total = setTimeout(expire, options.totalTimeoutMs ?? 600000);
     const disconnect = () => { if (!response.writableEnded) controller.abort(); };
     response.on('close', disconnect);
+    // NDJSON when asked (plans/specs/agent-streaming.md §2): deltas as the
+    // runtime produces them, pings while it is quiet, then `done` or `error`.
+    const streaming = (request.headers.accept ?? '').includes('application/x-ndjson');
+    const line = (value: object) => { if (!response.destroyed && !response.writableEnded) response.write(`${JSON.stringify(value)}\n`); };
+    let ping: ReturnType<typeof setInterval> | undefined;
     try {
       const payload = validateRequest(await readBody(request));
-      const result = await runtimes[payload.provider](payload, controller.signal);
+      if (streaming) {
+        response.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        ping = setInterval(() => line({ type: 'ping' }), options.pingMs ?? 10000);
+      }
+      const result = await runtimes[payload.provider](payload, controller.signal, event => {
+        clearTimeout(idle);
+        idle = setTimeout(expire, options.timeoutMs ?? 90000);
+        if (streaming) line(event);
+      });
       if (typeof result.text !== 'string' || !result.text.trim()) throw new Error('Runtime returned no text');
-      send(200, result);
+      if (streaming) { line({ type: 'done', ...result }); response.end(); }
+      else send(200, result);
     } catch (error) {
-      send(timedOut ? 504 : 400, { error: timedOut ? 'Agent runtime timed out' : String(error) });
+      const message = timedOut ? 'Agent runtime timed out' : String(error);
+      if (streaming && response.headersSent) { line({ type: 'error', error: message }); response.end(); }
+      else send(timedOut ? 504 : 400, { error: message });
     } finally {
-      clearTimeout(timeout);
+      clearTimeout(idle);
+      clearTimeout(total);
+      clearInterval(ping);
       response.off('close', disconnect);
       active.delete(controller);
       busy = false;

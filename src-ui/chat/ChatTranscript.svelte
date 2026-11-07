@@ -7,7 +7,7 @@
   import { nearBottom, type ChatTurn } from './conversation';
   import type { Snippet } from 'svelte';
 
-  let { turns, compact = false, scrollRequest = 0, retry, review }: { turns: ChatTurn[]; compact?: boolean; scrollRequest?: number; retry: (turn: ChatTurn) => void; review?: Snippet<[ChatTurn]> } = $props();
+  let { turns, compact = false, scrollRequest = 0, retry, stop, review }: { turns: ChatTurn[]; compact?: boolean; scrollRequest?: number; retry: (turn: ChatTurn) => void; stop?: (turn: ChatTurn) => void; review?: Snippet<[ChatTurn]> } = $props();
   let viewport: HTMLDivElement;
   let content: HTMLDivElement;
   let following = $state(true);
@@ -36,7 +36,7 @@
   <div class="transcript" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions" bind:this={viewport} onscroll={() => following = nearBottom(viewport.scrollTop, viewport.scrollHeight, viewport.clientHeight)}>
     <div class="messages" bind:this={content}>
       {#if !visible.length}<div class="empty"><MessageSquare size={22} strokeWidth={1.5} /><strong>Work with your model</strong><p>Ask a question, discuss a design, or change the document. Prose and visuals appear here; edits stay undoable.</p></div>{/if}
-      {#each visible as turn (turn.id)}<ChatMessage {turn} {review} retry={() => retry(turn)} />{/each}
+      {#each visible as turn (turn.id)}<ChatMessage {turn} {review} retry={() => retry(turn)} stop={stop ? () => stop(turn) : undefined} />{/each}
     </div>
   </div>
   {#if !following && turns.length}<div class="latest"><Button small variant="outline" onclick={latest}><ArrowDown size={13} strokeWidth={1.75} />Latest</Button></div>{/if}

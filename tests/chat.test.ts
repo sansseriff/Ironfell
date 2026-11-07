@@ -55,3 +55,48 @@ test('a rejected edit reads as a sentence, not markup', () => {
   assert.equal(failureSummary(failure, 2), 'The edit was rejected after 2 attempts, so nothing changed: instance.def: not a valid id: "#$def" at line 1');
   assert.equal(failureSummary('plain words'), 'plain words');
 });
+
+test('a streaming reply shows prose, holds back half-written markup and lists closed verbs', async () => {
+  const { streamView } = await import('../src-ui/chat/conversation');
+  assert.deepEqual(streamView('Making a pump.\n<ed'), { prose: 'Making a pump.\n', edit: null, verbs: [] });
+  assert.equal(streamView('See this:\n\n::vie').prose, 'See this:\n\n');
+  const forming = streamView('Making it.\n<edit><create id="$a" type="rect" name="pump body" x="1"/><set id="#4" x="2" fill.color="#f00"/><import-svg to="#1"><svg><g><path d="M0 0"/></g></svg></import-svg><create id="$b" type="te');
+  assert.equal(forming.prose, 'Making it.\n');
+  assert.deepEqual(forming.verbs, ['Create rect "pump body"', 'Set #4 · x, fill.color', 'Import SVG']);
+  assert.match(forming.edit!, /^<edit>/);
+  const closed = streamView('<edit><delete id="#3"/></edit>\nDone.');
+  assert.deepEqual([closed.prose, closed.verbs], ['\nDone.', ['Delete #3']]);
+  assert.equal(streamView('Like this:\n```xml\n<edit><delete id="#3"/></edit>\n```\n').edit, null);
+  assert.deepEqual(streamView('<look expand="#u"/>'), { prose: '', edit: null, verbs: [] });
+});
+
+test('progress folds phases, reasoning and text into labelled steps', async () => {
+  const { applyAgentEvents, finishProgress, stepLabel } = await import('../src-ui/chat/conversation');
+  const progress = { steps: [], text: '' } as any;
+  applyAgentEvents(progress, [{ kind: 'phase', phase: 'reading', attempt: 1 }, { kind: 'phase', phase: 'thinking', attempt: 1 }, { kind: 'reasoning', delta: 'Plan: ' }, { kind: 'reasoning', delta: 'a pump.' }], 10);
+  assert.equal(stepLabel(progress.steps[1], false), 'Thinking');
+  applyAgentEvents(progress, [{ kind: 'text', delta: 'Sure.\n<edit><create type="rect"/>' }], 20);
+  assert.equal(stepLabel(progress.steps[1], false), 'Writing the edit');
+  assert.equal(progress.steps[1].reasoning, 'Plan: a pump.');
+  applyAgentEvents(progress, [{ kind: 'phase', phase: 'applying', attempt: 1 }, { kind: 'phase', phase: 'thinking', attempt: 2 }], 30);
+  assert.equal(progress.text, '');
+  assert.equal(stepLabel(progress.steps[3], false), 'Reconsidering the rejected edit');
+  finishProgress(progress, 40);
+  assert.deepEqual(progress.steps.map((s: any) => [s.startedAt, s.endedAt]), [[10, 10], [10, 30], [30, 30], [30, 40]]);
+  assert.equal(stepLabel(progress.steps[1], true), 'Wrote the edit');
+});
+
+test('progress batches merge deltas and send a phase change at once', async () => {
+  const { eventBatcher } = await import('../src-ui/model/progress');
+  const sent: unknown[][] = [];
+  const batch = eventBatcher(events => sent.push(events), 20);
+  batch.push({ kind: 'text', delta: 'a' });
+  batch.push({ kind: 'text', delta: 'b' });
+  batch.push({ kind: 'reasoning', delta: 'r' });
+  assert.equal(sent.length, 0);
+  batch.push({ kind: 'phase', phase: 'applying', attempt: 1 });
+  assert.deepEqual(sent, [[{ kind: 'text', delta: 'ab' }, { kind: 'reasoning', delta: 'r' }, { kind: 'phase', phase: 'applying', attempt: 1 }]]);
+  batch.push({ kind: 'text', delta: 'c' });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(sent[1], [{ kind: 'text', delta: 'c' }]);
+});

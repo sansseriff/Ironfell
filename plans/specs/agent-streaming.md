@@ -1,7 +1,7 @@
 # Agent streaming: live progress, streamed prose, partial-edit previews
 
-**Status:** Proposed 2026-11-06 in the `t3/agent-streaming` worktree. Investigation
-only; waits on the user to pick a phase. Builds the follow-ups deferred by
+**Status:** Phases 1–2 built 2026-11-06 in the `t3/agent-streaming` worktree
+(§6); phases 3–4 proposed, not started. Builds the follow-ups deferred by
 [`narrative-panel.md` §9.3](narrative-panel.md) (real token streaming, Stop) and
 [`agent-runtimes.md` §6](agent-runtimes.md) item 1 (progress, cancellation).
 
@@ -20,8 +20,17 @@ away:
 | Claude browser API (`AnthropicTransport`) | `messages.stream()` events, `thinking` and `text` deltas | `finalMessage()` only |
 
 Probe: a Sonnet run of the stream-json command above streamed three
-`text_delta`s and a `result success`. A five-word prompt drew no thinking block;
-check `thinking_delta` against a real Iron edit before relying on it.
+`text_delta`s and a `result success`.
+
+**Reasoning text is not shared by either login (2026-11-06).** Codex on the
+ChatGPT login (`gpt-6.1-sol`) sends no reasoning item at all with `summary:
+"auto"`; with `-c model_supports_reasoning_summaries=true` it sends one whose
+`summary` is empty, even at `detailed` and high effort. Claude Code's
+stream-json sends `thinking_delta`s with empty text. So the panel shows the
+"Thinking" step and its timer until the reply's text begins, and reasoning
+appears only where a runtime shares it (the browser API path's summarized
+thinking; Codex summaries if an account or model provides them). Iron keeps
+`summary: "auto"` on `turn/start` for that case and drops empty deltas.
 
 Timeouts matter as much as the UI: the bridge allows 45 s per completion, HTTP
 50 s. The failing request in the screenshot that prompted this spec took 38.7 s
@@ -146,3 +155,33 @@ store-level **provisional transaction**:
 
 Phases 1–2 are independent of the engine and safe to ship alone. Phase 3 is the
 first that changes `iron_document`.
+
+## 6. Built (phases 1–2, 2026-11-06)
+
+- **Events:** `src-ui/model/progress.ts` (`AgentEvent`, `AskLive`, a 50 ms
+  batcher that merges deltas and sends a phase change at once).
+  `ask()` emits `reading`, `thinking` (attempt N; a repair is attempt 2),
+  `looking`, `applying`; a reply that arrives after Stop is not applied.
+- **Bridge:** `Accept: application/x-ndjson` streams `text`/`reasoning`/`ping`
+  lines, then `done` or `error`; without it, the old single JSON. Idle 90 s
+  (reset by each delta), total 10 min. Codex forwards `item/agentMessage/delta`
+  and `item/reasoning/summaryTextDelta`; Claude parses stream-json (and waits
+  for both process exit and the last line, which can arrive after close).
+- **Transports:** `LocalRuntimeTransport` reads the NDJSON (30 s bridge-silence
+  limit); `AnthropicTransport` forwards `text` and `thinking` stream events and
+  honours the signal.
+- **Boundary:** `modelAskProgress` (worker/native → page, keyed by request id)
+  and `modelAskCancel` (page → worker/native, aborts that turn's controller).
+  Client turn limit 15 min.
+- **UI:** `ChatProgress.svelte` (work log: current step, elapsed, Stop; steps
+  with reasoning; "Worked for …" folded once done), streamed prose through
+  `ChatMarkdown`, and "Writing the edit · N commands" with the last six verbs
+  and the markup so far (`streamView`, `editVerbs` in `chat/conversation.ts`).
+  A stopped turn reads "Stopped. Nothing was changed." and restores the prompt.
+
+Verified: 65 bun tests (adapters' deltas, NDJSON end to end, idle reset, quiet
+timeout, Stop aborting the runtime, `ask` phases, stream splitting, progress
+folding, batching); `chat-ui.ts` worker and main with a slow streamed fixture
+turn and Stop; `agent-runtime.ts` and `agent-components.ts` worker and main;
+live Codex `chat-ui.ts` (10.4 s); live Codex and Claude adapters streaming text
+(first text at 6.5 s and 2.7–3.5 s).

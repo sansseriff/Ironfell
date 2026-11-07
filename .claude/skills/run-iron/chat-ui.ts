@@ -139,8 +139,32 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="failed"]').length === 2);
   assert.equal(await prompt.inputValue(), 'A newer unsent draft');
   assert.equal(await page.evaluate(() => (window as any).__iron.save()), beforeFailure);
+  // Live progress (plans/specs/agent-streaming.md): the work log, reasoning,
+  // streamed prose and the edit's verbs as they close, then Stop.
+  await prompt.fill('chat-test-stream');
+  await prompt.press('Meta+Enter');
+  const running = page.locator('.chat-turn[data-status="running"]');
+  await running.locator('[data-chat-progress]', { hasText: 'Thinking' }).waitFor();
+  await running.locator('[data-chat-progress]', { hasText: 'Sizing the pump' }).waitFor();
+  await running.locator('[data-edit-forming] li', { hasText: 'Create rect "inlet"' }).waitFor({ timeout: 15000 });
+  assert.match(await running.locator('.chat-markdown').first().innerText(), /Here is a pump/);
+  assert.match(await running.locator('[data-chat-progress]').innerText(), /Writing the edit/);
+  await page.screenshot({ path: `.agents/chat/streaming-${runtimeMode}.png` });
+  await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="completed"]').length === 4, undefined, { timeout: 15000 });
+  const streamedTurn = page.locator('.chat-turn').last();
+  assert.match(await streamedTurn.locator('[data-chat-progress]').innerText(), /Worked for/);
+  assert.match(await page.evaluate(() => (window as any).__iron.view({ fidelity: 'skeleton' })), /pump body/);
+  await page.screenshot({ path: `.agents/chat/streamed-${runtimeMode}.png` });
+  const beforeStop = await page.evaluate(() => (window as any).__iron.save());
+  await prompt.fill('chat-test-stop');
+  await prompt.press('Meta+Enter');
+  await running.locator('[data-chat-progress]', { hasText: 'two ports' }).waitFor();
+  await page.getByRole('button', { name: 'Stop the agent', exact: true }).click();
+  await page.locator('.chat-turn[data-status="stopped"]').waitFor();
+  assert.equal(await prompt.inputValue(), 'chat-test-stop');
+  assert.equal(await page.evaluate(() => (window as any).__iron.save()), beforeStop);
   assert.deepEqual(errors, []);
-  console.log(`PASS CHAT ${runtimeMode}: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery; no page errors`);
+  console.log(`PASS CHAT ${runtimeMode}: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop; no page errors`);
   }
 } catch (error) {
   await mkdir('.agents/chat', { recursive: true });

@@ -40,7 +40,8 @@ neither owns nor mutates the document.
   thread/start, turn/start, completed agent-message items and turn/completed.
   Uses existing CLI auth. Live-tested with `codex-cli 0.166.0-alpha.5.1`, signed
   in using ChatGPT; no API key was supplied.
-- Claude: `claude -p --output-format json`, no built-in tools, strict empty MCP
+- Claude: `claude -p --output-format stream-json --verbose --include-partial-messages`
+  (since 2026-11-06, [`agent-streaming.md`](agent-streaming.md)), no built-in tools, strict empty MCP
   configuration, no settings sources or persisted session. **By default it runs on
   the signed-in Claude Code login (the user's Claude subscription)**, with
   `--safe-mode` (every customization off: CLAUDE.md, skills, plugins, hooks,
@@ -101,8 +102,14 @@ requests fail the turn. Claude uses bare mode and no tools. These are runtime
 restrictions, not OS-level confidentiality isolation from a hostile local
 process. No general agent shell is exposed through Iron's prompt.
 
-The bridge times out at 45 seconds per completion; HTTP at 50 seconds; the
-existing outer budget is 120 seconds, covering one repair. Disconnect/shutdown
+Since 2026-11-06 ([`agent-streaming.md`](agent-streaming.md)) the bridge times out
+a runtime that produces nothing for 90 seconds (each streamed delta resets it),
+and any completion after 10 minutes; a streamed response pings every 10 seconds
+and the transport gives up after 30 seconds without a byte. The whole turn
+(repair and looks included) is capped at 15 minutes. Before that: 45 s per
+completion, 50 s HTTP, 120 s per turn. On the subscription path the Claude
+environment also drops `ANTHROPIC_BASE_URL` with the token: from inside an agent
+session (T3, Claude Code) it pointed at the host's proxy and every call got 401. Disconnect/shutdown
 abort the process. Cleanup escalates to SIGKILL after one second, bounds output
 and removes temporary directories. There is no automatic provider fallback.
 
@@ -292,8 +299,9 @@ dev server on 5173 cannot satisfy a post-shutdown request and produce a false fa
 
 ## 6. Follow-up plan
 
-1. Explicit Stop and cancellation through all adapter lifetimes; panel progress
-   and usage events; clear queued/running states.
+1. ~~Explicit Stop and cancellation through all adapter lifetimes; panel progress
+   and usage events; clear queued/running states.~~ Stop, progress and streaming
+   done 2026-11-06 ([`agent-streaming.md`](agent-streaming.md)); usage events open.
 2. Persistent provider sessions, per-scope identity/revisions, bounded history,
    resume/reconnect semantics and normalized provider errors.
 3. Shared Iron tools (schema, scoped reads, validated edits) over provider-native

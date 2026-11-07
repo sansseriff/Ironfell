@@ -25,6 +25,9 @@ test('native launcher selects the second Claude profile, regardless of a parent 
   assert.equal(env.CLAUDE_CONFIG_DIR, '/home/test/.claude_2nd');
   assert.equal(env.IRON_CLAUDE_AUTH, 'subscription');
   assert.equal(claudeEnv('subscription', env).ANTHROPIC_API_KEY, undefined);
+  // A host's proxy URL and token (an agent session's) never reach a subscription run.
+  const hosted = claudeEnv('subscription', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/proxy', ANTHROPIC_AUTH_TOKEN: 'host-token', PATH: '/bin' });
+  assert.deepEqual([hosted.ANTHROPIC_BASE_URL, hosted.ANTHROPIC_AUTH_TOKEN, hosted.PATH], [undefined, undefined, '/bin']);
   assert.equal(nativeAgentEnvironment({ IRON_CLAUDE_CONFIG_DIR: '/chosen' }).CLAUDE_CONFIG_DIR, '/chosen');
 });
 

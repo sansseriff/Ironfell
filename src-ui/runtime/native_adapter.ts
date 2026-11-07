@@ -4,6 +4,7 @@ import { makeDocumentApi } from '../model/api';
 import { applyEdit } from '../model/edit';
 import { ask } from '../model/agent';
 import { makeModelTransport } from '../model/transport';
+import { eventBatcher, MODEL_ASK_TIMEOUT_MS } from '../model/progress';
 
 /** Same UI protocol as the web adapters. Native display callbacks drive Bevy;
  * this adapter batches control traffic and never sends frame ticks. */
@@ -20,6 +21,7 @@ export class NativeAdapter {
   private queries = new Map<number, { resolve: (text: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private core = (window as any).__TAURI__.core;
   private channel: any;
+  private asks = new Map<number, AbortController>();
 
   constructor() {
     this.channel = new this.core.Channel();
@@ -35,17 +37,25 @@ export class NativeAdapter {
 
   postMessage(data: UiRequest) {
     if (this.disposed) return;
+    if (data.ty === 'modelAskCancel') { this.asks.get(data.askId)?.abort(); return; }
     if (data.ty === "mousemove" && this.nativePointer) return;
     if ('requestId' in data && data.requestId >= 0 && !this.publicRequests.has(data.requestId)) {
       const replies: Record<string, string> = { documentSave: 'documentSaved', documentLoad: 'documentLoaded', modelEdit: 'modelEditResult', modelAsk: 'modelAskResult' };
       const ty = replies[data.ty] ?? data.ty;
-      const timer = setTimeout(() => { this.publicRequests.delete(data.requestId); this.emit({ty, requestId: data.requestId, ok:false, error:'native request timed out'}); }, data.ty === 'modelAsk' ? 120000 : 15000);
+      const timer = setTimeout(() => { this.publicRequests.delete(data.requestId); this.emit({ty, requestId: data.requestId, ok:false, error:'native request timed out'}); }, data.ty === 'modelAsk' ? MODEL_ASK_TIMEOUT_MS : 15000);
       this.publicRequests.set(data.requestId, { ty, timer });
     }
     if (data.ty === 'modelEdit' || data.ty === 'modelAsk') {
-      const operation = data.ty === 'modelEdit'
-        ? applyEdit(this.documentApi(), data.xml, data.label)
-        : ask(this.documentApi(), makeModelTransport(data), data.instruction, data);
+      let operation: Promise<any>;
+      if (data.ty === 'modelEdit') operation = applyEdit(this.documentApi(), data.xml, data.label);
+      else {
+        const controller = new AbortController();
+        const requestId = data.requestId;
+        this.asks.set(requestId, controller);
+        const progress = eventBatcher(events => this.emit({ ty: 'modelAskProgress', requestId, events }));
+        operation = ask(this.documentApi(), makeModelTransport(data), data.instruction, data, { onEvent: progress.push, signal: controller.signal })
+          .finally(() => { progress.flush(); this.asks.delete(requestId); });
+      }
       void operation.then((result) => this.receive({ ty: data.ty + 'Result', requestId: data.requestId, ok: result.ok, ack: data.ty === 'modelEdit' && result.ok ? 'applied' : 'completed', [data.ty === 'modelEdit' ? 'outcome' : 'result']: result }))
         .catch((e: unknown) => this.receive({ ty: data.ty + 'Result', requestId: data.requestId, ok: false, error: String(e) }));
       return;
@@ -100,6 +110,8 @@ export class NativeAdapter {
   }
   dispose() {
     if (this.disposed) return;
+    for (const controller of this.asks.values()) controller.abort();
+    this.asks.clear();
     for (const [requestId, pending] of this.publicRequests) { clearTimeout(pending.timer); this.emit({ty:pending.ty, requestId, ok:false, error:'native session disposed'}); }
     this.publicRequests.clear();
     this.disposed = true; this.pending = [];

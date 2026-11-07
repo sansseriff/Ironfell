@@ -307,3 +307,78 @@ test('a prose-only correction cannot turn a rejected edit into a reported succes
   assert.equal(result.attempts, 2);
   assert.equal(fixtureDoc.calls(), 0);
 });
+
+// ---- Streaming (plans/specs/agent-streaming.md) --------------------------------
+
+test('Codex and Claude adapters stream reply and reasoning deltas that add up to the reply', async () => {
+  const codexEvents: { type: string; delta: string }[] = [];
+  const codex = await codexRuntime(fixture)(payload, AbortSignal.timeout(3000), event => codexEvents.push(event));
+  assert.equal(codexEvents.filter(e => e.type === 'text').map(e => e.delta).join(''), codex.text);
+  assert.deepEqual(codexEvents.filter(e => e.type === 'reasoning').map(e => e.delta), ['Reading the request.']);
+  const saved = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    const claudeEvents: { type: string; delta: string }[] = [];
+    const claude = await claudeRuntime(fixture)(payload, AbortSignal.timeout(3000), event => claudeEvents.push(event));
+    assert.equal(claude.text, '<edit/>');
+    assert.equal(claudeEvents.filter(e => e.type === 'text').map(e => e.delta).join(''), '<edit/>');
+    assert.deepEqual(claudeEvents.filter(e => e.type === 'reasoning').map(e => e.delta), ['Nothing to change.']);
+  } finally { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; }
+});
+
+test('the bridge streams NDJSON deltas to the transport, and output keeps a long turn alive', async () => {
+  // Idle limit 100 ms, but a delta every 40 ms for 400 ms: the turn completes.
+  await bridgeTest(async (_request, signal, onEvent) => {
+    for (let i = 0; i < 10; i++) {
+      if (signal.aborted) throw new Error('aborted');
+      onEvent?.({ type: i === 0 ? 'reasoning' : 'text', delta: i === 0 ? 'plan' : `${i}` });
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    return { text: '123456789' };
+  }, async endpoint => {
+    const events: { kind: string; delta?: string }[] = [];
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    const result = await transport.complete(payload.system, payload.messages, { onEvent: event => events.push(event) });
+    assert.equal(result.text, '123456789');
+    assert.deepEqual(events[0], { kind: 'reasoning', delta: 'plan' });
+    assert.equal(events.filter(e => e.kind === 'text').map(e => e.delta).join(''), '123456789');
+  }, 100);
+});
+
+test('a streamed runtime that goes quiet times out with an error line; Stop aborts the runtime', async () => {
+  await bridgeTest(async (_request, signal) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })), async endpoint => {
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    await assert.rejects(() => transport.complete(payload.system, payload.messages, { onEvent: () => {} }), /timed out/);
+  }, 100);
+  let aborted!: () => void;
+  const cancelled = new Promise<void>(resolve => { aborted = resolve; });
+  await bridgeTest(async (_request, signal, onEvent) => {
+    onEvent?.({ type: 'text', delta: 'Hel' });
+    return await new Promise((_, reject) => signal.addEventListener('abort', () => { aborted(); reject(new Error('aborted')); }, { once: true }));
+  }, async endpoint => {
+    const controller = new AbortController();
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    const running = transport.complete(payload.system, payload.messages, { signal: controller.signal, onEvent: () => controller.abort() });
+    await assert.rejects(() => running, /abort/i);
+    await cancelled;
+  }, 3000);
+});
+
+test('ask reports its phases and passes deltas on; a stopped turn applies nothing', async () => {
+  const fixtureDoc = documentFixture();
+  const events: any[] = [];
+  const streaming = { name: 'fixture', complete: async (_s: string, _m: unknown, live: any = {}) => {
+    live.onEvent?.({ kind: 'text', delta: '<edit><create id="$shape" type="rect" parent="#1"/></edit>' });
+    return { text: '<edit><create id="$shape" type="rect" parent="#1"/></edit>' };
+  } };
+  const result = await ask(fixtureDoc.api, streaming, 'add a rectangle', {}, { onEvent: event => events.push(event) });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(events.filter(e => e.kind === 'phase').map(e => `${e.phase}:${e.attempt}`), ['reading:1', 'thinking:1', 'applying:1']);
+  assert.equal(events.filter(e => e.kind === 'text').length, 1);
+  // Stop while the model is answering: the reply that still arrives is not applied.
+  const controller = new AbortController();
+  const stopped = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { controller.abort(); return { text: '<edit><create id="$s" type="rect" parent="#1"/></edit>' }; } }, 'add another', {}, { signal: controller.signal });
+  assert.equal(stopped.ok, false);
+  assert.equal(stopped.error, 'stopped');
+  assert.equal(fixtureDoc.calls(), 1);
+});

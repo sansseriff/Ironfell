@@ -7,6 +7,7 @@ import { applyEdit, extractEdit, type EditOutcome } from './edit';
 import { manifest } from './manifest';
 import type { ModelTransport } from './transport';
 import { boundedHistory, executableReply, type ConversationOptions } from './conversation';
+import { STOPPED, type AskLive } from './progress';
 
 export interface AskResult {
   ok: boolean;
@@ -19,7 +20,9 @@ export interface AskResult {
   error?: string;
 }
 
-export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string, options: ConversationOptions = {}): Promise<AskResult> {
+export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string, options: ConversationOptions = {}, live: AskLive = {}): Promise<AskResult> {
+  const emit = live.onEvent ?? (() => {});
+  emit({ kind: 'phase', phase: 'reading', attempt: 1 });
   const snapshotVersion = await api.version();
   const system = manifest(await api.schema(), options.allowTextReply) + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
   // The model view first (what things are and where each is drawn, ECM §11),
@@ -45,14 +48,22 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
   let lastOutcome: EditOutcome | null = null;
   let note = '';
   let looks = 0;
+  const stopped = () => ({ ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: STOPPED });
   while (attempts < 2) {
     attempts += 1;
+    if (live.signal?.aborted) return stopped();
+    emit({ kind: 'phase', phase: 'thinking', attempt: attempts });
     let text: string;
     try {
-      text = (await transport.complete(system, messages)).text;
+      text = (await transport.complete(system, messages, { onEvent: live.onEvent, signal: live.signal })).text;
     } catch (e) {
-      return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: String(e) };
+      if (live.signal?.aborted) return stopped();
+      // The message alone: a bridge error already reads "Error: …".
+      const message = (e instanceof Error ? e.message : String(e)).replace(/^(Error: )+/, '');
+      return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: message };
     }
+    // A reply that arrives after Stop is not applied.
+    if (live.signal?.aborted) return stopped();
     // `<look expand="#u #e"/>` with no edit: show those instances' derived
     // insides (component-model.md §9) and ask again; not a repair attempt.
     const look = lookRequest(text);
@@ -60,6 +71,7 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
       looks += 1;
       attempts -= 1;
       messages.push({ role: 'assistant', content: text });
+      emit({ kind: 'phase', phase: 'looking', attempt: attempts + 1 });
       messages.push({ role: 'user', content: await lookView(api, look) });
       continue;
     }
@@ -73,6 +85,7 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
     if (await api.version() !== snapshotVersion) {
       return { ok: false, note, edit, outcome: null, attempts, transport: transport.name, error: 'document changed while the agent was thinking; ask again with the current document' };
     }
+    emit({ kind: 'phase', phase: 'applying', attempt: attempts });
     const guardedApi = { ...api, apply: (transaction: object) => api.apply(transaction, snapshotVersion) };
     lastOutcome = await applyEdit(guardedApi, edit, `model: ${instruction.slice(0, 60)}`);
     if (lastOutcome.ok) break;

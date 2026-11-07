@@ -240,6 +240,7 @@ export class PanelManager {
       case 'selection':
       case 'modelEditResult':
       case 'modelAskResult':
+      case 'modelAskProgress':
       case 'solveBench':
         if (data.ty === 'selection') setSelectionCount((data.list ?? []).length);
         this.docClient.handleMessage(data);

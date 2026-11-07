@@ -1523,12 +1523,16 @@ pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, p
         let leaves: Vec<String> = if let Some(leaves) = options.get("leaves") { serde_json::from_value(leaves.clone()).map_err(|e| e.to_string())? } else { vec![leaf.clone()] };
         if leaves.is_empty() { return Err("a scrub needs a property".into()); }
         let paths = leaves.iter().map(|l| l.parse::<iron_document::LeafPath>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
-        let alpha = options.get("channel").and_then(|v| v.as_str()) == Some("alpha");
+        let channel = options.get("channel").and_then(|v| v.as_str());
+        let alpha = channel == Some("alpha");
+        // A colour picker's drag: `value` carries the whole colour packed as
+        // 0xRRGGBBAA (exact in an f64), one preview per pointer move.
+        let rgba = channel == Some("color");
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("no store")?;
         if phase == "begin" {
             for &path in &paths {
                 let current = inspector_current(&store.0, id, path);
-                if !(matches!(current, Some(Value::Number(_))) && !alpha || matches!(current, Some(Value::Color(_))) && alpha) { return Err("this property cannot be scrubbed as a number".into()); }
+                if !(matches!(current, Some(Value::Number(_))) && !alpha && !rgba || matches!(current, Some(Value::Color(_))) && (alpha || rgba)) { return Err("this property cannot be scrubbed as a number".into()); }
                 if let Handle::Locked(why) = store.0.handle(id, path) { return Err(why); }
             }
             let gesture = store.0.begin_gesture(&[id]);
@@ -1539,7 +1543,10 @@ pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, p
             "move" => {
                 if !value.is_finite() { return Err("value must be finite".into()); }
                 for path in paths {
-                    let next = if alpha {
+                    let next = if rgba {
+                        let packed = value.clamp(0.0, u32::MAX as f64) as u32;
+                        Value::Color(packed.to_be_bytes().map(|c| c as f32 / 255.0))
+                    } else if alpha {
                         let Some(Value::Color(mut color)) = inspector_current(&store.0, id, path) else { return Err("no colour".into()); };
                         color[3] = value.clamp(0.0, 1.0) as f32;
                         Value::Color(color)
@@ -1560,6 +1567,29 @@ pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, p
     let result = run();
     if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+}
+
+/// The colours used in `node`'s composition, most used first (ties in tree
+/// order): the colour picker's "On this page" swatches.
+pub fn document_colors(app: &mut WorkerApp, node: String) -> String {
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else { return "[]".into() };
+    let Ok(id) = node.parse::<iron_document::NodeId>() else { return "[]".into() };
+    let doc = store.0.document();
+    let Some(root) = iron_document::composition::composition_of(doc, id) else { return "[]".into() };
+    let mut seen: Vec<(String, usize)> = Vec::new();
+    for n in doc.descendants(root) {
+        for facet in doc.facets_of(n) {
+            let kind = facet.kind();
+            for field in facet.field_names() {
+                let Ok(path) = iron_document::LeafPath::new(kind, field) else { continue };
+                let Some(iron_document::Value::Color(c)) = store.0.resolved(n, path) else { continue };
+                let hex = iron_document::Value::Color(c).to_string();
+                match seen.iter_mut().find(|(h, _)| *h == hex) { Some(entry) => entry.1 += 1, None => seen.push((hex, 1)) }
+            }
+        }
+    }
+    seen.sort_by(|a, b| b.1.cmp(&a.1));
+    serde_json::to_string(&seen.into_iter().take(40).map(|(h, _)| h).collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into())
 }
 
 pub fn document_inspect_set(app: &mut WorkerApp, node: String, leaf: String, text: String) -> String {

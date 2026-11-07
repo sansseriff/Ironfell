@@ -86,8 +86,8 @@ assert(!!(await doc()).facets.shadow[key],'effect menu did not add shadow');
 await page.getByRole('button',{name:'Drop shadow settings',exact:true}).click();await page.getByRole('spinbutton',{name:'Blur',exact:true}).waitFor();
 await page.keyboard.press('Escape');await wait();
 // Switching fill type uses one transaction and keeps the solid fallback.
-await page.getByRole('button',{name:'Fill paint settings',exact:true}).click();await page.getByRole('button',{name:'Fill type',exact:true}).click();
-await page.getByRole('option',{name:'Linear gradient',exact:true}).click();await wait();
+await page.getByRole('button',{name:'Fill paint settings',exact:true}).click();
+await page.locator('.paint-types [aria-label="Linear gradient"]').click();await wait();
 assert((await doc()).facets.gradient[key].kind.enum==='linear','fill type switch failed');
 await page.keyboard.press('Escape');await page.keyboard.press('Meta+z');await wait();
 assert(!(await doc()).facets.gradient?.[key],'fill type switch was not one undo');
@@ -100,6 +100,6 @@ await edit(`<edit><set id="${gradientId}" gradient.kind="radial" gradient.x0="0.
 await page.mouse.move(5,5);await wait();await page.screenshot({path:resolve(dir,'radial.png')});
 execFileSync('python3',[resolve(import.meta.dir,'appearance-pixels.py'),dir,'radial'],{stdio:'inherit'});
 
-await click(650,110);await page.getByRole("button", {name:"Fill paint settings"}).click();await page.getByRole("button", {name:"Fill type"}).waitFor();
+await click(650,110);await page.getByRole("button", {name:"Fill paint settings"}).click();await page.locator('.color-picker .sv').waitFor();
 await page.screenshot({path:resolve(dir,'inspector.png')});assert(errors.length===0,errors.join('\n'));console.log('no page errors');
 }catch(e){console.log("page errors",errors);await page.screenshot({path:resolve(dir,"failed.png")});throw e;}finally{await browser.close();}

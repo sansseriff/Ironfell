@@ -1,17 +1,37 @@
 <script lang="ts">
-  import { Popover } from "bits-ui";
+  import { Popover, ToggleGroup } from "bits-ui";
   import X from "@lucide/svelte/icons/x";
   import Minus from "@lucide/svelte/icons/minus";
   import PropertyField, { type Property } from "./PropertyField.svelte";
-  import Select from "./Select.svelte";
+  import ColorPicker from "./ColorPicker.svelte";
+  import { controllerManager } from "../../controller-manager.svelte";
   let { node, label, color, opacity, gradient = [], onSet, onRefresh, onError, onRemove, onMode }: {
     node: string; label: string; color: Property; opacity?: Property; gradient?: Property[];
     onSet: (field: Property, text: string) => void; onRefresh: () => void; onError: (error: string) => void;
     onRemove?: () => void; onMode?: (mode: string) => void;
   } = $props();
+  const doc = controllerManager.docClient;
   let open = $state(false);
   const mode = $derived(gradient.find(f => f.field === "kind")?.text ?? "solid");
-  const paint = $derived(gradient.length ? `${mode === "radial" ? "radial-gradient(circle" : "linear-gradient(135deg"}, ${gradient.find(f => f.field === "start")?.text}, ${gradient.find(f => f.field === "end")?.text})` : color.text ?? "#808080");
+  const stop = (name: string) => gradient.find(f => f.field === name);
+  const paint = $derived(gradient.length ? `${mode === "radial" ? "radial-gradient(circle" : "linear-gradient(135deg"}, ${stop("start")?.text}, ${stop("end")?.text})` : color.text ?? "#808080");
+  // Which gradient stop the picker edits (Figma's selected stop).
+  let active = $state<"start" | "end">("start");
+  const picked = $derived(gradient.length ? stop(active) ?? color : color);
+  // The composition's colours, read once each time the popover opens so the
+  // swatches hold still while a drag recolours the canvas.
+  let swatches = $state<string[]>([]);
+  $effect(() => {
+    if (!open) return;
+    let live = true;
+    doc.command({ op: "colors", node }).then((r) => { if (live && Array.isArray(r)) swatches = r; }).catch(() => {});
+    return () => { live = false; };
+  });
+  const types = [
+    { value: "solid", label: "Solid", chip: "var(--fg-muted)" },
+    { value: "linear", label: "Linear gradient", chip: "linear-gradient(to bottom, var(--fg-muted), transparent)" },
+    { value: "radial", label: "Radial gradient", chip: "radial-gradient(circle, transparent 15%, var(--fg-muted) 75%)" },
+  ];
 </script>
 
 <div class="paint-row" data-paint={label.toLowerCase()}>
@@ -30,26 +50,40 @@
       </div>
     </div>
     <Popover.Portal>
-      <Popover.Content class="property-popover" side="left" align="start" sideOffset={12} aria-label="{label} paint settings">
-        <header><strong>{label}</strong><Popover.Close class="property-icon" aria-label="Close {label.toLowerCase()} settings"><X size={15} /></Popover.Close></header>
-        <div class="property-popover-body">
-          {#if onMode}<Select label="Fill type" value={mode} items={[{ value: "solid", label: "Solid" }, { value: "linear", label: "Linear gradient" }, { value: "radial", label: "Radial gradient" }]} onChange={onMode} />{/if}
-          <div class="paint-preview" style:background={paint}></div>
-          <div class="property-grid">
-            {#if gradient.length}
-              {#each gradient.filter(f => f.kind === "color") as f (f.leaf)}
-                <PropertyField field={f} {node} label={f.field === "start" ? "Start colour" : "End colour"} {onSet} {onRefresh} {onError} />
-                <PropertyField field={f} {node} channel="alpha" label={f.field === "start" ? "Start alpha" : "End alpha"} {onSet} {onRefresh} {onError} />
-              {/each}
-              {#each gradient.filter(f => f.kind === "number") as f (f.leaf)}
-                <PropertyField field={f} {node} label={{ x0: "Start X", y0: "Start Y", x1: "End X", y1: "End Y" }[f.field]} {onSet} {onRefresh} {onError} />
-              {/each}
-            {:else}
-              <PropertyField field={color} {node} label="Colour" {onSet} {onRefresh} {onError} />
-              <PropertyField field={color} {node} channel="alpha" label="Colour alpha" {onSet} {onRefresh} {onError} />
-            {/if}
+      <Popover.Content class="property-popover color-popover" side="left" align="start" sideOffset={12} aria-label="{label} paint settings">
+        <header class="color-header">
+          <span class="color-tab">{label}</span>
+          <Popover.Close class="property-icon" aria-label="Close {label.toLowerCase()} settings"><X size={16} strokeWidth={1.5} /></Popover.Close>
+        </header>
+        {#if onMode}
+          <ToggleGroup.Root type="single" class="paint-types" value={mode} onValueChange={(v) => { if (v && v !== mode) onMode(v); }} aria-label="Paint type">
+            {#each types as t (t.value)}
+              <ToggleGroup.Item class="property-icon large paint-type" value={t.value} aria-label={t.label} title={t.label}>
+                <span class="paint-type-chip" style:background={t.chip}></span>
+              </ToggleGroup.Item>
+            {/each}
+          </ToggleGroup.Root>
+        {/if}
+        {#if gradient.length}
+          <div class="stops" style:--stops="linear-gradient(to right, {stop('start')?.text}, {stop('end')?.text})">
+            <div class="stop-bar"></div>
+            {#each ["start", "end"] as const as name (name)}
+              <button class="stop" class:active={active === name} style:left={name === "start" ? "0%" : "100%"} aria-label="{name === 'start' ? 'Start' : 'End'} colour stop" aria-pressed={active === name} onclick={() => active = name}>
+                <span style:background={stop(name)?.text}></span>
+              </button>
+            {/each}
           </div>
-        </div>
+        {/if}
+        {#key picked.leaf}
+          <ColorPicker field={picked} {node} {swatches} {onSet} {onRefresh} {onError} />
+        {/key}
+        {#if gradient.length}
+          <div class="property-grid gradient-points">
+            {#each gradient.filter(f => f.kind === "number") as f (f.leaf)}
+              <PropertyField field={f} {node} label={{ x0: "Start X", y0: "Start Y", x1: "End X", y1: "End Y" }[f.field]} {onSet} {onRefresh} {onError} />
+            {/each}
+          </div>
+        {/if}
       </Popover.Content>
     </Popover.Portal>
   </Popover.Root>
@@ -64,6 +98,18 @@
   .paint-name { text-align: left; border: 0; background: transparent; padding: 7px 3px; font-size: 12px; color: var(--fg); cursor: pointer; }
   .paint-value :global(.paint-swatch) { display: grid; place-items: center; width: 30px; height: 32px; padding: 0; border: 0; background: transparent; cursor: pointer; }
   .paint-chip { display: block; width: 19px; height: 19px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.05); }
-  .paint-preview { height: 112px; border-radius: 6px; border: 1px solid var(--border); }
+  :global(.property-popover.color-popover) { width: 240px; }
+  .color-header { padding: 8px 8px 8px 8px; }
+  .color-tab { padding: 5px 8px; border-radius: 5px; background: var(--hover); font-weight: 600; }
+  :global(.paint-types) { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
+  :global(.paint-type[data-state="on"]) { background: var(--hover); }
+  .paint-type-chip { display: block; width: 14px; height: 14px; border-radius: 2px; box-shadow: inset 0 0 0 1.5px var(--fg-muted); }
+  .stops { position: relative; margin: 16px 23px 0; height: 24px; }
+  .stop-bar { position: absolute; inset: 6px 0; border-radius: 3px; background: var(--stops); box-shadow: inset 0 0 0 1px rgba(0,0,0,.1); }
+  .stop { position: absolute; top: 0; width: 20px; height: 24px; padding: 3px; border: 0; border-radius: 4px; background: var(--bg); transform: translateX(-50%); cursor: pointer; box-shadow: 0 0 0 1px var(--border-strong), 0 1px 3px rgba(0,0,0,.2); }
+  .stop span { display: block; width: 100%; height: 100%; border-radius: 2px; }
+  .stop.active { box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0,0,0,.2); }
+  .stop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .gradient-points { padding: 0 16px 16px; }
   .remove { flex: 0 0 24px; }
 </style>

@@ -1402,6 +1402,10 @@ pixels: radial gradient pass
 no page errors
 ```
 
+On 2026-11-06 (Figma-style colour picker) the 1× run passes as above; `DPR=2`
+stops at its first pixel check (`appearance-pixels.py`: both sample points white),
+before any inspector step. Not yet investigated.
+
 ### Automatic embed frame / stroke regression
 
 ```sh

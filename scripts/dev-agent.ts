@@ -8,20 +8,18 @@ import { resolveClaude, resolveCodex } from './agent-bridge/resolve';
 
 export { resolveCodex, resolveClaude } from './agent-bridge/resolve';
 
-// Cross-origin isolation, which the worker frame hold needs
-// (plans/rendering/worker-frame-hold.md §5): on unless IRON_COI=0.
-export const ISOLATION_HEADERS = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
-export const isolatedByDefault = () => process.env.IRON_COI !== '0';
+// vite.config.ts serves the app cross-origin isolated, which the worker
+// frame hold needs (plans/rendering/worker-frame-hold.md §5), unless IRON_COI=0.
 
-export async function startAgentDev(options: { root?: string; codexBin?: string; claudeBin?: string; appPort?: number; bridgePort?: number; demo?: boolean; isolated?: boolean } = {}) {
+export async function startAgentDev(options: { root?: string; codexBin?: string; claudeBin?: string; appPort?: number; bridgePort?: number; demo?: boolean } = {}) {
   const root = options.root ?? fileURLToPath(new URL('..', import.meta.url));
   const codexBin = await resolveCodex(options.codexBin);
   // Claude Code is optional: without it, Codex still works and Claude says why it cannot.
   const claudeBin = await resolveClaude(options.claudeBin).catch(() => null);
   const auth = claudeAuth();
   const path = `/Ironfell/${options.demo ? '?demo' : '?scope=last'}`;
-  const isolated = options.isolated ?? isolatedByDefault();
-  const vite = await createServer({ root, clearScreen: false, server: { host: '127.0.0.1', port: options.appPort ?? 5175, strictPort: true, open: false, headers: isolated ? ISOLATION_HEADERS : undefined } });
+  const isolated = process.env.IRON_COI !== '0';
+  const vite = await createServer({ root, clearScreen: false, server: { host: '127.0.0.1', port: options.appPort ?? 5175, strictPort: true, open: false } });
   let bridge: ReturnType<typeof createAgentBridge> | undefined;
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= (async () => {
@@ -62,7 +60,7 @@ if (import.meta.main) {
   } else {
     try {
       if (args.some(arg => !['--demo', '--open'].includes(arg))) throw new Error('Unknown option. Run bun run dev:agent --help.');
-      if (process.env.IRON_AGENT_PORT && process.env.IRON_AGENT_PORT !== '4318') throw new Error('dev:agent uses bridge port 4318 for automatic pairing. Unset IRON_AGENT_PORT, or use separate dev and agent:serve commands for custom ports.');
+      if (process.env.IRON_AGENT_PORT && process.env.IRON_AGENT_PORT !== '4318') throw new Error('dev:agent uses bridge port 4318 for automatic pairing. Unset IRON_AGENT_PORT, or run bun run dev and bun scripts/agent-bridge/server.ts separately for custom ports.');
       const session = await startAgentDev({ demo: args.includes('--demo') });
       const claude = session.claudeBin
         ? `${session.claudeBin} (${session.claudeAuth === 'api-key' ? 'ANTHROPIC_API_KEY' : 'your Claude subscription'})`

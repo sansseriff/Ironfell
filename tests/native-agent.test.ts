@@ -9,12 +9,10 @@ import { createServer } from 'node:net';
 import { nativeAgentEnvironment, startNativeAgent } from '../scripts/native-agent';
 import { claudeEnv } from '../scripts/agent-bridge/runtimes';
 import { discoverNativeAgent } from '../src-ui/model/native-pairing';
-import packageJson from '../package.json';
 
 const fixture = fileURLToPath(new URL('fixtures/native-agent-child.ts', import.meta.url));
 
-test('adaptive agent command matches the native adaptive preset while keeping the second Claude profile', () => {
-  assert.equal(packageJson.scripts['native:agent:adaptive'], packageJson.scripts['native:adaptive'].replace('bun run native:run', 'bun run native:agent'));
+test('native launcher passes explicit frame-mode overrides through while keeping the second Claude profile', () => {
   const env = nativeAgentEnvironment({ IRON_NATIVE_RENDER_MODE: 'sync', IRON_NATIVE_PACING: 'adaptive', IRON_NATIVE_FRAME_LATENCY: '2' }, '/home/test');
   assert.equal(env.IRON_NATIVE_RENDER_MODE, 'sync');
   assert.equal(env.IRON_NATIVE_PACING, 'adaptive');

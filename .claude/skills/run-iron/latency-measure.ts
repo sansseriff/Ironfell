@@ -153,8 +153,8 @@ if (browserName === 'chrome') {
 } else if (browserName === 'native') {
   // The Tauri host's dev binary (bun run native:ui, then cargo build -p
   // iron-native --profile dev-opt), launched directly with the Latency view
-  // in front. MODES picks presets from package.json: baseline (pipelined,
-  // display pacing), adaptive (the recommended native:adaptive).
+  // in front. MODES picks presets: baseline (pipelined, display pacing),
+  // adaptive (the native default, what bun run native:run uses), late-fifo.
   const presets: Record<string, Record<string, string>> = {
     baseline: { IRON_NATIVE_RENDER_MODE: 'pipelined', IRON_NATIVE_PACING: 'display' },
     adaptive: { IRON_NATIVE_RENDER_MODE: 'sync', IRON_NATIVE_PACING: 'adaptive', IRON_NATIVE_FRAME_LATENCY: '2' },

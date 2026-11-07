@@ -127,12 +127,17 @@ pasted. Closing the window or Ctrl+C stops the app/process group and bridge.
 `IRON_CLAUDE_CONFIG_DIR` overrides the default profile explicitly. No inference
 at startup; `bun run native:agent --help` lists profile/executable overrides.
 
-Adaptive variant: `bun run native:agent:adaptive` preserves the same profile and
-pairing/lifecycle, setting `IRON_NATIVE_RENDER_MODE=sync`,
-`IRON_NATIVE_PACING=adaptive`, and `IRON_NATIVE_FRAME_LATENCY=2`, exactly like
-`native:adaptive`. The launcher fixture tests verify preset parity and delivery
-to the child process; no native rebuild is needed just to change these runtime
-settings (the usual launcher still refreshes/builds the native app).
+Since 2026-11-06 the native default frame mode is sync rendering with adaptive
+pacing and two frames in flight, so `bun run native:agent` and `bun run native:run`
+use it with no settings; `IRON_NATIVE_RENDER_MODE`, `IRON_NATIVE_PACING` and
+`IRON_NATIVE_FRAME_LATENCY` override it (`src-native/README.md`, “Frame modes”).
+The launcher fixture tests verify these reach the child process.
+Checked 2026-11-06 after `bun run native:build` (1m 45s): with no settings the
+packaged app reports `renderMode` `sync` and `pacing` `adaptive`. The packaged
+workspace self-test (`IRON_NATIVE_SELF_TEST=1`) fails its first check, `shared
+workspace ready` (`window.__iron` absent or `.loading` still shown after ~34 s),
+with the new default and with `pipelined`/`display` alike, screen unlocked:
+a break that predates this change, not yet investigated.
 
 `bun test tests/native-agent.test.ts` exercises second-profile isolation, IPC
 validation, authenticated requests, child exit/stop and occupied-port safety
@@ -187,8 +192,9 @@ an authenticated model turn remains the login test. It reuses built wasm,
 does not perform inference at startup, and never kills an occupied-port owner.
 `--open` is optional; Ctrl+C stops both services. `bun run dev` remains UI-only.
 Since 2026-11-06 `dev:agent` serves the app cross-origin isolated (the banner's
-`Frame hold: on`), so Chromium runs the worker frame hold as under `dev:hold`;
-`IRON_COI=0 bun run dev:agent` turns it off. Checked: `crossOriginIsolated` true,
+`Frame hold: on`), so Chromium runs the worker frame hold. Since the same day
+plain `bun run dev` is isolated too (`vite.config.ts`); `IRON_COI=0` turns it off
+for either. Checked: `crossOriginIsolated` true,
 `__frameHold.stats()` running, automatic pairing still works, no page errors.
 
 From the worktree root, with Vite on port 5175:
@@ -367,7 +373,7 @@ lines, and `locked for this drag` / `dragged through cluster`. Turn them on:
   `?bevy=views,debuglog` alongside other variants). `drive.ts`'s default URL
   includes it, so `smoke.txt` and the other scripts see these lines; keep it
   when overriding `URL=`. Without it, `logs applied|…` checks print nothing.
-- **Native:** `RUST_LOG=info,iron_debug=debug bun run native:adaptive` (any
+- **Native:** `RUST_LOG=info,iron_debug=debug bun run native:run` (any
   native script). `RUST_LOG` replaces the default filter, so keep `info`.
 
 Warnings (`rejected`, `differs from Bevy`, `drawn a frame late`) and one-off
@@ -2567,7 +2573,7 @@ and pointer-motion fast paths. A single `rustBridge.send_event_from_worker`
 callback carries the serialized Rust event union in both browser modes; native
 uses that event union on its channel. Fonts remain a host service.
 
-`bun run protocol:generate` regenerates named document commands and wire types
+`bun run protocol` regenerates named document commands and wire types
 from Rust. `bun run check` checks freshness, negative type fixtures, all frontend
 code and the Node config (zero errors, ten existing Svelte warnings).
 `bun test tests/document-api.test.ts tests/protocol-lifecycle.test.ts` runs seven
@@ -2642,9 +2648,10 @@ are unchanged; no Rust rebuild is needed for this cleanup. Evidence is in
 
 ### Native latency experiments — 2026-10-27
 
-`bun run native:low-latency` selects `IRON_NATIVE_RENDER_MODE=sync` and
-`IRON_NATIVE_PACING=late` (parallel ECS retained, FIFO/2, three drawables). Ordinary
-`native:run` defaults remain pipelined/display. `bun run native:baseline` explicitly
+`IRON_NATIVE_PACING=late bun run native:run` selects `IRON_NATIVE_RENDER_MODE=sync` and
+`IRON_NATIVE_PACING=late` (parallel ECS retained, FIFO/2, three drawables). At the
+time `native:run` defaulted to pipelined/display; since 2026-11-06 it defaults to
+sync/adaptive. `IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run` explicitly
 selects that original scheduling in the same binary for human A/B testing. Save
 and use the same document/view/window size; run one instance at a time.
 For independent comparisons, set
@@ -2690,7 +2697,7 @@ measurements remain open; these checks do not close the native latency gate.
 ### Optical filming scene — 2026-10-27
 
 Apply this skill when building or checking the opt-in filming scene. From the
-worktree root, `bun run native:film` opens sync/late and `bun run native:film:baseline`
+worktree root, `IRON_NATIVE_FILM=1 IRON_NATIVE_PACING=late bun run native:run` opens sync/late and `IRON_NATIVE_FILM=1 IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run`
 opens pipelined/display. Browser URLs append `latencyFilm=1`. Normal workspace
 launches are unchanged. Usage/recording protocol: `src-native/README.md`, “Filming
 visible pointer delay”. Keep the cursor visible, grab the yellow square at its
@@ -2787,7 +2794,7 @@ times in one browser session. Chrome runs also print the engine's own tick timin
 `latency-chrome.ts` (own temporary profile). `latency-trace.ts` (`URL=… NAME=x`)
 records a Chrome trace of one measurement to `.agents/latency/trace/`. Page
 parameters for experiments: `?workerTick=raf` (the worker's old rAF-only tick),
-`?latencyBusy=N` (N ms of extra work in the page's rAF); driver settings `CHROME_WINDOW=w,h` (window size in points, default 1710,1080) and `RENDER_SCALE=1|1.5|2|auto|panel4k` (the Settings view's render scale) for large-display runs, where the probe's interference warning also fires from load alone. On a large window add `&latencyTrackers=light` (engine, square, SVG ring): the five canvas trackers are full-view layers that, at 6K, load the GPU more than Iron and make the whole page drop frames. The probe's `--no-capture=1` (`NO_CAPTURE=1` for `latency-trace.ts`) drives the pointer without recording, and `PLAIN_CHROME=1` launches Chrome without Playwright's default switches; dropped frames then come from the trace's presentation feedback. Safari runs launch a fresh Safari per run when it was not already running, and close all its windows and quit after each (`scripts/latency/latency-key --only com.apple.Safari`, a key press only while Safari is frontmost), so no test tabs are restored later; the first run after a launch can be slow for the square, so add a discarded warm-up. `URL=http://127.0.0.1:5185/Ironfell/scripts/latency/bare/index.html` measures a plain page with no Iron (DOM square, Canvas2D, SVG, Konva) as each browser's baseline (2026-11-05: Chrome ≈36 ms, Safari and Firefox ≈52 ms). `BROWSER=firefox` runs a separate Firefox instance per run with a temporary profile in `/private/tmp` (under `~/Documents` macOS asks for folder access; spawned directly from a sandboxed shell Firefox cannot load the profile, so it goes through `open -na`), quit by profile path after the run. Playback smoothness without input: `latency-anim.ts` (`CASES=off,on,always`, `CHROME_WINDOW`, `REPEAT`, `RATE`, `DURATION`, `TRACE=1`) loops the demo square's clip recoloured yellow while `latency-probe --watch=1` records it; `scripts/latency/judder.py` reports repeated and doubled steps (worker-frame-hold.md §6f). `latency-churn.ts` (`SELECT=1` selects the square first) lists DOM mutations by dock panel during playback and Chrome's layout/style/script ms/s with each panel hidden in turn. With the built-in display open, run on a monitor with `CHROME_POS=x,y` (global top-left points; 1710,0 for the LG right of a 1710-pt built-in) and `PROBE_ARGS=--display=largest` (the probe's `--display=largest`; default is the built-in display). Frame modes (plans/rendering/worker-frame-hold.md §6g): with cross-origin isolation (`bun run dev:hold`, or `IRON_COI=1 bunx vite …`) Chromium runs the mode controller by default (`frameHold=auto`: early per interaction, late as the fallback, the clock ahead between interactions; the FPS readout shows `late`/`ahead`, and in developer mode always the mode (`early`, `off` with the reason in its tooltip), with the engine build and the frontend's commit in the tooltip; `__frameHold.stats()` has the counts, `events` (mode changes and why) and `skips`); `&frameHold=off` is free running, `&frameHold=late` fixed late, `&halfRate=1` the half-rate experiment, `&holdOrder=first` the old hold order (wait, then the page's work; the default works first, then waits), `&pageLayout=a-b` a random a–b ms of real layout per frame (off-screen text, steered to the target; `__frameHold.stats()` shows `layoutMs` and, in development, `lateWrites`, DOM changes after the hold began), `&pageBusy=a-b` a random a–b ms of main-thread work per frame (a busy UI; it changes nothing on screen, since a per-frame 1 px change alone made Chrome draw the page later). `scripts/latency/flips.py run.csv` classifies a drag's displayed frames as Vello in the same frame as the DOM, one behind or further, with flips (the judder); `scripts/latency/animtrace.py trace.json` reads a `TRACE=1` playback trace per vsync (worker frame made the draw or not, draw and dispatch times). `latency-measure.ts` takes `URL=…&workerTickBusy=N&frameHold=…` per configuration (`TAG` names it). The prototype's options: `&frameHold=on` (Chromium only; `always`: hold without recent input; `force`: in any engine; `&holdCap=ms`, the starting limit, default 4.5; `&holdAdapt=0`, the fixed cap) and `&workerTickBusy=N` for heavier ticks; the driver prints `frame hold: … held … released … skipped …` per run, `&with=…`/`&without=…`
+`?latencyBusy=N` (N ms of extra work in the page's rAF); driver settings `CHROME_WINDOW=w,h` (window size in points, default 1710,1080) and `RENDER_SCALE=1|1.5|2|auto|panel4k` (the Settings view's render scale) for large-display runs, where the probe's interference warning also fires from load alone. On a large window add `&latencyTrackers=light` (engine, square, SVG ring): the five canvas trackers are full-view layers that, at 6K, load the GPU more than Iron and make the whole page drop frames. The probe's `--no-capture=1` (`NO_CAPTURE=1` for `latency-trace.ts`) drives the pointer without recording, and `PLAIN_CHROME=1` launches Chrome without Playwright's default switches; dropped frames then come from the trace's presentation feedback. Safari runs launch a fresh Safari per run when it was not already running, and close all its windows and quit after each (`scripts/latency/latency-key --only com.apple.Safari`, a key press only while Safari is frontmost), so no test tabs are restored later; the first run after a launch can be slow for the square, so add a discarded warm-up. `URL=http://127.0.0.1:5185/Ironfell/scripts/latency/bare/index.html` measures a plain page with no Iron (DOM square, Canvas2D, SVG, Konva) as each browser's baseline (2026-11-05: Chrome ≈36 ms, Safari and Firefox ≈52 ms). `BROWSER=firefox` runs a separate Firefox instance per run with a temporary profile in `/private/tmp` (under `~/Documents` macOS asks for folder access; spawned directly from a sandboxed shell Firefox cannot load the profile, so it goes through `open -na`), quit by profile path after the run. Playback smoothness without input: `latency-anim.ts` (`CASES=off,on,always`, `CHROME_WINDOW`, `REPEAT`, `RATE`, `DURATION`, `TRACE=1`) loops the demo square's clip recoloured yellow while `latency-probe --watch=1` records it; `scripts/latency/judder.py` reports repeated and doubled steps (worker-frame-hold.md §6f). `latency-churn.ts` (`SELECT=1` selects the square first) lists DOM mutations by dock panel during playback and Chrome's layout/style/script ms/s with each panel hidden in turn. With the built-in display open, run on a monitor with `CHROME_POS=x,y` (global top-left points; 1710,0 for the LG right of a 1710-pt built-in) and `PROBE_ARGS=--display=largest` (the probe's `--display=largest`; default is the built-in display). Frame modes (plans/rendering/worker-frame-hold.md §6g): with cross-origin isolation (`bun run dev`, or `IRON_COI=1 bunx vite …`) Chromium runs the mode controller by default (`frameHold=auto`: early per interaction, late as the fallback, the clock ahead between interactions; the FPS readout shows `late`/`ahead`, and in developer mode always the mode (`early`, `off` with the reason in its tooltip), with the engine build and the frontend's commit in the tooltip; `__frameHold.stats()` has the counts, `events` (mode changes and why) and `skips`); `&frameHold=off` is free running, `&frameHold=late` fixed late, `&halfRate=1` the half-rate experiment, `&holdOrder=first` the old hold order (wait, then the page's work; the default works first, then waits), `&pageLayout=a-b` a random a–b ms of real layout per frame (off-screen text, steered to the target; `__frameHold.stats()` shows `layoutMs` and, in development, `lateWrites`, DOM changes after the hold began), `&pageBusy=a-b` a random a–b ms of main-thread work per frame (a busy UI; it changes nothing on screen, since a per-frame 1 px change alone made Chrome draw the page later). `scripts/latency/flips.py run.csv` classifies a drag's displayed frames as Vello in the same frame as the DOM, one behind or further, with flips (the judder); `scripts/latency/animtrace.py trace.json` reads a `TRACE=1` playback trace per vsync (worker frame made the draw or not, draw and dispatch times). `latency-measure.ts` takes `URL=…&workerTickBusy=N&frameHold=…` per configuration (`TAG` names it). The prototype's options: `&frameHold=on` (Chromium only; `always`: hold without recent input; `force`: in any engine; `&holdCap=ms`, the starting limit, default 4.5; `&holdAdapt=0`, the fixed cap) and `&workerTickBusy=N` for heavier ticks; the driver prints `frame hold: … held … released … skipped …` per run, `&with=…`/`&without=…`
 (views added to or closed from the measurement layout); see the plan's §6. Each run prints `label: p50 ms …` and writes JSON and per-frame CSV
 to `.agents/latency/measure/`; a run that cannot find the square saves the still it
 searched (`<label>-still.png`). Reference values (60 Hz built-in display, 2026-11-05),
@@ -2801,12 +2808,12 @@ worker ≈36 / 36 / 36 in every layout (with `?workerTick=raf`: ≈36 / 50 / 52 
 
 ### Native layer / presentation controls — 2026-10-27
 
-`bun run native:film:layers` adds a green native Bevy sprite at −192 CSS px on
-the final window camera, bypassing Vello. `native:film:detached` removes WKWebView
+`IRON_NATIVE_FILM=1 IRON_NATIVE_LAYER_PROBE=1 IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run` adds a green native Bevy sprite at −192 CSS px on
+the final window camera, bypassing Vello. `IRON_NATIVE_PROBE_WEBVIEW=detached` removes WKWebView
 after fixture setup, freezing the native drawable rectangle first. Use unheld
 cursor motion in the detached case; HTML button ownership is absent. Restart to
 restore the webview. Both shortcuts select pipelined/display; use
-`IRON_NATIVE_LAYER_PROBE=1 bun run native:film` for sync/late. Normal app launch
+`IRON_NATIVE_LAYER_PROBE=1 IRON_NATIVE_FILM=1 IRON_NATIVE_PACING=late bun run native:run` for sync/late. Normal app launch
 is unchanged. Idle marker updates do not dirty unchanged sprite/visibility state.
 
 After native packaging, run `python3 src-native/test/validate-layers.py` from the
@@ -2859,7 +2866,7 @@ The native filming suite also passes 14/14 with the direct Bevy sprite enabled.
 
 ### Standalone Bevy/winit control — 2026-10-27
 
-`bun run native:standalone` runs the isolated Cargo project in
+`src/iron_latency_probe/run.sh` runs the isolated Cargo project in
 `src/iron_latency_probe`. It enables native winit in its own workspace, not the
 shared Iron workspace, and reuses the worktree target cache with the same dev-opt
 profile. Its dependency graph has no Tauri, Vello or Iron engine. Use the ordinary

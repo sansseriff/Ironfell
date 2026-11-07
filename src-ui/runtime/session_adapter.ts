@@ -186,12 +186,12 @@ export class SessionAdapter {
         // own, so holding there only delays the DOM; `force` holds in any engine.
         const chromium = !!(navigator as any).userAgentData?.brands?.some((b: { brand: string }) => b.brand === 'Chromium');
         // On by default (§6g): the mode controller wherever it can work, Chromium
-        // with cross-origin isolation (`bun run dev:hold`, or a server sending
+        // with cross-origin isolation (`bun run dev`, unless `IRON_COI=0`, or a server sending
         // the headers). `?frameHold=off` turns it off.
         const holdMode = params.get('frameHold') ?? (chromium && globalThis.crossOriginIsolated ? 'auto' : null);
         let hold: SharedArrayBuffer | undefined;
         if (holdMode === 'off') frameMode.set('off', 'turned off by ?frameHold=off');
-        else if (!holdMode) frameMode.set('off', chromium ? 'the page is not cross-origin isolated: serve with `bun run dev:hold`' : 'not Chromium: frame modes work in Chromium only');
+        else if (!holdMode) frameMode.set('off', chromium ? 'the page is not cross-origin isolated: serve with `bun run dev` (not `IRON_COI=0`)' : 'not Chromium: frame modes work in Chromium only');
         if (holdMode && holdMode !== 'off' && !chromium && holdMode !== 'force') {
           frameMode.set('off', 'not Chromium: frame modes work in Chromium only');
           console.warn('frameHold: not Chromium, where holding the page does not carry the worker\'s frame; not holding (frameHold=force to override)');
@@ -208,7 +208,7 @@ export class SessionAdapter {
           });
           this.frameHold.start();
         } else if (holdMode && holdMode !== 'off') {
-          frameMode.set('off', 'the page is not cross-origin isolated: serve with `bun run dev:hold`');
+          frameMode.set('off', 'the page is not cross-origin isolated: serve with `bun run dev` (not `IRON_COI=0`)');
           console.warn('frameHold needs cross-origin isolation (serve with IRON_COI=1); not holding');
         }
         // `?pageBusy=a-b` (dev): a random a–b ms of main-thread work per frame (page_busy.ts).

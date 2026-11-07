@@ -354,7 +354,7 @@ impl Pacer {
         let value = serde_json::json!({"schema":2,"epoch":d.epoch,"rows":d.rows,
             "requestedSeconds":d.seconds,
             "pacing":self.mode(),"marginMs":self.margin * 1000.0,
-            "renderMode":std::env::var("IRON_NATIVE_RENDER_MODE").unwrap_or("pipelined".into()),
+            "renderMode":render_mode(),
             "presentMode":std::env::var("IRON_NATIVE_PRESENT_MODE").unwrap_or("fifo".into()),
             "frameLatency":std::env::var("IRON_NATIVE_FRAME_LATENCY").unwrap_or("2".into())});
         match std::fs::write(&d.path, serde_json::to_vec(&value).unwrap()) {
@@ -410,13 +410,20 @@ fn render_end(stages: Res<Stages>, stamp: Res<FrameStamp>, pacer: Res<Pacer>, qu
     }
 }
 
+/// The native frame mode unless the environment says otherwise: sync
+/// rendering with adaptive pacing (late-fifo while dragging, display pacing
+/// otherwise) and two frames in flight. `IRON_NATIVE_RENDER_MODE`,
+/// `IRON_NATIVE_PACING` and `IRON_NATIVE_FRAME_LATENCY` override each part.
+pub fn render_mode() -> String { std::env::var("IRON_NATIVE_RENDER_MODE").unwrap_or_else(|_| "sync".into()) }
+pub fn pacing_mode() -> String { std::env::var("IRON_NATIVE_PACING").unwrap_or_else(|_| "adaptive".into()) }
+
 pub fn install(app: &mut ironfell::WorkerApp) -> Pacer {
-    let scheduling = match std::env::var("IRON_NATIVE_PACING").as_deref() {
-        Ok("late") => Scheduling::Late,
-        Ok("late-fifo") => Scheduling::LateFifo,
-        Ok("adaptive") => Scheduling::Adaptive,
-        Ok("display") | Err(_) => Scheduling::Display,
-        Ok(mode) => panic!("unknown IRON_NATIVE_PACING: {mode}"),
+    let scheduling = match pacing_mode().as_str() {
+        "late" => Scheduling::Late,
+        "late-fifo" => Scheduling::LateFifo,
+        "adaptive" => Scheduling::Adaptive,
+        "display" => Scheduling::Display,
+        mode => panic!("unknown IRON_NATIVE_PACING: {mode}"),
     };
     let vsync_paced = matches!(scheduling, Scheduling::LateFifo | Scheduling::Adaptive);
     if vsync_paced {
@@ -468,7 +475,7 @@ pub fn install(app: &mut ironfell::WorkerApp) -> Pacer {
     println!(
         "IRON_NATIVE_SCHEDULING {}",
         serde_json::json!({"pacing":pacer.mode(),"frameClock":if pacer.vsync_clock {"vsync"} else {"wall"},"gpuBudget":pacer.gpu_budget,
-        "marginMs":margin,"renderMode":std::env::var("IRON_NATIVE_RENDER_MODE").unwrap_or("pipelined".into())})
+        "marginMs":margin,"renderMode":render_mode()})
     );
     if pacer.is_late() || pacer.trace.is_some() {
         app.init_resource::<FrameStamp>();

@@ -69,5 +69,5 @@ out += [';', '']
 text='\n'.join(out)
 file=root/'src-ui/runtime/protocol.generated.ts'
 if '--check' in sys.argv:
-    if not file.exists() or file.read_text()!=text: sys.exit('Protocol types are stale; run bun run protocol:generate')
+    if not file.exists() or file.read_text()!=text: sys.exit('Protocol types are stale; run bun run protocol')
 else: file.write_text(text)

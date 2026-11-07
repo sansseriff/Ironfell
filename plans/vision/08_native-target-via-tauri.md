@@ -434,7 +434,7 @@ display-link integration review.
   pointer events during the wait. Startup, idle recovery, refresh transitions and
   overload run immediately. The next callback replaces an overdue pending timer;
   pause and shutdown cancel it. There is no main-thread spin or sleep.
-- `bun run native:low-latency` selects **sync + late**, retaining FIFO/2 (three
+- `IRON_NATIVE_PACING=late bun run native:run` selects **sync + late**, retaining FIFO/2 (three
   drawables) and render on demand. Ordinary `native:run` keeps pipelined/display
   defaults. Both environment controls remain available for independent comparison.
 - Pacing trace schema 2 copies actual host frame IDs through extraction. Sparse
@@ -523,7 +523,7 @@ Human follow-up: the user reports composition split-handle resizing may feel
 faster, but dragging 2D shapes does not seem to have changed latency. This is
 subjective feedback, not a controlled A/B result, and it does not confirm an
 input-to-photon improvement. The recorded CPU captures used continuous default
-workspace rendering rather than a shape-drag workload. `bun run native:baseline`
+workspace rendering rather than a shape-drag workload. `IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run`
 now explicitly selects the original pipelined/display scheduling in the same
 binary for comparison with `native:low-latency`. Actual pointer receipt → tool
 preview → presentation during a drag remains the next measurement to investigate.
@@ -629,7 +629,7 @@ Cargo workspace using the same Bevy 0.20 version and dev-opt optimization profil
 with `DefaultPlugins` and Bevy's standard winit runner. Its dependency graph excludes
 Tauri, Vello and Iron's engine/document crates. Isolation prevents winit feature
 unification into the hosted engine; the shared target directory avoids another
-large build cache. `bun run native:standalone` builds/runs the regular executable.
+large build cache. `src/iron_latency_probe/run.sh` builds/runs the regular executable.
 A minimal macOS app wrapper adds metadata around the same binary for GUI control.
 
 The green follower matches the host's −192 logical-pixel offset. A normal Bevy
@@ -654,7 +654,7 @@ scene, so they are rejected. `CAMetalDisplayLink` (frame latency 1) sets its
 deadline two refreshes before presentation (≈35 ms present→glass) and its latency
 grew in use; rejected.
 
-`IRON_NATIVE_PACING=late-fifo` (`bun run native:late-fifo`: sync render, frame
+`IRON_NATIVE_PACING=late-fifo` (`IRON_NATIVE_PACING=late-fifo IRON_NATIVE_FRAME_LATENCY=1 bun run native:run`: sync render, frame
 latency 1) starts each frame so that it presents a 5 ms margin
 (`IRON_NATIVE_PACING_MARGIN_MS`) before a vsync taken from a `CVDisplayLink` on its
 own thread; a main-thread `CADisplayLink`'s timestamps jumped whenever that thread
@@ -737,7 +737,7 @@ Stock pacing shows none in the same tests because its queue hides them, at about
 twice the present delay. Planned skips from slightly late display callbacks are
 fixed (start now when the shortfall fits half the reserve, ≤ 4 ms).
 
-`IRON_NATIVE_PACING=adaptive` (`bun run native:adaptive`: sync render, frame
+`IRON_NATIVE_PACING=adaptive` (`bun run native:run`: sync render, frame
 latency 2) uses `late-fifo` while the user is dragging and display pacing (stock's
 queue) otherwise. Dragging is the left button held or any document gesture
 (`active_gesture()`), so it needs no tool or context knowledge; flying and

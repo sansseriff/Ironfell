@@ -9,7 +9,7 @@ Tauri host. It shares the build cache and matches Iron's `dev-opt` profile.
 From the latency worktree root:
 
 ```sh
-bun run native:standalone
+src/iron_latency_probe/run.sh
 ```
 
 The green diamond follows the pointer at −192 logical pixels, matching the hosted
@@ -19,7 +19,7 @@ backing scale it renders 2560×1636, matching the hosted control. Compare on the
 same monitor and run one test app at a time. Bevy's normal default frame loop is
 continuous while focused; match the hosted control's Continuous rendering setting.
 
-`IRON_BEVY_RENDER_MODE=sync bun run native:standalone` is an optional second
+`IRON_BEVY_RENDER_MODE=sync src/iron_latency_probe/run.sh` is an optional second
 comparison. The default is the unmodified pipelined rendering configuration.
 
 Latency knobs (all default to stock Bevy):
@@ -112,7 +112,7 @@ window host or change Bevy's runner. The bundle must be refreshed after rebuildi
 Optional input timing:
 
 ```sh
-IRON_BEVY_INPUT_TRACE=1 bun run native:standalone > .agents/latency/standalone-input.log 2>&1
+IRON_BEVY_INPUT_TRACE=1 src/iron_latency_probe/run.sh > .agents/latency/standalone-input.log 2>&1
 ```
 
 The observational AppKit monitor returns every event unchanged. Each newly sampled

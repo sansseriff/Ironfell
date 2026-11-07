@@ -4,6 +4,24 @@ Technical and scientific communication in age of AI
 
 ## Run it
 
+### The commands (`bun run …`)
+
+| command | what it does |
+|---|---|
+| `dev` | the web app on localhost:5173 (cross-origin isolated, so Chromium gets the worker frame hold; `IRON_COI=0` turns it off) |
+| `dev:agent`, `dev:agent:demo` | the same plus the Codex/Claude bridge, on 127.0.0.1:5175; your last scope or a temporary demo |
+| `native:run` | the native app (Tauri), unpackaged; adaptive frame mode |
+| `native:agent` | `native:run` plus the bridge, Claude on `~/.claude_2nd` |
+| `native:build` | the packaged native `.app` |
+| `native:ui` | the native app's frontend only (the other `native:` commands run it) |
+| `wasm`, `wasm:fast`, `wasm:smallfast` | the engine for the web: dev, optimized, shipped |
+| `build`, `preview` | the web app's static build, and serving it |
+| `check` | type checks, including that the generated protocol is current |
+| `protocol` | regenerates `src-ui/runtime/protocol.generated.ts` after an engine call changes |
+
+Native frame-mode comparisons and the latency/filming diagnostics are environment
+variables on `native:run`: `src-native/README.md`, “Frame modes”.
+
 ### Iron + Codex and Claude (one terminal)
 
 From the repository root, after dependencies and wasm are built:
@@ -29,7 +47,7 @@ No model call, wasm rebuild or login happens merely by starting the servers.
 Occupied ports cause a clear failure, never killing or reusing another server.
 Run `bun run dev:agent --help` for options.
 
-`bun run dev` remains frontend-only; `bun run agent:serve` remains bridge-only.
+`bun run dev` is frontend-only; `bun scripts/agent-bridge/server.ts` is bridge-only.
 
 ### Tauri + agents (second Claude profile)
 
@@ -37,11 +55,7 @@ Run `bun run dev:agent --help` for options.
 bun run native:agent
 ```
 
-For adaptive rendering, use this instead:
-
-```sh
-bun run native:agent:adaptive
-```
+It renders in the adaptive frame mode, the native default.
 
 This starts the local bridge, builds/runs Tauri, and connects it automatically
 with **Claude selected**, using **`~/.claude_2nd`** and its subscription login.

@@ -185,7 +185,7 @@ in the scope menu.
 ## 5. Engine calls
 
 Following the typed protocol (new call: an `engine_api` function, a dispatch arm, then
-`bun run protocol:generate`):
+`bun run protocol`):
 
 | Call | Does |
 |---|---|

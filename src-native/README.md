@@ -67,7 +67,7 @@ is followed by the typed protocol implementation: generated Rust-derived named
 commands, one shared input/control dispatcher, session/disposal guards and scoped
 UI reads. Hosts retain bootstrap, surfaces, scheduling and font/file services.
 The protocol checkpoint passed 22 workspace checks, including an actual webview reload
-that retains the native authored state and undo history. Run `bun run protocol:generate` after changing Rust command/request/event signatures and
+that retains the native authored state and undo history. Run `bun run protocol` after changing Rust command/request/event signatures and
 `bun run check` to verify generated types and negative type fixtures.
 Bulk computational Model transport remains a separate, unimplemented proposal.
 
@@ -92,8 +92,9 @@ prints local native event coordinates for diagnosis (ordinary launches do not).
 The interactive presentation allowance defaults to two frames (Bevy's usual
 setting; three Metal drawables). `IRON_NATIVE_FRAME_LATENCY=1` restores the earlier
 one-frame/two-drawable setting for comparisons.
-ECS multithreading remains enabled in both cases. Pipelined rendering is the
-default; the independent render-mode control below can disable its render thread.
+ECS multithreading remains enabled in both cases. Synchronous rendering is the
+default (see “Frame modes” below); `IRON_NATIVE_RENDER_MODE=pipelined` restores
+Bevy's render thread.
 
 The native window now has an opaque background and standard title-bar drawing;
 only the WKWebView overlay is transparent. The GPU NSView owns one explicit
@@ -102,7 +103,7 @@ backing scale follows the window. CADisplayLink requests the current screen
 maximum rate explicitly and refreshes that request on wake/move. `IRON_NATIVE_PRESENTATION` logs the
 actual window opacity, display maximum refresh rate and Metal layer settings.
 
-Pacing comparisons (normal default is FIFO/VSync with latency 2):
+Present-mode comparison (the default is FIFO/VSync with latency 2):
 
 ```sh
 IRON_NATIVE_PRESENT_MODE=immediate IRON_NATIVE_FRAME_LATENCY=2 bun run native:run
@@ -123,56 +124,51 @@ runs with `python3 src-native/test/analyze-pacing.py .agents/pacing-*.json`.
 Callback/host/acquisition/present-return times are CPU observations; they do not
 establish GPU completion, displayed frame times or event-to-photon latency.
 
-## Native latency controls
+## Frame modes
 
-After `bun run native:ui` (or `bun run native:build`), start the opt-in
-synchronous rendering + deadline pacing preset with:
+`bun run native:run`, `bun run native:agent` and the packaged app all use the
+default frame mode: **synchronous rendering, adaptive pacing, two frames in
+flight**. Adaptive pacing is `late-fifo` while you drag (left button held or a
+document gesture) and stock display pacing otherwise, so dragging gets the low
+latency and panning, flying and animation keep stock smoothness (vision 08,
+“Adaptive pacing”). Three environment variables override it, one part each:
+
+| variable | default | values |
+|---|---|---|
+| `IRON_NATIVE_RENDER_MODE` | `sync` | `sync`, `pipelined` (Bevy's render thread) |
+| `IRON_NATIVE_PACING` | `adaptive` | `adaptive`, `late-fifo`, `late`, `display` |
+| `IRON_NATIVE_FRAME_LATENCY` | `2` | `1`–`3` frames in flight (Metal drawables: latency + 1) |
+
+The comparison modes the old package scripts named:
 
 ```sh
-bun run native:low-latency
+IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run   # baseline: stock Bevy
+IRON_NATIVE_PACING=late bun run native:run                                         # was native:low-latency
+IRON_NATIVE_PACING=late-fifo IRON_NATIVE_FRAME_LATENCY=1 bun run native:run        # always late-fifo
 ```
 
-`bun run native:late-fifo` (sync render, frame latency 1, `IRON_NATIVE_PACING=late-fifo`)
-budgets tick start → Metal GPU completion to finish a feedback-adapted margin
-(initial 4 ms, `IRON_NATIVE_PACING_MARGIN_MS`) before a CVDisplayLink vsync, and drains
-FIFO backlogs from `presentedTime` feedback. Light 3D: 21.1 ms HUD present delay, as
-smooth as baseline's 45.0 ms. `IRON_NATIVE_GPU_BUDGET=0` budgets CPU only;
-`IRON_NATIVE_FRAME_CLOCK=wall` keeps wall-clock `Time`. Test scenes:
+They are scheduling choices in the same binary, not older source. For a human A/B
+comparison, save the document, quit one instance before starting the other, and
+use the same document, view, window size and monitor.
+
+`late` starts the update as late as the CPU budget allows before the display
+callback's target. `late-fifo` budgets tick start → Metal GPU completion to finish a
+feedback-adapted margin (initial 4 ms, `IRON_NATIVE_PACING_MARGIN_MS`) before a
+CVDisplayLink vsync, and drains FIFO backlogs from `presentedTime` feedback. Light 3D:
+21.1 ms HUD present delay, as smooth as baseline's 45.0 ms. `IRON_NATIVE_GPU_BUDGET=0`
+budgets CPU only; `IRON_NATIVE_FRAME_CLOCK=wall` keeps wall-clock `Time`. Test scenes:
 `IRON_NATIVE_3D_MOTION=1` strafes the 3D cameras; `IRON_NATIVE_3D_LOAD=N` adds N
 high-poly spheres. `IRON_NATIVE_2D_MOTION=1` (or a speed in px/s) pans the 2D views.
 
-`bun run native:adaptive` uses late-fifo only while dragging (left button held or a
-document gesture) and stock-style display pacing otherwise, so panning, flying and
-animation keep stock smoothness. See vision 08, “Adaptive pacing”.
-
 Engine event log: per-action and per-frame lines (`applied …`, `redraw (…)`,
 `solve:`, drag locks) are DEBUG on the `iron_debug` target and off by default.
-Show them with `RUST_LOG=info,iron_debug=debug bun run native:adaptive` (keep
+Show them with `RUST_LOG=info,iron_debug=debug bun run native:run` (keep
 `info`: `RUST_LOG` replaces the default filter). The web equivalent is
 `?bevy=debuglog`; see the run-iron skill's “Engine event log”. `IRON_NATIVE_PRESENT_TRACE=1` prints `IRON_NATIVE_PRESENT` feedback
 every 120 frames (exact only with sync rendering). Results and rationale: vision 08,
-“Vsync-timed presentation”. The standalone Bevy comparison stays one command away:
-`native:standalone:late-fifo`, `native:standalone:motion` (sweeping bars) and
-`native:standalone:stock`.
-
-This selects `IRON_NATIVE_RENDER_MODE=sync` and `IRON_NATIVE_PACING=late`:
-simulation, extraction and CPU render submission run in one host update, started
-closer to the display target. Parallel ECS systems remain available. FIFO and the
-three-drawable pool stay enabled. The ordinary `native:run` default remains
-pipelined rendering with immediate display-callback updates.
-
-The controls are independent for comparisons:
-
-```sh
-bun run native:baseline
-IRON_NATIVE_RENDER_MODE=sync IRON_NATIVE_PACING=display bun run native:run
-IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run
-```
-
-`native:baseline` selects the original scheduling behavior in the same binary;
-it is not an older source checkout. For a human A/B comparison, save the document,
-quit one instance before starting the other, and use the same document, view,
-window size and monitor. This keeps application-version changes out of the test.
+“Vsync-timed presentation”. The standalone Bevy comparison (no Tauri, Vello or
+webview) is `src/iron_latency_probe/run.sh`, with `IRON_BEVY_PACING=late-fifo` and
+`IRON_BEVY_MOTION=1` (sweeping bars) as its main settings; see its README.
 
 The final 60 Hz continuous-workspace comparison measured update-start → CPU
 present return at 18.32/18.87 ms p50/p95 for ordinary pipelining, 16.58/16.98 ms
@@ -247,8 +243,8 @@ dragging and keyboard undo were also inspected.
 Build once with `bun run native:build`, then launch one comparison at a time:
 
 ```sh
-bun run native:film             # sync / late
-bun run native:film:baseline    # pipelined / display
+IRON_NATIVE_FILM=1 IRON_NATIVE_PACING=late bun run native:run             # sync / late
+IRON_NATIVE_FILM=1 IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run    # pipelined / display
 ```
 
 For the browser, append `latencyFilm=1` to the normal URL, for example
@@ -286,8 +282,8 @@ and the intermediate composition textures, while sampling the same engine pointe
 as the magenta cross. These commands use the original pipelined/display preset:
 
 ```sh
-bun run native:film:layers
-bun run native:film:detached
+IRON_NATIVE_FILM=1 IRON_NATIVE_LAYER_PROBE=1 IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run
+IRON_NATIVE_FILM=1 IRON_NATIVE_LAYER_PROBE=1 IRON_NATIVE_PROBE_WEBVIEW=detached IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run
 ```
 
 Run one instance at a time. The detached control waits for the filming scene, then
@@ -297,7 +293,7 @@ cursor without holding a button: the HTML controls and button ownership are abse
 Quit and restart to restore the webview. Keep the same monitor, window size and
 scale; do not resize the detached control. `IRON_NATIVE_PROBE_WEBVIEW=hidden` hides
 the retained webview instead of detaching it. To compare sync/late, use
-`IRON_NATIVE_LAYER_PROBE=1 bun run native:film` and the same webview flag.
+`IRON_NATIVE_LAYER_PROBE=1 IRON_NATIVE_FILM=1 IRON_NATIVE_PACING=late bun run native:run` and the same webview flag.
 
 `python3 src-native/test/validate-layers.py` runs six packaged GPU-output controls:
 overlay/hidden/detached × pipelined/display or sync/late. These intentionally force
@@ -315,7 +311,7 @@ trace:
 ```sh
 MTL_HUD_ENABLED=1 MTL_HUD_LOG_ENABLED=1 MTL_HUD_ALIGNMENT=bottomright \
 MTL_HUD_ELEMENTS=device,layersize,fps,gputime,presentdelay,frameinterval \
-IRON_NATIVE_LAYER_PROBE=1 bun run native:film:baseline
+IRON_NATIVE_LAYER_PROBE=1 IRON_NATIVE_FILM=1 IRON_NATIVE_RENDER_MODE=pipelined IRON_NATIVE_PACING=display bun run native:run
 ```
 
 The process-local HUD menu can generate a five-second report. `MTL_HUD_REPORT_URL`

@@ -52,10 +52,10 @@ impl Host {
         } else {
             0
         };
-        match std::env::var("IRON_NATIVE_RENDER_MODE").as_deref() {
-            Ok("sync") => variant |= ironfell::VARIANT_SYNC_RENDER,
-            Ok("pipelined") | Err(_) => {}
-            Ok(mode) => return Err(format!("unknown IRON_NATIVE_RENDER_MODE: {mode}").into()),
+        match pacing::render_mode().as_str() {
+            "sync" => variant |= ironfell::VARIANT_SYNC_RENDER,
+            "pipelined" => {}
+            mode => return Err(format!("unknown IRON_NATIVE_RENDER_MODE: {mode}").into()),
         }
         let present = match std::env::var("IRON_NATIVE_PRESENT_MODE").as_deref() {
             Ok("immediate") => PresentMode::AutoNoVsync,
@@ -237,7 +237,7 @@ impl Host {
                 self.bridge.send(json!({"ty":"probeStats","stats":{
                     "frames":self.frames,
                     "renderThreadEnabled":render_thread,
-                    "requestedRenderMode":std::env::var("IRON_NATIVE_RENDER_MODE").unwrap_or("pipelined".into()),
+                    "requestedRenderMode":pacing::render_mode(),
                     "pacing":self.pacing.mode(),
                     "backend":"native",
                     "pointerSource":if self.input.is_some(){"native"}else{"webview"},
@@ -492,8 +492,8 @@ fn main() {
             }
             if std::env::var_os("IRON_NATIVE_FILM").is_some() {
                 let mut url = native.url()?;
-                let render = std::env::var("IRON_NATIVE_RENDER_MODE").unwrap_or("pipelined".into());
-                let pacing = std::env::var("IRON_NATIVE_PACING").unwrap_or("display".into());
+                let render = pacing::render_mode();
+                let pacing = pacing::pacing_mode();
                 url.query_pairs_mut().append_pair("latencyFilm", "1")
                     .append_pair("filmLabel", &format!("Native · {render} / {pacing}"));
                 if std::env::var_os("IRON_NATIVE_LAYER_PROBE").is_some() {
@@ -512,8 +512,8 @@ fn main() {
                 let mut url = native.url()?;
                 url.query_pairs_mut().append_pair("latency", &layout);
                 native.navigate(url)?;
-                let render = std::env::var("IRON_NATIVE_RENDER_MODE").unwrap_or("pipelined".into());
-                let pacing = std::env::var("IRON_NATIVE_PACING").unwrap_or("display".into());
+                let render = pacing::render_mode();
+                let pacing = pacing::pacing_mode();
                 native.set_title(&format!("Iron — latency · {layout} · {render} / {pacing}"))?;
                 // Room for the sweep beside the Model and Inspector views.
                 native.set_size(tauri::LogicalSize::new(1600.0, 1000.0))?;

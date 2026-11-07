@@ -39,7 +39,7 @@
         nodes: Vec&lt;String&gt;,
     },
     Resize {</code></pre></div></div></figure>
-<p>Rust defines the request/event union. <code>bun run protocol:generate</code> generates TypeScript wire types and named document commands; <code>bun run check</code> checks freshness and negative type fixtures. The low-level document call still carries a name and JSON arguments, checked for unknown names, arity and types before touching the world.</p>
+<p>Rust defines the request/event union. <code>bun run protocol</code> generates TypeScript wire types and named document commands; <code>bun run check</code> checks freshness and negative type fixtures. The low-level document call still carries a name and JSON arguments, checked for unknown names, arity and types before touching the world.</p>
 <figure class="code"><figcaption><span class="chip sys-bound">Engine boundary</span><a class="path" href="vscode://file/Users/andrew/Documents/PROGRAM_LOCAL/iron/src/engine_dispatch.rs:6">src/engine_dispatch.rs</a><span class="range">lines 6–12</span></figcaption><div class="code-scroll"><div class="code-grid"><pre class="gutter" aria-hidden="true">6
 7
 8

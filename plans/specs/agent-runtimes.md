@@ -33,7 +33,7 @@ neither owns nor mutates the document.
   completion lock).
 - `scripts/agent-bridge/resolve.ts`: finds each CLI (`IRON_CODEX_BIN` /
   `IRON_CLAUDE_BIN`, PATH, then its installer's place: the Codex app's bundled CLI,
-  `~/.local/bin/claude`). `dev:agent` and `agent:serve` both use it; Claude is
+  `~/.local/bin/claude`). `dev:agent` and the bridge alone (`bun scripts/agent-bridge/server.ts`) both use it; Claude is
   optional (a missing one fails only when asked).
 - `scripts/agent-bridge/runtimes.ts`: independent provider adapters.
 - Codex: `codex app-server`, JSON-lines stdio, initialize/initialized, ephemeral
@@ -122,8 +122,8 @@ Other native ports require a CSP change.
 
 ### Native launcher (2026-11-04)
 
-`bun run native:agent:adaptive` runs the same managed agents and second Claude
-profile with the existing `native:adaptive` preset: synchronous rendering,
+`bun run native:agent` runs the same managed agents and second Claude
+profile with the adaptive frame mode (the native default since 2026-11-06): synchronous rendering,
 adaptive pacing, and frame latency 2. The alias is regression-tested against
 that preset, and a subprocess fixture verifies all three settings reach the
 native child without changing the profile. No separate bridge setup is needed.
@@ -214,7 +214,7 @@ bun run dev -- --host 127.0.0.1 --port 5175 --strictPort
 ```sh
 cd /Users/andrew/Documents/PROGRAM_LOCAL/iron
 export IRON_CODEX_BIN="$HOME/.codex/plugins/.plugin-appserver/codex-cli/bin/codex"
-IRON_AGENT_ORIGINS=http://127.0.0.1:5175,http://localhost:5175 bun run agent:serve
+IRON_AGENT_ORIGINS=http://127.0.0.1:5175,http://localhost:5175 bun scripts/agent-bridge/server.ts
 ```
 
 The executable above exists on this machine; other installations can use

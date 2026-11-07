@@ -6,7 +6,7 @@ Phase 3 (isolation in deployment, default on) is **deferred to the app's own
 backend server** (decided 2026-11-05, §6e).
 **Phase 4, frame modes, built 2026-11-06 (§6g, results at its end):** on by
 default wherever it can work (Chromium with cross-origin isolation, e.g.
-`bun run dev:hold`): early (the hold) per interaction, late as the fallback
+`bun run dev`): early (the hold) per interaction, late as the fallback
 (drawn after the worker's rAF, so it goes out at the next vsync), late with
 the clock set ahead between interactions, the mode in the FPS readout, and a
 per-device memory. Early mode works first, then waits (the page's own work
@@ -737,7 +737,7 @@ when the working tree differed), so it is plain what is running (added
 2026-11-06).
 
 **Defaults.** `src-ui/runtime/session_adapter.ts`: `frameHold` is `auto`
-when the page is Chromium and cross-origin isolated (`bun run dev:hold`, or
+when the page is Chromium and cross-origin isolated (`bun run dev`, or
 the future backend's headers), otherwise off; `?frameHold=off|on|late|always`
 override. Per device: `localStorage['iron.frameModes.v1']`, keyed by canvas
 size (256 px buckets) and backend; two fallbacks in a row without a minute

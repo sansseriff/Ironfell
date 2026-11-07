@@ -8,7 +8,7 @@ dated, step-by-step record (methods, every run, verification) is in
 "Vsync-timed presentation", "GPU-aware budget" and "Adaptive pacing", with probe tables
 in [`src/iron_latency_probe/README.md`](../../src/iron_latency_probe/README.md).
 
-**Current recommendation:** `bun run native:adaptive`. Low latency (≈21–24 ms present
+**Current recommendation:** `bun run native:run`. Low latency (≈21–24 ms present
 delay) while the user drags; stock Bevy pacing (≈45 ms, but spike-proof) otherwise.
 
 All numbers: Apple M5, macOS 27.2, Bevy 0.20, wgpu 30.0.1, dev-opt, 60 Hz LG displays
@@ -131,15 +131,15 @@ only during drags, where one repeated frame is hard to see and latency matters m
 ## 8. Where things live
 
 - In-app measurement (2026-11-05): the Latency view and its OS-pointer probe,
-  [`latency-view.md`](latency-view.md); `native:adaptive` measured there at ≈36 ms
+  [`latency-view.md`](latency-view.md); adaptive pacing (now the native default) measured there at ≈36 ms
   for a document drag versus ≈52 ms for the WKWebView DOM, 60 Hz.
 
 - Host: `src-native/src/{pacing,frame_budget,vsync_clock,present_feedback,gpu_timing,display_link,motion_3d}.rs`.
-  Modes: `native:baseline`, `native:low-latency` (old), `native:late-fifo`, `native:adaptive`.
+  Modes (`IRON_NATIVE_PACING`): `display` (baseline, with `IRON_NATIVE_RENDER_MODE=pipelined`), `late` (old), `late-fifo`, `adaptive` (the default since 2026-11-06); `src-native/README.md`, “Frame modes”.
   Knobs: `IRON_NATIVE_PACING_MARGIN_MS`, `IRON_NATIVE_GPU_BUDGET=0`, `IRON_NATIVE_FRAME_CLOCK=wall`,
   `IRON_NATIVE_2D_MOTION`, `IRON_NATIVE_3D_MOTION`, `IRON_NATIVE_3D_LOAD`.
 - Standalone Bevy control (no Tauri/Vello/webview): `src/iron_latency_probe`,
-  `native:standalone[:late-fifo|:motion|:stock]`; `IRON_BEVY_PACING=late|late-fifo|metal-link`.
+  `src/iron_latency_probe/run.sh`; `IRON_BEVY_PACING=late|late-fifo|metal-link`, `IRON_BEVY_MOTION=1`.
 - Durable measurements: [`benchmarks/native-latency-2026-10-27.json`](benchmarks/native-latency-2026-10-27.json),
   [`benchmarks/native-presentation-2026-10-27.json`](benchmarks/native-presentation-2026-10-27.json);
   raw HUD reports, logs, traces and capture scripts in

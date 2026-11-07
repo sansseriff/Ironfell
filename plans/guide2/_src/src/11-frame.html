@@ -13,7 +13,7 @@
 </tbody></table></div>
 <p><code>BrowserRuntime</code> owns both browser modes' bootstrap, resizing, frame loop, disposal and font loading. Worker/main adapters no longer duplicate that lifecycle. Native retains its own surface and clock. The native pointer uses the latest AppKit sample, bypassing webview motion IPC; buttons, keys, wheel and document calls still use the shared request protocol.</p>
 <snip file="src/engine_protocol.rs" lines="8-14" first="pub enum Request {" last="Resize {"/>
-<p>Rust defines the request/event union. <code>bun run protocol:generate</code> generates TypeScript wire types and named document commands; <code>bun run check</code> checks freshness and negative type fixtures. The low-level document call still carries a name and JSON arguments, checked for unknown names, arity and types before touching the world.</p>
+<p>Rust defines the request/event union. <code>bun run protocol</code> generates TypeScript wire types and named document commands; <code>bun run check</code> checks freshness and negative type fixtures. The low-level document call still carries a name and JSON arguments, checked for unknown names, arity and types before touching the world.</p>
 <snip file="src/engine_dispatch.rs" lines="6-12" first="fn arity(args:&amp;[Value],expected:usize)-&gt;Result&lt;(),String&gt;{" last="pub fn call(app:&amp;mut WorkerApp,name:&amp;str,args:&amp;[Value])-&gt;Result&lt;String,String&gt;{"/>
 <p>The TypeScript model API is built by <code>makeDocumentApi(call)</code> over synchronous or asynchronous transports. The model parser therefore works on native as well as wasm; its code must await calls rather than assume the store lives beside it.</p>
 

@@ -18,6 +18,7 @@ import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
 import { LATENCY_VIEW, titleOf, type ViewSpec } from './views';
 import { controllerManager } from '../controller-manager.svelte';
+import { lastActive, noteActive } from './active_view.svelte';
 import type { CompositionEntry, OpenedDocument } from '../runtime/document_client.svelte';
 
 /** The layout every document starts from: the Main view (the `main`
@@ -45,6 +46,9 @@ function baseLayout(api: DockviewApi) {
   // The standard components (component-authoring.md §6): a view onto the
   // session's library composition; drag one onto a canvas to place it.
   view('library', 'Library', { source: 'library', notation: 'composition' }, { referencePanel: 'model', direction: 'within' }, { inactive: true });
+  // The layers panel (plans/specs/layers-panel.md): the front tab on the left,
+  // following the composition view used last.
+  view('layers', 'Layers', { source: 'follow', notation: 'layers' }, { referencePanel: 'model', direction: 'within', index: 0 });
   view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 280 });
 }
 
@@ -249,6 +253,12 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
   baseLayout(api);
   applying--;
   api.onDidLayoutChange(scheduleSave);
+  // The layers panel follows the composition view used last (layers-panel.md §4).
+  api.onDidActivePanelChange(({ panel }) => {
+    if (!panel) return;
+    const spec = specOf(panel);
+    noteActive(panel.id, spec?.notation === 'composition' ? spec.source : null);
+  });
   const doc = controllerManager.docClient;
   unwatch = [
     doc.onDocumentOpened((o) => void open(api, o)),
@@ -362,10 +372,11 @@ export async function resetWorkspace() {
 export function showComposition(source: string): string | null {
   if (!current || !source) return null;
   const c = controllerManager.docClient.compositions.find((e) => e.id === source || e.name === source);
-  const existing = current.panels.find((p) => {
+  // With two tabs on one composition, the one used last (layers-panel.md §5).
+  const existing = current.panels.filter((p) => {
     const spec = specOf(p);
     return spec?.notation === 'composition' && (spec.source === source || (!!c && (spec.source === c.id || spec.source === c.name)));
-  });
+  }).sort((a, b) => (lastActive.get(b.id) ?? 0) - (lastActive.get(a.id) ?? 0))[0];
   if (existing) {
     existing.api.setActive();
     return existing.id;
@@ -380,4 +391,29 @@ export function showComposition(source: string): string | null {
 /** The views onto narratives (their sources), for the driver. */
 export function openNarratives(): string[] {
   return (current?.panels ?? []).map((p) => (p.params as { spec?: ViewSpec } | undefined)?.spec).filter((s): s is ViewSpec => s?.notation === 'narrative').map((s) => s.source);
+}
+
+/** A view's spec as the dock holds it now (a pinned layers view rewrites its
+ *  own), or undefined for no such view. */
+export function viewSpec(panel: string): ViewSpec | undefined {
+  const p = current?.getPanel(panel);
+  return p ? specOf(p) : undefined;
+}
+
+/** Replace a view's spec, kept with the layout: the layers panel's pin
+ *  (layers-panel.md §4). */
+export function setViewSpec(panel: string, spec: ViewSpec) {
+  current?.getPanel(panel)?.api.updateParameters({ spec });
+  scheduleSave();
+}
+
+/** The open view of a composition (id or name) used last, if any. */
+export function viewShowing(source: string): string | null {
+  if (!current) return null;
+  const c = controllerManager.docClient.compositions.find((e) => e.id === source || e.name === source);
+  const views = current.panels.filter((p) => {
+    const spec = specOf(p);
+    return spec?.notation === 'composition' && (spec.source === source || (!!c && (spec.source === c.id || spec.source === c.name)));
+  }).sort((a, b) => (lastActive.get(b.id) ?? 0) - (lastActive.get(a.id) ?? 0));
+  return views[0]?.id ?? null;
 }

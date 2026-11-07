@@ -58,6 +58,8 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "netlist" => { arity(args,1)?; crate::engine_api::document_netlist(app,argument::<String>(args,0)?) },
         "table_edit" => { arity(args,3)?; crate::engine_api::document_table_edit(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "link" => { arity(args,4)?; crate::engine_api::document_link(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },
+        "layers" => { arity(args,2)?; crate::engine_api::document_layers(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
+        "select" => { arity(args,2)?; crate::engine_api::document_select(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "counterparts" => { arity(args,1)?; crate::engine_api::document_counterparts(app,argument::<String>(args,0)?) },
         "to_path" => { arity(args,2)?; crate::engine_api::document_to_path(app,argument::<String>(args,0)?,argument::<bool>(args,1)?) },
         "export_svg" => { arity(args,1)?; crate::engine_api::document_export_svg(app,argument::<String>(args,0)?) },

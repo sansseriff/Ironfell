@@ -47,6 +47,8 @@ export type DocumentCommand =
   | { op: 'netlist'; sheet: string }
   | { op: 'table_edit'; table: string; verb: string; cells: string }
   | { op: 'link'; a: string; b: string; keep: string; actor: string }
+  | { op: 'layers'; source: string; open_json: string }
+  | { op: 'select'; items_json: string; mode: string }
   | { op: 'counterparts'; node: string }
   | { op: 'to_path'; node: string; force: boolean }
   | { op: 'export_svg'; scope: string }
@@ -125,6 +127,8 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'netlist': return { fn: command.op, args: [command.sheet] };
     case 'table_edit': return { fn: command.op, args: [command.table, command.verb, command.cells] };
     case 'link': return { fn: command.op, args: [command.a, command.b, command.keep, command.actor] };
+    case 'layers': return { fn: command.op, args: [command.source, command.open_json] };
+    case 'select': return { fn: command.op, args: [command.items_json, command.mode] };
     case 'counterparts': return { fn: command.op, args: [command.node] };
     case 'to_path': return { fn: command.op, args: [command.node, command.force] };
     case 'export_svg': return { fn: command.op, args: [command.scope] };

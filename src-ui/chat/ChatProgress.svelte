@@ -12,7 +12,7 @@
   import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
   import Square from '@lucide/svelte/icons/square';
   import Button from '../lib/ui/Button.svelte';
-  import { stepLabel, type TurnProgress, type WorkStep } from './conversation';
+  import { formatTokens, stepLabel, stepTokens, turnTokens, type TurnProgress, type WorkStep } from './conversation';
 
   let { progress, running, startedAt, completedAt, stop }: {
     progress: TurnProgress; running: boolean; startedAt: number; completedAt?: number; stop?: () => void;
@@ -36,6 +36,16 @@
   const headline = $derived(running
     ? (current ? stepLabel(current, false) : 'Starting')
     : `Worked for ${seconds(startedAt, completedAt ?? now)}`);
+  // Tokens: "~" while estimated; exact once every model call has reported.
+  const count = $derived(turnTokens(progress, now, running));
+  const tokenText = $derived(count.tokens
+    ? `${count.exact ? '' : '~'}${formatTokens(count.tokens)} tokens${!running && count.thinking ? ` (${formatTokens(count.thinking)} thinking)` : ''}${count.perSecond ? ` · ${Math.round(count.perSecond)} tok/s` : ''}`
+    : '');
+  const stepTokenText = (step: WorkStep) => {
+    if (step.phase !== 'thinking') return '';
+    const counted = stepTokens(step);
+    return counted.tokens ? `${counted.exact ? '' : '~'}${formatTokens(counted.tokens)} tok · ` : '';
+  };
   const iconFor = (step: WorkStep) => step.phase === 'reading' ? FileSearch : step.phase === 'looking' ? Eye : step.phase === 'applying' ? WandSparkles : step.wrote ? PencilLine : Brain;
 </script>
 
@@ -46,7 +56,8 @@
         <span class="chevron" class:open><ChevronRight size={12} strokeWidth={1.75} /></span>
         {#if running}<span class="pulse" aria-hidden="true"></span>{/if}
         <span class="headline" role={running ? 'status' : undefined}>{headline}</span>
-        {#if running}<span class="elapsed">{seconds(startedAt, now)}</span>{/if}
+        {#if running}<span class="elapsed">{seconds(startedAt, now)}{tokenText ? ` · ${tokenText}` : ''}</span>
+        {:else if tokenText}<span class="elapsed">{tokenText}</span>{/if}
       </Collapsible.Trigger>
       {#if running && stop}
         <Button small variant="outline" class="stop" onclick={stop} aria-label="Stop the agent"><Square size={10} strokeWidth={2} />Stop</Button>
@@ -61,7 +72,7 @@
             <div class="row">
               <Icon size={12} strokeWidth={1.75} />
               <span class="label">{stepLabel(step, done)}</span>
-              <span class="time">{seconds(step.startedAt, step.endedAt ?? now)}</span>
+              <span class="time">{stepTokenText(step)}{seconds(step.startedAt, step.endedAt ?? now)}</span>
             </div>
             {#if step.reasoning.trim()}
               <div class="reasoning"><p>{step.reasoning.trim()}</p></div>
@@ -83,7 +94,7 @@
   .chevron.open { transform: rotate(90deg); }
   .running .headline { color: var(--fg); }
   .headline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .elapsed { color: var(--fg-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .elapsed { color: var(--fg-faint); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .pulse { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.35; } }
   @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } .chevron { transition: none; } }

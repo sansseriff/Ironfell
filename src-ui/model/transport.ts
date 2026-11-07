@@ -93,6 +93,10 @@ export async function readStream(body: ReadableStream<Uint8Array>, onEvent: Comp
       const message = JSON.parse(line);
       if (message.type === 'text' || message.type === 'reasoning') {
         if (typeof message.delta === 'string') onEvent?.({ kind: message.type, delta: message.delta });
+      } else if (message.type === 'thinking-tokens') {
+        if (typeof message.estimated === 'number') onEvent?.({ kind: 'thinking-tokens', estimated: message.estimated });
+      } else if (message.type === 'usage') {
+        if (typeof message.output === 'number') onEvent?.({ kind: 'usage', output: message.output, ...(typeof message.thinking === 'number' ? { thinking: message.thinking } : {}) });
       } else if (message.type === 'done') {
         if (typeof message.text !== 'string') throw new Error('Invalid agent bridge response');
         return { text: message.text as string, usage: message.usage };
@@ -138,6 +142,7 @@ export class AnthropicTransport implements ModelTransport {
       stream.on('thinking', delta => onEvent({ kind: 'reasoning', delta }));
     }
     const final = await stream.finalMessage();
+    live.onEvent?.({ kind: 'usage', output: final.usage.output_tokens });
     const text = final.content
       .filter((b): b is Anthropic.TextBlock => b.type === 'text')
       .map((b) => b.text)

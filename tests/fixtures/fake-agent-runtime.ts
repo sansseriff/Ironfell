@@ -66,6 +66,7 @@ if (process.argv.includes('app-server')) {
           await pause(70);
         }
         reply({ method: 'item/completed', params: { item: { id: 'answer', type: 'agentMessage', text: streamed } } });
+        reply({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: { outputTokens: 42, reasoningOutputTokens: 30 } } } });
         reply({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
         return;
       }
@@ -75,6 +76,7 @@ if (process.argv.includes('app-server')) {
       reply({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'reasoning', summaryIndex: 0, delta: 'Reading the request.' } });
       for (const piece of text.match(/[\s\S]{1,40}/g) ?? []) reply({ method: 'item/agentMessage/delta', params: { itemId: 'answer', delta: piece } });
       reply({ method: 'item/completed', params: { item: { id: 'answer', type: 'agentMessage', text } } });
+      reply({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: { outputTokens: 42, reasoningOutputTokens: 30 } } } });
       reply({ method: 'turn/completed', params: { turn: { status: failed ? 'failed' : 'completed', error: { message: 'fixture turn failed' } } } });
     }
   });
@@ -93,6 +95,8 @@ if (process.argv.includes('app-server')) {
   reply({ type: 'system', subtype: 'init' });
   reply({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } });
   reply({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Nothing to change.' } } });
+  reply({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 50, estimated_tokens_delta: 50 });
+  reply({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 120, estimated_tokens_delta: 70 });
   for (const piece of ['<edit', '/>']) reply({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: piece } } });
-  reply({ type: 'result', subtype: 'success', result: '<edit/>', is_error: false, usage: { input_tokens: input.length } });
+  reply({ type: 'result', subtype: 'success', result: '<edit/>', is_error: false, usage: { input_tokens: input.length, output_tokens: 130, output_tokens_details: { thinking_tokens: 125 } } });
 }

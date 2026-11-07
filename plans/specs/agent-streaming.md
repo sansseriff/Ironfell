@@ -179,6 +179,17 @@ first that changes `iron_document`.
   and the markup so far (`streamView`, `editVerbs` in `chat/conversation.ts`).
   A stopped turn reads "Stopped. Nothing was changed." and restores the prompt.
 
+- **Tokens (added the same day):** two more events, `thinking-tokens` (Claude
+  Code's `system`/`thinking_tokens` line, its running estimate of hidden
+  thinking, every few seconds) and `usage` (exact output tokens with thinking,
+  at the end of each model call: Codex `thread/tokenUsage/updated`, Claude's
+  `result`, the browser API's final message). The work log shows "~N tokens ·
+  R tok/s" while running (estimate: the thinking estimate or shared reasoning,
+  plus reply characters ÷ a characters-per-token ratio that starts at 3 and is
+  recalibrated from each exact count; measured ~3.4 for Codex, ~2 for Claude),
+  and "N tokens (T thinking) · R tok/s" once done, per second of model time.
+  Codex reports no count while it reasons, so its counter starts with the reply.
+
 Verified: 65 bun tests (adapters' deltas, NDJSON end to end, idle reset, quiet
 timeout, Stop aborting the runtime, `ask` phases, stream splitting, progress
 folding, batching); `chat-ui.ts` worker and main with a slow streamed fixture

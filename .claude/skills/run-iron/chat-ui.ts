@@ -149,10 +149,13 @@ try {
   await running.locator('[data-edit-forming] li', { hasText: 'Create rect "inlet"' }).waitFor({ timeout: 15000 });
   assert.match(await running.locator('.chat-markdown').first().innerText(), /Here is a pump/);
   assert.match(await running.locator('[data-chat-progress]').innerText(), /Writing the edit/);
+  assert.match(await running.locator('[data-chat-progress]').innerText(), /~\d+ tokens/);
   await page.screenshot({ path: `.agents/chat/streaming-${runtimeMode}.png` });
   await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="completed"]').length === 4, undefined, { timeout: 15000 });
   const streamedTurn = page.locator('.chat-turn').last();
   assert.match(await streamedTurn.locator('[data-chat-progress]').innerText(), /Worked for/);
+  // The runtime's exact count replaces the estimate once the call ends.
+  assert.match(await streamedTurn.locator('[data-chat-progress]').innerText(), /42 tokens \(30 thinking\)/);
   assert.match(await page.evaluate(() => (window as any).__iron.view({ fidelity: 'skeleton' })), /pump body/);
   await page.screenshot({ path: `.agents/chat/streamed-${runtimeMode}.png` });
   const beforeStop = await page.evaluate(() => (window as any).__iron.save());

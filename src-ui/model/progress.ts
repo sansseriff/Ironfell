@@ -11,7 +11,12 @@ export type AgentPhase = 'reading' | 'thinking' | 'looking' | 'applying';
 export type AgentEvent =
   | { kind: 'phase'; phase: AgentPhase; attempt: number }
   | { kind: 'reasoning'; delta: string }
-  | { kind: 'text'; delta: string };
+  | { kind: 'text'; delta: string }
+  /** The runtime's running estimate of this model call's thinking tokens
+   *  (Claude Code reports one while the thinking itself stays hidden). */
+  | { kind: 'thinking-tokens'; estimated: number }
+  /** This model call's exact output tokens, thinking included, once it ends. */
+  | { kind: 'usage'; output: number; thinking?: number };
 
 /** What a live caller passes beside the request: where events go, and how to stop. */
 export interface AskLive {
@@ -19,12 +24,13 @@ export interface AskLive {
   signal?: AbortSignal;
 }
 
-/** Merge a run of deltas of one kind into one event. */
+/** Merge a run of deltas of one kind into one event; of running estimates, keep the latest. */
 export function mergeEvents(events: AgentEvent[]): AgentEvent[] {
   const out: AgentEvent[] = [];
   for (const event of events) {
     const last = out[out.length - 1];
-    if (last && event.kind !== 'phase' && last.kind === event.kind) out[out.length - 1] = { kind: event.kind, delta: last.delta + event.delta };
+    if (last && (event.kind === 'text' || event.kind === 'reasoning') && last.kind === event.kind) out[out.length - 1] = { kind: event.kind, delta: last.delta + event.delta };
+    else if (last && event.kind === 'thinking-tokens' && last.kind === event.kind) out[out.length - 1] = event;
     else out.push(event);
   }
   return out;

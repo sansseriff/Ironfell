@@ -7,8 +7,12 @@ import type { CompletionRequest, ModelEntry } from '../../src-ui/model/runtime-o
 export type { ModelEntry };
 
 export interface RuntimeResult { text: string; usage?: unknown }
-/** A delta of the reply, or of the model's reasoning (summaries or thinking). */
-export interface RuntimeEvent { type: 'text' | 'reasoning'; delta: string }
+/** A delta of the reply or of the model's reasoning (summaries or thinking);
+ *  a running estimate of thinking tokens; or the call's exact output tokens. */
+export type RuntimeEvent =
+  | { type: 'text' | 'reasoning'; delta: string }
+  | { type: 'thinking-tokens'; estimated: number }
+  | { type: 'usage'; output: number; thinking?: number };
 export type Runtime = (request: CompletionRequest, signal: AbortSignal, onEvent?: (event: RuntimeEvent) => void) => Promise<RuntimeResult>;
 export type ModelLister = (signal: AbortSignal) => Promise<ModelEntry[]>;
 
@@ -120,6 +124,12 @@ export function codexRuntime(command = process.env.IRON_CODEX_BIN ?? 'codex'): R
       if (message.method === 'item/completed' && message.params.item.type === 'agentMessage') {
         messages.set(message.params.item.id, message.params.item.text);
       }
+      // Exact counts arrive once, just before the turn completes; Codex
+      // reports nothing while it reasons.
+      if (message.method === 'thread/tokenUsage/updated') {
+        const last = params.tokenUsage?.last;
+        if (typeof last?.outputTokens === 'number') onEvent({ type: 'usage', output: last.outputTokens, ...(typeof last.reasoningOutputTokens === 'number' ? { thinking: last.reasoningOutputTokens } : {}) });
+      }
       if (message.method === 'turn/completed') {
         const turn = message.params.turn;
         if (turn.status !== 'completed') fail?.(new Error(turn.error?.message ?? `Codex turn ${turn.status}`));
@@ -229,6 +239,11 @@ export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude',
           let message: any;
           try { message = JSON.parse(line); } catch { return; }
           if (message.type === 'result') { result = message; return; }
+          // Claude Code's estimate of the hidden thinking, every few seconds.
+          if (message.type === 'system' && message.subtype === 'thinking_tokens' && typeof message.estimated_tokens === 'number') {
+            onEvent({ type: 'thinking-tokens', estimated: message.estimated_tokens });
+            return;
+          }
           if (message.type !== 'stream_event') return;
           const event = message.event ?? {};
           // A new thinking block starts a paragraph, once thinking text has been shown.
@@ -253,7 +268,9 @@ export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude',
               ? `Claude exited (${code}); check ANTHROPIC_API_KEY`
               : `Claude exited (${code}); check that Claude Code is signed in (\`claude auth status\`, \`claude login\`)`);
             if (!result || result.is_error || typeof result.result !== 'string') throw new Error('Claude did not return a successful text result');
-            resolve({ text: result.result, usage: result.usage });
+            const usage = result.usage;
+            if (typeof usage?.output_tokens === 'number') onEvent({ type: 'usage', output: usage.output_tokens, ...(typeof usage.output_tokens_details?.thinking_tokens === 'number' ? { thinking: usage.output_tokens_details.thinking_tokens } : {}) });
+            resolve({ text: result.result, usage });
           } catch (error) { reject(error); }
         });
         child.stdin.end(transcript(request));

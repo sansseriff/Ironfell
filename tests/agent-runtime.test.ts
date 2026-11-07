@@ -311,18 +311,23 @@ test('a prose-only correction cannot turn a rejected edit into a reported succes
 // ---- Streaming (plans/specs/agent-streaming.md) --------------------------------
 
 test('Codex and Claude adapters stream reply and reasoning deltas that add up to the reply', async () => {
-  const codexEvents: { type: string; delta: string }[] = [];
+  const codexEvents: any[] = [];
   const codex = await codexRuntime(fixture)(payload, AbortSignal.timeout(3000), event => codexEvents.push(event));
   assert.equal(codexEvents.filter(e => e.type === 'text').map(e => e.delta).join(''), codex.text);
   assert.deepEqual(codexEvents.filter(e => e.type === 'reasoning').map(e => e.delta), ['Reading the request.']);
+  assert.deepEqual(codexEvents.filter(e => e.type === 'usage'), [{ type: 'usage', output: 42, thinking: 30 }]);
   const saved = process.env.ANTHROPIC_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
   try {
-    const claudeEvents: { type: string; delta: string }[] = [];
+    const claudeEvents: any[] = [];
     const claude = await claudeRuntime(fixture)(payload, AbortSignal.timeout(3000), event => claudeEvents.push(event));
     assert.equal(claude.text, '<edit/>');
     assert.equal(claudeEvents.filter(e => e.type === 'text').map(e => e.delta).join(''), '<edit/>');
     assert.deepEqual(claudeEvents.filter(e => e.type === 'reasoning').map(e => e.delta), ['Nothing to change.']);
+    // Claude Code's running estimate of hidden thinking, then the exact count.
+    assert.deepEqual(claudeEvents.filter(e => e.type === 'thinking-tokens' || e.type === 'usage'), [
+      { type: 'thinking-tokens', estimated: 50 }, { type: 'thinking-tokens', estimated: 120 }, { type: 'usage', output: 130, thinking: 125 },
+    ]);
   } finally { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; }
 });
 
@@ -334,14 +339,17 @@ test('the bridge streams NDJSON deltas to the transport, and output keeps a long
       onEvent?.({ type: i === 0 ? 'reasoning' : 'text', delta: i === 0 ? 'plan' : `${i}` });
       await new Promise(resolve => setTimeout(resolve, 40));
     }
+    onEvent?.({ type: 'thinking-tokens', estimated: 7 });
+    onEvent?.({ type: 'usage', output: 12, thinking: 3 });
     return { text: '123456789' };
   }, async endpoint => {
-    const events: { kind: string; delta?: string }[] = [];
+    const events: any[] = [];
     const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
     const result = await transport.complete(payload.system, payload.messages, { onEvent: event => events.push(event) });
     assert.equal(result.text, '123456789');
     assert.deepEqual(events[0], { kind: 'reasoning', delta: 'plan' });
     assert.equal(events.filter(e => e.kind === 'text').map(e => e.delta).join(''), '123456789');
+    assert.deepEqual(events.slice(-2), [{ kind: 'thinking-tokens', estimated: 7 }, { kind: 'usage', output: 12, thinking: 3 }]);
   }, 100);
 });
 

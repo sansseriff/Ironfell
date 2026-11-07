@@ -29,6 +29,15 @@ export interface WorkStep {
   reasoning: string;
   /** What the model wrote during this step, once it started writing. */
   wrote?: 'prose' | 'edit';
+  /** Characters of reply and of shared reasoning this step, for estimates. */
+  textChars?: number;
+  reasoningChars?: number;
+  /** The runtime's own running estimate of hidden thinking tokens. */
+  thinkingTokens?: number;
+  /** When the first sign of output arrived (any token, estimate or delta). */
+  firstTokenAt?: number;
+  /** Exact output tokens (thinking included) once the model call ended. */
+  usage?: { output: number; thinking?: number };
 }
 
 export interface TurnProgress {
@@ -46,10 +55,19 @@ export function applyAgentEvents(progress: TurnProgress, events: AgentEvent[], n
       if (step && step.endedAt === undefined) step.endedAt = now;
       progress.steps.push({ phase: event.phase, attempt: event.attempt, startedAt: now, reasoning: '' });
       if (event.phase === 'thinking') progress.text = '';
+    } else if (event.kind === 'usage') {
+      if (step) {
+        step.usage = { output: event.output, ...(event.thinking !== undefined ? { thinking: event.thinking } : {}) };
+        const replyTokens = event.output - (event.thinking ?? 0);
+        if ((step.textChars ?? 0) >= 200 && replyTokens > 0) charsPerToken = Math.min(6, Math.max(1.5, 0.5 * charsPerToken + 0.5 * (step.textChars! / replyTokens)));
+      }
+    } else if (event.kind === 'thinking-tokens') {
+      if (step) { step.thinkingTokens = event.estimated; step.firstTokenAt ??= now; }
     } else if (event.kind === 'reasoning') {
-      if (step) step.reasoning += event.delta;
+      if (step) { step.reasoning += event.delta; step.reasoningChars = (step.reasoningChars ?? 0) + event.delta.length; step.firstTokenAt ??= now; }
     } else {
       progress.text += event.delta;
+      if (step) { step.textChars = (step.textChars ?? 0) + event.delta.length; step.firstTokenAt ??= now; }
       if (step) step.wrote = streamView(progress.text).edit !== null ? 'edit' : progress.text.trim() ? 'prose' : step.wrote;
     }
   }
@@ -60,6 +78,40 @@ export function applyAgentEvents(progress: TurnProgress, events: AgentEvent[], n
 export function finishProgress(progress: TurnProgress | undefined, now: number) {
   const step = progress?.steps[progress.steps.length - 1];
   if (step && step.endedAt === undefined) step.endedAt = now;
+}
+
+/** Characters a reply token, for the live estimate. It starts at 3 and is
+ *  recalibrated from each exact count: measured 2026-11-06, Codex wrote ~3.4
+ *  and Claude ~2 (units and symbols such as Ω cost more). */
+let charsPerToken = 3;
+
+/** A step's output tokens: exact once its model call ended, else estimated
+ *  from the runtime's thinking estimate (or shared reasoning) and the reply. */
+export function stepTokens(step: WorkStep): { tokens: number; thinking: number; exact: boolean } {
+  if (step.usage) return { tokens: step.usage.output, thinking: step.usage.thinking ?? 0, exact: true };
+  const thinking = step.thinkingTokens ?? Math.ceil((step.reasoningChars ?? 0) / charsPerToken);
+  return { tokens: thinking + Math.ceil((step.textChars ?? 0) / charsPerToken), thinking, exact: false };
+}
+
+/** A turn's output tokens over its model calls, and their rate: per second of
+ *  generating (from the first token) while running, per second of model time once done. */
+export function turnTokens(progress: TurnProgress, now: number, running: boolean): { tokens: number; thinking: number; exact: boolean; perSecond: number | null } {
+  let tokens = 0, thinking = 0, exact = true, seconds = 0;
+  for (const step of progress.steps) {
+    if (step.phase !== 'thinking') continue;
+    const counted = stepTokens(step);
+    tokens += counted.tokens;
+    thinking += counted.thinking;
+    exact &&= counted.exact;
+    const from = running ? step.firstTokenAt : step.startedAt;
+    if (from !== undefined) seconds += ((step.endedAt ?? now) - from) / 1000;
+  }
+  return { tokens, thinking, exact: exact && tokens > 0, perSecond: seconds >= 1 && tokens > 0 ? tokens / seconds : null };
+}
+
+/** "1,234" or "12.3k". */
+export function formatTokens(n: number): string {
+  return n < 10000 ? n.toLocaleString('en-US') : `${(n / 1000).toFixed(1)}k`;
 }
 
 /** What a step is doing (running) or did (done), in a few words. */

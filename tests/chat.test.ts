@@ -100,3 +100,26 @@ test('progress batches merge deltas and send a phase change at once', async () =
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.deepEqual(sent[1], [{ kind: 'text', delta: 'c' }]);
 });
+
+test('token counts: estimates while running, exact once each call reports, with a rate', async () => {
+  const { applyAgentEvents, turnTokens, stepTokens, formatTokens } = await import('../src-ui/chat/conversation');
+  const { mergeEvents } = await import('../src-ui/model/progress');
+  assert.deepEqual(mergeEvents([{ kind: 'thinking-tokens', estimated: 50 }, { kind: 'thinking-tokens', estimated: 150 }]), [{ kind: 'thinking-tokens', estimated: 150 }]);
+  const progress = { steps: [], text: '' } as any;
+  applyAgentEvents(progress, [{ kind: 'phase', phase: 'thinking', attempt: 1 }], 0);
+  applyAgentEvents(progress, [{ kind: 'thinking-tokens', estimated: 300 }], 1000);
+  applyAgentEvents(progress, [{ kind: 'text', delta: 'x'.repeat(300) }], 2000);
+  // 300 estimated thinking + 300 chars / 3 = 400, over 2 s since the first token.
+  assert.deepEqual(turnTokens(progress, 3000, true), { tokens: 400, thinking: 300, exact: false, perSecond: 200 });
+  applyAgentEvents(progress, [{ kind: 'usage', output: 420, thinking: 310 }, { kind: 'phase', phase: 'applying', attempt: 1 }], 4000);
+  // 300 chars were 110 reply tokens: the next estimate uses about 2.9 characters a token.
+  const next = applyAgentEvents({ steps: [], text: '' }, [{ kind: 'phase', phase: 'thinking', attempt: 1 }, { kind: 'text', delta: 'y'.repeat(290) }], 0);
+  assert.equal(stepTokens(next.steps[0]).tokens, Math.ceil(290 / (0.5 * 3 + 0.5 * (300 / 110))));
+  assert.deepEqual(stepTokens(progress.steps[0]), { tokens: 420, thinking: 310, exact: true });
+  // Done: per second of model time (4 s).
+  assert.deepEqual(turnTokens(progress, 5000, false), { tokens: 420, thinking: 310, exact: true, perSecond: 105 });
+  // Codex shares nothing while it reasons: no count, no rate yet.
+  const quiet = applyAgentEvents({ steps: [], text: '' }, [{ kind: 'phase', phase: 'thinking', attempt: 1 }], 0);
+  assert.deepEqual(turnTokens(quiet, 5000, true), { tokens: 0, thinking: 0, exact: false, perSecond: null });
+  assert.deepEqual([formatTokens(1234), formatTokens(12345)], ['1,234', '12.3k']);
+});

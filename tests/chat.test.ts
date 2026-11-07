@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contentParts, safeChatUrl, chatHistory, shouldSubmit, narrativeMode, nearBottom, type ChatTurn } from '../src-ui/chat/conversation';
+import { contentParts, failureSummary, safeChatUrl, chatHistory, shouldSubmit, narrativeMode, nearBottom, type ChatTurn } from '../src-ui/chat/conversation';
 import { boundedHistory } from '../src-ui/model/conversation';
 
 test('content parts preserve prose and ordered composition visuals', () => {
@@ -48,4 +48,10 @@ test('layout modes validate stored values and scroll follow uses the reader posi
   assert.equal(narrativeMode('corrupt-local-storage'), 'authoring');
   assert.equal(nearBottom(100, 500, 400), true);
   assert.equal(nearBottom(0, 1000, 400), false);
+});
+
+test('a rejected edit reads as a sentence, not markup', () => {
+  const failure = '<edit-failed applied="none" version="14">\n  <error kind="parse">instance.def: not a valid id: &quot;#$def&quot; at line 1</error>\n</edit-failed>';
+  assert.equal(failureSummary(failure, 2), 'The edit was rejected after 2 attempts, so nothing changed: instance.def: not a valid id: "#$def" at line 1');
+  assert.equal(failureSummary('plain words'), 'plain words');
 });

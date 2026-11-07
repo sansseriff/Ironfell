@@ -44,6 +44,17 @@ export function contentParts(text: string): ContentPart[] {
   return result;
 }
 
+/** A rejected edit's `<edit-failed>` markup as a sentence: its errors' text,
+ *  unescaped; the markup itself stays in the edit details. */
+export function failureSummary(failure: string, attempts = 1): string {
+  const errors = [...failure.matchAll(/<error\b[^>]*>([\s\S]*?)<\/error>/g)]
+    .map(m => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&').trim())
+    .filter(Boolean);
+  if (!errors.length) return failure.trim() || 'The request could not be completed.';
+  const tries = attempts > 1 ? ` after ${attempts} attempts` : '';
+  return `The edit was rejected${tries}, so nothing changed: ${errors.join('; ')}`;
+}
+
 export function safeChatUrl(value: string, image = false): string | null {
   try {
     const url = new URL(value);

@@ -100,6 +100,13 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
     }
     return raw.startsWith('#') || raw.startsWith('r') ? raw : `#${raw}`;
   };
+  // A leaf value: a ref leaf (instance.def, …) may name a node this edit
+  // creates by its $alias, like any id attribute.
+  const leafValue = (kind: Parameters<typeof coerce>[0], raw: string, index: number): SlotJson => {
+    const text = raw.trim();
+    if (kind === 'ref' && text.startsWith('$')) return { ref: resolveId(text, 'ref', index) };
+    return coerce(kind, raw);
+  };
 
   // Pass 3: placements, batched per (parent, after) so keys are distinct.
   const placementKeys = new Map<string, string[]>();
@@ -152,7 +159,7 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
           try {
             leaf = resolveLeaf(schema, type, k);
             comps[leaf.facet] ??= {};
-            comps[leaf.facet][leaf.field] = coerce(leaf.kind, raw);
+            comps[leaf.facet][leaf.field] = leafValue(leaf.kind, raw, v.index);
           } catch (e) {
             throw at(e instanceof Error ? e.message : String(e));
           }
@@ -174,7 +181,7 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
           let leaf;
           try {
             leaf = k.includes('.') || !type ? resolveLeafAnyType(schema, k) : resolveLeaf(schema, type, k);
-            const slot = coerce(leaf.kind, raw);
+            const slot = leafValue(leaf.kind, raw, v.index);
             if (v.verb === 'set') ops.push({ t: 'set', id, path: `${leaf.facet}.${leaf.field}`, slot });
             else (byComp[leaf.facet] ??= {})[leaf.field] = slot;
           } catch (e) {

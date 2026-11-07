@@ -1,7 +1,7 @@
 <script lang="ts">
   import ChatTranscript from './ChatTranscript.svelte';
   import ChatComposer from './ChatComposer.svelte';
-  import { chatHistory, type ChatSession, type ChatTurn, type SendTurn } from './conversation';
+  import { chatHistory, failureSummary, type ChatSession, type ChatTurn, type SendTurn } from './conversation';
   import { controllerManager } from '../controller-manager.svelte';
   import type { Snippet } from 'svelte';
 
@@ -23,7 +23,7 @@
       const result = await execute(text, history, turn);
       turn.result = result;
       turn.status = result.ok ? 'completed' : 'failed';
-      turn.error = result.error || (!result.ok ? result.outcome?.failure || 'The request could not be completed.' : '');
+      turn.error = result.error || (!result.ok ? (result.outcome?.failure ? failureSummary(result.outcome.failure, result.attempts) : 'The request could not be completed.') : '');
     } catch (error) { turn.status = 'failed'; turn.error = String(error); }
     turn.completedAt = Date.now();
     current.turns = current.turns.map(item => item.id === turn.id ? { ...turn } : item);

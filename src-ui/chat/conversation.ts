@@ -28,7 +28,7 @@ export interface WorkStep {
   /** Reasoning the runtime shared during this step (summaries or thinking). */
   reasoning: string;
   /** What the model wrote during this step, once it started writing. */
-  wrote?: 'prose' | 'edit';
+  wrote?: 'prose' | 'edit' | 'revise';
   /** Characters of reply and of shared reasoning this step, for estimates. */
   textChars?: number;
   reasoningChars?: number;
@@ -68,7 +68,10 @@ export function applyAgentEvents(progress: TurnProgress, events: AgentEvent[], n
     } else {
       progress.text += event.delta;
       if (step) { step.textChars = (step.textChars ?? 0) + event.delta.length; step.firstTokenAt ??= now; }
-      if (step) step.wrote = streamView(progress.text).edit !== null ? 'edit' : progress.text.trim() ? 'prose' : step.wrote;
+      if (step) {
+        const formed = streamView(progress.text).edit;
+        step.wrote = formed !== null ? (formed.startsWith('<revise') ? 'revise' : 'edit') : progress.text.trim() ? 'prose' : step.wrote;
+      }
     }
   }
   return progress;
@@ -122,6 +125,7 @@ export function stepLabel(step: WorkStep, done: boolean): string {
     case 'applying': return done ? 'Applied the edit' : 'Applying the edit';
     case 'thinking': {
       const repair = step.attempt > 1;
+      if (step.wrote === 'revise') return done ? 'Revised the rejected edit' : 'Revising the rejected edit';
       if (step.wrote === 'edit') return repair ? (done ? 'Rewrote the rejected edit' : 'Rewriting the rejected edit') : done ? 'Wrote the edit' : 'Writing the edit';
       if (step.wrote === 'prose') return done ? 'Replied' : 'Writing';
       return repair ? (done ? 'Reconsidered the rejected edit' : 'Reconsidering the rejected edit') : done ? 'Thought' : 'Thinking';
@@ -137,7 +141,7 @@ export interface StreamView { prose: string; edit: string | null; verbs: string[
 
 export function streamView(text: string): StreamView {
   let start = -1;
-  for (const match of text.matchAll(/<(?:edit|look)[\s>/]/g)) {
+  for (const match of text.matchAll(/<(?:edit|look|revise)[\s>/]/g)) {
     // An edit inside a fenced code block is an example, not the edit.
     if ((text.slice(0, match.index).match(/```/g)?.length ?? 0) % 2 === 0) { start = match.index!; break; }
   }
@@ -147,8 +151,10 @@ export function streamView(text: string): StreamView {
     const gt = text.indexOf('>', start);
     return { prose: text.slice(0, start) + (gt < 0 ? '' : holdBack(text.slice(gt + 1))), edit: null, verbs: [] };
   }
-  const close = text.indexOf('</edit>', start);
-  const end = close < 0 ? text.length : close + '</edit>'.length;
+  // A <revise> patches the rejected edit; it forms like an edit.
+  const closeTag = text.startsWith('<revise', start) ? '</revise>' : '</edit>';
+  const close = text.indexOf(closeTag, start);
+  const end = close < 0 ? text.length : close + closeTag.length;
   const edit = text.slice(start, end);
   const after = close < 0 ? '' : holdBack(text.slice(end));
   const prose = text.slice(0, start) + after;
@@ -159,7 +165,7 @@ function holdBack(text: string): string {
   const lt = text.lastIndexOf('<');
   if (lt >= 0 && !text.slice(lt).includes('>')) {
     const tail = text.slice(lt);
-    if ('<edit'.startsWith(tail) || '<look'.startsWith(tail) || tail.startsWith('<edit') || tail.startsWith('<look')) text = text.slice(0, lt);
+    if (['<edit', '<look', '<revise'].some(tag => tag.startsWith(tail) || tail.startsWith(tag))) text = text.slice(0, lt);
   }
   const line = text.slice(text.lastIndexOf('\n') + 1);
   if (line.startsWith(':')) text = text.slice(0, text.length - line.length);
@@ -172,7 +178,7 @@ export function editVerbs(edit: string): string[] {
   let depth = 0;
   for (const tag of edit.matchAll(/<(\/?)([a-zA-Z][\w-]*)((?:\s+[\w.:-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g)) {
     const [, closing, name, attrText, selfClosing] = tag;
-    if (name === 'edit') continue;
+    if (name === 'edit' || name === 'revise') continue;
     if (closing) { depth = Math.max(0, depth - 1); continue; }
     if (depth === 0) verbs.push(describeVerb(name, attrText));
     if (!selfClosing) depth++;
@@ -202,6 +208,11 @@ function describeVerb(verb: string, attrText: string): string {
     case 'table': return 'Make a table';
     case 'circuit': return 'Build a circuit';
     case 'write': case 'rewrite': return 'Write narrative';
+    case 'change': return `Change ${a.op ?? ''}${Object.keys(a).filter(k => k !== 'op').length ? ` · ${Object.keys(a).filter(k => k !== 'op').slice(0, 4).join(', ')}` : ''}`;
+    case 'replace': return `Replace ${a.op ?? ''}`;
+    case 'drop': return `Drop ${a.op ?? ''}`;
+    case 'insert': return `Insert ${a.after !== undefined ? `after ${a.after}` : `before ${a.before ?? ''}`}`;
+    case 'text': return `Replace text "${(a.old ?? '').slice(0, 30)}"${/^(true|yes|1)$/i.test(a.all ?? '') ? ' everywhere' : ''}`;
     default: return verb;
   }
 }
@@ -276,6 +287,8 @@ export function failureSummary(failure: string, attempts = 1): string {
   const errors = [...failure.matchAll(/<error\b[^>]*>([\s\S]*?)<\/error>/g)]
     .map(m => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&').trim())
     .filter(Boolean);
+  const revise = failure.match(/<revise-failed>([\s\S]*?)<\/revise-failed>/);
+  if (!errors.length && revise) errors.push(`the revise could not be applied: ${revise[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim()}`);
   if (!errors.length) return failure.trim() || 'The request could not be completed.';
   const tries = attempts > 1 ? ` after ${attempts} attempts` : '';
   return `The edit was rejected${tries}, so nothing changed: ${errors.join('; ')}`;

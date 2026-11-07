@@ -34,6 +34,10 @@ export interface ParsedEdit {
   ops: object[];
   /** alias -> minted id */
   aliases: Record<string, string>;
+  /** For each op, the index of the verb that wrote it: a verb may write several. */
+  opVerb: number[];
+  /** Each verb, briefly, in the model's terms: `create $sinv`, `create point in $btric`. */
+  verbs: string[];
 }
 
 export class EditError extends Error {
@@ -86,11 +90,19 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
     verbs.push({ verb: verb as Verb['verb'], attrs: { ...(child[':@'] ?? {}) }, index: verbs.length });
   }
 
-  // Pass 2: mint ids for aliases, in order of creation.
-  const aliasNames = verbs.filter((v) => v.verb === 'create').map((v) => v.attrs.id).filter((id) => id?.startsWith('$'));
-  const minted = await api.nextIds(aliasNames.length);
+  // Pass 2: mint an id for every create that does not name an existing one
+  // (an $alias, or no id at all), in order of creation.
+  const fresh = verbs.filter((v) => v.verb === 'create' && (!v.attrs.id || v.attrs.id.startsWith('$')));
+  const minted = await api.nextIds(fresh.length);
   const aliases: Record<string, string> = {};
-  aliasNames.forEach((a, i) => (aliases[a] = minted[i]));
+  const mintedFor = new Map<number, string>();
+  fresh.forEach((v, i) => {
+    mintedFor.set(v.index, minted[i]);
+    if (v.attrs.id) {
+      if (aliases[v.attrs.id]) throw new EditError(`op ${v.index}: alias ${v.attrs.id} is created twice in this edit`, v.index);
+      aliases[v.attrs.id] = minted[i];
+    }
+  });
   const resolveId = (raw: string | undefined, what: string, index: number): string => {
     if (!raw) throw new EditError(`op ${index}: missing ${what}`, index);
     if (raw.startsWith('$')) {
@@ -101,10 +113,12 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
     return raw.startsWith('#') || raw.startsWith('r') ? raw : `#${raw}`;
   };
   // A leaf value: a ref leaf (instance.def, …) may name a node this edit
-  // creates by its $alias, like any id attribute.
+  // creates by its $alias, like any id attribute, and so may a binding's
+  // expression ({= $a.port.signal * 2}).
   const leafValue = (kind: Parameters<typeof coerce>[0], raw: string, index: number): SlotJson => {
     const text = raw.trim();
     if (kind === 'ref' && text.startsWith('$')) return { ref: resolveId(text, 'ref', index) };
+    if (/^\{=[\s\S]*\}$/.test(text)) return coerce(kind, text.replace(ALIAS_IN_EXPR, (alias) => resolveId(alias, 'alias', index)));
     return coerce(kind, raw);
   };
 
@@ -141,6 +155,7 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
   const relIds = await api.nextRelationIds(verbs.filter((v) => v.verb === 'link').length);
   let relIndex = 0;
   const ops: object[] = [];
+  const opVerb: number[] = [];
   const skip = new Set(['id', 'type', 'parent', 'after', 'first', 'to', 'from', 'rel', 'path', 'value', 'bind']);
   for (const v of verbs) {
     const a = v.attrs;
@@ -150,7 +165,7 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
         const type = a.type;
         if (!type) throw at('missing type');
         if (!schema.types[type]) throw at(`unknown type "${type}"; types: ${Object.keys(schema.types).join(', ')}`);
-        const id = a.id?.startsWith('$') ? aliases[a.id] : resolveId(a.id ?? minted[0], 'id', v.index);
+        const id = mintedFor.get(v.index) ?? resolveId(a.id, 'id', v.index);
         const { parent, order } = takeKey(v);
         const comps: Record<string, Record<string, SlotJson>> = {};
         for (const [k, raw] of Object.entries(a)) {
@@ -219,8 +234,20 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
         ops.push({ t: 'unlink', id: resolveId(a.id, 'id', v.index) });
         break;
     }
+    while (opVerb.length < ops.length) opVerb.push(v.index);
   }
-  return { expectVersion, exact, ops, aliases };
+  return { expectVersion, exact, ops, aliases, opVerb, verbs: verbs.map(describe) };
+}
+
+/** An `$alias` inside a binding's expression. */
+const ALIAS_IN_EXPR = /\$[A-Za-z_]\w*/g;
+
+/** A verb in the model's own terms, for errors: what it names, or what it makes and where. */
+function describe(v: { verb: string; attrs: Record<string, string> }): string {
+  const a = v.attrs;
+  if (v.verb === 'create') return a.id ? `create ${a.id}` : `create ${a.type ?? 'node'}${a.parent ? ` in ${a.parent}` : ''}`;
+  if (v.verb === 'link') return `link ${a.from ?? ''} ${a.rel ?? 'references'} ${a.to ?? ''}`;
+  return `${v.verb} ${a.id ?? ''}`.trim();
 }
 
 /** A leaf written as `facet.field`, or a bare field unique across all facets. */
@@ -466,10 +493,8 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
     const err = e instanceof EditError ? e : new EditError(String(e));
     return { ok: false, failure: failed(await api.version(), [{ op: err.line ?? null, kind: 'parse', message: err.message }]) };
   }
-  const result: ApplyResult = await api.apply(
-    { label, actor: 'model', ts: Date.now(), ops: parsed.ops, ...(parsed.exact ? { exact: true } : {}) },
-    parsed.expectVersion,
-  );
+  const tx = { label, actor: 'model', ts: Date.now(), ops: parsed.ops, ...(parsed.exact ? { exact: true } : {}) };
+  const result: ApplyResult = await api.apply(tx, parsed.expectVersion);
   if (result.ok) {
     const out: EditOutcome = { ok: true, version: result.version, aliases: parsed.aliases };
     if (result.solver) {
@@ -478,7 +503,43 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
     }
     return out;
   }
-  return { ok: false, version: result.version, failure: failed(result.version ?? await api.version(), result.errors ?? []) };
+  return { ok: false, version: result.version, failure: failed(result.version ?? await api.version(), inModelTerms(tx, parsed, result.errors ?? [])) };
+}
+
+type EditErrorLine = { op: number | null; kind: string; message: string; verb?: string };
+
+/** The store's errors as the model wrote the edit: each op as the verb that
+ *  wrote it (a verb may write several ops), ids this edit minted as the
+ *  aliases they were written as, and an op the transaction's JSON failed to
+ *  read in (a bad expression) found by its column. */
+function inModelTerms(tx: { ops: object[] }, parsed: ParsedEdit, errors: { op: number | null; kind: string; message: string }[]): EditErrorLine[] {
+  const aliasOf = new Map(Object.entries(parsed.aliases).map(([alias, id]) => [id, alias]));
+  const renamed = (message: string) => message.replace(/#[\w/]+/g, (id) => aliasOf.get(id) ?? id);
+  return errors.map((e) => {
+    let op = e.op;
+    let message = e.message;
+    const at = message.match(/ at line (\d+) column (\d+)$/);
+    if (op === null && at) {
+      op = opAtColumn(tx, Number(at[2]));
+      message = message.slice(0, at.index);
+    }
+    const verb = op === null ? null : parsed.opVerb[op] ?? null;
+    return { op: verb, kind: e.kind, message: renamed(message), ...(verb === null ? {} : { verb: parsed.verbs[verb] }) };
+  });
+}
+
+/** Which op of a transaction holds a 1-based byte column of its JSON
+ *  (serde reports positions in bytes; the JSON is one line). */
+function opAtColumn(tx: { ops: object[] }, column: number): number | null {
+  const bytes = (s: string) => new TextEncoder().encode(s).length;
+  const { ops, ...head } = tx;
+  let at = bytes(JSON.stringify({ ...head, ops: [] })) - 2; // just inside "ops":[
+  for (let i = 0; i < ops.length; i++) {
+    const end = at + bytes(JSON.stringify(ops[i]));
+    if (column - 1 < end) return column - 1 >= at ? i : null;
+    at = end + 1; // the comma
+  }
+  return null;
 }
 
 function solverMarkup(version: number, s: SolverSummary): string {
@@ -488,9 +549,27 @@ function solverMarkup(version: number, s: SolverSummary): string {
   return `<applied version="${version}">\n  <solver clusters="${s.clusters.join(' ')}" moved="${s.moved.join(' ')}"/>${unmet.join('')}\n</applied>`;
 }
 
-function failed(version: number, errors: { op: number | null; kind: string; message: string }[]): string {
-  const lines = errors.map((e) => `  <error${e.op === null ? '' : ` op="${e.op}"`} kind="${e.kind}">${escapeXml(e.message)}</error>`);
+/** `<edit-failed>` markup. Errors that say the same thing are one line
+ *  listing their ops, so forty of one mistake read as one. `op` counts the
+ *  edit's verbs from 0. */
+function failed(version: number, errors: EditErrorLine[]): string {
+  const groups = new Map<string, EditErrorLine[]>();
+  for (const e of errors) {
+    const key = `${e.kind}\u0000${e.message}`;
+    groups.set(key, [...(groups.get(key) ?? []), e]);
+  }
+  const lines = [...groups.values()].map((group) => {
+    const [e] = group;
+    const ops = [...new Set(group.map((g) => g.op).filter((op): op is number => op !== null))].sort((a, b) => a - b);
+    const where = ops.length > 1 ? ` ops="${ops.join(' ')}"` : ops.length === 1 ? ` op="${ops[0]}"${e.verb ? ` verb="${escapeAttr(e.verb)}"` : ''}` : '';
+    const times = group.length > 1 ? ` (${group.length} times)` : '';
+    return `  <error${where} kind="${e.kind}">${escapeXml(e.message)}${times}</error>`;
+  });
   return `<edit-failed applied="none" version="${version}">\n${lines.join('\n')}\n</edit-failed>`;
+}
+
+function escapeAttr(s: string): string {
+  return escapeXml(s).replace(/"/g, '&quot;');
 }
 
 function escapeXml(s: string): string {

@@ -227,3 +227,47 @@ trace and single outcome record, the native launcher's log, `turnLog`);
 `chat-ui.ts` worker and main check every finished turn has its calls and its
 outcome in the log (7 turns); live Codex `chat-ui.ts` logged 2 turns (209 KB).
 
+
+## 8. Repairing a rejected edit (2026-11-06)
+
+The first logged turn (an EDFA component, Claude Opus, 286 s) failed twice
+on harness bugs, not on the model's reading of the prompt. Attempt 1 used
+`$aliases` inside bindings (`port.signal="{= $spump.port.signal / 10 …}"`),
+which the manifest implied were allowed but `edit.ts` passed to the
+expression parser unresolved; the store's error had no op and a JSON column
+("unexpected '$' at 1 at line 1 column 869"). Attempt 2 dropped the bindings
+and left `id` off nodes nothing named (points, ions); every such create was
+given the first alias's id, so 41 ops failed as "#U already exists", an id
+the model never wrote. Each repair resent the whole 102-op edit.
+
+Fixed:
+
+- Every create without an id, or with an `$alias`, gets its own minted id; an
+  alias created twice is refused.
+- `$aliases` resolve inside `{= …}` bindings as in id and ref attributes.
+- `<edit-failed>` reads as the model wrote the edit: `op` counts the edit's
+  verbs from 0 (a verb writing several store ops is one op), with
+  `verb="create $sinv"`; ids the edit minted read as their aliases; a bad
+  expression the store fails to read in is placed at its verb by its byte
+  column; identical errors are one line, `ops="…"` and "(N times)".
+- The manifest says `id` is optional on `<create>` and aliases work in
+  bindings.
+- **`<revise>`** (`src-ui/model/revise.ts`): a repair names only what changes
+  in the rejected edit, kept by `ask` as written: `<change op>` (set or add
+  attributes), `<replace op>`, `<drop op>`, `<insert after|before>`, and
+  `<text old new all>` (exact text, once unless `all`; runs last). `op` is an
+  `$alias`/`as=` or the op number, always of the edit as sent, so a revise's
+  own order never shifts its handles; root attributes (`expect-version`)
+  carry over. The revised edit is applied whole as one transaction and is
+  what the chat shows, the turn returns and the log records (`trace` step
+  `revised: true`; a revise that cannot apply is `kind: 'revise'` with a
+  `<revise-failed>` reason). After a rejected revised edit, the full revised
+  edit is shown back so a second revise's numbers match. A turn now has three
+  replies (the edit and two repairs), since a repair is usually short. The
+  chat streams a revise like an edit ("Revising the rejected edit", its steps
+  listed).
+
+Verified: 79 bun tests (10 new in `tests/revise.test.ts`); both logged edits
+replayed through `__iron.edit` on the engine apply, attempt 1 with its live
+bindings (inversion 0.838, gain 20.27 dB, out 10.64 mW); `chat-ui.ts`,
+`agent-runtime.ts`, `agent-components.ts` worker and main; fast smoke.

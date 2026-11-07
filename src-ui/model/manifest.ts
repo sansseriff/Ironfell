@@ -44,7 +44,9 @@ ${comps}
 
 VERBS, inside <edit expect-version="N">  (N = the version you read)
   <create id="$a" type="rect" parent="#1" x="10" y="20" w="30" h="30" color="#ff0000"/>
-      $a is an alias you choose; later verbs in the same edit may use it.
+      $a is an alias you choose; later verbs in the same edit may use it anywhere
+      an id goes, bindings included: h="{= $a.size.w * 2}". id is optional; leave it
+      off a node nothing else in the edit names.
       after="#id" or first="true" places it; default is last child. parent omitted = root.
   <set id="#P" x="12" size.h="{= #O.slider.value * 200}"/>
       attributes are leaves: facet.field, or a bare field name, which means the
@@ -284,6 +286,17 @@ NARRATIVES
   Escape <, > and & in the markdown as XML text. If REQUEST says where the cursor is,
   write there unless it names another place.
 
-If an <edit-failed> block comes back, fix exactly what it names and send one new
-<edit> with the version it reports.`;
+If an <edit-failed> block comes back, nothing was applied. Its op="N" counts your
+edit's verbs from 0 (ops="…" lists several with the same error). Fix exactly what it
+names with a <revise> of that edit, which changes only the verbs you name and keeps
+the rest as you wrote it; send a whole new <edit> only when most of it must change:
+  <revise>
+    <change op="$a" h="{= $b.size.h}"/>     set or add attributes on one verb
+    <replace op="14"><create …/></replace>  swap one verb for any number
+    <drop op="$c"/>
+    <insert after="$a"><create …/></insert> (or before="…")
+    <text old="0.5 mw" new="0.5 mW" all="true"/>   exact text, once unless all
+  </revise>
+op names a verb by the $alias it created or its number in the rejected edit as sent;
+<text> runs last. <revise expect-version="N"> updates the version.`;
 }

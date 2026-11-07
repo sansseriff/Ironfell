@@ -1,10 +1,12 @@
 /**
  * One request, one edit: read a view, ask the model, apply what it wrote,
- * and give it one chance to fix a rejected edit (doc 04 §9.5).
+ * and give it two chances to fix a rejected edit (doc 04 §9.5), each a
+ * <revise> of the rejected edit or a new one.
  */
 import type { DocumentApi } from './api';
 import { applyEdit, extractEdit, type EditOutcome } from './edit';
 import { manifest } from './manifest';
+import { extractRevise, revise } from './revise';
 import type { ModelTransport } from './transport';
 import { boundedHistory, executableReply, type ConversationOptions } from './conversation';
 import { STOPPED, type AskLive } from './progress';
@@ -26,7 +28,8 @@ export interface AskResult {
 export type AskStep =
   | { attempt: number; kind: 'look'; ids: string[] }
   | { attempt: number; kind: 'prose' }
-  | { attempt: number; kind: 'edit'; ok: boolean; failure?: string; summary?: string; version?: number }
+  | { attempt: number; kind: 'edit'; ok: boolean; failure?: string; summary?: string; version?: number; revised?: boolean }
+  | { attempt: number; kind: 'revise'; ok: false; failure: string }
   | { attempt: number; kind: 'no-edit' | 'stale' | 'stopped' | 'error'; message?: string };
 
 /** One request, with the turn's outcome sent to the transport's log (the
@@ -82,6 +85,8 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   ];
   let attempts = 0;
   let lastEdit: string | null = null;
+  /** The edit the store last rejected, as written: what a <revise> patches. */
+  let rejected: string | null = null;
   let lastOutcome: EditOutcome | null = null;
   let note = '';
   let looks = 0;
@@ -89,7 +94,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     trace.push({ attempt: attempts, kind: 'stopped' });
     return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: STOPPED };
   };
-  while (attempts < 2) {
+  while (attempts < MAX_ATTEMPTS) {
     attempts += 1;
     if (live.signal?.aborted) return stopped();
     emit({ kind: 'phase', phase: 'thinking', attempt: attempts });
@@ -117,8 +122,24 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       messages.push({ role: 'user', content: await lookView(api, look) });
       continue;
     }
-    const edit = extractEdit(options.allowTextReply ? executableReply(text) : text);
-    note = text.replace(edit ?? '', '').trim();
+    const executable = options.allowTextReply ? executableReply(text) : text;
+    let edit = extractEdit(executable);
+    // A <revise> patches the edit just rejected (revise.ts): the full edit it
+    // makes is what is applied, shown and logged.
+    const patch = !edit && rejected ? extractRevise(executable) : null;
+    note = text.replace(edit ?? patch ?? '', '').trim();
+    if (patch && rejected) {
+      const revised = revise(rejected, patch);
+      if (!revised.ok) {
+        const failure = `<revise-failed>${revised.error.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</revise-failed>`;
+        trace.push({ attempt: attempts, kind: 'revise', ok: false, failure });
+        lastOutcome = { ok: false, failure };
+        messages.push({ role: 'assistant', content: text });
+        messages.push({ role: 'user', content: `${failure}\n\nNothing was applied. ${REPAIR}` });
+        continue;
+      }
+      edit = revised.edit;
+    }
     if (!edit) {
       const prose = !!(options.allowTextReply && note && attempts === 1);
       trace.push(prose ? { attempt: attempts, kind: 'prose' } : { attempt: attempts, kind: 'no-edit' });
@@ -133,13 +154,24 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     emit({ kind: 'phase', phase: 'applying', attempt: attempts });
     const guardedApi = { ...api, apply: (transaction: object) => api.apply(transaction, snapshotVersion) };
     lastOutcome = await applyEdit(guardedApi, edit, `model: ${instruction.slice(0, 60)}`);
-    trace.push({ attempt: attempts, kind: 'edit', ok: lastOutcome.ok, ...(lastOutcome.failure ? { failure: lastOutcome.failure } : {}), ...(lastOutcome.summary ? { summary: lastOutcome.summary } : {}), ...(lastOutcome.version !== undefined ? { version: lastOutcome.version } : {}) });
+    trace.push({ attempt: attempts, kind: 'edit', ok: lastOutcome.ok, ...(lastOutcome.failure ? { failure: lastOutcome.failure } : {}), ...(lastOutcome.summary ? { summary: lastOutcome.summary } : {}), ...(lastOutcome.version !== undefined ? { version: lastOutcome.version } : {}), ...(patch ? { revised: true } : {}) });
     if (lastOutcome.ok) break;
+    rejected = edit;
     messages.push({ role: 'assistant', content: text });
-    messages.push({ role: 'user', content: `${lastOutcome.failure}\n\nSend one corrected <edit>.` });
+    // A revised edit is shown whole, so a second revise's op numbers and the
+    // errors' match what the model sees.
+    const shown = patch ? `Your revise made this edit, which was rejected:\n${edit}\n\n` : '';
+    messages.push({ role: 'user', content: `${shown}${lastOutcome.failure}\n\n${REPAIR}` });
   }
   return { ok: !!lastOutcome?.ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name };
 }
+
+/** Model replies one request may take: the edit and two repairs. A repair
+ *  is usually a short <revise>, so a second costs little. */
+const MAX_ATTEMPTS = 3;
+
+/** What a rejected edit's reply asks for. */
+const REPAIR = 'Fix what it names with a <revise> of that edit (only the ops that change), or send one new <edit> if most of it must change.';
 
 /** Looks one request may take before it must answer. */
 const MAX_LOOKS = 2;

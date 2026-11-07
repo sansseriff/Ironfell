@@ -7,6 +7,7 @@ import { applyEdit, extractEdit, type EditOutcome } from './edit';
 import { manifest } from './manifest';
 import type { ModelTransport } from './transport';
 import { boundedHistory, executableReply, type ConversationOptions } from './conversation';
+import { STOPPED, type AskLive } from './progress';
 
 export interface AskResult {
   ok: boolean;
@@ -17,9 +18,48 @@ export interface AskResult {
   attempts: number;
   transport: string;
   error?: string;
+  /** Each model reply and what became of it, in order (the agent log keeps it). */
+  trace?: AskStep[];
 }
 
-export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string, options: ConversationOptions = {}): Promise<AskResult> {
+/** One model reply in a turn: a look, prose, an edit (applied or rejected), or why it ended. */
+export type AskStep =
+  | { attempt: number; kind: 'look'; ids: string[] }
+  | { attempt: number; kind: 'prose' }
+  | { attempt: number; kind: 'edit'; ok: boolean; failure?: string; summary?: string; version?: number }
+  | { attempt: number; kind: 'no-edit' | 'stale' | 'stopped' | 'error'; message?: string };
+
+/** One request, with the turn's outcome sent to the transport's log (the
+ *  bridge's agent log for local runtimes) when it ends. */
+export async function ask(api: DocumentApi, transport: ModelTransport, instruction: string, options: ConversationOptions = {}, live: AskLive = {}): Promise<AskResult> {
+  const started = Date.now();
+  const trace: AskStep[] = [];
+  let result: AskResult | undefined;
+  let thrown: unknown;
+  try {
+    result = await runAsk(api, transport, instruction, options, live, trace);
+    result.trace = trace;
+    return result;
+  } catch (error) {
+    thrown = error;
+    throw error;
+  } finally {
+    if (options.turnId && transport.log) {
+      void transport.log({
+        turn: options.turnId, instruction, transport: transport.name, ms: Date.now() - started,
+        ok: result?.ok ?? false, attempts: result?.attempts ?? 0,
+        error: result?.error ?? (thrown === undefined ? undefined : String(thrown)),
+        note: result?.note || undefined, edit: result?.edit ?? undefined,
+        outcome: result?.outcome ? { ok: result.outcome.ok, version: result.outcome.version, failure: result.outcome.failure, summary: result.outcome.summary } : undefined,
+        trace, historyMessages: options.history?.length ?? 0,
+      });
+    }
+  }
+}
+
+async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: string, options: ConversationOptions, live: AskLive, trace: AskStep[]): Promise<AskResult> {
+  const emit = live.onEvent ?? (() => {});
+  emit({ kind: 'phase', phase: 'reading', attempt: 1 });
   const snapshotVersion = await api.version();
   const system = manifest(await api.schema(), options.allowTextReply) + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
   // The model view first (what things are and where each is drawn, ECM §11),
@@ -45,36 +85,55 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
   let lastOutcome: EditOutcome | null = null;
   let note = '';
   let looks = 0;
+  const stopped = () => {
+    trace.push({ attempt: attempts, kind: 'stopped' });
+    return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: STOPPED };
+  };
   while (attempts < 2) {
     attempts += 1;
+    if (live.signal?.aborted) return stopped();
+    emit({ kind: 'phase', phase: 'thinking', attempt: attempts });
     let text: string;
     try {
-      text = (await transport.complete(system, messages)).text;
+      text = (await transport.complete(system, messages, { onEvent: live.onEvent, signal: live.signal, turn: options.turnId })).text;
     } catch (e) {
-      return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: String(e) };
+      if (live.signal?.aborted) return stopped();
+      // The message alone: a bridge error already reads "Error: …".
+      const message = (e instanceof Error ? e.message : String(e)).replace(/^(Error: )+/, '');
+      trace.push({ attempt: attempts, kind: 'error', message });
+      return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: message };
     }
+    // A reply that arrives after Stop is not applied.
+    if (live.signal?.aborted) return stopped();
     // `<look expand="#u #e"/>` with no edit: show those instances' derived
     // insides (component-model.md §9) and ask again; not a repair attempt.
     const look = lookRequest(text);
     if (look && !extractEdit(text) && looks < MAX_LOOKS) {
       looks += 1;
+      trace.push({ attempt: attempts, kind: 'look', ids: look });
       attempts -= 1;
       messages.push({ role: 'assistant', content: text });
+      emit({ kind: 'phase', phase: 'looking', attempt: attempts + 1 });
       messages.push({ role: 'user', content: await lookView(api, look) });
       continue;
     }
     const edit = extractEdit(options.allowTextReply ? executableReply(text) : text);
     note = text.replace(edit ?? '', '').trim();
     if (!edit) {
-      if (options.allowTextReply && note && attempts === 1) return { ok: true, note, edit: null, outcome: null, attempts, transport: transport.name };
+      const prose = !!(options.allowTextReply && note && attempts === 1);
+      trace.push(prose ? { attempt: attempts, kind: 'prose' } : { attempt: attempts, kind: 'no-edit' });
+      if (prose) return { ok: true, note, edit: null, outcome: null, attempts, transport: transport.name };
       return { ok: false, note, edit: null, outcome: null, attempts, transport: transport.name, error: 'the reply had no <edit> block' };
     }
     lastEdit = edit;
     if (await api.version() !== snapshotVersion) {
+      trace.push({ attempt: attempts, kind: 'stale' });
       return { ok: false, note, edit, outcome: null, attempts, transport: transport.name, error: 'document changed while the agent was thinking; ask again with the current document' };
     }
+    emit({ kind: 'phase', phase: 'applying', attempt: attempts });
     const guardedApi = { ...api, apply: (transaction: object) => api.apply(transaction, snapshotVersion) };
     lastOutcome = await applyEdit(guardedApi, edit, `model: ${instruction.slice(0, 60)}`);
+    trace.push({ attempt: attempts, kind: 'edit', ok: lastOutcome.ok, ...(lastOutcome.failure ? { failure: lastOutcome.failure } : {}), ...(lastOutcome.summary ? { summary: lastOutcome.summary } : {}), ...(lastOutcome.version !== undefined ? { version: lastOutcome.version } : {}) });
     if (lastOutcome.ok) break;
     messages.push({ role: 'assistant', content: text });
     messages.push({ role: 'user', content: `${lastOutcome.failure}\n\nSend one corrected <edit>.` });

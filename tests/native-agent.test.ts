@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,9 @@ test('native launcher selects the second Claude profile, regardless of a parent 
   assert.equal(env.CLAUDE_CONFIG_DIR, '/home/test/.claude_2nd');
   assert.equal(env.IRON_CLAUDE_AUTH, 'subscription');
   assert.equal(claudeEnv('subscription', env).ANTHROPIC_API_KEY, undefined);
+  // A host's proxy URL and token (an agent session's) never reach a subscription run.
+  const hosted = claudeEnv('subscription', { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/proxy', ANTHROPIC_AUTH_TOKEN: 'host-token', PATH: '/bin' });
+  assert.deepEqual([hosted.ANTHROPIC_BASE_URL, hosted.ANTHROPIC_AUTH_TOKEN, hosted.PATH], [undefined, undefined, '/bin']);
   assert.equal(nativeAgentEnvironment({ IRON_CLAUDE_CONFIG_DIR: '/chosen' }).CLAUDE_CONFIG_DIR, '/chosen');
 });
 
@@ -40,18 +43,24 @@ test('native pairing only accepts a validated IPC connection, with safe manual f
 test('native launcher passes the profile and private connection, authenticates Claude requests and closes the bridge on app exit', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'iron-native-agent-'));
   const session = await startNativeAgent({
-    env: { ...process.env, IRON_CLAUDE_CONFIG_DIR: profile, IRON_TEST_PROFILE: profile, ANTHROPIC_API_KEY: 'must-not-reach-claude', IRON_TEST_ADAPTIVE: '1', IRON_NATIVE_RENDER_MODE: 'sync', IRON_NATIVE_PACING: 'adaptive', IRON_NATIVE_FRAME_LATENCY: '2' },
+    env: { ...process.env, IRON_CLAUDE_CONFIG_DIR: profile, IRON_TEST_PROFILE: profile, ANTHROPIC_API_KEY: 'must-not-reach-claude', IRON_TEST_ADAPTIVE: '1', IRON_NATIVE_RENDER_MODE: 'sync', IRON_NATIVE_PACING: 'adaptive', IRON_NATIVE_FRAME_LATENCY: '2', IRON_AGENT_LOG: join(profile, 'agent-logs') },
     claudeBin: fixture, codexBin: fixture, bridgePort: 0, command: [process.execPath, fixture],
   });
   try {
     assert.equal(await session.done, 0);
     await assert.rejects(fetch(`${session.endpoint}/models`));
+    // The native bridge logs its calls too (agent-bridge/log.ts).
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const day = new Date();
+    const file = join(profile, 'agent-logs', `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}.jsonl`);
+    const call = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).find(record => record.kind === 'call');
+    assert.equal(call.reply, 'alternate-profile-confirmed');
   } finally { await session.stop(); await rm(profile, { recursive: true, force: true }); }
 });
 
 test('native launcher stops a running child and bridge together', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'iron-native-agent-'));
-  const session = await startNativeAgent({ env: { ...process.env, IRON_CLAUDE_CONFIG_DIR: profile }, claudeBin: fixture, codexBin: fixture, bridgePort: 0, command: [process.execPath, '-e', 'setInterval(() => {}, 1000)'] });
+  const session = await startNativeAgent({ env: { ...process.env, IRON_CLAUDE_CONFIG_DIR: profile, IRON_AGENT_LOG: '0' }, claudeBin: fixture, codexBin: fixture, bridgePort: 0, command: [process.execPath, '-e', 'setInterval(() => {}, 1000)'] });
   try { await session.stop(); await session.done; await assert.rejects(fetch(session.endpoint)); }
   finally { await rm(profile, { recursive: true, force: true }); }
 });

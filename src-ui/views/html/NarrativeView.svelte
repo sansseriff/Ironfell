@@ -34,6 +34,7 @@
   import { chatSession } from '../../chat/sessions.svelte';
   import { narrativeMode, type ChatHandle, type ChatTurn, type NarrativeMode as Mode } from '../../chat/conversation';
   import type { ConversationMessage } from '../../model/conversation';
+  import type { AskLive } from '../../model/progress';
   import type { AskResult } from '../../model/agent';
   import Select from "../../lib/ui/Select.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
@@ -254,7 +255,7 @@
     return `${text}\n\n(The author's cursor is in the narrative "${source}"${at}${cursor.heading ? `, under the heading "${cursor.heading}"` : ""}. Insert new text there with <write narrative="${source}" after="${cursor.block ?? "end"}">; edits elsewhere are allowed when the request implies them.)${sel}`;
   }
 
-  async function performTurn(text: string, history: ConversationMessage[], turn: ChatTurn, xmlForTest?: string): Promise<AskResult> {
+  async function performTurn(text: string, history: ConversationMessage[], turn: ChatTurn, live: AskLive = {}, xmlForTest?: string): Promise<AskResult> {
     const instruction = contextFor(text);
     const owner = session;
     const currentSource = source;
@@ -267,7 +268,7 @@
       const outcome = await doc.edit(xmlForTest, `model: ${text.slice(0, 60)}`);
       result = { ok: !!outcome.ok, note: '', edit: xmlForTest, outcome, attempts: 1, transport: 'scripted' };
     } else {
-      result = await doc.ask(instruction, { history, allowTextReply: true });
+      result = await doc.ask(instruction, { history, allowTextReply: true, turnId: turn.id }, live);
     }
     if (generation !== doc.generation) return result;
     const read = await doc.command<{ ok: boolean; blocks: StoredBlock[] }>({ op: 'narrative_read', source: currentSource });
@@ -377,7 +378,7 @@
       mode: (m?: Mode) => (m ? (mode = m) : mode),
       flush: () => editor?.flush(),
       askWith: (xml: string, text = "") => {
-        return chat?.submit(text || '(scripted edit)', (instruction, history, turn) => performTurn(instruction, history, turn, xml));
+        return chat?.submit(text || '(scripted edit)', (instruction, history, turn, live) => performTurn(instruction, history, turn, live, xml));
       },
       turns: () => session.turns.map(turn => ({ ...turn, ok: !!turn.result?.ok, note: turn.result?.note ?? '', ...reviews[turn.id], before: undefined, after: undefined })),
       keep,

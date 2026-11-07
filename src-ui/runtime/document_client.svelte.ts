@@ -55,6 +55,7 @@ import { persistent, scopesUrl, showScope, target } from '../route';
 import { isNativeHost } from './native_host';
 import { ANTHROPIC_API_MODELS, isLoopbackOrigin, localEndpoint, type AgentProvider, type ModelEntry } from '../model/runtime-options';
 import { listLocalModels } from '../model/transport';
+import { MODEL_ASK_TIMEOUT_MS, STOPPED, type AgentEvent, type AskLive } from '../model/progress';
 import { discoverLocalAgent } from '../model/local-pairing';
 import { discoverNativeAgent } from '../model/native-pairing';
 import type { ConversationOptions } from '../model/conversation';
@@ -145,6 +146,8 @@ export class DocumentClient {
 
   private post: ((data: UiRequest) => void) | null = null;
   private pending = new PendingRequests();
+  /** Progress listeners of running model turns, by request id. */
+  private askListeners = new Map<number, (event: AgentEvent) => void>();
   private subscriptions = new QuerySubscriptions(command => this.request('documentCall', documentArguments(command)), interest => this.post?.({ty:'setUiInterest', ...interest}));
   sessionVersion = $state(0);
   resolvedVersion = $state(0);
@@ -443,7 +446,7 @@ export class DocumentClient {
   }
 
   /** One model turn: view, prompt, apply. */
-  async ask(instruction: string, conversation: ConversationOptions = {}): Promise<any> {
+  async ask(instruction: string, conversation: ConversationOptions = {}, live: AskLive = {}): Promise<any> {
     const generation = this.generation;
     if (this.asking) throw new Error('a model turn is already running');
     this.asking = true;
@@ -454,7 +457,22 @@ export class DocumentClient {
       const runtime = this.agentProvider === 'anthropic' ? undefined : {
         provider: this.agentProvider, endpoint: this.agentEndpoint, token: this.agentToken, model: this.agentModel || undefined,
       };
-      const result = await this.request('modelAsk', { instruction, apiKey: runtime ? '' : this.apiKey, model: this.modelName, runtime, ...conversation });
+      if (live.signal?.aborted) throw new Error(STOPPED);
+      const payload = { instruction, apiKey: runtime ? '' : this.apiKey, model: this.modelName, runtime, ...conversation };
+      let askId = -1;
+      const cancel = () => { if (askId >= 0) this.post?.({ ty: 'modelAskCancel', askId } as UiRequest); };
+      live.signal?.addEventListener('abort', cancel, { once: true });
+      let result;
+      try {
+        result = await this.pending.request((requestId, sessionId) => {
+          askId = requestId;
+          if (live.onEvent) this.askListeners.set(requestId, live.onEvent);
+          this.post!({ ty: 'modelAsk', requestId, sessionId, ...payload } as UiRequest);
+        }, MODEL_ASK_TIMEOUT_MS);
+      } finally {
+        live.signal?.removeEventListener('abort', cancel);
+        this.askListeners.delete(askId);
+      }
       if (generation === this.generation) this.lastAsk = result;
       return result;
     } finally {
@@ -664,6 +682,10 @@ export class DocumentClient {
         this.pending.settle(data.requestId, data.sessionId, 'text' in data ? data.text : undefined, 'error' in data ? data.error : undefined);
         return true;
       }
+      case 'modelAskProgress': {
+        if (data.sessionId === undefined || data.sessionId === this.pending.session) for (const event of data.events) this.askListeners.get(data.requestId)?.(event);
+        return true;
+      }
       case 'modelEditResult':
       case 'modelAskResult': {
         // Resolve with the structured outcome even on a rejected edit: the
@@ -700,7 +722,7 @@ export class DocumentClient {
 
   private request<T extends ClientRequest['ty']>(ty: T, payload: RequestPayload<T>): Promise<any> {
     if (!this.post) return Promise.reject(new Error('no session'));
-    return this.pending.request((requestId, sessionId) => this.post!({ ty, requestId, sessionId, ...payload } as UiRequest), ty === 'modelAsk' ? 120000 : 15000);
+    return this.pending.request((requestId, sessionId) => this.post!({ ty, requestId, sessionId, ...payload } as UiRequest), ty === 'modelAsk' ? MODEL_ASK_TIMEOUT_MS : 15000);
   }
 
   async refresh(): Promise<void> {

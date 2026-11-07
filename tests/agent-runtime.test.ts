@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { resolve } from 'node:path';
 import { createAgentBridge, validateRequest } from '../scripts/agent-bridge/server';
+import { agentLog, agentLogDir } from '../scripts/agent-bridge/log';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type Runtime } from '../scripts/agent-bridge/runtimes';
 import { LocalRuntimeTransport } from '../src-ui/model/transport';
 import { localEndpoint, type CompletionRequest } from '../src-ui/model/runtime-options';
@@ -306,4 +310,155 @@ test('a prose-only correction cannot turn a rejected edit into a reported succes
   assert.equal(result.ok, false);
   assert.equal(result.attempts, 2);
   assert.equal(fixtureDoc.calls(), 0);
+});
+
+// ---- Streaming (plans/specs/agent-streaming.md) --------------------------------
+
+test('Codex and Claude adapters stream reply and reasoning deltas that add up to the reply', async () => {
+  const codexEvents: any[] = [];
+  const codex = await codexRuntime(fixture)(payload, AbortSignal.timeout(3000), event => codexEvents.push(event));
+  assert.equal(codexEvents.filter(e => e.type === 'text').map(e => e.delta).join(''), codex.text);
+  assert.deepEqual(codexEvents.filter(e => e.type === 'reasoning').map(e => e.delta), ['Reading the request.']);
+  assert.deepEqual(codexEvents.filter(e => e.type === 'usage'), [{ type: 'usage', output: 42, thinking: 30 }]);
+  const saved = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    const claudeEvents: any[] = [];
+    const claude = await claudeRuntime(fixture)(payload, AbortSignal.timeout(3000), event => claudeEvents.push(event));
+    assert.equal(claude.text, '<edit/>');
+    assert.equal(claudeEvents.filter(e => e.type === 'text').map(e => e.delta).join(''), '<edit/>');
+    assert.deepEqual(claudeEvents.filter(e => e.type === 'reasoning').map(e => e.delta), ['Nothing to change.']);
+    // Claude Code's running estimate of hidden thinking, then the exact count.
+    assert.deepEqual(claudeEvents.filter(e => e.type === 'thinking-tokens' || e.type === 'usage'), [
+      { type: 'thinking-tokens', estimated: 50 }, { type: 'thinking-tokens', estimated: 120 }, { type: 'usage', output: 130, thinking: 125 },
+    ]);
+  } finally { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; }
+});
+
+test('the bridge streams NDJSON deltas to the transport, and output keeps a long turn alive', async () => {
+  // Idle limit 100 ms, but a delta every 40 ms for 400 ms: the turn completes.
+  await bridgeTest(async (_request, signal, onEvent) => {
+    for (let i = 0; i < 10; i++) {
+      if (signal.aborted) throw new Error('aborted');
+      onEvent?.({ type: i === 0 ? 'reasoning' : 'text', delta: i === 0 ? 'plan' : `${i}` });
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    onEvent?.({ type: 'thinking-tokens', estimated: 7 });
+    onEvent?.({ type: 'usage', output: 12, thinking: 3 });
+    return { text: '123456789' };
+  }, async endpoint => {
+    const events: any[] = [];
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    const result = await transport.complete(payload.system, payload.messages, { onEvent: event => events.push(event) });
+    assert.equal(result.text, '123456789');
+    assert.deepEqual(events[0], { kind: 'reasoning', delta: 'plan' });
+    assert.equal(events.filter(e => e.kind === 'text').map(e => e.delta).join(''), '123456789');
+    assert.deepEqual(events.slice(-2), [{ kind: 'thinking-tokens', estimated: 7 }, { kind: 'usage', output: 12, thinking: 3 }]);
+  }, 100);
+});
+
+test('a streamed runtime that goes quiet times out with an error line; Stop aborts the runtime', async () => {
+  await bridgeTest(async (_request, signal) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })), async endpoint => {
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    await assert.rejects(() => transport.complete(payload.system, payload.messages, { onEvent: () => {} }), /timed out/);
+  }, 100);
+  let aborted!: () => void;
+  const cancelled = new Promise<void>(resolve => { aborted = resolve; });
+  await bridgeTest(async (_request, signal, onEvent) => {
+    onEvent?.({ type: 'text', delta: 'Hel' });
+    return await new Promise((_, reject) => signal.addEventListener('abort', () => { aborted(); reject(new Error('aborted')); }, { once: true }));
+  }, async endpoint => {
+    const controller = new AbortController();
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    const running = transport.complete(payload.system, payload.messages, { signal: controller.signal, onEvent: () => controller.abort() });
+    await assert.rejects(() => running, /abort/i);
+    await cancelled;
+  }, 3000);
+});
+
+test('ask reports its phases and passes deltas on; a stopped turn applies nothing', async () => {
+  const fixtureDoc = documentFixture();
+  const events: any[] = [];
+  const streaming = { name: 'fixture', complete: async (_s: string, _m: unknown, live: any = {}) => {
+    live.onEvent?.({ kind: 'text', delta: '<edit><create id="$shape" type="rect" parent="#1"/></edit>' });
+    return { text: '<edit><create id="$shape" type="rect" parent="#1"/></edit>' };
+  } };
+  const result = await ask(fixtureDoc.api, streaming, 'add a rectangle', {}, { onEvent: event => events.push(event) });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(events.filter(e => e.kind === 'phase').map(e => `${e.phase}:${e.attempt}`), ['reading:1', 'thinking:1', 'applying:1']);
+  assert.equal(events.filter(e => e.kind === 'text').length, 1);
+  // Stop while the model is answering: the reply that still arrives is not applied.
+  const controller = new AbortController();
+  const stopped = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { controller.abort(); return { text: '<edit><create id="$s" type="rect" parent="#1"/></edit>' }; } }, 'add another', {}, { signal: controller.signal });
+  assert.equal(stopped.ok, false);
+  assert.equal(stopped.error, 'stopped');
+  assert.equal(fixtureDoc.calls(), 1);
+});
+
+// ---- Agent log (scripts/agent-bridge/log.ts) ---------------------------------------
+
+test('the agent log keeps each call (prompt once, reply, timing, usage) and each turn outcome', async () => {
+  assert.equal(agentLogDir('/repo', {}), '/repo/.agents/agent-logs');
+  assert.equal(agentLogDir('/repo', { IRON_AGENT_LOG: '0' }), null);
+  assert.equal(agentLogDir('/repo', { IRON_AGENT_LOG: '/elsewhere' }), '/elsewhere');
+  const dir = await mkdtemp(join(tmpdir(), 'iron-agent-log-'));
+  const log = agentLog(dir);
+  const bridge = createAgentBridge({ token, origins: ['http://localhost:5173'], log, runtimes: {
+    codex: async (_request, _signal, onEvent) => { onEvent?.({ type: 'reasoning', delta: 'Weighing it.' }); onEvent?.({ type: 'usage', output: 9, thinking: 4 }); return { text: '<edit/>' }; },
+    claude: async () => { throw new Error('claude is down'); },
+  } });
+  bridge.server.listen(0, '127.0.0.1');
+  await once(bridge.server, 'listening');
+  const endpoint = `http://127.0.0.1:${(bridge.server.address() as { port: number }).port}`;
+  try {
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    await transport.complete(payload.system, payload.messages, { turn: 'turn-1', onEvent: () => {} });
+    await transport.complete(payload.system, payload.messages, { turn: 'turn-1' });
+    await assert.rejects(() => new LocalRuntimeTransport({ provider: 'claude', endpoint, token }).complete(payload.system, payload.messages, { turn: 'turn-2' }), /claude is down/);
+    await transport.log({ turn: 'turn-1', ok: true, trace: [{ attempt: 1, kind: 'edit', ok: true }] });
+    const bad = await fetch(`${endpoint}/log`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ turn: '../etc' }) });
+    assert.equal(bad.status, 400);
+    const unauthorised = await fetch(`${endpoint}/log`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turn: 'x' }) });
+    assert.equal(unauthorised.status, 401);
+    await log.flushed();
+    const [file] = await readdir(dir);
+    const records = (await readFile(join(dir, file), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    // The system prompt once, three calls naming it, the page's turn record.
+    assert.deepEqual(records.map(r => `${r.kind}:${r.turn ?? ''}`), ['system:', 'call:turn-1', 'call:turn-1', 'call:turn-2', 'turn:turn-1']);
+    const [system, first, , failed, turn] = records;
+    assert.equal(system.text, payload.system);
+    assert.equal(first.system, system.hash);
+    assert.deepEqual([first.reply, first.reasoning, first.usage, first.messages], ['<edit/>', 'Weighing it.', { output: 9, thinking: 4 }, payload.messages]);
+    assert.equal(typeof first.ms, 'number');
+    assert.match(failed.error, /claude is down/);
+    assert.deepEqual(turn.trace, [{ attempt: 1, kind: 'edit', ok: true }]);
+  } finally { bridge.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('ask sends the turn id with each call and logs each reply\'s fate once the turn ends', async () => {
+  const fixtureDoc = documentFixture();
+  const turns: string[] = [];
+  const records: any[] = [];
+  let calls = 0;
+  const transport = {
+    name: 'fixture',
+    complete: async (_s: string, _m: unknown, live: any = {}) => {
+      turns.push(live.turn);
+      calls++;
+      return { text: calls === 1 ? '<edit><create type="not-a-type" parent="#1"/></edit>' : '<edit><create id="$shape" type="rect" parent="#1" x="20"/></edit>' };
+    },
+    log: async (record: any) => { records.push(record); },
+  };
+  const result = await ask(fixtureDoc.api, transport, 'add a rectangle', { turnId: 'turn-7' });
+  assert.equal(result.ok, true);
+  assert.deepEqual(turns, ['turn-7', 'turn-7']);
+  assert.deepEqual(result.trace?.map(step => `${step.kind}:${'ok' in step ? step.ok : ''}`), ['edit:false', 'edit:true']);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].turn, 'turn-7');
+  assert.equal(records[0].attempts, 2);
+  assert.match(records[0].trace[0].failure, /edit-failed/);
+  // No turn id (a script's __iron.ask): nothing is logged.
+  calls = 1;
+  await ask(fixtureDoc.api, transport, 'add another');
+  assert.equal(records.length, 1);
 });

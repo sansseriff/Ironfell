@@ -2,7 +2,9 @@ import { chromium } from 'playwright-core';
 import { once } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { agentLog } from '../../../scripts/agent-bridge/log';
 import assert from 'node:assert/strict';
 import { createAgentBridge } from '../../../scripts/agent-bridge/server';
 import { codexRuntime } from '../../../scripts/agent-bridge/runtimes';
@@ -13,7 +15,10 @@ const runtimeMode = process.env.RUNTIME ?? 'worker';
 const live = process.env.LIVE_AGENT === '1';
 const token = randomBytes(24).toString('hex');
 const runtime = codexRuntime(live ? undefined : resolve('tests/fixtures/fake-agent-runtime.ts'));
-const bridge = createAgentBridge({ token, origins: [new URL(url).origin], runtimes: { codex: runtime, claude: runtime }, timeoutMs: live ? 20000 : 5000 });
+// The agent log (scripts/agent-bridge/log.ts), checked at the end against the page's turns.
+const logDir = await mkdtemp(resolve(tmpdir(), 'iron-chat-log-'));
+const log = agentLog(logDir);
+const bridge = createAgentBridge({ token, origins: [new URL(url).origin], runtimes: { codex: runtime, claude: runtime }, timeoutMs: live ? 20000 : 5000, log });
 bridge.server.listen(0, '127.0.0.1');
 await once(bridge.server, 'listening');
 const endpoint = `http://127.0.0.1:${(bridge.server.address() as { port: number }).port}`;
@@ -24,6 +29,25 @@ page.setDefaultTimeout(8000);
 const errors: string[] = [];
 page.on('pageerror', error => errors.push(String(error)));
 page.on('requestfailed', request => console.error('Request failed:', request.url(), request.failure()?.errorText));
+
+/** Every Model/Lesson turn the page ran through the bridge has its calls and its outcome in the agent log. */
+async function checkAgentLog() {
+  // The page posts a turn's outcome without waiting; let it land.
+  await new Promise(resolve => setTimeout(resolve, 300));
+  await log.flushed();
+  const records = (await Promise.all((await readdir(logDir)).map(file => readFile(resolve(logDir, file), 'utf8'))))
+    .join('').trim().split('\n').map(line => JSON.parse(line));
+  const ids = await page.locator('.chat-turn').evaluateAll(turns => turns.filter(t => t.getAttribute('data-status') !== 'running').map(t => t.getAttribute('data-turn-id')));
+  const calls = new Set(records.filter(r => r.kind === 'call').map(r => r.turn));
+  const outcomes = new Map(records.filter(r => r.kind === 'turn').map(r => [r.turn, r]));
+  assert.ok(records.some(r => r.kind === 'system'), 'the log holds the system prompt');
+  for (const id of ids) {
+    assert.ok(calls.has(id), `turn ${id} has its model calls in the agent log`);
+    assert.ok(outcomes.has(id), `turn ${id} has its outcome in the agent log`);
+  }
+  return ids.length;
+}
+
 try {
   await page.goto(url);
   await page.evaluate(mode => localStorage.setItem('iron.settings.v1', JSON.stringify({ runtime: mode })), runtimeMode);
@@ -58,7 +82,8 @@ try {
     assert.deepEqual(errors, []);
     await mkdir('.agents/chat', { recursive: true });
     await page.screenshot({ path: `.agents/chat/live-${runtimeMode}.png` });
-    console.log(`PASS LIVE CHAT ${runtimeMode}: real Codex prose/visual without mutation, then validated shape creation; no page errors`);
+    const logged = await checkAgentLog();
+    console.log(`PASS LIVE CHAT ${runtimeMode}: real Codex prose/visual without mutation, then validated shape creation, ${logged} turns in the agent log; no page errors`);
   } else {
   await prompt.fill('chat-test-prose');
   await prompt.dispatchEvent('keydown', { key: 'Enter', metaKey: true, isComposing: true });
@@ -139,8 +164,36 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="failed"]').length === 2);
   assert.equal(await prompt.inputValue(), 'A newer unsent draft');
   assert.equal(await page.evaluate(() => (window as any).__iron.save()), beforeFailure);
+  // Live progress (plans/specs/agent-streaming.md): the work log, reasoning,
+  // streamed prose and the edit's verbs as they close, then Stop.
+  await prompt.fill('chat-test-stream');
+  await prompt.press('Meta+Enter');
+  const running = page.locator('.chat-turn[data-status="running"]');
+  await running.locator('[data-chat-progress]', { hasText: 'Thinking' }).waitFor();
+  await running.locator('[data-chat-progress]', { hasText: 'Sizing the pump' }).waitFor();
+  await running.locator('[data-edit-forming] li', { hasText: 'Create rect "inlet"' }).waitFor({ timeout: 15000 });
+  assert.match(await running.locator('.chat-markdown').first().innerText(), /Here is a pump/);
+  assert.match(await running.locator('[data-chat-progress]').innerText(), /Writing the edit/);
+  assert.match(await running.locator('[data-chat-progress]').innerText(), /~\d+ tokens/);
+  await page.screenshot({ path: `.agents/chat/streaming-${runtimeMode}.png` });
+  await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="completed"]').length === 4, undefined, { timeout: 15000 });
+  const streamedTurn = page.locator('.chat-turn').last();
+  assert.match(await streamedTurn.locator('[data-chat-progress]').innerText(), /Worked for/);
+  // The runtime's exact count replaces the estimate once the call ends.
+  assert.match(await streamedTurn.locator('[data-chat-progress]').innerText(), /42 tokens \(30 thinking\)/);
+  assert.match(await page.evaluate(() => (window as any).__iron.view({ fidelity: 'skeleton' })), /pump body/);
+  await page.screenshot({ path: `.agents/chat/streamed-${runtimeMode}.png` });
+  const beforeStop = await page.evaluate(() => (window as any).__iron.save());
+  await prompt.fill('chat-test-stop');
+  await prompt.press('Meta+Enter');
+  await running.locator('[data-chat-progress]', { hasText: 'two ports' }).waitFor();
+  await page.getByRole('button', { name: 'Stop the agent', exact: true }).click();
+  await page.locator('.chat-turn[data-status="stopped"]').waitFor();
+  assert.equal(await prompt.inputValue(), 'chat-test-stop');
+  assert.equal(await page.evaluate(() => (window as any).__iron.save()), beforeStop);
   assert.deepEqual(errors, []);
-  console.log(`PASS CHAT ${runtimeMode}: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery; no page errors`);
+  const logged = await checkAgentLog();
+  console.log(`PASS CHAT ${runtimeMode}: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, ${logged} turns in the agent log; no page errors`);
   }
 } catch (error) {
   await mkdir('.agents/chat', { recursive: true });
@@ -151,4 +204,7 @@ try {
   clearTimeout(deadline);
   bridge.stop();
   await browser.close();
+  // KEEP_AGENT_LOG=1 keeps the run's agent log to read.
+  if (process.env.KEEP_AGENT_LOG === '1') console.log(`Agent log: ${logDir}`);
+  else await rm(logDir, { recursive: true, force: true });
 }

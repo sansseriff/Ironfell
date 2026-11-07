@@ -48,9 +48,35 @@ if (process.argv.includes('app-server')) {
         text = !look ? `<look expand="${use}"/>`
           : /derived/.test(look) && look.includes('name="dot"') ? `<edit><set id="${entity}" name="P1 seen"/></edit>` : 'ERROR: the look showed no derived picture';
       }
+      // A slow, streamed turn for the chat's live progress (chat-ui.ts): reasoning,
+      // prose, then an edit verb by verb; `chat-test-stop` goes quiet after the
+      // reasoning so the test can press Stop. Only this request, not the history.
+      const request = input.split('\nREQUEST\n').pop() ?? '';
+      if (request.includes('chat-test-stream') || request.includes('chat-test-stop')) {
+        const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        const main = input.match(/<composition id="(#[^"]+)" name="main"/)?.[1] ?? '#1';
+        for (const piece of ['Sizing ', 'the pump ', 'and its ', 'two ports.']) {
+          reply({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'reasoning', summaryIndex: 0, delta: piece } });
+          await pause(150);
+        }
+        if (request.includes('chat-test-stop')) await pause(4000);
+        const streamed = `Here is a **pump** with two ports.\n<edit><create id="$a" type="rect" parent="${main}" name="pump body" x="40" y="40" w="80" h="50" color="#3366cc"/><create id="$b" type="rect" parent="${main}" name="inlet" x="20" y="55" w="20" h="20" color="#22aa55"/><create id="$c" type="rect" parent="${main}" name="outlet" x="120" y="55" w="20" h="20" color="#cc3322"/></edit>`;
+        for (const piece of streamed.match(/[\s\S]{1,24}/g) ?? []) {
+          reply({ method: 'item/agentMessage/delta', params: { itemId: 'answer', delta: piece } });
+          await pause(70);
+        }
+        reply({ method: 'item/completed', params: { item: { id: 'answer', type: 'agentMessage', text: streamed } } });
+        reply({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: { outputTokens: 42, reasoningOutputTokens: 30 } } } });
+        reply({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+        return;
+      }
       const failed = mode === 'failed' || input.trimEnd().endsWith('chat-test-failure');
       if (failed) await new Promise(resolve => setTimeout(resolve, 250));
+      // Stream as the app-server does: a reasoning summary, then the reply in pieces.
+      reply({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'reasoning', summaryIndex: 0, delta: 'Reading the request.' } });
+      for (const piece of text.match(/[\s\S]{1,40}/g) ?? []) reply({ method: 'item/agentMessage/delta', params: { itemId: 'answer', delta: piece } });
       reply({ method: 'item/completed', params: { item: { id: 'answer', type: 'agentMessage', text } } });
+      reply({ method: 'thread/tokenUsage/updated', params: { tokenUsage: { last: { outputTokens: 42, reasoningOutputTokens: 30 } } } });
       reply({ method: 'turn/completed', params: { turn: { status: failed ? 'failed' : 'completed', error: { message: 'fixture turn failed' } } } });
     }
   });
@@ -65,5 +91,12 @@ if (process.argv.includes('app-server')) {
   if (bare === safe) process.exit(3);
   if (bare && !process.env.ANTHROPIC_API_KEY) process.exit(3);
   if (safe && (process.env.ANTHROPIC_API_KEY || process.env.CLAUDECODE || Object.keys(process.env).some(k => k.startsWith('CLAUDE_CODE_')))) process.exit(4);
-  reply({ result: '<edit/>', is_error: false, usage: { input_tokens: input.length } });
+  if (process.argv[process.argv.indexOf('--output-format') + 1] !== 'stream-json' || !process.argv.includes('--verbose')) process.exit(5);
+  reply({ type: 'system', subtype: 'init' });
+  reply({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } });
+  reply({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Nothing to change.' } } });
+  reply({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 50, estimated_tokens_delta: 50 });
+  reply({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 120, estimated_tokens_delta: 70 });
+  for (const piece of ['<edit', '/>']) reply({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: piece } } });
+  reply({ type: 'result', subtype: 'success', result: '<edit/>', is_error: false, usage: { input_tokens: input.length, output_tokens: 130, output_tokens_details: { thinking_tokens: 125 } } });
 }

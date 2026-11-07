@@ -3,11 +3,13 @@
 export class PendingRequests {
   private nextId = 1;
   private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  private session: number | null = null;
-  attach(session: number) { this.dispose('session replaced'); this.session = session; }
+  private sessionId: number | null = null;
+  attach(session: number) { this.dispose('session replaced'); this.sessionId = session; }
   get size() { return this.pending.size; }
+  /** The attached session's id, which replies echo. */
+  get session() { return this.sessionId; }
   request<T>(send: (id: number, session: number) => void, timeout = 15000): Promise<T> {
-    const session = this.session;
+    const session = this.sessionId;
     if (session === null) return Promise.reject(new Error('no session'));
     if (this.pending.size >= 1024) return Promise.reject(new Error('too many pending requests'));
     return new Promise((resolve, reject) => {
@@ -18,14 +20,14 @@ export class PendingRequests {
     });
   }
   settle(id: number, session: number | undefined, value?: unknown, error?: string) {
-    if (session !== this.session) return;
+    if (session !== this.sessionId) return;
     const pending = this.pending.get(id);
     if (!pending) return;
     this.pending.delete(id); clearTimeout(pending.timer);
     if (error) pending.reject(new Error(error)); else pending.resolve(value);
   }
   dispose(reason = 'session disposed') {
-    this.session = null;
+    this.sessionId = null;
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error(reason)); }
     this.pending.clear();
   }

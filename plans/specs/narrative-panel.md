@@ -307,7 +307,8 @@ their scroll/composer tests, rather than running T3's whole build.
   pending/error state, copy/retry and collapsed edit diagnostics; extension
   snippet for Lesson's Keep/Revert controls.
 - `chat/ChatComposer.svelte`: shared input, explicit target slot, provider/model
-  controls and connection settings. No fake Stop/streaming controls.
+  controls and connection settings. No fake Stop/streaming controls. (Real
+  ones since 2026-11-06: [`agent-streaming.md`](agent-streaming.md).)
 - `chat/ChatMarkdown.svelte`, `ChatVisual.svelte`: safe Markdown AST rendering
   and explicit `::view{show=composition focus=#node}` cards with engine SVG
   snapshots and an Open action. No arbitrary model-generated HTML/JS.
@@ -327,7 +328,8 @@ checks still govern any edits. Browser/native adapters use the same options.
 
 ### 9.3 Deliberate follow-ups
 
-Real token streaming, end-to-end Stop, provider-native session resume, durable
+Real token streaming and end-to-end Stop (built 2026-11-06,
+[`agent-streaming.md`](agent-streaming.md)), provider-native session resume, durable
 chat records, virtualized/paged long histories, attachments, math/Mermaid,
 arbitrary interactive artifacts and queued/steered requests require separate
 runtime/storage work. Do not imply those features exist through decorative UI.

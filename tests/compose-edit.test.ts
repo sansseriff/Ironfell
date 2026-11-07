@@ -67,3 +67,25 @@ test('the manifest lists the standard components from the schema', () => {
   assert.match(text, /<look expand="#use"\/>/);
   assert.doesNotMatch(text, /only when asked/);
 });
+
+test('a ref leaf may name a node created in the same edit by its $alias', async () => {
+  const schema = {
+    facets: { name: { text: 'string' }, instance: { def: 'ref', mode: 'enum' } },
+    types: {
+      definition: { facets: [{ kind: 'name', required: false }], default_host: 'library', children: 'any' },
+      entity: { facets: [{ kind: 'instance', required: true }], default_host: 'model', children: 'any' },
+    },
+  };
+  const api = {
+    schema: async () => schema,
+    nextIds: async (n: number) => ['#D1', '#E1', '#E2'].slice(0, n),
+    nextRelationIds: async () => [],
+    place: async (_p: string, _a: string, n: number) => Array.from({ length: n }, (_, i) => `k${i}`),
+  } as any;
+  const { parseEdit } = await import('../src-ui/model/edit');
+  const parsed = await parseEdit(api, '<edit><create id="$def" type="definition" parent="#L" name="level"/><create id="$e" type="entity" parent="#M" instance.def="$def"/><set id="$e" instance.def="$def"/></edit>');
+  const create = parsed.ops[1] as any;
+  assert.deepEqual(create.facets.find((f: any) => f.instance).instance.def, { ref: '#D1' });
+  assert.deepEqual((parsed.ops[2] as any).slot, { ref: '#D1' });
+  await assert.rejects(parseEdit(api, '<edit><create id="$e" type="entity" parent="#M" instance.def="$nope"/></edit>'), /alias \$nope is not created in this edit/);
+});

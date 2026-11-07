@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contentParts, safeChatUrl, chatHistory, shouldSubmit, narrativeMode, nearBottom, type ChatTurn } from '../src-ui/chat/conversation';
+import { contentParts, failureSummary, safeChatUrl, chatHistory, shouldSubmit, narrativeMode, nearBottom, type ChatTurn } from '../src-ui/chat/conversation';
 import { boundedHistory } from '../src-ui/model/conversation';
 
 test('content parts preserve prose and ordered composition visuals', () => {
@@ -48,4 +48,93 @@ test('layout modes validate stored values and scroll follow uses the reader posi
   assert.equal(narrativeMode('corrupt-local-storage'), 'authoring');
   assert.equal(nearBottom(100, 500, 400), true);
   assert.equal(nearBottom(0, 1000, 400), false);
+});
+
+test('a rejected edit reads as a sentence, not markup', () => {
+  const failure = '<edit-failed applied="none" version="14">\n  <error kind="parse">instance.def: not a valid id: &quot;#$def&quot; at line 1</error>\n</edit-failed>';
+  assert.equal(failureSummary(failure, 2), 'The edit was rejected after 2 attempts, so nothing changed: instance.def: not a valid id: "#$def" at line 1');
+  assert.equal(failureSummary('plain words'), 'plain words');
+});
+
+test('a streaming reply shows prose, holds back half-written markup and lists closed verbs', async () => {
+  const { streamView } = await import('../src-ui/chat/conversation');
+  assert.deepEqual(streamView('Making a pump.\n<ed'), { prose: 'Making a pump.\n', edit: null, verbs: [] });
+  assert.equal(streamView('See this:\n\n::vie').prose, 'See this:\n\n');
+  const forming = streamView('Making it.\n<edit><create id="$a" type="rect" name="pump body" x="1"/><set id="#4" x="2" fill.color="#f00"/><import-svg to="#1"><svg><g><path d="M0 0"/></g></svg></import-svg><create id="$b" type="te');
+  assert.equal(forming.prose, 'Making it.\n');
+  assert.deepEqual(forming.verbs, ['Create rect "pump body"', 'Set #4 · x, fill.color', 'Import SVG']);
+  assert.match(forming.edit!, /^<edit>/);
+  const closed = streamView('<edit><delete id="#3"/></edit>\nDone.');
+  assert.deepEqual([closed.prose, closed.verbs], ['\nDone.', ['Delete #3']]);
+  assert.equal(streamView('Like this:\n```xml\n<edit><delete id="#3"/></edit>\n```\n').edit, null);
+  assert.deepEqual(streamView('<look expand="#u"/>'), { prose: '', edit: null, verbs: [] });
+});
+
+test('progress folds phases, reasoning and text into labelled steps', async () => {
+  const { applyAgentEvents, finishProgress, stepLabel } = await import('../src-ui/chat/conversation');
+  const progress = { steps: [], text: '' } as any;
+  applyAgentEvents(progress, [{ kind: 'phase', phase: 'reading', attempt: 1 }, { kind: 'phase', phase: 'thinking', attempt: 1 }, { kind: 'reasoning', delta: 'Plan: ' }, { kind: 'reasoning', delta: 'a pump.' }], 10);
+  assert.equal(stepLabel(progress.steps[1], false), 'Thinking');
+  applyAgentEvents(progress, [{ kind: 'text', delta: 'Sure.\n<edit><create type="rect"/>' }], 20);
+  assert.equal(stepLabel(progress.steps[1], false), 'Writing the edit');
+  assert.equal(progress.steps[1].reasoning, 'Plan: a pump.');
+  applyAgentEvents(progress, [{ kind: 'phase', phase: 'applying', attempt: 1 }, { kind: 'phase', phase: 'thinking', attempt: 2 }], 30);
+  assert.equal(progress.text, '');
+  assert.equal(stepLabel(progress.steps[3], false), 'Reconsidering the rejected edit');
+  finishProgress(progress, 40);
+  assert.deepEqual(progress.steps.map((s: any) => [s.startedAt, s.endedAt]), [[10, 10], [10, 30], [30, 30], [30, 40]]);
+  assert.equal(stepLabel(progress.steps[1], true), 'Wrote the edit');
+});
+
+test('progress batches merge deltas and send a phase change at once', async () => {
+  const { eventBatcher } = await import('../src-ui/model/progress');
+  const sent: unknown[][] = [];
+  const batch = eventBatcher(events => sent.push(events), 20);
+  batch.push({ kind: 'text', delta: 'a' });
+  batch.push({ kind: 'text', delta: 'b' });
+  batch.push({ kind: 'reasoning', delta: 'r' });
+  assert.equal(sent.length, 0);
+  batch.push({ kind: 'phase', phase: 'applying', attempt: 1 });
+  assert.deepEqual(sent, [[{ kind: 'text', delta: 'ab' }, { kind: 'reasoning', delta: 'r' }, { kind: 'phase', phase: 'applying', attempt: 1 }]]);
+  batch.push({ kind: 'text', delta: 'c' });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.deepEqual(sent[1], [{ kind: 'text', delta: 'c' }]);
+});
+
+test('token counts: estimates while running, exact once each call reports, with a rate', async () => {
+  const { applyAgentEvents, turnTokens, stepTokens, formatTokens } = await import('../src-ui/chat/conversation');
+  const { mergeEvents } = await import('../src-ui/model/progress');
+  assert.deepEqual(mergeEvents([{ kind: 'thinking-tokens', estimated: 50 }, { kind: 'thinking-tokens', estimated: 150 }]), [{ kind: 'thinking-tokens', estimated: 150 }]);
+  const progress = { steps: [], text: '' } as any;
+  applyAgentEvents(progress, [{ kind: 'phase', phase: 'thinking', attempt: 1 }], 0);
+  applyAgentEvents(progress, [{ kind: 'thinking-tokens', estimated: 300 }], 1000);
+  applyAgentEvents(progress, [{ kind: 'text', delta: 'x'.repeat(300) }], 2000);
+  // 300 estimated thinking + 300 chars / 3 = 400, over 2 s since the first token.
+  assert.deepEqual(turnTokens(progress, 3000, true), { tokens: 400, thinking: 300, exact: false, perSecond: 200 });
+  applyAgentEvents(progress, [{ kind: 'usage', output: 420, thinking: 310 }, { kind: 'phase', phase: 'applying', attempt: 1 }], 4000);
+  // 300 chars were 110 reply tokens: the next estimate uses about 2.9 characters a token.
+  const next = applyAgentEvents({ steps: [], text: '' }, [{ kind: 'phase', phase: 'thinking', attempt: 1 }, { kind: 'text', delta: 'y'.repeat(290) }], 0);
+  assert.equal(stepTokens(next.steps[0]).tokens, Math.ceil(290 / (0.5 * 3 + 0.5 * (300 / 110))));
+  assert.deepEqual(stepTokens(progress.steps[0]), { tokens: 420, thinking: 310, exact: true });
+  // Done: per second of model time (4 s).
+  assert.deepEqual(turnTokens(progress, 5000, false), { tokens: 420, thinking: 310, exact: true, perSecond: 105 });
+  // Codex shares nothing while it reasons: no count, no rate yet.
+  const quiet = applyAgentEvents({ steps: [], text: '' }, [{ kind: 'phase', phase: 'thinking', attempt: 1 }], 0);
+  assert.deepEqual(turnTokens(quiet, 5000, true), { tokens: 0, thinking: 0, exact: false, perSecond: null });
+  assert.deepEqual([formatTokens(1234), formatTokens(12345)], ['1,234', '12.3k']);
+});
+
+test('a turn log carries the turn as the chat saw it, and where its calls are logged', async () => {
+  const { turnLog } = await import('../src-ui/chat/conversation');
+  const turn: any = {
+    id: 'turn-9', instruction: 'make a pump', target: 'Document', status: 'failed', startedAt: Date.UTC(2026, 10, 6, 12), completedAt: Date.UTC(2026, 10, 6, 12) + 4200,
+    error: 'The edit was rejected', progress: { text: '', steps: [{ phase: 'thinking', attempt: 1, startedAt: Date.UTC(2026, 10, 6, 12), endedAt: Date.UTC(2026, 10, 6, 12) + 4000, reasoning: 'hm', usage: { output: 50, thinking: 20 }, wrote: 'edit' }] },
+    result: { ok: false, note: '', edit: '<edit/>', attempts: 2, transport: 'codex:local', outcome: { ok: false, failure: '<edit-failed/>' }, trace: [{ attempt: 1, kind: 'edit', ok: false }] },
+  };
+  const log = turnLog(turn);
+  assert.equal(log.turn, 'turn-9');
+  assert.match(log.agentLog, /^\.agents\/agent-logs\/2026-11-0\d\.jsonl/);
+  assert.equal(log.seconds, 4.2);
+  assert.deepEqual(log.steps, [{ step: 'Wrote the edit', attempt: 1, seconds: 4, tokens: { tokens: 50, thinking: 20, exact: true }, reasoning: 'hm' }]);
+  assert.deepEqual([log.failure, log.trace.length, 'streamed' in log], ['<edit-failed/>', 1, false]);
 });

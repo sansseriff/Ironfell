@@ -286,15 +286,17 @@ LIVE_AGENT=1 IRON_CODEX_BIN=/path/to/codex bun .claude/skills/run-iron/chat-ui.t
 Expected output:
 
 ```text
-PASS CHAT worker: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop; no page errors
-PASS CHAT main: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop; no page errors
-PASS LIVE CHAT worker: real Codex prose/visual without mutation, then validated shape creation; no page errors
+PASS CHAT worker: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, 7 turns in the agent log; no page errors
+PASS CHAT main: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, 7 turns in the agent log; no page errors
+PASS LIVE CHAT worker: real Codex prose/visual without mutation, then validated shape creation, 2 turns in the agent log; no page errors
 ```
 
 All pass 2026-11-03 with cached wasm; again 2026-11-06 with the streaming checks
 (`plans/specs/agent-streaming.md`): a slow streamed fixture turn shows its work
 log, prose and forming edit (`.agents/chat/streaming-*.png`), then Stop restores
-the prompt and leaves the document unchanged. The scripts need `playwright-core`;
+the prompt and leaves the document unchanged. Each run gives its bridge an agent log
+in a temporary folder and checks every finished turn has its calls and outcome there
+(`KEEP_AGENT_LOG=1` keeps the folder and prints it). The scripts need `playwright-core`;
 if `node_modules` lacks it, install it in a scratch folder and pass
 `NODE_PATH=<that>/node_modules`. Each fixture run uses the real engine and
 a scripted local runtime, covering the shared components in both panels and all

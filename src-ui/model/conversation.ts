@@ -8,6 +8,8 @@ export interface ConversationMessage {
 export interface ConversationOptions {
   history?: ConversationMessage[];
   allowTextReply?: boolean;
+  /** The chat turn's id: sent with each model call and the outcome, for the agent log. */
+  turnId?: string;
 }
 
 export function executableReply(text: string): string {

@@ -95,6 +95,10 @@ builds retain manual token entry. This is a trusted local-development convenienc
 not isolation from local programs that can forge HTTP headers. Do not allow
 untrusted apps on the permitted origins. Provider credentials are never returned.
 
+Since 2026-11-06 the bridge also keeps a local agent log of prompts, replies and
+turn outcomes for debugging ([`agent-streaming.md`](agent-streaming.md) §7;
+`IRON_AGENT_LOG=0` turns it off). It holds document content and stays on this machine.
+
 Each turn uses a temporary empty directory. Codex has a read-only sandbox,
 never approvals, disabled shell/unified execution, apps, plugins, hooks, skill
 search, web search and configured MCP servers. Unexpected server-initiated

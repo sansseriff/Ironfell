@@ -10,9 +10,17 @@ import Anthropic from '@anthropic-ai/sdk';
 import { localEndpoint, type ModelEntry, type ModelOptions, type LocalRuntimeOptions } from './runtime-options';
 import type { AgentEvent } from './progress';
 
+/** A turn's outcome as the agent log records it (agent.ts writes it). */
+export interface TurnRecord { turn: string; [key: string]: unknown }
+
 type Message = { role: 'user' | 'assistant'; content: string };
 /** Where a streaming completion sends its deltas, and how it is stopped. */
-export interface CompleteLive { onEvent?: (event: AgentEvent) => void; signal?: AbortSignal }
+export interface CompleteLive {
+  onEvent?: (event: AgentEvent) => void;
+  signal?: AbortSignal;
+  /** The chat turn this call belongs to (the agent log groups by it). */
+  turn?: string;
+}
 
 /** No bytes from the bridge for this long means it is gone; it pings every
  *  10 s while a runtime works (scripts/agent-bridge/server.ts). */
@@ -37,6 +45,17 @@ export class LocalRuntimeTransport implements ModelTransport {
   readonly name: string;
   private endpoint: URL;
 
+  /** A turn's outcome to the bridge's agent log (scripts/agent-bridge/log.ts).
+   *  Best effort: a bridge without logging, or none at all, is not an error. */
+  async log(record: TurnRecord) {
+    try {
+      await fetch(new URL('/log', this.endpoint), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.options.token}` },
+        body: JSON.stringify(record), signal: AbortSignal.timeout(5000),
+      });
+    } catch { /* logging never fails a turn */ }
+  }
+
   constructor(private options: LocalRuntimeOptions) {
     this.endpoint = localEndpoint(options.endpoint);
     this.name = `${options.provider}:local${options.model ? `:${options.model}` : ''}`;
@@ -54,7 +73,7 @@ export class LocalRuntimeTransport implements ModelTransport {
       const response = await fetch(new URL('/complete', this.endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', Authorization: `Bearer ${this.options.token}` },
-        body: JSON.stringify({ provider: this.options.provider, system, messages, ...(this.options.model ? { model: this.options.model } : {}) }),
+        body: JSON.stringify({ provider: this.options.provider, system, messages, ...(this.options.model ? { model: this.options.model } : {}), ...(live.turn ? { turn: live.turn } : {}) }),
         signal,
       });
       heard();
@@ -112,6 +131,8 @@ export interface ModelTransport {
   readonly name: string;
   /** The whole reply; with `live.onEvent`, its text and reasoning as they form. */
   complete(system: string, messages: Message[], live?: CompleteLive): Promise<{ text: string; usage?: unknown }>;
+  /** Record a turn's outcome where this transport keeps logs, if it does. */
+  log?(record: TurnRecord): Promise<void>;
 }
 
 export class AnthropicTransport implements ModelTransport {

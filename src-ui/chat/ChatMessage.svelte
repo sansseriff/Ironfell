@@ -9,7 +9,8 @@
   import ChatVisual from './ChatVisual.svelte';
   import ChatProgress from './ChatProgress.svelte';
   import PencilLine from '@lucide/svelte/icons/pencil-line';
-  import { contentParts, streamView, type ChatTurn } from './conversation';
+  import ClipboardList from '@lucide/svelte/icons/clipboard-list';
+  import { contentParts, streamView, turnLog, type ChatTurn } from './conversation';
   import type { Snippet } from 'svelte';
 
   let { turn, retry, stop, review }: { turn: ChatTurn; retry: () => void; stop?: () => void; review?: Snippet<[ChatTurn]> } = $props();
@@ -21,6 +22,16 @@
   const SHOWN_VERBS = 6;
   let copied = $state(false);
   let copyError = $state('');
+  // "Copy turn log": the turn as JSON, for a bug report (conversation.ts `turnLog`).
+  let logCopied = $state(false);
+  async function copyLog() {
+    copyError = '';
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(turnLog($state.snapshot(turn) as ChatTurn), null, 2));
+      logCopied = true;
+      setTimeout(() => { logCopied = false; }, 1500);
+    } catch { copyError = 'Could not copy the turn log.'; }
+  }
   async function copy() {
     copyError = '';
     try { await navigator.clipboard.writeText(turn.result?.note || turn.result?.edit || ''); copied = true; }
@@ -57,7 +68,7 @@
       {/if}
     {:else if turn.status === 'stopped'}
       <p class="summary">Stopped. Nothing was changed.</p>
-      <Button small variant="outline" onclick={retry}>Restore prompt</Button>
+      <div class="meta"><Button small variant="outline" onclick={retry}>Restore prompt</Button><IconButton icon={logCopied ? Check : ClipboardList} label={logCopied ? 'Turn log copied' : 'Copy turn log (for a bug report)'} onclick={copyLog} /></div>
     {:else}
       {#each parts as part, index (index)}
         {#if part.kind === 'markdown'}<ChatMarkdown text={part.text} />{:else}<ChatVisual show={part.show} focus={part.focus} />{/if}
@@ -71,7 +82,7 @@
           <Collapsible.Content><pre class="edit">{turn.result.edit}{turn.result.outcome?.failure ? `\n${turn.result.outcome.failure}` : ''}</pre></Collapsible.Content>
         </Collapsible.Root>
       {/if}
-      <div class="meta"><span>{turn.result?.transport ?? 'Runtime error'}{turn.completedAt ? ` · ${Math.max(0.1, (turn.completedAt - turn.startedAt) / 1000).toFixed(1)}s` : ''}</span><IconButton icon={copied ? Check : Copy} label={copied ? 'Message copied' : 'Copy assistant message'} onclick={copy} /></div>
+      <div class="meta"><span>{turn.result?.transport ?? 'Runtime error'}{turn.completedAt ? ` · ${Math.max(0.1, (turn.completedAt - turn.startedAt) / 1000).toFixed(1)}s` : ''}</span><span class="actions"><IconButton icon={logCopied ? Check : ClipboardList} label={logCopied ? 'Turn log copied' : 'Copy turn log (for a bug report)'} onclick={copyLog} /><IconButton icon={copied ? Check : Copy} label={copied ? 'Message copied' : 'Copy assistant message'} onclick={copy} /></span></div>
       {#if copyError}<p class="error" role="status">{copyError}</p>{/if}
     {/if}
   </div>
@@ -98,5 +109,6 @@
   .verbs li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .verbs .earlier { color: var(--fg-faint); }
   .edit { font-size: 10px; background: var(--bg-sunken); padding: 10px; border-radius: 6px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .actions { display: flex; align-items: center; gap: 2px; }
   .meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 8px; color: var(--fg-faint); font-size: 10px; }
 </style>

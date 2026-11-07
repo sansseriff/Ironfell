@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createAgentBridge } from './agent-bridge/server';
+import { agentLog, agentLogDir } from './agent-bridge/log';
 import { claudeRuntime, claudeModels, codexRuntime, codexModels } from './agent-bridge/runtimes';
 import { resolveClaude, resolveCodex } from './agent-bridge/resolve';
 
@@ -26,6 +27,7 @@ export async function startNativeAgent(options: {
     token, origins: ['tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'],
     runtimes: { claude: claudeRuntime(claudeBin, 'subscription', env), codex: codexRuntime(codexBin) },
     models: { claude: claudeModels, codex: codexModels(codexBin) },
+    log: (() => { const dir = agentLogDir(fileURLToPath(new URL('..', import.meta.url)), env); return dir ? agentLog(dir) : null; })(),
   });
   try {
     await new Promise<void>((resolve, reject) => {

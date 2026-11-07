@@ -123,3 +123,18 @@ test('token counts: estimates while running, exact once each call reports, with 
   assert.deepEqual(turnTokens(quiet, 5000, true), { tokens: 0, thinking: 0, exact: false, perSecond: null });
   assert.deepEqual([formatTokens(1234), formatTokens(12345)], ['1,234', '12.3k']);
 });
+
+test('a turn log carries the turn as the chat saw it, and where its calls are logged', async () => {
+  const { turnLog } = await import('../src-ui/chat/conversation');
+  const turn: any = {
+    id: 'turn-9', instruction: 'make a pump', target: 'Document', status: 'failed', startedAt: Date.UTC(2026, 10, 6, 12), completedAt: Date.UTC(2026, 10, 6, 12) + 4200,
+    error: 'The edit was rejected', progress: { text: '', steps: [{ phase: 'thinking', attempt: 1, startedAt: Date.UTC(2026, 10, 6, 12), endedAt: Date.UTC(2026, 10, 6, 12) + 4000, reasoning: 'hm', usage: { output: 50, thinking: 20 }, wrote: 'edit' }] },
+    result: { ok: false, note: '', edit: '<edit/>', attempts: 2, transport: 'codex:local', outcome: { ok: false, failure: '<edit-failed/>' }, trace: [{ attempt: 1, kind: 'edit', ok: false }] },
+  };
+  const log = turnLog(turn);
+  assert.equal(log.turn, 'turn-9');
+  assert.match(log.agentLog, /^\.agents\/agent-logs\/2026-11-0\d\.jsonl/);
+  assert.equal(log.seconds, 4.2);
+  assert.deepEqual(log.steps, [{ step: 'Wrote the edit', attempt: 1, seconds: 4, tokens: { tokens: 50, thinking: 20, exact: true }, reasoning: 'hm' }]);
+  assert.deepEqual([log.failure, log.trace.length, 'streamed' in log], ['<edit-failed/>', 1, false]);
+});

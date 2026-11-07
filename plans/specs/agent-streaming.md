@@ -196,3 +196,34 @@ folding, batching); `chat-ui.ts` worker and main with a slow streamed fixture
 turn and Stop; `agent-runtime.ts` and `agent-components.ts` worker and main;
 live Codex `chat-ui.ts` (10.4 s); live Codex and Claude adapters streaming text
 (first text at 6.5 s and 2.7–3.5 s).
+
+## 7. Agent log (2026-11-06, a stopgap)
+
+Until a backend keeps conversations, the bridge writes a local log for
+debugging the agent: `scripts/agent-bridge/log.ts`, JSON lines, one file a day
+in `.agents/agent-logs/` (gitignored), capped at 200 MB a file. On by default
+for `dev:agent`, the standalone bridge and the native launcher;
+`IRON_AGENT_LOG=<folder>` moves it, `IRON_AGENT_LOG=0` turns it off. The
+browser API path (no bridge) is not logged.
+
+- `system`: each distinct system prompt once per file, by hash (it is ~29 KB).
+- `call` (bridge): turn id, provider, model, ms, first-token ms, usage,
+  the system prompt's hash, the messages sent (document view, selection,
+  history, request, look and repair rounds), the raw reply, shared reasoning,
+  and the error, timeout or Stop if any. About 90 KB a call on the demo.
+- `turn` (page, `POST /log`, best effort): instruction, ok, attempts, error,
+  note, final edit and outcome, history length, and `trace`: each reply's fate
+  in order (`look`, `prose`, `edit` with ok/failure/summary, `no-edit`,
+  `stale`, `stopped`, `error`). `AskResult.trace` carries the same.
+
+Calls and outcome share the chat turn's id (`ConversationOptions.turnId`,
+sent as `turn`). Each chat message has **Copy turn log**: the turn as the chat
+saw it (steps, tokens, trace, edit, failure, what had streamed) as JSON, with
+the log file to look in. Logs hold document content and prompts, which the
+provider already receives; they stay on this machine.
+
+Verified: 69 bun tests (bridge records, `/log` validation and auth, `ask`'s
+trace and single outcome record, the native launcher's log, `turnLog`);
+`chat-ui.ts` worker and main check every finished turn has its calls and its
+outcome in the log (7 turns); live Codex `chat-ui.ts` logged 2 turns (209 KB).
+

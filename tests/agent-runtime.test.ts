@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { resolve } from 'node:path';
 import { createAgentBridge, validateRequest } from '../scripts/agent-bridge/server';
+import { agentLog, agentLogDir } from '../scripts/agent-bridge/log';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type Runtime } from '../scripts/agent-bridge/runtimes';
 import { LocalRuntimeTransport } from '../src-ui/model/transport';
 import { localEndpoint, type CompletionRequest } from '../src-ui/model/runtime-options';
@@ -389,4 +393,72 @@ test('ask reports its phases and passes deltas on; a stopped turn applies nothin
   assert.equal(stopped.ok, false);
   assert.equal(stopped.error, 'stopped');
   assert.equal(fixtureDoc.calls(), 1);
+});
+
+// ---- Agent log (scripts/agent-bridge/log.ts) ---------------------------------------
+
+test('the agent log keeps each call (prompt once, reply, timing, usage) and each turn outcome', async () => {
+  assert.equal(agentLogDir('/repo', {}), '/repo/.agents/agent-logs');
+  assert.equal(agentLogDir('/repo', { IRON_AGENT_LOG: '0' }), null);
+  assert.equal(agentLogDir('/repo', { IRON_AGENT_LOG: '/elsewhere' }), '/elsewhere');
+  const dir = await mkdtemp(join(tmpdir(), 'iron-agent-log-'));
+  const log = agentLog(dir);
+  const bridge = createAgentBridge({ token, origins: ['http://localhost:5173'], log, runtimes: {
+    codex: async (_request, _signal, onEvent) => { onEvent?.({ type: 'reasoning', delta: 'Weighing it.' }); onEvent?.({ type: 'usage', output: 9, thinking: 4 }); return { text: '<edit/>' }; },
+    claude: async () => { throw new Error('claude is down'); },
+  } });
+  bridge.server.listen(0, '127.0.0.1');
+  await once(bridge.server, 'listening');
+  const endpoint = `http://127.0.0.1:${(bridge.server.address() as { port: number }).port}`;
+  try {
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    await transport.complete(payload.system, payload.messages, { turn: 'turn-1', onEvent: () => {} });
+    await transport.complete(payload.system, payload.messages, { turn: 'turn-1' });
+    await assert.rejects(() => new LocalRuntimeTransport({ provider: 'claude', endpoint, token }).complete(payload.system, payload.messages, { turn: 'turn-2' }), /claude is down/);
+    await transport.log({ turn: 'turn-1', ok: true, trace: [{ attempt: 1, kind: 'edit', ok: true }] });
+    const bad = await fetch(`${endpoint}/log`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ turn: '../etc' }) });
+    assert.equal(bad.status, 400);
+    const unauthorised = await fetch(`${endpoint}/log`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ turn: 'x' }) });
+    assert.equal(unauthorised.status, 401);
+    await log.flushed();
+    const [file] = await readdir(dir);
+    const records = (await readFile(join(dir, file), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    // The system prompt once, three calls naming it, the page's turn record.
+    assert.deepEqual(records.map(r => `${r.kind}:${r.turn ?? ''}`), ['system:', 'call:turn-1', 'call:turn-1', 'call:turn-2', 'turn:turn-1']);
+    const [system, first, , failed, turn] = records;
+    assert.equal(system.text, payload.system);
+    assert.equal(first.system, system.hash);
+    assert.deepEqual([first.reply, first.reasoning, first.usage, first.messages], ['<edit/>', 'Weighing it.', { output: 9, thinking: 4 }, payload.messages]);
+    assert.equal(typeof first.ms, 'number');
+    assert.match(failed.error, /claude is down/);
+    assert.deepEqual(turn.trace, [{ attempt: 1, kind: 'edit', ok: true }]);
+  } finally { bridge.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('ask sends the turn id with each call and logs each reply\'s fate once the turn ends', async () => {
+  const fixtureDoc = documentFixture();
+  const turns: string[] = [];
+  const records: any[] = [];
+  let calls = 0;
+  const transport = {
+    name: 'fixture',
+    complete: async (_s: string, _m: unknown, live: any = {}) => {
+      turns.push(live.turn);
+      calls++;
+      return { text: calls === 1 ? '<edit><create type="not-a-type" parent="#1"/></edit>' : '<edit><create id="$shape" type="rect" parent="#1" x="20"/></edit>' };
+    },
+    log: async (record: any) => { records.push(record); },
+  };
+  const result = await ask(fixtureDoc.api, transport, 'add a rectangle', { turnId: 'turn-7' });
+  assert.equal(result.ok, true);
+  assert.deepEqual(turns, ['turn-7', 'turn-7']);
+  assert.deepEqual(result.trace?.map(step => `${step.kind}:${'ok' in step ? step.ok : ''}`), ['edit:false', 'edit:true']);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].turn, 'turn-7');
+  assert.equal(records[0].attempts, 2);
+  assert.match(records[0].trace[0].failure, /edit-failed/);
+  // No turn id (a script's __iron.ask): nothing is logged.
+  calls = 1;
+  await ask(fixtureDoc.api, transport, 'add another');
+  assert.equal(records.length, 1);
 });

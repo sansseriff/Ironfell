@@ -10,7 +10,7 @@
 </script>
 
 <section class="html-view model-view">
-  <ChatPanel {session} target="Document and compositions" send={(text, history, _turn, live) => doc.ask(text, { history, allowTextReply: true }, live)} />
+  <ChatPanel {session} target="Document and compositions" send={(text, history, turn, live) => doc.ask(text, { history, allowTextReply: true, turnId: turn.id }, live)} />
 </section>
 
 <style>

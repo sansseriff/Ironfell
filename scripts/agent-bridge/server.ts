@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type ModelEntry, type ModelLister, type Runtime } from './runtimes';
 import { resolveClaude, resolveCodex } from './resolve';
+import { agentLog, agentLogDir, type AgentLog } from './log';
+import { fileURLToPath } from 'node:url';
 import type { CompletionRequest } from '../../src-ui/model/runtime-options';
 import { isLoopbackOrigin } from '../../src-ui/model/runtime-options';
 
@@ -10,10 +12,16 @@ export function validateRequest(value: unknown): CompletionRequest {
   if (!request || !['codex', 'claude'].includes(request.provider) || typeof request.system !== 'string' || !request.system.trim() ||
     !Array.isArray(request.messages) || !request.messages.length || request.messages.length > 16 ||
     request.messages.some(message => !message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string') ||
-    (request.model !== undefined && (typeof request.model !== 'string' || request.model.length > 200))) {
+    (request.model !== undefined && (typeof request.model !== 'string' || request.model.length > 200)) ||
+    (request.turn !== undefined && !isTurnId(request.turn))) {
     throw new Error('Invalid completion request');
   }
   return request;
+}
+
+/** A chat turn's id: a UUID, or any short word-like name. */
+function isTurnId(value: unknown): value is string {
+  return typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
 }
 
 async function readBody(request: IncomingMessage) {
@@ -40,7 +48,10 @@ export function createAgentBridge(options: {
   /** How often a streamed completion pings while the runtime is quiet. */
   pingMs?: number;
   allowPairing?: boolean;
+  /** Where model calls and turn outcomes are written (log.ts); none if absent. */
+  log?: AgentLog | null;
 }) {
+  const log = options.log ?? null;
   if (options.token.length < 32) throw new Error('Bridge token must be at least 32 characters');
   const runtimes = options.runtimes ?? { codex: codexRuntime(), claude: claudeRuntime() };
   const models = options.models ?? (options.runtimes ? {} : { codex: codexModels(), claude: claudeModels });
@@ -91,6 +102,19 @@ export function createAgentBridge(options: {
         return send(400, { error: String(error) });
       }
     }
+    // A turn's outcome, from the page (agent.ts): applied or rejected edits,
+    // repairs, looks, Stop. Accepted, and dropped, when logging is off.
+    if (request.url === '/log' && request.method === 'POST') {
+      if (request.headers['content-type'] !== 'application/json') return send(415, { error: 'Expected application/json' });
+      try {
+        const record = await readBody(request);
+        if (!record || typeof record !== 'object' || Array.isArray(record) || !isTurnId(record.turn)) throw new Error('Invalid log record');
+        log?.write({ ...record, kind: 'turn' });
+        return send(200, { logged: !!log });
+      } catch (error) {
+        return send(400, { error: String(error) });
+      }
+    }
     if (request.url !== '/complete' || request.method !== 'POST') return send(404, { error: 'Not found' });
     if (request.headers['content-type'] !== 'application/json') return send(415, { error: 'Expected application/json' });
     if (busy) return send(429, { error: 'Agent bridge is busy' });
@@ -110,25 +134,48 @@ export function createAgentBridge(options: {
     const streaming = (request.headers.accept ?? '').includes('application/x-ndjson');
     const line = (value: object) => { if (!response.destroyed && !response.writableEnded) response.write(`${JSON.stringify(value)}\n`); };
     let ping: ReturnType<typeof setInterval> | undefined;
+    // What the log records of this call (log.ts).
+    const started = Date.now();
+    let payload: CompletionRequest | undefined;
+    let firstTokenMs: number | undefined;
+    let reasoning = '';
+    let usage: unknown;
+    let reply: string | undefined;
+    let failure: string | undefined;
     try {
-      const payload = validateRequest(await readBody(request));
+      payload = validateRequest(await readBody(request));
       if (streaming) {
         response.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         ping = setInterval(() => line({ type: 'ping' }), options.pingMs ?? 10000);
       }
       const result = await runtimes[payload.provider](payload, controller.signal, event => {
+        firstTokenMs ??= Date.now() - started;
+        if (event.type === 'reasoning') reasoning += event.delta;
+        if (event.type === 'usage') usage = { output: event.output, thinking: event.thinking };
         clearTimeout(idle);
         idle = setTimeout(expire, options.timeoutMs ?? 90000);
         if (streaming) line(event);
       });
+      reply = result.text;
+      usage ??= result.usage;
       if (typeof result.text !== 'string' || !result.text.trim()) throw new Error('Runtime returned no text');
       if (streaming) { line({ type: 'done', ...result }); response.end(); }
       else send(200, result);
     } catch (error) {
       const message = timedOut ? 'Agent runtime timed out' : String(error);
+      failure = controller.signal.aborted && !timedOut ? 'stopped (the page disconnected)' : message;
       if (streaming && response.headersSent) { line({ type: 'error', error: message }); response.end(); }
       else send(timedOut ? 504 : 400, { error: message });
     } finally {
+      if (log && payload) {
+        log.write({
+          kind: 'call', turn: payload.turn ?? null, provider: payload.provider, model: payload.model ?? null,
+          ms: Date.now() - started, firstTokenMs: firstTokenMs ?? null, usage: usage ?? null,
+          ...(failure ? { error: failure } : {}),
+          system: log.system(payload.system), messages: payload.messages,
+          reply: reply ?? null, ...(reasoning ? { reasoning } : {}),
+        });
+      }
       clearTimeout(idle);
       clearTimeout(total);
       clearInterval(ping);
@@ -150,13 +197,14 @@ if (import.meta.main) {
   const codexBin = await resolveCodex().catch(() => process.env.IRON_CODEX_BIN ?? 'codex');
   const claudeBin = await resolveClaude().catch(() => process.env.IRON_CLAUDE_BIN ?? 'claude');
   const auth = claudeAuth();
+  const logDir = agentLogDir(fileURLToPath(new URL('../..', import.meta.url)));
   const bridge = createAgentBridge({
-    token, origins, allowPairing: true,
+    token, origins, allowPairing: true, log: logDir ? agentLog(logDir) : null,
     runtimes: { codex: codexRuntime(codexBin), claude: claudeRuntime(claudeBin, auth) },
     models: { codex: codexModels(codexBin), claude: claudeModels },
   });
   bridge.server.listen(port, '127.0.0.1', () => {
-    console.log(`Iron agent bridge: http://127.0.0.1:${port}\nSession token: ${token}\nCodex:  ${codexBin}\nClaude: ${claudeBin} (${auth === 'api-key' ? 'ANTHROPIC_API_KEY' : 'your Claude subscription'})\nTrusted local Iron dev pages pair automatically. Manual token entry remains available. Provider credentials stay local.`);
+    console.log(`Iron agent bridge: http://127.0.0.1:${port}\nSession token: ${token}\nCodex:  ${codexBin}\nClaude: ${claudeBin} (${auth === 'api-key' ? 'ANTHROPIC_API_KEY' : 'your Claude subscription'})\nLog:    ${logDir ?? 'off (IRON_AGENT_LOG=0)'}\nTrusted local Iron dev pages pair automatically. Manual token entry remains available. Provider credentials stay local.`);
   });
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => bridge.stop());
 }

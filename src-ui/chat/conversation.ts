@@ -235,6 +235,41 @@ export function contentParts(text: string): ContentPart[] {
   return result;
 }
 
+/** What "Copy turn log" puts on the clipboard: the turn as the chat saw it
+ *  (steps, tokens, each reply's fate, the final edit). The prompts and raw
+ *  replies are in the bridge's agent log, found by `turn`. */
+export function turnLog(turn: ChatTurn, now = Date.now()) {
+  const day = new Date(turn.startedAt);
+  const file = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}.jsonl`;
+  const progress = turn.progress;
+  return {
+    turn: turn.id,
+    agentLog: `.agents/agent-logs/${file} (records with this turn)`,
+    instruction: turn.instruction,
+    target: turn.target,
+    status: turn.status,
+    startedAt: new Date(turn.startedAt).toISOString(),
+    seconds: Number((((turn.completedAt ?? now) - turn.startedAt) / 1000).toFixed(1)),
+    transport: turn.result?.transport ?? null,
+    error: turn.error || turn.result?.error || null,
+    attempts: turn.result?.attempts ?? null,
+    tokens: progress ? turnTokens(progress, turn.completedAt ?? now, turn.status === 'running') : null,
+    steps: progress?.steps.map(step => ({
+      step: stepLabel(step, step.endedAt !== undefined),
+      attempt: step.attempt,
+      seconds: Number((((step.endedAt ?? now) - step.startedAt) / 1000).toFixed(1)),
+      ...(step.phase === 'thinking' ? { tokens: stepTokens(step) } : {}),
+      ...(step.reasoning ? { reasoning: step.reasoning } : {}),
+    })) ?? [],
+    trace: turn.result?.trace ?? [],
+    note: turn.result?.note || null,
+    edit: turn.result?.edit ?? null,
+    failure: turn.result?.outcome?.failure ?? null,
+    // A turn still running, or stopped: what had streamed so far.
+    ...(turn.status === 'running' || turn.status === 'stopped' ? { streamed: progress?.text ?? '' } : {}),
+  };
+}
+
 /** A rejected edit's `<edit-failed>` markup as a sentence: its errors' text,
  *  unescaped; the markup itself stays in the edit details. */
 export function failureSummary(failure: string, attempts = 1): string {

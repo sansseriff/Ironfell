@@ -268,7 +268,7 @@
       const outcome = await doc.edit(xmlForTest, `model: ${text.slice(0, 60)}`);
       result = { ok: !!outcome.ok, note: '', edit: xmlForTest, outcome, attempts: 1, transport: 'scripted' };
     } else {
-      result = await doc.ask(instruction, { history, allowTextReply: true }, live);
+      result = await doc.ask(instruction, { history, allowTextReply: true, turnId: turn.id }, live);
     }
     if (generation !== doc.generation) return result;
     const read = await doc.command<{ ok: boolean; blocks: StoredBlock[] }>({ op: 'narrative_read', source: currentSource });

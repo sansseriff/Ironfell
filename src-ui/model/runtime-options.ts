@@ -32,6 +32,8 @@ export interface CompletionRequest {
   system: string;
   messages: { role: 'user' | 'assistant'; content: string }[];
   model?: string;
+  /** The chat turn this call belongs to, so the agent log can group them. */
+  turn?: string;
 }
 
 export function isLoopbackOrigin(origin: string): boolean {

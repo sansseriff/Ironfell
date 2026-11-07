@@ -4,12 +4,18 @@
 is the agreed first slice; phases 2–4 are listed so phase 1 does not block them. No
 code yet. Work order: `handoff-product.md`, "Panels and session".
 
-**Decision (user, 2026-11-06):** a Figma-style layers panel in the HTML DOM, built
-on a Melt UI tree pattern with virtualised rows, scoped to one composition at a
-time. The other contexts an entity appears in show as markers on its row, not as more
-rows. The whole document's structure is a separate concern (the composition list, and
-later a Model outline), not one tree of everything. Start with a targeted slice
-(phase 1) and leave timeline and narrative scope undecided.
+**Decision (user, 2026-11-06):** a layers panel in the HTML DOM, with virtualised
+rows, scoped to one composition at a time. Its layout, interaction and styling follow
+Figma's layers panel (§7.5). The other contexts an entity appears in show as markers on
+its row, not as more rows. The whole document's structure is a separate concern (the
+composition list, and later a Model outline), not one tree of everything. Start with a
+targeted slice (phase 1) and leave timeline and narrative scope undecided. The
+Document view stays in the default layout until its general controls (undo, save,
+load, export) move to a File menu.
+
+**Melt UI's Tree is not used** (checked 2026-11-06 against `melt` 0.44.0, the source of
+`builders/Tree.svelte.js`); a WAI-ARIA tree over flattened rows is written instead
+(§7.3).
 
 A mockup from the discussion (static HTML, not in the repo) showed the composition
 list, a tree with entity chips, an embed opened in place, derived parts, and a 14,444-row
@@ -107,9 +113,11 @@ The panel shows one composition: the **source**.
 - **The source is the view spec.** A new `layers` notation has `source: "follow"` or a
   composition id. Pinning rewrites the spec, so dockview saves it with the layout
   (`workspace.json` per scope) and no new persistence is needed.
-- **The header names the source** in a Bits UI `Select` (the shared
-  `src-ui/lib/ui/Select.svelte`) listing every composition, with its dimension. Choosing
-  one goes there (§5). A pin toggle (`IconButton` with Lucide `pin`) sits beside it.
+- **A Compositions section above the tree**, as Figma's Pages section sits above its
+  Layers: every composition as a row with its dimension, the source highlighted.
+  Choosing one goes there (§5). The split between the two sections is draggable, and
+  the Compositions section collapses to its header. The Layers header carries a pin
+  toggle (`IconButton` with Lucide `pin`) and collapse all, as Figma's does.
 
 **Embeds and the editing scope.** When you work inside an embed, the panel stays on the
 outer composition and reveals the row inside the embed, because its key is the full
@@ -193,12 +201,20 @@ the Document view and the model.
 
 ### 7.2 Setting the selection from the panel
 
-There is no FFI for HTML to set the selection today; only the select tool writes it.
-Phase 1 adds `select { items: [{ node, panel, chain }], mode: replace | toggle | range }`,
-applied as a session op through `Store::set_selection`. The select tool already reads
-session changes back (`select.rs`, the system that compares `session_version`), so the
-canvas follows. `panel` is the view the panel is following (or, when pinned, the most
-recent view of that composition), so the select tool's reach is right.
+HTML can set the selection today only through the narrative's cross-probe
+(`engine_api::narrative_probe`, action `select`): one node, written straight to
+`SelectionState`, with no chain and no multiple selection. Phase 1 adds
+`select { items: [{ node, panel, chain }], mode: replace | toggle | range }`, applied as
+a session op through `Store::set_selection`. The select tool already reads session
+changes back (`select.rs`, the system that compares `session_version`), so the canvas
+follows. `panel` is the view the panel is following (or, when pinned, the most recent
+view of that composition), so the select tool's reach is right. The narrative's
+`select` can then move onto the same command.
+
+**Hover both ways.** Hovering a row lights the node on the canvas, and its counterparts
+in other compositions, through the same probe's `hover` and `unhover` (Figma outlines
+the hovered layer on the canvas). Hovering on the canvas tints the row if it is
+mounted (`doc.hovered`); it never scrolls the tree.
 
 Click replaces the selection; Cmd/Ctrl-click toggles; Shift-click selects the visible
 range between the anchor and the row, as Figma does.
@@ -208,24 +224,56 @@ range between the anchor and the row, as Figma does.
 `src-ui/views/html/LayersView.svelte`, registered as the `layers` notation in
 `views.ts`.
 
-- **The tree pattern.** Bits UI has no tree. Use Melt UI's tree builder if it works
-  with virtualised rows (only the visible rows mounted). If it needs every item mounted,
-  implement the WAI-ARIA treeview pattern directly over the flattened rows: `role=tree`,
-  `treeitem` with `aria-level`, `aria-expanded`, `aria-selected`, `aria-setsize` and
-  `aria-posinset`, one roving `tabindex`, and the keyboard keys of §7.4. Decide at the
-  start of phase 1 by trying Melt's tree against Prussia; record the result here.
+- **The tree pattern.** Bits UI has no tree. Melt UI's Tree builder
+  (`melt/builders`, 0.44.0, pre-1.0) does not fit, from its source:
+  - it takes the whole nested item tree, and its navigation and range selection walk
+    all of it (`Tree.getAllChildren`), where the panel holds only the visible rows the
+    engine sends (§7.1);
+  - arrow keys move focus with `document.getElementById(…).focus()` on the
+    neighbouring item, which fails when that row is scrolled out and not mounted;
+  - it keeps its own `selected` and `expanded` sets, while the selection here belongs to
+    the session and is keyed by chain;
+  - it renders nested `role=group` containers, while a virtual window is one flat list.
+
+  So implement the WAI-ARIA treeview pattern directly over the flattened rows:
+  `role=tree`, `treeitem` with `aria-level`, `aria-expanded`, `aria-selected`,
+  `aria-setsize` and `aria-posinset` (the attributes the pattern provides for trees
+  that are not nested in the DOM), focus moved through `aria-activedescendant` on the
+  tree so it never depends on a row being mounted, and the keys of §7.4. Melt's
+  behaviour list is the checklist: typeahead with a 500 ms timeout, range selection to
+  the anchor, expand on click.
 - **Virtualisation.** Rows have a fixed height, so a window is a few lines: a scroll
   container, a spacer of `rows × height`, and only the rows in view plus an overscan
   mounted. Add `@tanstack/svelte-virtual` only if variable row heights ever appear.
-- **Styling.** Iron's tokens (`src-ui/app.css`) and nearby patterns: rows like the
-  Selection view's lists, header controls like `CompositionSettings.svelte`. Lucide
-  icons, each from its own path (`@lucide/svelte/icons/<name>`). Icon-only controls have
-  an `aria-label` and a title. Check light and dark, at 1× and 2×.
-- **Default layout.** Layers replaces Document on the left in the base layout
-  (`workspace.ts`). Document stays in the "+" menu (`FIXED_VIEWS`). Saved layouts are
-  not rewritten. The Document view also holds undo and redo, save, load and SVG
-  export (`DocumentView.svelte`); until those have a home outside it, Document stays
-  in the default layout as a tab behind Layers rather than leaving it (§11, question 5).
+- **Styling.** Figma's panel (§7.5) in Iron's tokens (`src-ui/app.css`): row hover
+  `--hover`, selected `--accent-soft`, names `--fg`, icons `--fg-faint`. Header controls
+  like `CompositionSettings.svelte`. Lucide icons, each from its own path
+  (`@lucide/svelte/icons/<name>`). Icon-only controls have an `aria-label` and a title.
+  Check light and dark, at 1× and 2×.
+- **Default layout.** Layers joins the left stack in the base layout (`workspace.ts`)
+  as the active tab. **Document stays in the default layout** as a tab beside it: it
+  holds undo and redo, save, load and SVG export (`DocumentView.svelte`), which are
+  needed whatever panel is showing. Those move to a File menu later (§11, question 5);
+  only then can the markup view leave the default layout.
+
+### 7.5 Following Figma
+
+Taken from Figma's panel (UI3, in a browser, 2026-11-06), by looking and interacting:
+
+| Figma | Iron |
+|---|---|
+| Pages section above Layers, each a section header with its own actions (search, add) | Compositions above Layers (§4) |
+| Rows 32 px tall, a rounded fill inset from the panel edges, no tree guide lines | the same |
+| Indent 24 px per level; the disclosure chevron left of the type icon, shown only when the row has children | the same |
+| A small muted type icon per kind (frame `#`, group dashed square, text `T`, vector, image) | Lucide icons per kind (§3) |
+| Names in the regular weight at the UI's body size; frames are not bold | the same |
+| Hover: light grey fill, the layer outlined on the canvas, and lock and eye icons appear at the right | the same; phase 1 shows the icons only once phase 2 makes them work |
+| Selected: a light blue fill across the row | `--accent-soft` |
+| A set lock or hide stays visible without hover | phase 2 |
+| Layers header: collapse all | the same, plus the pin |
+
+Not taken: Figma's left rail (File, Assets and so on) and its single page canvas. Iron's
+dock already holds its views.
 
 ### 7.4 Keyboard
 
@@ -237,7 +285,7 @@ selection with the keyboard selects on the canvas too, as clicking does.
 ## 8. Phases
 
 **Phase 1: browse and select.** §3–§7: the `layers` notation in the default layout;
-following and pinning; the header composition picker; the `layers` query with open sets;
+following and pinning; the Compositions section; the `layers` query with open sets;
 virtualised rows; selection both ways (`select` FFI, reveal on canvas selection); embeds
 opened in place; entity chips and one `showIn` for chips and the Inspector.
 *Exit:*
@@ -299,6 +347,7 @@ below it (`authoring-workflows.md` §8.3, the resistor example).
    skipped by picking, bounds and export.
 4. **Which picture a chip names** when an entity has several figures in one composition
    (phase 1 takes the first), and whether such a chip should list them.
-5. **A home for the Document view's controls** (undo, redo, save, load, SVG export),
-   so the markup view can leave the default layout. The scope menu (`scopes.md` §10.1)
-   and a toolbar are candidates.
+5. **A File menu for the Document view's controls** (undo, redo, save, load, SVG
+   export), so the markup view can leave the default layout. It could grow out of the
+   scope menu (`scopes.md` §10.1). Until it exists, Document stays in the default
+   layout.

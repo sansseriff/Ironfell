@@ -31,6 +31,30 @@ class ControllerManagerClass {
     this.manager.onInitialized = () => {
       this.syncFlags();
     };
+    this.manager.onRenderLost = (kind, error) => void this.recoverRenderer(kind, error);
+  }
+
+  /** When the renderer recovered on its own (`recoverRenderer`), recently. */
+  private recoveries: number[] = [];
+
+  /**
+   * The GPU device was lost or wgpu reported an error, and the engine
+   * stopped rendering (src/render_loss.rs): every view would stay blank.
+   * Restart as the Settings view does, keeping the document. A renderer
+   * that fails again and again (a real bug, not the browser dropping the
+   * device) is left stopped after three tries a minute, with the error
+   * shown, rather than restarting in a loop.
+   */
+  private async recoverRenderer(kind: string, error: string): Promise<void> {
+    const now = performance.now();
+    this.recoveries = this.recoveries.filter(t => now - t < 60_000);
+    if (this.recoveries.length >= 3) {
+      this.docClient.error = `Rendering stopped (${kind}): ${error}. Reload the page to try again.`;
+      return;
+    }
+    this.recoveries.push(now);
+    console.warn(`[gfx] restarting the renderer after ${kind}`);
+    await this.restart();
   }
 
   /** Boot the app on the full-window canvas (called once from App.svelte). */

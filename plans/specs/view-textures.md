@@ -345,3 +345,25 @@ that ever shows.
   apply to every use, not only the compositor.
 - **`vello_hybrid` renderer per target.** If a `Renderer` is bound to one target size,
   many views need many renderers, each with its own GPU resources.
+
+## 8. Resizes and a lost GPU device (2026-11-06)
+
+Collapsing Helium's tab sidebar resized the window on ten consecutive frames;
+each resize retires the vector renderer and every window-sized texture
+(`vector::hybrid::prepare_scene`), here at ~3700×2270. The browser then failed a
+frame's canvas texture without reporting why and dropped the WebGPU device ("A
+valid external Instance reference no longer exists"). Bevy's default handler
+quit the app, so every view stayed white with nothing told to the shell.
+
+- **Resizes are throttled** (`PanelManager.handleWindowResize`): at most one
+  canvas resize per 100 ms while the window changes, and one at the size it
+  stops at. Panel rects wait with it, so no panel lies outside the canvas the
+  engine has. A 10-frame resize now rebuilds the renderer 3 times, not 10.
+- **A lost device restarts the renderer** (`src/render_loss.rs`): Iron's
+  `RenderErrorHandler` stops rendering instead of quitting and sends
+  `renderLost` once; `ControllerManager.recoverRenderer` saves the document and
+  restarts as a settings change does (undo history is lost), at most three
+  times a minute. Bevy checks for errors only in a rendered frame, and an idle
+  app renders none, so on WebGPU the device's `lost` promise is watched too and
+  reports at once. `__loseDevice()` destroys the device to try it.
+

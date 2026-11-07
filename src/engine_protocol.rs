@@ -111,6 +111,9 @@ pub enum Request {
     },
     ProbeStats,
     ProbeReset,
+    /// Dev: destroy the GPU device, as a browser's GPU process dropping it
+    /// would, to exercise the renderer's recovery (`render_loss`).
+    LoseDevice,
 }
 
 pub fn dispatch(app: &mut crate::WorkerApp, request: Request) -> (Option<Value>, bool) {
@@ -266,6 +269,12 @@ pub fn dispatch(app: &mut crate::WorkerApp, request: Request) -> (Option<Value>,
             json!({"ty":"solveBench","requestId":request_id,"text":api::solve_bench(iterations.min(10000),repeats.min(100))}),
         ),
         StartRunning | StopRunning | ReleaseApp | ProbeStats | ProbeReset => None,
+        LoseDevice => {
+            if let Some(device) = app.world().get_resource::<bevy::render::renderer::RenderDevice>() {
+                device.wgpu_device().destroy();
+            }
+            None
+        }
     };
     let answer = answer.map(|mut value| {
         let applied = document_call && value.get("text").and_then(Value::as_str)

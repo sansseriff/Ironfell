@@ -364,6 +364,8 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
 /// perf-grid variant so FFI behavior is uniform across cells.
 fn init_shared_resources(app: &mut App) {
     app.init_resource::<crate::host_events::HostEvents>();
+    // After RenderPlugin, which installs Bevy's quit-on-error handler.
+    crate::render_loss::install(app);
     app.init_resource::<AccumulatedCursorDelta>();
     app.init_resource::<AccumulatedScroll>();
     app.init_resource::<crate::panels::Panels>();

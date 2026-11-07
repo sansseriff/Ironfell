@@ -166,6 +166,18 @@ async function run(line: string) {
     }
     case "sleep":
       return page.waitForTimeout(n[0] ?? 500);
+    case "viewport": {
+      // `viewport w h [steps]`: resize the window to w×h over `steps`
+      // frames (default 1), as a browser sidebar animating open or shut does.
+      const from = page.viewportSize()!;
+      const steps = Math.max(1, n[2] ?? 1);
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        await page.setViewportSize({ width: Math.round(from.width + (n[0] - from.width) * t), height: Math.round(from.height + (n[1] - from.height) * t) });
+        await page.waitForTimeout(16);
+      }
+      return out(`viewport ${n[0]}x${n[1]} in ${steps} steps`);
+    }
     case "panel":
       return out(JSON.stringify(rest[0] ? await panelRect(rest[0]) : await readPanel()));
     case "shot": {

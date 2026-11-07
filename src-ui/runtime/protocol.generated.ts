@@ -195,6 +195,7 @@ export type EngineRequest =
   | { ty: 'solveBench'; requestId: number; iterations: number; repeats: number }
   | { ty: 'probeStats' }
   | { ty: 'probeReset' }
+  | { ty: 'loseDevice' }
 ;
 
 export type EngineEvent =
@@ -210,4 +211,5 @@ export type EngineEvent =
   | { ty: 'textEdit'; active: boolean; node: string; text: string; anchor: number; focus: number; caret: [number, number, number] }
   | { ty: 'linkDrop'; spec: string; node: string; x: number; y: number }
   | { ty: 'focus'; panel: string; palette: string; keys: string }
+  | { ty: 'renderLost'; kind: string; error: string }
 ;

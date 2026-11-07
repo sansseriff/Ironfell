@@ -41,6 +41,7 @@ pub mod engine_api;
 pub mod engine_dispatch;
 pub mod engine_protocol;
 pub mod host_events;
+mod render_loss;
 mod host_services;
 
 pub mod panels;

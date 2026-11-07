@@ -968,6 +968,9 @@ throughput; `SIZE=2560x1440@2` sets the window and device scale (that one
 is 5K); `URL=…` replaces the default page. For frame times:
 `__probeReset()`, act, then `__probe()` logs and stores `__lastProbeStats`
 (`effectiveFps`, `tickMs`, `rafDeltaMs`).
+`__loseDevice()` destroys the GPU device: with `?gfx=webgpu` the console
+shows `WebGPU device lost`, `[gfx] restarting the renderer after DeviceLost`,
+and the views render again with the document kept (src/render_loss.rs).
 
 Every view renders into its own texture and the window only composites
 (`plans/specs/view-textures.md`), and a frame that changes nothing visible is not
@@ -1016,6 +1019,7 @@ cd -
 | `errors` | print uncaught page errors, then fail the run on any of them or on any `late:` line (the engine's `drawn a frame late` warning, kept since the start of the run) |
 | `panel [name]` | print a panel's rect (default the viewer) |
 | `sleep ms` | wait |
+| `viewport w h [steps]` | resize the window to w×h over `steps` frames, as an animated browser sidebar does; the canvas follows at most every 100 ms plus once at the end (`PanelManager.handleWindowResize`) |
 | `quit` | close the browser |
 
 Where things are in the demo scene, in document space: the draggable square

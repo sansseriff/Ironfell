@@ -42,6 +42,9 @@ function hasWebGL2(): boolean {
   }
 }
 
+/** The least time between two canvas resizes while the window is resized. */
+const RESIZE_INTERVAL_MS = 100;
+
 export class PanelManager {
   private session: SessionAdapter | null = null;
   private mode: RuntimeMode = 'worker';
@@ -57,6 +60,13 @@ export class PanelManager {
   private stopWatchingTheme: (() => void) | null = null;
 
   public onInitialized: (() => void) | null = null;
+  /** The engine's renderer stopped (`renderLost`): the GPU device was lost
+   *  or wgpu reported an error. The document is still in the engine. */
+  public onRenderLost: ((kind: string, error: string) => void) | null = null;
+  /** Window resizes, throttled (`handleWindowResize`): the interval's
+   *  timer, and whether a resize arrived that the canvas has not had. */
+  private resizeTimer: ReturnType<typeof setTimeout> | null = null;
+  private resizeOwed = false;
 
   // UI flags (mirrored into the svelte controller)
   isInitialized = false;
@@ -166,6 +176,11 @@ export class PanelManager {
     this.textInput = null;
     this.session?.dispose();
     this.session = null;
+    if (this.resizeTimer !== null) {
+      clearTimeout(this.resizeTimer);
+      this.resizeTimer = null;
+    }
+    this.resizeOwed = false;
     if (this.windowResizeHandler) {
       window.removeEventListener('resize', this.windowResizeHandler);
       this.windowResizeHandler = null;
@@ -195,6 +210,8 @@ export class PanelManager {
     // __probe() logs stats for the recent frames; __probeReset() clears the buffer.
     (window as any).__probe = () => this.session?.post({ ty: 'probeStats' });
     (window as any).__probeReset = () => this.session?.post({ ty: 'probeReset' });
+    // Destroys the GPU device, to try the renderer's recovery (render_loss.rs).
+    (window as any).__loseDevice = () => this.session?.post({ ty: 'loseDevice' });
   }
 
   private handleSessionMessage(data: UiEvent): void {
@@ -218,6 +235,10 @@ export class PanelManager {
         break;
       case 'clipboard':
         copied(data.text ?? '');
+        break;
+      case 'renderLost':
+        console.error(`[gfx] renderer stopped (${data.kind}): ${data.error}`);
+        this.onRenderLost?.(data.kind, data.error);
         break;
       case 'runtimeError':
         this.input.dispose();
@@ -285,10 +306,41 @@ export class PanelManager {
    * app's pointer mapping change together.
    */
   refreshPixelRatio(): void {
-    this.handleWindowResize();
+    this.applyCanvasSize();
   }
 
+  /**
+   * A window resize, at most once per `RESIZE_INTERVAL_MS`, and once more
+   * when the size stops changing. A resize rebuilds every window-sized GPU
+   * texture and the vector renderer, and an animated one (a browser's tab
+   * sidebar collapsing) sends one per frame: ten full-window rebuilds in a
+   * fraction of a second were followed by a lost WebGPU device in Helium
+   * (2026-11-06). Until the canvas catches up, the browser stretches its
+   * last frame, and panel rects wait too (`postPanelRect`), so a panel is
+   * never placed outside the canvas the engine still has.
+   */
   private handleWindowResize(): void {
+    if (this.resizeTimer !== null) {
+      this.resizeOwed = true;
+      return;
+    }
+    this.applyCanvasSize();
+    this.startResizeInterval();
+  }
+
+  private startResizeInterval(): void {
+    this.resizeTimer = setTimeout(() => {
+      this.resizeTimer = null;
+      if (!this.resizeOwed) return;
+      // The size the window was left at, or the next step of a resize still
+      // under way: another interval follows either way.
+      this.applyCanvasSize();
+      this.startResizeInterval();
+    }, RESIZE_INTERVAL_MS);
+  }
+
+  private applyCanvasSize(): void {
+    this.resizeOwed = false;
     this.sizeCanvasBackingStore();
     this.session?.resizeCanvas(...this.canvasPhysicalSize(), pixelRatio());
     // Panel placeholders resize with the window; ResizeObserver fires, but re-post
@@ -344,6 +396,8 @@ export class PanelManager {
   private postPanelRect(id: string): void {
     const entry = this.panels.get(id);
     if (!entry || !this.session || !this.canvas) return;
+    // A window resize is pending; it re-posts every panel with the canvas.
+    if (this.resizeOwed) return;
     const dpr = pixelRatio();
     const canvasRect = this.canvas.getBoundingClientRect();
     const rect = entry.el.getBoundingClientRect();

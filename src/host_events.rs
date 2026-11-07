@@ -32,6 +32,10 @@ pub enum EngineEvent {
     /// (plans/specs/contexts.md §2.7): its palette (`select rect|ellipse
     /// pen`, `|` sharing a slot) and keymap (`v:select r:rect`).
     Focus { panel: String, palette: String, keys: String },
+    /// The renderer stopped: the GPU device was lost or wgpu reported an
+    /// error (`render_loss`). `kind` is wgpu's error type (`DeviceLost`,
+    /// `Validation`, `OutOfMemory`, `Internal`). The main world still runs.
+    RenderLost { kind: String, error: String },
 }
 
 #[derive(Debug, Clone, Serialize)]

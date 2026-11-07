@@ -212,7 +212,8 @@ needs:
   (an OAuth sign-in, say) cannot talk back under `same-origin`; that case
   needs `same-origin-allow-popups`.
 - Until then the hold runs only on a dev server with `IRON_COI=1`
-  (`vite.config.ts`), and real users get tick-on-input alone (Vello in the
+  (`vite.config.ts`) or under `bun run dev:agent`, isolated by default since
+  2026-11-06 (`IRON_COI=0` turns it off), and real users get tick-on-input alone (Vello in the
   DOM's frame for ticks up to ~5 ms in Chrome).
 
 ## 6a. Findings on a 6K display (2026-11-05)

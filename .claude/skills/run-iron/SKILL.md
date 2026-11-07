@@ -186,6 +186,10 @@ models (`POST /models`). It checks executability, not login validity;
 an authenticated model turn remains the login test. It reuses built wasm,
 does not perform inference at startup, and never kills an occupied-port owner.
 `--open` is optional; Ctrl+C stops both services. `bun run dev` remains UI-only.
+Since 2026-11-06 `dev:agent` serves the app cross-origin isolated (the banner's
+`Frame hold: on`), so Chromium runs the worker frame hold as under `dev:hold`;
+`IRON_COI=0 bun run dev:agent` turns it off. Checked: `crossOriginIsolated` true,
+`__frameHold.stats()` running, automatic pairing still works, no page errors.
 
 From the worktree root, with Vite on port 5175:
 

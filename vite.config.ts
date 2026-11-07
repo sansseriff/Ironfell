@@ -52,7 +52,7 @@ export default defineConfig(({ mode }) => ({
     // IRON_COI=1: cross-origin isolation, for SharedArrayBuffer (the frame
     // hold prototype, plans/rendering/worker-frame-hold.md). Dev only for now;
     // GitHub Pages cannot send these headers.
-    headers: process.env.IRON_COI ? { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' } : undefined,
+    headers: process.env.IRON_COI && process.env.IRON_COI !== '0' ? { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' } : undefined,
     watch: { ignored: ['**/.agents/**', '**/plans/**', '**/target/**'] },
   },
   // Ensure WASM files are treated as assets

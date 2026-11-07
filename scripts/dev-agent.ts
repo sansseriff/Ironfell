@@ -8,14 +8,20 @@ import { resolveClaude, resolveCodex } from './agent-bridge/resolve';
 
 export { resolveCodex, resolveClaude } from './agent-bridge/resolve';
 
-export async function startAgentDev(options: { root?: string; codexBin?: string; claudeBin?: string; appPort?: number; bridgePort?: number; demo?: boolean } = {}) {
+// Cross-origin isolation, which the worker frame hold needs
+// (plans/rendering/worker-frame-hold.md §5): on unless IRON_COI=0.
+export const ISOLATION_HEADERS = { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' };
+export const isolatedByDefault = () => process.env.IRON_COI !== '0';
+
+export async function startAgentDev(options: { root?: string; codexBin?: string; claudeBin?: string; appPort?: number; bridgePort?: number; demo?: boolean; isolated?: boolean } = {}) {
   const root = options.root ?? fileURLToPath(new URL('..', import.meta.url));
   const codexBin = await resolveCodex(options.codexBin);
   // Claude Code is optional: without it, Codex still works and Claude says why it cannot.
   const claudeBin = await resolveClaude(options.claudeBin).catch(() => null);
   const auth = claudeAuth();
   const path = `/Ironfell/${options.demo ? '?demo' : '?scope=last'}`;
-  const vite = await createServer({ root, clearScreen: false, server: { host: '127.0.0.1', port: options.appPort ?? 5175, strictPort: true, open: false } });
+  const isolated = options.isolated ?? isolatedByDefault();
+  const vite = await createServer({ root, clearScreen: false, server: { host: '127.0.0.1', port: options.appPort ?? 5175, strictPort: true, open: false, headers: isolated ? ISOLATION_HEADERS : undefined } });
   let bridge: ReturnType<typeof createAgentBridge> | undefined;
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= (async () => {
@@ -42,7 +48,7 @@ export async function startAgentDev(options: { root?: string; codexBin?: string;
       bridge!.server.listen(options.bridgePort ?? 4318, '127.0.0.1', resolve);
     });
     const bridgePort = (bridge.server.address() as { port: number }).port;
-    return { url: `${origin}${path}`, endpoint: `http://127.0.0.1:${bridgePort}`, codexBin, claudeBin, claudeAuth: auth, vite, stop };
+    return { url: `${origin}${path}`, endpoint: `http://127.0.0.1:${bridgePort}`, codexBin, claudeBin, claudeAuth: auth, isolated, vite, stop };
   } catch (error) {
     await stop();
     throw error;
@@ -52,7 +58,7 @@ export async function startAgentDev(options: { root?: string; codexBin?: string;
 if (import.meta.main) {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    console.log('bun run dev:agent [--demo] [--open]\nStarts Iron + the local Codex/Claude bridge. Ctrl+C stops both.\n--demo: ephemeral demo instead of your last saved scope\n--open: open the browser after both services are ready\nIRON_CODEX_BIN, IRON_CLAUDE_BIN: optional explicit executables\nIRON_CLAUDE_AUTH=api-key: bill Claude to ANTHROPIC_API_KEY instead of your subscription');
+    console.log('bun run dev:agent [--demo] [--open]\nStarts Iron + the local Codex/Claude bridge. Ctrl+C stops both.\n--demo: ephemeral demo instead of your last saved scope\n--open: open the browser after both services are ready\nIRON_CODEX_BIN, IRON_CLAUDE_BIN: optional explicit executables\nIRON_CLAUDE_AUTH=api-key: bill Claude to ANTHROPIC_API_KEY instead of your subscription\nIRON_COI=0: serve without cross-origin isolation (no worker frame hold)');
   } else {
     try {
       if (args.some(arg => !['--demo', '--open'].includes(arg))) throw new Error('Unknown option. Run bun run dev:agent --help.');
@@ -61,7 +67,7 @@ if (import.meta.main) {
       const claude = session.claudeBin
         ? `${session.claudeBin} (${session.claudeAuth === 'api-key' ? 'ANTHROPIC_API_KEY' : 'your Claude subscription'})`
         : 'not found: install Claude Code or set IRON_CLAUDE_BIN to use Claude';
-      console.log(`\nIron + Codex + Claude ready\n  App:    ${session.url}\n  Bridge: ${session.endpoint}\n  Codex:  ${session.codexBin}\n  Claude: ${claude}\n\nChoose Codex or Claude, and a model, in Model or Lesson. Pairing is automatic; no token to paste.\nUses your local Codex and Claude Code logins. If sign-in is needed, run:\n  ${JSON.stringify(session.codexBin)} login\n  ${JSON.stringify(session.claudeBin ?? 'claude')} auth login\n${args.includes('--demo') ? 'Demo changes are temporary; export anything you want to keep.\n' : ''}Ctrl+C stops both services.\n`);
+      console.log(`\nIron + Codex + Claude ready\n  App:    ${session.url}\n  Bridge: ${session.endpoint}\n  Codex:  ${session.codexBin}\n  Claude: ${claude}\n  Frame hold: ${session.isolated ? 'on (cross-origin isolated; Chromium)' : 'off (IRON_COI=0)'}\n\nChoose Codex or Claude, and a model, in Model or Lesson. Pairing is automatic; no token to paste.\nUses your local Codex and Claude Code logins. If sign-in is needed, run:\n  ${JSON.stringify(session.codexBin)} login\n  ${JSON.stringify(session.claudeBin ?? 'claude')} auth login\n${args.includes('--demo') ? 'Demo changes are temporary; export anything you want to keep.\n' : ''}Ctrl+C stops both services.\n`);
       for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { void session.stop().catch(error => { console.error(error); process.exitCode = 1; }); });
       if (args.includes('--open')) {
         session.vite.config.server.open = new URL(session.url).pathname + new URL(session.url).search;

@@ -15,6 +15,7 @@
   import BookOpen from "@lucide/svelte/icons/book-open";
   import Settings from "@lucide/svelte/icons/settings";
   import Timer from "@lucide/svelte/icons/timer";
+  import Layers from "@lucide/svelte/icons/layers";
   import X from "@lucide/svelte/icons/x";
   import Pencil from "@lucide/svelte/icons/pencil";
   import Trash from "@lucide/svelte/icons/trash-2";
@@ -63,6 +64,7 @@
 
   const ICONS: Record<Notation, Component> = {
     composition: Shapes,
+    layers: Layers,
     markup: FileCode,
     selection: SlidersHorizontal,
     conversation: Bot,

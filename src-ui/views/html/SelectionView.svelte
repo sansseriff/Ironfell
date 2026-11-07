@@ -5,6 +5,7 @@
   import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
+  import { showIn as showPicture } from "../show_in";
   import Plus from "@lucide/svelte/icons/plus";
   import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
@@ -192,7 +193,7 @@
         <Button small variant="outline" onclick={() => author("wrap", { ids: doc.selection })} title="Wrap the selection in an empty at its centre (⌘⌥G)">Wrap in empty</Button>
       {/if}
       {#each showIn as f (f.node)}
-        <Button small onclick={() => doc.command({ op: 'focus', node: f.node })}>Show in {f.name ?? f.composition}<ChevronRight size={12} strokeWidth={1.75} /></Button>
+        <Button small onclick={() => void showPicture({ node: f.node, composition: f.composition })}>Show in {f.name ?? f.composition}<ChevronRight size={12} strokeWidth={1.75} /></Button>
       {/each}
     </div>
   {/if}

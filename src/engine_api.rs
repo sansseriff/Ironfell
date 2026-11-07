@@ -1586,6 +1586,88 @@ pub fn document_compositions(app: &mut WorkerApp) -> String {
     serde_json::Value::Array(list).to_string()
 }
 
+/// The layers panel's rows (plans/specs/layers-panel.md §7.1): the visible
+/// rows of the composition `source` (an id or name), descending into each
+/// row whose key is in `open_json` (a JSON array of keys). `{"ok", "composition",
+/// "dims", "rows", "total"}`.
+pub fn document_layers(app: &mut WorkerApp, source: String, open_json: String) -> String {
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    let doc = store.0.document();
+    let Some(c) = find_composition(doc, &source) else { return fail(format!("no composition {source:?}")) };
+    let open: std::collections::BTreeSet<String> = match serde_json::from_str(&open_json) {
+        Ok(o) => o,
+        Err(e) => return fail(format!("open: {e}")),
+    };
+    let rows = iron_document::layers::rows(doc, c, &open);
+    let dims = match iron_document::composition::dims(doc, c) {
+        Some(iron_document::composition::Dims::Three) => "3d",
+        _ => "2d",
+    };
+    serde_json::json!({"ok": true, "composition": c.to_string(), "dims": dims, "total": rows.len(), "rows": rows}).to_string()
+}
+
+/// Set the selection from HTML (layers-panel.md §7.2): `items_json` is
+/// `[{node, panel, chain?}]`, a chain being the select tool's (ids joined by
+/// spaces, the node last); one left out is the node's lineage in its own
+/// composition. `mode` is `replace`, `add` or `toggle`. One session change,
+/// which the select tool reads back.
+pub fn document_select(app: &mut WorkerApp, items_json: String, mode: String) -> String {
+    use iron_document::{NodeId, Value};
+    let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    #[derive(serde::Deserialize)]
+    struct Item {
+        node: String,
+        #[serde(default)]
+        panel: Option<String>,
+        #[serde(default)]
+        chain: Option<String>,
+    }
+    let items: Vec<Item> = match serde_json::from_str(&items_json) {
+        Ok(i) => i,
+        Err(e) => return fail(format!("items: {e}")),
+    };
+    if !matches!(mode.as_str(), "replace" | "add" | "toggle") {
+        return fail(format!("unknown mode {mode:?}; use replace, add or toggle"));
+    }
+    if let Some(mut active) = app.world_mut().get_resource_mut::<ActivityControl>() {
+        active.remaining_frames = 10;
+    }
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    let doc = store.0.document();
+    let mut picked = Vec::new();
+    for item in items {
+        let Some(id) = item.node.parse::<NodeId>().ok().filter(|&id| doc.is_live(id)) else { return fail(format!("no node {}", item.node)) };
+        let chain = match item.chain.filter(|c| !c.is_empty()) {
+            Some(c) => c,
+            None => iron_document::layers::key(&iron_document::layers::lineage(doc, id)),
+        };
+        if chain.split(' ').next_back() != Some(item.node.as_str()) && chain.split(' ').next_back() != Some(id.to_string().as_str()) {
+            return fail(format!("chain {chain:?} does not end at {}", item.node));
+        }
+        let mut data = std::collections::BTreeMap::new();
+        if let Some(panel) = item.panel.filter(|p| !p.is_empty()) {
+            data.insert("panel".to_owned(), Value::Str(panel));
+        }
+        data.insert("chain".to_owned(), Value::Str(chain));
+        picked.push((id, data));
+    }
+    let mut next = if mode == "replace" { Vec::new() } else { store.0.selection() };
+    for (id, data) in picked {
+        match next.iter().position(|(n, _)| *n == id) {
+            Some(i) if mode == "toggle" => {
+                next.remove(i);
+            }
+            Some(i) => next[i] = (id, data),
+            None => next.push((id, data)),
+        }
+    }
+    match store.0.set_selection(&next) {
+        Ok(()) => serde_json::json!({"ok": true, "selected": next.iter().map(|(n, _)| n.to_string()).collect::<Vec<_>>()}).to_string(),
+        Err(e) => fail(e.to_string()),
+    }
+}
+
 /// A composition named by id or name (as a view's `source` names it).
 fn find_composition(doc: &iron_document::Document, source: &str) -> Option<iron_document::NodeId> {
     use iron_document::composition;

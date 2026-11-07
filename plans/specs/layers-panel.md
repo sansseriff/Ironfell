@@ -1,8 +1,8 @@
 # Layers panel
 
-**Status:** Proposed 2026-11-06 (design discussion with the user, same day). Phase 1
-is the agreed first slice; phases 2–4 are listed so phase 1 does not block them. No
-code yet. Work order: `handoff-product.md`, "Panels and session".
+**Status:** Proposed 2026-11-06 (design discussion with the user, same day). **Phase 1
+built 2026-11-06** on `t3/layers-panel` (§12); phases 2–4 open. Work order:
+`handoff-product.md`, "Panels and session".
 
 **Decision (user, 2026-11-06):** a layers panel in the HTML DOM, with virtualised
 rows, scoped to one composition at a time. Its layout, interaction and styling follow
@@ -10,8 +10,8 @@ Figma's layers panel (§7.5). The other contexts an entity appears in show as ma
 its row, not as more rows. The whole document's structure is a separate concern (the
 composition list, and later a Model outline), not one tree of everything. Start with a
 targeted slice (phase 1) and leave timeline and narrative scope undecided. The
-Document view stays in the default layout until its general controls (undo, save,
-load, export) move to a File menu.
+Document view keeps its place (the "+" menu; it was already not in the default
+layout) until its general controls (undo, save, load, export) move to a File menu.
 
 **Melt UI's Tree is not used** (checked 2026-11-06 against `melt` 0.44.0, the source of
 `builders/Tree.svelte.js`); a WAI-ARIA tree over flattened rows is written instead
@@ -176,10 +176,13 @@ One new query in `iron_document`, so it is tested natively, with an `engine_api`
 and a protocol op:
 
 ```text
-layers { composition, open: [chain…], reveal?: chain }
-  → { rows: [{ key, depth, id, kind, name, count, embed?, entity?, chips: [{composition, name, dims, node}] }],
-      total, version }
+layers { source, open_json: [key…] }
+  → { ok, composition, dims, total,
+      rows: [{ key, depth, id, kind, name, count, dims, embed?, entity?, chips: [{composition, name, dims, node, chain}] }] }
 ```
+
+As built there is no `reveal`: the panel opens the ancestors of a revealed chain
+itself, since they are the chain's prefixes.
 
 - It walks the composition from its top level, descends only into rows whose key is in
   `open` (and the ancestors of `reveal`), and returns the **visible rows, flattened**.
@@ -204,7 +207,9 @@ the Document view and the model.
 HTML can set the selection today only through the narrative's cross-probe
 (`engine_api::narrative_probe`, action `select`): one node, written straight to
 `SelectionState`, with no chain and no multiple selection. Phase 1 adds
-`select { items: [{ node, panel, chain }], mode: replace | toggle | range }`, applied as
+`select { items: [{ node, panel, chain? }], mode: replace | add | toggle }` (a range is
+computed by the panel from its visible rows and sent as `replace`; a missing chain is
+the node's lineage in its own composition), applied as
 a session op through `Store::set_selection`. The select tool already reads session
 changes back (`select.rs`, the system that compares `session_version`), so the canvas
 follows. `panel` is the view the panel is following (or, when pinned, the most recent
@@ -250,11 +255,11 @@ range between the anchor and the row, as Figma does.
   like `CompositionSettings.svelte`. Lucide icons, each from its own path
   (`@lucide/svelte/icons/<name>`). Icon-only controls have an `aria-label` and a title.
   Check light and dark, at 1× and 2×.
-- **Default layout.** Layers joins the left stack in the base layout (`workspace.ts`)
-  as the active tab. **Document stays in the default layout** as a tab beside it: it
-  holds undo and redo, save, load and SVG export (`DocumentView.svelte`), which are
-  needed whatever panel is showing. Those move to a File menu later (§11, question 5);
-  only then can the markup view leave the default layout.
+- **Default layout.** Layers joins the left group in the base layout (`workspace.ts`)
+  as its front tab, beside Model and Library (a document's first narrative still opens
+  in front of it). The Document view was already not in the default layout; it stays
+  in the "+" menu. It holds undo and redo, save, load and SVG export
+  (`DocumentView.svelte`), which move to a File menu later (§11, question 5).
 
 ### 7.5 Following Figma
 
@@ -341,8 +346,9 @@ below it (`authoring-workflows.md` §8.3, the resistor example).
    editor, and on how a branching narrative relates to a timeline.
 2. **Linked repeats in imports.** Prussia imports with repeated pieces as references to
    definitions (`instance-cache.md` §7). Until phase 3 opens derived parts, a path inside
-   a repeat is not reachable from the panel. Check how much of Prussia that covers before
-   phase 1's exit claims "any path".
+   a repeat is not reachable from the panel. **Measured 2026-11-06:** with every group
+   open the panel lists 7,933 rows of the 14,407 nodes; the rest are inside references.
+   A canvas selection inside one reveals and outlines the reference's row instead.
 3. **The visibility leaf** for hide: which facet holds it, and whether hidden nodes are
    skipped by picking, bounds and export.
 4. **Which picture a chip names** when an entity has several figures in one composition
@@ -351,3 +357,47 @@ below it (`authoring-workflows.md` §8.3, the resistor example).
    export), so the markup view can leave the default layout. It could grow out of the
    scope menu (`scopes.md` §10.1). Until it exists, Document stays in the default
    layout.
+
+## 12. Done
+
+**Phase 1, 2026-11-06** (`t3/layers-panel`).
+
+- **Engine.** `iron_document::layers` (`rows`, `lineage`, `key`): the visible rows of a
+  composition, keyed by chain, opened by key, through embeds (the embedded
+  composition's top level, up to 8 deep), 2D topmost first, chips one per other
+  composition picturing the row's entity (with the figure's chain). Layer rows are
+  groups, shapes, text, tables, paths, meshes, sliders, embeds, cameras, empties and
+  uses; points, contours, overrides and expanded or session nodes are not. A text row
+  with no name takes its first line. `engine_api::document_layers` and
+  `document_select` (dispatch `layers`, `select`; protocol regenerated). Native tests:
+  `tests/layers.rs` (order and open keys, an embed shown twice with distinct keys,
+  chips per composition, points and contours).
+- **UI.** `LayersView.svelte` (notation `layers`, in the default layout's left group
+  and the "+" menu). Compositions section (fits its rows up to 40% of the panel,
+  collapsible, resizable). A WAI-ARIA tree over flattened rows with
+  `aria-activedescendant`, `aria-level`, `aria-setsize`, `aria-posinset`; 32 px rows,
+  24 px indent, rounded inset fills, `--hover` and `--accent-soft`; only rows in view
+  mounted (28 while scrolling Prussia). Click selects, Cmd toggles, Shift selects the
+  visible range; Up, Down, Home, End, Right, Left and typeahead. A canvas selection
+  opens the rows above it, scrolls the row into view and flashes it; a node inside a
+  shared reference reveals and outlines the reference's row. Hovering a row lights
+  the node through the narrative probe; canvas hover tints the row. Following
+  (`active_view.svelte.ts`: the dock's active composition tab, or the view a new
+  selection was made in) or pinned (the view spec's source, saved with the layout).
+  Chips and the Inspector's Show in share `show_in.ts`: open or bring forward the tab
+  (`showComposition`, now the most recently used of several), select with the chain,
+  frame. A repeated, unchanged selection event no longer pulls a following panel back
+  to the view the selection was made in.
+- **HTML views take the pointer only under `.html-view`** (Workspace.svelte), whose
+  global `.row` style is why the panel's rows are `.layer`.
+- **Measured.** Prussia fully opened: 7,933 rows, 19–20 ms and 1.1 MB per `layers`
+  call. Above the "few milliseconds" of §7.1, but only when every one of 893 groups is
+  open; a row range in the query stays the remedy if it shows in use.
+- **Checks.** `layers.txt` (20 assertions: Main's embeds, an embed opened, row → canvas
+  with chain, canvas → row, Cmd and Shift, keys and typeahead, hover, follow and pin,
+  a chip from Optics to Schematic, the Inspector's Show in, rows mounted); fast smoke
+  (6 assertions), `narrative.txt` unchanged, `workspace.txt` with the new view;
+  `iron_document` tests and 52 JS tests pass; `bun run check` 0 errors.
+- **Not yet:** the embed-twice exit is covered natively, not in the browser (the demo
+  embeds nothing twice); flash on a chip lands in the target's panel only when
+  following.

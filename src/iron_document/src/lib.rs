@@ -51,6 +51,7 @@ pub mod solve;
 pub mod standard;
 pub mod sym;
 pub mod text;
+pub mod layers;
 pub mod layout;
 pub mod narrative;
 pub mod table;

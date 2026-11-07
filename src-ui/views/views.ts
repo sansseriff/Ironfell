@@ -21,8 +21,9 @@ import SettingsView from './html/SettingsView.svelte';
 import CompositionTools from './html/CompositionTools.svelte';
 import NarrativeView from './html/NarrativeView.svelte';
 import LatencyView from './html/LatencyView.svelte';
+import LayersView from './html/LayersView.svelte';
 
-export type Notation = 'composition' | 'markup' | 'selection' | 'conversation' | 'narrative' | 'settings' | 'latency';
+export type Notation = 'composition' | 'layers' | 'markup' | 'selection' | 'conversation' | 'narrative' | 'settings' | 'latency';
 
 export interface ViewSpec {
   source: string;
@@ -39,6 +40,9 @@ export interface NotationDef {
 
 export const NOTATIONS: Record<Notation, NotationDef> = {
   composition: { label: 'Composition', canvas: 'composition', html: CompositionTools },
+  // One composition's drawing tree (plans/specs/layers-panel.md): source is
+  // `follow` (the composition view used last) or a pinned composition's id.
+  layers: { label: 'Layers', html: LayersView },
   markup: { label: 'Document', html: DocumentView },
   selection: { label: 'Inspector', html: SelectionView },
   conversation: { label: 'Model', html: ModelView },
@@ -61,6 +65,7 @@ export const LATENCY_VIEW: ViewSpec = { source: 'latency', notation: 'latency' }
 export const FIXED_VIEWS: { title: string; spec: ViewSpec }[] = [
   // A session composition generated from the clips (plans/specs/timeline.md).
   { title: 'Timeline', spec: { source: 'timeline', notation: 'composition' } },
+  { title: 'Layers', spec: { source: 'follow', notation: 'layers' } },
   { title: 'Document', spec: { source: 'document', notation: 'markup' } },
   { title: 'Inspector', spec: { source: 'selection', notation: 'selection' } },
   { title: 'Model', spec: { source: 'document', notation: 'conversation' } },

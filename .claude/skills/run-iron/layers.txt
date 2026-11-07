@@ -1,0 +1,69 @@
+# The layers panel (plans/specs/layers-panel.md phase 1): the default layout's
+# Layers tab follows the view in use; rows open in place through embeds; a row
+# click selects on the canvas with the select tool's chain, and a canvas click
+# reveals the row; Cmd toggles, Shift selects a range, arrows and typeahead move;
+# hovering a row lights the node; pinning holds the source; a chip and the
+# Inspector's Show in go to the picture in its composition. Every assert must
+# print `assertion passed`.
+#   GPU=1 SIZE=1680x1000@1 bun run drive.ts < layers.txt
+nav
+ready
+eval window.__wait = async test => { const until = Date.now() + 5000; while (Date.now() < until) { try { if (await test()) return true; } catch {} await new Promise(r => setTimeout(r, 50)); } return false; }; window.__items = () => [...document.querySelectorAll('[role=tree] [role=treeitem]')]; window.__row = name => __items().find(e => e.querySelector('.name')?.textContent.trim() === name); window.__sel = () => __items().filter(e => e.getAttribute('aria-selected') === 'true').map(e => e.querySelector('.name').textContent.trim()); window.__mark = name => { document.querySelectorAll('[data-pick]').forEach(e => e.removeAttribute('data-pick')); const r = __row(name); r?.setAttribute('data-pick', ''); return !!r; }; 'ok'
+# The Layers tab is in front on the left and follows Main: its embeds.
+assert __wait(() => [...document.querySelectorAll('.dv-tab.dv-active-tab')].some(t => t.textContent.includes('Layers')) && !!__row('scene view'))
+# Opening the scene embed lists the scene's shapes under it, one level down.
+eval __row('scene view').querySelector('.twisty').click(); 'opened'
+assert __wait(() => __row('shadow')?.getAttribute('aria-level') === '2' && __row('square')?.getAttribute('aria-level') === '2')
+# A row click selects on the canvas with the select tool's chain (embed, node).
+assert __mark('shadow')
+clickel [data-pick]
+assert __wait(async () => { const s = await __iron.session(); return s.length === 1 && s[0].name === 'shadow' && s[0].panel === 'viewer' && s[0].chain.split(' ').length === 2; })
+# A canvas click reveals and marks the row.
+dclick 540 460
+assert __wait(() => JSON.stringify(__sel()) === '["square"]')
+# Cmd toggles a row into the selection; Shift selects the visible range.
+assert __mark('box')
+keydown Meta
+clickel [data-pick]
+keyup Meta
+assert __wait(() => __iron.selection().length === 2 && __sel().length === 2)
+assert __mark('bar')
+keydown Shift
+clickel [data-pick]
+keyup Shift
+assert __wait(() => JSON.stringify(__sel()) === '["bar","box"]')
+# The keyboard: Down moves the selection, Left goes to the parent, typeahead jumps.
+key ArrowDown
+assert __wait(() => JSON.stringify(__sel()) === '["shadow"]')
+key ArrowLeft
+assert __wait(() => JSON.stringify(__sel()) === '["scene view"]')
+key p
+assert __wait(() => JSON.stringify(__sel()) === '["pendulum view"]')
+# Hovering a row lights its node.
+eval __row('assembly view').dispatchEvent(new PointerEvent('pointerenter')); 'hovered'
+assert __wait(() => __iron.hovered().length > 0)
+eval document.querySelector('[role=tree]').dispatchEvent(new PointerEvent('pointerleave')); 'left'
+# Following: the Optics tab's layers; pinned, they stay while Schematic is used.
+tab Optics
+assert __wait(() => !!__row('laser power') && !!__row('beam'))
+clickel [aria-label="Pin to this composition"]
+tab Schematic
+sleep 300
+assert __wait(() => !!__row('laser power') && !__row('wire'))
+clickel [aria-label="Unpin: follow the view in use"]
+tab Main
+tab Schematic
+assert __wait(() => !!__row('wire'))
+# A chip: from the Optics laser body to its picture in the Schematic.
+tab Optics
+assert __wait(() => !!__row('body') && !!__row('body').querySelector('.chip'))
+eval __row('body').querySelector('.chip').click(); 'chip'
+assert __wait(async () => [...document.querySelectorAll('.dv-tab.dv-active-tab')].some(t => t.textContent.includes('Schematic')) && (await __iron.session())[0]?.panel === 'schematic' && __sel().length === 1)
+# The Inspector's Show in does the same, back to the Optics.
+click Show in optics
+assert __wait(async () => (await __iron.session())[0]?.panel === 'optics' && __sel().length === 1)
+# Only the rows in view are mounted.
+assert __items().length < 60
+shot layers
+errors
+quit

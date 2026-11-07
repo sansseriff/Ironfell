@@ -61,6 +61,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `schematic.txt` | ~40 s |
 | `scopes.txt` | ~15 s |
 | `workspace.txt` | ~25 s |
+| `layers.txt` (`GPU=1`) | ~22 s (21.5 s, 2026-11-06) |
 | `scope-menu.txt` | ~20 s |
 | `narrative.txt` | ~25 s |
 | `timeline.txt` | ~30 s |
@@ -2220,9 +2221,9 @@ Expected, minus `nav`, `ready`, `clicked` and bare `1` lines:
 
 ```
 applied "open demo scene" (302 ops, System) -> v1
-"demo page: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components timeline model library selection"
+"demo page: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components timeline layers model library selection"
 (no new console output)
-"empty scope: viewer timeline model library selection"
+"empty scope: viewer timeline layers model library selection"
 "suggested name: composition"
 "made: Pendulum=#4:Pendulum; active Pendulum"
 "renamed: Swing (#4)"
@@ -2231,7 +2232,7 @@ applied "draw rectangle" (1 ops, Human) -> v3
 applied "rename" (1 ops, Human) -> v4
 "flushed"
 (no new console output)
-"reloaded: Pendulum library model selection timeline viewer; active Pendulum"
+"reloaded: Pendulum layers library model selection timeline viewer; active Pendulum"
 "after delete: tab open false"
 applied "delete composition" (1 ops, Human) -> v5
 applied "undo: delete composition" (2 ops, System) -> v6
@@ -2239,8 +2240,8 @@ applied "undo: delete composition" (2 ops, System) -> v6
 "missing view shown: true"
 "after Create: missing view shown false"
 applied "new composition" (1 ops, Human) -> v7
-"new demo scope: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components outline pitch dials data circuit timeline stats document model library lesson selection"
-"back in Untitled: document ghost library model selection stats timeline viewer"
+"new demo scope: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components outline pitch dials data circuit timeline lesson layers model library selection"
+"back in Untitled: ghost layers library model selection timeline viewer"
 (no page errors)
 ```
 
@@ -2248,6 +2249,36 @@ The `(no new console output)` after the reload is the point: nothing is
 applied before a stored scope. Old WebGPU artifacts (built before this) still
 queue the demo at startup and lack the `demo` call, so rebuild both backends
 (`bun run wasm` / `wasm:fast`) after pulling this.
+
+Updated 2026-11-06 for the Layers view in the default layout. The last two lines
+had also drifted before that (no `stats` or `document` view opens by default now).
+
+## The layers panel (2026-11-06)
+
+plans/specs/layers-panel.md phase 1. The default layout's left group has a
+**Layers** tab in front (`src-ui/views/html/LayersView.svelte`, notation `layers`,
+source `follow` or a pinned composition id): a Compositions section, then one
+composition's drawing tree. Rows come from the engine's `layers` call
+(`__iron.call('layers', [source, JSON.stringify(openKeys)])` → `{ok, composition,
+dims, rows, total}`); a row's `key` is the select tool's chain. `select`
+(`__iron.call('select', [itemsJson, 'replace'|'add'|'toggle'])`, items `{node,
+panel, chain?}`) sets the session selection from HTML. Rows are absolutely
+positioned in a scroll container; only those in view are in the DOM. Driver
+helpers in the fixture: `__row(name)`, `__sel()`, `__mark(name)` (then
+`clickel [data-pick]` for a real click, with `keydown Meta`/`Shift` around it).
+
+```sh
+cd .claude/skills/run-iron && GPU=1 SIZE=1680x1000@1 bun run drive.ts < layers.txt; cd -
+```
+
+Expected, minus `nav`, `ready`, `tab`, `clicked` and quoted lines: twenty
+`assertion passed` lines and `(no page errors)`. A full layout check of the
+Prussia import (not in the repo; copy it to `.agents/tmp/big.svg` as for
+`bench-large-svg.txt`) is manual: import into Controls, open `layer2`, scroll,
+Cmd-click a path inside a shared piece and see its reference row revealed and
+outlined. Measured 2026-11-06: every group opened gives 7,933 rows (the rest of
+the 14,407 nodes are inside shared references), 19–20 ms and 1.1 MB per query;
+28 rows mounted while scrolling.
 
 ## The narrative panel (2026-11-03)
 

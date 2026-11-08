@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-06 for the agent's component verbs (component-model.md phase 7) and the 3D components proposal (`specs/component-3d.md`). Update this file whenever a plan is added,
+**Updated:** 2026-11-08 for the plot, machines, repeat, and variants and imports proposals. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -71,6 +71,10 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`layers-panel.md`](specs/layers-panel.md) | A Figma-style layers panel: one composition's drawing tree per panel (following the view or pinned), rows keyed by the select tool's chain, entity chips linking to the other compositions that picture an entity, Show in that opens the tab and selects, HTML with virtualised rows | Proposed 2026-11-06; phase 1 (browse and select) built 2026-11-06 (§12); phases 2–4 open |
 | [`agent-streaming.md`](specs/agent-streaming.md) | Live agent progress: one event stream from provider to chat (phases, reasoning summaries, streamed prose, Stop, idle timeout), a T3-style work log, and partial-edit previews through provisional store transactions | Phases 1–2 built 2026-11-06 (§6: live work log, Stop, streamed prose and forming edit, idle timeouts); 3–4 (partial-edit previews) proposed |
 | [`timeline.md`](specs/timeline.md) | The timeline as a session composition: what a clip is, a session `clock` node, `axis` leaves fixed during drags, generated rows by object and property bound to clips, `std:timeline`, retiming, explicit clip creation | Phases 1–2, most of 3 and Animate change (4) done 2026-11-03 (§11); snapping, easing curves, ends at the playhead, phase 5 next |
+| [`plot.md`](specs/plot.md) | Series values (numbers with a unit), broadcasting floor functions and lambdas (`x => …`); paths bound to SVG path data (`points`, `circles`, `segments`); instances with their own size that reflow on a corner drag; the `std:plot` standard component | Proposed 2026-11-08; waits on the user |
+| [`machines.md`](specs/machines.md) | Component state machines, first slice: states as poses over channels, transitions with tweens over a `progress` input; progress driven by a clock clip (a derived band, edited per occurrence) or by the machine itself; the strip/graph timeline panel; how the narrative sets state | Proposed 2026-11-08; waits on the user |
+| [`repeat.md`](specs/repeat.md) | A `repeat` node: one derived child per element of a series or count, keyed by index or value, entering and exiting through machines | Proposed 2026-11-08; after plot phase 3 |
+| [`variants-and-imports.md`](specs/variants-and-imports.md) | Lesson variants (`extends`, differences only, re-applied when the base changes); `iron://owner/package@range` imports, pinned and copied in with a hash | Proposed 2026-11-08; syntax only, building waits on narrative moves and the server |
 
 ## 4. Rendering
 

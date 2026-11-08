@@ -113,6 +113,12 @@ fn check_kind(spec: &InputInfo, v: &Value) -> Result<(), String> {
     if spec.kind == ValueKind::Any {
         return Ok(());
     }
+    // A NaN default means "none" or "auto" (a plot's ranges and cursor,
+    // plans/specs/plot.md §10 Q3): such an input takes any number or
+    // quantity, in whatever unit its data has.
+    if matches!(spec.default, Value::Number(x) if x.is_nan()) && v.as_quantity().is_some() {
+        return Ok(());
+    }
     if v.kind() != spec.kind {
         return Err(format!("expects {}, got {}", spec.kind.name(), v.kind().name()));
     }

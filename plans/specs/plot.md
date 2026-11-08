@@ -359,7 +359,7 @@ shows how often slots fall short.
   never point-edits it. packed-paths.md's "constant only" is superseded.
 - `stroke.path_length` scales dashes on paths (`materialize::stroke_style`) and
   exports as `pathLength`. Other shapes ignore it for now.
-- Not yet: `std:plot` (§4), the generated function table (§7;
+- Not yet: the generated function table (§7;
   the prompt is updated by hand), `<look values=…>`, the share-key content hash
   (§1.5; series hash by `Debug`, which is complete for them).
 - Follow-up seen in the app: a binding's quantity literals print in SI (`400 nm` reads
@@ -382,4 +382,28 @@ shows how often slots fall short.
   parts. Min sizes (§3.2's `min_w`/`min_h`) are not built: a drag may shrink a box to
   nothing, as it may a rect.
 - Static instances (`instantiate_static`) still read the template's default size.
+
+**2026-11-08: phase 3, `std:plot` (§4), without the cursor drag and log axes.**
+
+- Built in `standard.rs` (`plot`), listed in the Library tab. Ports as §4.1 except
+  `x_scale`/`y_scale` (log axes, not built). Inputs `x_min x_max y_min y_max cursor`
+  default to NaN ("auto"/"none"); an input with a NaN default accepts any number or
+  quantity (`definition::check_kind`), and `<place>` reads `x_min="400 nm"` as one.
+- Outputs `x_lo x_hi y_lo y_hi y_at_cursor` are the ranges in use and the curve at the
+  cursor. They do not depend on the picture's box (an entity's ports are shared by its
+  pictures), so the y range is "nice" for 5 ticks whatever the size; the picture's own
+  tick count follows its size (about one per 70 px across, 40 px up, 2 to 8).
+- Template (360 × 240): frame, title, a clipped plot area (grid, series 3, 2, 1, cursor
+  line, dot and value), unclipped axes, tick marks and 8 label slots per axis (D6), and
+  axis titles (the label given, else the data's unit; tick labels are in that unit).
+  With `f` the curve is `sample(f, …)` at one point per 2 px; the range output samples
+  200 points.
+- `<place>`: `$self.k` reads the entity's own argument `k` (§10 Q4), series, enum and
+  `#rrggbb` arguments parse. Floor additions: `isnan kind concat unit_of in_unit sig`.
+  A quoted word (`'…'`, an enum literal) bound to a text leaf becomes text in the graph.
+- Not built: dragging the cursor (§4.3), log axes, colour series, the palette domain
+  (§6; colours are the defaults of `color`, `color2`, `color3`), the `vis` machine (§8).
+- Seen in the app: a selected plot's authoring chrome shows a pin for each of its 19
+  inputs down its left edge; a quieter chrome for many-input components is a chrome.md
+  question.
 

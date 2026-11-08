@@ -29,6 +29,7 @@ pub const ENTRIES: &[Entry] = &[
     Entry { key: "laser", name: "Laser" },
     Entry { key: "fiber", name: "Fiber" },
     Entry { key: "meter", name: "Dial meter" },
+    Entry { key: "plot", name: "Plot" },
 ];
 
 /// The name of the session composition the Library tab shows.
@@ -221,6 +222,7 @@ pub fn definition_ops(key: &str, library: NodeId, order: OrderKey, first: u64) -
             words.content = bound(format!("fmt({input}.port.signal, \"mW\", 2)"));
             d.child(readout, "text", t, vec![at(14.0, 118.0).wrap(), words.wrap(), Font::default().wrap(), paint([0.1, 0.1, 0.12, 1.0]), named("readout")]);
         }
+        "plot" => plot(&mut d, &mut ids, template),
         other => return Err(format!("no standard component {other:?}")),
     }
     Ok((d.ops, def))
@@ -490,3 +492,194 @@ fn bake(key: &str) -> Baked {
     let bounds = store.extent(u);
     Baked { nodes, bounds }
 }
+
+/// `std:plot` (plans/specs/plot.md §4): series against x, drawn from SVG
+/// path data, in a box of its own that reflows when resized. Ranges and
+/// the cursor default to NaN, "auto" and "none". Template parts read the
+/// box (`#T.size.w/h`); the ranges are outputs, so other components can
+/// read them, and they do not depend on the box.
+fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> NodeId) {
+    let def = d.id;
+    let nan = || Slot::Const(Value::Number(f64::NAN));
+    let text_ = |t: &str| Slot::Const(Value::Str(t.into()));
+    let colour = |c: [f32; 4]| Slot::Const(Value::Color(c));
+    let xs0: Vec<f64> = (0..=40).map(|i| i as f64 * 0.25).collect();
+    let ys0: Vec<f64> = xs0.iter().map(|x| (x * 1.3).sin() * (-x / 5.0).exp()).collect();
+    let none = || Slot::Const(Value::series(Vec::<f64>::new(), crate::units::Dim::NONE));
+    let mut input = |d: &mut Def, name: &str, default: Slot| {
+        let id = ids.id();
+        d.child(id, "port_spec", def, vec![named(name), port("value", "in", default)]);
+        id
+    };
+    let xs = input(d, "xs", Slot::Const(Value::series(xs0, crate::units::Dim::NONE)));
+    let ys = input(d, "ys", Slot::Const(Value::series(ys0, crate::units::Dim::NONE)));
+    let ys2 = input(d, "ys2", none());
+    let ys3 = input(d, "ys3", none());
+    let f = input(d, "f", nan());
+    let style = input(d, "style", Slot::Const(Value::Enum("line".into())));
+    let x_min = input(d, "x_min", nan());
+    let x_max = input(d, "x_max", nan());
+    let y_min = input(d, "y_min", nan());
+    let y_max = input(d, "y_max", nan());
+    let x_label = input(d, "x_label", text_(""));
+    let y_label = input(d, "y_label", text_(""));
+    let title = input(d, "title", text_(""));
+    let cursor = input(d, "cursor", nan());
+    let grid = input(d, "grid", Slot::Const(Value::Bool(true)));
+    let color = input(d, "color", colour([0.184, 0.435, 0.871, 1.0]));
+    let color2 = input(d, "color2", colour([0.91, 0.455, 0.231, 1.0]));
+    let color3 = input(d, "color3", colour([0.098, 0.663, 0.475, 1.0]));
+    let reveal = input(d, "reveal", n(1.0));
+    let sig = |id: NodeId| format!("{id}.port.signal");
+    let (xs, ys, ys2, ys3, f, style, x_min, x_max, y_min, y_max) = (sig(xs), sig(ys), sig(ys2), sig(ys3), sig(f), sig(style), sig(x_min), sig(x_max), sig(y_min), sig(y_max));
+    let (x_label, y_label, title, cursor, grid, color, color2, color3, reveal) = (sig(x_label), sig(y_label), sig(title), sig(cursor), sig(grid), sig(color), sig(color2), sig(color3), sig(reveal));
+    let is_fn = format!("kind({f}) == \"function\"");
+    // Outputs: the ranges in use, and the curve's value at the cursor.
+    let mut output = |d: &mut Def, name: &str, e: String| {
+        let id = ids.id();
+        d.child(id, "port_spec", def, vec![named(name), port("value", "out", bound(e))]);
+        sig(id)
+    };
+    let x_lo = output(d, "x_lo", format!("isnan({x_min}) ? ({is_fn} ? 0 : min({xs})) : {x_min}"));
+    let x_hi = output(d, "x_hi", format!("isnan({x_max}) ? ({is_fn} ? 10 : max({xs})) : {x_max}"));
+    // The function sampled for the range, at a fixed count (outputs do not
+    // see a picture's box); the picture samples it at its own width.
+    let ys_all = format!("concat({is_fn} ? sample({f}, {x_lo}, {x_hi}, 200) : {ys}, {ys2}, {ys3})");
+    let y_lo = output(d, "y_lo", format!("isnan({y_min}) ? nice_lo(min({ys_all}), max({ys_all}), 5) : {y_min}"));
+    let y_hi = output(d, "y_hi", format!("isnan({y_max}) ? nice_hi(min({ys_all}), max({ys_all}), 5) : {y_max}"));
+    let y_at = output(d, "y_at_cursor", format!("isnan({cursor}) ? 0 / 0 : ({is_fn} ? {f}({cursor}) : interp({xs}, {ys}, {cursor}))"));
+
+    let t = template(d, ids);
+    // The template's box: its picture's default size, read by every part.
+    d.ops.iter_mut().for_each(|op| {
+        if let Op::Create { id, facets, .. } = op
+            && *id == t
+        {
+            facets.push(size(360.0, 240.0));
+        }
+    });
+    let (w, h) = (format!("{t}.size.w"), format!("{t}.size.h"));
+    let top = format!("({title} != \"\" ? 30 : 14)");
+    let (left, right, bottom) = (54.0, 16.0, 40.0);
+    let aw = format!("max(1, {w} - {})", left + right);
+    let ah = format!("max(1, {h} - {top} - {bottom})");
+    let samples = format!("clamp(floor({aw} / 2), 2, 2000)");
+    let px1 = format!("({is_fn} ? range({x_lo}, {x_hi}, {samples}) : {xs})");
+    let py1 = format!("({is_fn} ? sample({f}, {x_lo}, {x_hi}, {samples}) : {ys})");
+    let xp = |v: &str| format!("scale({v}, {x_lo}, {x_hi}, 0, {aw})");
+    let yp = |v: &str| format!("scale({v}, {y_lo}, {y_hi}, {ah}, 0)");
+    let xt = format!("ticks({x_lo}, {x_hi}, clamp(floor({aw} / 70), 2, 8))");
+    let yt = format!("ticks({y_lo}, {y_hi}, clamp(floor({ah} / 40), 2, 8))");
+    let ink = [0.2, 0.22, 0.27, 1.0];
+    let muted = [0.38, 0.41, 0.47, 1.0];
+
+    let text_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, x: Slot, y: Slot, content: String, size_: f64, weight: f64, box_w: Option<(f64, &str)>, rot: f64, c: [f32; 4]| {
+        let id = ids.id();
+        let mut tr = Transform2d::default();
+        tr.x = x;
+        tr.y = y;
+        tr.rot = n(rot);
+        let mut words = Text::default();
+        words.content = bound(content);
+        let mut font = Font::default();
+        font.size = n(size_);
+        font.weight = n(weight);
+        let mut facets = vec![tr.wrap()];
+        if let Some((bw, align)) = box_w {
+            words.sizing = Slot::Const(Value::Enum("fixed".into()));
+            font.align = Slot::Const(Value::Enum(align.into()));
+            facets.push(size(bw, size_ * 1.5));
+        }
+        facets.extend([words.wrap(), font.wrap(), paint(c), named(name)]);
+        d.child(id, "text", parent, facets);
+    };
+    let path_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, dd: String, stroke: Stroke, fill: Fill| {
+        let id = ids.id();
+        let mut shape = crate::facet::PathShape::default();
+        shape.d = bound(dd);
+        d.child(id, "path", parent, vec![at(0.0, 0.0).wrap(), shape.wrap(), stroke.wrap(), fill.wrap(), named(name)]);
+    };
+    let line = |c: [f32; 4], width: f64| {
+        let mut s = Stroke::default();
+        s.color = Slot::Const(Value::Color(c));
+        s.width = n(width);
+        s
+    };
+    let no_fill = || {
+        let mut f = Fill::default();
+        f.opacity = n(0.0);
+        f
+    };
+
+    // 1. The frame, filling the box.
+    let frame = ids.id();
+    let mut corners = crate::facet::Corners::default();
+    for c in [&mut corners.tl, &mut corners.tr, &mut corners.br, &mut corners.bl] {
+        *c = n(6.0);
+    }
+    let mut box_ = Size::default();
+    box_.w = bound(w.clone());
+    box_.h = bound(h.clone());
+    d.child(frame, "rect", t, vec![at(0.0, 0.0).wrap(), box_.wrap(), corners.wrap(), paint([1.0, 1.0, 1.0, 1.0]), line([0.82, 0.84, 0.88, 1.0], 1.0).wrap(), named("frame")]);
+    // 2. The title.
+    text_part(d, ids, t, "title", n(14.0), n(8.0), title.clone(), 13.0, 600.0, None, 0.0, ink);
+    // 3. The plot area, clipped: grid, series, cursor.
+    let area = ids.id();
+    let mut area_at = Transform2d::default();
+    area_at.x = n(left);
+    area_at.y = bound(top.clone());
+    let mut clip = crate::facet::GroupClip::default();
+    clip.w = bound(aw.clone());
+    clip.h = bound(ah.clone());
+    d.child(area, "group", t, vec![area_at.wrap(), clip.wrap(), named("area")]);
+    path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line([0.9, 0.91, 0.94, 1.0], 1.0), no_fill());
+    for (k, (sx, sy, c)) in [(xs.clone(), ys3.clone(), color3.clone()), (xs.clone(), ys2.clone(), color2.clone()), (px1.clone(), py1.clone(), color.clone())].into_iter().enumerate() {
+        let (x, y) = (xp(&sx), yp(&sy));
+        let draw = format!(
+            "len({sy}) == 0 ? \"\" : ({style} == 'scatter' ? circles({x}, {y}, 3) : ({style} == 'smooth' ? smooth({x}, {y}) : ({style} == 'area' ? area({x}, {y}, {ah}) : ({style} == 'bars' ? bars({x}, {y}, {ah}, max(1, {aw} / max(1, len({sy})) * 0.7)) : 'M ' + points({x}, {y})))))"
+        );
+        let solid = format!("({style} == 'scatter' || {style} == 'bars')");
+        let mut stroke = line([0.0, 0.0, 0.0, 1.0], 2.0);
+        stroke.color = bound(format!("{solid} ? rgb(0, 0, 0, 0) : {c}"));
+        stroke.path_length = n(1.0);
+        stroke.dash = bound(format!("{reveal} < 1 ? \"1 1\" : \"\""));
+        stroke.dash_offset = bound(format!("1 - {reveal}"));
+        let mut fill = Fill::default();
+        fill.color = bound(c.clone());
+        fill.opacity = bound(format!("{solid} ? {reveal} : ({style} == 'area' ? 0.18 * {reveal} : 0)"));
+        path_part(d, ids, area, &format!("series {}", 3 - k), draw, stroke, fill);
+    }
+    let cx = xp(&cursor);
+    let cy = yp(&y_at);
+    let mut dashed = line(muted, 1.0);
+    dashed.dash = Slot::Const(Value::Str("4 3".into()));
+    path_part(d, ids, area, "cursor", format!("isnan({cursor}) ? \"\" : segments({cx}, 0, {cx}, {ah})"), dashed, no_fill());
+    let mut dot_fill = Fill::default();
+    dot_fill.color = bound(color.clone());
+    path_part(d, ids, area, "cursor dot", format!("isnan({cursor}) ? \"\" : circles({cx}, {cy}, 4)"), line([1.0, 1.0, 1.0, 1.0], 1.5), dot_fill);
+    text_part(d, ids, area, "cursor value", bound(format!("isnan({cursor}) ? 0 : {cx} + 6")), bound(format!("isnan({cursor}) ? 0 : {cy} - 20")), format!("isnan({cursor}) ? \"\" : fmt(sig({y_at}, 3))"), 11.0, 600.0, None, 0.0, ink);
+    // 4. Axes, tick marks and labels, unclipped, in the same space.
+    let axes = ids.id();
+    let mut axes_at = Transform2d::default();
+    axes_at.x = n(left);
+    axes_at.y = bound(top.clone());
+    d.child(axes, "group", t, vec![axes_at.wrap(), named("axes")]);
+    path_part(d, ids, axes, "axis lines", format!("'M 0,0 L 0,' + str({ah}) + ' L ' + str({aw}) + ',' + str({ah})"), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill());
+    path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill());
+    let x_unit = format!("unit_of({px1})");
+    let y_unit = format!("unit_of({py1})");
+    for i in 0..8 {
+        let v = format!("at({xt}, {i})");
+        text_part(d, ids, axes, &format!("x tick {i}"), bound(format!("{} - 28", xp(&v))), bound(format!("{ah} + 7")), format!("{i} < len({xt}) ? fmt(in_unit({v}, {x_unit})) : \"\""), 10.0, 400.0, Some((56.0, "center")), 0.0, muted);
+    }
+    for i in 0..8 {
+        let v = format!("at({yt}, {i})");
+        text_part(d, ids, axes, &format!("y tick {i}"), n(-50.0), bound(format!("{} - 7", yp(&v))), format!("{i} < len({yt}) ? fmt(in_unit({v}, {y_unit})) : \"\""), 10.0, 400.0, Some((44.0, "right")), 0.0, muted);
+    }
+    // 5. Axis titles: the label given, else the data's unit.
+    text_part(d, ids, t, "x title", bound(format!("{left} + {aw} / 2 - 120")), bound(format!("{h} - 18")), format!("{x_label} != \"\" ? {x_label} : {x_unit}"), 11.0, 500.0, Some((240.0, "center")), 0.0, muted);
+    let mut y_title_rot = -std::f64::consts::FRAC_PI_2;
+    y_title_rot = (y_title_rot * 1e9).round() / 1e9;
+    text_part(d, ids, t, "y title", n(4.0), bound(format!("{top} + {ah} / 2 + 120")), format!("{y_label} != \"\" ? {y_label} : {y_unit}"), 11.0, 500.0, Some((240.0, "center")), y_title_rot, muted);
+}
+

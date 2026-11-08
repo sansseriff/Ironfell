@@ -155,7 +155,8 @@ EXPRESSIONS (for {= …} bindings)
   element (NumPy-style), a number meeting every element: pow(cos(pi * xs / d), 2).
   len at(s, i) first last sum mean, min(s) max(s), interp(xs, ys, x), where(cond, a, b)
   (comparisons give 1/0 per element), ticks(lo, hi, n) about n round values,
-  nice_lo/nice_hi(lo, hi, n), log10 ln exp, sinc(x) = sin(x)/x.
+  nice_lo/nice_hi(lo, hi, n), log10 ln exp, sinc(x) = sin(x)/x, sig(x, n) n significant
+  figures, isnan(x), kind(v), concat(s1, s2, …), unit_of(x), in_unit(x, 'nm').
   Functions: x => body or (x, y) => body is a function value; map(s, f), sample(f, a, b,
   n), and f(x) calls one. Its references are read when it is made, so a function bound
   to a slider is remade when the slider moves.
@@ -231,6 +232,16 @@ COMPONENT VERBS  (place instances and pictures; in an <edit> of their own, any n
   Standard components (std:<key>, copied in once; each port: name, its kind, an
   input's default):
 ${standard}
+  std:plot draws data in a box you size and the person can resize; use it for any
+  curve, scatter or bar chart instead of drawing points or rects:
+    <edit><place def="std:plot" in="#C" x="40" y="300" w="480" h="280" title="Screen"
+      xs="{= range(-15, 15, 241)}" ys="{= pow(cos(pi * $self.xs / #F.port.signal), 2)}"
+      style="area" x_label="y (mm)"/></edit>
+  xs/ys are series (ys2, ys3 more series on the same xs), or f="{= x => …}" with
+  x_min/x_max (sampled at the plot's width). $self.k reads this entity's argument k.
+  style line|smooth|scatter|area|bars; x_min x_max y_min y_max default auto; cursor
+  marks an x and outputs y_at_cursor; reveal 0..1 draws the series on; axis titles
+  default to the data's units; outputs x_lo x_hi y_lo y_hi are the ranges in use.
 
 PORTS AND SIGNALS
   An entity has port children (name; port.kind, port.dir in|out, port.signal), one per

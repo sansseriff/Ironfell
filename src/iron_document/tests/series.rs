@@ -59,6 +59,8 @@ fn series_are_made_and_broadcast_with_units() {
     assert_eq!(nums(&eval("ticks(0, 10, 5)").unwrap()), vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
     assert_eq!(nums(&eval("ticks(-0.13, 0.92, 5)").unwrap()), vec![0.0, 0.2, 0.4, 0.6, 0.8]);
     assert_eq!(eval("nice_hi(-0.13, 0.92, 5)").unwrap(), Value::Number(1.0));
+    assert_eq!(eval("sig(0.211933828883, 3)").unwrap(), Value::Number(0.212));
+    assert_eq!(eval("sig(123456, 2)").unwrap(), Value::Number(120000.0));
     assert_eq!(eval("nice_lo(-0.13, 0.92, 5)").unwrap(), Value::Number(-0.2));
     // A series condition is not one bool.
     assert!(eval("series(1, 2) > 1 ? 1 : 0").unwrap_err().contains("where"));

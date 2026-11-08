@@ -111,12 +111,19 @@ fn last(doc: &crate::document::Document, parent: NodeId) -> Option<crate::order:
 
 /// One argument's slot: a `{= expr}` binding, or a constant of the kind
 /// the input's default has.
-fn arg_slot(kind: ValueKind, raw: &str) -> Result<Slot, String> {
+/// `$self.k` in a binding is the entity being placed's argument `k`
+/// (`#entity.args.k`), so one argument can read another (plot.md §10 Q4).
+fn arg_slot(kind: ValueKind, raw: &str, entity: NodeId) -> Result<Slot, String> {
     let t = raw.trim();
     if let Some(e) = t.strip_prefix("{=").and_then(|r| r.strip_suffix('}')) {
-        return Expr::parse(e.trim()).map(Slot::Bound).map_err(|err| format!("{raw:?}: {err}"));
+        let e = e.trim().replace("$self.", &format!("{entity}.args."));
+        return Expr::parse(&e).map(Slot::Bound).map_err(|err| format!("{raw:?}: {err}"));
     }
     let v = match kind {
+        ValueKind::Series => Value::parse_series(t).unwrap_or_else(|| Err("expected two or more numbers, then an optional unit (400 450 500 nm), or {= range(…)}".into())).map_err(|e| format!("{raw:?}: {e}"))?,
+        ValueKind::Enum => Value::Enum(t.to_owned()),
+        ValueKind::Color => hex_color(t).ok_or_else(|| format!("{raw:?}: expected a colour, #rrggbb or #rrggbbaa, or {{= rgb(…)}}"))?,
+        ValueKind::Number if t.eq_ignore_ascii_case("nan") || t == "auto" => Value::Number(f64::NAN),
         ValueKind::Number => Value::Number(t.parse().map_err(|_| format!("{raw:?}: expected a number"))?),
         ValueKind::Bool => Value::Bool(match t {
             "true" => true,
@@ -128,6 +135,16 @@ fn arg_slot(kind: ValueKind, raw: &str) -> Result<Slot, String> {
         _ => Value::parse_quantity(t).or_else(|_| t.parse::<f64>().map(Value::Number)).unwrap_or_else(|_| Value::Str(raw.to_owned())),
     };
     Ok(Slot::Const(v))
+}
+
+/// `#rrggbb` or `#rrggbbaa`.
+fn hex_color(t: &str) -> Option<Value> {
+    let h = t.strip_prefix('#')?;
+    if !matches!(h.len(), 6 | 8) || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let ch = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok().map(|b| b as f32 / 255.0);
+    Some(Value::Color([ch(0)?, ch(2)?, ch(4)?, if h.len() == 8 { ch(6)? } else { 1.0 }]))
 }
 
 fn place(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Result<(Vec<Op>, String, Named), String> {
@@ -282,7 +299,9 @@ fn place(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Re
         if !fresh {
             return Err(format!("{name}=…: set an existing entity's arguments with <set id=\"{entity}\" args.{name}=…/>"));
         }
-        let slot = arg_slot(input.kind, v).map_err(|e| format!("{name}: {e}"))?;
+        // A NaN default ("auto") takes a quantity as well as a number.
+        let kind = if matches!(input.default, Value::Number(x) if x.is_nan()) && Value::parse_quantity(v.trim()).is_ok() { ValueKind::Quantity } else { input.kind };
+        let slot = arg_slot(kind, v, entity).map_err(|e| format!("{name}: {e}"))?;
         sets.push(Op::Set { id: entity, path: format!("args.{name}").parse().map_err(|e| format!("args.{name}: {e:?}"))?, slot });
     }
     push(&mut scratch, sets)?;

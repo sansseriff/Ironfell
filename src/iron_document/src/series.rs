@@ -163,7 +163,7 @@ pub fn binary(op: BinOp, a: &Value, b: &Value) -> Option<Result<Value, EvalError
 
 /// The scalar floor functions that apply per element to a series.
 const ELEMENTWISE: &[&str] = &[
-    "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt", "pow", "hypot", "log10", "ln", "exp", "sinc",
+    "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt", "pow", "hypot", "log10", "ln", "exp", "sinc", "sig",
 ];
 
 /// The floor functions this module answers; `None` passes `func` on to
@@ -184,8 +184,74 @@ pub fn call(func: &str, args: &[Value]) -> Option<Result<Value, EvalError>> {
         "sample" => sample(args),
         "rgb" | "hsl" | "mix" | "spectrum" => colour(func, args),
         "points" | "smooth" | "circles" | "segments" | "bars" | "area" => path_data(func, args),
+        "isnan" => isnan(args),
+        "kind" => match args {
+            [v] => Ok(Value::Str(v.kind().name().to_owned())),
+            _ => arity(func, 1, args.len()),
+        },
+        "concat" => concat(args),
+        "unit_of" => unit_of(args),
+        "in_unit" => in_unit(args),
         _ if any_series && ELEMENTWISE.contains(&func) => broadcast(func, args),
         _ => return None,
+    })
+}
+
+/// `isnan(x)`: whether a number (or a quantity's magnitude) is NaN, the
+/// value an input defaults to when it means "none" or "auto".
+fn isnan(args: &[Value]) -> Result<Value, EvalError> {
+    let [v] = args else { return arity("isnan", 1, args.len()) };
+    Ok(Value::Bool(v.as_quantity().is_some_and(|(x, _)| x.is_nan())))
+}
+
+/// `concat(a, b, …)`: series joined end to end; empty ones are skipped
+/// whatever their unit.
+fn concat(args: &[Value]) -> Result<Value, EvalError> {
+    let mut data = Vec::new();
+    let mut dim = None;
+    for a in args {
+        let (d, u) = series_of("concat", a)?;
+        if d.is_empty() {
+            continue;
+        }
+        match dim {
+            Some(e) if e != u => return err(format!("concat: series in different units, {} and {}", describe(e), describe(u))),
+            _ => dim = Some(u),
+        }
+        data.extend_from_slice(d);
+    }
+    Ok(Value::series(data, dim.unwrap_or(Dim::NONE)))
+}
+
+/// `unit_of(x)`: the unit a value shows in (a series: the one its largest
+/// magnitude picks), `""` for a plain number. An axis titles itself with it.
+fn unit_of(args: &[Value]) -> Result<Value, EvalError> {
+    let [v] = args else { return arity("unit_of", 1, args.len()) };
+    let (biggest, dim) = match numeric("unit_of", v)? {
+        Arg::Many(d, dim) => (d.iter().copied().filter(|x| x.is_finite()).fold(0.0f64, |m, x| m.max(x.abs())), dim),
+        Arg::One(x, dim) => (x.abs(), dim),
+    };
+    Ok(Value::Str(if dim.is_none() { String::new() } else { crate::units::display_unit(biggest, dim).0 }))
+}
+
+/// `in_unit(x, 'nm')`: a value's magnitude in a unit, as plain numbers
+/// (tick labels under an axis titled with the unit); `''` for a plain number.
+fn in_unit(args: &[Value]) -> Result<Value, EvalError> {
+    let [v, u] = args else { return arity("in_unit", 2, args.len()) };
+    let name = u.as_str().ok_or_else(|| EvalError::Type(format!("in_unit: the unit must be text, got {}", u.kind().name())))?;
+    let (factor, want) = if name.trim().is_empty() {
+        (1.0, Dim::NONE)
+    } else {
+        let unit = crate::units::parse_unit(name.trim()).map_err(|e| EvalError::Type(format!("in_unit: {e}")))?;
+        (unit.factor, unit.dim)
+    };
+    let x = numeric("in_unit", v)?;
+    if x.dim() != want {
+        return err(format!("in_unit: {} cannot be shown in {name:?}", describe(x.dim())));
+    }
+    Ok(match x {
+        Arg::One(x, _) => Value::Number(crate::units::round12(x / factor)),
+        Arg::Many(d, _) => Value::series(d.iter().map(|x| crate::units::round12(x / factor)).collect::<Vec<_>>(), Dim::NONE),
     })
 }
 

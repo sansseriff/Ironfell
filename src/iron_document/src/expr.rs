@@ -651,7 +651,7 @@ pub mod floor {
         "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt",
         "pow", "hypot", "log10", "ln", "exp", "sinc", "fmt", "sci", "str", "series", "range", "step", "len", "at", "first",
         "last", "sum", "mean", "interp", "ticks", "nice_lo", "nice_hi", "where", "map", "sample", "rgb", "hsl", "mix",
-        "spectrum", "points", "smooth", "circles", "segments", "bars", "area",
+        "spectrum", "points", "smooth", "circles", "segments", "bars", "area", "isnan", "kind", "concat", "unit_of", "in_unit", "sig",
     ];
 
     /// The scalar arms of [`call`], for the series module to apply per element.
@@ -728,6 +728,19 @@ pub mod floor {
         let n = |k| args_of(func, args, k);
         let q = Value::quantity;
         Ok(match func {
+            // sig(x, n): x rounded to n significant figures, unit kept.
+            "sig" => {
+                let a = n(2)?;
+                plain(func, &a, &[1])?;
+                let (x, digits) = (a[0].0, a[1].0.clamp(1.0, 15.0).round() as i32);
+                let r = if x == 0.0 || !x.is_finite() {
+                    x
+                } else {
+                    let k = 10f64.powi(digits - 1 - x.abs().log10().floor() as i32);
+                    crate::units::round12((x * k).round() / k)
+                };
+                q(r, a[0].1)
+            }
             "log10" | "ln" | "exp" | "sinc" => {
                 let a = n(1)?;
                 plain(func, &a, &[0])?;

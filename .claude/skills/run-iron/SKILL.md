@@ -44,6 +44,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `BACKENDS=webgl2 build.sh`, warm, after a source change | ~45 s (cargo ~25 s) |
 | ⏱ `build.sh` (both backends), warm | ~1–1.5 min (1m 04s, 2026-11-04; ~55 s after a `web_ffi.rs` edit, 2026-11-06) |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
+| ⏱ `build.sh` after an `iron_document` change | ~3.5 min (3m 40s and 3m 23s, 2026-11-08): the document crate rebuilds everything above it |
 | ⏱ `build.sh` cold | ~5 min (5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06) |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4 min (cargo 3m 25s, plus binding generation; 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |

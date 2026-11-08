@@ -218,7 +218,9 @@ static TYPES: &[TypeSpec] = &[
     // A template: its subtree is what an instance copies.
     TypeSpec {
         name: "template",
-        facets: &[(K::Template, true), (K::Name, false)],
+        // `size`: the picture's default box; parts bind to it, and each
+        // sized `use` holds its own (plans/specs/plot.md §3).
+        facets: &[(K::Template, true), (K::Name, false), (K::Size, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -326,7 +328,7 @@ static TYPES: &[TypeSpec] = &[
     // whose children are its definition's template, expanded, never stored.
     TypeSpec {
         name: "use",
-        facets: &[(K::Use, true), (K::Transform2d, true), (K::Name, false), (K::Appearance, false), (K::Instance, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false)],
+        facets: &[(K::Use, true), (K::Transform2d, true), (K::Name, false), (K::Appearance, false), (K::Instance, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false), (K::Size, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },

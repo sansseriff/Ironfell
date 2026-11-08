@@ -170,7 +170,7 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
         },
         facets: vec![instance.wrap(), args.wrap(), entity_name.wrap()],
     }];
-    ops.extend(use_ops(doc, u, doc.next_relation_id(), entity, notation, name, place.figure_parent, place.figure_after.clone()));
+    ops.extend(use_ops(doc, def, u, doc.next_relation_id(), entity, notation, name, place.figure_parent, place.figure_after.clone()));
     Ok((entity, ops))
 }
 
@@ -185,13 +185,23 @@ pub fn place_figures(doc: &Document, entity: NodeId, notation: &str, parent: Opt
         .ok_or_else(|| format!("{entity} is not an entity with a definition"))?;
     template_of(doc, def, notation).ok_or_else(|| format!("{def} has no template for notation {notation:?}"))?;
     let name = name_of(doc, entity).unwrap_or_default();
-    Ok(use_ops(doc, doc.next_id(), doc.next_relation_id(), entity, notation, &name, parent, after))
+    Ok(use_ops(doc, def, doc.next_id(), doc.next_relation_id(), entity, notation, &name, parent, after))
 }
 
 /// A `use` node figuring `entity` in `notation`, at the origin.
 #[allow(clippy::too_many_arguments)]
-fn use_ops(doc: &Document, u: NodeId, rel: crate::id::RelationId, entity: NodeId, notation: &str, name: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Vec<Op> {
-    let _ = doc;
+#[allow(clippy::too_many_arguments)]
+fn use_ops(doc: &Document, def: NodeId, u: NodeId, rel: crate::id::RelationId, entity: NodeId, notation: &str, name: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Vec<Op> {
+    // A sized template's picture starts at the template's box, as
+    // constants: each picture then holds its own (plans/specs/plot.md §3).
+    let size = template_of(doc, def, notation)
+        .and_then(|t| doc.get::<crate::facet::Size>(t))
+        .map(|s| {
+            let mut own = crate::facet::Size::default();
+            own.w = Slot::Const(s.w.constant().cloned().unwrap_or(Value::Number(100.0)));
+            own.h = Slot::Const(s.h.constant().cloned().unwrap_or(Value::Number(100.0)));
+            own
+        });
     let mut placed = Use::default();
     placed.notation = Slot::Const(Value::Str(notation.to_owned()));
     let mut use_name = Name::default();
@@ -205,7 +215,7 @@ fn use_ops(doc: &Document, u: NodeId, rel: crate::id::RelationId, entity: NodeId
                 Some(k) => OrderKey::after(k),
                 None => OrderKey::first(),
             },
-            facets: vec![placed.wrap(), crate::facet::Transform2d::default().wrap(), use_name.wrap()],
+            facets: [placed.wrap(), crate::facet::Transform2d::default().wrap(), use_name.wrap()].into_iter().chain(size.map(|s| s.wrap())).collect(),
         },
         Op::Link { rel: Relation { id: rel, from: u, to: entity, rel: RelKind::Figures, data: BTreeMap::new() } },
     ]

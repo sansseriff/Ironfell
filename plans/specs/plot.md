@@ -359,11 +359,27 @@ shows how often slots fall short.
   never point-edits it. packed-paths.md's "constant only" is superseded.
 - `stroke.path_length` scales dashes on paths (`materialize::stroke_style`) and
   exports as `pathLength`. Other shapes ignore it for now.
-- Not yet: sized instances (§3), `std:plot` (§4), the generated function table (§7;
+- Not yet: `std:plot` (§4), the generated function table (§7;
   the prompt is updated by hand), `<look values=…>`, the share-key content hash
   (§1.5; series hash by `Debug`, which is complete for them).
 - Follow-up seen in the app: a binding's quantity literals print in SI (`400 nm` reads
   back as `0.00000040000000000000003 m` in views and files). Printing the prefixed
   form when it round-trips exactly is a small change to `write_lit`, but it changes
   saved binding text, so it is left for a deliberate format decision.
+
+**2026-11-08: phase 2's sized instances (§3).**
+
+- `template` and `use` accept `size` (registry.rs). `definition::use_ops` seeds a new
+  picture's `size` from its template's, as constants; `<place>` takes `w=`/`h=` (or
+  `size.w=`/`size.h=`; bare `w`/`h` set arguments instead when the definition has
+  inputs of those names) and refuses them for an unsized template.
+- Expansion (`expand::want_use`): a reference to the template's own `size` relocates to
+  the use's when the use is sized; an unsized use keeps reading the template's default.
+- Render analysis keys any part reading the box on it (`analysis::classify`, input
+  `size`), so equal-size pictures may share a drawing and others never do.
+- The select tool's `local_box` gives a sized `use` a box of its size with
+  `Kind::Sized`, so grips write the use's `size` and position instead of resizing
+  parts. Min sizes (§3.2's `min_w`/`min_h`) are not built: a drag may shrink a box to
+  nothing, as it may a rect.
+- Static instances (`instantiate_static`) still read the template's default size.
 

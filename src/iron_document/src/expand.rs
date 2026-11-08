@@ -219,7 +219,13 @@ fn want_use(doc: &Document, u: NodeId, entity: Option<NodeId>, def: NodeId, nota
     }
     let Some(template) = definition::template_of(doc, def, notation) else { return };
     let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
+    // A sized picture (plans/specs/plot.md §3): the template's own `size`,
+    // which its parts read, is this use's.
+    let sized = doc.facet(u, FacetKind::Size).is_some();
     let follow = |leaf: Leaf| -> Leaf {
+        if leaf.node == template {
+            return if sized && leaf.path.facet == FacetKind::Size { Leaf { node: u, path: leaf.path } } else { leaf };
+        }
         let root = leaf.node.path()[0];
         let owner = if inside.contains(&root) {
             u

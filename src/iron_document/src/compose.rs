@@ -47,7 +47,7 @@ struct Named {
 }
 
 /// Attributes of `<place>` that are not arguments.
-const PLACE_ATTRS: &[&str] = &["def", "entity", "in", "x", "y", "rot", "notation", "name", "as"];
+const PLACE_ATTRS: &[&str] = &["def", "entity", "in", "x", "y", "rot", "notation", "name", "as", "size.w", "size.h"];
 
 /// The ops for a model's component verbs (see the module doc), and a
 /// summary of what each made, one line per verb.
@@ -220,6 +220,22 @@ fn place(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Re
         let place = Placement { entity_parent: Some(model), entity_after: last(&scratch, model), figure_parent: Some(parent), figure_after: last(&scratch, parent) };
         definition::instantiate(&scratch, def, &notation, &name, &place)?
     };
+    // A sized picture's box: `w`/`h` (unless the definition has inputs of
+    // those names, which they then set) or `size.w`/`size.h`.
+    let input_names: Vec<&str> = definition::inputs_of(&scratch, def)?.iter().map(|i| i.name).collect();
+    let size_word = |k: &str| -> Option<&str> {
+        if input_names.contains(&k) {
+            return None;
+        }
+        el.attr(k)
+    };
+    let box_w = el.attr("size.w").or_else(|| size_word("w"));
+    let box_h = el.attr("size.h").or_else(|| size_word("h"));
+    let as_size = |k: &str, v: Option<&str>| -> Result<Option<f64>, String> {
+        v.map(|v| v.trim().trim_end_matches("px").trim().parse::<f64>().map_err(|_| format!("{k}={v:?} is not a number"))).transpose()
+    };
+    let (box_w, box_h) = (as_size("w", box_w)?, as_size("h", box_h)?);
+    let mut sized = false;
     let mut inst = inst;
     let mut picture = None;
     for op in inst.iter_mut() {
@@ -234,7 +250,19 @@ fn place(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Re
                 tr.y = Slot::Const(Value::Number(y));
                 tr.rot = Slot::Const(Value::Number(rot));
             }
+            if let Facet::Size(s) = f {
+                sized = true;
+                if let Some(w) = box_w {
+                    s.w = Slot::Const(Value::Number(w));
+                }
+                if let Some(h) = box_h {
+                    s.h = Slot::Const(Value::Number(h));
+                }
+            }
         }
+    }
+    if !sized && (box_w.is_some() || box_h.is_some()) {
+        return Err(format!("{def}'s template has no size, so its picture cannot be given w or h; give the template a size (size.w, size.h) and bind its parts to it"));
     }
     let picture = picture.ok_or("no picture placed")?;
     push(&mut scratch, inst)?;
@@ -243,7 +271,7 @@ fn place(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Re
     let inputs = definition::inputs_of(&scratch, def)?;
     let mut sets = Vec::new();
     for (k, v) in &el.attrs {
-        if PLACE_ATTRS.contains(&k.as_str()) {
+        if PLACE_ATTRS.contains(&k.as_str()) || (matches!(k.as_str(), "w" | "h") && !input_names.contains(&k.as_str())) {
             continue;
         }
         let name = k.strip_prefix("args.").unwrap_or(k);

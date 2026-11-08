@@ -1101,6 +1101,10 @@ impl Geo<'_> {
             // (render-cache.md §4.3): no walk of the subtree, which on a
             // large import cost tens of ms per hover. Leaves count by their
             // tight geometry, as snapping does. Without the index, walk.
+            // A sized picture (plans/specs/plot.md §3) is one box of its own
+            // size, resized by writing that size: its parts reflow through
+            // their bindings, so text keeps its size and strokes their width.
+            "use" if nest::reference(doc, id).is_none() && self.has(id, K::Size) && let (Some(w), Some(h)) = (self.num(id, "size.w"), self.num(id, "size.h")) => Some((Rect::new(0.0, 0.0, w, h), Kind::Sized { aspect: false })),
             // A reference's box is its template's content.
             "use" if nest::reference(doc, id).is_some() => {
                 let t = nest::reference(doc, id)?;

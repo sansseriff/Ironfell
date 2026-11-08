@@ -186,7 +186,11 @@ DEFINITIONS
   its port_spec children: an in port (port.dir="in", port.kind="value" or a typed
   kind) is an input whose port.signal is its default; out ports and across/through
   pairs as below. A template child's subtree is the picture for one notation, and
-  may bind to a port_spec's port.signal. An entity instantiates a definition:
+  may bind to a port_spec's port.signal. A template with a size (size.w, size.h) is
+  resizable: its parts bind to the template's own size ({= #T.size.w - 20}), each
+  picture of it holds its own size, and dragging a picture's corner (or setting its
+  size.w/size.h) reflows its parts; give text a fixed font size and bind only its
+  position, so it moves but never stretches. An entity instantiates a definition:
   instance.def names it and args.<name> holds one value per in port, each bindable
   (args.level="{= #O.slider.value}"). Instantiation gives the entity one port per
   port_spec; an in port reads its argument unless a connection feeds it. Its
@@ -216,6 +220,7 @@ COMPONENT VERBS  (place instances and pictures; in an <edit> of their own, any n
   place entity= adds another picture of an entity a linked instance already is, in
   another composition: one thing, drawn in each. The use's notation is the
   composition's unless notation= picks another of the definition's templates.
+  w= and h= give a sized template's picture its box (default: the template's).
   Other attributes (k= or args.k=) are arguments: a value of the input's kind or
   {= expr}. make-component of= turns shapes side by side into a definition shown by
   its main (edit the main to edit the definition; place instances of it), or uses

@@ -314,7 +314,20 @@ pub fn classify(doc: &Document, reactive: &Reactive, u: NodeId) -> Option<Analys
         };
         inputs.insert(spec.name.to_owned(), input);
     }
-    let name_of = |spec: NodeId| specs.iter().find(|s| s.spec == spec).map_or("?", |s| s.name);
+    // A sized picture's box is an input like an argument (plans/specs/plot.md
+    // §3): parts that read it are keyed on it, so pictures of different
+    // sizes never share a drawing. It arrives as the use itself.
+    if let Some(size) = doc.get::<crate::facet::Size>(u) {
+        for field in ["w", "h"] {
+            arrives.insert(Leaf { node: u, path: LeafPath::new(FacetKind::Size, field).expect("declared field") }, u);
+        }
+        let input = match (size.w.constant().and_then(Value::as_f64), size.h.constant().and_then(Value::as_f64)) {
+            (Some(w), Some(h)) => Input::Constant(Value::Vec2([w, h])),
+            _ => Input::Wired("its size is bound".to_owned()),
+        };
+        inputs.insert("size".to_owned(), input);
+    }
+    let name_of = |spec: NodeId| if spec == u { "size" } else { specs.iter().find(|s| s.spec == spec).map_or("?", |s| s.name) };
     let mut r = Resolver { doc, reactive, owners: [Some(u), entity].into_iter().flatten().collect(), inputs: arrives, memo: BTreeMap::new(), visiting: BTreeSet::new() };
     let overrides = expand::overrides_of(doc, u);
     let mut parts = Vec::new();

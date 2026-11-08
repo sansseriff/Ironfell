@@ -121,3 +121,33 @@ fn a_function_is_sampled_at_the_plot_s_width_and_read_at_the_cursor() {
     store.apply(tx("wider", vec![Op::Set { id: u, path: path("size.w"), slot: Slot::Const(Value::Number(560.0)) }])).unwrap();
     assert_eq!(anchors(&store, part(&store, u, "series 1")), 245);
 }
+
+/// The plot's vis machine (plans/specs/machines.md): disappear takes it
+/// away; appear draws it on in order, axes before the curve.
+#[test]
+fn the_plot_appears_and_disappears_in_order() {
+    let (mut store, _) = desk();
+    let (e, u) = place(&mut store, "");
+    let at = |s: &Store, name: &str, leaf: &str| s.resolved(part(s, u, name), path(leaf)).unwrap().as_f64().unwrap();
+    store.advance_machines(0.0);
+    assert_eq!(at(&store, "axis lines", "trim.end"), 1.0);
+    // As an edit writes it: text, for an enum input.
+    let vis = |s: &mut Store, v: &str| s.apply(tx("vis", vec![Op::Set { id: e, path: path("args.vis"), slot: Slot::Const(Value::Str(v.into())) }])).unwrap();
+    vis(&mut store, "hidden");
+    store.advance_machines(1.0);
+    store.advance_machines(1.5);
+    assert_eq!(at(&store, "axis lines", "trim.end"), 0.0);
+    assert_eq!(at(&store, "series 1", "trim.end"), 0.0);
+    assert_eq!(at(&store, "frame", "appearance.opacity"), 0.0);
+    // Appear, 0.4 s in: the frame is in, the axes half drawn (Easy Ease is
+    // symmetric), the curve not started.
+    vis(&mut store, "shown");
+    store.advance_machines(2.0);
+    store.advance_machines(2.4);
+    assert_eq!(at(&store, "frame", "appearance.opacity"), 1.0);
+    assert!((at(&store, "axis lines", "trim.end") - 0.5).abs() < 1e-6, "{}", at(&store, "axis lines", "trim.end"));
+    assert_eq!(at(&store, "series 1", "trim.end"), 0.0);
+    store.advance_machines(3.5);
+    assert_eq!(at(&store, "series 1", "trim.end"), 1.0);
+    assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));
+}

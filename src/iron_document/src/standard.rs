@@ -530,6 +530,7 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let color2 = input(d, "color2", colour([0.91, 0.455, 0.231, 1.0]));
     let color3 = input(d, "color3", colour([0.098, 0.663, 0.475, 1.0]));
     let reveal = input(d, "reveal", n(1.0));
+    let _vis = input(d, "vis", Slot::Const(Value::Enum("shown".into())));
     let sig = |id: NodeId| format!("{id}.port.signal");
     let (xs, ys, ys2, ys3, f, style, x_min, x_max, y_min, y_max) = (sig(xs), sig(ys), sig(ys2), sig(ys3), sig(f), sig(style), sig(x_min), sig(x_max), sig(y_min), sig(y_max));
     let (x_label, y_label, title, cursor, grid, color, color2, color3, reveal) = (sig(x_label), sig(y_label), sig(title), sig(cursor), sig(grid), sig(color), sig(color2), sig(color3), sig(reveal));
@@ -548,6 +549,49 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let y_lo = output(d, "y_lo", format!("isnan({y_min}) ? nice_lo(min({ys_all}), max({ys_all}), 5) : {y_min}"));
     let y_hi = output(d, "y_hi", format!("isnan({y_max}) ? nice_hi(min({ys_all}), max({ys_all}), 5) : {y_max}"));
     let y_at = output(d, "y_at_cursor", format!("isnan({cursor}) ? 0 / 0 : ({is_fn} ? {f}({cursor}) : interp({xs}, {ys}, {cursor}))"));
+
+    // The vis machine (plans/specs/machines.md): hidden and shown, appear
+    // drawing the plot on in order (frame, axes, ticks, then the curve) with
+    // Easy Ease, disappear taking it away in reverse. Parts read its channels.
+    let channel = |d: &mut Def, ids: &mut Ids, name: &str| {
+        let id = ids.id();
+        let mut c = crate::facet::Channel::default();
+        c.value = n(1.0);
+        d.child(id, "channel", def, vec![named(name), c.wrap()]);
+        format!("{id}.channel.value")
+    };
+    let (ch_frame, ch_axes, ch_ticks, ch_series) = (channel(d, ids, "frame"), channel(d, ids, "axes"), channel(d, ids, "ticks"), channel(d, ids, "series"));
+    let machine = ids.id();
+    d.child(machine, "machine", def, vec![named("vis")]);
+    for (state, v) in [("hidden", 0.0), ("shown", 1.0)] {
+        let id = ids.id();
+        let mut pose = crate::facet::Args::default();
+        for c in ["frame", "axes", "ticks", "series"] {
+            pose.insert(c, n(v));
+        }
+        d.child(id, "state", machine, vec![named(state), pose.wrap()]);
+    }
+    for (name, from, to, ms, tweens) in [
+        ("appear", "hidden", "shown", 1400.0, [("frame", 0.0, 300.0, "ease_out"), ("axes", 150.0, 500.0, "easy_ease"), ("ticks", 450.0, 450.0, "easy_ease"), ("series", 650.0, 750.0, "easy_ease")]),
+        ("disappear", "shown", "hidden", 450.0, [("series", 0.0, 250.0, "ease_in"), ("ticks", 100.0, 250.0, "ease_in"), ("axes", 150.0, 250.0, "ease_in"), ("frame", 200.0, 250.0, "ease_in")]),
+    ] {
+        let id = ids.id();
+        let mut tr = crate::facet::Transition::default();
+        tr.from = text_(from);
+        tr.to = text_(to);
+        tr.ms = n(ms);
+        tr.ease = text_("ease_in_out");
+        d.child(id, "transition", machine, vec![tr.wrap(), named(name)]);
+        for (c, at, len, ease) in tweens {
+            let w = ids.id();
+            let mut tw = crate::facet::Tween::default();
+            tw.channel = text_(c);
+            tw.at = n(at);
+            tw.ms = n(len);
+            tw.ease = text_(ease);
+            d.child(w, "tween", id, vec![tw.wrap()]);
+        }
+    }
 
     let t = template(d, ids);
     // The template's box: its picture's default size, read by every part.
@@ -573,7 +617,12 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let ink = [0.2, 0.22, 0.27, 1.0];
     let muted = [0.38, 0.41, 0.47, 1.0];
 
-    let text_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, x: Slot, y: Slot, content: String, size_: f64, weight: f64, box_w: Option<(f64, &str)>, rot: f64, c: [f32; 4]| {
+    let fade_by = |e: &str| {
+        let mut a = crate::facet::Appearance::default();
+        a.opacity = bound(e.to_owned());
+        a.wrap()
+    };
+    let text_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, x: Slot, y: Slot, content: String, size_: f64, weight: f64, box_w: Option<(f64, &str)>, rot: f64, c: [f32; 4], fade: &str| {
         let id = ids.id();
         let mut tr = Transform2d::default();
         tr.x = x;
@@ -590,10 +639,10 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
             font.align = Slot::Const(Value::Enum(align.into()));
             facets.push(size(bw, size_ * 1.5));
         }
-        facets.extend([words.wrap(), font.wrap(), paint(c), named(name)]);
+        facets.extend([words.wrap(), font.wrap(), paint(c), named(name), fade_by(fade)]);
         d.child(id, "text", parent, facets);
     };
-    let path_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, dd: String, stroke: Stroke, fill: Fill, trim_end: Option<String>| {
+    let path_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, dd: String, stroke: Stroke, fill: Fill, trim_end: Option<String>, fade: Option<&str>| {
         let id = ids.id();
         let mut shape = crate::facet::PathShape::default();
         shape.d = bound(dd);
@@ -603,6 +652,9 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
             let mut t = crate::facet::Trim::default();
             t.end = bound(e);
             facets.push(t.wrap());
+        }
+        if let Some(f) = fade {
+            facets.push(fade_by(f));
         }
         d.child(id, "path", parent, facets);
     };
@@ -627,9 +679,9 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let mut box_ = Size::default();
     box_.w = bound(w.clone());
     box_.h = bound(h.clone());
-    d.child(frame, "rect", t, vec![at(0.0, 0.0).wrap(), box_.wrap(), corners.wrap(), paint([1.0, 1.0, 1.0, 1.0]), line([0.82, 0.84, 0.88, 1.0], 1.0).wrap(), named("frame")]);
+    d.child(frame, "rect", t, vec![at(0.0, 0.0).wrap(), box_.wrap(), corners.wrap(), paint([1.0, 1.0, 1.0, 1.0]), line([0.82, 0.84, 0.88, 1.0], 1.0).wrap(), named("frame"), fade_by(&ch_frame)]);
     // 2. The title.
-    text_part(d, ids, t, "title", n(14.0), n(8.0), title.clone(), 13.0, 600.0, None, 0.0, ink);
+    text_part(d, ids, t, "title", n(14.0), n(8.0), title.clone(), 13.0, 600.0, None, 0.0, ink, &ch_frame);
     // 3. The plot area, clipped: grid, series, cursor.
     let area = ids.id();
     let mut area_at = Transform2d::default();
@@ -639,7 +691,7 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     clip.w = bound(aw.clone());
     clip.h = bound(ah.clone());
     d.child(area, "group", t, vec![area_at.wrap(), clip.wrap(), named("area")]);
-    path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line([0.9, 0.91, 0.94, 1.0], 1.0), no_fill(), None);
+    path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line([0.9, 0.91, 0.94, 1.0], 1.0), no_fill(), None, Some(&ch_ticks));
     for (k, (sx, sy, c)) in [(xs.clone(), ys3.clone(), color3.clone()), (xs.clone(), ys2.clone(), color2.clone()), (px1.clone(), py1.clone(), color.clone())].into_iter().enumerate() {
         let (x, y) = (xp(&sx), yp(&sy));
         let draw = format!(
@@ -650,40 +702,41 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
         stroke.color = bound(format!("{solid} ? rgb(0, 0, 0, 0) : {c}"));
         let mut fill = Fill::default();
         fill.color = bound(c.clone());
-        fill.opacity = bound(format!("{solid} ? {reveal} : ({style} == 'area' ? 0.18 * {reveal} : 0)"));
-        path_part(d, ids, area, &format!("series {}", 3 - k), draw, stroke, fill, Some(reveal.clone()));
+        let shown = format!("min({reveal}, {ch_series})");
+        fill.opacity = bound(format!("{solid} ? {shown} : ({style} == 'area' ? 0.18 * {shown} : 0)"));
+        path_part(d, ids, area, &format!("series {}", 3 - k), draw, stroke, fill, Some(shown.clone()), None);
     }
     let cx = xp(&cursor);
     let cy = yp(&y_at);
     let mut dashed = line(muted, 1.0);
     dashed.dash = Slot::Const(Value::Str("4 3".into()));
-    path_part(d, ids, area, "cursor", format!("isnan({cursor}) ? \"\" : segments({cx}, 0, {cx}, {ah})"), dashed, no_fill(), None);
+    path_part(d, ids, area, "cursor", format!("isnan({cursor}) ? \"\" : segments({cx}, 0, {cx}, {ah})"), dashed, no_fill(), None, Some(&ch_series));
     let mut dot_fill = Fill::default();
     dot_fill.color = bound(color.clone());
-    path_part(d, ids, area, "cursor dot", format!("isnan({cursor}) ? \"\" : circles({cx}, {cy}, 4)"), line([1.0, 1.0, 1.0, 1.0], 1.5), dot_fill, None);
-    text_part(d, ids, area, "cursor value", bound(format!("isnan({cursor}) ? 0 : {cx} + 6")), bound(format!("isnan({cursor}) ? 0 : {cy} - 20")), format!("isnan({cursor}) ? \"\" : fmt(sig({y_at}, 3))"), 11.0, 600.0, None, 0.0, ink);
+    path_part(d, ids, area, "cursor dot", format!("isnan({cursor}) ? \"\" : circles({cx}, {cy}, 4)"), line([1.0, 1.0, 1.0, 1.0], 1.5), dot_fill, None, Some(&ch_series));
+    text_part(d, ids, area, "cursor value", bound(format!("isnan({cursor}) ? 0 : {cx} + 6")), bound(format!("isnan({cursor}) ? 0 : {cy} - 20")), format!("isnan({cursor}) ? \"\" : fmt(sig({y_at}, 3))"), 11.0, 600.0, None, 0.0, ink, &ch_series);
     // 4. Axes, tick marks and labels, unclipped, in the same space.
     let axes = ids.id();
     let mut axes_at = Transform2d::default();
     axes_at.x = n(left);
     axes_at.y = bound(top.clone());
     d.child(axes, "group", t, vec![axes_at.wrap(), named("axes")]);
-    path_part(d, ids, axes, "axis lines", format!("'M 0,0 L 0,' + str({ah}) + ' L ' + str({aw}) + ',' + str({ah})"), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), None);
-    path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), None);
+    path_part(d, ids, axes, "axis lines", format!("'M 0,0 L 0,' + str({ah}) + ' L ' + str({aw}) + ',' + str({ah})"), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), Some(ch_axes.clone()), None);
+    path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), Some(ch_ticks.clone()), None);
     let x_unit = format!("unit_of({px1})");
     let y_unit = format!("unit_of({py1})");
     for i in 0..8 {
         let v = format!("at({xt}, {i})");
-        text_part(d, ids, axes, &format!("x tick {i}"), bound(format!("{} - 28", xp(&v))), bound(format!("{ah} + 7")), format!("{i} < len({xt}) ? fmt(in_unit({v}, {x_unit})) : \"\""), 10.0, 400.0, Some((56.0, "center")), 0.0, muted);
+        text_part(d, ids, axes, &format!("x tick {i}"), bound(format!("{} - 28", xp(&v))), bound(format!("{ah} + 7")), format!("{i} < len({xt}) ? fmt(in_unit({v}, {x_unit})) : \"\""), 10.0, 400.0, Some((56.0, "center")), 0.0, muted, &ch_ticks);
     }
     for i in 0..8 {
         let v = format!("at({yt}, {i})");
-        text_part(d, ids, axes, &format!("y tick {i}"), n(-50.0), bound(format!("{} - 7", yp(&v))), format!("{i} < len({yt}) ? fmt(in_unit({v}, {y_unit})) : \"\""), 10.0, 400.0, Some((44.0, "right")), 0.0, muted);
+        text_part(d, ids, axes, &format!("y tick {i}"), n(-50.0), bound(format!("{} - 7", yp(&v))), format!("{i} < len({yt}) ? fmt(in_unit({v}, {y_unit})) : \"\""), 10.0, 400.0, Some((44.0, "right")), 0.0, muted, &ch_ticks);
     }
     // 5. Axis titles: the label given, else the data's unit.
-    text_part(d, ids, t, "x title", bound(format!("{left} + {aw} / 2 - 120")), bound(format!("{h} - 18")), format!("{x_label} != \"\" ? {x_label} : {x_unit}"), 11.0, 500.0, Some((240.0, "center")), 0.0, muted);
+    text_part(d, ids, t, "x title", bound(format!("{left} + {aw} / 2 - 120")), bound(format!("{h} - 18")), format!("{x_label} != \"\" ? {x_label} : {x_unit}"), 11.0, 500.0, Some((240.0, "center")), 0.0, muted, &ch_frame);
     let mut y_title_rot = -std::f64::consts::FRAC_PI_2;
     y_title_rot = (y_title_rot * 1e9).round() / 1e9;
-    text_part(d, ids, t, "y title", n(4.0), bound(format!("{top} + {ah} / 2 + 120")), format!("{y_label} != \"\" ? {y_label} : {y_unit}"), 11.0, 500.0, Some((240.0, "center")), y_title_rot, muted);
+    text_part(d, ids, t, "y title", n(4.0), bound(format!("{top} + {ah} / 2 + 120")), format!("{y_label} != \"\" ? {y_label} : {y_unit}"), 11.0, 500.0, Some((240.0, "center")), y_title_rot, muted, &ch_frame);
 }
 

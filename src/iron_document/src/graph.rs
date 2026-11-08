@@ -41,8 +41,10 @@ impl ProducerId {
     pub const NETWORK: ProducerId = ProducerId(1);
     /// Where groups' layouts place their children (`layout.rs`).
     pub const LAYOUT: ProducerId = ProducerId(2);
+    /// Component state machines' channels (`machine.rs`).
+    pub const MACHINES: ProducerId = ProducerId(3);
     /// The first id a host producer receives.
-    pub const FIRST_HOST: ProducerId = ProducerId(3);
+    pub const FIRST_HOST: ProducerId = ProducerId(4);
 }
 
 /// One published value: who published it and at which of their frames.

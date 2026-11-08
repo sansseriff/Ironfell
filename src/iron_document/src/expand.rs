@@ -124,7 +124,7 @@ fn relocate(owner: NodeId, n: NodeId) -> Option<NodeId> {
 /// A definition's own content an entity derives: its port_specs,
 /// equations, inner entities and connections.
 fn is_body(doc: &Document, def: NodeId, node: NodeId) -> bool {
-    doc.node(node).is_some_and(|n| n.parent == Some(def) && matches!(n.ty.name(), "port_spec" | "equation" | "entity" | "connection"))
+    doc.node(node).is_some_and(|n| n.parent == Some(def) && matches!(n.ty.name(), "port_spec" | "equation" | "entity" | "connection" | "channel"))
 }
 
 /// The definition an entity instantiates and is linked to, read from an
@@ -179,7 +179,7 @@ fn want_entity(doc: &Document, entity: NodeId, def: NodeId, depth: usize, out: &
         let Some(node) = doc.live(child) else { continue };
         let ty = match node.ty.name() {
             "port_spec" => TypeId::lookup("port").expect("registered"),
-            "equation" | "entity" | "connection" => node.ty,
+            "equation" | "entity" | "connection" | "channel" => node.ty,
             _ => continue,
         };
         let Some(id) = NodeId::expanded(entity, child) else { continue };

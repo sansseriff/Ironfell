@@ -216,7 +216,41 @@ static TYPES: &[TypeSpec] = &[
         name: "definition",
         facets: &[(K::Name, true), (K::Import, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port_spec", "equation", "template", "entity", "connection"]),
+        children: ChildPolicy::Only(&["port_spec", "equation", "template", "entity", "connection", "channel", "machine"]),
+    },
+    // A component's state machine (plans/specs/machines.md), named for the
+    // `in` port whose value is its state: definition data a player reads.
+    TypeSpec {
+        name: "machine",
+        facets: &[(K::Name, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["state", "transition"]),
+    },
+    // A state: its name, and its pose as args (a value per channel).
+    TypeSpec {
+        name: "state",
+        facets: &[(K::Name, true), (K::Args, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    TypeSpec {
+        name: "transition",
+        facets: &[(K::Transition, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["tween"]),
+    },
+    TypeSpec {
+        name: "tween",
+        facets: &[(K::Tween, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // A number a machine moves; copied onto each instance like a port.
+    TypeSpec {
+        name: "channel",
+        facets: &[(K::Name, true), (K::Channel, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
     },
     // A template: its subtree is what an instance copies.
     TypeSpec {
@@ -350,7 +384,7 @@ static TYPES: &[TypeSpec] = &[
         name: "entity",
         facets: &[(K::Instance, true), (K::Args, true), (K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection"]),
+        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection", "channel"]),
     },
     // A relationship between operand nodes, solved in whatever direction a
     // drag chooses (constraint-system.md §4). Never materialised as content;

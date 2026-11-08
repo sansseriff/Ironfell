@@ -119,6 +119,11 @@ fn check_kind(spec: &InputInfo, v: &Value) -> Result<(), String> {
     if matches!(spec.default, Value::Number(x) if x.is_nan()) && v.as_quantity().is_some() {
         return Ok(());
     }
+    // A word is a word: an enum input (a machine's state) takes text too, as
+    // an edit writes it (args.vis="hidden").
+    if matches!((spec.kind, v.kind()), (ValueKind::Enum, ValueKind::Str) | (ValueKind::Str, ValueKind::Enum)) {
+        return Ok(());
+    }
     if v.kind() != spec.kind {
         return Err(format!("expects {}, got {}", spec.kind.name(), v.kind().name()));
     }

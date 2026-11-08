@@ -249,6 +249,24 @@ ${standard}
   style line|smooth|scatter|area|bars; x_min x_max y_min y_max default auto; cursor
   marks an x and outputs y_at_cursor; reveal 0..1 draws the series on; axis titles
   default to the data's units; outputs x_lo x_hi y_lo y_hi are the ranges in use.
+  vis="hidden" or "shown" plays its disappear or appear (axes, ticks, then the curve).
+
+STATE MACHINES  (a component's states and animated transitions)
+  A definition holds channels (numbers its template binds to) and a machine named for
+  an in port whose value is the state:
+    <create id="$v" type="port_spec" parent="$d" name="vis" kind="value" dir="in" signal="shown"/>
+    <create id="$f" type="channel" parent="$d" name="fade" value="1"/>
+    <create id="$m" type="machine" parent="$d" name="vis"/>
+    <create type="state" parent="$m" name="hidden" args.fade="0"/>
+    <create type="state" parent="$m" name="shown" args.fade="1"/>
+    <create id="$a" type="transition" parent="$m" name="appear" from="hidden" to="shown" ms="900" ease="ease_in_out"/>
+    <create type="tween" parent="$a" channel="fade" at="200" ms="700" ease="easy_ease"/>
+  A state's args are its pose (a value per channel; unset: the channel's value). A
+  part reads a channel: opacity="{= $f.channel.value}", trim.end="{= $f.channel.value}".
+  Setting the instance's state, <set id="#entity" args.vis="hidden"/>, plays the
+  transition from that state to the new one (from/to may be *), each channel easing
+  over the whole transition or its tween's slice (at, ms in milliseconds); no
+  transition snaps. Channel values are not saved.
 
 PORTS AND SIGNALS
   An entity has port children (name; port.kind, port.dir in|out, port.signal), one per

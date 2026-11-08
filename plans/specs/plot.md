@@ -402,7 +402,7 @@ shows how often slots fall short.
   `#rrggbb` arguments parse. Floor additions: `isnan kind concat unit_of in_unit sig`.
   A quoted word (`'…'`, an enum literal) bound to a text leaf becomes text in the graph.
 - Not built: dragging the cursor (§4.3), log axes, colour series, the palette domain
-  (§6; colours are the defaults of `color`, `color2`, `color3`), the `vis` machine (§8).
+  (§6; colours are the defaults of `color`, `color2`, `color3`). The `vis` machine (§8) was added the same day (machines.md §10).
 - Seen in the app: a selected plot's authoring chrome shows a pin for each of its 19
   inputs down its left edge; a quieter chrome for many-input components is a chrome.md
   question.

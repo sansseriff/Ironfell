@@ -398,6 +398,35 @@ facets! {
         path_length: Number = Value::Number(0.0),
     }
 
+    /// A number a component's state machine moves (plans/specs/machines.md):
+    /// a `channel` child of a definition, copied onto each instance like a
+    /// port. `value` is its rest value; while a state differs from it, or a
+    /// transition runs, the machine player publishes the instance's value.
+    /// Template parts bind to it (`{= #fade.channel.value}`).
+    Channel / "channel" => Channel {
+        value: Number = Value::Number(0.0),
+    }
+
+    /// A transition between two states of a machine: `from` and `to` (state
+    /// names, `*` for any), its length and its easing (a curve name or
+    /// `cubic-bezier(…)`). Channels without a tween ease over all of it.
+    Transition / "transition" => Transition {
+        from: Str = Value::Str("*".to_owned()),
+        to: Str = Value::Str("*".to_owned()),
+        ms: Number = Value::Number(300.0),
+        ease: Str = Value::Str("ease_in_out".to_owned()),
+    }
+
+    /// One channel's motion inside a transition: from `at` for `ms`
+    /// (milliseconds into the transition), shaped by `ease`. The same as a
+    /// binding `ease(curve, window(progress, at/T, (at+ms)/T))`.
+    Tween / "tween" => Tween {
+        channel: Str = Value::Str(String::new()),
+        at: Number = Value::Number(0.0),
+        ms: Number = Value::Number(300.0),
+        ease: Str = Value::Str("easy_ease".to_owned()),
+    }
+
     /// After Effects' Trim Paths (plans/specs/wires-and-formulas.md §5): the
     /// part of a shape's outline that is stroked, as fractions of its length,
     /// `start` to `end`, shifted by `offset` (wrapping). The fill is whole.

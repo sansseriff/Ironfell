@@ -276,3 +276,39 @@ the agent can tell it caught an instance mid-way.
    instance. Is a transition a node with a `progress` leaf (simplest for clips), or is
    progress a port on the entity (`#plot1.appear`)? Proposed: a leaf on the expanded
    transition node, so clips animate it like any leaf.
+
+## 10. Done
+
+**2026-11-08: phase 1 (machines on events) and phase 3's plot.**
+
+- Node types (registry.rs): `channel` (a definition child, `channel.value` its rest
+  value, copied onto each instance like a port: expand.rs `is_body`), `machine` (named
+  for the `in` port whose value is the state), `state` (its pose as `args`, one per
+  channel), `transition` (`from`, `to` with `*`, `ms`, `ease`) and `tween` (`channel`,
+  `at`, `ms`, `ease`). §2's `<machine>`/`<channel>` markup is these nodes; the state
+  port is an ordinary `value` input whose default is the initial state.
+- The player (`machine.rs`, `Store::advance_machines(now)`, a PreUpdate system beside
+  the motion player that keeps picturing compositions rendering while it runs): a
+  changed state argument starts the transition (exact match, then `*`), progress runs
+  0 → 1 over `ms` on the host clock, and each channel is `from + (to − from) ·
+  ease(curve, window(progress, at/ms, (at+ms)/ms))` (wires-and-formulas.md §5). An
+  interruption starts from the current values (M8); a change with no transition, an
+  instance first seen, and undo or redo snap. Values publish as
+  `ProducerId::MACHINES` only where they differ from rest, so resting instances stay
+  static to the renderer and nothing is saved.
+- An enum input takes text (`args.vis="hidden"` from an edit; `definition::check_kind`).
+- `std:plot` gains `vis` (`shown`/`hidden`) and channels `frame`, `axes`, `ticks`,
+  `series`: appear (1.4 s) fades the frame and titles in, draws the axes, then ticks,
+  grid and labels, then the curve, with Easy Ease; disappear (0.45 s) reverses it. The
+  series' `trim.end` is `min(reveal, series)`.
+- `tests/machines.rs` (transition, tween slice, interruption, undo snap, nothing
+  saved, no transition snaps) and `tests/plot.rs` (the plot's order). Seen in the app
+  through `<edit>`.
+- Not yet: the `progress` leaf a clip can drive (phase 2, with keys on the timeline,
+  the derived band and the strip/graph panel), the inspector's segmented state
+  control, a pinned preview state on a main, a machine on a main's own picture (mains
+  show channels' rest values). Tweens stay their own nodes; a tween is the binding
+  `ease(window(progress))` in meaning, and phase 2's progress leaf lets either form be
+  written. In the area style the fill fades in whole while the line draws; clipping
+  the fill to the drawn length would read better.
+

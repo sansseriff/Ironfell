@@ -27,6 +27,7 @@ pub mod copy;
 pub mod definition;
 pub mod document;
 pub mod expand;
+pub mod machine;
 pub mod make;
 pub mod expr;
 pub mod geom;
@@ -219,6 +220,8 @@ pub struct Store {
     /// clock turns it on (`set_motion`): a document read without one sees
     /// where things are, never part-way.
     motion: Motion,
+    /// Component state machines' player (machine.rs): presentation state.
+    machines: machine::Player,
     /// Nodes' interaction states, as the host last reported them (session;
     /// read by rules that match `state:`).
     interaction: BTreeMap<NodeId, Vec<&'static str>>,
@@ -319,6 +322,7 @@ impl Store {
             contexts: None,
             layout_preview: None,
             motion: Motion::default(),
+            machines: machine::Player::default(),
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             gesture: None,
@@ -1293,6 +1297,23 @@ impl Store {
         }
     }
 
+    /// Advance components' state machines to `now` (seconds, the host's
+    /// clock; plans/specs/machines.md): start a transition where an
+    /// instance's state argument changed, move the ones running, and publish
+    /// channel values. Returns what is running, so the host renders it.
+    pub fn advance_machines(&mut self, now: f64) -> Vec<machine::Running> {
+        let (values, running) = {
+            let reactive = &self.reactive;
+            let doc = &self.doc;
+            let read = |l: Leaf| reactive.read(doc, l);
+            self.machines.advance(doc, &read, now)
+        };
+        if values != self.reactive.published_by(ProducerId::MACHINES) {
+            self.publish(ProducerId::MACHINES, values);
+        }
+        running
+    }
+
     /// Advance the transitions in flight to `now` (seconds, the host's
     /// clock) and publish where they have got to. Returns the nodes that
     /// moved, so the host renders them; empty when nothing is in flight.
@@ -1694,6 +1715,9 @@ impl Store {
     /// Undo the most recent transaction. `ts` is the caller's clock.
     /// `None` when there is nothing to undo.
     pub fn undo(&mut self, ts: u64) -> Option<Result<Applied, Vec<ApplyError>>> {
+        // An undone state change snaps rather than playing back
+        // (plans/specs/machines.md §6).
+        self.machines.snap_next = true;
         if self.gesture.is_some() && self.history.can_undo() {
             self.end_gesture(GestureStatus::Cancelled("undo".into()));
         }
@@ -1727,6 +1751,7 @@ impl Store {
     }
 
     pub fn redo(&mut self, ts: u64) -> Option<Result<Applied, Vec<ApplyError>>> {
+        self.machines.snap_next = true;
         if self.gesture.is_some() && self.history.can_redo() {
             self.end_gesture(GestureStatus::Cancelled("redo".into()));
         }

@@ -47,7 +47,7 @@
 <div class="chat-markdown">{@render blocks(tokens)}</div>
 
 <style>
-  .chat-markdown { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; min-width: 0; }
+  .chat-markdown { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; min-width: 0; }
   .chat-markdown :global(p) { margin: 0 0 10px; }
   .chat-markdown :global(p:last-child) { margin-bottom: 0; }
   .chat-markdown :global(h1), .chat-markdown :global(h2), .chat-markdown :global(h3), .chat-markdown :global(h4), .chat-markdown :global(h5), .chat-markdown :global(h6) { font-size: 1.1em; line-height: 1.4; margin: 16px 0 8px; }

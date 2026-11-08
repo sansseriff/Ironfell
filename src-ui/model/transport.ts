@@ -38,7 +38,7 @@ export async function listLocalModels(endpoint: string, token: string, provider:
 }
 
 export function makeModelTransport(options: ModelOptions): ModelTransport {
-  return options.runtime ? new LocalRuntimeTransport(options.runtime) : new AnthropicTransport(options.apiKey, options.model);
+  return options.runtime ? new LocalRuntimeTransport(options.runtime) : new AnthropicTransport(options.apiKey, options.model, options.effort);
 }
 
 export class LocalRuntimeTransport implements ModelTransport {
@@ -58,7 +58,7 @@ export class LocalRuntimeTransport implements ModelTransport {
 
   constructor(private options: LocalRuntimeOptions) {
     this.endpoint = localEndpoint(options.endpoint);
-    this.name = `${options.provider}:local${options.model ? `:${options.model}` : ''}`;
+    this.name = `${options.provider}:local${options.model ? `:${options.model}` : ''}${options.effort ? `:${options.effort}` : ''}`;
   }
 
   async complete(system: string, messages: Message[], live: CompleteLive = {}) {
@@ -73,7 +73,7 @@ export class LocalRuntimeTransport implements ModelTransport {
       const response = await fetch(new URL('/complete', this.endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', Authorization: `Bearer ${this.options.token}` },
-        body: JSON.stringify({ provider: this.options.provider, system, messages, ...(this.options.model ? { model: this.options.model } : {}), ...(live.turn ? { turn: live.turn } : {}) }),
+        body: JSON.stringify({ provider: this.options.provider, system, messages, ...(this.options.model ? { model: this.options.model } : {}), ...(this.options.effort ? { effort: this.options.effort } : {}), ...(live.turn ? { turn: live.turn } : {}) }),
         signal,
       });
       heard();
@@ -142,8 +142,9 @@ export class AnthropicTransport implements ModelTransport {
   constructor(
     apiKey: string,
     private model = 'claude-opus-5',
+    private effort?: string,
   ) {
-    this.name = `anthropic:${model}`;
+    this.name = `anthropic:${model}${effort ? `:${effort}` : ''}`;
     // The key is the user's own and stays in their browser.
     this.client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
   }
@@ -154,6 +155,7 @@ export class AnthropicTransport implements ModelTransport {
       model: this.model,
       max_tokens: 16000,
       thinking: { type: 'adaptive', display: 'summarized' },
+      ...(this.effort ? { output_config: { effort: this.effort as Anthropic.OutputConfig['effort'] } } : {}),
       system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
       messages,
     }, { signal: live.signal });

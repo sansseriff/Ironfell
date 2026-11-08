@@ -373,6 +373,30 @@ this slice preserves the existing mode behavior and shares its conversation.
   Both completed with no page errors. Provider process authentication stays
   local; no provider credentials enter chat history.
 
+### 9.5 Composer and transcript look, after T3 Code (2026-11-07)
+
+A second pass on T3 Code (pingdotgg/t3code `main`: `ComposerSurface`,
+`ComposerControl`, `ComposerModelEffort`, `TimelineUserMessageRow`,
+`MessagesTimeline`), restyled in Iron tokens; nothing copied.
+
+- Composer: one 16 px-radius surface (736 px column). The text field grows
+  with its text from two lines to 208 px, then scrolls; no resize handle. The
+  key hint line is gone (Send's tooltip carries it).
+- Footer: quiet 28 px ghost controls (runtime, model and effort, settings),
+  then a round Send that becomes Stop while this conversation's turn runs.
+  Stop moved there from the work log. `ModelEffortPicker.svelte` is a Bits UI
+  dropdown with radio groups: models left, the model's effort levels right
+  (agent-runtimes.md §2).
+- Transcript: the user's text is a right-aligned bubble (max 80 %) with the
+  target under it; the reply is plain 14 px text with no role header; message
+  actions dim until hover; "Latest" is a pill above the composer.
+- Fix: the transcript stopped following when content grew (an image loading)
+  as a scroll event fired; only an upward scroll now releases following.
+- Unchanged: Cmd/Ctrl+Enter sends (T3 sends on Enter).
+- Evidence: `bun test tests/` 85 pass; `bun run check` 0 errors; `chat-ui.ts`
+  worker and main; fast smoke six assertions, no page errors; screenshots of
+  the menu in light and dark at 2×.
+
 Vite's cache now lives in root-relative `.agents/vite`, so worktrees using
 shared installed dependencies do not overwrite each other's optimizer cache.
 

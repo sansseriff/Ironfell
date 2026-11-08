@@ -78,8 +78,9 @@ Svelte, Bits UI and Iron tokens; copy nothing. Inside the running assistant
 message:
 
 - **Header:** a live phase label with elapsed seconds ("Thinking · 12s",
-  "Writing edit · 7 verbs", "Repairing · attempt 2"), plus a Stop
-  `IconButton` (Lucide `square`).
+  "Writing edit · 7 verbs", "Repairing · attempt 2"). Stop (Lucide `square`)
+  was here; since 2026-11-07 it is the composer's send button while a turn
+  runs (narrative-panel.md §9.5).
 - **Work log:** a `Collapsible`, open while running and collapsed when done,
   like T3. Each phase is one row, with reasoning-summary text streamed under
   "Thinking". When the turn finishes it reads "Worked for 38s".

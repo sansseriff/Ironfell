@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { CompletionRequest, ModelEntry } from '../../src-ui/model/runtime-options';
+import { CLAUDE_EFFORTS, type CompletionRequest, type ModelEntry } from '../../src-ui/model/runtime-options';
 export type { ModelEntry };
 
 export interface RuntimeResult { text: string; usage?: unknown }
@@ -145,7 +145,7 @@ export function codexRuntime(command = process.env.IRON_CODEX_BIN ?? 'codex'): R
         developerInstructions: 'Follow the Iron response format in the supplied instructions: return edit markup for document changes, or Markdown for an allowed conversational reply. Do not use tools, access files, execute commands, or research. All needed document data is in the prompt.',
         ...(request.model ? { model: request.model } : {}),
       });
-      await rpc.request('turn/start', { threadId: thread.id, summary: 'auto', input: [{ type: 'text', text: transcript(request) }] });
+      await rpc.request('turn/start', { threadId: thread.id, summary: 'auto', ...(request.effort ? { effort: request.effort } : {}), input: [{ type: 'text', text: transcript(request) }] });
       return await completed;
     } finally {
       await rpc.close();
@@ -165,7 +165,10 @@ export function codexModels(command = process.env.IRON_CODEX_BIN ?? 'codex'): Mo
       const result = await rpc.request('model/list', {});
       const data: any[] = Array.isArray(result?.data) ? result.data : [];
       return data.filter(m => !m.hidden && typeof (m.model ?? m.id) === 'string')
-        .map(m => ({ id: m.model ?? m.id, label: m.displayName ?? m.model ?? m.id, ...(m.isDefault ? { default: true } : {}) }));
+        .map(m => {
+          const efforts = Array.isArray(m.supportedReasoningEfforts) ? m.supportedReasoningEfforts.map((e: any) => e?.reasoningEffort).filter((e: unknown) => typeof e === 'string') : [];
+          return { id: m.model ?? m.id, label: m.displayName ?? m.model ?? m.id, ...(m.isDefault ? { default: true } : {}), ...(efforts.length ? { efforts } : {}) };
+        });
     } finally {
       await rpc.close();
       await rm(cwd, { recursive: true, force: true });
@@ -175,10 +178,10 @@ export function codexModels(command = process.env.IRON_CODEX_BIN ?? 'codex'): Mo
 
 /** Claude Code's aliases, each the latest of its family (`claude --model`). */
 export const claudeModels: ModelLister = async () => [
-  { id: 'opus', label: 'Opus' },
-  { id: 'sonnet', label: 'Sonnet' },
-  { id: 'haiku', label: 'Haiku' },
-  { id: 'fable', label: 'Fable' },
+  { id: 'opus', label: 'Opus', efforts: CLAUDE_EFFORTS },
+  { id: 'sonnet', label: 'Sonnet', efforts: CLAUDE_EFFORTS },
+  { id: 'haiku', label: 'Haiku', efforts: CLAUDE_EFFORTS },
+  { id: 'fable', label: 'Fable', efforts: CLAUDE_EFFORTS },
 ];
 
 /** How Claude Code is paid for: the signed-in Claude subscription (the
@@ -218,7 +221,8 @@ export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude',
     const child = spawn(command, ['-p', auth === 'api-key' ? '--bare' : '--safe-mode', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--tools', '',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
       '--no-session-persistence', '--system-prompt', request.system,
-      ...(request.model ? ['--model', request.model] : [])], { cwd, stdio: 'pipe', signal, env: claudeEnv(auth, baseEnv) });
+      ...(request.model ? ['--model', request.model] : []),
+      ...(request.effort ? ['--effort', request.effort] : [])], { cwd, stdio: 'pipe', signal, env: claudeEnv(auth, baseEnv) });
     child.stderr.resume();
     try {
       return await new Promise<RuntimeResult>((resolve, reject) => {

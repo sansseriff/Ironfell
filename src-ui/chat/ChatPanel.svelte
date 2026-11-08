@@ -50,12 +50,13 @@
     return $state.snapshot(entry) as ChatTurn;
   }
 
-  function stop(turn: ChatTurn) { controllers.get(turn.id)?.abort(); }
+  /** Stop this conversation's running turn (the composer's Stop). */
+  function stop() { for (const turn of session.turns) if (turn.status === 'running') controllers.get(turn.id)?.abort(); }
 </script>
 
 <section class="chat-panel" class:compact data-chat-panel aria-label="Agent conversation">
-  {#if !compact || session.turns.length}<ChatTranscript turns={session.turns} {compact} {scrollRequest} {review} {stop} retry={(turn) => { if (!session.draft) session.draft = turn.instruction; }} />{/if}
-  <ChatComposer bind:value={session.draft} {busy} {compact} {target} {targetControl} submit={() => { void submit(); }} />
+  {#if !compact || session.turns.length}<ChatTranscript turns={session.turns} {compact} {scrollRequest} {review} retry={(turn) => { if (!session.draft) session.draft = turn.instruction; }} />{/if}
+  <ChatComposer bind:value={session.draft} {busy} {compact} {target} {targetControl} submit={() => { void submit(); }} {stop} />
 </section>
 
 <style>

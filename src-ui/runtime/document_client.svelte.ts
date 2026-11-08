@@ -106,6 +106,10 @@ export class DocumentClient {
   agentModelsFor: AgentProvider | null = $state(null);
   /** The model picked for each runtime, remembered in this browser. */
   private modelChoices: Partial<Record<AgentProvider, string>> = {};
+  /** The reasoning effort for the chosen runtime (`''`: its default), and
+   *  each runtime's, remembered in this browser. */
+  agentEffort = $state('');
+  private effortChoices: Partial<Record<AgentProvider, string>> = {};
   agentPairing = $state(false);
   private pairedToken = $state('');
   private pairedEndpoint = $state('');
@@ -208,7 +212,9 @@ export class DocumentClient {
       const saved = JSON.parse(localStorage.getItem(AGENT_CHOICE_KEY) ?? 'null');
       if (saved && ['codex', 'claude', 'anthropic'].includes(saved.provider)) {
         this.modelChoices = saved.models ?? {};
+        this.effortChoices = saved.efforts ?? {};
         this.agentProvider = saved.provider;
+        this.agentEffort = this.effortChoices[saved.provider as AgentProvider] ?? '';
         this.agentModel = saved.provider === 'anthropic' ? '' : this.modelChoices[saved.provider as AgentProvider] ?? '';
         if (this.modelChoices.anthropic) this.modelName = this.modelChoices.anthropic;
       }
@@ -327,6 +333,7 @@ export class DocumentClient {
     if (options.endpoint !== undefined) this.agentEndpoint = options.endpoint;
     if (options.token !== undefined) this.agentToken = options.token;
     this.agentModel = options.model ?? (options.provider === 'anthropic' ? '' : this.modelChoices[options.provider] ?? '');
+    this.agentEffort = this.effortChoices[options.provider] ?? '';
     this.saveAgentChoice();
     if (options.provider !== 'anthropic' && options.token === undefined) void this.connectLocalAgent().then(() => this.loadAgentModels());
     else void this.loadAgentModels();
@@ -340,9 +347,32 @@ export class DocumentClient {
     this.saveAgentChoice();
   }
 
+  /** The effort levels the chosen model takes (the runtime's default model
+   *  when none is chosen); empty until the runtime lists its models. */
+  get agentEfforts(): string[] {
+    if (this.agentModelsFor !== this.agentProvider) return [];
+    const id = this.agentProvider === 'anthropic' ? this.modelName : this.agentModel;
+    const model = id ? this.agentModels.find(m => m.id === id) : this.agentModels.find(m => m.default);
+    return model?.efforts ?? [];
+  }
+
+  /** The effort a turn asks for: the chosen one, unless the model is known
+   *  not to take it (picked for another model), when it is the default. */
+  get effectiveEffort(): string {
+    const efforts = this.agentEfforts;
+    return this.agentEffort && (!efforts.length || efforts.includes(this.agentEffort)) ? this.agentEffort : '';
+  }
+
+  /** The reasoning effort for the chosen runtime (`''`: its default). */
+  setAgentEffort(effort: string) {
+    this.agentEffort = effort;
+    this.effortChoices = { ...this.effortChoices, [this.agentProvider]: effort };
+    this.saveAgentChoice();
+  }
+
   private saveAgentChoice() {
     try {
-      localStorage.setItem(AGENT_CHOICE_KEY, JSON.stringify({ provider: this.agentProvider, models: this.modelChoices }));
+      localStorage.setItem(AGENT_CHOICE_KEY, JSON.stringify({ provider: this.agentProvider, models: this.modelChoices, efforts: this.effortChoices }));
     } catch {
       // storage unavailable: the choice lasts this page
     }
@@ -383,6 +413,7 @@ export class DocumentClient {
       if (connection && !this.nativeAgentPaired) {
         this.agentProvider = connection.provider;
         this.agentModel = this.modelChoices[connection.provider] ?? '';
+        this.agentEffort = this.effortChoices[connection.provider] ?? '';
         this.nativeAgentPaired = true;
       }
       this.agentToken = token;
@@ -455,10 +486,10 @@ export class DocumentClient {
       if (generation !== this.generation) throw new Error('session disposed');
       if (!this.canAsk) throw new Error(this.agentProvider === 'anthropic' ? 'no API key set' : 'start the local agent bridge and connect in Agent settings');
       const runtime = this.agentProvider === 'anthropic' ? undefined : {
-        provider: this.agentProvider, endpoint: this.agentEndpoint, token: this.agentToken, model: this.agentModel || undefined,
+        provider: this.agentProvider, endpoint: this.agentEndpoint, token: this.agentToken, model: this.agentModel || undefined, effort: this.effectiveEffort || undefined,
       };
       if (live.signal?.aborted) throw new Error(STOPPED);
-      const payload = { instruction, apiKey: runtime ? '' : this.apiKey, model: this.modelName, runtime, ...conversation };
+      const payload = { instruction, apiKey: runtime ? '' : this.apiKey, model: this.modelName, effort: runtime ? undefined : this.effectiveEffort || undefined, runtime, ...conversation };
       let askId = -1;
       const cancel = () => { if (askId >= 0) this.post?.({ ty: 'modelAskCancel', askId } as UiRequest); };
       live.signal?.addEventListener('abort', cancel, { once: true });

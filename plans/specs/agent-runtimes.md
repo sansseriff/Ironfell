@@ -28,7 +28,7 @@ bridge receives instructions and document context, not a browser API key. It
 neither owns nor mutates the document.
 
 - `scripts/agent-bridge/server.ts`: `POST /complete` with `provider`, `system`,
-  `messages` and optional `model`; `POST /models` with `provider` lists what each
+  `messages` and optional `model` and `effort`; `POST /models` with `provider` lists what each
   runtime offers (token-checked, cached five minutes, outside the one-at-a-time
   completion lock).
 - `scripts/agent-bridge/resolve.ts`: finds each CLI (`IRON_CODEX_BIN` /
@@ -63,6 +63,16 @@ neither owns nor mutates the document.
   the runtime's own; a model typed in Agent settings that is not listed shows as
   custom. The runtime and each runtime's model are remembered in browser storage
   (`iron.agent.v1`).
+- Reasoning effort (2026-11-07): one menu with the model (as T3 Code's), the
+  chosen model's levels beside it. Codex's come from `model/list`
+  (`supportedReasoningEfforts`: low … max, and `ultra` on some) and go to
+  `turn/start` as `effort`; Claude Code's are low … max, passed as `--effort`;
+  the browser API path sends `output_config.effort`. "Default" sends nothing,
+  so the runtime's own applies: Codex's `model_reasoning_effort` in
+  `~/.codex/config.toml`, Claude Code's built-in default (the bridge strips
+  `CLAUDE_EFFORT` and reads no settings), the API model's default. Each
+  runtime's effort is remembered with its model; a level the chosen model does
+  not list falls back to Default. The bridge validates it and logs it per call.
 - Existing `AnthropicTransport` remains available as “Claude · browser API”.
 - Shared `AgentSettings.svelte` in conversation and narrative panels supplies
   provider, endpoint, in-memory bridge token and optional runtime model. Blank

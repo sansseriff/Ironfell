@@ -13,7 +13,7 @@
   import { contentParts, streamView, turnLog, type ChatTurn } from './conversation';
   import type { Snippet } from 'svelte';
 
-  let { turn, retry, stop, review }: { turn: ChatTurn; retry: () => void; stop?: () => void; review?: Snippet<[ChatTurn]> } = $props();
+  let { turn, retry, review }: { turn: ChatTurn; retry: () => void; review?: Snippet<[ChatTurn]> } = $props();
   const parts = $derived(contentParts(turn.result?.note ?? ''));
   // While it runs: the reply as it streams, split into prose and the edit forming.
   const live = $derived(turn.status === 'running' ? streamView(turn.progress?.text ?? '') : null);
@@ -40,11 +40,13 @@
 </script>
 
 <article class="chat-turn" data-turn-id={turn.id} data-status={turn.status}>
-  <div class="user-message"><span class="role">You</span><p>{turn.instruction}</p></div>
+  <div class="user-row">
+    <div class="user-message"><p>{turn.instruction}</p></div>
+    {#if turn.target}<span class="target">{turn.target}</span>{/if}
+  </div>
   <div class="assistant-message">
-    <div class="heading"><span class="role">{turn.result?.transport.split(':')[0] || 'Assistant'}</span><span class="target">{turn.target}</span></div>
     {#if turn.progress && (turn.status === 'running' || turn.progress.steps.length)}
-      <ChatProgress progress={turn.progress} running={turn.status === 'running'} startedAt={turn.startedAt} completedAt={turn.completedAt} {stop} />
+      <ChatProgress progress={turn.progress} running={turn.status === 'running'} startedAt={turn.startedAt} completedAt={turn.completedAt} />
     {/if}
     {#if turn.status === 'running'}
       {#if !turn.progress}<p class="working" role="status"><span class="pulse"></span>Working…</p>{/if}
@@ -89,14 +91,15 @@
 </article>
 
 <style>
-  .chat-turn { width: min(100%, 720px); margin: 0 auto; min-width: 0; }
-  .user-message { margin: 0 0 18px 24px; padding: 10px 14px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 12px 12px 3px 12px; }
-  .user-message p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.55; margin: 4px 0 0; }
-  .role { font-size: 11px; font-weight: 600; text-transform: capitalize; }
-  .heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin-bottom: 8px; }
-  .target { color: var(--fg-faint); font-size: 10px; }
-  .assistant-message { min-width: 0; }
-  .working, .summary { font-size: 12px; margin: 4px 0 10px; color: var(--fg-muted); }
+  .chat-turn { width: min(100%, 736px); margin: 0 auto; min-width: 0; }
+  /* The user's turn: a bubble on the right, as T3 Code's; the reply below it
+     is plain text across the column. */
+  .user-row { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin: 0 0 16px; }
+  .user-message { max-width: min(80%, 560px); padding: 9px 14px; background: var(--bg-sunken); border-radius: 16px; }
+  .user-message p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.55; margin: 0; }
+  .target { padding: 0 6px; color: var(--fg-faint); font-size: 11px; }
+  .assistant-message { min-width: 0; padding: 0 4px; }
+  .working, .summary { font-size: 13px; margin: 4px 0 10px; color: var(--fg-muted); }
   .working { display: flex; align-items: center; gap: 8px; }
   .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
   .error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -110,5 +113,10 @@
   .verbs .earlier { color: var(--fg-faint); }
   .edit { font-size: 10px; background: var(--bg-sunken); padding: 10px; border-radius: 6px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
   .actions { display: flex; align-items: center; gap: 2px; }
-  .meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 8px; color: var(--fg-faint); font-size: 10px; }
+  .meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; color: var(--fg-faint); font-size: 11px; }
+  /* Actions show on hover or focus where there is a pointer to hover with. */
+  @media (hover: hover) {
+    .meta { opacity: 0.55; transition: opacity 150ms ease; }
+    .chat-turn:hover .meta, .meta:focus-within { opacity: 1; }
+  }
 </style>

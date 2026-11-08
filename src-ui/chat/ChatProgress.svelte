@@ -1,6 +1,6 @@
 <script lang="ts">
   // A turn's work log (plans/specs/agent-streaming.md §3): the step it is on
-  // with elapsed time and Stop while it runs, each step with the reasoning the
+  // with elapsed time while it runs (Stop is the composer's), each step with the reasoning the
   // runtime shared, collapsed to "Worked for …" once it ends. Every row is
   // backed by an event from the runtime; nothing here is decorative.
   import { Collapsible } from 'bits-ui';
@@ -10,12 +10,10 @@
   import PencilLine from '@lucide/svelte/icons/pencil-line';
   import Eye from '@lucide/svelte/icons/eye';
   import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
-  import Square from '@lucide/svelte/icons/square';
-  import Button from '../lib/ui/Button.svelte';
   import { formatTokens, stepLabel, stepTokens, turnTokens, type TurnProgress, type WorkStep } from './conversation';
 
-  let { progress, running, startedAt, completedAt, stop }: {
-    progress: TurnProgress; running: boolean; startedAt: number; completedAt?: number; stop?: () => void;
+  let { progress, running, startedAt, completedAt }: {
+    progress: TurnProgress; running: boolean; startedAt: number; completedAt?: number;
   } = $props();
 
   let now = $state(Date.now());
@@ -59,9 +57,6 @@
         {#if running}<span class="elapsed">{seconds(startedAt, now)}{tokenText ? ` · ${tokenText}` : ''}</span>
         {:else if tokenText}<span class="elapsed">{tokenText}</span>{/if}
       </Collapsible.Trigger>
-      {#if running && stop}
-        <Button small variant="outline" class="stop" onclick={stop} aria-label="Stop the agent"><Square size={10} strokeWidth={2} />Stop</Button>
-      {/if}
     </div>
     <Collapsible.Content>
       <ol class="steps">
@@ -87,7 +82,7 @@
 <style>
   .work { margin: 0 0 10px; }
   .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
-  :global(.work-trigger) { display: flex; align-items: center; gap: 6px; min-width: 0; background: transparent; border: none; border-radius: 4px; padding: 3px 0; font: inherit; font-size: 12px; color: var(--fg-muted); cursor: pointer; }
+  :global(.work-trigger) { display: flex; align-items: center; gap: 6px; min-width: 0; background: transparent; border: none; border-radius: 4px; padding: 3px 0; font: inherit; font-size: 13px; color: var(--fg-muted); cursor: pointer; }
   :global(.work-trigger:hover) { color: var(--fg); }
   :global(.work-trigger:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .chevron { display: inline-flex; transition: transform 120ms ease; }
@@ -98,13 +93,12 @@
   .pulse { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.35; } }
   @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } .chevron { transition: none; } }
-  :global(.work .stop) { gap: 5px; }
   .steps { list-style: none; margin: 4px 0 0 5px; padding: 0 0 0 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
-  .row { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--fg-muted); }
+  .row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--fg-muted); }
   .current .row { color: var(--fg); }
   .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .time { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
   /* Newest reasoning stays in view: the column runs bottom-up. */
   .reasoning { display: flex; flex-direction: column-reverse; max-height: 132px; overflow-y: auto; margin: 4px 0 0 19px; }
-  .reasoning p { margin: 0; font-size: 11px; line-height: 1.5; color: var(--fg-muted); font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .reasoning p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-muted); font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

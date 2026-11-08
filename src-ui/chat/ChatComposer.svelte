@@ -46,7 +46,7 @@
       {#if busy && stop}
         <button type="button" class="round stop" onclick={stop} aria-label="Stop the agent" title="Stop the agent"><Square size={11} strokeWidth={0} fill="currentColor" /></button>
       {:else}
-        <button type="submit" class="round send" disabled={blocked} aria-label="Send message" title="Send · Cmd/Ctrl+Enter"><ArrowUp size={16} strokeWidth={2.25} /></button>
+        <button type="submit" class="round send" disabled={blocked} aria-label="Send message" title="Send · Enter (Shift+Enter for a new line)"><ArrowUp size={16} strokeWidth={2.25} /></button>
       {/if}
     </div>
   </div>

@@ -308,8 +308,11 @@ export function chatHistory(turns: ChatTurn[]): ConversationMessage[] {
   ]));
 }
 
-export function shouldSubmit(event: Pick<KeyboardEvent, 'key' | 'isComposing' | 'repeat' | 'shiftKey' | 'altKey' | 'metaKey' | 'ctrlKey'>): boolean {
-  return event.key === 'Enter' && !event.isComposing && !event.repeat && !event.shiftKey && !event.altKey && (event.metaKey || event.ctrlKey);
+/** Enter sends, as T3 Code's composer (Cmd/Ctrl+Enter too); Shift+Enter or
+ *  Alt+Enter is a new line. Never while an IME is composing: WebKit reports
+ *  the Enter that ends a composition with keyCode 229 and isComposing false. */
+export function shouldSubmit(event: Pick<KeyboardEvent, 'key' | 'isComposing' | 'repeat' | 'shiftKey' | 'altKey'> & { keyCode?: number }): boolean {
+  return event.key === 'Enter' && !event.isComposing && event.keyCode !== 229 && !event.repeat && !event.shiftKey && !event.altKey;
 }
 
 export function nearBottom(top: number, height: number, viewport: number): boolean {

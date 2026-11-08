@@ -392,7 +392,8 @@ A second pass on T3 Code (pingdotgg/t3code `main`: `ComposerSurface`,
   actions dim until hover; "Latest" is a pill above the composer.
 - Fix: the transcript stopped following when content grew (an image loading)
   as a scroll event fired; only an upward scroll now releases following.
-- Unchanged: Cmd/Ctrl+Enter sends (T3 sends on Enter).
+- Enter sends, as T3's (Cmd/Ctrl+Enter still does); Shift+Enter or Alt+Enter
+  is a new line; never during IME composition (also WebKit's keyCode 229).
 - Evidence: `bun test tests/` 85 pass; `bun run check` 0 errors; `chat-ui.ts`
   worker and main; fast smoke six assertions, no page errors; screenshots of
   the menu in light and dark at 2×.

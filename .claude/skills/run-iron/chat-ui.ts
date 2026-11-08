@@ -86,9 +86,14 @@ try {
     console.log(`PASS LIVE CHAT ${runtimeMode}: real Codex prose/visual without mutation, then validated shape creation, ${logged} turns in the agent log; no page errors`);
   } else {
   await prompt.fill('chat-test-prose');
-  await prompt.dispatchEvent('keydown', { key: 'Enter', metaKey: true, isComposing: true });
+  await prompt.dispatchEvent('keydown', { key: 'Enter', isComposing: true });
   assert.equal(await page.locator('.chat-turn').count(), 0);
-  await prompt.press('Meta+Enter');
+  // Shift+Enter is a new line, not a send.
+  await prompt.press('Shift+Enter');
+  assert.equal(await page.locator('.chat-turn').count(), 0);
+  assert.equal(await prompt.inputValue(), 'chat-test-prose\n');
+  await prompt.fill('chat-test-prose');
+  await prompt.press('Enter');
   await page.locator('.chat-turn[data-status="completed"]').waitFor();
   await page.locator('[data-chat-visual] img').waitFor();
   assert.equal(await page.locator('.chat-markdown h2').textContent(), 'A shared conversation');
@@ -100,11 +105,11 @@ try {
   await mkdir('.agents/chat', { recursive: true });
   await page.screenshot({ path: `.agents/chat/model-${runtimeMode}.png` });
   await prompt.fill('chat-test-follow-up');
-  await prompt.press('Meta+Enter');
+  await prompt.press('Enter');
   await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="completed"]').length === 2);
   assert.match(await page.locator('.chat-turn').last().innerText(), /previous reply described a rectangle/);
   await prompt.fill('chat-test-slow');
-  await prompt.press('Meta+Enter');
+  await prompt.press('Enter');
   await page.locator('.chat-turn[data-status="running"]').waitFor();
   await page.locator('.transcript').evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); });
   await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="completed"]').length === 3);
@@ -128,7 +133,7 @@ try {
   assert.equal(await page.locator('.narrative .scroll').isVisible(), false);
   const before = await page.evaluate(() => (window as any).__iron.save());
   await lessonPrompt.fill('chat-test-lesson');
-  await lessonPrompt.press('Meta+Enter');
+  await lessonPrompt.press('Enter');
   await page.locator('.narrative .chat-turn[data-status="completed"]').waitFor();
   assert.equal(await page.evaluate(() => (window as any).__iron.save()), before);
   await page.locator('[data-mode-button="hybrid"]').click();
@@ -155,10 +160,10 @@ try {
   assert.equal(await page.locator('.chat-turn').count(), 3);
   const beforeFailure = await page.evaluate(() => (window as any).__iron.save());
   await prompt.fill('chat-test-failure');
-  await prompt.press('Meta+Enter');
+  await prompt.press('Enter');
   await page.locator('.chat-turn[data-status="failed"]').waitFor();
   assert.equal(await prompt.inputValue(), 'chat-test-failure');
-  await prompt.press('Meta+Enter');
+  await prompt.press('Enter');
   await page.locator('.chat-turn[data-status="running"]').waitFor();
   await prompt.fill('A newer unsent draft');
   await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="failed"]').length === 2);
@@ -167,7 +172,7 @@ try {
   // Live progress (plans/specs/agent-streaming.md): the work log, reasoning,
   // streamed prose and the edit's verbs as they close, then Stop.
   await prompt.fill('chat-test-stream');
-  await prompt.press('Meta+Enter');
+  await prompt.press('Enter');
   const running = page.locator('.chat-turn[data-status="running"]');
   await running.locator('[data-chat-progress]', { hasText: 'Thinking' }).waitFor();
   await running.locator('[data-chat-progress]', { hasText: 'Sizing the pump' }).waitFor();
@@ -185,7 +190,7 @@ try {
   await page.screenshot({ path: `.agents/chat/streamed-${runtimeMode}.png` });
   const beforeStop = await page.evaluate(() => (window as any).__iron.save());
   await prompt.fill('chat-test-stop');
-  await prompt.press('Meta+Enter');
+  await prompt.press('Enter');
   await running.locator('[data-chat-progress]', { hasText: 'two ports' }).waitFor();
   await page.getByRole('button', { name: 'Stop the agent', exact: true }).click();
   await page.locator('.chat-turn[data-status="stopped"]').waitFor();

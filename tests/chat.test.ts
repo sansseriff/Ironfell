@@ -35,11 +35,12 @@ test('conversation history excludes failures, preserves edit context and is boun
   assert.ok(history.reduce((sum, message) => sum + message.content.length, 0) <= 48000);
 });
 
-test('composer submit is modifier-based, IME safe, non-repeating, with newline modifiers preserved', () => {
-  const key = { key: 'Enter', isComposing: false, repeat: false, shiftKey: false, altKey: false, metaKey: true, ctrlKey: false };
+test('composer submits on Enter, IME safe, non-repeating, with newline modifiers preserved', () => {
+  const key = { key: 'Enter', isComposing: false, repeat: false, shiftKey: false, altKey: false, metaKey: false, ctrlKey: false };
   assert.equal(shouldSubmit(key), true);
-  assert.equal(shouldSubmit({ ...key, metaKey: false, ctrlKey: true }), true);
-  for (const event of [{ isComposing: true }, { repeat: true }, { shiftKey: true }, { altKey: true }, { metaKey: false }, { key: 'a' }]) assert.equal(shouldSubmit({ ...key, ...event }), false);
+  assert.equal(shouldSubmit({ ...key, metaKey: true }), true);
+  assert.equal(shouldSubmit({ ...key, ctrlKey: true }), true);
+  for (const event of [{ isComposing: true }, { keyCode: 229 }, { repeat: true }, { shiftKey: true }, { altKey: true }, { key: 'a' }]) assert.equal(shouldSubmit({ ...key, ...event }), false);
 });
 
 test('layout modes validate stored values and scroll follow uses the reader position', () => {

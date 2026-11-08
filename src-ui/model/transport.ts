@@ -58,7 +58,7 @@ export class LocalRuntimeTransport implements ModelTransport {
 
   constructor(private options: LocalRuntimeOptions) {
     this.endpoint = localEndpoint(options.endpoint);
-    this.name = `${options.provider}:local${options.model ? `:${options.model}` : ''}${options.effort ? `:${options.effort}` : ''}`;
+    this.name = `${options.provider}:local${options.model ? `:${options.model}` : ''}${options.effort ? `:${options.effort}` : ''}${options.serviceTier ? `:${options.serviceTier}` : ''}`;
   }
 
   async complete(system: string, messages: Message[], live: CompleteLive = {}) {
@@ -73,7 +73,7 @@ export class LocalRuntimeTransport implements ModelTransport {
       const response = await fetch(new URL('/complete', this.endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', Authorization: `Bearer ${this.options.token}` },
-        body: JSON.stringify({ provider: this.options.provider, system, messages, ...(this.options.model ? { model: this.options.model } : {}), ...(this.options.effort ? { effort: this.options.effort } : {}), ...(live.turn ? { turn: live.turn } : {}) }),
+        body: JSON.stringify({ provider: this.options.provider, system, messages, ...(this.options.model ? { model: this.options.model } : {}), ...(this.options.effort ? { effort: this.options.effort } : {}), ...(this.options.serviceTier ? { serviceTier: this.options.serviceTier } : {}), ...(live.turn ? { turn: live.turn } : {}) }),
         signal,
       });
       heard();

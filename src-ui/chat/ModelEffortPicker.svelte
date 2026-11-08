@@ -1,11 +1,13 @@
 <script lang="ts">
   // The composer's model and reasoning-effort control, one menu as in T3
   // Code's composer: models on the left, the chosen model's effort levels on
-  // the right. The trigger reads "Opus · High". Picking a model keeps the
-  // menu open so the effort can be set too; picking an effort closes it.
+  // the right, and Fast below them where the model offers it (Codex's
+  // `priority` tier). The trigger reads "Opus High", with a bolt when Fast.
+  // Picking a model or Fast keeps the menu open; picking an effort closes it.
   import { DropdownMenu } from 'bits-ui';
   import Check from '@lucide/svelte/icons/check';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import Zap from '@lucide/svelte/icons/zap';
   import { controllerManager } from '../controller-manager.svelte';
 
   let { disabled = false }: { disabled?: boolean } = $props();
@@ -33,11 +35,15 @@
   });
   const efforts = $derived(doc.agentEfforts);
   const effort = $derived(doc.effectiveEffort);
+  // Fast: the tier named so (Codex lists `priority` as "Fast").
+  const fastTier = $derived(doc.agentTiers.find((t) => t.name.toLowerCase() === 'fast') ?? doc.agentTiers.find((t) => t.id === 'priority'));
+  const fast = $derived(!!fastTier && doc.effectiveTier === fastTier.id);
   const title = (level: string) => level ? level[0].toUpperCase() + level.slice(1) : 'Default';
 </script>
 
 <DropdownMenu.Root>
-  <DropdownMenu.Trigger class="composer-control model-effort" {disabled} aria-label="Model and effort: {modelLabel}, {effort ? `${effort} effort` : 'default effort'}" title="Model and reasoning effort">
+  <DropdownMenu.Trigger class="composer-control model-effort" {disabled} aria-label="Model and effort: {modelLabel}, {effort ? `${effort} effort` : 'default effort'}{fast ? ', fast' : ''}" title="Model, reasoning effort and speed">
+    {#if fast}<Zap size={12} strokeWidth={0} fill="currentColor" class="fast-mark" />{/if}
     <span class="model-name">{modelLabel}</span>
     {#if effort}<span class="effort-name">{title(effort)}</span>{/if}
     <ChevronDown size={14} strokeWidth={1.75} />
@@ -60,8 +66,9 @@
           {/each}
         </DropdownMenu.RadioGroup>
       </div>
-      {#if efforts.length}
+      {#if efforts.length || fastTier}
         <div class="column efforts">
+          {#if efforts.length}
           <div class="ui-menu-heading">Effort</div>
           <DropdownMenu.RadioGroup value={effort || DEFAULT} onValueChange={(v) => doc.setAgentEffort(v === DEFAULT ? '' : v)}>
             {#each [DEFAULT, ...efforts] as level (level)}
@@ -74,6 +81,18 @@
             {/each}
           </DropdownMenu.RadioGroup>
           <p class="note">Default: the runtime's own setting.</p>
+          {/if}
+          {#if fastTier}
+            <div class="ui-menu-heading speed">Speed</div>
+            <DropdownMenu.CheckboxItem class="ui-menu-item" checked={fast} closeOnSelect={false} onCheckedChange={(on) => doc.setAgentTier(on ? fastTier.id : '')}>
+              {#snippet children({ checked })}
+                <span class="check">{#if checked}<Check size={14} strokeWidth={2} />{/if}</span>
+                <span class="label">Fast</span>
+                <Zap size={12} strokeWidth={0} fill="currentColor" />
+              {/snippet}
+            </DropdownMenu.CheckboxItem>
+            {#if fastTier.description}<p class="note">{fastTier.description}</p>{/if}
+          {/if}
         </div>
       {/if}
     </DropdownMenu.Content>
@@ -83,6 +102,8 @@
 <style>
   .model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .effort-name { flex: none; color: var(--fg-faint); }
+  :global(.composer-control.model-effort svg.fast-mark) { color: var(--warning); }
+  .speed { margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; }
   :global(.model-effort:hover) .effort-name, :global(.model-effort[data-state='open']) .effort-name { color: var(--fg-muted); }
   :global(.model-effort-menu) { display: flex; padding: 0; min-width: 0; max-width: calc(100vw - 32px); overflow: hidden; }
   .column { display: flex; flex-direction: column; padding: 4px; min-width: 0; max-height: min(340px, 60vh); overflow-y: auto; }

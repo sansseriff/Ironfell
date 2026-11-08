@@ -73,6 +73,13 @@ neither owns nor mutates the document.
   `CLAUDE_EFFORT` and reads no settings), the API model's default. Each
   runtime's effort is remembered with its model; a level the chosen model does
   not list falls back to Default. The bridge validates it and logs it per call.
+- Fast (Codex, 2026-11-07): `model/list` gives each model's `serviceTiers`
+  (every current model offers `priority`, named "Fast": 1.5–2x speed, some at
+  increased usage). A Fast checkbox under the effort levels, shown when the
+  model offers it, sends `serviceTier: "priority"` on `turn/start`; off sends
+  nothing, so `service_tier` in `~/.codex/config.toml` applies ("default").
+  Remembered per runtime; the trigger shows a bolt. The bridge accepts a tier
+  only for Codex.
 - Existing `AnthropicTransport` remains available as “Claude · browser API”.
 - Shared `AgentSettings.svelte` in conversation and narrative panels supplies
   provider, endpoint, in-memory bridge token and optional runtime model. Blank

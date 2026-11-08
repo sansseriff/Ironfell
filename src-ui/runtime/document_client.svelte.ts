@@ -53,7 +53,7 @@ import { Scopes, webLocks, type ScopeState } from './scopes';
 import { OpfsScopeStorage } from './scope_storage';
 import { persistent, scopesUrl, showScope, target } from '../route';
 import { isNativeHost } from './native_host';
-import { ANTHROPIC_API_MODELS, isLoopbackOrigin, localEndpoint, type AgentProvider, type ModelEntry } from '../model/runtime-options';
+import { ANTHROPIC_API_MODELS, isLoopbackOrigin, localEndpoint, type AgentProvider, type ModelEntry, type ServiceTier } from '../model/runtime-options';
 import { listLocalModels } from '../model/transport';
 import { MODEL_ASK_TIMEOUT_MS, STOPPED, type AgentEvent, type AskLive } from '../model/progress';
 import { discoverLocalAgent } from '../model/local-pairing';
@@ -110,6 +110,10 @@ export class DocumentClient {
    *  each runtime's, remembered in this browser. */
   agentEffort = $state('');
   private effortChoices: Partial<Record<AgentProvider, string>> = {};
+  /** The speed tier for the chosen runtime (`''`: its default; Codex's
+   *  `priority` is Fast), and each runtime's, remembered in this browser. */
+  agentTier = $state('');
+  private tierChoices: Partial<Record<AgentProvider, string>> = {};
   agentPairing = $state(false);
   private pairedToken = $state('');
   private pairedEndpoint = $state('');
@@ -215,6 +219,8 @@ export class DocumentClient {
         this.effortChoices = saved.efforts ?? {};
         this.agentProvider = saved.provider;
         this.agentEffort = this.effortChoices[saved.provider as AgentProvider] ?? '';
+        this.tierChoices = saved.tiers ?? {};
+        this.agentTier = this.tierChoices[saved.provider as AgentProvider] ?? '';
         this.agentModel = saved.provider === 'anthropic' ? '' : this.modelChoices[saved.provider as AgentProvider] ?? '';
         if (this.modelChoices.anthropic) this.modelName = this.modelChoices.anthropic;
       }
@@ -334,6 +340,7 @@ export class DocumentClient {
     if (options.token !== undefined) this.agentToken = options.token;
     this.agentModel = options.model ?? (options.provider === 'anthropic' ? '' : this.modelChoices[options.provider] ?? '');
     this.agentEffort = this.effortChoices[options.provider] ?? '';
+    this.agentTier = this.tierChoices[options.provider] ?? '';
     this.saveAgentChoice();
     if (options.provider !== 'anthropic' && options.token === undefined) void this.connectLocalAgent().then(() => this.loadAgentModels());
     else void this.loadAgentModels();
@@ -347,13 +354,30 @@ export class DocumentClient {
     this.saveAgentChoice();
   }
 
-  /** The effort levels the chosen model takes (the runtime's default model
-   *  when none is chosen); empty until the runtime lists its models. */
-  get agentEfforts(): string[] {
-    if (this.agentModelsFor !== this.agentProvider) return [];
+  /** The chosen model's entry (the runtime's default model when none is
+   *  chosen); undefined until the runtime lists its models. */
+  private get chosenModel(): ModelEntry | undefined {
+    if (this.agentModelsFor !== this.agentProvider) return undefined;
     const id = this.agentProvider === 'anthropic' ? this.modelName : this.agentModel;
-    const model = id ? this.agentModels.find(m => m.id === id) : this.agentModels.find(m => m.default);
-    return model?.efforts ?? [];
+    return id ? this.agentModels.find(m => m.id === id) : this.agentModels.find(m => m.default);
+  }
+
+  /** The effort levels the chosen model takes; empty until listed. */
+  get agentEfforts(): string[] { return this.chosenModel?.efforts ?? []; }
+
+  /** The speed tiers the chosen model offers (Codex's Fast); empty until listed. */
+  get agentTiers(): ServiceTier[] { return this.chosenModel?.tiers ?? []; }
+
+  /** The tier a turn asks for: the chosen one if the model offers it. */
+  get effectiveTier(): string {
+    return this.agentTier && this.agentTiers.some(t => t.id === this.agentTier) ? this.agentTier : '';
+  }
+
+  /** The speed tier for the chosen runtime (`''`: its default). */
+  setAgentTier(tier: string) {
+    this.agentTier = tier;
+    this.tierChoices = { ...this.tierChoices, [this.agentProvider]: tier };
+    this.saveAgentChoice();
   }
 
   /** The effort a turn asks for: the chosen one, unless the model is known
@@ -372,7 +396,7 @@ export class DocumentClient {
 
   private saveAgentChoice() {
     try {
-      localStorage.setItem(AGENT_CHOICE_KEY, JSON.stringify({ provider: this.agentProvider, models: this.modelChoices, efforts: this.effortChoices }));
+      localStorage.setItem(AGENT_CHOICE_KEY, JSON.stringify({ provider: this.agentProvider, models: this.modelChoices, efforts: this.effortChoices, tiers: this.tierChoices }));
     } catch {
       // storage unavailable: the choice lasts this page
     }
@@ -414,6 +438,7 @@ export class DocumentClient {
         this.agentProvider = connection.provider;
         this.agentModel = this.modelChoices[connection.provider] ?? '';
         this.agentEffort = this.effortChoices[connection.provider] ?? '';
+        this.agentTier = this.tierChoices[connection.provider] ?? '';
         this.nativeAgentPaired = true;
       }
       this.agentToken = token;
@@ -486,7 +511,7 @@ export class DocumentClient {
       if (generation !== this.generation) throw new Error('session disposed');
       if (!this.canAsk) throw new Error(this.agentProvider === 'anthropic' ? 'no API key set' : 'start the local agent bridge and connect in Agent settings');
       const runtime = this.agentProvider === 'anthropic' ? undefined : {
-        provider: this.agentProvider, endpoint: this.agentEndpoint, token: this.agentToken, model: this.agentModel || undefined, effort: this.effectiveEffort || undefined,
+        provider: this.agentProvider, endpoint: this.agentEndpoint, token: this.agentToken, model: this.agentModel || undefined, effort: this.effectiveEffort || undefined, serviceTier: this.effectiveTier || undefined,
       };
       if (live.signal?.aborted) throw new Error(STOPPED);
       const payload = { instruction, apiKey: runtime ? '' : this.apiKey, model: this.modelName, effort: runtime ? undefined : this.effectiveEffort || undefined, runtime, ...conversation };

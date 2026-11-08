@@ -11,7 +11,7 @@ if (process.argv.includes('app-server')) {
     if (mode === 'malformed') { process.stdout.write('not json\n'); return; }
     if (message.method === 'initialize') reply({ id: message.id, result: {} });
     else if (message.method === 'model/list') reply({ id: message.id, result: { data: [
-      { id: 'fixture-default', model: 'fixture-default', displayName: 'Fixture Default', isDefault: true, hidden: false, supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'high', description: '' }, { reasoningEffort: 'ultra', description: '' }] },
+      { id: 'fixture-default', model: 'fixture-default', displayName: 'Fixture Default', isDefault: true, hidden: false, supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'high', description: '' }, { reasoningEffort: 'ultra', description: '' }], serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }] },
       { id: 'fixture-other', model: 'fixture-other', displayName: 'Fixture Other', isDefault: false, hidden: false },
       { id: 'fixture-hidden', model: 'fixture-hidden', displayName: 'Hidden', isDefault: false, hidden: true },
     ] } });
@@ -29,7 +29,7 @@ if (process.argv.includes('app-server')) {
         ? `<edit><set id="${shape}" x="240" fill.color="#22aa55"/></edit>`
         : `<edit><create id="$shape" type="rect" parent="${target}" name="agent-test-shape" x="100" y="120" w="80" h="60" color="#ff2200"/></edit>`;
       if (input.includes('chat-test-prose')) text = '## A shared conversation\n\nA **rectangle** is a 2D shape.\n\n| Property | Meaning |\n| --- | --- |\n| width | horizontal size |\n\n```ts\nconst safe = true;\n```\n\n::view{show=main}\n\n<script>window.chatInjected = true</script>\n\n[unsafe](javascript:alert(1))';
-      if (input.includes('effort-test')) text = `effort=${message.params.effort ?? 'none'}`;
+      if (input.includes('effort-test')) text = `effort=${message.params.effort ?? 'none'} tier=${message.params.serviceTier ?? 'none'}`;
       if (input.includes('chat-test-follow-up')) text = input.includes('A **rectangle** is a 2D shape.') ? 'The previous reply described a rectangle.' : 'ERROR: missing history';
       if (input.includes('chat-test-lesson')) text = '### Lesson companion\n\nWe can discuss the lesson without editing it.\n\n::view{show=main}';
       if (input.includes('chat-test-slow')) {

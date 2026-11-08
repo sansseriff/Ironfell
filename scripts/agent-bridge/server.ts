@@ -5,7 +5,7 @@ import { resolveClaude, resolveCodex } from './resolve';
 import { agentLog, agentLogDir, type AgentLog } from './log';
 import { fileURLToPath } from 'node:url';
 import type { CompletionRequest } from '../../src-ui/model/runtime-options';
-import { isEffort, isLoopbackOrigin } from '../../src-ui/model/runtime-options';
+import { isEffort, isLoopbackOrigin, isServiceTier } from '../../src-ui/model/runtime-options';
 
 export function validateRequest(value: unknown): CompletionRequest {
   const request = value as CompletionRequest;
@@ -14,6 +14,7 @@ export function validateRequest(value: unknown): CompletionRequest {
     request.messages.some(message => !message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string') ||
     (request.model !== undefined && (typeof request.model !== 'string' || request.model.length > 200)) ||
     (request.effort !== undefined && !isEffort(request.effort)) ||
+    (request.serviceTier !== undefined && (request.provider !== 'codex' || !isServiceTier(request.serviceTier))) ||
     (request.turn !== undefined && !isTurnId(request.turn))) {
     throw new Error('Invalid completion request');
   }
@@ -170,7 +171,7 @@ export function createAgentBridge(options: {
     } finally {
       if (log && payload) {
         log.write({
-          kind: 'call', turn: payload.turn ?? null, provider: payload.provider, model: payload.model ?? null, effort: payload.effort ?? null,
+          kind: 'call', turn: payload.turn ?? null, provider: payload.provider, model: payload.model ?? null, effort: payload.effort ?? null, serviceTier: payload.serviceTier ?? null,
           ms: Date.now() - started, firstTokenMs: firstTokenMs ?? null, usage: usage ?? null,
           ...(failure ? { error: failure } : {}),
           system: log.system(payload.system), messages: payload.messages,

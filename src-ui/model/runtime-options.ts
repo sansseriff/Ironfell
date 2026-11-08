@@ -9,6 +9,8 @@ export interface LocalRuntimeOptions {
   model?: string;
   /** Reasoning effort (`low` … `max`, and Codex's `ultra`); unset: the runtime's default. */
   effort?: string;
+  /** A speed tier the model lists (Codex's `priority`: Fast); unset: the runtime's default. */
+  serviceTier?: string;
 }
 
 export interface ModelOptions extends ConversationOptions {
@@ -22,7 +24,10 @@ export interface ModelOptions extends ConversationOptions {
 /** A model a runtime offers (the bridge's `POST /models`): `id` is what
  *  `CompletionRequest.model` takes; `default` marks the runtime's own;
  *  `efforts` are the reasoning levels it accepts, lowest first. */
-export interface ModelEntry { id: string; label: string; default?: boolean; efforts?: string[] }
+export interface ModelEntry { id: string; label: string; default?: boolean; efforts?: string[]; tiers?: ServiceTier[] }
+
+/** A speed tier a model offers (Codex's `serviceTiers`): `priority` is Fast. */
+export interface ServiceTier { id: string; name: string; description?: string }
 
 /** The effort levels Claude takes, through Claude Code (`--effort`) and the
  *  API (`output_config.effort`). */
@@ -31,6 +36,11 @@ export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 /** An effort level's name: low … max, and Codex's `ultra`. */
 export function isEffort(value: unknown): value is string {
   return typeof value === 'string' && /^[a-z]{2,12}$/.test(value);
+}
+
+/** A service tier's id (`priority`, `flex`, …). */
+export function isServiceTier(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(value);
 }
 
 /** The Claude API's models, for the API-key path (no bridge to ask). */
@@ -47,6 +57,7 @@ export interface CompletionRequest {
   messages: { role: 'user' | 'assistant'; content: string }[];
   model?: string;
   effort?: string;
+  serviceTier?: string;
   /** The chat turn this call belongs to, so the agent log can group them. */
   turn?: string;
 }

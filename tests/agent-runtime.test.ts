@@ -31,14 +31,15 @@ test('bridge validates loopback URLs and request envelopes', () => {
   for (const endpoint of ['https://127.0.0.1', 'http://example.com', 'http://127.0.0.1.evil', 'http://user@localhost', 'http://localhost/path']) assert.throws(() => localEndpoint(endpoint));
   assert.equal(localEndpoint('http://127.0.0.1:4318').hostname, '127.0.0.1');
   assert.deepEqual(validateRequest(payload), payload);
-  for (const value of [null, {}, { ...payload, provider: 'shell' }, { ...payload, messages: [{ role: 'system', content: '' }] }, { ...payload, effort: '--model' }, { ...payload, effort: 3 }]) assert.throws(() => validateRequest(value));
+  for (const value of [null, {}, { ...payload, provider: 'shell' }, { ...payload, messages: [{ role: 'system', content: '' }] }, { ...payload, effort: '--model' }, { ...payload, effort: 3 }, { ...payload, serviceTier: 'Fast!' }, { ...payload, provider: 'claude', serviceTier: 'priority' }]) assert.throws(() => validateRequest(value));
   assert.equal(validateRequest({ ...payload, effort: 'xhigh' }).effort, 'xhigh');
+  assert.equal(validateRequest({ ...payload, serviceTier: 'priority' }).serviceTier, 'priority');
 });
 
-test('the chosen effort reaches Codex (turn/start) and Claude Code (--effort); none leaves the default', async () => {
+test('the chosen effort reaches Codex (turn/start, with Fast as serviceTier) and Claude Code (--effort); none leaves the default', async () => {
   const request = { ...payload, messages: [{ role: 'user' as const, content: 'effort-test' }] };
-  assert.equal((await codexRuntime(fixture)({ ...request, effort: 'ultra' }, AbortSignal.timeout(3000))).text, 'effort=ultra');
-  assert.equal((await codexRuntime(fixture)(request, AbortSignal.timeout(3000))).text, 'effort=none');
+  assert.equal((await codexRuntime(fixture)({ ...request, effort: 'ultra', serviceTier: 'priority' }, AbortSignal.timeout(3000))).text, 'effort=ultra tier=priority');
+  assert.equal((await codexRuntime(fixture)(request, AbortSignal.timeout(3000))).text, 'effort=none tier=none');
   const saved = process.env.ANTHROPIC_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
   try {
@@ -201,7 +202,7 @@ test('Claude adapter is tool-free, uses the subscription login by default and an
 
 test('bridge lists each runtime\'s models behind the token, Codex from its app-server', async () => {
   assert.deepEqual(await codexModels(fixture)(AbortSignal.timeout(3000)), [
-    { id: 'fixture-default', label: 'Fixture Default', default: true, efforts: ['low', 'high', 'ultra'] },
+    { id: 'fixture-default', label: 'Fixture Default', default: true, efforts: ['low', 'high', 'ultra'], tiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }] },
     { id: 'fixture-other', label: 'Fixture Other' },
   ]);
   assert.deepEqual((await claudeModels(AbortSignal.timeout(1000))).map(m => m.id), ['opus', 'sonnet', 'haiku', 'fable']);

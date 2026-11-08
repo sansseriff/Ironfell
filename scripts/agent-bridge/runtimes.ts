@@ -145,7 +145,7 @@ export function codexRuntime(command = process.env.IRON_CODEX_BIN ?? 'codex'): R
         developerInstructions: 'Follow the Iron response format in the supplied instructions: return edit markup for document changes, or Markdown for an allowed conversational reply. Do not use tools, access files, execute commands, or research. All needed document data is in the prompt.',
         ...(request.model ? { model: request.model } : {}),
       });
-      await rpc.request('turn/start', { threadId: thread.id, summary: 'auto', ...(request.effort ? { effort: request.effort } : {}), input: [{ type: 'text', text: transcript(request) }] });
+      await rpc.request('turn/start', { threadId: thread.id, summary: 'auto', ...(request.effort ? { effort: request.effort } : {}), ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}), input: [{ type: 'text', text: transcript(request) }] });
       return await completed;
     } finally {
       await rpc.close();
@@ -167,7 +167,9 @@ export function codexModels(command = process.env.IRON_CODEX_BIN ?? 'codex'): Mo
       return data.filter(m => !m.hidden && typeof (m.model ?? m.id) === 'string')
         .map(m => {
           const efforts = Array.isArray(m.supportedReasoningEfforts) ? m.supportedReasoningEfforts.map((e: any) => e?.reasoningEffort).filter((e: unknown) => typeof e === 'string') : [];
-          return { id: m.model ?? m.id, label: m.displayName ?? m.model ?? m.id, ...(m.isDefault ? { default: true } : {}), ...(efforts.length ? { efforts } : {}) };
+          const tiers = Array.isArray(m.serviceTiers) ? m.serviceTiers.filter((t: any) => typeof t?.id === 'string' && typeof t?.name === 'string')
+            .map((t: any) => ({ id: t.id, name: t.name, ...(typeof t.description === 'string' && t.description ? { description: t.description } : {}) })) : [];
+          return { id: m.model ?? m.id, label: m.displayName ?? m.model ?? m.id, ...(m.isDefault ? { default: true } : {}), ...(efforts.length ? { efforts } : {}), ...(tiers.length ? { tiers } : {}) };
         });
     } finally {
       await rpc.close();

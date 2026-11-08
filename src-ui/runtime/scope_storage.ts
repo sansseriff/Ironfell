@@ -15,6 +15,9 @@
  *     scopes/<id>/workspace.json      the dock layout (D10): which views are
  *                                     open, where; workspace state, never
  *                                     in the document or its undo
+ *     scopes/<id>/chats.json          the chat panels' conversations
+ *                                     (src-ui/chat/sessions.svelte.ts):
+ *                                     workspace state too
  */
 
 export interface ScopeMeta {
@@ -58,6 +61,10 @@ export interface ScopeStorage {
   writeMeta(meta: ScopeMeta): Promise<void>;
   /** Replace the scope's dock layout (`workspace.json`). */
   writeWorkspace(id: string, json: string): Promise<void>;
+  /** The scope's chat conversations (`chats.json`), if any were saved. */
+  readChats(id: string): Promise<string | null>;
+  /** Replace the scope's chat conversations (`chats.json`). */
+  writeChats(id: string, json: string): Promise<void>;
   remove(id: string): Promise<void>;
   /** Bytes the scope's files hold (snapshots, log, set-aside segments). */
   size(id: string): Promise<number>;
@@ -97,7 +104,7 @@ const lines = (ndjson: string) => ndjson.split('\n').filter(l => l.trim() !== ''
 
 // ---- memory ---------------------------------------------------------------
 
-interface MemoryScope { meta: ScopeMeta; snapshots: Map<number, string>; segments: Map<number, string>; broken: Map<string, Map<number, string>>; workspace: string | null }
+interface MemoryScope { meta: ScopeMeta; snapshots: Map<number, string>; segments: Map<number, string>; broken: Map<string, Map<number, string>>; workspace: string | null; chats?: string | null }
 
 export class MemoryScopeStorage implements ScopeStorage {
   readonly kind = 'memory' as const;
@@ -142,12 +149,17 @@ export class MemoryScopeStorage implements ScopeStorage {
     const s = this.scopes.get(id);
     if (s) s.workspace = json;
   }
+  async readChats(id: string) { return this.scopes.get(id)?.chats ?? null; }
+  async writeChats(id: string, json: string) {
+    const s = this.scopes.get(id);
+    if (s) s.chats = json;
+  }
   async remove(id: string) { this.scopes.delete(id); }
   async size(id: string) {
     const s = this.scopes.get(id);
     if (!s) return 0;
     const sum = (m: Map<number, string>) => [...m.values()].reduce((n, t) => n + t.length, 0);
-    return sum(s.snapshots) + sum(s.segments) + [...s.broken.values()].reduce((n, m) => n + sum(m), 0) + JSON.stringify(s.meta).length + (s.workspace?.length ?? 0);
+    return sum(s.snapshots) + sum(s.segments) + [...s.broken.values()].reduce((n, m) => n + sum(m), 0) + JSON.stringify(s.meta).length + (s.workspace?.length ?? 0) + (s.chats?.length ?? 0);
   }
   async estimate() { return null; }
 
@@ -301,6 +313,16 @@ export class OpfsScopeStorage implements ScopeStorage {
   async writeWorkspace(id: string, json: string) {
     const dir = await this.scopeDir(id);
     if (dir) await this.write(dir, 'workspace.json', json);
+  }
+
+  async readChats(id: string) {
+    const dir = await this.scopeDir(id);
+    return dir ? this.readText(dir, 'chats.json') : null;
+  }
+
+  async writeChats(id: string, json: string) {
+    const dir = await this.scopeDir(id);
+    if (dir) await this.write(dir, 'chats.json', json);
   }
 
   async remove(id: string) {

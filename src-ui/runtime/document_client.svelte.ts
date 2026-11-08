@@ -655,6 +655,17 @@ export class DocumentClient {
     }
   }
 
+  /** The open scope's saved chats (`chats.json`); null with no scope (an
+   *  unsaved page keeps its chats in memory only). */
+  readChats(): Promise<{ id: string; json: string | null } | null> {
+    return this.scopes?.readChats() ?? Promise.resolve(null);
+  }
+
+  /** Keep chats with scope `id` (ignored once another scope is open). */
+  saveChats(id: string, json: string): Promise<void> {
+    return this.scopes?.saveChats(id, json) ?? Promise.resolve();
+  }
+
   /** Forget the open document's saved layout (Reset layout). */
   forgetWorkspace(key: string) {
     if (key === 'page') {

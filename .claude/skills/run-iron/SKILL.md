@@ -76,6 +76,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `bun test tests/dev-agent.test.ts`, warm launcher tests | <1 s (2026-11-04) |
 | `bun run dev:agent:demo`, warm startup to ready | ~1 s; stays running until Ctrl+C |
 | `chat-ui.ts`, fixture, worker or main | ~4–7 s; capped at 55 s |
+| `chat-history.ts`, fixture, saved scope | ~10 s; capped at 55 s |
 | `chat-ui.ts`, real Codex prose/visual + shape, worker | ~10–25 s; capped at 55 s |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
@@ -290,6 +291,27 @@ PASS CHAT worker: shared Model/Lesson, Markdown/visuals, safe content, history, 
 PASS CHAT main: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, dictated text, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, 7 turns in the agent log; no page errors
 PASS LIVE CHAT worker: real Codex prose/visual without mutation, then validated shape creation, 2 turns in the agent log; no page errors
 ```
+
+### Chat history
+
+Each chat panel (Model, each narrative's Lesson chat) keeps its own list of
+conversations, saved with the scope as `chats.json` (`src-ui/chat/sessions.svelte.ts`).
+`chat-ui.ts` runs on `?demo`, which saves nothing, so this script opens a saved
+scope instead (`&new=demo`, in a fresh browser profile):
+
+```sh
+URL='http://127.0.0.1:5175/Ironfell/?gfx=webgl2&new=demo' bun .claude/skills/run-iron/chat-history.ts
+```
+
+Expected output:
+
+```text
+PASS CHAT HISTORY: new chat, past chats menu, open, draft per chat, saved with the scope across reload, delete with confirm, separate Lesson history; no page errors
+```
+
+Screenshot: `.agents/chat/history-menu.png`. With `&new=demo` the address is then
+replaced with `scope=…`; wait for that scope to be open before acting (the script
+polls for it), since acting while it opens can reload the page.
 
 All pass 2026-11-03 with cached wasm; again 2026-11-06 with the streaming checks
 (`plans/specs/agent-streaming.md`): a slow streamed fixture turn shows its work

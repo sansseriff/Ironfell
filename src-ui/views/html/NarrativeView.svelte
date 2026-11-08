@@ -31,7 +31,7 @@
   import IconButton from "../../lib/ui/IconButton.svelte";
   import TextInput from "../../lib/ui/TextInput.svelte";
   import ChatPanel from '../../chat/ChatPanel.svelte';
-  import { chatSession } from '../../chat/sessions.svelte';
+  import { panelHistory } from '../../chat/sessions.svelte';
   import { narrativeMode, type ChatHandle, type ChatTurn, type NarrativeMode as Mode } from '../../chat/conversation';
   import type { ConversationMessage } from '../../model/conversation';
   import type { AskLive } from '../../model/progress';
@@ -230,7 +230,9 @@
     reviewed: "" | "kept" | "reverted";
     error?: string;
   }
-  const session = $derived(chatSession(`${doc.generation}:${doc.scope.current?.id ?? 'demo'}:narrative:${source}`));
+  // This narrative's chats, saved with the scope (chat/sessions.svelte.ts).
+  const history = $derived(panelHistory(`narrative:${source}`));
+  const session = $derived(history.current);
   const reviews = $derived(session.annotations as Record<string, NarrativeReview>);
   let chat: ChatHandle | undefined = $state();
   let writeAtCursor = $state(true);
@@ -289,6 +291,7 @@
     const review = reviews[session.turns[index]?.id];
     if (!review) return;
     review.reviewed = 'kept';
+    history.save();
     editor?.highlight(new Set());
   }
 
@@ -309,6 +312,7 @@
       if (!result.ok) { review.error = result.error || 'Could not revert the model change.'; return; }
     }
     review.reviewed = 'reverted';
+    history.save();
     editor.highlight(new Set());
     await editor.refresh();
   }
@@ -494,7 +498,7 @@
     </div>
 
     <div class="conversation-host" class:compact={mode === 'authoring'}>
-      <ChatPanel {session} bind:this={chat} compact={mode === 'authoring'} target={targetLabel} send={performTurn}>
+      <ChatPanel {session} {history} bind:this={chat} compact={mode === 'authoring'} target={targetLabel} send={performTurn}>
         {#snippet targetControl()}
           <Button variant="outline" small title="Where the model writes: click to switch" onclick={() => writeAtCursor = !writeAtCursor}>{targetLabel}</Button>
         {/snippet}

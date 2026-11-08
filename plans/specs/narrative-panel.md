@@ -403,6 +403,27 @@ A second pass on T3 Code (pingdotgg/t3code `main`: `ComposerSurface`,
   worker and main; fast smoke six assertions, no page errors; screenshots of
   the menu in light and dark at 2×.
 
+### 9.6 Chat history (2026-11-07)
+
+- Each chat panel keeps a list of conversations: the Model panel per source,
+  and each narrative's chat. The header shows the current one's title (its
+  first request); it opens the panel's chats, newest message first, with New
+  chat and Delete this chat… (confirmed in a dialog; the document keeps what
+  the chat changed). A New chat button sits beside it. Each conversation keeps
+  its own unsent draft and, for a narrative, its block reviews.
+- Saved with the scope as `chats.json` beside `workspace.json`: workspace state,
+  never in the document or its undo. Read once per scope; written 400 ms after
+  a turn ends, a chat is opened, started or deleted, a review is kept or
+  reverted, and when the tab is hidden. Nothing is written until the read
+  succeeds, so a failed read never overwrites the saved history. Running turns
+  are saved when they end; at most 50 conversations per panel. A read-only tab
+  (scope open elsewhere) saves nothing. An unsaved page (`?demo`) and the native
+  build (memory scope storage) keep chats for the session only.
+- Code: `src-ui/chat/history.ts` (format, titles, merge; unit-tested),
+  `sessions.svelte.ts` (store), `ChatThreads.svelte` (header).
+- Evidence: 90 bun tests (5 new); `chat-history.ts` against a saved scope;
+  `chat-ui.ts` worker and main; fast smoke; `narrative.txt` no page errors.
+
 Vite's cache now lives in root-relative `.agents/vite`, so worktrees using
 shared installed dependencies do not overwrite each other's optimizer cache.
 

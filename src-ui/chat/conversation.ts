@@ -223,6 +223,10 @@ export interface ChatSession {
   annotations: Record<string, unknown>;
 }
 
+/** Set a conversation's unsent draft. The conversation belongs to its
+ *  panel's history (sessions.svelte.ts), not to the component showing it. */
+export function setDraft(session: ChatSession, draft: string) { session.draft = draft; }
+
 /** Run one turn. `live` carries the progress callback and the Stop signal. */
 export type SendTurn = (text: string, history: ConversationMessage[], turn: ChatTurn, live: AskLive) => Promise<AskResult>;
 export interface ChatHandle { submit(text?: string, execute?: SendTurn): Promise<ChatTurn | null> }

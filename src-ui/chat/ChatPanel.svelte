@@ -1,12 +1,15 @@
 <script lang="ts">
   import ChatTranscript from './ChatTranscript.svelte';
   import ChatComposer from './ChatComposer.svelte';
-  import { applyAgentEvents, chatHistory, failureSummary, finishProgress, type ChatSession, type ChatTurn, type SendTurn } from './conversation';
+  import ChatThreads from './ChatThreads.svelte';
+  import type { ChatHistory } from './sessions.svelte';
+  import type { ChatThread } from './history';
+  import { applyAgentEvents, chatHistory, failureSummary, finishProgress, setDraft, type ChatSession, type ChatTurn, type SendTurn } from './conversation';
   import { STOPPED, type AgentEvent } from '../model/progress';
   import { controllerManager } from '../controller-manager.svelte';
   import type { Snippet } from 'svelte';
 
-  let { session, send, target = 'Document', compact = false, review, targetControl }: { session: ChatSession; send: SendTurn; target?: string; compact?: boolean; review?: Snippet<[ChatTurn]>; targetControl?: Snippet } = $props();
+  let { session, history, send, target = 'Document', compact = false, review, targetControl }: { session: ChatSession; history?: ChatHistory; send: SendTurn; target?: string; compact?: boolean; review?: Snippet<[ChatTurn]>; targetControl?: Snippet } = $props();
   const doc = controllerManager.docClient;
   const busy = $derived(session.turns.some(turn => turn.status === 'running'));
   let scrollRequest = $state(0);
@@ -18,7 +21,8 @@
     text = text.trim();
     if (!text || busy || doc.asking) return null;
     const current = session;
-    const history = chatHistory(current.turns);
+    const owner = history;
+    const priorMessages = chatHistory(current.turns);
     const turn: ChatTurn = { id: crypto.randomUUID(), instruction: text, target, status: 'running', startedAt: Date.now(), progress: { steps: [], text: '' } };
     current.turns = [...current.turns, turn];
     // The state proxy of the turn just added: what the transcript renders, so
@@ -30,7 +34,7 @@
     controllers.set(entry.id, controller);
     const live = { signal: controller.signal, onEvent: (event: AgentEvent) => { if (entry.progress) applyAgentEvents(entry.progress, [event], Date.now()); } };
     try {
-      const result = await execute(text, history, entry, live);
+      const result = await execute(text, priorMessages, entry, live);
       entry.result = result;
       // Stop pressed once the edit was applying: it applied, so the turn completed.
       if (result.error === STOPPED) entry.status = 'stopped';
@@ -47,6 +51,8 @@
     entry.completedAt = Date.now();
     finishProgress(entry.progress, entry.completedAt);
     if (entry.status !== 'completed' && !current.draft) current.draft = text;
+    // Saved with the scope, and to the top of the panel's chats.
+    if (owner && 'updated' in current) owner.touch(current as ChatThread);
     return $state.snapshot(entry) as ChatTurn;
   }
 
@@ -55,8 +61,11 @@
 </script>
 
 <section class="chat-panel" class:compact data-chat-panel aria-label="Agent conversation">
+  {#if history}<ChatThreads {history} {busy} />{/if}
   {#if !compact || session.turns.length}<ChatTranscript turns={session.turns} {compact} {scrollRequest} {review} retry={(turn) => { if (!session.draft) session.draft = turn.instruction; }} />{/if}
-  <ChatComposer bind:value={session.draft} {busy} {compact} {target} {targetControl} submit={() => { void submit(); }} {stop} />
+  <!-- The draft belongs to the conversation (chat/sessions.svelte.ts), not
+       to this panel: bound through its getter and setter. -->
+  <ChatComposer bind:value={() => session.draft, (draft) => setDraft(session, draft)} {busy} {compact} {target} {targetControl} submit={() => { void submit(); }} {stop} />
 </section>
 
 <style>

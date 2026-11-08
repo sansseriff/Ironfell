@@ -234,6 +234,21 @@ export class Scopes {
     return this.serial(() => this.storage.writeWorkspace(id, json));
   }
 
+  /** The open scope's saved chats (`chats.json`), with its id; null with
+   *  no scope open. */
+  readChats(): Promise<{ id: string; json: string | null } | null> {
+    if (!this.current) return Promise.resolve(null);
+    const id = this.current.id;
+    return this.serial(async () => ({ id, json: await this.storage.readChats(id) }));
+  }
+
+  /** Save chats with scope `id`, if it is still the open one. A read-only
+   *  tab saves nothing, as with the layout. */
+  saveChats(id: string, json: string): Promise<void> {
+    if (this.current?.id !== id || this.readOnly) return Promise.resolve();
+    return this.serial(() => this.storage.writeChats(id, json));
+  }
+
   /** Delete a scope; it cannot be undone. Deleting the open one opens the
    *  most recent other, or a new empty scope when none is left. A scope open
    *  in another tab is refused. */

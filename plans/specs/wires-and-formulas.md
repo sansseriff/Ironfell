@@ -92,6 +92,47 @@ expression floor grows by a function.
 - **The agent** writes the formula directly; the wires appear when the person selects
   the result. Agent and person edit the same thing.
 
+## 4a. Pins that collapse, and dropping onto a component
+
+A selected component shows its ports as pins (component-authoring §3). With many
+inputs (`std:plot` has 19) a column of pins down each edge is noise. Pins are for
+**wiring**; settings belong in the inspector's Component section, which lists every
+input, grouped.
+
+**Which pins show.** A `port_spec` gains `port.show`: `pin` (always a pin), `auto`
+(default) or `settings` (never a pin; inspector only). A selected component shows:
+
+- every `pin` port, and every `auto` port that is **active**: connected, bound, or set
+  away from its default (the last as a small dot, not a wire);
+- physical ports (anchors on the geometry) always, where they are;
+- the rest collapsed into one **"+ N more"** pill per side, which opens a compact list
+  of the hidden ports, each row draggable as a pin.
+
+`std:plot` marks `xs`, `ys` and `f` as `pin` and its outputs `y_at_cursor` and the
+ranges as `auto`; style, colours, labels and the rest are `settings`. The inspector
+groups inputs by a `port.group` (Data, Range, Labels, Cursor, Look); the definition's
+author sets both, in the Port section.
+
+**Dropping onto a component.** A wire dragged from a pin or a value need not hit a tiny
+pin:
+
+1. While the drag is over a component, its pins expand to the **compatible** inputs
+   (kind and unit match: a series to series inputs, mW to optical power), the rest
+   dimmed. A drop on a pin connects to it, as now.
+2. A drop on the **body**:
+   - one compatible input: connect to it;
+   - several: a **menu at the drop point** lists them, best guess first (a name that
+     matches the source's, `xs` → `xs`; unconnected before connected; `pin` ports
+     before others), each with its kind and unit and whether it is already connected.
+     Typing filters; Enter takes the first; Escape cancels the drag;
+   - none: no connection, and a note says why ("plot has no input that takes mW").
+3. The result is a connection (port to port, both entities) or a binding (a value to an
+   input: the input's argument bound, `args.ys = {= #src…}`), with a Map range chip
+   when the units or ranges differ (the existing mapping popover).
+
+The same menu serves a drop onto a plain object (the properties it can take: rotation,
+size, opacity, trim…), which is component-authoring §3's "the drop asks which property".
+
 ## 5. Easing as a function
 
 For chips (and transitions, machines.md) easing must be callable in a formula, not only
@@ -136,6 +177,6 @@ than a separate mechanism (to be folded into machines.md when it is built).
 | Phase | Builds | Exit |
 |---|---|---|
 | 1 | `ease()`, `window()`, `cubic-bezier` and the presets in `time::ease` and the floor; the `trim` facet, renderer and SVG export | a line draws on with Easy Ease from a binding on a slider; keys accept `easy_ease` |
-| 2 | Read-only wires around the selection (bindings and connections, pins as ends, off-canvas chips, hover formula) | selecting the plot shows its input wires; selecting a slider shows what it drives |
-| 3 | Drawing: drag value to property (generalised link drag), chips menu, editing chips, formula chip | a person makes the three staggered draw-ons of §5 without typing |
+| 2 | Read-only wires around the selection (bindings and connections, pins as ends, off-canvas chips, hover formula); collapsing pins (`port.show`, `port.group`, the "+ N more" pill, §4a) | selecting the plot shows three pins, its wires, and "+ 16 more"; selecting a slider shows what it drives |
+| 3 | Drawing: drag value to property (generalised link drag), drop on a component's body with the compatible-input menu (§4a), chips menu, editing chips, formula chip | a person wires a slider into a plot by dropping it on the plot and picking `cursor`, and makes the three staggered draw-ons of §5 without typing |
 | 4 | Bundling, chain following, read-only reasons | a selection with 19 wires stays legible |

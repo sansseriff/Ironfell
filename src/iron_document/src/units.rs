@@ -250,34 +250,45 @@ pub fn convert(si: f64, unit: Unit) -> f64 {
 /// prefix so the mantissa reads in `1..1000` (`0.00958 W` → `9.58 mW`,
 /// `0.5 kg` → `500 g`). Not the file format, which stores `[si, canonical]`.
 pub fn format(si: f64, dim: Dim) -> String {
+    let (unit, factor) = display_unit(si, dim);
+    join(si / factor, &unit)
+}
+
+/// The unit [`format`] would show `si` in, and its SI factor: the canonical
+/// unit with an engineering prefix so `si` reads in `1..1000`. A series
+/// shows every element in the unit its largest magnitude picks.
+pub fn display_unit(si: f64, dim: Dim) -> (String, f64) {
     let canonical = dim.canonical_unit();
     // Mass is the one base whose coherent unit already carries a prefix.
-    let (base, value) = if dim == Dim::MASS { ("g", si * 1e3) } else { (canonical.as_str(), si) };
-    let prefixable = !base.is_empty() && !base.contains(['*', '/']) && atom(base).is_some();
+    let (base, base_factor) = if dim == Dim::MASS { ("g".to_owned(), 1e-3) } else { (canonical, 1.0) };
+    let value = si / base_factor;
+    let prefixable = !base.is_empty() && !base.contains(['*', '/']) && atom(&base).is_some();
     if value == 0.0 || !value.is_finite() || !prefixable {
-        return join(value, base);
+        return (base, base_factor);
     }
     let exp = ((value.abs().log10() / 3.0).floor() as i32 * 3).clamp(-24, 24);
     if exp == 0 {
-        return join(value, base);
+        return (base, base_factor);
     }
     let Some((prefix, _)) = PREFIXES.iter().find(|(p, e)| *e == exp && *p != "μ" && *p != "u") else {
-        return join(value, base);
+        return (base, base_factor);
     };
-    join(value / 10f64.powi(exp), &format!("{prefix}{base}"))
+    (format!("{prefix}{base}"), base_factor * 10f64.powi(exp))
+}
+
+/// Twelve significant digits: enough for any display, and it hides the
+/// noise a prefix division introduces (9.579999999999998).
+pub fn round12(value: f64) -> f64 {
+    if value == 0.0 || !value.is_finite() {
+        return value;
+    }
+    let digits = 12 - value.abs().log10().floor() as i32 - 1;
+    let k = 10f64.powi(digits.clamp(-300, 300));
+    (value * k).round() / k
 }
 
 fn join(value: f64, unit: &str) -> String {
-    // Twelve significant digits: enough for any display, and it hides the
-    // noise a prefix division introduces (9.579999999999998).
-    let rounded = if value == 0.0 || !value.is_finite() {
-        value
-    } else {
-        let digits = 12 - value.abs().log10().floor() as i32 - 1;
-        let k = 10f64.powi(digits.clamp(-300, 300));
-        (value * k).round() / k
-    };
-    let n = crate::value::fmt_num(rounded);
+    let n = crate::value::fmt_num(round12(value));
     if unit.is_empty() { n } else { format!("{n} {unit}") }
 }
 

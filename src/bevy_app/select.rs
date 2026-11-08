@@ -1084,7 +1084,10 @@ impl Geo<'_> {
             "path" => {
                 let outline = crate::document_bridge::path_outline(self.store, id);
                 let r = outline.control_box();
-                (r.width() > 0.0 || r.height() > 0.0 || outline.elements().len() > 0).then_some((r, Kind::Points))
+                // Drawn by an expression (a bound `path.d`): framed, but
+                // neither resized nor point-edited; its source is the binding.
+                let kind = if iron_document::contour::bound(doc, id) { Kind::Fixed } else { Kind::Points };
+                (r.width() > 0.0 || r.height() > 0.0 || outline.elements().len() > 0).then_some((r, kind))
             }
             // An empty's marker, with what hangs off it: picked and framed as
             // one, not resized.
@@ -1954,7 +1957,7 @@ pub fn select_tool_system(
         if let Some(r) = &edit.reach {
             let id = r.node();
             let converting = pending.0.iter().any(|t| t.ops.iter().any(|o| matches!(o, Op::Create { id: c, .. } if *c == id) || matches!(o, Op::Set { id: c, path, .. } if *c == id && path.facet == iron_document::FacetKind::PathShape)));
-            let editable = doc.facet(id, iron_document::FacetKind::PathShape).is_some() && iron_document::contour::packed(doc, id).is_none();
+            let editable = doc.facet(id, iron_document::FacetKind::PathShape).is_some() && iron_document::contour::packed(doc, id).is_none() && !iron_document::contour::bound(doc, id);
             if sel.selected != [id] || !(editable || converting) {
                 *edit = PathEdit::default();
             }

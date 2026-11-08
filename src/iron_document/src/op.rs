@@ -9,7 +9,7 @@ use crate::document::{Document, Node, Relation};
 use crate::id::{NodeId, RelationId, Version};
 use crate::order::OrderKey;
 use crate::registry::TypeId;
-use crate::value::{Slot, Value, ValueKind};
+use crate::value::{Slot, Value};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -347,7 +347,37 @@ fn create(
     // Bindings and entity rules are checked once the whole transaction has
     // applied (`check_created`): a restored subtree's nodes may read each
     // other in any order.
-    Ok(vec![Op::Delete { id }])
+    let mut inverse = new_input_args(doc, id);
+    inverse.push(Op::Delete { id });
+    Ok(inverse)
+}
+
+/// A new `in` port_spec on a definition gives every instance of it the
+/// argument at its default, as authoring from the UI does (author.rs), so
+/// a plain `create` (the model's) never leaves instances without one.
+/// Answers the inverses, before the create's own `Delete` so that undo
+/// (which runs inverses in reverse) removes the port first.
+fn new_input_args(doc: &mut Document, id: NodeId) -> Vec<Op> {
+    use crate::facet::{Args, LeafStruct};
+    if doc.live(id).map(|n| n.ty.name()) != Some("port_spec") {
+        return Vec::new();
+    }
+    let Some(def) = doc.live(id).and_then(|n| n.parent).filter(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "definition")) else { return Vec::new() };
+    let Ok(inputs) = crate::definition::inputs_of(doc, def) else { return Vec::new() };
+    let Some(spec) = inputs.into_iter().find(|s| s.spec == id) else { return Vec::new() };
+    let mut inverse = Vec::new();
+    for e in crate::author::entities_of(doc, def) {
+        let Some(old) = doc.get::<Args>(e).cloned() else { continue };
+        if old.slots.contains_key(spec.name) {
+            continue;
+        }
+        let mut args = old.clone();
+        args.insert(spec.name, Slot::Const(spec.default.clone()));
+        doc.remove_facet(e, FacetKind::Args);
+        doc.insert_facet(e, args.wrap());
+        inverse.push(Op::AddFacet { id: e, facet: old.wrap() });
+    }
+    inverse
 }
 
 /// The checks a `Create` defers to the end of its transaction: its bindings
@@ -417,6 +447,9 @@ pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Versio
 fn check_path_form(doc: &Document, cx: &Ctx, path: NodeId) -> Result<(), ApplyError> {
     let packed = doc.get::<crate::facet::PathShape>(path).and_then(|p| p.d.constant()).and_then(Value::as_geometry).is_some_and(|g| !g.is_empty());
     let expanded = doc.children(path).iter().any(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "contour"));
+    if expanded && crate::contour::bound(doc, path) {
+        return Err(cx.err(ErrorKind::MixedPath, format!("{path} is drawn by its bound path.d and cannot also hold contour children")));
+    }
     if packed && expanded {
         return Err(cx.err(ErrorKind::MixedPath, format!("{path} holds its outlines in path.d and in contour children; a path has one or the other")));
     }
@@ -539,9 +572,6 @@ fn check_facet_bindings(doc: &Document, cx: &Ctx, id: NodeId, comps: &[Facet]) -
         for field in c.field_names() {
             if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
                 let path = LeafPath::new(c.kind(), field).expect("declared field");
-                if path.kind() == ValueKind::Geometry {
-                    return Err(cx.err(ErrorKind::TypeMismatch, crate::facet::LeafError::ConstantOnly(path).to_string()));
-                }
                 check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
             }
         }
@@ -560,6 +590,11 @@ fn set(
     if let Some(expr) = slot.expr() {
         check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
     }
+    if path.facet == FacetKind::Args
+        && let Some(inverse) = catch_up_args(doc, cx, id, path.field, slot)?
+    {
+        return Ok(inverse);
+    }
     let comp = doc.facet_mut(id, path.facet).ok_or_else(|| {
         cx.err(
             ErrorKind::UnknownPath,
@@ -577,6 +612,38 @@ fn set(
         path,
         slot: old,
     }])
+}
+
+/// Setting an argument the entity lacks but its definition declares (a
+/// document saved before `create` caught instances up, `new_input_args`):
+/// bring the entity's args up to date, every missing input at its default,
+/// then this one. The inverse sets this argument back to its default, not
+/// to missing, so undo never restores an entity its definition refuses.
+/// `None` when the argument exists or is not declared (the ordinary set
+/// path then accepts or refuses it).
+fn catch_up_args(doc: &mut Document, cx: &Ctx, id: NodeId, field: &str, slot: &Slot) -> Result<Option<Vec<Op>>, ApplyError> {
+    use crate::facet::{Args, Instance};
+    let Some(old) = doc.get::<Args>(id) else { return Ok(None) };
+    if old.slots.contains_key(field) {
+        return Ok(None);
+    }
+    let Some(def) = doc.get::<Instance>(id).and_then(|i| i.def.constant()).and_then(|v| v.as_ref()) else { return Ok(None) };
+    let Ok(specs) = crate::definition::inputs_of(doc, def) else { return Ok(None) };
+    if !specs.iter().any(|s| s.name == field) {
+        return Ok(None);
+    }
+    let mut args = old.clone();
+    for s in &specs {
+        if !args.slots.contains_key(s.name) {
+            args.insert(s.name, Slot::Const(s.default.clone()));
+        }
+    }
+    let default = args.slots.get(field).cloned().expect("declared input inserted above");
+    args.insert(field, slot.clone());
+    doc.remove_facet(id, FacetKind::Args);
+    doc.insert_facet(id, crate::facet::LeafStruct::wrap(args));
+    check_entity(doc, cx, id)?;
+    Ok(Some(vec![Op::Set { id, path: LeafPath::new(FacetKind::Args, field).expect("an argument path"), slot: default }]))
 }
 
 fn add_comp(

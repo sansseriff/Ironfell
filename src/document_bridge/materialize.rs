@@ -208,7 +208,21 @@ pub fn stroke_style(store: &Store, id: NodeId) -> kurbo::Stroke {
     let dash: Vec<f64> = word("stroke.dash", "").split(|c: char| c == ',' || c.is_whitespace()).filter_map(|v| v.parse().ok()).collect();
     let solid = dash.is_empty() || dash.iter().any(|&d| d < 0.0 || !d.is_finite()) || dash.iter().all(|&d| d == 0.0);
     let style = kurbo::Stroke::new(r.num("stroke.width", 1.0) as f64).with_join(join).with_caps(cap).with_miter_limit(r.num("stroke.miter", 4.0) as f64);
-    if solid { style } else { style.with_dashes(r.num("stroke.dash_offset", 0.0) as f64, dash) }
+    if solid {
+        return style;
+    }
+    // SVG's `pathLength` (plans/specs/plot.md §2): dashes measured against
+    // a nominal length, scaled to the path's own.
+    let nominal = r.num("stroke.path_length", 0.0) as f64;
+    let scale = if nominal > 0.0 && store.document().live(id).is_some_and(|n| n.ty.name() == "path") {
+        use kurbo::ParamCurveArclen as _;
+        let length: f64 = path_outline(store, id).segments().map(|s| s.arclen(1e-3)).sum();
+        if length > 0.0 { length / nominal } else { 1.0 }
+    } else {
+        1.0
+    };
+    let dash: Vec<f64> = dash.into_iter().map(|d| d * scale).collect();
+    style.with_dashes(r.num("stroke.dash_offset", 0.0) as f64 * scale, dash)
 }
 
 /// Half the side of an `empty`'s marker box, in document units.

@@ -46,6 +46,7 @@ pub mod parts;
 pub mod port;
 pub mod registry;
 pub mod serial;
+pub mod series;
 pub mod shape;
 pub mod plug;
 pub mod solve;

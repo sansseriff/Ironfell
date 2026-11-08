@@ -57,6 +57,78 @@ impl Geometry {
         EMPTY.get_or_init(|| Arc::new(Geometry::default())).clone()
     }
 
+    /// SVG path data (`M 0 0 L 10 5 C …`, every command, absolute or
+    /// relative; arcs become cubics) as packed contours: how a `path.d`
+    /// written or bound as text becomes geometry (plans/specs/plot.md §2).
+    pub fn from_svg_path(data: &str) -> Result<Geometry, String> {
+        use kurbo::PathEl;
+        let path = BezPath::from_svg(data).map_err(|e| format!("not SVG path data ({e}): {}", preview(data)))?;
+        let mut contours: Vec<PackedContour> = Vec::new();
+        let mut cur: Option<PackedContour> = None;
+        let finish = |c: Option<PackedContour>, out: &mut Vec<PackedContour>| {
+            if let Some(mut c) = c {
+                // A closed contour whose last anchor sits on its first: one
+                // anchor, the last's in-handle moved onto the first.
+                if c.closed && c.anchors.len() > 1 {
+                    let (first, last) = (c.anchors[0], c.anchors[c.anchors.len() - 1]);
+                    if (first.at - last.at).hypot() < 1e-9 {
+                        c.anchors[0].inn = last.inn;
+                        c.anchors.pop();
+                    }
+                }
+                if !c.anchors.is_empty() {
+                    out.push(c);
+                }
+            }
+        };
+        let corner = |p: Point| Anchor { at: p, inn: Vec2::ZERO, out: Vec2::ZERO };
+        for el in path.elements() {
+            match *el {
+                PathEl::MoveTo(p) => {
+                    finish(cur.take(), &mut contours);
+                    cur = Some(PackedContour { closed: false, anchors: vec![corner(p)] });
+                }
+                PathEl::LineTo(p) => cur.get_or_insert_with(PackedContour::default).anchors.push(corner(p)),
+                PathEl::QuadTo(c, p) => {
+                    let c0 = cur.get_or_insert_with(PackedContour::default);
+                    let from = c0.anchors.last().map_or(p, |a| a.at);
+                    let (c1, c2) = (from + (c - from) * (2.0 / 3.0), p + (c - p) * (2.0 / 3.0));
+                    if let Some(last) = c0.anchors.last_mut() {
+                        last.out = c1 - last.at;
+                    }
+                    c0.anchors.push(Anchor { at: p, inn: c2 - p, out: Vec2::ZERO });
+                }
+                PathEl::CurveTo(c1, c2, p) => {
+                    let c0 = cur.get_or_insert_with(PackedContour::default);
+                    if let Some(last) = c0.anchors.last_mut() {
+                        last.out = c1 - last.at;
+                    }
+                    c0.anchors.push(Anchor { at: p, inn: c2 - p, out: Vec2::ZERO });
+                }
+                PathEl::ClosePath => {
+                    if let Some(c) = cur.as_mut() {
+                        c.closed = true;
+                    }
+                    let start = cur.as_ref().and_then(|c| c.anchors.first()).map(|a| a.at);
+                    finish(cur.take(), &mut contours);
+                    // SVG: after Z the pen is back at the subpath's start.
+                    if let Some(at) = start {
+                        cur = Some(PackedContour { closed: false, anchors: vec![corner(at)] });
+                    }
+                }
+            }
+        }
+        // A pen left after Z with nothing drawn from it is not a contour.
+        if let Some(c) = &cur
+            && c.anchors.len() == 1
+            && contours.last().is_some_and(|l| l.closed && l.anchors.first().map(|a| a.at) == Some(c.anchors[0].at))
+        {
+            cur = None;
+        }
+        finish(cur, &mut contours);
+        Ok(Geometry::new(contours))
+    }
+
     pub fn contours(&self) -> &[PackedContour] {
         &self.contours
     }
@@ -198,6 +270,11 @@ fn thousands(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+fn preview(data: &str) -> String {
+    let short: String = data.chars().take(60).collect();
+    if short.len() < data.len() { format!("{short}…") } else { short }
 }
 
 #[cfg(test)]

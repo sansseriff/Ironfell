@@ -83,7 +83,7 @@ pub enum Value { …, Geometry(Arc<Geometry>) }
 - **Immutable.** An edit replaces the whole value with `Op::Set` on `path.d`. Its
   inverse is the old `Arc`, so undo is cheap whatever the path's size.
 - **Equality** compares `contours` (with `Arc::ptr_eq` as a fast path), never the cache.
-- **Constant only.** The leaf can't be `Bound`: no expression produces geometry, and
+- **Constant only** (superseded 2026-11-08: [`plot.md`](plot.md) §2 lets `path.d` be bound to SVG path data, a third, *bound* form). The leaf can't be `Bound`: no expression produces geometry, and
   `Slot::Bound` on a `Geometry` leaf is refused like any kind mismatch. `Animated`
   stays reserved. Path morphing may want it one day.
 - **The cache** keeps the `BezPath`s that `contour::outline` and `fill_outline` build

@@ -327,3 +327,48 @@ fn adding_a_facet_inside_an_instance_is_an_undoable_override() {
     assert!(store.document().facet(copy, FacetKind::Stroke).is_none());
     assert!(!store.document().children(u).iter().any(|&c| store.document().live(c).unwrap().ty.name() == "override"));
 }
+
+/// An in port created on a definition with a plain `create` (as the model
+/// does) gives every existing instance the argument at its default, in the
+/// same transaction; undo takes both back.
+#[test]
+fn creating_an_input_gives_existing_instances_the_argument() {
+    let Lib { mut store, scene, def, .. } = library();
+    let (entity, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    store.apply(tx("instantiate bar", ops)).unwrap();
+    let phase = store.document().next_id();
+    let last = store.document().children(def).iter().map(|&c| store.document().live(c).unwrap().order.clone()).max().unwrap();
+    let create = Op::Create { id: phase, ty: ty("port_spec"), parent: Some(def), order: OrderKey::after(&last), facets: vec![input(Value::Number(2.0)).wrap(), named("phase").wrap()] };
+    store.apply(tx("new input", vec![create])).unwrap();
+    store.document().check_invariants().unwrap();
+    assert_eq!(resolved(&store, entity, "args.phase"), Value::Number(2.0));
+    assert_eq!(resolved(&store, port_named(&store, entity, "phase"), "port.signal"), Value::Number(2.0));
+    store.apply(tx("set phase", vec![Op::Set { id: entity, path: path("args.phase"), slot: num(1.5) }])).unwrap();
+    assert_eq!(resolved(&store, entity, "args.phase"), Value::Number(1.5));
+    store.undo(1).unwrap().unwrap();
+    store.undo(1).unwrap().unwrap();
+    assert!(store.document().get::<iron_document::facet::Args>(entity).unwrap().slots.get("phase").is_none());
+    assert!(store.document().live(phase).is_none());
+}
+
+/// A document saved before that (an entity missing an argument its
+/// definition declares): setting the argument catches the entity up rather
+/// than being refused, and undo sets it back to the default.
+#[test]
+fn setting_a_missing_declared_argument_catches_the_entity_up() {
+    let Lib { mut store, scene, def, .. } = library();
+    let (entity, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    store.apply(tx("instantiate bar", ops)).unwrap();
+    // Drop `power` from the saved entity's args, as an older file has it.
+    let text = iron_document::serial::save(store.document());
+    let power = r#","power":{"q":[0.001,"W"]}"#;
+    assert!(text.contains(power), "{text}");
+    let mut store = Store::load(&text.replace(power, "")).unwrap();
+    assert!(store.document().get::<iron_document::facet::Args>(entity).unwrap().slots.get("power").is_none());
+    store.apply(tx("set power", vec![Op::Set { id: entity, path: path("args.power"), slot: Slot::Const(Value::parse_quantity("3 mW").unwrap()) }])).unwrap();
+    assert_eq!(resolved(&store, entity, "args.power"), Value::parse_quantity("3 mW").unwrap());
+    // An argument the definition does not declare is still refused.
+    assert!(store.apply(tx("bogus", vec![Op::Set { id: entity, path: path("args.nope"), slot: num(1.0) }])).is_err());
+    store.undo(1).unwrap().unwrap();
+    assert_eq!(resolved(&store, entity, "args.power"), Value::parse_quantity("1 mW").unwrap());
+}

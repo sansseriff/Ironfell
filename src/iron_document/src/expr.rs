@@ -11,9 +11,14 @@
 //!   clamp(#3.slider.value * 2, 0, 1)
 //! ```
 //!
-//! Absent on purpose: collection verbs and calls that leave the process.
-//! Those arrive with the floor tranche that needs them and with the
+//! Absent on purpose: calls that leave the process. Those arrive with the
 //! cost-tagged invocation node. `Get` (`beam.waist`) reads a record's field.
+//!
+//! Series and functions (plans/specs/plot.md §1): floor functions and
+//! operators broadcast over series, and `x => body` is a function value.
+//! A lambda's parameters are locals (`Var`), never dependencies; its
+//! references are dependencies of the binding that holds it, and
+//! evaluating the lambda closes it over their current values (`Closure`).
 
 use crate::facet::LeafPath;
 use crate::id::NodeId;
@@ -48,6 +53,51 @@ pub enum Expr {
     Call(String, Vec<Expr>),
     /// A field of a record value: `expr.field` (doc 02 §4).
     Get(Box<Expr>, &'static str),
+    /// A lambda's parameter, read inside its body.
+    Var(&'static str),
+    /// `x => body`, `(x, y) => body`: evaluates to a [`Closure`].
+    Lambda(Vec<&'static str>, Box<Expr>),
+    /// A function value called: `f(x)`, where `f` is a parameter or a leaf
+    /// holding a function.
+    Apply(Box<Expr>, Vec<Expr>),
+}
+
+/// A function value: parameters and a body with no references left in it
+/// (each was replaced by its value when the lambda was evaluated), so
+/// applying it reads nothing from the document.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Closure {
+    pub params: Vec<&'static str>,
+    pub body: Expr,
+}
+
+/// Most samples any function may produce or apply in one evaluation.
+pub const MAX_SAMPLES: usize = 100_000;
+
+impl Closure {
+    pub fn apply(&self, args: &[Value]) -> Result<Value, EvalError> {
+        if args.len() != self.params.len() {
+            return Err(EvalError::Arity { func: self.to_string(), expected: self.params.len(), got: args.len() });
+        }
+        let env: Vec<(&'static str, Value)> = self.params.iter().copied().zip(args.iter().cloned()).collect();
+        // Closed: the body reads no leaf.
+        self.body.eval_in(&|_| None, &env)
+    }
+}
+
+impl fmt::Display for Closure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_params(&self.params, f)?;
+        f.write_str(" => ")?;
+        self.body.write(f, PREC_TERNARY)
+    }
+}
+
+fn write_params(params: &[&'static str], f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match params {
+        [one] => f.write_str(one),
+        many => write!(f, "({})", many.join(", ")),
+    }
 }
 
 /// Named numeric constants of the floor. One arm each, like functions.
@@ -160,6 +210,14 @@ impl Expr {
                 }
             }
             Expr::Get(e, _) => e.collect_deps(out),
+            Expr::Var(_) => {}
+            Expr::Lambda(_, body) => body.collect_deps(out),
+            Expr::Apply(f, args) => {
+                f.collect_deps(out);
+                for a in args {
+                    a.collect_deps(out);
+                }
+            }
         }
     }
 
@@ -175,6 +233,9 @@ impl Expr {
             Expr::If(c, a, b) => Expr::If(Box::new(c.map_refs(f)), Box::new(a.map_refs(f)), Box::new(b.map_refs(f))),
             Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.map_refs(f)).collect()),
             Expr::Get(e, field) => Expr::Get(Box::new(e.map_refs(f)), field),
+            Expr::Var(_) => self.clone(),
+            Expr::Lambda(ps, body) => Expr::Lambda(ps.clone(), Box::new(body.map_refs(f))),
+            Expr::Apply(g, args) => Expr::Apply(Box::new(g.map_refs(f)), args.iter().map(|a| a.map_refs(f)).collect()),
         }
     }
 
@@ -191,41 +252,83 @@ impl Expr {
             Expr::If(c, a, b) => Expr::If(Box::new(c.replace_refs(f)), Box::new(a.replace_refs(f)), Box::new(b.replace_refs(f))),
             Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.replace_refs(f)).collect()),
             Expr::Get(e, field) => Expr::Get(Box::new(e.replace_refs(f)), field),
+            Expr::Var(_) => self.clone(),
+            Expr::Lambda(ps, body) => Expr::Lambda(ps.clone(), Box::new(body.replace_refs(f))),
+            Expr::Apply(g, args) => Expr::Apply(Box::new(g.replace_refs(f)), args.iter().map(|a| a.replace_refs(f)).collect()),
         }
+    }
+
+    /// This lambda body closed: every reference replaced by its value, and
+    /// every outer local (not one of `params`) by its value in `env`.
+    fn close(&self, read: &dyn Fn(Leaf) -> Option<Value>, env: &[(&'static str, Value)], params: &[&'static str]) -> Result<Expr, EvalError> {
+        Ok(match self {
+            Expr::Lit(_) | Expr::Const(_) => self.clone(),
+            Expr::Ref(l) => Expr::Lit(read(*l).ok_or(EvalError::Unresolved(*l))?),
+            Expr::Var(name) if params.contains(name) => self.clone(),
+            Expr::Var(name) => Expr::Lit(lookup(env, name)?),
+            Expr::Neg(e) => Expr::Neg(Box::new(e.close(read, env, params)?)),
+            Expr::Not(e) => Expr::Not(Box::new(e.close(read, env, params)?)),
+            Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(a.close(read, env, params)?), Box::new(b.close(read, env, params)?)),
+            Expr::If(c, a, b) => Expr::If(Box::new(c.close(read, env, params)?), Box::new(a.close(read, env, params)?), Box::new(b.close(read, env, params)?)),
+            Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.close(read, env, params)).collect::<Result<_, _>>()?),
+            Expr::Get(e, field) => Expr::Get(Box::new(e.close(read, env, params)?), field),
+            Expr::Lambda(inner, body) => {
+                let all: Vec<&'static str> = params.iter().chain(inner.iter()).copied().collect();
+                Expr::Lambda(inner.clone(), Box::new(body.close(read, env, &all)?))
+            }
+            Expr::Apply(g, args) => Expr::Apply(Box::new(g.close(read, env, params)?), args.iter().map(|a| a.close(read, env, params)).collect::<Result<_, _>>()?),
+        })
     }
 
     /// Evaluate against a resolver for leaf values. Reads go through the
     /// resolver and nowhere else, which is the hook a tracking evaluator
     /// would use later.
     pub fn eval(&self, read: &dyn Fn(Leaf) -> Option<Value>) -> Result<Value, EvalError> {
+        self.eval_in(read, &[])
+    }
+
+    /// Evaluate with the locals `env` in scope (innermost last).
+    fn eval_in(&self, read: &dyn Fn(Leaf) -> Option<Value>, env: &[(&'static str, Value)]) -> Result<Value, EvalError> {
         match self {
             Expr::Lit(v) => Ok(v.clone()),
             Expr::Const(c) => Ok(Value::Number(c.value())),
             Expr::Ref(l) => read(*l).ok_or(EvalError::Unresolved(*l)),
-            Expr::Neg(e) => match e.eval(read)? {
+            Expr::Var(name) => lookup(env, name),
+            Expr::Lambda(params, body) => Ok(Value::Fn(std::sync::Arc::new(Closure { params: params.clone(), body: body.close(read, env, params)? }))),
+            Expr::Apply(f, args) => {
+                let f = f.eval_in(read, env)?;
+                let vals: Vec<Value> = args.iter().map(|a| a.eval_in(read, env)).collect::<Result<_, _>>()?;
+                match f {
+                    Value::Fn(c) => c.apply(&vals),
+                    v => Err(EvalError::Type(format!("cannot call {}; only a function (x => …) can be called", v.kind().name()))),
+                }
+            }
+            Expr::Neg(e) => match e.eval_in(read, env)? {
                 Value::Number(n) => Ok(Value::Number(-n)),
                 Value::Quantity { si, dim } => Ok(Value::Quantity { si: -si, dim }),
+                Value::Series { data, dim } => Ok(Value::series(data.iter().map(|x| -x).collect::<Vec<_>>(), dim)),
                 v => Err(EvalError::Type(format!("cannot negate {}", v.kind().name()))),
             },
-            Expr::Not(e) => match e.eval(read)? {
+            Expr::Not(e) => match e.eval_in(read, env)? {
                 Value::Bool(b) => Ok(Value::Bool(!b)),
                 v => Err(EvalError::Type(format!("cannot negate {}", v.kind().name()))),
             },
             Expr::Bin(op, a, b) => {
-                let a = a.eval(read)?;
-                let b = b.eval(read)?;
+                let a = a.eval_in(read, env)?;
+                let b = b.eval_in(read, env)?;
                 binary(*op, a, b)
             }
-            Expr::If(c, a, b) => match c.eval(read)? {
-                Value::Bool(true) => a.eval(read),
-                Value::Bool(false) => b.eval(read),
+            Expr::If(c, a, b) => match c.eval_in(read, env)? {
+                Value::Bool(true) => a.eval_in(read, env),
+                Value::Bool(false) => b.eval_in(read, env),
+                Value::Series { .. } => Err(EvalError::Type("a condition over a series is not one bool; use where(cond, a, b) for each element".into())),
                 v => Err(EvalError::Type(format!("condition is {}, not bool", v.kind().name()))),
             },
             Expr::Call(name, args) => {
-                let vals: Result<Vec<Value>, EvalError> = args.iter().map(|a| a.eval(read)).collect();
+                let vals: Result<Vec<Value>, EvalError> = args.iter().map(|a| a.eval_in(read, env)).collect();
                 floor::call(name, &vals?)
             }
-            Expr::Get(e, field) => match e.eval(read)? {
+            Expr::Get(e, field) => match e.eval_in(read, env)? {
                 Value::Record { kind, fields } => fields.get(field).cloned().ok_or_else(|| {
                     let names: Vec<&str> = fields.keys().copied().collect();
                     EvalError::Type(format!("{kind} has no field {field:?}; fields: {}", names.join(", ")))
@@ -237,7 +340,7 @@ impl Expr {
 
     pub fn parse(text: &str) -> Result<Expr, ParseError> {
         let tokens = lex(text)?;
-        let mut p = Parser { tokens, pos: 0 };
+        let mut p = Parser { tokens, pos: 0, scope: Vec::new() };
         let e = p.expr(PREC_TERNARY)?;
         if p.pos < p.tokens.len() {
             return Err(ParseError(format!("unexpected {:?} after expression", p.tokens[p.pos])));
@@ -302,8 +405,37 @@ impl Expr {
                 e.write(f, PREC_GET)?;
                 write!(f, ".{field}")
             }
+            Expr::Var(name) => f.write_str(name),
+            Expr::Lambda(params, body) => {
+                let paren = PREC_TERNARY < parent;
+                if paren {
+                    f.write_str("(")?;
+                }
+                write_params(params, f)?;
+                f.write_str(" => ")?;
+                body.write(f, PREC_TERNARY)?;
+                if paren {
+                    f.write_str(")")?;
+                }
+                Ok(())
+            }
+            Expr::Apply(g, args) => {
+                g.write(f, PREC_GET)?;
+                f.write_str("(")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    a.write(f, PREC_TERNARY)?;
+                }
+                f.write_str(")")
+            }
         }
     }
+}
+
+fn lookup(env: &[(&'static str, Value)], name: &str) -> Result<Value, EvalError> {
+    env.iter().rev().find(|(n, _)| *n == name).map(|(_, v)| v.clone()).ok_or_else(|| EvalError::Type(format!("{name} is not defined here")))
 }
 
 fn write_lit(v: &Value, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -322,6 +454,13 @@ fn write_lit(v: &Value, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Value::Ref(id) => write!(f, "ref({id})"),
         // The exact magnitude in the canonical unit, so parse(print(q)) == q.
         Value::Quantity { si, dim } => write!(f, "{} {}", crate::value::fmt_num(*si), dim.canonical_unit()),
+        // Exact SI magnitudes, so parse(print(s)) == s: `series(0.1, 0.2)`,
+        // or `(series(4e-7, 5e-7) * 1 m)` with a unit.
+        Value::Series { data, dim } => {
+            let items: Vec<String> = data.iter().map(|x| crate::value::fmt_num(*x)).collect();
+            if dim.is_none() { write!(f, "series({})", items.join(", ")) } else { write!(f, "(series({}) * 1 {})", items.join(", "), dim.canonical_unit()) }
+        }
+        Value::Fn(c) => write!(f, "({c})"),
         other => write!(f, "{other}"),
     }
 }
@@ -396,8 +535,21 @@ fn quantity_op(op: BinOp, a: &Value, b: &Value) -> Option<Result<Value, EvalErro
 fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
     use Value::*;
     let num = |x: &Value| x.as_f64();
+    if matches!(a, Series { .. }) || matches!(b, Series { .. }) {
+        if let Some(r) = crate::series::binary(op, &a, &b) {
+            return r;
+        }
+    }
     if let Some(r) = quantity_op(op, &a, &b) {
         return r;
+    }
+    // Text joins: '…' lexes as an enum literal, so a quoted word in either
+    // style joins like a string (`'λ = ' + fmt(x)`).
+    if op == BinOp::Add
+        && let (Str(_) | Enum(_), Str(_) | Enum(_)) = (&a, &b)
+        && (matches!(a, Str(_)) || matches!(b, Str(_)))
+    {
+        return Ok(Str(format!("{}{}", a.as_str().expect("text"), b.as_str().expect("text"))));
     }
     Ok(match op {
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => match (&a, &b) {
@@ -449,6 +601,18 @@ pub fn format_number(n: f64, digits: Option<usize>) -> String {
 }
 
 fn fmt(args: &[Value]) -> Result<String, EvalError> {
+    // A unit written '…' lexes as an enum; it means the same as "…".
+    let owned: Vec<Value> = args.iter().map(|v| match v { Value::Enum(s) => Value::Str(s.clone()), v => v.clone() }).collect();
+    let args = &owned[..];
+    if let Some(Value::Series { data, dim }) = args.first() {
+        let shown: Vec<String> = data.iter().take(crate::value::SERIES_SHOWN).map(|&x| {
+            let mut one = vec![Value::quantity(x, *dim)];
+            one.extend(args[1..].iter().cloned());
+            fmt(&one)
+        }).collect::<Result<_, _>>()?;
+        let more = if data.len() > crate::value::SERIES_SHOWN { ", …" } else { "" };
+        return Ok(format!("{}{more}", shown.join(", ")));
+    }
     let bad = |m: String| EvalError::Type(format!("fmt: {m}"));
     let digits = |v: &Value| v.as_f64().filter(|d| d.is_finite()).map(|d| d.clamp(0.0, 15.0) as usize).ok_or_else(|| bad(format!("digits must be a number, got {}", v.kind().name())));
     match args {
@@ -485,8 +649,15 @@ pub mod floor {
 
     pub const NAMES: &[&str] = &[
         "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt",
-        "pow", "hypot", "fmt", "sci", "str",
+        "pow", "hypot", "log10", "ln", "exp", "sinc", "fmt", "sci", "str", "series", "range", "step", "len", "at", "first",
+        "last", "sum", "mean", "interp", "ticks", "nice_lo", "nice_hi", "where", "map", "sample", "rgb", "hsl", "mix",
+        "spectrum", "points", "smooth", "circles", "segments", "bars", "area",
     ];
+
+    /// The scalar arms of [`call`], for the series module to apply per element.
+    pub fn scalar(func: &str, args: &[Value]) -> Result<Value, EvalError> {
+        call_scalar(func, args)
+    }
 
     /// Magnitudes and dimensions of `n` number-or-quantity arguments.
     fn args_of(func: &str, args: &[Value], n: usize) -> Result<Vec<(f64, Dim)>, EvalError> {
@@ -527,6 +698,11 @@ pub mod floor {
     }
 
     pub fn call(func: &str, args: &[Value]) -> Result<Value, EvalError> {
+        // Series, functions, colours and path data (plot.md §1–§2), and
+        // broadcasting the scalar functions below over series.
+        if let Some(r) = crate::series::call(func, args) {
+            return r;
+        }
         // Text from values (plans/specs/text.md §6): readouts bind a text
         // node's content to these, so formatting is visible in the binding.
         match func {
@@ -545,9 +721,24 @@ pub mod floor {
             }
             _ => {}
         }
+        call_scalar(func, args)
+    }
+
+    fn call_scalar(func: &str, args: &[Value]) -> Result<Value, EvalError> {
         let n = |k| args_of(func, args, k);
         let q = Value::quantity;
         Ok(match func {
+            "log10" | "ln" | "exp" | "sinc" => {
+                let a = n(1)?;
+                plain(func, &a, &[0])?;
+                let x = a[0].0;
+                Value::Number(match func {
+                    "log10" => x.log10(),
+                    "ln" => x.ln(),
+                    "exp" => x.exp(),
+                    _ => if x == 0.0 { 1.0 } else { x.sin() / x },
+                })
+            }
             "abs" => {
                 let a = n(1)?;
                 q(a[0].0.abs(), a[0].1)
@@ -849,6 +1040,7 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                     "!=" => "!=",
                     "&&" => "&&",
                     "||" => "||",
+                    "=>" => "=>",
                     _ => match c {
                         b'+' => "+",
                         b'-' => "-",
@@ -872,6 +1064,8 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
 struct Parser {
     tokens: Vec<Tok>,
     pos: usize,
+    /// The lambda parameters in scope, innermost last.
+    scope: Vec<&'static str>,
 }
 
 impl Parser {
@@ -948,17 +1142,88 @@ impl Parser {
         }
     }
 
-    /// A primary followed by any number of `.field` accesses.
+    /// A primary followed by any number of `.field` accesses, and calls of
+    /// a function value (`f(x)`, `#e.args.f(x)`).
     fn postfix(&mut self) -> Result<Expr, ParseError> {
         let mut e = self.primary()?;
-        while self.peek() == Some(&Tok::Dot) {
-            self.next();
-            match self.next() {
-                Some(Tok::Ident(name)) => e = Expr::Get(Box::new(e), crate::sym::intern(&name)),
-                got => return Err(ParseError(format!("expected a field name after '.', got {got:?}"))),
+        loop {
+            match self.peek() {
+                Some(Tok::Dot) => {
+                    self.next();
+                    match self.next() {
+                        Some(Tok::Ident(name)) => e = Expr::Get(Box::new(e), crate::sym::intern(&name)),
+                        got => return Err(ParseError(format!("expected a field name after '.', got {got:?}"))),
+                    }
+                }
+                Some(Tok::LParen) if matches!(e, Expr::Var(_) | Expr::Ref(_) | Expr::Get(..) | Expr::Apply(..) | Expr::Lambda(..)) => {
+                    self.next();
+                    let args = self.args()?;
+                    e = Expr::Apply(Box::new(e), args);
+                }
+                _ => return Ok(e),
             }
         }
-        Ok(e)
+    }
+
+    /// Arguments after an opening `(`, through the closing `)`.
+    fn args(&mut self) -> Result<Vec<Expr>, ParseError> {
+        let mut args = Vec::new();
+        if self.peek() == Some(&Tok::RParen) {
+            self.next();
+            return Ok(args);
+        }
+        loop {
+            args.push(self.expr(PREC_TERNARY)?);
+            match self.next() {
+                Some(Tok::Comma) => continue,
+                Some(Tok::RParen) => return Ok(args),
+                got => return Err(ParseError(format!("expected , or ) in call, got {got:?}"))),
+            }
+        }
+    }
+
+    /// `(a, b) => …` from the `(` at the cursor: the parameter names, or
+    /// `None` (cursor unmoved) when this `(` opens something else.
+    fn lambda_params(&mut self) -> Option<Vec<String>> {
+        let mut i = self.pos + 1;
+        let mut names = Vec::new();
+        if self.tokens.get(i) == Some(&Tok::RParen) {
+            return None;
+        }
+        loop {
+            let Some(Tok::Ident(n)) = self.tokens.get(i) else { return None };
+            names.push(n.clone());
+            i += 1;
+            match self.tokens.get(i) {
+                Some(Tok::Comma) => i += 1,
+                Some(Tok::RParen) => break,
+                _ => return None,
+            }
+        }
+        if self.tokens.get(i + 1) != Some(&Tok::Op("=>")) {
+            return None;
+        }
+        self.pos = i + 2;
+        Some(names)
+    }
+
+    /// A lambda's body, with `params` in scope; the cursor is past `=>`.
+    fn lambda(&mut self, params: Vec<String>) -> Result<Expr, ParseError> {
+        let mut interned = Vec::new();
+        for p in &params {
+            if matches!(p.as_str(), "true" | "false") || Constant::from_name(p).is_some() {
+                return Err(ParseError(format!("{p} cannot name a parameter")));
+            }
+            if interned.contains(&crate::sym::intern(p)) {
+                return Err(ParseError(format!("parameter {p} is named twice")));
+            }
+            interned.push(crate::sym::intern(p));
+        }
+        let depth = self.scope.len();
+        self.scope.extend(interned.iter().copied());
+        let body = self.expr(PREC_TERNARY);
+        self.scope.truncate(depth);
+        Ok(Expr::Lambda(interned, Box::new(body?)))
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
@@ -969,6 +1234,11 @@ impl Parser {
             Some(Tok::Enum(s)) => Ok(Expr::Lit(Value::Enum(s))),
             Some(Tok::Ref(l)) => Ok(Expr::Ref(l)),
             Some(Tok::LParen) => {
+                self.pos -= 1;
+                if let Some(params) = self.lambda_params() {
+                    return self.lambda(params);
+                }
+                self.pos += 1;
                 let e = self.expr(PREC_TERNARY)?;
                 self.expect(Tok::RParen)?;
                 Ok(e)
@@ -992,6 +1262,11 @@ impl Parser {
                     _ => Err(ParseError("vector literals have 2 or 3 numbers".into())),
                 }
             }
+            Some(Tok::Ident(name)) if self.peek() == Some(&Tok::Op("=>")) => {
+                self.next();
+                self.lambda(vec![name])
+            }
+            Some(Tok::Ident(name)) if self.scope.iter().any(|p| *p == name) => Ok(Expr::Var(crate::sym::intern(&name))),
             Some(Tok::Ident(name)) => match name.as_str() {
                 "true" => Ok(Expr::Lit(Value::Bool(true))),
                 "false" => Ok(Expr::Lit(Value::Bool(false))),
@@ -1001,20 +1276,11 @@ impl Parser {
                     Ok(Expr::Const(Constant::from_name(c).expect("checked")))
                 }
                 _ => {
-                    self.expect(Tok::LParen)?;
-                    let mut args = Vec::new();
-                    if self.peek() == Some(&Tok::RParen) {
-                        self.next();
-                        return Ok(Expr::Call(name, args));
+                    if self.peek() != Some(&Tok::LParen) {
+                        return Err(ParseError(format!("{name} is not defined here: a function call needs (…), and a name is only defined inside a lambda that takes it (x => …)")));
                     }
-                    loop {
-                        args.push(self.expr(PREC_TERNARY)?);
-                        match self.next() {
-                            Some(Tok::Comma) => continue,
-                            Some(Tok::RParen) => break,
-                            got => return Err(ParseError(format!("expected , or ) in call, got {got:?}"))),
-                        }
-                    }
+                    self.next();
+                    let args = self.args()?;
                     Ok(Expr::Call(name, args))
                 }
             },

@@ -262,7 +262,7 @@ sample count: a plot of 10,000 samples is still one path per series.
 ```xml
 <edit><place def="std:plot" in="#main" x="600" y="800" w="420" h="260" name="Screen I(y)"
   xs="{= range(-15, 15, 241)}"
-  ys="{= pow(cos(pi * $self.xs / #F.port.signal), 2) * pow(sinc($self.xs / #E.port.signal), 2)}"
+  ys="{= pow(cos(pi * $self.xs / #F.port.signal), 2) * pow(sinc(pi * $self.xs / #E.port.signal), 2)}"
   x_label="y (mm)" y_label="I / I₀" style="area"/></edit>
 ```
 
@@ -332,3 +332,38 @@ shows how often slots fall short.
 | 2. Bound paths and sized uses | §2, §3 | a bound `'M ' + points(…)` renders, hit-tests, exports to SVG, refuses point editing; a sized test template resizes from each grip, text keeping its size, and undo restores the box in one step |
 | 3. `std:plot` | §4–§6 | placed from the Library tab and by `<place>`; a slider-driven `ys` redraws live; corner resize reflows ticks and labels; the cursor drags along the curve; the double-slit example of §4.4 in one short edit; run-iron smoke updated |
 | 4. Appear and disappear | machines.md phases 1–2 | §8 |
+
+## 12. Done
+
+**2026-11-08: phase 1, and phase 2's bound paths.**
+
+- `Value::Series { data, dim }` and `Value::Fn` (`value.rs`): series written as
+  `"0 0.4 0.9"` or `"400 450 500 nm"` (`Value::parse_series`; the UI's `coerce` sends
+  `{ser: text}`), stored as `{"ser": [[si…], "unit"]}`, shown in full up to 16 and as
+  `series(121 · nm, 400…700)` beyond (`units::display_unit` picks one unit for all).
+  A function cannot be loaded as a constant.
+- Expressions (`expr.rs`, new `series.rs`): broadcasting arithmetic and every scalar
+  floor function; comparisons give 1/0 per element; `==` stays whole-value (§10 Q2).
+  `series range step len at first last sum mean min(s) max(s) interp ticks nice_lo
+  nice_hi where log10 ln exp sinc map sample rgb hsl mix spectrum` and the path-data
+  writers `points smooth circles segments bars area`. Ticks use d3's step thresholds.
+  `sinc(x) = sin(x)/x` (unnormalised).
+- Lambdas: `x => body`, `(x, y) => body`, `f(x)`; parameters are `Expr::Var`, scoped by
+  the parser; evaluating a lambda closes it (`Closure`), and its references stay
+  dependencies of the binding that holds it.
+- `'…'` (an enum literal) joins with `+` and serves as `fmt`'s unit like `"…"`.
+- `path.d`: a constant written as path data is parsed (`Geometry::from_svg_path`, via
+  kurbo); a binding that yields text is parsed in the graph (`graph::as_leaf_kind`), a
+  parse failure being a binding error. `contour::bound` is the third form; `op.rs`
+  refuses contour children beside it; the select tool frames it as `Kind::Fixed` and
+  never point-edits it. packed-paths.md's "constant only" is superseded.
+- `stroke.path_length` scales dashes on paths (`materialize::stroke_style`) and
+  exports as `pathLength`. Other shapes ignore it for now.
+- Not yet: sized instances (§3), `std:plot` (§4), the generated function table (§7;
+  the prompt is updated by hand), `<look values=…>`, the share-key content hash
+  (§1.5; series hash by `Debug`, which is complete for them).
+- Follow-up seen in the app: a binding's quantity literals print in SI (`400 nm` reads
+  back as `0.00000040000000000000003 m` in views and files). Printing the prefixed
+  form when it round-trips exactly is a small change to `write_lit`, but it changes
+  saved binding text, so it is left for a deliberate format decision.
+

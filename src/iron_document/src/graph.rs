@@ -393,7 +393,7 @@ impl Reactive {
                 let runtime = &self.runtime;
                 let resolved = &self.resolved;
                 let nodes = &self.nodes;
-                expr.eval(&|l| read_with(overlay, runtime, resolved, nodes, doc, l))
+                expr.eval(&|l| read_with(overlay, runtime, resolved, nodes, doc, l)).and_then(|v| as_leaf_kind(leaf, v))
             };
             match result {
                 Ok(v) => {
@@ -432,4 +432,16 @@ fn read_with(
         return Some(s.value.clone());
     }
     doc.leaf(leaf.node, leaf.path)?.constant().cloned()
+}
+
+/// A bound value as its leaf holds it: SVG path data on a geometry leaf
+/// (`path.d`) becomes geometry (plans/specs/plot.md §2).
+fn as_leaf_kind(leaf: Leaf, v: Value) -> Result<Value, crate::expr::EvalError> {
+    match v {
+        // '…' lexes as an enum literal; either quoting is text here.
+        Value::Str(text) | Value::Enum(text) if leaf.path.kind() == crate::value::ValueKind::Geometry => crate::geometry::Geometry::from_svg_path(&text)
+            .map(|g| Value::Geometry(std::sync::Arc::new(g)))
+            .map_err(crate::expr::EvalError::Type),
+        v => Ok(v),
+    }
 }

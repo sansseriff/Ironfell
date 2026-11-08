@@ -49,6 +49,14 @@ pub fn packed(doc: &Document, path: NodeId) -> Option<&Arc<Geometry>> {
     doc.get::<PathShape>(path).and_then(|p| p.d.constant()).and_then(Value::as_geometry).filter(|g| !g.is_empty())
 }
 
+/// Whether `path` is drawn by an expression: its `path.d` is bound (SVG path
+/// data, plans/specs/plot.md §2). A third form beside packed and expanded:
+/// drawn from its resolved value, never point-edited, and it has no
+/// `contour` children.
+pub fn bound(doc: &Document, path: NodeId) -> bool {
+    doc.get::<PathShape>(path).is_some_and(|p| p.d.expr().is_some())
+}
+
 /// `path`'s outlines whichever form it takes, as resolved (a resize
 /// previews a packed path's `d`): its `path.d` when packed, shared, with its
 /// outlines cached; built from its `contour` and `point` children when

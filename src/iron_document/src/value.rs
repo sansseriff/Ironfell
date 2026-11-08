@@ -39,9 +39,17 @@ pub enum Value {
     /// Field order is canonical (sorted), so files and views are stable.
     Record { kind: &'static str, fields: BTreeMap<&'static str, Value> },
     /// A path's outlines, packed (plans/specs/packed-paths.md). Shared, so
-    /// copies of a document or an op never copy the anchors. Constant only:
-    /// no expression produces one.
+    /// copies of a document or an op never copy the anchors. An expression
+    /// produces one only as SVG path data (a string) on a `path.d`, which
+    /// the store parses (plans/specs/plot.md §2).
     Geometry(Arc<Geometry>),
+    /// Numbers with one unit (plans/specs/plot.md §1): magnitudes in SI base
+    /// units and their shared dimension. Shared, so copies are free.
+    Series { data: Arc<[f64]>, dim: Dim },
+    /// A function, `x => body` (plot.md §1.4), closed: every reference in
+    /// its body was replaced by its value when the lambda was evaluated. It
+    /// exists only as a resolved value; no file or op holds one.
+    Fn(Arc<crate::expr::Closure>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -57,6 +65,8 @@ pub enum ValueKind {
     Quantity,
     Record,
     Geometry,
+    Series,
+    Fn,
     /// Only as a declared field kind: the field accepts any value. Used by
     /// clip endpoints, whose kind is the target leaf's. No value has it.
     Any,
@@ -75,6 +85,8 @@ impl ValueKind {
         ValueKind::Quantity,
         ValueKind::Record,
         ValueKind::Geometry,
+        ValueKind::Series,
+        ValueKind::Fn,
         ValueKind::Any,
     ];
 
@@ -95,6 +107,8 @@ impl ValueKind {
             ValueKind::Quantity => "quantity",
             ValueKind::Record => "record",
             ValueKind::Geometry => "geometry",
+            ValueKind::Series => "series",
+            ValueKind::Fn => "function",
             ValueKind::Any => "any",
         }
     }
@@ -114,7 +128,45 @@ impl Value {
             Value::Quantity { .. } => ValueKind::Quantity,
             Value::Record { .. } => ValueKind::Record,
             Value::Geometry(_) => ValueKind::Geometry,
+            Value::Series { .. } => ValueKind::Series,
+            Value::Fn(_) => ValueKind::Fn,
         }
+    }
+
+    /// A series of SI magnitudes with one dimension.
+    pub fn series(data: impl Into<Arc<[f64]>>, dim: Dim) -> Value {
+        Value::Series { data: data.into(), dim }
+    }
+
+    pub fn as_series(&self) -> Option<(&Arc<[f64]>, Dim)> {
+        match self {
+            Value::Series { data, dim } => Some((data, *dim)),
+            _ => None,
+        }
+    }
+
+    /// `"0 0.4 0.9"`, `"400 450 500 nm"`, `"1, 2, 3"`: two or more numbers,
+    /// then an optional unit for all of them, as `stroke.dash` and SVG's
+    /// `points` are written. `None` when the text is not that shape.
+    pub fn parse_series(text: &str) -> Option<Result<Value, String>> {
+        let words: Vec<&str> = text.split(|c: char| c == ',' || c.is_whitespace()).filter(|w| !w.is_empty()).collect();
+        let numeric = |w: &str| w.parse::<f64>().is_ok();
+        let (nums, unit) = match words.split_last() {
+            Some((last, rest)) if !numeric(last) && !rest.is_empty() && rest.iter().all(|w| numeric(w)) => (rest, Some(*last)),
+            _ if words.iter().all(|w| numeric(w)) => (&words[..], None),
+            _ => return None,
+        };
+        if nums.len() < 2 {
+            return None;
+        }
+        let (factor, dim) = match unit {
+            Some(u) => match units::parse_unit(u) {
+                Ok(u) => (u.factor, u.dim),
+                Err(e) => return Some(Err(e.to_string())),
+            },
+            None => (1.0, Dim::NONE),
+        };
+        Some(Ok(Value::series(nums.iter().map(|w| w.parse::<f64>().expect("checked") * factor).collect::<Vec<_>>(), dim)))
     }
 
     /// A record of `kind` with the given fields (names interned).
@@ -288,6 +340,23 @@ impl Value {
                     },
                     // `{"geo": [[closed, [x, y, ix, iy, ox, oy, …]], …]}`.
                     "geo" => Geometry::from_json(inner).map(|g| Value::Geometry(Arc::new(g))),
+                    // `{"ser": [[si, …], "unit"]}` in files (SI, canonical
+                    // unit, `""` for plain numbers); `{"ser": "400 450 nm"}`
+                    // from the model surface.
+                    "ser" => match inner {
+                        J::Array(a) => match a.as_slice() {
+                            [J::Array(items), J::String(u)] => {
+                                let data: Option<Vec<f64>> = items.iter().map(|i| i.as_f64()).collect();
+                                let data = data.ok_or_else(|| "ser holds numbers".to_owned())?;
+                                let (factor, dim) = if u.is_empty() { (1.0, Dim::NONE) } else { let u = units::parse_unit(u).map_err(|e| e.to_string())?; (u.factor, u.dim) };
+                                Ok(Value::series(data.into_iter().map(|x| x * factor).collect::<Vec<_>>(), dim))
+                            }
+                            _ => Err("ser must be [[numbers], \"unit\"]".to_owned()),
+                        },
+                        J::String(t) => Value::parse_series(t).unwrap_or_else(|| Err(format!("{t:?} is not a series: two or more numbers, then an optional unit"))),
+                        _ => Err("ser must be [[numbers], \"unit\"] or \"numbers unit\"".to_owned()),
+                    },
+                    "fn" => Err("a function cannot be a constant; write it as a binding, {= x => …}".to_owned()),
                     other => Err(format!("unknown value tag {other:?}")),
                 }
             }
@@ -349,8 +418,40 @@ impl fmt::Display for Value {
                 f.write_str("}")
             }
             Value::Geometry(g) => write!(f, "{g}"),
+            Value::Series { data, dim } => f.write_str(&series_text(data, *dim)),
+            Value::Fn(c) => write!(f, "{c}"),
         }
     }
+}
+
+/// How many elements a series shows in a view before it is summarised.
+pub const SERIES_SHOWN: usize = 16;
+
+/// A series as the model reads and writes it: up to [`SERIES_SHOWN`]
+/// numbers in one unit (`400 450 500 nm`), else a summary
+/// (`series(121 · nm, 400…700)`).
+fn series_text(data: &[f64], dim: Dim) -> String {
+    let (unit, factor) = if dim.is_none() {
+        (String::new(), 1.0)
+    } else {
+        let biggest = data.iter().copied().filter(|x| x.is_finite()).fold(0.0f64, |m, x| m.max(x.abs()));
+        units::display_unit(biggest, dim)
+    };
+    let num = |x: f64| fmt_num(units::round12(x / factor));
+    if data.len() <= SERIES_SHOWN {
+        let mut out: Vec<String> = data.iter().map(|&x| num(x)).collect();
+        if !unit.is_empty() {
+            out.push(unit);
+        }
+        if data.len() < 2 {
+            return format!("series({})", out.join(" "));
+        }
+        return out.join(" ");
+    }
+    let lo = data.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = data.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let unit = if unit.is_empty() { String::new() } else { format!(" · {unit}") };
+    format!("series({}{unit}, {}…{})", data.len(), num(lo), num(hi))
 }
 
 /// Shortest faithful rendering: `120` not `120.0`, `0.1` not `0.10000000000000001`.
@@ -399,6 +500,19 @@ impl Serialize for Value {
             Value::Geometry(g) => {
                 let mut m = s.serialize_map(Some(1))?;
                 m.serialize_entry("geo", &g.to_json())?;
+                m.end()
+            }
+            Value::Series { data, dim } => {
+                let unit = if dim.is_none() { String::new() } else { dim.canonical_unit() };
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("ser", &(&**data, unit))?;
+                m.end()
+            }
+            // Never saved (a file or op cannot hold one; `from_json` refuses
+            // it). Written as its source so a view or log can show it.
+            Value::Fn(c) => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("fn", &c.to_string())?;
                 m.end()
             }
         }
@@ -502,6 +616,8 @@ mod tests {
             Value::parse_quantity("3 kg*m2/s3").unwrap(),
             Value::parse_quantity("1/s2").unwrap(),
             Value::record("gaussian_beam", [("waist", Value::parse_quantity("30 um").unwrap()), ("m2", Value::Number(1.1))]),
+            Value::series(vec![0.0, 0.4, 0.9], Dim::NONE),
+            Value::parse_series("400 450 500 nm").unwrap().unwrap(),
         ];
         for v in cases {
             let j = serde_json::to_string(&v).unwrap();
@@ -528,6 +644,14 @@ mod tests {
         assert_eq!(Value::parse_quantity("1550 nm").unwrap().to_string(), "1.55 µm");
         let beam = Value::record("gaussian_beam", [("waist", Value::parse_quantity("30 um").unwrap()), ("m2", Value::Number(1.1))]);
         assert_eq!(beam.to_string(), "gaussian_beam{m2=1.1, waist=30 µm}");
+        assert_eq!(Value::parse_series("400 450 500 nm").unwrap().unwrap().to_string(), "400 450 500 nm");
+        assert_eq!(Value::parse_series("0, 0.5, 1").unwrap().unwrap().to_string(), "0 0.5 1");
+        let long = Value::series((0..121).map(|i| 400e-9 + i as f64 * 2.5e-9).collect::<Vec<_>>(), Dim::LENGTH);
+        assert_eq!(long.to_string(), "series(121 · nm, 400…700)");
+        assert!(Value::parse_series("hello world").is_none());
+        assert!(Value::parse_series("3 nm").is_none(), "one number is a quantity, not a series");
+        assert_eq!(serde_json::to_string(&Value::parse_series("1 2 mm").unwrap().unwrap()).unwrap(), r#"{"ser":[[0.001,0.002],"m"]}"#);
+        assert!(Value::from_json(&serde_json::json!({"fn": "x => x"})).is_err());
         assert_eq!(serde_json::to_string(&beam).unwrap(), r#"{"rec":["gaussian_beam",{"m2":1.1,"waist":{"q":[0.000029999999999999997,"m"]}}]}"#);
     }
 }

@@ -157,6 +157,20 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
   const ops: object[] = [];
   const opVerb: number[] = [];
   const skip = new Set(['id', 'type', 'parent', 'after', 'first', 'to', 'from', 'rel', 'path', 'value', 'bind']);
+  // A verb's leaf attributes. Only placement and the verb's own words are
+  // reserved: `value` is a leaf (slider.value, key.value) unless `path=`
+  // names the leaf (the `path="…" value="…"` form), and `x.bind="expr"`, the
+  // form the view prints, is accepted as `x="{= expr}"`.
+  const leafPairs = (a: Record<string, string>, reserved: Set<string>): [string, string][] => {
+    const out: [string, string][] = [];
+    for (const [k, raw] of Object.entries(a)) {
+      if (reserved.has(k)) continue;
+      if (k.endsWith('.bind')) out.push([k.slice(0, -'.bind'.length), `{= ${raw}}`]);
+      else out.push([k, raw]);
+    }
+    return out;
+  };
+  const placement = new Set(['id', 'type', 'parent', 'after', 'first']);
   for (const v of verbs) {
     const a = v.attrs;
     const at = (msg: string) => new EditError(`op ${v.index} <${v.verb}>: ${msg}`, v.index);
@@ -168,8 +182,7 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
         const id = mintedFor.get(v.index) ?? resolveId(a.id, 'id', v.index);
         const { parent, order } = takeKey(v);
         const comps: Record<string, Record<string, SlotJson>> = {};
-        for (const [k, raw] of Object.entries(a)) {
-          if (skip.has(k)) continue;
+        for (const [k, raw] of leafPairs(a, placement)) {
           let leaf;
           try {
             leaf = resolveLeaf(schema, type, k);
@@ -189,7 +202,7 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
         const type = a.type; // optional hint for bare attribute names
         const pairs: [string, string][] = [];
         if (a.path) pairs.push([a.path, a.bind !== undefined ? `{= ${a.bind}}` : (a.value ?? '')]);
-        for (const [k, raw] of Object.entries(a)) if (!skip.has(k)) pairs.push([k, raw]);
+        pairs.push(...leafPairs(a, a.path ? new Set([...placement, 'path', 'value', 'bind']) : placement));
         if (pairs.length === 0) throw at('nothing to set; give leaf attributes such as x="10" or path="size.h" value="10"');
         const byComp: Record<string, Record<string, SlotJson>> = {};
         for (const [k, raw] of pairs) {

@@ -146,6 +146,9 @@ fn inline(doc: &Document, reactive: &Reactive, expr: &Expr) -> Expr {
         Expr::If(c, a, b) => Expr::If(i(c), i(a), i(b)),
         Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| inline(doc, reactive, a)).collect()),
         Expr::Get(e, f) => Expr::Get(i(e), f),
+        Expr::Var(_) => expr.clone(),
+        Expr::Lambda(ps, body) => Expr::Lambda(ps.clone(), i(body)),
+        Expr::Apply(g, args) => Expr::Apply(i(g), args.iter().map(|a| inline(doc, reactive, a)).collect()),
     }
 }
 

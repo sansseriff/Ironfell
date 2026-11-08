@@ -2,7 +2,7 @@
  * The registry schema as `schema` returns it: the one source for
  * the manifest, attribute resolution, and value coercion.
  */
-export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'enum' | 'ref' | 'quantity' | 'record' | 'any';
+export type Kind = 'number' | 'bool' | 'string' | 'color' | 'vec2' | 'vec3' | 'enum' | 'ref' | 'quantity' | 'record' | 'geometry' | 'series' | 'function' | 'any';
 
 export interface Schema {
   facets: Record<string, Record<string, Kind>>;
@@ -57,10 +57,14 @@ export type SlotJson =
   | { enum: string }
   | { ref: string }
   | { q: string }
+  | { ser: string }
   | { bind: string };
 
 /** `9.58 mW`, `1550nm`, `3 kg*m2/s3`: a magnitude followed by a unit. The unit table lives in Rust. */
 const QUANTITY = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*[A-Za-zµμ°Ω][A-Za-z0-9µμ°Ω*·/^-]*$/;
+const NUM = String.raw`[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?`;
+/** Two or more numbers, then an optional unit for all: a series (plans/specs/plot.md §1.2). */
+const SERIES = new RegExp(String.raw`^${NUM}(?:[\s,]+${NUM})+(?:\s+[A-Za-zµμ°Ω][A-Za-z0-9µμ°Ω*·/^-]*)?$`);
 
 /**
  * Coerce liberally (doc 04 §9.4): `12`, `"12"`, `12px` are all 12; colours
@@ -92,6 +96,14 @@ export function coerce(kind: Kind, raw: string): SlotJson {
       return { q: text };
     case 'record':
       throw new Error(`"${raw}": records are set field by field or by a binding, not as one attribute`);
+    // SVG path data; the engine parses it (plans/specs/plot.md §2).
+    case 'geometry':
+      return raw;
+    case 'series':
+      if (!SERIES.test(text)) throw new Error(`"${raw}" is not a series (two or more numbers, then an optional unit: 400 450 500 nm)`);
+      return { ser: text };
+    case 'function':
+      throw new Error(`"${raw}": a function is written as a binding, {= x => …}`);
     case 'color':
       return { rgba: parseColor(text) };
     case 'vec2':
@@ -102,6 +114,9 @@ export function coerce(kind: Kind, raw: string): SlotJson {
       return v;
     }
     case 'any': {
+      // A run of numbers is a series, except two or three with commas and
+      // no unit, which stay a vector (`1,2`).
+      if (SERIES.test(text) && !(text.includes(',') && !/\s[A-Za-zµμ°Ω]/.test(text) && text.split(/[,\s]+/).filter(Boolean).length <= 3)) return { ser: text };
       if (QUANTITY.test(text) && !/^(true|false)$/i.test(text)) return { q: text };
       if (/^-?\d/.test(text) && !text.includes(',')) return Number(text);
       if (/^[\[(]?\s*-?\d/.test(text) && text.includes(',')) return parseVector(text);

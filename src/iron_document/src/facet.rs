@@ -392,6 +392,10 @@ facets! {
         miter: Number = Value::Number(4.0),
         dash: Str = Value::Str(String::new()),
         dash_offset: Number = Value::Number(0.0),
+        // SVG's `pathLength`: when positive, `dash` and `dash_offset` are
+        // measured as if the path were this long (1 makes them fractions:
+        // `dash="1 1"`, `dash_offset="{= 1 - t}"` draws a path on).
+        path_length: Number = Value::Number(0.0),
     }
 
     /// Which mesh asset a `mesh` node shows.
@@ -722,8 +726,10 @@ pub enum LeafError {
         expected: ValueKind,
         got: ValueKind,
     },
-    /// A binding on a leaf no expression can produce (a path's `d`).
+    /// A binding on a leaf no expression can produce.
     ConstantOnly(LeafPath),
+    /// A value of the right kind's text that does not parse (path data).
+    BadValue { path: LeafPath, message: String },
 }
 
 impl fmt::Display for LeafError {
@@ -731,6 +737,7 @@ impl fmt::Display for LeafError {
         match self {
             LeafError::UnknownFacet(c) => write!(f, "unknown component {c:?}"),
             LeafError::ConstantOnly(path) => write!(f, "{path} holds a constant; it cannot be bound"),
+            LeafError::BadValue { path, message } => write!(f, "{path}: {message}"),
             LeafError::UnknownField { facet, field } => {
                 if facet.is_dynamic() {
                     return write!(f, "{} has no argument {:?} (arguments come from the definition's in ports)", facet.name(), field);
@@ -788,9 +795,16 @@ impl Facet {
             facet: kind,
             field: field.to_owned(),
         })?;
-        if slot.expr().is_some() && expected == ValueKind::Geometry {
-            return Err(LeafError::ConstantOnly(LeafPath::new(kind, field).expect("field checked above")));
-        }
+        // A path's outlines may be written as SVG path data, constant or
+        // bound (plans/specs/plot.md §2): text becomes geometry here, and a
+        // binding's text in the graph.
+        let slot = match slot {
+            Slot::Const(Value::Str(text)) if expected == ValueKind::Geometry => {
+                let g = crate::geometry::Geometry::from_svg_path(&text).map_err(|message| LeafError::BadValue { path: LeafPath::new(kind, field).expect("field checked above"), message })?;
+                Slot::Const(Value::Geometry(std::sync::Arc::new(g)))
+            }
+            slot => slot,
+        };
         // A binding's kind is only known when it is evaluated; the graph
         // reports a mismatch then. Constants are checked here.
         if let Some(v) = slot.constant()

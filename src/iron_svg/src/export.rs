@@ -480,6 +480,10 @@ impl Writer<'_> {
                 if num(offset) != "0" {
                     attrs.push(("stroke-dashoffset", num(offset)));
                 }
+                let nominal = self.f(id, "stroke.path_length", 0.0);
+                if nominal > 0.0 {
+                    attrs.push(("pathLength", num(nominal)));
+                }
             }
         }
 

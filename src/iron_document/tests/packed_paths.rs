@@ -86,18 +86,21 @@ fn the_view_summarises_a_packed_path() {
     assert!(view.contains(r#"d="2 contours, 6 anchors""#), "{view}");
 }
 
+/// `path.d` may be bound to SVG path data (plans/specs/plot.md §2, which
+/// lifted packed-paths.md's "constant only"): the path is then neither
+/// packed nor expanded but bound, drawn from the resolved value.
 #[test]
-fn path_d_cannot_be_bound() {
+fn path_d_may_be_bound_to_path_data() {
     let (mut store, id) = with_packed();
-    let bound = Slot::Bound(Expr::parse("1 + 1").unwrap());
-    let err = store.apply(tx("bind", vec![Op::Set { id, path: path("path.d"), slot: bound.clone() }])).unwrap_err();
-    assert_eq!(err[0].kind, ErrorKind::TypeMismatch, "{err:?}");
-    // Nor on a created path.
-    let id2 = store.document().next_ids(1)[0];
-    let mut p = PathShape::default();
-    p.d = bound;
-    let err = store.apply(tx("draw", vec![Op::Create { id: id2, ty: ty("path"), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), p.wrap()] }])).unwrap_err();
-    assert_eq!(err[0].kind, ErrorKind::TypeMismatch, "{err:?}");
+    let bound = Slot::Bound(Expr::parse("'M 0 0 L 40 0 L 40 20'").unwrap());
+    store.apply(tx("bind", vec![Op::Set { id, path: path("path.d"), slot: bound.clone() }])).unwrap();
+    assert!(contour::packed(store.document(), id).is_none());
+    assert!(contour::bound(store.document(), id));
+    assert_eq!(contour::geometry(&store, id).anchor_count(), 3);
+    // Expanding a bound path's points makes nothing to edit.
+    assert!(contour::expand_points(&store, id).is_empty());
+    store.undo(0).unwrap().unwrap();
+    assert!(contour::packed(store.document(), id).is_some());
 }
 
 #[test]

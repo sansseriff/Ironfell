@@ -32,7 +32,8 @@ what the request needs.
 VIEW
   <document version="N"> holds nodes. Every node has an opaque id like #3F; copy
   ids exactly, never invent one. Attributes are the node's leaves. attr.bind="expr"
-  means the attr is bound to an expression and its shown value is derived.
+  means the attr is bound to an expression and its shown value is derived; write
+  a binding as attr="{= expr}" (attr.bind="expr" is accepted too).
   <driven-by ref="#clip" prop="…"/> means a clip animates that leaf. A node with
   elided has children you were not shown; count="N" is the real count.
 
@@ -131,14 +132,39 @@ VALUES
   with radii rx, ry (a circle is an ellipse with rx = ry). A path holds contours, each an
   outline holding its points in order (x, y in the path's space; handles ix iy ox oy
   relative to the point) and closed or not; a second contour inside the first is a hole
-  when it runs the other way, or always under fill_rule evenodd.
+  when it runs the other way, or always under fill_rule evenodd. Write a path's shape
+  as SVG path data instead: <create type="path" d="M 0 0 C 20 0 20 40 40 40"/>, and
+  bind d to path data to draw a curve from numbers (EXPRESSIONS); such a path has no
+  contour children. stroke.path_length is SVG's pathLength: with path_length="1",
+  dash="1 1" and dash_offset="{= 1 - t}" draws the path on as t goes 0 to 1.
+  A series is numbers with one unit, written "0 0.4 0.9 1.6" or "400 450 500 nm"
+  (two or more); a long one shows as series(121 · nm, 400…700).
 
 EXPRESSIONS (for {= …} bindings)
   #id.facet.field references a leaf; + - * / % < <= > >= == != && || !;
   cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
   lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan atan2(y,x) sqrt pow(x,y) hypot(x,y);
   the constant pi; angles in radians; quantity literals 9.58 mW. A binding may not
-  depend on itself.
+  depend on itself. Inside an attribute write < as &lt; (or flip the comparison).
+  Text: '…' strings (single quotes inside an attribute), + joins them; fmt(x) a
+  number or quantity as text, fmt(x, d) with d decimals, fmt(q, 'nm', d) converted
+  to that unit with it appended, sci(x, d) scientific, str(v) anything. So a text
+  node shows a live value: content="{= 'λ = ' + fmt(#L.port.signal, 'nm', 0)}".
+  Series (never type out sample values; generate them): range(a, b, n) n values a..b,
+  step(a, b, d), series(a, b, …). Arithmetic and every function above apply per
+  element (NumPy-style), a number meeting every element: pow(cos(pi * xs / d), 2).
+  len at(s, i) first last sum mean, min(s) max(s), interp(xs, ys, x), where(cond, a, b)
+  (comparisons give 1/0 per element), ticks(lo, hi, n) about n round values,
+  nice_lo/nice_hi(lo, hi, n), log10 ln exp, sinc(x) = sin(x)/x.
+  Functions: x => body or (x, y) => body is a function value; map(s, f), sample(f, a, b,
+  n), and f(x) calls one. Its references are read when it is made, so a function bound
+  to a slider is remade when the slider moves.
+  Path data (plain-number coordinates, pixels) for a bound path.d: 'M ' + points(xs, ys)
+  a polyline, smooth(xs, ys) a curve through the points, circles(xs, ys, r) scatter
+  dots, segments(x0, y0, x1, y1) ticks or grid lines, bars(xs, ys, base, w), area(xs,
+  ys, base); a non-finite sample breaks the line. Map data to pixels with scale(xs,
+  lo, hi, 0, w). Colours: rgb(r, g, b[, a]) 0–255, hsl(h, s, l[, a]) degrees and 0–100,
+  mix(c1, c2, t), spectrum(λ) visible light's colour for a wavelength.
 
 MODEL AND COMPOSITIONS
   Two views come first. <model-view> lists entities: what things are, each with its

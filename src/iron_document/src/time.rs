@@ -31,18 +31,102 @@ pub struct Sample {
 }
 
 pub fn ease(name: &str, u: f64) -> f64 {
-    let u = u.clamp(0.0, 1.0);
-    match name {
-        "ease_in" => u * u,
-        "ease_out" => 1.0 - (1.0 - u) * (1.0 - u),
-        "ease_in_out" => {
-            if u < 0.5 {
-                2.0 * u * u
-            } else {
-                1.0 - (-2.0 * u + 2.0).powi(2) / 2.0
+    curve(name).map_or(u.clamp(0.0, 1.0), |c| c.at(u))
+}
+
+/// An easing curve (plans/specs/wires-and-formulas.md §5): one vocabulary
+/// for keys, `ease()` in formulas, transitions and layout glides.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Curve {
+    Linear,
+    /// Today's quadratics, kept so files read the same.
+    In,
+    Out,
+    InOut,
+    /// CSS's `cubic-bezier(x1, y1, x2, y2)`.
+    Bezier([f64; 4]),
+    /// 0 until the end, then 1.
+    Hold,
+}
+
+/// The named curves, with what each is.
+pub const CURVES: &[(&str, &str)] = &[
+    ("linear", "constant speed"),
+    ("ease_in", "starts slowly"),
+    ("ease_out", "ends slowly"),
+    ("ease_in_out", "starts and ends slowly"),
+    ("ease", "CSS's ease, cubic-bezier(0.25, 0.1, 0.25, 1)"),
+    ("easy_ease", "After Effects' Easy Ease, cubic-bezier(0.33, 0, 0.67, 1)"),
+    ("hold", "jumps at the end"),
+];
+
+/// A curve by name, or `cubic-bezier(x1, y1, x2, y2)` with x1, x2 in 0..1.
+pub fn curve(name: &str) -> Result<Curve, String> {
+    let name = name.trim();
+    Ok(match name {
+        "linear" => Curve::Linear,
+        "ease_in" => Curve::In,
+        "ease_out" => Curve::Out,
+        "ease_in_out" => Curve::InOut,
+        "ease" => Curve::Bezier([0.25, 0.1, 0.25, 1.0]),
+        "easy_ease" => Curve::Bezier([0.33, 0.0, 0.67, 1.0]),
+        "hold" => Curve::Hold,
+        _ => {
+            let inner = name.strip_prefix("cubic-bezier(").and_then(|r| r.strip_suffix(')')).ok_or_else(|| {
+                format!("unknown easing {name:?}; use one of {} or cubic-bezier(x1, y1, x2, y2)", CURVES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "))
+            })?;
+            let n: Vec<f64> = inner.split(',').map(|p| p.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|_| format!("{name}: four numbers"))?;
+            let [x1, y1, x2, y2] = n[..] else { return Err(format!("{name}: four numbers")) };
+            if !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&x2) || ![y1, y2].iter().all(|v| v.is_finite()) {
+                return Err(format!("{name}: x1 and x2 must be within 0..1"));
+            }
+            Curve::Bezier([x1, y1, x2, y2])
+        }
+    })
+}
+
+impl Curve {
+    /// Progress `u` (clamped to 0..1) shaped by the curve.
+    pub fn at(self, u: f64) -> f64 {
+        let u = if u.is_nan() { 0.0 } else { u.clamp(0.0, 1.0) };
+        match self {
+            Curve::Linear => u,
+            Curve::In => u * u,
+            Curve::Out => 1.0 - (1.0 - u) * (1.0 - u),
+            Curve::InOut => {
+                if u < 0.5 {
+                    2.0 * u * u
+                } else {
+                    1.0 - (-2.0 * u + 2.0).powi(2) / 2.0
+                }
+            }
+            Curve::Hold => {
+                if u >= 1.0 { 1.0 } else { 0.0 }
+            }
+            Curve::Bezier([x1, y1, x2, y2]) => {
+                // x(s) = u for s by Newton's method, bisection when it
+                // stalls (as browsers do), then y(s).
+                let b = |a1: f64, a2: f64, s: f64| 3.0 * (1.0 - s) * (1.0 - s) * s * a1 + 3.0 * (1.0 - s) * s * s * a2 + s * s * s;
+                let db = |a1: f64, a2: f64, s: f64| 3.0 * (1.0 - s) * (1.0 - s) * a1 + 6.0 * (1.0 - s) * s * (a2 - a1) + 3.0 * s * s * (1.0 - a2);
+                let mut s = u;
+                for _ in 0..8 {
+                    let (x, d) = (b(x1, x2, s) - u, db(x1, x2, s));
+                    if x.abs() < 1e-7 {
+                        return b(y1, y2, s);
+                    }
+                    if d.abs() < 1e-6 {
+                        break;
+                    }
+                    s = (s - x / d).clamp(0.0, 1.0);
+                }
+                let (mut lo, mut hi) = (0.0, 1.0);
+                for _ in 0..50 {
+                    s = (lo + hi) / 2.0;
+                    if b(x1, x2, s) < u { lo = s } else { hi = s }
+                }
+                b(y1, y2, s)
             }
         }
-        _ => u,
     }
 }
 

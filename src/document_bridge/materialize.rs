@@ -601,6 +601,7 @@ impl Reader<'_> {
                 }
                 _ => Shape2d::Rect { w: r.num("size.w", 100.0), h: r.num("size.h", 100.0), radii: ["tl", "tr", "br", "bl"].map(|c| r.num(&format!("corners.{c}"), 0.0)) },
             };
+            let shape = trimmed(r, shape);
             let fill = r.color("fill.color").map(|mut c| {
                 c[3] *= r.num("fill.opacity", 1.0);
                 c
@@ -609,6 +610,35 @@ impl Reader<'_> {
             let shadow = r.color("shadow.color").map(|color| Shadow2d { color, dx: r.num("shadow.dx", 0.0), dy: r.num("shadow.dy", 4.0), std_dev: r.num("shadow.blur", 4.0).max(0.0) * 0.5 });
             Doc2d { shape, fill, stroke, shadow }
         }
+    }
+}
+
+/// A shape whose `trim` cuts its outline (After Effects' Trim Paths,
+/// plans/specs/wires-and-formulas.md §5): drawn as a path whose stroked
+/// outline is the kept part and whose fill is the whole shape. Untrimmed
+/// shapes, and ellipse arcs, are left as they are.
+fn trimmed(r: &Reader, shape: Shape2d) -> Shape2d {
+    if r.get("trim.end").is_none() {
+        return shape;
+    }
+    let (start, end, offset) = (r.num("trim.start", 0.0) as f64, r.num("trim.end", 1.0) as f64, r.num("trim.offset", 0.0) as f64);
+    if start <= 0.0 && end >= 1.0 {
+        return shape;
+    }
+    let cut = |outline: &kurbo::BezPath| std::sync::Arc::new(iron_document::geometry::trim(outline, start, end, offset));
+    match shape {
+        Shape2d::Path { outline, fill, even_odd } => Shape2d::Path { outline: cut(&outline), fill, even_odd },
+        Shape2d::Rect { w, h, radii } => {
+            let anchors = iron_document::shape::rect_outline(w as f64, h as f64, radii.map(f64::from));
+            let whole = iron_document::geometry::Geometry::new(vec![iron_document::geometry::PackedContour { closed: true, anchors }]).outline().clone();
+            Shape2d::Path { outline: cut(&whole), fill: Some(whole), even_odd: false }
+        }
+        Shape2d::Ellipse { rx, ry, arc: None } => {
+            use kurbo::Shape as _;
+            let whole = std::sync::Arc::new(kurbo::Ellipse::new((0.0, 0.0), (rx as f64, ry as f64), 0.0).to_path(0.05));
+            Shape2d::Path { outline: cut(&whole), fill: Some(whole), even_odd: false }
+        }
+        other => other,
     }
 }
 

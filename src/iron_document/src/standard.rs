@@ -593,11 +593,18 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
         facets.extend([words.wrap(), font.wrap(), paint(c), named(name)]);
         d.child(id, "text", parent, facets);
     };
-    let path_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, dd: String, stroke: Stroke, fill: Fill| {
+    let path_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, dd: String, stroke: Stroke, fill: Fill, trim_end: Option<String>| {
         let id = ids.id();
         let mut shape = crate::facet::PathShape::default();
         shape.d = bound(dd);
-        d.child(id, "path", parent, vec![at(0.0, 0.0).wrap(), shape.wrap(), stroke.wrap(), fill.wrap(), named(name)]);
+        let mut facets = vec![at(0.0, 0.0).wrap(), shape.wrap(), stroke.wrap(), fill.wrap(), named(name)];
+        // Drawn on by `trim.end` (Trim Paths).
+        if let Some(e) = trim_end {
+            let mut t = crate::facet::Trim::default();
+            t.end = bound(e);
+            facets.push(t.wrap());
+        }
+        d.child(id, "path", parent, facets);
     };
     let line = |c: [f32; 4], width: f64| {
         let mut s = Stroke::default();
@@ -632,7 +639,7 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     clip.w = bound(aw.clone());
     clip.h = bound(ah.clone());
     d.child(area, "group", t, vec![area_at.wrap(), clip.wrap(), named("area")]);
-    path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line([0.9, 0.91, 0.94, 1.0], 1.0), no_fill());
+    path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line([0.9, 0.91, 0.94, 1.0], 1.0), no_fill(), None);
     for (k, (sx, sy, c)) in [(xs.clone(), ys3.clone(), color3.clone()), (xs.clone(), ys2.clone(), color2.clone()), (px1.clone(), py1.clone(), color.clone())].into_iter().enumerate() {
         let (x, y) = (xp(&sx), yp(&sy));
         let draw = format!(
@@ -641,22 +648,19 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
         let solid = format!("({style} == 'scatter' || {style} == 'bars')");
         let mut stroke = line([0.0, 0.0, 0.0, 1.0], 2.0);
         stroke.color = bound(format!("{solid} ? rgb(0, 0, 0, 0) : {c}"));
-        stroke.path_length = n(1.0);
-        stroke.dash = bound(format!("{reveal} < 1 ? \"1 1\" : \"\""));
-        stroke.dash_offset = bound(format!("1 - {reveal}"));
         let mut fill = Fill::default();
         fill.color = bound(c.clone());
         fill.opacity = bound(format!("{solid} ? {reveal} : ({style} == 'area' ? 0.18 * {reveal} : 0)"));
-        path_part(d, ids, area, &format!("series {}", 3 - k), draw, stroke, fill);
+        path_part(d, ids, area, &format!("series {}", 3 - k), draw, stroke, fill, Some(reveal.clone()));
     }
     let cx = xp(&cursor);
     let cy = yp(&y_at);
     let mut dashed = line(muted, 1.0);
     dashed.dash = Slot::Const(Value::Str("4 3".into()));
-    path_part(d, ids, area, "cursor", format!("isnan({cursor}) ? \"\" : segments({cx}, 0, {cx}, {ah})"), dashed, no_fill());
+    path_part(d, ids, area, "cursor", format!("isnan({cursor}) ? \"\" : segments({cx}, 0, {cx}, {ah})"), dashed, no_fill(), None);
     let mut dot_fill = Fill::default();
     dot_fill.color = bound(color.clone());
-    path_part(d, ids, area, "cursor dot", format!("isnan({cursor}) ? \"\" : circles({cx}, {cy}, 4)"), line([1.0, 1.0, 1.0, 1.0], 1.5), dot_fill);
+    path_part(d, ids, area, "cursor dot", format!("isnan({cursor}) ? \"\" : circles({cx}, {cy}, 4)"), line([1.0, 1.0, 1.0, 1.0], 1.5), dot_fill, None);
     text_part(d, ids, area, "cursor value", bound(format!("isnan({cursor}) ? 0 : {cx} + 6")), bound(format!("isnan({cursor}) ? 0 : {cy} - 20")), format!("isnan({cursor}) ? \"\" : fmt(sig({y_at}, 3))"), 11.0, 600.0, None, 0.0, ink);
     // 4. Axes, tick marks and labels, unclipped, in the same space.
     let axes = ids.id();
@@ -664,8 +668,8 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     axes_at.x = n(left);
     axes_at.y = bound(top.clone());
     d.child(axes, "group", t, vec![axes_at.wrap(), named("axes")]);
-    path_part(d, ids, axes, "axis lines", format!("'M 0,0 L 0,' + str({ah}) + ' L ' + str({aw}) + ',' + str({ah})"), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill());
-    path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill());
+    path_part(d, ids, axes, "axis lines", format!("'M 0,0 L 0,' + str({ah}) + ' L ' + str({aw}) + ',' + str({ah})"), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), None);
+    path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), None);
     let x_unit = format!("unit_of({px1})");
     let y_unit = format!("unit_of({py1})");
     for i in 0..8 {

@@ -398,6 +398,16 @@ facets! {
         path_length: Number = Value::Number(0.0),
     }
 
+    /// After Effects' Trim Paths (plans/specs/wires-and-formulas.md §5): the
+    /// part of a shape's outline that is stroked, as fractions of its length,
+    /// `start` to `end`, shifted by `offset` (wrapping). The fill is whole.
+    /// "Draw this line on" is `trim.end` going from 0 to 1.
+    Trim / "trim" => Trim {
+        start: Number = Value::Number(0.0),
+        end: Number = Value::Number(1.0),
+        offset: Number = Value::Number(0.0),
+    }
+
     /// Which mesh asset a `mesh` node shows.
     Mesh / "mesh" => Mesh { asset: Str = Value::Str("torus".to_owned()) }
 
@@ -428,7 +438,7 @@ facets! {
     Key / "key" => Key {
         t: Number = Value::Number(0.0),
         value: Any = Value::Number(0.0),
-        easing: Enum = Value::Enum("linear".to_owned()) => ["linear", "ease_in", "ease_out", "ease_in_out", "hold"],
+        easing: Enum = Value::Enum("linear".to_owned()) => ["linear", "ease_in", "ease_out", "ease_in_out", "ease", "easy_ease", "hold"],
     }
 
     /// The playhead (timeline.md §4.1): the time clips are sampled at, and

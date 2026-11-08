@@ -188,6 +188,10 @@ impl Writer<'_> {
         self.get(id, leaf).and_then(|v| v.as_f64()).unwrap_or(default)
     }
 
+    fn has_trim(&self, id: NodeId) -> bool {
+        self.get(id, "trim.end").is_some()
+    }
+
     fn color(&self, id: NodeId, leaf: &str) -> Option<[f32; 4]> {
         self.get(id, leaf).and_then(|v| v.as_color())
     }
@@ -483,6 +487,16 @@ impl Writer<'_> {
                 let nominal = self.f(id, "stroke.path_length", 0.0);
                 if nominal > 0.0 {
                     attrs.push(("pathLength", num(nominal)));
+                }
+            } else if self.has_trim(id) {
+                // Trim Paths as SVG's dash trick: a length-1 path, one dash the
+                // kept length, offset back to where it starts.
+                let (start, end, offset) = (self.f(id, "trim.start", 0.0), self.f(id, "trim.end", 1.0), self.f(id, "trim.offset", 0.0));
+                if start > 0.0 || end < 1.0 {
+                    let keep = (end - start).clamp(0.0, 1.0);
+                    attrs.push(("pathLength", "1".to_owned()));
+                    attrs.push(("stroke-dasharray", format!("{} {}", num(keep), num(1.0 - keep + 1e-9))));
+                    attrs.push(("stroke-dashoffset", num(-(start + offset).rem_euclid(1.0))));
                 }
             }
         }

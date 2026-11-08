@@ -272,6 +272,54 @@ fn thousands(n: usize) -> String {
     out
 }
 
+/// `path` cut to the part from `start` to `end` of its length (fractions,
+/// every subpath in order, as one run), shifted by `offset` and wrapping:
+/// After Effects' Trim Paths (plans/specs/wires-and-formulas.md §5).
+pub fn trim(path: &BezPath, start: f64, end: f64, offset: f64) -> BezPath {
+    use kurbo::{ParamCurve, ParamCurveArclen};
+    const ACC: f64 = 1e-3;
+    let (start, end) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
+    if end <= start {
+        return BezPath::new();
+    }
+    if end - start >= 1.0 {
+        return path.clone();
+    }
+    let segs: Vec<kurbo::PathSeg> = path.segments().collect();
+    let lens: Vec<f64> = segs.iter().map(|s| s.arclen(ACC)).collect();
+    let total: f64 = lens.iter().sum();
+    if !(total > 0.0) {
+        return BezPath::new();
+    }
+    let a = (start + offset).rem_euclid(1.0);
+    let b = a + (end - start);
+    // The kept spans in 0..1; a span past 1 wraps to the start.
+    let spans: Vec<(f64, f64)> = if b <= 1.0 { vec![(a, b)] } else { vec![(a, 1.0), (0.0, b - 1.0)] };
+    let mut out = BezPath::new();
+    for (lo, hi) in spans {
+        let (lo, hi) = (lo * total, hi * total);
+        let mut at = 0.0;
+        let mut pen: Option<Point> = None;
+        for (seg, len) in segs.iter().zip(&lens) {
+            let (s0, s1) = (at, at + len);
+            at = s1;
+            if s1 <= lo || s0 >= hi || *len <= 0.0 {
+                continue;
+            }
+            let t0 = if lo > s0 { seg.inv_arclen(lo - s0, ACC) } else { 0.0 };
+            let t1 = if hi < s1 { seg.inv_arclen(hi - s0, ACC) } else { 1.0 };
+            let piece = seg.subsegment(t0..t1);
+            let from = piece.start();
+            if pen.is_none_or(|p| (p - from).hypot() > 1e-9) {
+                out.move_to(from);
+            }
+            out.push(piece.as_path_el());
+            pen = Some(piece.end());
+        }
+    }
+    out
+}
+
 fn preview(data: &str) -> String {
     let short: String = data.chars().take(60).collect();
     if short.len() < data.len() { format!("{short}…") } else { short }

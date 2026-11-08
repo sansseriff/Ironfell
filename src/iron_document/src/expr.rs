@@ -652,6 +652,7 @@ pub mod floor {
         "pow", "hypot", "log10", "ln", "exp", "sinc", "fmt", "sci", "str", "series", "range", "step", "len", "at", "first",
         "last", "sum", "mean", "interp", "ticks", "nice_lo", "nice_hi", "where", "map", "sample", "rgb", "hsl", "mix",
         "spectrum", "points", "smooth", "circles", "segments", "bars", "area", "isnan", "kind", "concat", "unit_of", "in_unit", "sig",
+        "ease", "window",
     ];
 
     /// The scalar arms of [`call`], for the series module to apply per element.

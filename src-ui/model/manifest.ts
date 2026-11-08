@@ -135,8 +135,10 @@ VALUES
   when it runs the other way, or always under fill_rule evenodd. Write a path's shape
   as SVG path data instead: <create type="path" d="M 0 0 C 20 0 20 40 40 40"/>, and
   bind d to path data to draw a curve from numbers (EXPRESSIONS); such a path has no
-  contour children. stroke.path_length is SVG's pathLength: with path_length="1",
-  dash="1 1" and dash_offset="{= 1 - t}" draws the path on as t goes 0 to 1.
+  contour children. trim (rect, ellipse, path) is Trim Paths: trim.start..trim.end of
+  the outline is stroked (fractions; trim.offset shifts it), the fill stays whole, so
+  trim.end="{= …}" from 0 to 1 draws a shape on. stroke.path_length is SVG's
+  pathLength, scaling dash and dash_offset.
   A series is numbers with one unit, written "0 0.4 0.9 1.6" or "400 450 500 nm"
   (two or more); a long one shows as series(121 · nm, 400…700).
 
@@ -155,6 +157,11 @@ EXPRESSIONS (for {= …} bindings)
   element (NumPy-style), a number meeting every element: pow(cos(pi * xs / d), 2).
   len at(s, i) first last sum mean, min(s) max(s), interp(xs, ys, x), where(cond, a, b)
   (comparisons give 1/0 per element), ticks(lo, hi, n) about n round values,
+  ease(curve, t) shapes progress t (0–1) by an easing curve: linear ease_in ease_out
+  ease_in_out ease easy_ease hold, or "cubic-bezier(x1, y1, x2, y2)"; window(t, a, b)
+  maps the slice a–b of t to 0–1 (a delay or stagger): a staggered draw-on is
+  trim.end="{= ease('easy_ease', window(#p, 0.3, 0.6))}". Clip keys take the same
+  names in easing.
   nice_lo/nice_hi(lo, hi, n), log10 ln exp, sinc(x) = sin(x)/x, sig(x, n) n significant
   figures, isnan(x), kind(v), concat(s1, s2, …), unit_of(x), in_unit(x, 'nm').
   Functions: x => body or (x, y) => body is a function value; map(s, f), sample(f, a, b,

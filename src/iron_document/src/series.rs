@@ -184,6 +184,8 @@ pub fn call(func: &str, args: &[Value]) -> Option<Result<Value, EvalError>> {
         "sample" => sample(args),
         "rgb" | "hsl" | "mix" | "spectrum" => colour(func, args),
         "points" | "smooth" | "circles" | "segments" | "bars" | "area" => path_data(func, args),
+        "ease" => ease(args),
+        "window" => window(args),
         "isnan" => isnan(args),
         "kind" => match args {
             [v] => Ok(Value::Str(v.kind().name().to_owned())),
@@ -195,6 +197,32 @@ pub fn call(func: &str, args: &[Value]) -> Option<Result<Value, EvalError>> {
         _ if any_series && ELEMENTWISE.contains(&func) => broadcast(func, args),
         _ => return None,
     })
+}
+
+/// `ease(curve, t)`: progress t (clamped to 0..1) shaped by an easing curve,
+/// a name (`easy_ease`) or `cubic-bezier(x1, y1, x2, y2)`; t may be a series.
+fn ease(args: &[Value]) -> Result<Value, EvalError> {
+    let [c, t] = args else { return arity("ease", 2, args.len()) };
+    let name = c.as_str().ok_or_else(|| EvalError::Type(format!("ease: the curve is a name or 'cubic-bezier(…)', got {}", c.kind().name())))?;
+    let curve = crate::time::curve(name).map_err(|e| EvalError::Type(format!("ease: {e}")))?;
+    match numeric("ease", t)? {
+        Arg::One(x, d) if d.is_none() => Ok(Value::Number(curve.at(x))),
+        Arg::Many(xs, d) if d.is_none() => Ok(Value::series(xs.iter().map(|&x| curve.at(x)).collect::<Vec<_>>(), Dim::NONE)),
+        a => err(format!("ease: progress is a plain number from 0 to 1, got {}", describe(a.dim()))),
+    }
+}
+
+/// `window(t, a, b)`: the slice a..b of progress t mapped to 0..1, clamped:
+/// a delay or a stagger.
+fn window(args: &[Value]) -> Result<Value, EvalError> {
+    let [t, a, b] = args else { return arity("window", 3, args.len()) };
+    let (a, b) = (plain_number("window", a)?, plain_number("window", b)?);
+    let one = |x: f64| if b == a { if x >= b { 1.0 } else { 0.0 } } else { ((x - a) / (b - a)).clamp(0.0, 1.0) };
+    match numeric("window", t)? {
+        Arg::One(x, d) if d.is_none() => Ok(Value::Number(one(x))),
+        Arg::Many(xs, d) if d.is_none() => Ok(Value::series(xs.iter().map(|&x| one(x)).collect::<Vec<_>>(), Dim::NONE)),
+        a => err(format!("window: progress is a plain number, got {}", describe(a.dim()))),
+    }
 }
 
 /// `isnan(x)`: whether a number (or a quantity's magnitude) is NaN, the

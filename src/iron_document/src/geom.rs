@@ -310,7 +310,7 @@ pub fn effect_of(doc: &Document, leaf: Leaf) -> GeometryEffect {
         FacetKind::Transform2d if matches!(ty, "point" | "contour") => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
         FacetKind::Transform2d => GeometryEffect::Placement(leaf.node),
         FacetKind::Handles | FacetKind::Contour => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
-        FacetKind::Size | FacetKind::PathShape | FacetKind::Text | FacetKind::Font | FacetKind::Radius | FacetKind::Arc | FacetKind::Stroke | FacetKind::Shadow | FacetKind::Frame | FacetKind::Embed | FacetKind::EmbedCamera => {
+        FacetKind::Size | FacetKind::PathShape | FacetKind::Trim | FacetKind::Text | FacetKind::Font | FacetKind::Radius | FacetKind::Arc | FacetKind::Stroke | FacetKind::Shadow | FacetKind::Frame | FacetKind::Embed | FacetKind::EmbedCamera => {
             GeometryEffect::Local(leaf.node)
         }
         // A camera's aspect shapes every embed that looks through it; rare,

@@ -110,7 +110,7 @@
   // layout already places it (its position is locked by it).
   const placedByLayout = $derived(fields("transform2d").some(f => f.edit === "locked" && (f.why ?? "").includes("layout")));
   const addKinds = $derived(["arc", "group_clip", "layout", "rules", ...(placedByLayout ? ["layout_item"] : [])]);
-  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "shadow", "text", "font", "args"].includes(c.kind)));
+  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "trim", "shadow", "text", "font", "args"].includes(c.kind)));
   // A text node's box is its words' unless it is fixed (or wraps): only
   // then are W and H its own (plans/specs/text.md §2).
   const textSizing = $derived(fields("text").length ? (field("text", "sizing", "auto_width", "enum").text ?? "auto_width") : null);
@@ -345,10 +345,28 @@
                     <div class="property-popover-body">
                       <div class="subheading">Basic</div>
                       <div class="property-grid">
-                        {#each fields("stroke").filter(f => ["join", "cap", "miter", "dash", "dash_offset"].includes(f.field)) as f (f.leaf)}
-                          <PropertyField field={f} node={inspected.node} label={{ join: "Join", cap: "Cap", miter: "Miter limit", dash: "Dash pattern", dash_offset: "Dash offset" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+                        {#each fields("stroke").filter(f => ["join", "cap", "miter", "dash", "dash_offset", "path_length"].includes(f.field)) as f (f.leaf)}
+                          <PropertyField field={f} node={inspected.node} label={{ join: "Join", cap: "Cap", miter: "Miter limit", dash: "Dash pattern", dash_offset: "Dash offset", path_length: "Path length" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
                         {/each}
                       </div>
+                      <!-- Trim Paths (plans/specs/wires-and-formulas.md §5): the part of the
+                           outline that is stroked; "draw on" animates End from 0 to 1. -->
+                      {#if supports("trim")}
+                        <div class="subheading trim-heading"><span>Trim</span>
+                          {#if fields("trim").length}
+                            <button class="property-icon" aria-label="Remove trim" title="Remove trim" onclick={() => component("trim", false)}><Minus size={15} /></button>
+                          {:else}
+                            <button class="property-icon" aria-label="Add trim" title="Add trim" onclick={() => component("trim", true)}><Plus size={15} strokeWidth={1.5} /></button>
+                          {/if}
+                        </div>
+                        {#if fields("trim").length}
+                          <div class="property-grid">
+                            {#each fields("trim") as f (f.leaf)}
+                              <PropertyField field={f} node={inspected.node} label={{ start: "Start", end: "End", offset: "Offset" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+                            {/each}
+                          </div>
+                        {/if}
+                      {/if}
                     </div>
                   </Popover.Content></Popover.Portal>
                 </Popover.Root>
@@ -403,6 +421,7 @@
 
 <style>
   .properties { padding: 0 !important; font-size: 12px; }
+  .trim-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
   .panel-heading { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
   .panel-heading span { border-bottom: 2px solid var(--accent); padding-bottom: 4px; }
   .row { padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 4px; }

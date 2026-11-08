@@ -180,3 +180,27 @@ than a separate mechanism (to be folded into machines.md when it is built).
 | 2 | Read-only wires around the selection (bindings and connections, pins as ends, off-canvas chips, hover formula); collapsing pins (`port.show`, `port.group`, the "+ N more" pill, §4a) | selecting the plot shows three pins, its wires, and "+ 16 more"; selecting a slider shows what it drives |
 | 3 | Drawing: drag value to property (generalised link drag), drop on a component's body with the compatible-input menu (§4a), chips menu, editing chips, formula chip | a person wires a slider into a plot by dropping it on the plot and picking `cursor`, and makes the three staggered draw-ons of §5 without typing |
 | 4 | Bundling, chain following, read-only reasons | a selection with 19 wires stays legible |
+
+## 8. Done
+
+**2026-11-08: phase 1.**
+
+- `time::Curve` and `time::curve(name)`: `linear`, `ease_in`, `ease_out`, `ease_in_out`
+  (the quadratics, unchanged), `ease`, `easy_ease`, `hold`, and `cubic-bezier(x1, y1,
+  x2, y2)` (x1, x2 in 0..1; Newton then bisection, as browsers solve it). `time::ease`
+  uses it, so clip keys accept `ease` and `easy_ease` (added to `key.easing`'s options).
+  Custom beziers on keys wait for `key.easing` to accept text (it is an enum); formulas
+  take them now. The `easy_ease_in`/`_out` presets are left out: After Effects' names
+  run opposite to CSS's and would confuse.
+- Floor: `ease(curve, t)` and `window(t, a, b)`, both per element over a series.
+- `trim` facet (`start`, `end`, `offset`) on rect, ellipse and path:
+  `geometry::trim` cuts an outline by arc length (every subpath in order as one run,
+  wrapping by `offset`); `materialize::trimmed` draws a trimmed rect, ellipse (not an
+  arc) or path as a path whose stroke is the kept part and whose fill is whole; SVG
+  export writes `pathLength="1"` with a dash (when no dash is set). The inspector's
+  Stroke settings popover has a Trim group (add, remove, start, end, offset) and Path
+  length.
+- `std:plot`'s series draw on through `trim.end = reveal` instead of the dash trick.
+- Not yet: the easing menu with curve previews (phase 3 and the timeline), Trim on
+  text or tables, `smooth` (§6 Q2).
+

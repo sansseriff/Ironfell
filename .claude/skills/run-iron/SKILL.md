@@ -286,8 +286,8 @@ LIVE_AGENT=1 IRON_CODEX_BIN=/path/to/codex bun .claude/skills/run-iron/chat-ui.t
 Expected output:
 
 ```text
-PASS CHAT worker: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, 7 turns in the agent log; no page errors
-PASS CHAT main: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, 7 turns in the agent log; no page errors
+PASS CHAT worker: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, dictated text, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, 7 turns in the agent log; no page errors
+PASS CHAT main: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, dictated text, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, 7 turns in the agent log; no page errors
 PASS LIVE CHAT worker: real Codex prose/visual without mutation, then validated shape creation, 2 turns in the agent log; no page errors
 ```
 

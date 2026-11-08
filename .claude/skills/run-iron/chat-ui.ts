@@ -92,7 +92,9 @@ try {
   await prompt.press('Shift+Enter');
   assert.equal(await page.locator('.chat-turn').count(), 0);
   assert.equal(await prompt.inputValue(), 'chat-test-prose\n');
-  await prompt.fill('chat-test-prose');
+  // Dictation through the accessibility API can set the text with no input
+  // event; the composer still sends it (ChatComposer.svelte, sync()).
+  await prompt.evaluate((e: HTMLTextAreaElement) => { e.value = 'chat-test-prose'; });
   await prompt.press('Enter');
   await page.locator('.chat-turn[data-status="completed"]').waitFor();
   await page.locator('[data-chat-visual] img').waitFor();
@@ -198,7 +200,7 @@ try {
   assert.equal(await page.evaluate(() => (window as any).__iron.save()), beforeStop);
   assert.deepEqual(errors, []);
   const logged = await checkAgentLog();
-  console.log(`PASS CHAT ${runtimeMode}: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, ${logged} turns in the agent log; no page errors`);
+  console.log(`PASS CHAT ${runtimeMode}: shared Model/Lesson, Markdown/visuals, safe content, history, scroll follow, IME, dictated text, drafts/modes/cursor, prose-only, review/revert/conflict, failure recovery, live progress and Stop, ${logged} turns in the agent log; no page errors`);
   }
 } catch (error) {
   await mkdir('.agents/chat', { recursive: true });

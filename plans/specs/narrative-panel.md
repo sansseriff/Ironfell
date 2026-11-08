@@ -394,6 +394,11 @@ A second pass on T3 Code (pingdotgg/t3code `main`: `ComposerSurface`,
   as a scroll event fired; only an upward scroll now releases following.
 - Enter sends, as T3's (Cmd/Ctrl+Enter still does); Shift+Enter or Alt+Enter
   is a new line; never during IME composition (also WebKit's keyCode 229).
+- Dictation: text set without an `input` event (accessibility insertion, as
+  dictation apps may use) showed in the field, but Send stayed disabled and
+  Enter sent nothing and cleared it. The composer now takes the field's text on
+  `selectionchange`, blur and before sending; `chat-ui.ts` covers it. Cmd+V
+  paste already worked (Chrome, verified).
 - Evidence: `bun test tests/` 85 pass; `bun run check` 0 errors; `chat-ui.ts`
   worker and main; fast smoke six assertions, no page errors; screenshots of
   the menu in light and dark at 2×.

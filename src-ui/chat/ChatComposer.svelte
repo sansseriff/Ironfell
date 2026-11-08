@@ -32,12 +32,27 @@
     field.style.height = 'auto';
     field.style.height = `${field.scrollHeight}px`;
   });
+
+  // Dictation (Wispr Flow, Handy, macOS Dictation) may insert text through
+  // the accessibility API, which can change the field without an `input`
+  // event; `bind:value` would then miss it, leaving Send disabled and Enter
+  // sending nothing. The caret still moves, so `selectionchange` fires: take
+  // the field's text then, on blur, and before sending.
+  function sync() { if (field && field.value !== value) value = field.value; }
+  $effect(() => {
+    const el = field;
+    if (!el) return;
+    const onSelection = () => { if (document.activeElement === el) sync(); };
+    el.addEventListener('selectionchange', sync);
+    document.addEventListener('selectionchange', onSelection);
+    return () => { el.removeEventListener('selectionchange', sync); document.removeEventListener('selectionchange', onSelection); };
+  });
 </script>
 
-<form class="composer" class:compact aria-label="Chat composer" onsubmit={(event) => { event.preventDefault(); if (!blocked) submit(); }}>
+<form class="composer" class:compact aria-label="Chat composer" onsubmit={(event) => { event.preventDefault(); sync(); if (!blocked) submit(); }}>
   <div class="surface">
     <div class="target">{#if targetControl}{@render targetControl()}{:else}<span>{target}</span>{/if}</div>
-    <TextInput multiline bind:element={field} aria-label="Agent instruction" rows={compact ? 1 : 2} placeholder="Ask, explain, or change something…" bind:value onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); if (!blocked) submit(); } }} />
+    <TextInput multiline bind:element={field} aria-label="Agent instruction" rows={compact ? 1 : 2} placeholder="Ask, explain, or change something…" bind:value onblur={sync} onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); sync(); if (!blocked) submit(); } }} />
     <div class="footer">
       <Select value={doc.agentProvider} items={providers} label="Agent runtime" disabled={busy || doc.asking} onChange={(provider) => doc.configureAgent({ provider })} />
       <ModelEffortPicker disabled={busy || doc.asking} />

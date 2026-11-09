@@ -401,3 +401,10 @@ below it (`authoring-workflows.md` §8.3, the resistor example).
 - **Not yet:** the embed-twice exit is covered natively, not in the browser (the demo
   embeds nothing twice); flash on a chip lands in the target's panel only when
   following.
+
+**2026-11-09: the composition picker (the layout council).** The Compositions section
+above the tree (Figma's Pages) became one row in the tree's header: the composition shown,
+with its 2D/3D icon, and a menu of every composition (the one shown checked, its dims
+beside it) and New composition…. It repeated the composition tabs and took about half the
+panel (300 px of the demo's 715). Following, choosing goes to that composition; pinned, it
+shows that composition here. The pin and Collapse all stay in the same row.

@@ -12,6 +12,10 @@
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Pin from "@lucide/svelte/icons/pin";
+  import Check from "@lucide/svelte/icons/check";
+  import Plus from "@lucide/svelte/icons/plus";
+  import { DropdownMenu } from "bits-ui";
+  import NewCompositionDialog from "../NewCompositionDialog.svelte";
   import ListCollapse from "@lucide/svelte/icons/list-collapse";
   import Shapes from "@lucide/svelte/icons/shapes";
   import SquareDashed from "@lucide/svelte/icons/square-dashed";
@@ -368,54 +372,41 @@
   const iconOf = (r: Row) => (r.kind === "use" ? (r.entity ? ComponentIcon : Diamond) : (ICONS[r.kind] ?? Square));
   const label = (r: Row) => r.name ?? `${r.kind} ${r.id}`;
 
-  // The Compositions section: collapsible, and resized by its lower edge.
-  let compsOpen = $state(true);
-  /** Its height once dragged; until then it fits its rows, up to a cap. */
-  let compsHeight = $state<number | null>(null);
-  let comps: HTMLElement | undefined = $state();
-  function resize(e: PointerEvent) {
-    const bar = e.currentTarget as HTMLElement;
-    bar.setPointerCapture(e.pointerId);
-    const y0 = e.clientY;
-    const h0 = compsHeight ?? comps?.offsetHeight ?? 132;
-    const moveBar = (m: PointerEvent) => (compsHeight = Math.min(420, Math.max(44, h0 + m.clientY - y0)));
-    const up = () => {
-      bar.removeEventListener("pointermove", moveBar);
-      bar.removeEventListener("pointerup", up);
-    };
-    bar.addEventListener("pointermove", moveBar);
-    bar.addEventListener("pointerup", up);
-  }
+  // The composition picker (the layout council, 2026-11-09): one row in the
+  // tree's header in place of the Compositions list, which repeated the
+  // composition tabs and took half the panel. Following, it names the
+  // composition in view; picking one goes there (pinned, shows it here).
+  let picking = $state(false);
+  let naming = $state(false);
 </script>
 
 <div class="html-view layers">
-  <section class="comps" bind:this={comps} class:sized={compsOpen && compsHeight !== null} style:height={compsOpen && compsHeight !== null ? `${compsHeight}px` : undefined}>
-    <header>
-      <button class="section-toggle" aria-expanded={compsOpen} onclick={() => (compsOpen = !compsOpen)}>
-        {#if compsOpen}<ChevronDown size={12} strokeWidth={1.75} />{:else}<ChevronRight size={12} strokeWidth={1.75} />{/if}
-        Compositions
-      </button>
-    </header>
-    {#if compsOpen}
-      <div class="comp-list" role="listbox" aria-label="Compositions">
-        {#each entries as c (c.id)}
-          <button class="comp" class:current={c.id === current?.id} role="option" aria-selected={c.id === current?.id}
-            title={pinned ? `Show ${c.name ?? c.id}'s layers here` : `Go to ${c.name ?? c.id}`} onclick={() => choose(c.id)}>
-            {#if c.dims === "3d"}<Box size={14} strokeWidth={1.5} />{:else}<Shapes size={14} strokeWidth={1.5} />{/if}
-            <span class="name">{c.name ?? c.id}</span>
-            <span class="dims">{c.dims.toUpperCase()}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-  </section>
-  {#if compsOpen}
-    <div class="splitter" role="separator" aria-orientation="horizontal" aria-label="Resize compositions" onpointerdown={resize}></div>
-  {/if}
-
   <section class="tree-section">
     <header>
-      <span class="title">Layers</span>
+      <DropdownMenu.Root bind:open={picking}>
+        <DropdownMenu.Trigger class="comp-pick" aria-label="Composition: {current?.name ?? 'none'}" title={pinned ? "Pinned to this composition. Choose another to show its layers here" : "Following the composition in view. Choose one to go to it"} data-comp-pick>
+          {#if current?.dims === "3d"}<Box size={14} strokeWidth={1.5} />{:else}<Shapes size={14} strokeWidth={1.5} />{/if}
+          <span class="comp-name">{current?.name ?? current?.id ?? "No composition"}</span>
+          <ChevronDown size={12} strokeWidth={1.75} />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content class="ui-menu comp-menu" align="start" sideOffset={4}>
+            <DropdownMenu.Group>
+            <DropdownMenu.GroupHeading class="ui-menu-heading">{pinned ? "Show here" : "Go to"}</DropdownMenu.GroupHeading>
+            {#each entries as c (c.id)}
+              <DropdownMenu.Item class="ui-menu-item" onSelect={() => choose(c.id)}>
+                <span class="check">{#if c.id === current?.id}<Check size={14} strokeWidth={2} />{/if}</span>
+                {c.name ?? c.id}
+                <span class="ui-hint">{c.dims.toUpperCase()}</span>
+              </DropdownMenu.Item>
+            {/each}
+            </DropdownMenu.Group>
+            <DropdownMenu.Separator class="ui-menu-separator" />
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => { picking = false; naming = true; }}><span class="check"><Plus size={14} strokeWidth={2} /></span>New composition…</DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+      <span class="grow"></span>
       <IconButton icon={Pin} label={pinned ? "Unpin: follow the view in use" : "Pin to this composition"} pressed={pinned !== null} onPressedChange={setPinned} />
       <IconButton icon={ListCollapse} label="Collapse all" onclick={collapseAll} />
     </header>
@@ -466,27 +457,21 @@
   </section>
 </div>
 
+<NewCompositionDialog bind:open={naming} onCreated={(c) => choose(c.id)} />
+
 <style>
   /* An HTML view (Workspace.svelte's `.html-view` takes the pointer), without its page padding. */
   .layers { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 0 !important; gap: 0 !important; overflow: hidden !important; font-size: 12px; color: var(--fg); background: var(--bg); }
   section { display: flex; flex-direction: column; min-height: 0; }
   header { display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 8px 0 16px; flex: none; }
-  .title { flex: 1; font-weight: 600; }
-  .section-toggle { display: inline-flex; align-items: center; gap: 4px; margin-left: -16px; padding: 4px 6px 4px 2px; border: 0; border-radius: 4px; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
-  .section-toggle :global(svg) { color: var(--fg-faint); }
-  .section-toggle:hover { background: var(--hover); }
-  .section-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .comps { flex: none; overflow: hidden; max-height: 40%; }
-  .comps.sized { max-height: none; }
-  .comp-list { overflow: auto; padding: 0 8px 8px; }
-  .comp { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
-  .comp :global(svg) { color: var(--fg-faint); flex: none; }
-  .comp:hover { background: var(--hover); }
-  .comp.current { background: var(--active); font-weight: 600; }
-  .comp:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .comp .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dims { font-size: 10px; color: var(--fg-faint); }
-  .splitter { flex: none; height: 5px; margin-top: -2px; border-bottom: 1px solid var(--border); cursor: row-resize; }
+  .grow { flex: 1; }
+  :global(.comp-pick) { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
+  :global(.comp-pick svg) { flex: none; color: var(--fg-muted); }
+  :global(.comp-pick:hover), :global(.comp-pick[data-state="open"]) { background: var(--hover); }
+  :global(.comp-pick:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .comp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :global(.comp-menu) { min-width: 220px; max-height: 60vh; overflow: auto; }
+  :global(.comp-menu .check) { display: inline-grid; place-items: center; width: 16px; margin-right: 6px; }
   .tree-section { flex: 1; }
   .tree { position: relative; flex: 1; min-height: 0; overflow: auto; outline: none; }
   .spacer { position: relative; }

@@ -422,7 +422,7 @@ fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &Vi
                     && let Some(v) = slot.constant()
                     && !by.contains_key(&leaf)
                     && reactive.signal(leaf).is_none()
-                    && c.kind().default_facet().get(f).and_then(|d| d.constant()).is_some_and(|d| d == v)
+                    && c.kind().default_facet().get(f).and_then(|d| d.constant()).is_some_and(|d| d == v || matches!((d, v), (crate::value::Value::Number(a), crate::value::Value::Number(b)) if a.is_nan() && b.is_nan()))
                 {
                     continue;
                 }

@@ -357,3 +357,36 @@ the agent can tell it caught an instance mid-way.
   written. In the area style the fill fades in whole while the line draws; clipping
   the fill to the drawn length would read better.
 
+
+**2026-11-08: step 6, machines on the timeline and made by hand.**
+
+- **Per instance (Q12 b, c).** Each instance gets copies of its component's machines
+  (expand.rs, after its ports), so a transition's `ms` may read an input (each
+  instance its own length) and an instance may override any transition, tween or pose
+  through the existing override mechanism. The player reads the resolved copies.
+- **Timing (Q7, Q9).** Tweens are fractions of their transition (`start`, `end`), so
+  retiming keeps proportions, and `shape` takes any function of progress
+  (`{= p => …}`). One easing default, Easy Ease. Not built as a separate value kind:
+  the tween's fields are the timing's structure, and `shape` is its formula form.
+- **On the clock (§4, phase 2).** A clip keying a state (hold keys) drives the
+  transitions it selects from the clock, from the previous state's pose, so any
+  playhead time shows the same picture, forwards or backwards. `key.span` retimes one
+  occurrence (auto: the transition's length). The timeline draws a progress band from
+  each such key. The inspector keys a choice input with ◇, and a change to an
+  animated input keys the playhead (After Effects).
+- **By hand (Q8).** On a main, **+ State** makes the machine (a `state` input typed as
+  the choice of its states, `default` and `state_2`, one any-to-any transition of
+  300 ms Easy Ease) and pins the new state; clicking a state pins it (session only,
+  the main shows its pose, a banner says so, a field renames it); number edits made
+  while pinned become its pose (`machine::record`: a new channel resting at the old
+  value, the part bound to it, the state's value; one undo step). Transitions show
+  their length and an **easing field** (curve previews, a cubic-bezier editor).
+- Exit met in the app: a line made a component; + State; Trim End 0 recorded into
+  `hidden`; an instance's state keyed hidden at 0 s and default at 1 s by hand;
+  scrubbing 0.9 / 1.15 / 1.6 s shows nothing, half and all; a 2 s span retimes that
+  occurrence; undo restores it. `tests/machines.rs`, `tests/machine_authoring.rs`.
+- Not yet: dragging the band's end (the drag's handle is ambiguous between the key's
+  time and its span; set Span in the key's inspector instead); the strip/graph
+  panel; a "Previewing" chip on the canvas (the inspector shows it); colour channels
+  (channels are numbers); double-click does not enter a main whose only part is an
+  unfilled path (Enter does); per-view machines (Q2); per-lesson timing (§5.3).

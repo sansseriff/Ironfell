@@ -185,6 +185,8 @@ pub struct Player {
     /// Instances whose next state change snaps instead of playing: those
     /// an undo or redo set the state of.
     pub snap: std::collections::BTreeSet<NodeId>,
+    /// A state pinned for editing on its main (session only).
+    pub pinned: Option<Pinned>,
 }
 
 /// What a running transition reports, for a probe or a view.
@@ -244,6 +246,20 @@ impl Player {
             }
         }
         self.known.retain(|key, _| seen.contains(key));
+        // A pinned state shows on its main, which reads the definition's own
+        // channels.
+        let mut pinned_out = BTreeMap::new();
+        if let Some(pin) = &self.pinned
+            && let Some(p) = pose(doc, read, pin.def, pin.machine, &pin.state)
+        {
+            let value_path: LeafPath = "channel.value".parse().expect("declared leaf");
+            for (c, v) in p {
+                let rest = doc.get::<Channel>(c).and_then(|x| number(&x.value)).unwrap_or(0.0);
+                if (v - rest).abs() > 1e-12 {
+                    pinned_out.insert(Leaf { node: c, path: value_path }, Value::Number(v));
+                }
+            }
+        }
         let mut out = BTreeMap::new();
         let value_path: LeafPath = "channel.value".parse().expect("declared leaf");
         for (&(e, _), k) in self.known.iter_mut() {
@@ -269,6 +285,7 @@ impl Player {
                 }
             }
         }
+        out.extend(pinned_out);
         (out, running)
     }
 }
@@ -301,4 +318,242 @@ fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf
         (c, a + (b - a) * plan.shaped(c, p))
     }).collect();
     Some((values, Some((plan.transition, p))))
+}
+
+// ── Authoring by hand (machines.md §9 Q8) ──────────────────────────────
+
+fn order_after_last(doc: &Document, parent: NodeId) -> crate::order::OrderKey {
+    doc.children(parent).iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(crate::order::OrderKey::first, |o| crate::order::OrderKey::after(&o))
+}
+
+fn named(t: &str) -> crate::facet::Facet {
+    use crate::facet::LeafStruct;
+    let mut n = Name::default();
+    n.text = crate::value::Slot::Const(Value::Str(t.into()));
+    n.wrap()
+}
+
+fn ty(n: &str) -> crate::registry::TypeId {
+    crate::registry::TypeId::lookup(n).expect("registered")
+}
+
+/// Ids after the document's and any the ops create.
+fn fresh(doc: &Document, ops: &[crate::op::Op]) -> NodeId {
+    let mut next = doc.next_id();
+    for op in ops {
+        if let crate::op::Op::Create { id, .. } = op
+            && !id.is_session()
+            && !id.is_expanded()
+            && *id >= next
+        {
+            next = id.offset(1);
+        }
+    }
+    next
+}
+
+/// A machine's states' names, in order.
+pub fn state_names(doc: &Document, machine: NodeId) -> Vec<String> {
+    children(doc, machine, "state").into_iter().filter_map(|s| name_of(doc, s)).collect()
+}
+
+/// The `in` port a machine follows, on its definition.
+fn state_port(doc: &Document, def: NodeId, machine: NodeId) -> Option<NodeId> {
+    let port = name_of(doc, machine)?;
+    children(doc, def, "port_spec").into_iter().find(|&p| name_of(doc, p).as_deref() == Some(port.as_str()))
+}
+
+/// The state port's type, the machine's states as a choice.
+fn choice_of(names: &[String]) -> String {
+    format!("choice({})", names.join("|"))
+}
+
+/// "Add state" on a main: the first makes the machine, following a new
+/// input `state` whose type is the choice of its states, with "default"
+/// and "state_2" and one transition between any two (300 ms, Easy Ease);
+/// each later one adds a state. Answers the ops and the new state's name.
+pub fn add_state_ops(doc: &Document, def: NodeId) -> Result<(Vec<crate::op::Op>, String), String> {
+    use crate::facet::{Args, LeafStruct, Port, Transition};
+    use crate::op::Op;
+    use crate::value::Slot;
+    if doc.live(def).map(|n| n.ty.name()) != Some("definition") {
+        return Err(format!("{def} is not a definition"));
+    }
+    let mut ops = Vec::new();
+    let mut next = fresh(doc, &[]);
+    let mut take = || {
+        let id = next;
+        next = next.offset(1);
+        id
+    };
+    let text = |t: &str| Slot::Const(Value::Str(t.into()));
+    match machines(doc, def).first() {
+        None => {
+            let names = vec!["default".to_owned(), "state_2".to_owned()];
+            let (spec, machine) = (take(), take());
+            let mut p = Port::default();
+            p.kind = text("value");
+            p.dir = Slot::Const(Value::Enum("in".into()));
+            p.signal = Slot::Const(Value::Enum(names[0].clone()));
+            p.datatype = text(&choice_of(&names));
+            p.show = Slot::Const(Value::Enum("pin".into()));
+            p.group = text("States");
+            let port_name = if children(doc, def, "port_spec").iter().any(|&s| name_of(doc, s).as_deref() == Some("state")) { "state_".to_owned() + &machines(doc, def).len().to_string() } else { "state".to_owned() };
+            let mut order = order_after_last(doc, def);
+            ops.push(Op::Create { id: spec, ty: ty("port_spec"), parent: Some(def), order: order.clone(), facets: vec![named(&port_name), p.wrap()] });
+            order = crate::order::OrderKey::after(&order);
+            ops.push(Op::Create { id: machine, ty: ty("machine"), parent: Some(def), order, facets: vec![named(&port_name)] });
+            let mut k = crate::order::OrderKey::first();
+            for n in &names {
+                ops.push(Op::Create { id: take(), ty: ty("state"), parent: Some(machine), order: k.clone(), facets: vec![named(n), Args::default().wrap()] });
+                k = crate::order::OrderKey::after(&k);
+            }
+            let mut t = Transition::default();
+            t.ms = Slot::Const(Value::Number(300.0));
+            ops.push(Op::Create { id: take(), ty: ty("transition"), parent: Some(machine), order: k, facets: vec![named("change"), t.wrap()] });
+            // Existing instances get the argument (op.rs's catch-up).
+            Ok((ops, names[1].clone()))
+        }
+        Some(&(machine, _)) => {
+            let mut names = state_names(doc, machine);
+            let mut i = names.len() + 1;
+            while names.contains(&format!("state_{i}")) {
+                i += 1;
+            }
+            let name = format!("state_{i}");
+            let order = children(doc, machine, "state").into_iter().filter_map(|s| doc.live(s)).map(|n| n.order.clone()).max().map_or_else(crate::order::OrderKey::first, |o| crate::order::OrderKey::after(&o));
+            ops.push(Op::Create { id: take(), ty: ty("state"), parent: Some(machine), order, facets: vec![named(&name), Args::default().wrap()] });
+            names.push(name.clone());
+            if let Some(spec) = state_port(doc, def, machine) {
+                ops.push(Op::Set { id: spec, path: "port.datatype".parse().expect("declared"), slot: text(&choice_of(&names)) });
+            }
+            Ok((ops, name))
+        }
+    }
+}
+
+/// Rename a state, and what names it: the port's choice, its default,
+/// transitions' `from`/`to`.
+pub fn rename_state_ops(doc: &Document, state: NodeId, name: &str) -> Result<Vec<crate::op::Op>, String> {
+    use crate::op::Op;
+    use crate::value::Slot;
+    let name = name.trim().replace(' ', "_");
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err("a state's name is letters, digits, - and _".into());
+    }
+    let old = name_of(doc, state).ok_or("not a state")?;
+    let machine = doc.live(state).and_then(|n| n.parent).ok_or("a state belongs to a machine")?;
+    let def = doc.live(machine).and_then(|n| n.parent).ok_or("a machine belongs to a definition")?;
+    let mut names = state_names(doc, machine);
+    if names.contains(&name) {
+        return Err(format!("there is already a state {name:?}"));
+    }
+    for n in names.iter_mut().filter(|n| **n == old) {
+        *n = name.clone();
+    }
+    let text = |t: &str| Slot::Const(Value::Str(t.into()));
+    let mut ops = vec![Op::Set { id: state, path: "name.text".parse().expect("declared"), slot: text(&name) }];
+    if let Some(spec) = state_port(doc, def, machine) {
+        ops.push(Op::Set { id: spec, path: "port.datatype".parse().expect("declared"), slot: text(&choice_of(&names)) });
+        if doc.get::<crate::facet::Port>(spec).and_then(|p| p.signal.constant()).and_then(|v| v.as_str()) == Some(old.as_str()) {
+            ops.push(Op::Set { id: spec, path: "port.signal".parse().expect("declared"), slot: Slot::Const(Value::Enum(name.clone())) });
+        }
+    }
+    for t in children(doc, machine, "transition") {
+        for end in ["from", "to"] {
+            let p: LeafPath = format!("transition.{end}").parse().expect("declared");
+            if doc.leaf(t, p).and_then(|s| s.constant()).and_then(|v| v.as_str()) == Some(old.as_str()) {
+                ops.push(Op::Set { id: t, path: p, slot: text(&name) });
+            }
+        }
+    }
+    Ok(ops)
+}
+
+/// A state pinned for editing on a main (session only): the main shows its
+/// pose, and number edits to the component's parts record into it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pinned {
+    pub def: NodeId,
+    pub machine: NodeId,
+    pub state: String,
+}
+
+/// Record edits while a state is pinned (machines.md §6, "Editing a part
+/// while pinned"): a number set on a part of the component's picture
+/// becomes that state's pose. A leaf already bound to a channel sets the
+/// channel's value in the state; any other gets a new channel, resting at
+/// the leaf's value now (what every other state keeps), the leaf bound to
+/// it. Other ops pass through.
+pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crate::op::Op> {
+    use crate::expr::Expr;
+    use crate::facet::{Args, Channel, FacetKind, LeafStruct};
+    use crate::op::Op;
+    use crate::value::Slot;
+    let Some(template) = children(doc, pin.def, "template").first().copied() else { return ops };
+    let Some(state) = children(doc, pin.machine, "state").into_iter().find(|&s| name_of(doc, s).as_deref() == Some(pin.state.as_str())) else { return ops };
+    let channels: Vec<(NodeId, String, f64)> = channels(doc, pin.def);
+    let mut pose: Args = doc.get::<Args>(state).cloned().unwrap_or_default();
+    let mut posed = false;
+    let mut next = fresh(doc, &ops);
+    let mut order = order_after_last(doc, pin.def);
+    let mut made: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+    let part_of = |id: NodeId| !id.is_expanded() && doc.is_ancestor(template, id);
+    // A leaf's channel, if its binding is one: `#ch.channel.value`.
+    let bound_channel = |slot: Option<&Slot>| match slot.and_then(|s| s.expr()) {
+        Some(Expr::Ref(l)) => channels.iter().find(|(c, ..)| *c == l.node).map(|(_, n, _)| n.clone()),
+        _ => None,
+    };
+    let mut record_one = |id: NodeId, path: LeafPath, v: f64, current: Option<f64>, out: &mut Vec<Op>, pose: &mut Args| -> Slot {
+        if let Some(name) = bound_channel(doc.leaf(id, path)) {
+            pose.insert(&name, Slot::Const(Value::Number(v)));
+            return doc.leaf(id, path).cloned().expect("bound");
+        }
+        let base = format!("{}_{}", name_of(doc, id).unwrap_or_else(|| doc.live(id).map_or("part", |n| n.ty.name()).to_owned()), path.field).replace(' ', "_");
+        let mut name = base.clone();
+        let mut k = 2;
+        while channels.iter().any(|(_, n, _)| *n == name) || made.contains(&name) {
+            name = format!("{base}_{k}");
+            k += 1;
+        }
+        made.push(name.clone());
+        let ch = next;
+        next = next.offset(1);
+        let mut c = Channel::default();
+        c.value = Slot::Const(Value::Number(current.unwrap_or(v)));
+        out.push(Op::Create { id: ch, ty: ty("channel"), parent: Some(pin.def), order: order.clone(), facets: vec![named(&name), c.wrap()] });
+        order = crate::order::OrderKey::after(&order);
+        pose.insert(&name, Slot::Const(Value::Number(v)));
+        Slot::Bound(Expr::Ref(Leaf { node: ch, path: "channel.value".parse().expect("declared") }))
+    };
+    for op in ops {
+        match op {
+            Op::Set { id, path, slot: Slot::Const(Value::Number(v)) } if part_of(id) && path.facet != FacetKind::Name => {
+                let current = doc.leaf(id, path).and_then(|s| s.constant()).and_then(Value::as_f64).or_else(|| path.facet.default_facet().get(path.field).and_then(|s| s.constant()).and_then(Value::as_f64));
+                let slot = record_one(id, path, v, current, &mut out, &mut pose);
+                posed = true;
+                out.push(Op::Set { id, path, slot });
+            }
+            Op::AddFacet { id, mut facet } if part_of(id) => {
+                let default = facet.kind().default_facet();
+                for field in facet.field_names() {
+                    let (Some(Value::Number(v)), d) = (facet.get(field).and_then(|s| s.constant()).cloned(), default.get(field).and_then(|s| s.constant()).and_then(Value::as_f64)) else { continue };
+                    if Some(v) == d {
+                        continue;
+                    }
+                    let path = LeafPath::new(facet.kind(), field).expect("declared");
+                    let slot = record_one(id, path, v, d, &mut out, &mut pose);
+                    posed = true;
+                    let _ = facet.set(field, slot);
+                }
+                out.push(Op::AddFacet { id, facet });
+            }
+            op => out.push(op),
+        }
+    }
+    if posed {
+        out.push(Op::AddFacet { id: state, facet: pose.wrap() });
+    }
+    out
 }

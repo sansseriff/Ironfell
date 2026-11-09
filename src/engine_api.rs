@@ -635,7 +635,30 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
             }).collect();
             return Ok(serde_json::json!({"ok": true, "main": main.to_string(), "name": name(main), "controls": controls, "paths": paths, "picked_point": picked_point}));
         }
+        // Pin a state on its main (session only, machines.md §6): no
+        // transaction.
+        if verb == "pin_state" {
+            let pin = match a.get("state").and_then(|v| v.as_str()) {
+                Some(state) => Some(iron_document::machine::Pinned { def: id("def")?, machine: id("machine")?, state: state.to_owned() }),
+                None => None,
+            };
+            store.0.pin_state(pin);
+            return Ok(serde_json::json!({"ok": true}));
+        }
+        if verb == "add_state" {
+            let def = id("def")?;
+            let (ops, name) = iron_document::machine::add_state_ops(doc, def)?;
+            let label = format!("add state {name}");
+            store.0.apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false }).map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+            // The new state is pinned, so the next edits shape it.
+            let doc = store.0.document();
+            if let Some(&(machine, _)) = iron_document::machine::machines(doc, def).first() {
+                store.0.pin_state(Some(iron_document::machine::Pinned { def, machine, state: name.clone() }));
+            }
+            return Ok(serde_json::json!({"ok": true, "state": name}));
+        }
         let (label, ops, made): (String, Vec<iron_document::Op>, Option<iron_document::NodeId>) = match verb.as_str() {
+            "rename_state" => ("rename state".into(), iron_document::machine::rename_state_ops(doc, id("state")?, a.get("name").and_then(|v| v.as_str()).unwrap_or(""))?, None),
             "attach_points" | "detach_points" => {
                 let points: Vec<iron_document::NodeId> = serde_json::from_value(a.get("points").cloned().ok_or("points missing")?).map_err(|e| e.to_string())?;
                 let ops = if verb == "attach_points" { iron_document::attachment::attach(&store.0, id("control")?, &points)? }
@@ -1317,6 +1340,8 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
                         "why": why,
                         "options": kind.options(field),
                         "key": key_state(&store.0, iron_document::Leaf { node: id, path }),
+                        // A field whose default is NaN reads "auto" (a key's span).
+                        "auto": kind.default_facet().get(field).and_then(|s| s.constant()).is_some_and(|v| matches!(v, iron_document::Value::Number(x) if x.is_nan())),
                         "error": store.0.reactive().errors.get(&iron_document::Leaf { node: id, path }),
                     }))
                 })
@@ -1382,7 +1407,21 @@ fn inspect_main(store: &iron_document::Store, id: iron_document::NodeId) -> serd
         .collect();
     let instances = iron_document::author::entities_of(doc, def).len();
     let resizable = doc.children(def).iter().any(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "template") && doc.facet(c, iron_document::FacetKind::Size).is_some());
-    serde_json::json!({"def": def.to_string(), "name": name, "ports": ports, "instances": instances, "resizable": resizable})
+    // Its state machines (machines.md §6): states, transitions, which state
+    // is pinned for editing.
+    let pinned = store.pinned_state().filter(|p| p.def == def);
+    let name_of = |n: iron_document::NodeId| doc.get::<iron_document::facet::Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+    let kids = |n: iron_document::NodeId, t: &str| doc.children(n).iter().copied().filter(|c| !c.is_expanded() && doc.live(*c).is_some_and(|x| x.ty.name() == t)).collect::<Vec<_>>();
+    let text = |n: iron_document::NodeId, p: &str| store.resolved(n, p.parse().expect("declared")).map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string()));
+    let machines: Vec<serde_json::Value> = iron_document::machine::machines(doc, def)
+        .into_iter()
+        .map(|(m, port)| {
+            let states: Vec<_> = kids(m, "state").into_iter().map(|s| serde_json::json!({"id": s.to_string(), "name": name_of(s)})).collect();
+            let transitions: Vec<_> = kids(m, "transition").into_iter().map(|t| serde_json::json!({"id": t.to_string(), "name": name_of(t), "from": text(t, "transition.from"), "to": text(t, "transition.to"), "ms": text(t, "transition.ms"), "ease": text(t, "transition.ease")})).collect();
+            serde_json::json!({"id": m.to_string(), "port": port, "states": states, "transitions": transitions, "pinned": pinned.filter(|p| p.machine == m).map(|p| p.state.clone())})
+        })
+        .collect();
+    serde_json::json!({"def": def.to_string(), "name": name, "ports": ports, "instances": instances, "resizable": resizable, "machines": machines})
 }
 
 fn port_json(store: &iron_document::Store, spec: iron_document::NodeId) -> serde_json::Value {
@@ -1467,6 +1506,7 @@ fn inspect_component(store: &iron_document::Store, id: iron_document::NodeId) ->
                 "via": via,
                 "why": why,
                 "error": store.reactive().errors.get(&iron_document::Leaf { node: entity, path }),
+                "key": key_state(store, iron_document::Leaf { node: entity, path }),
                 // Its declared type (types-and-units.md §3.1): the widget.
                 "datatype": (!input.ty.is_loose()).then(|| input.ty.to_string()),
                 "options": input.ty.options(),
@@ -1605,6 +1645,11 @@ pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) 
                 }
                 let current = inspector_current(&store.0, id, path).ok_or_else(|| format!("no property {id}.{path}"))?;
                 let value = inspector_value(&current, text.as_str().ok_or("a property value must be text")?)?;
+                // An animated leaf keys the playhead (After Effects' stopwatch).
+                if let Some(keyed) = iron_document::timeline_view::set_animated_ops(&store.0, iron_document::Leaf { node: id, path }, value.clone()) {
+                    bindings.extend(keyed);
+                    continue;
+                }
                 // `replace` (pasted data): a constant replaces the formula
                 // instead of editing through it.
                 if patch.get("replace").and_then(|v| v.as_bool()) == Some(true) && store.0.document().leaf(id, path).is_some_and(|s| s.expr().is_some()) {

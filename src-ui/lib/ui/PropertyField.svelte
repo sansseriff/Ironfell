@@ -10,6 +10,7 @@
   import Unlink from "@lucide/svelte/icons/unlink";
   import Diamond from "@lucide/svelte/icons/diamond";
   import Select from "./Select.svelte";
+  import EasingField from "./EasingField.svelte";
   import { ToggleGroup } from "bits-ui";
   import { controllerManager } from "../../controller-manager.svelte";
   let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, inlineUnit = false, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8, zeroLabel }: {
@@ -32,7 +33,7 @@
   const unit = $derived(percent || percentStored ? "%" : angle ? "°" : "");
   // The schema's values for an enum field (`facet.rs`).
   const options = $derived(f.options ?? undefined);
-  const labels: Record<string, string> = { t: "Time (s)", value: "Value", easing: "Easing", mode: "Pieces", x: "X", y: "Y", w: "W", h: "H", rot: "Rotation", sx: "Scale X", sy: "Scale Y", rx: "Radius X", ry: "Radius Y", opacity: "Opacity", kind: "Type", start: "Start", end: "End", enabled: "Clip content", radius: "Radius", color: "Colour", width: "Weight", fill_rule: "Fill rule", dash_offset: "Offset" };
+  const labels: Record<string, string> = { span: "Span (s)", t: "Time (s)", value: "Value", easing: "Easing", mode: "Pieces", x: "X", y: "Y", w: "W", h: "H", rot: "Rotation", sx: "Scale X", sy: "Scale Y", rx: "Radius X", ry: "Radius Y", opacity: "Opacity", kind: "Type", start: "Start", end: "End", enabled: "Clip content", radius: "Radius", color: "Colour", width: "Weight", fill_rule: "Fill rule", dash_offset: "Offset" };
   const displayLabel = $derived(label ?? labels[f.field] ?? f.field.replaceAll("_", " "));
   const numberValue = $derived(channel === "alpha" ? Math.round(parseInt((f.text ?? "#000000ff").slice(7, 9) || "ff", 16) / 255 * 100) / 100 : Number(f.text));
   // Formulas (plans/specs/wires-and-formulas.md §2): any field takes one,
@@ -83,7 +84,9 @@
   }
   // ◇ (After Effects' stopwatch, timeline.md §12.3): key this property at
   // the playhead, or remove the key there.
-  const animatable = $derived(!!f.key && !locked && !f.bind && (numeric || f.kind === "color" || f.kind === "quantity"));
+  // Numbers, colours and quantities interpolate; a choice (a component's
+  // state) steps with hold keys.
+  const animatable = $derived(!!f.key && !locked && !f.bind && (numeric || f.kind === "color" || f.kind === "quantity" || !!f.options));
   async function keyHere() {
     onError("");
     const r = await doc.command({ op: 'inspect_animate', node, leaf: f.leaf, action: "key" });
@@ -158,6 +161,10 @@
   onDestroy(() => finish(true));
 </script>
 
+{#snippet keyButton()}
+  {#if animatable && !compact}<button type="button" class="field-action key" class:reveal={f.key === "none"} class:animated={f.key !== "none"} aria-label={f.key === "on" ? `Remove the key on ${displayLabel}` : `Key ${displayLabel} at the playhead`} title={f.key === "on" ? "Remove the key at the playhead" : f.key === "animated" ? "Add a key at the playhead" : "Animate: key this value at the playhead"} onclick={keyHere}><Diamond size={11} strokeWidth={1.75} fill={f.key === "on" ? "currentColor" : "none"} /></button>{/if}
+{/snippet}
+
 <svelte:window onkeydown={(e: KeyboardEvent) => { alt = e.altKey; }} onkeyup={(e: KeyboardEvent) => alt = e.altKey} onblur={() => { alt = false; finish(true); }} />
 
 <label class="field" class:wide={!compact && !numeric && f.kind !== "bool"} class:compact class:locked data-leaf={f.leaf} title={f.why ?? (f.via ? `Edits ${f.via} through the binding` : numeric ? "Alt + drag to adjust · Shift for precision · Esc to cancel" : "")}>
@@ -182,12 +189,17 @@
       {#if f.bind && !locked}<button type="button" class="field-action" aria-label={`Remove the formula from ${displayLabel}`} title="Remove formula (keep the current value)" onclick={unbind}><Unlink size={13} strokeWidth={1.5} /></button>{/if}
     {:else if f.kind === "bool"}
       <input aria-label={displayLabel} type="checkbox" checked={f.text === "true"} disabled={locked} onchange={(e) => onSet(f, String(e.currentTarget.checked))} />
+    {:else if f.field === "easing" || (f.field === "ease" && f.kind === "str")}
+      <!-- A curve: previews, and (where text is allowed) a cubic-bezier. -->
+      <EasingField label={displayLabel} value={f.text} custom={f.kind === "str"} disabled={locked} onChange={(v) => onSet(f, v)} />
     {:else if options && options.length <= 4}
       <ToggleGroup.Root type="single" class="segmented" value={f.text ?? options[0]} disabled={locked} aria-label={displayLabel} onValueChange={(v) => { if (v && v !== f.text) onSet(f, v); }}>
         {#each options as o (o)}<ToggleGroup.Item class="segment" value={o}>{o[0].toUpperCase() + o.slice(1)}</ToggleGroup.Item>{/each}
       </ToggleGroup.Root>
+      {@render keyButton()}
     {:else if options}
       <Select label={displayLabel} value={f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
+      {@render keyButton()}
     {:else if f.kind === "color" && channel !== "alpha"}
       {#if !hideSwatch}<input aria-label={displayLabel} class="swatch" type="color" value={(f.text ?? "#000000").slice(0, 7)} disabled={locked} onchange={(e) => onSet(f, e.currentTarget.value + (f.text ?? "").slice(7, 9))} />{/if}
       <input aria-label={`${displayLabel} hex`} class="hex" value={(f.text ?? "").slice(1, colorDigits + 1).toUpperCase()} disabled={locked} onchange={(e) => onSet(f, `#${e.currentTarget.value.replace("#", "")}`)} />
@@ -199,7 +211,7 @@
       {#if unit && !(zeroLabel && !dragging && numeric && Number(shown) === 0)}<span class="unit">{unit}</span>{/if}
       {#if f.unit && !isAuto}<span class="unit">{f.unit}</span>{/if}
       {#if f.auto && !locked && !isAuto && !editingFormula}<button type="button" class="auto-toggle" title="Back to automatic" onclick={() => onSet(f, "auto")}>Auto</button>{/if}
-      {#if animatable && !compact}<button type="button" class="field-action key" class:reveal={f.key === "none"} class:animated={f.key !== "none"} aria-label={f.key === "on" ? `Remove the key on ${displayLabel}` : `Key ${displayLabel} at the playhead`} title={f.key === "on" ? "Remove the key at the playhead" : f.key === "animated" ? "Add a key at the playhead" : "Animate: key this value at the playhead"} onclick={keyHere}><Diamond size={11} strokeWidth={1.75} fill={f.key === "on" ? "currentColor" : "none"} /></button>{/if}
+      {@render keyButton()}
       {#if !locked && !compact}<button type="button" class="field-action reveal" aria-label={`Write a formula for ${displayLabel}`} title="Formula (or type =)" onclick={openFormula}><SquareFunction size={13} strokeWidth={1.5} /></button>{/if}
     {/if}
   </span>

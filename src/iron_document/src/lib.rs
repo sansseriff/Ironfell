@@ -1307,6 +1307,18 @@ impl Store {
     /// clock; plans/specs/machines.md): start a transition where an
     /// instance's state argument changed, move the ones running, and publish
     /// channel values. Returns what is running, so the host renders it.
+    /// Pin a state on its main for editing, or unpin (`None`): session
+    /// only, never saved or undone. A pinned machine's channels show the
+    /// state's pose on the main, and number edits record into it.
+    pub fn pin_state(&mut self, pin: Option<machine::Pinned>) {
+        self.machines.pinned = pin;
+        self.advance_machines(self.motion.clock);
+    }
+
+    pub fn pinned_state(&self) -> Option<&machine::Pinned> {
+        self.machines.pinned.as_ref()
+    }
+
     pub fn advance_machines(&mut self, now: f64) -> Vec<machine::Running> {
         let (values, running) = {
             let reactive = &self.reactive;
@@ -1911,6 +1923,11 @@ impl Store {
         // (component-model.md §7): an argument, a slider, an override.
         let mut input = input;
         input.ops = expand::translate(&self.doc, &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
+        // A state pinned on its main records number edits to the component's
+        // parts as that state's pose (machine.rs `record`).
+        if let Some(pin) = self.machines.pinned.clone() {
+            input.ops = machine::record(&self.doc, &pin, std::mem::take(&mut input.ops));
+        }
         let mut work = self.doc.clone();
         let stamp = work.version().next();
         let mut inverse = Vec::new();

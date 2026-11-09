@@ -81,6 +81,10 @@ pub struct Segment {
     pub offset: f64,
     pub label: String,
     pub keys: Vec<NodeId>,
+    /// On a component's keyed state (machines.md §4.2): each key that
+    /// changes it, with its transition's own length in seconds and name,
+    /// drawn as a progress band after the key.
+    pub bands: Vec<(NodeId, f64, String)>,
 }
 
 fn ty(n: &str) -> TypeId {
@@ -143,7 +147,8 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
                 }
             };
             let o = &mut objects[i];
-            let segment = Segment { clip, offset, label: label.clone(), keys: keys.iter().map(|k| k.id).collect() };
+            let bands = state_bands(store, r.to, &prop, &keys);
+            let segment = Segment { clip, offset, label: label.clone(), keys: keys.iter().map(|k| k.id).collect(), bands };
             match o.props.iter_mut().find(|p| p.prop == prop) {
                 Some(p) => p.segments.push(segment),
                 None => o.props.push(Prop { prop: prop.clone(), segments: vec![segment] }),
@@ -159,6 +164,28 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
     let seen = t0 + 2400.0 / pps.max(1.0);
     let end = ((end.max(seen) / 5.0).ceil() * 5.0 + 5.0).max(10.0);
     Plan { clock, objects, end, tick: tick_for(pps), errors, light: false }
+}
+
+/// The transitions a keyed state's keys select: (key, the transition's own
+/// length in seconds, its name), for each key that changes the state.
+fn state_bands(store: &Store, target: NodeId, prop: &str, keys: &[crate::time::KeyAt]) -> Vec<(NodeId, f64, String)> {
+    let doc = store.document();
+    let Some(port) = prop.strip_prefix("args.") else { return Vec::new() };
+    let Some(def) = crate::expand::linked_definition(doc, target) else { return Vec::new() };
+    let Some((m, _)) = crate::machine::machines(doc, def).into_iter().find(|(_, p)| p == port) else { return Vec::new() };
+    let mc = crate::machine::copy_of(doc, Some(target), m);
+    let read = |l: Leaf| store.resolved(l.node, l.path);
+    let word = |v: &Value| v.as_str().map(str::to_owned);
+    let authored = doc.leaf(target, LeafPath::new(FacetKind::Args, port).ok().expect("an argument path")).and_then(|s| s.constant()).and_then(word);
+    let mut out = Vec::new();
+    for (i, k) in keys.iter().enumerate() {
+        let (Some(to), from) = (word(&k.value), if i > 0 { word(&keys[i - 1].value) } else { authored.clone() }) else { continue };
+        let Some(from) = from.filter(|f| *f != to) else { continue };
+        if let Some(p) = crate::machine::plan(doc, &read, def, mc, &from, &to).filter(|p| p.ms > 0.0) {
+            out.push((k.id, p.ms / 1000.0, name_of(store, p.transition).unwrap_or_else(|| format!("{from} → {to}"))));
+        }
+    }
+    out
 }
 
 /// One row of the timeline, for its two halves (§12.3): the canvas draws
@@ -406,6 +433,20 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 f.extend(words(&s.label, 11.0, 500.0));
                 f.push(paint([1.0, 1.0, 1.0, 0.9]));
                 push("tracks", format!("bar label {} {}", s.clip, o.target), "text", f, None);
+                // A keyed state's transitions (machines.md §4.2): a band rising
+                // from each key that changes the state over the transition's
+                // length, or the key's own span (one occurrence retimed).
+                for (k, len, name) in &s.bands {
+                    let x = at(&key_x(s, *k));
+                    let w = format!("(isnan({k}.key.span) || {k}.key.span <= 0 ? {} : {k}.key.span) * {pps}", lit(*len));
+                    let h = SEG_H;
+                    let mut shape = crate::facet::PathShape::default();
+                    shape.d = Slot::Bound(Expr::parse(&format!("'M 0,{h} L ' + str({w}) + ',0 L ' + str({w}) + ',{h} Z'")).expect("a band's path"));
+                    let mut fill = Fill::default();
+                    fill.color = Slot::Const(Value::Color([PLAYHEAD[0], PLAYHEAD[1], PLAYHEAD[2], 0.35]));
+                    let _ = name;
+                    push("tracks", format!("band {k} {}", o.target), "path", vec![place(&x, &ry(row.y + 3.0)), shape.wrap(), fill.wrap()], Some(*k));
+                }
                 // A diamond per key: a drag moves the key in time (it
                 // projects the key), Delete deletes it.
                 let side = KEY_PX / std::f64::consts::SQRT_2;
@@ -871,13 +912,15 @@ pub fn key_leaf_ops(store: &Store, leaf: Leaf) -> Result<Vec<Op>, String> {
         return toggle_key_ops(store, clip);
     }
     let value = store.resolved(leaf.node, leaf.path).ok_or("no value to key")?;
-    if crate::time::lerp(&value, &value, 0.5).is_none() {
+    // Words (a component's state) step: hold keys (machines.md §4.2).
+    let steps = matches!(value, Value::Str(_) | Value::Enum(_));
+    if !steps && crate::time::lerp(&value, &value, 0.5).is_none() {
         return Err(format!("{} does not animate", leaf.path));
     }
     if store.document().leaf(leaf.node, leaf.path).is_some_and(|s| s.expr().is_some()) {
         return Err(format!("{} is set by a formula; remove the formula to key it", leaf.path));
     }
-    Ok(new_clip_ops(store, leaf, &[(store.time(), value, "easy_ease")]))
+    Ok(new_clip_ops(store, leaf, &[(store.time(), value, if steps { "hold" } else { "easy_ease" })]))
 }
 
 /// "Draw on" (After Effects' Trim Paths recipe): `trim.end` keyed from 0 at
@@ -900,4 +943,21 @@ pub fn draw_on_ops(store: &Store, node: NodeId, secs: f64) -> Result<Vec<Op>, St
     let now = store.time();
     ops.extend(new_clip_ops(store, leaf, &[(now, Value::Number(0.0), "easy_ease"), (now + secs.max(0.05), Value::Number(1.0), "easy_ease")]));
     Ok(ops)
+}
+
+/// A value set from the inspector on an animated leaf (After Effects: with
+/// the stopwatch on, a change keys the playhead): the key there takes it,
+/// or a new key is added there. `None` for a leaf no clip animates.
+pub fn set_animated_ops(store: &Store, leaf: Leaf, value: Value) -> Option<Vec<Op>> {
+    let doc = store.document();
+    let (clip, offset) = clip_of(doc, leaf)?;
+    let keys = crate::time::keys(doc, clip);
+    let u = store.time() - crate::time::start(doc, clip) - offset;
+    if let Some(k) = keys.iter().find(|k| (k.t - u).abs() <= AT_KEY) {
+        return Some(vec![Op::Set { id: k.id, path: key_path("value"), slot: Slot::Const(value) }]);
+    }
+    let mut ids = Ids { nodes: doc.next_ids(1).into_iter(), rels: Vec::new().into_iter() };
+    let mut ops = Vec::new();
+    insert_key(doc, clip, &keys, u, value, &mut ids, &mut ops);
+    Some(ops)
 }

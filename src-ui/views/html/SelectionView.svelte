@@ -24,6 +24,7 @@
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import Button from "../../lib/ui/Button.svelte";
   import Select from "../../lib/ui/Select.svelte";
+  import EasingField from "../../lib/ui/EasingField.svelte";
   import Unlink from "@lucide/svelte/icons/unlink";
   import type { ViewSpec } from "../views";
 
@@ -63,7 +64,8 @@
   // linearly bound value edits its source and a locked one says why.
   type Field = Property;
   type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean; datatype?: string | null; show?: string | null; group?: string | null; suggest?: string[] };
-  type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[]; resizable?: boolean };
+  type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[]; resizable?: boolean; machines?: MachineInfo[] };
+  type MachineInfo = { id: string; port: string; pinned: string | null; states: { id: string; name: string | null }[]; transitions: { id: string; name: string | null; from: string | null; to: string | null; ms: string | null; ease: string | null }[] };
   type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null; sections?: string[]; constraints?: { node: string; horizontal: string; vertical: string } | null };
   // Every section, in the built-in order: what an older engine's inspection
   // (without `sections`) shows.
@@ -294,6 +296,35 @@
               {/each}
             </div>
             <div class="row"><button onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture">+ input</button><span class="hint">Ports: the port tool, on the main</span></div>
+            <!-- States (machines.md §6, §9 Q8): Add state makes the machine (a `state`
+                 input, its states, one transition); clicking a state pins it on the
+                 main, and number edits made while it is pinned become its pose. -->
+            <div class="states" data-section="states">
+              <div class="subheading states-head"><span>States</span><Button small variant="outline" onclick={() => author("add_state", { def: inspected!.main!.def })} title="Add a state: edits made while it is selected here become its look; instances animate between states">+ State</Button></div>
+              {#each inspected.main.machines ?? [] as m (m.id)}
+                <div class="state-chips" role="group" aria-label="States of {m.port}">
+                  {#each m.states as st (st.id)}
+                    <button class="state-chip" class:pinned={m.pinned === st.name} aria-pressed={m.pinned === st.name} title={m.pinned === st.name ? "Previewing: edits shape this state. Click to stop." : "Preview this state and edit its look"}
+                      onclick={() => author("pin_state", m.pinned === st.name ? { def: inspected!.main!.def } : { def: inspected!.main!.def, machine: m.id, state: st.name })}>{st.name}</button>
+                  {/each}
+                </div>
+                {#if m.pinned}
+                  {@const pinnedState = m.states.find((x) => x.name === m.pinned)}
+                  <div class="pinned-banner" role="status"><span class="dot"></span>Previewing <strong>{m.pinned}</strong>: edit the parts to shape this state.
+                    {#if pinnedState}<input aria-label="Rename state {m.pinned}" value={m.pinned} onchange={(e) => author("rename_state", { state: pinnedState.id, name: e.currentTarget.value })} />{/if}
+                  </div>
+                {/if}
+                {#each m.transitions as t (t.id)}
+                  <div class="transition-row">
+                    <span class="mono" title="From {t.from} to {t.to} (* is any state)">{t.from === "*" && t.to === "*" ? "Any change" : `${t.from} → ${t.to}`}</span>
+                    <label class="ms" title="How long it takes">
+                      <input inputmode="decimal" aria-label="Duration of {t.name}" value={t.ms ?? ""} onchange={(e) => patch({ "transition.ms": e.currentTarget.value }, [], "transition length", t.id)} /><span>ms</span>
+                    </label>
+                    <EasingField label="Easing of {t.name}" value={t.ease} onChange={(v) => patch({ "transition.ease": v }, [], "transition easing", t.id)} />
+                  </div>
+                {/each}
+              {/each}
+            </div>
             <!-- Figma's "Resizing" (frame-constraints.md §4): the picture gets a box
                  of its parts' bounds; each part says how it follows the box. -->
             <label class="row resizable" title="Each picture of this component gets its own size; drag a corner to resize it. Set how each part follows in its Constraints.">
@@ -501,6 +532,22 @@
 
 <style>
   .properties { padding: 0 !important; font-size: 12px; }
+  .states { padding: 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .states-head { display: flex; justify-content: space-between; align-items: center; margin: 0; }
+  .state-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .state-chip { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--fg); font-size: 11px; padding: 3px 10px; cursor: pointer; }
+  .state-chip:hover { border-color: var(--border-strong); }
+  .state-chip.pinned { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
+  .state-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pinned-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg); font-size: 11px; }
+  .pinned-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .pinned-banner input { flex: 1 0 100%; height: 24px; border: 1px solid transparent; border-radius: 4px; background: var(--bg); color: var(--fg); font-size: 11px; padding: 0 6px; outline: none; }
+  .pinned-banner input:focus { border-color: var(--accent); }
+  .transition-row { display: grid; grid-template-columns: 1fr 72px; gap: 6px; align-items: center; font-size: 11px; }
+  .transition-row :global(.easing-trigger) { grid-column: 1 / -1; }
+  .transition-row .ms { display: flex; align-items: center; height: 26px; border-radius: 5px; background: var(--bg-sunken); padding-right: 6px; }
+  .transition-row .ms input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font-size: 12px; padding: 0 6px; outline: none; }
+  .transition-row .ms span { color: var(--fg-faint); }
   .resizable { align-items: center; gap: 8px; font-size: 12px; }
   .resizable input { accent-color: var(--accent); margin: 0; }
   .constraints-head { margin-top: 12px; }

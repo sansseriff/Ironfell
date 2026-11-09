@@ -71,6 +71,11 @@ pub struct Object {
 pub struct Prop {
     pub prop: String,
     pub segments: Vec<Segment>,
+    /// A component's state port (machines.md §6): drawn as a lane of named
+    /// stretches. `rest`: the state it holds where nothing keys it, with its
+    /// index among the machine's states.
+    pub lane: bool,
+    pub rest: Option<(String, usize)>,
 }
 
 /// A clip on one of its targets, shifted by the relation's stagger offset,
@@ -85,6 +90,9 @@ pub struct Segment {
     /// changes it, with its transition's own length in seconds and name,
     /// drawn as a progress band after the key.
     pub bands: Vec<(NodeId, f64, String)>,
+    /// On a keyed state: each key's state and its index among the
+    /// machine's states (its lane colour).
+    pub states: Vec<(NodeId, String, usize)>,
 }
 
 fn ty(n: &str) -> TypeId {
@@ -148,11 +156,39 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
             };
             let o = &mut objects[i];
             let bands = state_bands(store, r.to, &prop, &keys);
-            let segment = Segment { clip, offset, label: label.clone(), keys: keys.iter().map(|k| k.id).collect(), bands };
+            let names = machine_states(store, r.to, &prop);
+            let states = match &names {
+                Some(n) => keys.iter().filter_map(|k| k.value.as_str().map(|v| (k.id, v.to_owned(), n.iter().position(|x| x == v).unwrap_or(0)))).collect(),
+                None => Vec::new(),
+            };
+            let segment = Segment { clip, offset, label: label.clone(), keys: keys.iter().map(|k| k.id).collect(), bands, states };
             match o.props.iter_mut().find(|p| p.prop == prop) {
                 Some(p) => p.segments.push(segment),
-                None => o.props.push(Prop { prop: prop.clone(), segments: vec![segment] }),
+                None => o.props.push(Prop { prop: prop.clone(), segments: vec![segment], lane: names.is_some(), rest: None }),
             }
+        }
+    }
+    // Every instance of a component with states gets a lane, keyed or not,
+    // so what state each one is in reads off the timeline (machines.md §6).
+    for e in doc.nodes_of_type(ty("entity")).filter(|&e| !e.is_session() && !e.is_expanded() && doc.is_live(e)) {
+        let Some(def) = crate::expand::linked_definition(doc, e) else { continue };
+        for (_, port) in crate::machine::machines(doc, def) {
+            let prop = format!("args.{port}");
+            if objects.iter().any(|o| o.target == e && o.props.iter().any(|p| p.prop == prop)) {
+                continue;
+            }
+            let Ok(path) = LeafPath::new(FacetKind::Args, &port) else { continue };
+            let Some(state) = store.resolved(e, path).and_then(|v| v.as_str().map(str::to_owned)) else { continue };
+            let names = machine_states(store, e, &prop).unwrap_or_default();
+            let index = names.iter().position(|n| *n == state).unwrap_or(0);
+            let i = match objects.iter().position(|o| o.target == e) {
+                Some(i) => i,
+                None => {
+                    objects.push(Object { target: e, label: label_of(store, e), props: Vec::new() });
+                    objects.len() - 1
+                }
+            };
+            objects[i].props.push(Prop { prop, segments: Vec::new(), lane: true, rest: Some((state, index)) });
         }
     }
     let pps = comp.and_then(|c| number(store, c, FacetKind::Axis, "pps")).unwrap_or(100.0);
@@ -164,6 +200,16 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
     let seen = t0 + 2400.0 / pps.max(1.0);
     let end = ((end.max(seen) / 5.0).ceil() * 5.0 + 5.0).max(10.0);
     Plan { clock, objects, end, tick: tick_for(pps), errors, light: false }
+}
+
+/// The states of the machine an instance's `prop` (`args.<port>`) is the
+/// state of, in order; `None` when it is not a state port.
+fn machine_states(store: &Store, target: NodeId, prop: &str) -> Option<Vec<String>> {
+    let doc = store.document();
+    let port = prop.strip_prefix("args.")?;
+    let def = crate::expand::linked_definition(doc, target)?;
+    let (m, _) = crate::machine::machines(doc, def).into_iter().find(|(_, p)| p == port)?;
+    Some(crate::machine::state_names(doc, m))
 }
 
 /// The transitions a keyed state's keys select: (key, the transition's own
@@ -201,6 +247,8 @@ pub struct Row {
     pub prop: Option<String>,
     pub clip: Option<NodeId>,
     pub error: bool,
+    /// A component's state lane.
+    pub lane: bool,
 }
 
 /// The rows, top to bottom, in document px from the composition's top.
@@ -209,12 +257,12 @@ pub fn rows(plan: &Plan) -> Vec<Row> {
     let mut y = RULER_H + 4.0;
     for o in &plan.objects {
         let error = o.props.iter().flat_map(|p| &p.segments).any(|s| plan.errors.contains(&s.clip));
-        out.push(Row { kind: "object", label: o.label.clone(), y, target: o.target, prop: None, clip: None, error });
+        out.push(Row { kind: "object", label: o.label.clone(), y, target: o.target, prop: None, clip: None, error, lane: false });
         y += ROW_H;
         for p in &o.props {
             let short = p.prop.rsplit('.').next().unwrap_or(&p.prop).to_owned();
             let error = p.segments.iter().any(|s| plan.errors.contains(&s.clip));
-            out.push(Row { kind: "property", label: short, y, target: o.target, prop: Some(p.prop.clone()), clip: p.segments.first().map(|s| s.clip), error });
+            out.push(Row { kind: "property", label: short, y, target: o.target, prop: Some(p.prop.clone()), clip: p.segments.first().map(|s| s.clip), error, lane: p.lane });
             y += ROW_H;
         }
     }
@@ -308,6 +356,16 @@ const SEGMENT: [f32; 4] = [0.3, 0.55, 0.95, 1.0];
 const ERROR: [f32; 4] = [0.9, 0.3, 0.3, 1.0];
 const PLAYHEAD: [f32; 4] = [1.0, 0.6, 0.2, 1.0];
 const LOOP: [f32; 4] = [1.0, 0.6, 0.2, 0.22];
+/// A state lane's stretches, by the state's index: muted hues that read in
+/// both themes under light or dark labels.
+const LANE: [[f32; 4]; 6] = [
+    [0.36, 0.52, 0.80, 0.75],
+    [0.30, 0.66, 0.54, 0.75],
+    [0.72, 0.50, 0.82, 0.75],
+    [0.84, 0.60, 0.30, 0.75],
+    [0.80, 0.42, 0.52, 0.75],
+    [0.50, 0.58, 0.40, 0.75],
+];
 
 /// The timeline's colours for one theme: the dark set matches the shell's
 /// dark tokens, the light set its light ones (src-ui/app.css), and the DOM
@@ -420,8 +478,34 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
         }
         for p in &o.props {
             let row = ri.next().expect("a property row");
+            // A state lane (machines.md §6): a stretch per state, named,
+            // from its key to the next, under the bar (which stays, clear,
+            // for dragging the clip). An unkeyed one holds all along.
+            let stretch = |push: &mut dyn FnMut(&'static str, String, &str, Vec<Facet>, Option<NodeId>), key: String, from: String, to: String, name: &str, index: usize, faint: bool| {
+                let mut c = LANE[index % LANE.len()];
+                if faint {
+                    c[3] *= 0.55;
+                }
+                push("backdrop", format!("lane {key}"), "rect", vec![place(&at(&from), &ry(row.y + 3.0)), sized(&format!("max(({to}) - ({from}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(c)], None);
+                let mut f = vec![place(&format!("{} + 7", at(&from)), &ry(row.y + 4.0))];
+                f.extend(words(name, 11.0, 600.0));
+                f.push(paint(if plan.light { [0.12, 0.12, 0.14, 0.92] } else { [1.0, 1.0, 1.0, 0.92] }));
+                push("backdrop", format!("lane label {key}"), "text", f, None);
+            };
+            if let Some((state, index)) = &p.rest {
+                stretch(&mut push, format!("{} {}", o.target, p.prop), "0".into(), lit(plan.end), state, *index, true);
+            }
             for s in &p.segments {
-                let colour = if plan.errors.contains(&s.clip) { ERROR } else { SEGMENT };
+                for (i, (k, name, index)) in s.states.iter().enumerate() {
+                    let to = s.states.get(i + 1).map_or_else(|| lit(plan.end), |(n, ..)| key_x(s, *n));
+                    stretch(&mut push, format!("{k} {}", o.target), key_x(s, *k), to, name, *index, false);
+                }
+            }
+            for s in &p.segments {
+                let mut colour = if plan.errors.contains(&s.clip) { ERROR } else { SEGMENT };
+                if !s.states.is_empty() && !plan.errors.contains(&s.clip) {
+                    colour = [colour[0], colour[1], colour[2], 0.0];
+                }
                 let times: Vec<String> = s.keys.iter().map(|&k| format!("{k}.key.t")).collect();
                 let (lo, hi) = (fold("min", &times), fold("max", &times));
                 // The clip's bar: from its first key to its last. A drag
@@ -429,10 +513,12 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 // the leaf the drag moves); Delete deletes the clip.
                 let x = at(&format!("{}.timing.start + {} + {lo}", s.clip, lit(s.offset)));
                 push("tracks", format!("bar {} {}", s.clip, o.target), "rect", vec![place(&x, &ry(row.y + 3.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
-                let mut f = vec![place(&format!("{x} + 8"), &ry(row.y + 4.0))];
-                f.extend(words(&s.label, 11.0, 500.0));
-                f.push(paint([1.0, 1.0, 1.0, 0.9]));
-                push("tracks", format!("bar label {} {}", s.clip, o.target), "text", f, None);
+                if s.states.is_empty() {
+                    let mut f = vec![place(&format!("{x} + 8"), &ry(row.y + 4.0))];
+                    f.extend(words(&s.label, 11.0, 500.0));
+                    f.push(paint([1.0, 1.0, 1.0, 0.9]));
+                    push("tracks", format!("bar label {} {}", s.clip, o.target), "text", f, None);
+                }
                 // A keyed state's transitions (machines.md §4.2): a band rising
                 // from each key that changes the state over the transition's
                 // length, or the key's own span (one occurrence retimed).

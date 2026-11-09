@@ -79,6 +79,12 @@ pub fn copy_of(doc: &Document, entity: Option<NodeId>, m: NodeId) -> NodeId {
     entity.and_then(|e| NodeId::expanded(e, m)).filter(|&c| doc.is_live(c)).unwrap_or(m)
 }
 
+/// The definition's node an instance's copy stands for (itself when
+/// authored).
+pub fn copy_source(n: NodeId) -> NodeId {
+    n.expanded_parts().map_or(n, |(_, local)| local)
+}
+
 /// The pose machine `machine` (a definition's or an instance's copy) gives
 /// `state`: a value per channel of `def`, the channel's rest value where
 /// the state says nothing.
@@ -250,7 +256,7 @@ impl Player {
         // channels.
         let mut pinned_out = BTreeMap::new();
         if let Some(pin) = &self.pinned
-            && let Some(p) = pose(doc, read, pin.def, pin.machine, &pin.state)
+            && let Some(p) = pinned_pose(doc, read, pin)
         {
             let value_path: LeafPath = "channel.value".parse().expect("declared leaf");
             for (c, v) in p {
@@ -477,6 +483,123 @@ pub struct Pinned {
     pub def: NodeId,
     pub machine: NodeId,
     pub state: String,
+    /// A transition scrubbed by hand in the machine panel (machines.md §6,
+    /// "Clicking a transition"): from, to, and its progress 0..1. The main
+    /// shows that moment instead of the state's pose.
+    pub scrub: Option<(String, String, f64)>,
+}
+
+impl Pinned {
+    pub fn state(def: NodeId, machine: NodeId, state: impl Into<String>) -> Pinned {
+        Pinned { def, machine, state: state.into(), scrub: None }
+    }
+}
+
+/// What a pin shows on its main: the state's pose, or a scrubbed
+/// transition's moment.
+fn pinned_pose(doc: &Document, read: Read, pin: &Pinned) -> Option<BTreeMap<NodeId, f64>> {
+    let Some((from, to, p)) = &pin.scrub else { return pose(doc, read, pin.def, pin.machine, &pin.state) };
+    let (a, b) = (pose(doc, read, pin.def, pin.machine, from)?, pose(doc, read, pin.def, pin.machine, to)?);
+    let plan = plan(doc, read, pin.def, pin.machine, from, to);
+    let p = p.clamp(0.0, 1.0);
+    Some(b.iter().map(|(&c, &y)| {
+        let x = a.get(&c).copied().unwrap_or(y);
+        let k = plan.as_ref().map_or(if p >= 1.0 { 1.0 } else { 0.0 }, |pl| pl.shaped(c, p));
+        (c, x + (y - x) * k)
+    }).collect())
+}
+
+/// The transition a keyed state is in at clock time `clock`, and its
+/// progress (for the timeline's state lanes); `None` at rest.
+pub fn progress_at(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(NodeId, f64)> {
+    clocked(doc, read, def, machine, state, clock)?.1
+}
+
+/// Is the machine a chain or a loop (each state has at most one explicit
+/// way in and one way out)? Then the panel draws it as a strip; otherwise
+/// as a graph (machines.md §6).
+pub fn is_strip(doc: &Document, read: Read, machine: NodeId) -> bool {
+    let mut ins: BTreeMap<String, usize> = BTreeMap::new();
+    let mut outs: BTreeMap<String, usize> = BTreeMap::new();
+    for t in children(doc, machine, "transition") {
+        let (f, g) = (read_text(read, t, "transition.from").unwrap_or_else(|| "*".into()), read_text(read, t, "transition.to").unwrap_or_else(|| "*".into()));
+        if f != "*" && g != "*" {
+            *outs.entry(f).or_default() += 1;
+            *ins.entry(g).or_default() += 1;
+        }
+    }
+    ins.values().chain(outs.values()).all(|&n| n <= 1)
+}
+
+/// Give one pair of states its own transition (machines.md §6): a
+/// `from → to` transition after the machine's others, with the length and
+/// easing of the one the pair used, and copies of its tweens. Answers the
+/// ops and the new transition.
+pub fn add_transition_ops(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Result<(Vec<crate::op::Op>, NodeId), String> {
+    use crate::facet::{LeafStruct, Transition, Tween};
+    use crate::op::Op;
+    use crate::value::Slot;
+    let names = state_names(doc, machine);
+    for s in [from, to] {
+        if !names.iter().any(|n| n == s) {
+            return Err(format!("{s:?} is not a state of this machine"));
+        }
+    }
+    if from == to {
+        return Err("a transition goes between two different states".into());
+    }
+    let was = plan(doc, read, def, machine, from, to);
+    if let Some(p) = &was
+        && read_text(read, p.transition, "transition.from").as_deref() == Some(from)
+        && read_text(read, p.transition, "transition.to").as_deref() == Some(to)
+    {
+        return Err(format!("{from} → {to} has its own transition already"));
+    }
+    let mut next = fresh(doc, &[]);
+    let id = next;
+    next = next.offset(1);
+    let text = |t: &str| Slot::Const(Value::Str(t.into()));
+    let mut t = Transition::default();
+    t.from = text(from);
+    t.to = text(to);
+    if let Some(p) = &was {
+        t.ms = Slot::Const(Value::Number(p.ms));
+        if let Some(e) = doc.leaf(p.transition, "transition.ease".parse().expect("declared")) {
+            t.ease = e.clone();
+        }
+    }
+    let mut ops = vec![Op::Create { id, ty: ty("transition"), parent: Some(machine), order: order_after_last(doc, machine), facets: vec![named(&format!("{from} to {to}")), t.wrap()] }];
+    if let Some(p) = &was {
+        let mut order = crate::order::OrderKey::first();
+        for w in children(doc, p.transition, "tween") {
+            let Some(f) = doc.get::<Tween>(w) else { continue };
+            ops.push(Op::Create { id: next, ty: ty("tween"), parent: Some(id), order: order.clone(), facets: vec![f.clone().wrap()] });
+            next = next.offset(1);
+            order = crate::order::OrderKey::after(&order);
+        }
+    }
+    Ok((ops, id))
+}
+
+/// Give a channel its own slice of a transition: a tween over all of it,
+/// with the transition's easing, which the panel's bar then narrows.
+pub fn add_tween_ops(doc: &Document, transition: NodeId, channel: &str) -> Result<(Vec<crate::op::Op>, NodeId), String> {
+    use crate::facet::{LeafStruct, Tween};
+    use crate::op::Op;
+    use crate::value::Slot;
+    if ty_of(doc, transition) != Some("transition") {
+        return Err(format!("{transition} is not a transition"));
+    }
+    if children(doc, transition, "tween").iter().any(|&w| doc.get::<Tween>(w).and_then(|t| t.channel.constant()).and_then(|v| v.as_str()) == Some(channel)) {
+        return Err(format!("{channel} has a tween here already"));
+    }
+    let id = fresh(doc, &[]);
+    let mut w = Tween::default();
+    w.channel = Slot::Const(Value::Str(channel.into()));
+    if let Some(e) = doc.leaf(transition, "transition.ease".parse().expect("declared")) {
+        w.ease = e.clone();
+    }
+    Ok((vec![Op::Create { id, ty: ty("tween"), parent: Some(transition), order: order_after_last(doc, transition), facets: vec![w.wrap()] }], id))
 }
 
 /// Record edits while a state is pinned (machines.md §6, "Editing a part

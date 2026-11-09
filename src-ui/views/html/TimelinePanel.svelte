@@ -18,11 +18,13 @@
   import { controllerManager } from "../../controller-manager.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
   import TimelineTransport from "./TimelineTransport.svelte";
+  import MachinePanel from "./MachinePanel.svelte";
+  import { machines } from "../../lib/machines.svelte";
 
   let { panel }: { panel: string } = $props();
   const doc = controllerManager.docClient;
 
-  type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean };
+  type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean; lane?: boolean; state?: { state: string | null; running: { name: string | null; progress: number } | null } | null };
   type Rows = { ok: boolean; rows: Row[]; y0: number; zoom: number; label_w: number; ruler_h: number; row_h: number };
   let layout: Rows = $state({ ok: false, rows: [], y0: 0, zoom: 1, label_w: 160, ruler_h: 56, row_h: 22 });
   let root: HTMLDivElement | undefined = $state();
@@ -82,6 +84,25 @@
   }
 
   const key = (action: "prev" | "next" | "toggle", clip: string | null) => clip && doc.command({ op: "timeline_key", action, clip }).then(read);
+  // An unkeyed state lane's ◇ starts animating the state at the playhead.
+  const keyRow = (row: Row) => (row.clip ? key("toggle", row.clip) : row.prop && doc.command({ op: "inspect_animate", node: row.target, leaf: row.prop, action: "key" }).then(read));
+
+  // The panel's two layouts (machines.md §6): the document's clock, or the
+  // states of the component being edited. Entering a component (selecting
+  // its main or a part) switches to its states; leaving switches back. A
+  // selected instance offers its states without switching.
+  const stopMachines = machines.use();
+  onDestroy(stopMachines);
+  let mode = $state<"timeline" | "states">("timeline");
+  let lastMain: string | null = null;
+  $effect(() => {
+    const main = machines.view?.main ?? null;
+    if (main !== lastMain) {
+      lastMain = main;
+      mode = main ? "states" : "timeline";
+    }
+  });
+  const offered = $derived(!!machines.view && (!!machines.view.main || machines.view.machines.length > 0));
   // A name selects its object, and hovering it lights the object in every view.
   const probe = (node: string, action: "hover" | "unhover" | "select") => doc.command({ op: "narrative_probe", node, action });
 </script>
@@ -104,9 +125,12 @@
           </BitsButton.Root>
         {:else}
           <span class="prop" title={row.prop}>{row.label}</span>
+          {#if row.lane && row.state}
+            <span class="now" title="At the playhead">{#if row.state.running}{row.state.running.name ?? "change"} {Math.round(row.state.running.progress * 100)}%{:else}{row.state.state ?? ""}{/if}</span>
+          {/if}
           <span class="keys">
             <IconButton icon={ChevronLeft} label="Previous key of {row.label}" title="Previous key" onclick={() => key("prev", row.clip)} data-key="prev" />
-            <IconButton icon={Diamond} label={row.keyed ? `Remove the key of ${row.label} here` : `Add a key of ${row.label} here`} title={row.keyed ? "Remove the key at the playhead" : "Add a key at the playhead"} pressed={row.keyed} onPressedChange={() => key("toggle", row.clip)} data-key="toggle" />
+            <IconButton icon={Diamond} label={row.keyed ? `Remove the key of ${row.label} here` : `Add a key of ${row.label} here`} title={row.keyed ? "Remove the key at the playhead" : "Add a key at the playhead"} pressed={row.keyed} onPressedChange={() => keyRow(row)} data-key="toggle" />
             <IconButton icon={ChevronRight} label="Next key of {row.label}" title="Next key" onclick={() => key("next", row.clip)} data-key="next" />
           </span>
         {/if}
@@ -117,6 +141,12 @@
     <TimelineTransport {area} over={() => over} />
   </div>
 </div>
+{#if offered && mode === "timeline"}
+  <button class="to-states canvas-ui" onclick={() => (mode = "states")} title="Show the states of {machines.view?.name ?? 'this component'}">States · {machines.view?.name ?? "component"}</button>
+{/if}
+{#if mode === "states"}
+  <MachinePanel onTimeline={() => (mode = "timeline")} />
+{/if}
 
 <style>
   /* The column matches the canvas half's surface (timeline_view.rs's
@@ -232,6 +262,39 @@
   .prop {
     flex: 1;
     min-width: 0;
+  }
+  .now {
+    flex: none;
+    max-width: 84px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--hover);
+    color: var(--fg);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .to-states {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    height: 24px;
+    padding: 0 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    background: var(--bg);
+    color: var(--fg);
+    font-size: 11px;
+    cursor: pointer;
+    pointer-events: auto;
+    z-index: 2;
+  }
+  .to-states:hover {
+    border-color: var(--accent);
+  }
+  .to-states:focus-visible {
+    outline: 2px solid var(--accent);
   }
   .keys {
     display: flex;

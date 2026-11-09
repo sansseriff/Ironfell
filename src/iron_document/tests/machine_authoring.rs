@@ -57,7 +57,7 @@ fn a_state_made_by_hand_animates_its_instances() {
     assert_eq!(doc.get::<Port>(spec).unwrap().datatype.constant(), Some(&Value::Str("choice(default|state_2)".into())));
     // Pin state_2; dim the dot. One transaction makes a channel, binds the
     // dot to it and records 0.2 as state_2's pose.
-    store.pin_state(Some(machine::Pinned { def, machine: m, state: "state_2".into() }));
+    store.pin_state(Some(machine::Pinned::state(def, m, "state_2")));
     store.apply(tx("dim", vec![Op::Set { id: dot, path: path("appearance.opacity"), slot: Slot::Const(Value::Number(0.2)) }])).unwrap();
     store.advance_machines(0.5);
     let chans = machine::channels(store.document(), def);
@@ -101,4 +101,82 @@ fn a_state_made_by_hand_animates_its_instances() {
     }
     assert!(machine::channels(store.document(), def).is_empty());
     assert_eq!(store.document().leaf(dot, path("appearance.opacity")).unwrap().constant(), Some(&Value::Number(1.0)));
+}
+
+/// The machine panel's verbs (machines.md §6): a scrubbed transition shows
+/// on the main, a pair gets its own transition, a channel its own slice;
+/// and every instance with states has a lane on the timeline.
+#[test]
+fn the_machine_panel_scrubs_retimes_and_lanes_show_state() {
+    let mut store = Store::new();
+    let ids = store.document().next_ids(6);
+    let [bench, model, library, def, template, dot] = ids[..] else { unreachable!() };
+    let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    let mut t = Template::default();
+    t.notation = Slot::Const(Value::Str("free".into()));
+    store
+        .apply(tx(
+            "card",
+            vec![
+                Op::Create { id: bench, ty: ty("composition"), parent: None, order: k(0), facets: vec![named("bench"), c.wrap()] },
+                Op::Create { id: model, ty: ty("model"), parent: None, order: k(1), facets: vec![] },
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k(2), facets: vec![] },
+                Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: k(0), facets: vec![named("card")] },
+                Op::Create { id: template, ty: ty("template"), parent: Some(def), order: k(0), facets: vec![t.wrap()] },
+                Op::Create { id: dot, ty: ty("rect"), parent: Some(template), order: k(0), facets: vec![Transform2d::default().wrap(), Size::default().wrap(), Appearance::default().wrap(), named("dot")] },
+            ],
+        ))
+        .unwrap();
+    let (ops, _) = machine::add_state_ops(store.document(), def).unwrap();
+    store.apply(tx("add state", ops)).unwrap();
+    let m = machine::machines(store.document(), def)[0].0;
+    store.pin_state(Some(machine::Pinned::state(def, m, "state_2")));
+    store.apply(tx("dim", vec![Op::Set { id: dot, path: path("appearance.opacity"), slot: Slot::Const(Value::Number(0.2)) }])).unwrap();
+    let opacity = |s: &Store| s.resolved(dot, path("appearance.opacity")).unwrap().as_f64().unwrap();
+    // Scrubbing default → state_2 half-way shows a moment between on the main.
+    let scrub = |s: &mut Store, p: f64| s.pin_state(Some(machine::Pinned { def, machine: m, state: "state_2".into(), scrub: Some(("default".into(), "state_2".into(), p)) }));
+    scrub(&mut store, 0.5);
+    let half = opacity(&store);
+    assert!(half < 1.0 && half > 0.2, "half-way: {half}");
+    scrub(&mut store, 1.0);
+    assert!((opacity(&store) - 0.2).abs() < 1e-9);
+    // One "any change" transition: a strip, and default → state_2 uses it.
+    {
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        assert!(machine::is_strip(store.document(), &read, m));
+    }
+    // Own timing for default → state_2: its own transition, 300 ms like the shared one.
+    let (ops, own) = {
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        machine::add_transition_ops(store.document(), &read, def, m, "default", "state_2").unwrap()
+    };
+    store.apply(tx("own", ops)).unwrap();
+    {
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        let plan = machine::plan(store.document(), &read, def, m, "default", "state_2").unwrap();
+        assert_eq!(plan.transition, own);
+        assert_eq!(plan.ms, 300.0);
+        assert!(machine::add_transition_ops(store.document(), &read, def, m, "default", "state_2").is_err(), "twice is refused");
+    }
+    // The channel's own slice, the second half: at a quarter it has not moved.
+    let chan = machine::channels(store.document(), def)[0].1.clone();
+    let (ops, tween) = machine::add_tween_ops(store.document(), own, &chan).unwrap();
+    store.apply(tx("tween", ops)).unwrap();
+    store.apply(tx("narrow", vec![Op::Set { id: tween, path: path("tween.start"), slot: Slot::Const(Value::Number(0.5)) }])).unwrap();
+    scrub(&mut store, 0.25);
+    assert_eq!(opacity(&store), 1.0, "before its slice");
+    scrub(&mut store, 0.75);
+    assert!(opacity(&store) < 1.0);
+    store.pin_state(None);
+    // An instance, never keyed, has a state lane on the timeline.
+    let (ops, _) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
+    store.apply(tx("place", ops)).unwrap();
+    let clock = store.ensure_clock().unwrap();
+    let plan = timeline_view::plan(&store, clock, None);
+    let lane = plan.objects.iter().flat_map(|o| &o.props).find(|p| p.prop == "args.state").expect("a lane");
+    assert!(lane.lane);
+    assert_eq!(lane.rest, Some(("default".into(), 0)));
+    assert!(timeline_view::rows(&plan).iter().any(|r| r.lane));
 }

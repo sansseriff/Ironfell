@@ -637,9 +637,15 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
         }
         // Pin a state on its main (session only, machines.md §6): no
         // transaction.
+        // `scrub: {from, to, progress}` shows a moment of a transition on
+        // the main instead (the machine panel's transition playhead).
         if verb == "pin_state" {
+            let scrub = a.get("scrub").filter(|v| v.is_object()).map(|v| {
+                let t = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_owned();
+                (t("from"), t("to"), v.get("progress").and_then(|x| x.as_f64()).unwrap_or(0.0))
+            });
             let pin = match a.get("state").and_then(|v| v.as_str()) {
-                Some(state) => Some(iron_document::machine::Pinned { def: id("def")?, machine: id("machine")?, state: state.to_owned() }),
+                Some(state) => Some(iron_document::machine::Pinned { def: id("def")?, machine: id("machine")?, state: state.to_owned(), scrub }),
                 None => None,
             };
             store.0.pin_state(pin);
@@ -653,12 +659,47 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
             // The new state is pinned, so the next edits shape it.
             let doc = store.0.document();
             if let Some(&(machine, _)) = iron_document::machine::machines(doc, def).first() {
-                store.0.pin_state(Some(iron_document::machine::Pinned { def, machine, state: name.clone() }));
+                store.0.pin_state(Some(iron_document::machine::Pinned::state(def, machine, name.clone())));
             }
             return Ok(serde_json::json!({"ok": true, "state": name}));
         }
         let (label, ops, made): (String, Vec<iron_document::Op>, Option<iron_document::NodeId>) = match verb.as_str() {
-            "rename_state" => ("rename state".into(), iron_document::machine::rename_state_ops(doc, id("state")?, a.get("name").and_then(|v| v.as_str()).unwrap_or(""))?, None),
+            "rename_state" => {
+                let state = id("state")?;
+                let ops = iron_document::machine::rename_state_ops(doc, state, a.get("name").and_then(|v| v.as_str()).unwrap_or(""))?;
+                // A pin on the old name follows the rename.
+                let old = doc.get::<iron_document::facet::Name>(state).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+                let new = ops.iter().find_map(|o| match o {
+                    iron_document::Op::Set { id, slot, .. } if *id == state => slot.constant().and_then(|v| v.as_str()).map(str::to_owned),
+                    _ => None,
+                });
+                if let (Some(old), Some(new), Some(mut pin)) = (old, new, store.0.pinned_state().cloned())
+                    && pin.state == old
+                {
+                    pin.state = new;
+                    store.0.pin_state(Some(pin));
+                }
+                ("rename state".into(), ops, None)
+            }
+            // The machine panel (machines.md §6): one pair of states its own
+            // timing; a channel its own slice of a transition, or not.
+            "add_transition" => {
+                let read = |l: iron_document::Leaf| store.0.resolved(l.node, l.path);
+                let s = |k: &str| a.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let (ops, t) = iron_document::machine::add_transition_ops(doc, &read, id("def")?, id("machine")?, &s("from"), &s("to"))?;
+                ("add transition".into(), ops, Some(t))
+            }
+            "add_tween" => {
+                let (ops, w) = iron_document::machine::add_tween_ops(doc, id("transition")?, a.get("channel").and_then(|v| v.as_str()).unwrap_or(""))?;
+                ("add tween".into(), ops, Some(w))
+            }
+            "remove_node" => {
+                let n = id("node")?;
+                if !matches!(doc.live(n).map(|x| x.ty.name()), Some("tween" | "transition")) {
+                    return Err("remove_node takes a tween or a transition".into());
+                }
+                (format!("remove {}", doc.live(n).map_or("", |x| x.ty.name())), vec![iron_document::Op::Delete { id: n }], None)
+            }
             "attach_points" | "detach_points" => {
                 let points: Vec<iron_document::NodeId> = serde_json::from_value(a.get("points").cloned().ok_or("points missing")?).map_err(|e| e.to_string())?;
                 let ops = if verb == "attach_points" { iron_document::attachment::attach(&store.0, id("control")?, &points)? }
@@ -2660,7 +2701,26 @@ pub fn timeline_rows(app: &mut WorkerApp, panel: String) -> String {
                     let base = iron_document::time::start(doc, c) + doc.relations_from(c).find(|x| x.rel == iron_document::RelKind::Animates).and_then(|x| x.data.get("offset").and_then(|v| v.as_f64())).unwrap_or(0.0);
                     iron_document::time::keys(doc, c).iter().any(|k| (base + k.t - now).abs() <= tv::AT_KEY)
                 });
-                serde_json::json!({"kind": r.kind, "label": r.label, "y": r.y, "target": r.target.to_string(), "prop": r.prop, "clip": r.clip.map(|c| c.to_string()), "error": r.error, "keyed": keyed})
+                // A state lane says what state it is in at the playhead, and
+                // the transition it is going through, if any.
+                let mut state = serde_json::Value::Null;
+                if r.lane
+                    && let Some(port) = r.prop.as_deref().and_then(|p| p.strip_prefix("args."))
+                    && let Ok(path) = iron_document::facet::LeafPath::new(iron_document::FacetKind::Args, port)
+                {
+                    let read = |l: iron_document::Leaf| store.resolved(l.node, l.path);
+                    let leaf = iron_document::Leaf { node: r.target, path };
+                    let now_state = read(leaf).and_then(|v| v.as_str().map(str::to_owned));
+                    let run = iron_document::expand::linked_definition(doc, r.target).and_then(|def| {
+                        let (m, _) = iron_document::machine::machines(doc, def).into_iter().find(|(_, p)| p == port)?;
+                        let (t, p) = iron_document::machine::progress_at(doc, &read, def, iron_document::machine::copy_of(doc, Some(r.target), m), leaf, now)?;
+                        let src = iron_document::machine::copy_source(t);
+                        let name = doc.get::<iron_document::facet::Name>(src).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+                        Some(serde_json::json!({"name": name, "progress": p}))
+                    });
+                    state = serde_json::json!({"state": now_state, "running": run});
+                }
+                serde_json::json!({"kind": r.kind, "label": r.label, "y": r.y, "target": r.target.to_string(), "prop": r.prop, "clip": r.clip.map(|c| c.to_string()), "error": r.error, "keyed": keyed, "lane": r.lane, "state": state})
             })
             .collect();
         let axis = |f: &str, d: f64| comp.and_then(|c| iron_document::facet::LeafPath::new(iron_document::facet::FacetKind::Axis, f).ok().and_then(|p| store.resolved(c, p))).and_then(|v| v.as_f64()).unwrap_or(d);
@@ -2802,4 +2862,79 @@ pub fn document_latency(app: &mut WorkerApp, panel: String, fields: String) -> S
     let w = affine * kurbo::Point::new(tx + half, ty + half);
     let centre = [(w.x - view.rect.x as f64) / dpr, (w.y - view.rect.y as f64) / dpr];
     serde_json::json!({"ok": true, "ready": true, "composition": comp.to_string(), "target": target.to_string(), "centre": centre}).to_string()
+}
+
+/// The machine panel's data (machines.md §6): for the main `node` is in
+/// (the main or one of its parts), or the instance `node` shows, the
+/// component's machines: states, transitions with their tweens, which
+/// transition each pair of states runs, the channels, strip or graph
+/// layout. For an instance, also the state it is in now and the transition
+/// it is in, if any. And the pin, wherever it is (for the canvas chip).
+/// `{"ok", "view": {"def", "name", "main", "entity", "machines"} | null,
+/// "pinned": {"def", "name", "machine", "state", "scrub"} | null}`.
+pub fn machine_view(app: &mut WorkerApp, node: String) -> String {
+    // A read polled by the shell: no frames asked for (narrative_run asks).
+    let run = |store: &iron_document::Store| -> Result<serde_json::Value, String> {
+        use iron_document::{expand, machine, NodeId};
+        let doc = store.document();
+        let name_of = |n: NodeId| doc.get::<iron_document::facet::Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+        let read = |l: iron_document::Leaf| store.resolved(l.node, l.path);
+        let text = |n: NodeId, p: &str| read(iron_document::Leaf { node: n, path: p.parse().expect("declared") }).and_then(|v| v.as_str().map(str::to_owned));
+        let num = |n: NodeId, p: &str| read(iron_document::Leaf { node: n, path: p.parse().expect("declared") }).and_then(|v| v.as_f64());
+        let kids = |n: NodeId, t: &str| doc.children(n).iter().copied().filter(|c| !c.is_expanded() && doc.live(*c).is_some_and(|x| x.ty.name() == t)).collect::<Vec<_>>();
+        let pin = store.pinned_state().cloned();
+        let pinned = pin.as_ref().map(|p| serde_json::json!({"def": p.def.to_string(), "name": name_of(p.def), "machine": p.machine.to_string(), "state": p.state, "scrub": p.scrub.as_ref().map(|(f, t, x)| serde_json::json!({"from": f, "to": t, "progress": x}))}));
+        // Which component: the main the node is in, else the instance it shows.
+        let node: Option<NodeId> = node.parse().ok().filter(|&n| doc.is_live(n));
+        let main = node.map(|n| n.path()[0]).filter(|&m| expand::main_definition(doc, m).is_some());
+        let entity = if main.is_some() { None } else {
+            node.and_then(|n| if doc.live(n).is_some_and(|x| x.ty.name() == "entity") { Some(n) } else { iron_document::composition::figured_by(doc, n) })
+        };
+        let def = main.and_then(|m| expand::main_definition(doc, m)).or_else(|| entity.and_then(|e| expand::linked_definition(doc, e)));
+        let Some(def) = def else { return Ok(serde_json::json!({"ok": true, "view": null, "pinned": pinned})) };
+        let now = store.time();
+        let machines: Vec<serde_json::Value> = machine::machines(doc, def)
+            .into_iter()
+            .map(|(m, port)| {
+                let states: Vec<String> = machine::state_names(doc, m);
+                let transitions: Vec<_> = kids(m, "transition").into_iter().map(|t| {
+                    let tweens: Vec<_> = kids(t, "tween").into_iter().map(|w| serde_json::json!({
+                        "id": w.to_string(), "channel": text(w, "tween.channel"), "start": num(w, "tween.start"), "end": num(w, "tween.end"), "ease": text(w, "tween.ease"),
+                        "shaped": matches!(read(iron_document::Leaf { node: w, path: "tween.shape".parse().expect("declared") }), Some(iron_document::Value::Fn(_))),
+                    })).collect();
+                    serde_json::json!({"id": t.to_string(), "name": name_of(t), "from": text(t, "transition.from"), "to": text(t, "transition.to"), "ms": num(t, "transition.ms"), "ease": text(t, "transition.ease"), "tweens": tweens})
+                }).collect();
+                let mc = machine::copy_of(doc, entity, m);
+                let mut pairs = Vec::new();
+                for a in &states {
+                    for b in states.iter().filter(|b| *b != a) {
+                        let p = machine::plan(doc, &read, def, mc, a, b);
+                        pairs.push(serde_json::json!({"from": a, "to": b, "transition": p.as_ref().map(|p| machine::copy_source(p.transition).to_string()), "ms": p.as_ref().map(|p| p.ms)}));
+                    }
+                }
+                let state_ids: Vec<_> = kids(m, "state").into_iter().map(|s| serde_json::json!({"id": s.to_string(), "name": name_of(s)})).collect();
+                let current = entity.map(|e| {
+                    let leaf = iron_document::Leaf { node: e, path: iron_document::facet::LeafPath::new(iron_document::FacetKind::Args, &port).expect("an argument path") };
+                    let state = read(leaf).and_then(|v| v.as_str().map(str::to_owned));
+                    let run = machine::progress_at(doc, &read, def, mc, leaf, now);
+                    serde_json::json!({"state": state, "transition": run.map(|r| machine::copy_source(r.0).to_string()), "progress": run.map(|r| r.1)})
+                });
+                serde_json::json!({
+                    "id": m.to_string(), "port": port, "states": state_ids, "transitions": transitions, "pairs": pairs,
+                    "layout": if machine::is_strip(doc, &read, m) { "strip" } else { "graph" },
+                    "pinned": pin.as_ref().filter(|p| p.machine == m).map(|p| p.state.clone()),
+                    "current": current,
+                })
+            })
+            .collect();
+        let channels: Vec<_> = machine::channels(doc, def).into_iter().map(|(c, n, rest)| serde_json::json!({"id": c.to_string(), "name": n, "rest": rest})).collect();
+        Ok(serde_json::json!({"ok": true, "pinned": pinned, "view": {
+            "def": def.to_string(), "name": name_of(def), "main": main.map(|m| m.to_string()), "entity": entity.map(|e| e.to_string()), "machines": machines, "channels": channels,
+        }}))
+    };
+    let result = match app.world().get_resource::<crate::document_bridge::DocumentStore>() {
+        Some(store) => run(&store.0),
+        None => Err("document bridge not installed".into()),
+    };
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }

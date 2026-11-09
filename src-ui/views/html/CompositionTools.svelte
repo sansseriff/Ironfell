@@ -33,6 +33,9 @@
   import type { Tool } from "../../runtime/document_client.svelte";
   import type { ViewSpec } from "../views";
   import TimelinePanel from "./TimelinePanel.svelte";
+  import X from "@lucide/svelte/icons/x";
+  import { onDestroy } from "svelte";
+  import { machines } from "../../lib/machines.svelte";
 
   let { spec, panel = "" }: { spec: ViewSpec; panel?: string } = $props();
 
@@ -78,6 +81,12 @@
   const current = (slot: string[]) => (slot.includes(last[slot.join("|")]) ? last[slot.join("|")] : slot[0]);
   let menu: Record<string, boolean> = $state({});
 
+  // A state previewed on a main says so on the canvas, loudly, with a way
+  // out (machines.md §6): what you see is not the component's resting look.
+  const stopMachines = machines.use();
+  onDestroy(stopMachines);
+  const pin = $derived(machines.pinned);
+
   function pick(tool: string, slot?: string[]) {
     if (slot) menu[slot.join("|")] = false;
     doc.setTool(tool as Tool);
@@ -86,6 +95,14 @@
 
 {#if timeline}
   <TimelinePanel {panel} />
+{/if}
+
+{#if shown && pin}
+  <div class="previewing canvas-ui" role="status">
+    <span class="dot"></span>
+    <span>Previewing {#if pin.scrub}<strong>{pin.scrub.from} → {pin.scrub.to}</strong> at {Math.round(pin.scrub.progress * 100)}%{:else}<strong>{pin.state}</strong>{/if}{#if pin.name}<span class="of"> · {pin.name}</span>{/if}</span>
+    <button class="stop" onclick={() => machines.pin(pin.def, pin.machine, null)} title="Stop previewing: show the component at rest" aria-label="Stop previewing"><X size={13} strokeWidth={2} /></button>
+  </div>
 {/if}
 
 {#if shown}
@@ -128,6 +145,12 @@
 {/if}
 
 <style>
+  .previewing { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px 0 12px; border-radius: 14px; background: #ff9933; color: #1d1203; font-size: 12px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); pointer-events: auto; z-index: 4; white-space: nowrap; }
+  .previewing .dot { width: 7px; height: 7px; border-radius: 50%; background: #1d1203; }
+  .previewing .of { opacity: 0.75; }
+  .previewing .stop { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 11px; background: rgba(0, 0, 0, 0.12); color: inherit; cursor: pointer; }
+  .previewing .stop:hover { background: rgba(0, 0, 0, 0.22); }
+  .previewing .stop:focus-visible { outline: 2px solid #1d1203; }
   .toolbar {
     position: absolute;
     left: 50%;

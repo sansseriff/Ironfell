@@ -385,8 +385,43 @@ the agent can tell it caught an instance mid-way.
   `hidden`; an instance's state keyed hidden at 0 s and default at 1 s by hand;
   scrubbing 0.9 / 1.15 / 1.6 s shows nothing, half and all; a 2 s span retimes that
   occurrence; undo restores it. `tests/machines.rs`, `tests/machine_authoring.rs`.
-- Not yet: dragging the band's end (the drag's handle is ambiguous between the key's
-  time and its span; set Span in the key's inspector instead); the strip/graph
-  panel; a "Previewing" chip on the canvas (the inspector shows it); colour channels
+- Not yet (the panel and chip were built 2026-11-09, below): dragging the band's end
+  (the drag's handle is ambiguous between the key's time and its span; set Span in the
+  key's inspector instead); colour channels
   (channels are numbers); double-click does not enter a main whose only part is an
   unfilled path (Enter does); per-view machines (Q2); per-lesson timing (§5.3).
+
+**2026-11-09: the machine panel, state lanes, the canvas chip (§6).**
+
+- **State lanes.** Every instance of a component with states has a row on the
+  document's timeline, keyed or not: its state port's lane shows a named stretch
+  per state (from its key to the next; an unkeyed one holds all along, fainter),
+  coloured by the state's place in the machine, under the progress bands. The DOM
+  column says what the lane is in at the playhead (`hidden`, or `appear 40%` mid-
+  transition; `timeline_rows` `lane`, `state`); an unkeyed lane's ◇ starts keying it.
+- **The machine panel** (`MachinePanel.svelte`, `machine_view`). The timeline panel
+  has two layouts: the clock, and a component's states. Selecting a main or one of
+  its parts switches to its states, leaving switches back, and a selected instance
+  offers them (a **States** button) without switching. **Strip** (chains and loops,
+  `machine::is_strip`): the states in a row, each gap holding both directions'
+  transition (name · length); **graph** (it branches): a diagram in a pane left of
+  the tracks, an edge per explicit transition, wildcard ones listed. Auto, Strip or
+  Graph, a session choice. Clicking a state on a main pins it; on an instance, sets
+  its state (the instance's current state is marked).
+- **A transition's tracks.** Clicking a transition, or choosing From and To, shows
+  that pair's transition: length and easing (shared ones say so; **Own timing**
+  gives the pair its own, copying length, easing and tweens:
+  `machine::add_transition_ops`), a ruler in ms, and a row per channel: its tween's
+  slice as a bar to drag (body moves, ends resize; one undo step on release) with
+  its curve drawn in, an easing field, × to follow the transition again; or **+** to
+  give the channel its own slice (`add_tween_ops`). The playhead scrubs the
+  transition's progress on the main (`Pinned::scrub`, session only), ▶ plays it; an
+  instance mid-transition shows where it is.
+- **The canvas chip.** While a state is pinned or a transition scrubbed, every 2D
+  view shows "Previewing *hidden* · component" (or "*a → b* at 40%") with a stop
+  button.
+- `tests/machine_authoring.rs` (scrub, own timing, a slice, an unkeyed lane).
+- Not yet: per-instance overrides edited from the panel (instances are read-only
+  there; edit the main); the panel's scrub on every instance in the view (it shows on
+  the main); adding or removing explicit graph edges by dragging.
+

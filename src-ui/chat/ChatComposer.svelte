@@ -24,13 +24,29 @@
   const blocked = $derived(busy || doc.asking || !doc.canAsk || !value.trim());
 
   // Grow with the text: measure at `auto`, then fix the height; the CSS
-  // max-height caps it and the field scrolls beyond that.
+  // min-height keeps a full line and max-height caps it. A panel mounted
+  // hidden measures 0, so measure again whenever the field's width changes
+  // (shown, or the panel resized), and leave CSS in charge until it has a
+  // size. The scrollbar appears only once the text passes the cap.
   let field = $state<HTMLTextAreaElement>();
-  $effect(() => {
-    void value;
+  let overflowing = $state(false);
+  function fit() {
     if (!field) return;
     field.style.height = 'auto';
-    field.style.height = `${field.scrollHeight}px`;
+    const natural = field.scrollHeight;
+    if (!natural) { field.style.height = ''; overflowing = false; return; }
+    const cap = parseFloat(getComputedStyle(field).maxHeight) || Infinity;
+    field.style.height = `${Math.min(natural, cap)}px`;
+    overflowing = natural > cap + 1;
+  }
+  $effect(() => { void value; fit(); });
+  $effect(() => {
+    const el = field;
+    if (!el) return;
+    let width = el.clientWidth;
+    const observer = new ResizeObserver(() => { if (el.clientWidth !== width) { width = el.clientWidth; fit(); } });
+    observer.observe(el);
+    return () => observer.disconnect();
   });
 
   // Dictation (Wispr Flow, Handy, macOS Dictation) may insert text through
@@ -52,7 +68,7 @@
 <form class="composer" class:compact aria-label="Chat composer" onsubmit={(event) => { event.preventDefault(); sync(); if (!blocked) submit(); }}>
   <div class="surface">
     <div class="target">{#if targetControl}{@render targetControl()}{:else}<span>{target}</span>{/if}</div>
-    <TextInput multiline bind:element={field} aria-label="Agent instruction" rows={compact ? 1 : 2} placeholder="Ask, explain, or change something…" bind:value onblur={sync} onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); sync(); if (!blocked) submit(); } }} />
+    <TextInput multiline class={overflowing ? 'overflowing' : ''} bind:element={field} aria-label="Agent instruction" rows={compact ? 1 : 2} placeholder="Ask, explain, or change something…" bind:value onblur={sync} onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); sync(); if (!blocked) submit(); } }} />
     <div class="footer">
       <Select value={doc.agentProvider} items={providers} label="Agent runtime" disabled={busy || doc.asking} onChange={(provider) => doc.configureAgent({ provider })} />
       <ModelEffortPicker disabled={busy || doc.asking} />
@@ -80,10 +96,16 @@
   .target:empty { display: none; }
   .surface :global(textarea.ui-input) {
     display: block; width: 100%; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; outline: none;
-    background: transparent; resize: none; overflow-y: auto;
-    min-height: 0; max-height: 208px; padding: 8px 16px 6px;
+    background: transparent; resize: none; overflow-y: hidden;
+    /* One full line plus the padding, so the caret is never clipped. */
+    min-height: calc(14px * 1.6 + 14px); max-height: 208px; padding: 8px 16px 6px;
     font-size: 14px; line-height: 1.6; color: var(--fg);
+    scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
   }
+  .surface :global(textarea.ui-input.overflowing) { overflow-y: auto; }
+  .surface :global(textarea.ui-input::-webkit-scrollbar) { width: 8px; }
+  .surface :global(textarea.ui-input::-webkit-scrollbar-track) { background: transparent; }
+  .surface :global(textarea.ui-input::-webkit-scrollbar-thumb) { background: var(--border-strong); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
   .surface :global(textarea.ui-input::placeholder) { color: var(--fg-faint); }
   .footer { display: flex; gap: 2px; align-items: center; padding: 2px 8px 8px; min-width: 0; }
   .spacer { flex: 1; }
@@ -113,6 +135,6 @@
   .stop:hover { opacity: 0.85; }
   .hint { text-align: center; margin: 6px 0 0; color: var(--fg-faint); font-size: 11px; }
   .compact { padding: 4px 10px 8px; }
-  .compact .surface :global(textarea.ui-input) { max-height: 120px; font-size: 13px; }
+  .compact .surface :global(textarea.ui-input) { max-height: 120px; min-height: calc(13px * 1.6 + 14px); font-size: 13px; }
   @media (prefers-reduced-motion: reduce) { .surface, .round, .footer :global(*) { transition: none; } }
 </style>

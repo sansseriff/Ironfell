@@ -293,6 +293,17 @@ PASS CHAT main: shared Model/Lesson, Markdown/visuals, safe content, history, sc
 PASS LIVE CHAT worker: real Codex prose/visual without mutation, then validated shape creation, 2 turns in the agent log; no page errors
 ```
 
+The composer's field sizing, by screenshot: `composer-shots.ts` captures it empty,
+focused, with three lines, past its 208 px cap and cleared, in light and dark at 1×
+and 2×, and prints each one's height, `scrollHeight` and `overflow-y`. Empty is
+59 px (two rows), three lines 81 px, past the cap 208 px with `overflow-y: auto`;
+every other state has `hidden`, so no scrollbar shows (~15 s; the wasm need not be
+current, so a worktree can serve a copy of the main checkout's `src-ui/wasm/`):
+
+```sh
+cd .claude/skills/run-iron && URL='http://127.0.0.1:5185/Ironfell/?gfx=webgl2&demo' OUT=/tmp/composer bun run composer-shots.ts
+```
+
 ### Chat history
 
 Each chat panel (Model, each narrative's Lesson chat) keeps its own list of

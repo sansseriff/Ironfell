@@ -313,6 +313,15 @@ the agent can tell it caught an instance mid-way.
 11. **The plot's `reveal`** duplicates `vis` (council, Opus): two ways to draw the
     series on. Proposed: drop `reveal` once the timeline keys state (step 8).
 
+12. **Customising timing from inside and outside (agreed 2026-11-08, step 6).** Four
+    layers, like arguments, overrides and clips: (a) the author's default, in the
+    definition; (b) timing the author exposes as an input (`ms="{= $self.appear_time}"`:
+    the player evaluates transition and tween timing per instance instead of reading
+    constants); (c) a per-instance override of any transition, without the author
+    exposing it (the inspector lists an instance's transitions with Override and Reset);
+    (d) a per-occurrence retime on the timeline (§4.2's band). Poses (each state's
+    channel values) take (b) and (c) the same way. None of (b)–(d) is built yet.
+
 ## 10. Done
 
 **2026-11-08: phase 1 (machines on events) and phase 3's plot.**

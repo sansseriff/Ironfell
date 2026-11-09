@@ -181,6 +181,8 @@ struct Run {
     start: f64,
     from: BTreeMap<NodeId, f64>,
     to: BTreeMap<NodeId, f64>,
+    /// The states it goes between.
+    states: (String, String),
 }
 
 /// The player: what each instance's machines were last seen in, and what
@@ -193,6 +195,8 @@ pub struct Player {
     pub snap: std::collections::BTreeSet<NodeId>,
     /// A state pinned for editing on its main (session only).
     pub pinned: Option<Pinned>,
+    /// What was running at the last advance, for views.
+    pub running: Vec<Running>,
 }
 
 /// What a running transition reports, for a probe or a view.
@@ -201,6 +205,9 @@ pub struct Running {
     pub entity: NodeId,
     pub transition: NodeId,
     pub progress: f64,
+    /// The states it goes between.
+    pub from: String,
+    pub to: String,
 }
 
 impl Player {
@@ -223,7 +230,7 @@ impl Player {
                 if let Some((values, run)) = clocked(doc, read, def, mc, Leaf { node: e, path }, clock) {
                     seen.insert((e, m));
                     if let Some(r) = run {
-                        running.push(Running { entity: e, transition: r.0, progress: r.1 });
+                        running.push(Running { entity: e, transition: r.0, progress: r.1, from: r.2.clone(), to: r.3.clone() });
                     }
                     self.known.insert((e, m), Known { state, values, run: None });
                     continue;
@@ -237,7 +244,7 @@ impl Player {
                     Some(k) if k.state != state => {
                         let from_state = std::mem::replace(&mut k.state, state.clone());
                         match plan(doc, read, def, mc, &from_state, &state).filter(|p| p.ms > 0.0 && !snap.contains(&e)) {
-                            Some(plan) => k.run = Some(Run { plan, start: now, from: k.values.clone(), to }),
+                            Some(plan) => k.run = Some(Run { plan, start: now, from: k.values.clone(), to, states: (from_state.clone(), state.clone()) }),
                             None => {
                                 k.values = to;
                                 k.run = None;
@@ -279,7 +286,7 @@ impl Player {
                     k.values = run.to.clone();
                     k.run = None;
                 } else {
-                    running.push(Running { entity: e, transition: run.plan.transition, progress: p });
+                    running.push(Running { entity: e, transition: run.plan.transition, progress: p, from: run.states.0.clone(), to: run.states.1.clone() });
                 }
             }
             for (&c, &v) in &k.values {
@@ -292,6 +299,7 @@ impl Player {
             }
         }
         out.extend(pinned_out);
+        self.running = running.clone();
         (out, running)
     }
 }
@@ -302,7 +310,7 @@ impl Player {
 /// the key's `span`, one occurrence retimed), from the previous state's
 /// pose, so any time gives the same picture. `None` when no clip drives
 /// the state, or the playhead is before its first key.
-fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(BTreeMap<NodeId, f64>, Option<(NodeId, f64)>)> {
+fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(BTreeMap<NodeId, f64>, Option<(NodeId, f64, String, String)>)> {
     let (clip, offset) = crate::timeline_view::clip_of(doc, state)?;
     let keys = crate::time::keys(doc, clip);
     let u = clock - crate::time::start(doc, clip) - offset;
@@ -323,7 +331,7 @@ fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf
         let a = from.get(&c).copied().unwrap_or(b);
         (c, a + (b - a) * plan.shaped(c, p))
     }).collect();
-    Some((values, Some((plan.transition, p))))
+    Some((values, Some((plan.transition, p, from_state, to_state))))
 }
 
 // ── Authoring by hand (machines.md §9 Q8) ──────────────────────────────
@@ -511,7 +519,7 @@ fn pinned_pose(doc: &Document, read: Read, pin: &Pinned) -> Option<BTreeMap<Node
 
 /// The transition a keyed state is in at clock time `clock`, and its
 /// progress (for the timeline's state lanes); `None` at rest.
-pub fn progress_at(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(NodeId, f64)> {
+pub fn progress_at(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(NodeId, f64, String, String)> {
     clocked(doc, read, def, machine, state, clock)?.1
 }
 
@@ -529,6 +537,47 @@ pub fn is_strip(doc: &Document, read: Read, machine: NodeId) -> bool {
         }
     }
     ins.values().chain(outs.values()).all(|&n| n <= 1)
+}
+
+/// The states in strip order (machines.md §6): along the explicit
+/// transitions when they make a chain or a loop (from the chain's start, or
+/// the first state for a loop), the rest after in the machine's order; and
+/// whether the last runs back to the first (a loop).
+pub fn strip_order(doc: &Document, read: Read, machine: NodeId) -> (Vec<String>, bool) {
+    let names = state_names(doc, machine);
+    let mut next: BTreeMap<String, String> = BTreeMap::new();
+    for t in children(doc, machine, "transition") {
+        let (f, g) = (read_text(read, t, "transition.from").unwrap_or_else(|| "*".into()), read_text(read, t, "transition.to").unwrap_or_else(|| "*".into()));
+        if f != "*" && g != "*" && names.contains(&f) && names.contains(&g) {
+            next.entry(f).or_insert(g);
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut looped = false;
+    // Chains first, each from a state nothing explicit leads into.
+    let starts: Vec<String> = names.iter().filter(|n| next.contains_key(*n) && !next.values().any(|v| v == *n)).cloned().collect();
+    let firsts = if starts.is_empty() { names.iter().filter(|n| next.contains_key(*n)).take(1).cloned().collect() } else { starts };
+    for s in firsts {
+        let mut at = s;
+        while !out.contains(&at) {
+            out.push(at.clone());
+            match next.get(&at) {
+                Some(n) => {
+                    if out.first() == Some(n) {
+                        looped = true;
+                    }
+                    at = n.clone();
+                }
+                None => break,
+            }
+        }
+    }
+    for n in names {
+        if !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    (out, looped)
 }
 
 /// Give one pair of states its own transition (machines.md §6): a
@@ -609,6 +658,11 @@ pub fn add_tween_ops(doc: &Document, transition: NodeId, channel: &str) -> Resul
 /// the leaf's value now (what every other state keeps), the leaf bound to
 /// it. Other ops pass through.
 pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crate::op::Op> {
+    // A scrubbed transition shows a moment between two states, not one:
+    // edits then are plain edits (the panel says so), never a pose.
+    if pin.scrub.is_some() {
+        return ops;
+    }
     use crate::expr::Expr;
     use crate::facet::{Args, Channel, FacetKind, LeafStruct};
     use crate::op::Op;

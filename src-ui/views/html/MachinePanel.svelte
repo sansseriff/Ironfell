@@ -17,6 +17,8 @@
   import ArrowRight from "@lucide/svelte/icons/arrow-right";
   import Play from "@lucide/svelte/icons/play";
   import Plus from "@lucide/svelte/icons/plus";
+  import Square from "@lucide/svelte/icons/square";
+  import { controllerManager } from "../../controller-manager.svelte";
   import X from "@lucide/svelte/icons/x";
   import Button from "../../lib/ui/Button.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
@@ -36,22 +38,27 @@
   const editable = $derived(!!view?.main);
   let error = $state("");
 
-  // Layout: automatic (strip for chains and loops), or chosen; session only.
-  let layoutChoice = $state<"auto" | "strip" | "graph">("auto");
-  const layoutOf = (m: Machine) => (layoutChoice === "auto" ? m.layout : layoutChoice);
+  // Layout: automatic (strip for chains and loops), or chosen; kept for
+  // the session (machines.md §6: workspace state).
+  const layoutOf = (m: Machine) => (machines.layoutChoice === "auto" ? m.layout : machines.layoutChoice);
 
-  // The transition shown in the tracks, per machine: a pair of states.
-  let chosen = $state<Record<string, { from: string; to: string }>>({});
-  const names = (m: Machine) => m.states.map((s) => s.name ?? "").filter(Boolean);
+  // The transition shown in the tracks, per machine: a pair of states, the
+  // one chosen; on an instance going through one, that one; else the first.
+  const names = (m: Machine) => m.order?.[0] ?? m.states.map((s) => s.name ?? "").filter(Boolean);
   function pairOf(m: Machine): { from: string; to: string } | null {
-    const c = chosen[m.id];
+    const c = machines.chosen[m.id];
     const ns = names(m);
     if (c && ns.includes(c.from) && ns.includes(c.to) && c.from !== c.to) return c;
+    const cur = m.current;
+    if (!editable && cur?.from && cur?.to) return { from: cur.from, to: cur.to };
     return ns.length >= 2 ? { from: ns[0], to: ns[1] } : null;
   }
   const pairInfo = (m: Machine, p: { from: string; to: string }): Pair | undefined => m.pairs.find((x) => x.from === p.from && x.to === p.to);
   const transitionOf = (m: Machine, id: string | null | undefined): Transition | undefined => m.transitions.find((t) => t.id === id);
   const own = (t: Transition | undefined, p: { from: string; to: string }) => !!t && t.from === p.from && t.to === p.to;
+  // The shared transition a pair with its own would otherwise use.
+  const sharedFor = (m: Machine, p: { from: string; to: string }, t: Transition | undefined) =>
+    m.transitions.find((x) => x !== t && (x.from === "*" || x.from === p.from) && (x.to === "*" || x.to === p.to) && (x.from === "*" || x.to === "*"));
   const describe = (t: Transition) => (t.from === "*" && t.to === "*" ? "any change" : `${t.from === "*" ? "any" : t.from} → ${t.to === "*" ? "any" : t.to}`);
 
   async function run(p: Promise<{ ok: boolean; error?: string }>) {
@@ -62,9 +69,12 @@
   }
 
   // ── States ────────────────────────────────────────────────────────────
-  const lit = (m: Machine, s: string) => (editable ? m.pinned === s : m.current?.state === s);
+  // A state is lit when it is previewed (not while a transition is
+  // scrubbed: that is a moment between two), or an instance is in it.
+  const lit = (m: Machine, s: string) => (editable ? m.pinned === s && !machines.pinned?.scrub : m.current?.state === s);
   function clickState(m: Machine, s: string) {
     if (!view) return;
+    stopPlay();
     scrubbing = null;
     if (editable) {
       void run(machines.pin(view.def, m.id, m.pinned === s && !machines.pinned?.scrub ? null : s));
@@ -73,16 +83,18 @@
     }
   }
   function choose(m: Machine, from: string, to: string) {
-    chosen = { ...chosen, [m.id]: { from, to } };
+    machines.chosen = { ...machines.chosen, [m.id]: { from, to } };
+    stopPlay();
     scrubbing = null;
-    if (view && editable && machines.pinned?.scrub) void machines.pin(view.def, m.id, m.pinned ?? from);
+    if (view && editable && machines.pinned?.scrub) void machines.pin(view.def, m.id, machines.pinned.state);
   }
+  const editMain = () => view?.main_of && controllerManager.docClient.command({ op: "narrative_probe", node: view.main_of, action: "select" });
 
   // ── The strip: states in order, each gap holding both directions ──────
   function between(m: Machine, a: string, b: string) {
     const p = pairInfo(m, { from: a, to: b });
     const t = transitionOf(m, p?.transition);
-    return { p, t, label: t ? `${t.name ?? "change"} · ${Math.round(p?.ms ?? 0)} ms` : "snaps" };
+    return { p, t, shared: !!t && !own(t, { from: a, to: b }), label: t ? `${t.name ?? "change"} · ${Math.round(p?.ms ?? 0)} ms` : "snaps" };
   }
 
   // ── The graph: states round a circle, an edge per explicit transition ─
@@ -95,20 +107,30 @@
       return { name, x: GW / 2 + Math.cos(a) * (GW / 2 - 50), y: GH / 2 + Math.sin(a) * (GH / 2 - 26) };
     });
   }
+  // An edge per pair of states that has a transition: solid for the
+  // pair's own, dashed for a shared (any-state) one.
   function edges(m: Machine) {
     const at = Object.fromEntries(nodes(m).map((n) => [n.name, n]));
-    return m.transitions
-      .filter((t) => t.from && t.to && t.from !== "*" && t.to !== "*" && at[t.from] && at[t.to])
-      .map((t) => {
-        const a = at[t.from!], b = at[t.to!];
+    return m.pairs
+      .filter((q) => q.transition && at[q.from] && at[q.to])
+      .map((q) => {
+        const t = transitionOf(m, q.transition)!;
+        const shared = !own(t, q);
+        const a = at[q.from], b = at[q.to];
         const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
         // Offset to the right of travel, so the two directions sit apart;
         // trim to the boxes' edges.
         const ox = (-dy / len) * 7, oy = (dx / len) * 7, trim = 34;
-        return { t, x1: a.x + (dx / len) * trim + ox, y1: a.y + (dy / len) * 16 + oy, x2: b.x - (dx / len) * trim + ox, y2: b.y - (dy / len) * 16 + oy };
+        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, t, shared, x1: a.x + (dx / len) * trim + ox, y1: a.y + (dy / len) * 16 + oy, x2: b.x - (dx / len) * trim + ox, y2: b.y - (dy / len) * 16 + oy };
       });
   }
   const wild = (m: Machine) => m.transitions.filter((t) => t.from === "*" || t.to === "*");
+  const keyActivate = (e: KeyboardEvent, f: () => void) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      f();
+    }
+  };
 
   // ── Tracks ────────────────────────────────────────────────────────────
   const LABEL_W = 132;
@@ -159,11 +181,23 @@
   let scrubbing = $state<string | null>(null);
   let progress = $state(0);
   let playing = 0;
+  let isPlaying = $state(false);
+  function stopPlay() {
+    cancelAnimationFrame(playing);
+    isPlaying = false;
+  }
+  // Stopping the preview anywhere (the canvas chip) stops playback too.
+  $effect(() => {
+    if (!machines.pinned?.scrub) {
+      stopPlay();
+      scrubbing = null;
+    }
+  });
   function scrubTo(m: Machine, p: { from: string; to: string }, value: number) {
     if (!view || !editable) return;
     progress = Math.max(0, Math.min(1, value));
     scrubbing = m.id;
-    void machines.pin(view.def, m.id, m.pinned ?? p.from, { from: p.from, to: p.to, progress });
+    void machines.pin(view.def, m.id, machines.pinned?.state ?? m.pinned ?? p.from, { from: p.from, to: p.to, progress });
   }
   // A press on the ruler or a track (not on a bar or a control) scrubs.
   let scrubDown = false;
@@ -174,19 +208,21 @@
       if (at.closest(".bar, .row-tools, button, input") || !at.closest(".ruler, .track")) return;
       scrubDown = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      cancelAnimationFrame(playing);
+      stopPlay();
     } else if (!scrubDown) return;
     const lane = (e.currentTarget as HTMLElement).querySelector(".lane-area") as HTMLElement | null;
     const r = (lane ?? (e.currentTarget as HTMLElement)).getBoundingClientRect();
     scrubTo(m, p, (e.clientX - r.left) / r.width);
   }
   function play(m: Machine, p: { from: string; to: string }, ms: number) {
-    cancelAnimationFrame(playing);
+    stopPlay();
+    isPlaying = true;
     const t0 = performance.now();
     const step = () => {
       const k = Math.min(1, (performance.now() - t0) / Math.max(ms, 1));
       scrubTo(m, p, k);
-      if (k < 1) playing = requestAnimationFrame(step);
+      if (k < 1 && isPlaying) playing = requestAnimationFrame(step);
+      else isPlaying = false;
     };
     playing = requestAnimationFrame(step);
   }
@@ -198,11 +234,14 @@
 <div class="machine-panel canvas-ui" data-machine-panel>
   <div class="head">
     <span class="title">States{#if view?.name}<span class="muted"> · {view.name}</span>{/if}</span>
-    {#if view && !editable && view.entity}<span class="hint">Selected instance · edit timing on the component's main</span>{/if}
+    {#if view && !editable && view.entity}
+      <span class="hint">An instance: its state now is marked; timing is the component's</span>
+      {#if view.main_of}<Button small variant="outline" onclick={editMain} title="Select the component's main to edit its states and timing">Edit main</Button>{/if}
+    {/if}
     <span class="grow"></span>
     {#if error}<span class="error" role="alert">{error}</span>{/if}
     {#if view?.machines.length}
-      <ToggleGroup.Root type="single" class="seg" value={layoutChoice} aria-label="Layout" onValueChange={(v) => v && (layoutChoice = v as typeof layoutChoice)}>
+      <ToggleGroup.Root type="single" class="seg" value={machines.layoutChoice} aria-label="Layout" onValueChange={(v) => v && (machines.layoutChoice = v as typeof machines.layoutChoice)}>
         <ToggleGroup.Item class="seg-item" value="auto" title="Strip for a chain or a loop, graph when it branches">Auto</ToggleGroup.Item>
         <ToggleGroup.Item class="seg-item" value="strip">Strip</ToggleGroup.Item>
         <ToggleGroup.Item class="seg-item" value="graph">Graph</ToggleGroup.Item>
@@ -211,6 +250,24 @@
     {#if editable && view}<Button small variant="outline" onclick={() => run(machines.author("add_state", { def: view!.def }))} title="Add a state; edits made while it is previewed become its look">+ State</Button>{/if}
     <Button small variant="outline" onclick={onTimeline} title="Back to the document's timeline">Timeline</Button>
   </div>
+
+  {#if view && editable && machines.pinned?.def === view.def}
+    {@const pin = machines.pinned}
+    {@const pm = view.machines.find((x) => x.id === pin.machine)}
+    {@const pst = pm?.states.find((x) => x.name === pin.state)}
+    <div class="banner" role="status">
+      <span class="dot"></span>
+      {#if pin.scrub}
+        <span>Showing <strong>{pin.scrub.from} → {pin.scrub.to}</strong> at {Math.round(pin.scrub.progress * 100)}%: a moment between two states, so edits now change the parts, not a state.</span>
+      {:else}
+        <span>Previewing</span>
+        {#if pst}<input class="rename" aria-label="Rename state {pin.state}" value={pin.state} onchange={(e) => run(machines.author("rename_state", { state: pst.id, name: e.currentTarget.value }))} />{/if}
+        <span>Edit the parts on the canvas to shape this state.</span>
+      {/if}
+      <span class="grow"></span>
+      <Button small variant="outline" onclick={() => { stopPlay(); void machines.pin(pin.def, pin.machine, null); }}>Stop previewing</Button>
+    </div>
+  {/if}
 
   {#if !view}
     <div class="empty">Select a component's main, a part of it, or an instance to see its states.</div>
@@ -231,32 +288,31 @@
           {#if layoutOf(m) === "graph"}
             <div class="graph-pane">
               <div class="label">{m.port}</div>
-              <svg viewBox="0 0 {GW} {GH}" role="group" aria-label="States of {m.port}">
+              <svg width={GW} height={GH} viewBox="0 0 {GW} {GH}" role="group" aria-label="States of {m.port}">
                 <defs><marker id="arrow-{m.id}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="arrowhead" /></marker></defs>
-                {#each edges(m) as e (e.t.id)}
-                  {@const on = !!p && e.t.from === p.from && e.t.to === p.to}
-                  <!-- svelte-ignore a11y_click_events_have_key_events -->
-                  <g class="edge" class:on role="button" tabindex="-1" aria-label="{e.t.from} to {e.t.to}" onclick={() => choose(m, e.t.from!, e.t.to!)}>
+                {#each edges(m) as e (e.key)}
+                  {@const on = !!p && e.from === p.from && e.to === p.to}
+                  <g class="edge" class:on class:shared={e.shared} role="button" tabindex="0" aria-label="{e.from} to {e.to}{e.shared ? ' (shared timing)' : ''}" onclick={() => choose(m, e.from, e.to)} onkeydown={(ev) => keyActivate(ev, () => choose(m, e.from, e.to))}>
+                    <title>{e.from} → {e.to}: {e.t.name ?? "change"}{e.shared ? " (shared)" : ""}</title>
                     <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} class="hit" />
                     <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} marker-end="url(#arrow-{m.id})" />
                   </g>
                 {/each}
                 {#each nodes(m) as n (n.name)}
-                  <!-- svelte-ignore a11y_click_events_have_key_events -->
-                  <g class="node" class:lit={lit(m, n.name)} role="button" tabindex="-1" aria-label="State {n.name}" onclick={() => clickState(m, n.name)}>
+                  <g class="node" class:lit={lit(m, n.name)} role="button" tabindex="0" aria-label="State {n.name}" onclick={() => clickState(m, n.name)} onkeydown={(ev) => keyActivate(ev, () => clickState(m, n.name))}>
                     <rect x={n.x - 34} y={n.y - 14} width="68" height="28" rx="14" />
                     <text x={n.x} y={n.y + 4} text-anchor="middle">{n.name.length > 10 ? n.name.slice(0, 9) + "…" : n.name}</text>
                   </g>
                 {/each}
               </svg>
-              {#each wild(m) as w (w.id)}<div class="wild">Otherwise: {w.name ?? "change"} ({describe(w)}) · {Math.round(w.ms ?? 0)} ms</div>{/each}
+              {#each wild(m) as w (w.id)}<div class="wild">Dashed: {w.name ?? "change"} ({describe(w)}) · {Math.round(w.ms ?? 0)} ms</div>{/each}
             </div>
           {:else}
             <div class="strip" role="group" aria-label="States of {m.port}">
               <span class="label">{m.port}</span>
               {#each names(m) as s, i (s)}
                 <button class="state" class:lit={lit(m, s)} aria-pressed={lit(m, s)} onclick={() => clickState(m, s)}
-                  title={editable ? (m.pinned === s ? "Previewing on the main: edits shape this state. Click to stop." : "Preview this state on the main and edit its look") : `Set this instance to ${s}`}>
+                  title={editable ? (lit(m, s) ? "Previewing on the main: edits shape this state. Click to stop." : "Preview this state on the main and edit its look") : `Set this instance to ${s} (where its state is keyed, this keys it at the playhead)`}>
                   {#if !editable && m.current?.state === s}<span class="dot"></span>{/if}{s}
                 </button>
                 {#if i < names(m).length - 1}
@@ -264,11 +320,20 @@
                   {@const fwd = between(m, s, next)}
                   {@const back = between(m, next, s)}
                   <span class="gap">
-                    <button class="arrow" class:on={p?.from === s && p?.to === next} onclick={() => choose(m, s, next)} title="{s} → {next}"><span>{fwd.label}</span><ArrowRight size={12} strokeWidth={1.75} /></button>
-                    <button class="arrow back" class:on={p?.from === next && p?.to === s} onclick={() => choose(m, next, s)} title="{next} → {s}"><ArrowRight size={12} strokeWidth={1.75} /><span>{back.label}</span></button>
+                    <button class="arrow" class:shared={fwd.shared} class:on={p?.from === s && p?.to === next} onclick={() => choose(m, s, next)} title="{s} → {next}{fwd.shared ? ' (shared timing)' : ''}"><span>{fwd.label}</span><ArrowRight size={12} strokeWidth={1.75} /></button>
+                    <button class="arrow back" class:shared={back.shared} class:on={p?.from === next && p?.to === s} onclick={() => choose(m, next, s)} title="{next} → {s}{back.shared ? ' (shared timing)' : ''}"><ArrowRight size={12} strokeWidth={1.75} /><span>{back.label}</span></button>
                   </span>
                 {/if}
               {/each}
+              {#if m.order?.[1] && names(m).length > 2}
+                {@const last = names(m)[names(m).length - 1]}
+                {@const first = names(m)[0]}
+                {@const loop = between(m, last, first)}
+                <span class="gap">
+                  <button class="arrow" class:shared={loop.shared} class:on={p?.from === last && p?.to === first} onclick={() => choose(m, last, first)} title="{last} → {first} (back to the start)"><span>{loop.label}</span><ArrowRight size={12} strokeWidth={1.75} /></button>
+                </span>
+                <span class="loop-end">↺ {first}</span>
+              {/if}
             </div>
           {/if}
 
@@ -281,17 +346,28 @@
                   <Select label="To" value={p.to} items={names(m).filter((n) => n !== p.from).map((n) => ({ value: n, label: n }))} onChange={(v) => choose(m, p.from, v)} />
                 </div>
                 {#if t}
-                  <span class="uses" title="The transition this change runs">{own(t, p) ? (t.name ?? "") : `uses ${t.name ?? "change"} (${describe(t)})`}</span>
-                  {#if !own(t, p) && editable}
-                    <Button small variant="outline" title="Give {p.from} → {p.to} its own length, easing and tweens (starting from these)" onclick={() => run(machines.author("add_transition", { def: view!.def, machine: m.id, from: p.from, to: p.to }))}>Own timing</Button>
+                  {#if own(t, p)}
+                    <span class="scope own" title="Only {p.from} → {p.to} uses this timing">This pair · {t.name ?? ""}</span>
+                    {#if editable && sharedFor(m, p, t)}
+                      <Button small variant="outline" title="Remove this pair's own timing: it uses the shared one again" onclick={() => run(machines.author("remove_node", { node: t!.id }))}>Use shared</Button>
+                    {/if}
+                  {:else}
+                    <span class="scope shared" title="Edits here change every pair that uses {t.name ?? 'this transition'}">Shared · {describe(t)}: edits change every pair using it</span>
+                    {#if editable}
+                      <Button small variant="outline" title="Give {p.from} → {p.to} its own length, easing and slices (starting from these)" onclick={() => run(machines.author("add_transition", { def: view!.def, machine: m.id, from: p.from, to: p.to }))}>Customize this pair</Button>
+                    {/if}
                   {/if}
                   <span class="grow"></span>
-                  <label class="ms" title={own(t, p) ? "How long it takes" : `How long it takes (shared by ${describe(t)})`}>
-                    <input inputmode="decimal" aria-label="Length of {t.name}" disabled={!editable} value={t.ms ?? ""}
+                  <label class="ms" title={t.ms_formula ? "Set by a formula (an input or an override): edit it in the inspector" : own(t, p) ? "How long it takes" : `How long it takes (shared by ${describe(t)})`}>
+                    {#if t.ms_formula}<span class="fx">ƒ</span>{/if}
+                    <input inputmode="decimal" aria-label="Length of {t.name}" disabled={!editable || t.ms_formula} value={editable ? (t.ms ?? "") : Math.round(ms)}
                       onchange={(e) => run(machines.patch(t!.id, { "transition.ms": e.currentTarget.value }, "transition length"))} /><span>ms</span>
                   </label>
                   <div class="ease"><EasingField label="Easing of {t.name}" value={t.ease} disabled={!editable} onChange={(v) => run(machines.patch(t!.id, { "transition.ease": v }, "transition easing"))} /></div>
-                  {#if editable}<IconButton icon={Play} label="Play {p.from} to {p.to} on the main" onclick={() => play(m, p, ms)} />{/if}
+                  {#if editable}
+                    {#if isPlaying}<IconButton icon={Square} label="Stop playing" onclick={stopPlay} />
+                    {:else}<IconButton icon={Play} label="Play {p.from} to {p.to} on the main" onclick={() => play(m, p, ms)} />{/if}
+                  {/if}
                 {:else}
                   <span class="uses">No transition: {p.from} → {p.to} snaps.</span>
                   {#if editable}<Button small variant="outline" onclick={() => run(machines.author("add_transition", { def: view!.def, machine: m.id, from: p.from, to: p.to }))}>Add transition</Button>{/if}
@@ -322,9 +398,9 @@
                               <svg class="curve" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><path d={(() => { const f = curveOf(w.ease); let d = ""; for (let i = 0; i <= 24; i++) { const x = i / 24; d += `${i ? "L" : "M"}${(x * 100).toFixed(1)},${(18 - f(x) * 16).toFixed(1)}`; } return d; })()} /></svg>
                               {#if editable}
                                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                                <span class="grip start" onpointerdown={(e) => grab(e, w, "start")} onpointermove={moveBar} onpointerup={dropBar}></span>
+                                <span class="grip start" onpointerdown={(e) => grab(e, w, "start")} onpointermove={moveBar} onpointerup={dropBar} onpointercancel={dropBar}></span>
                                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                                <span class="grip end" onpointerdown={(e) => grab(e, w, "end")} onpointermove={moveBar} onpointerup={dropBar}></span>
+                                <span class="grip end" onpointerdown={(e) => grab(e, w, "end")} onpointermove={moveBar} onpointerup={dropBar} onpointercancel={dropBar}></span>
                               {/if}
                             {:else}<span class="f">ƒ shape</span>{/if}
                           </div>
@@ -389,11 +465,21 @@
   .arrow.back :global(svg) { transform: scaleX(-1); }
   .arrow:hover { background: var(--hover); color: var(--fg); }
   .arrow.on { border-color: var(--accent); color: var(--fg); background: var(--bg-sunken); }
+  .arrow.shared span { font-style: italic; }
+  .loop-end { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+  .banner { display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: rgba(255, 153, 51, 0.16); border-bottom: 1px solid rgba(255, 153, 51, 0.5); font-size: 12px; flex: none; }
+  .banner .dot { flex: none; background: #ff9933; }
+  .banner .rename { width: 110px; height: 24px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 600; }
+  .banner .rename:focus { outline: none; border-color: var(--accent); }
+  .scope { font-size: 11px; padding: 2px 8px; border-radius: 9px; white-space: nowrap; }
+  .scope.shared { background: rgba(255, 153, 51, 0.16); color: var(--fg); }
+  .scope.own { background: var(--accent-soft); color: var(--fg); }
+  .fx { color: var(--accent); font-style: italic; }
   .arrow:focus-visible { outline: 1px solid var(--accent); }
 
   /* The graph */
-  .graph-pane { display: flex; flex-direction: column; width: 280px; min-width: 200px; padding: 6px 10px; border-right: 1px solid var(--border); resize: horizontal; overflow: hidden; }
-  .graph-pane svg { display: block; flex: 1; min-height: 0; width: 100%; }
+  .graph-pane { padding: 6px 10px; border-right: 1px solid var(--border); overflow: auto; }
+  .graph-pane svg { display: block; }
   .node rect { fill: var(--bg-sunken); stroke: var(--border-strong); stroke-width: 1; }
   .node text { fill: var(--fg); font-size: 11px; font-weight: 600; }
   .node { cursor: pointer; }
@@ -402,7 +488,11 @@
   .edge { cursor: pointer; }
   .edge line { stroke: var(--fg-muted); stroke-width: 1.5; }
   .edge .hit { stroke: transparent; stroke-width: 10; }
-  .edge:hover line:not(.hit), .edge.on line:not(.hit) { stroke: var(--accent); stroke-width: 2; }
+  .edge.shared line:not(.hit) { stroke-dasharray: 4 3; opacity: 0.7; }
+  .edge:hover line:not(.hit), .edge.on line:not(.hit) { stroke: var(--accent); stroke-width: 2; opacity: 1; }
+  .edge:focus-visible, .node:focus-visible { outline: none; }
+  .edge:focus-visible line:not(.hit) { stroke: var(--accent); stroke-width: 2.5; }
+  .node:focus-visible rect { stroke: var(--accent); stroke-width: 2; }
   .arrowhead { fill: var(--fg-muted); }
   .wild { color: var(--fg-muted); font-size: 11px; margin-top: 4px; }
 

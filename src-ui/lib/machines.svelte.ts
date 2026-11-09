@@ -5,7 +5,7 @@
 import { controllerManager } from "../controller-manager.svelte";
 
 export type Tween = { id: string; channel: string | null; start: number | null; end: number | null; ease: string | null; shaped: boolean };
-export type Transition = { id: string; name: string | null; from: string | null; to: string | null; ms: number | null; ease: string | null; tweens: Tween[] };
+export type Transition = { id: string; name: string | null; from: string | null; to: string | null; ms: number | null; ease: string | null; tweens: Tween[]; ms_formula?: boolean };
 export type Pair = { from: string; to: string; transition: string | null; ms: number | null };
 export type Machine = {
   id: string;
@@ -14,8 +14,10 @@ export type Machine = {
   transitions: Transition[];
   pairs: Pair[];
   layout: "strip" | "graph";
+  /** States in strip order, and whether the last runs back to the first. */
+  order: [string[], boolean];
   pinned: string | null;
-  current: { state: string | null; transition: string | null; progress: number | null } | null;
+  current: { state: string | null; transition: string | null; progress: number | null; from: string | null; to: string | null } | null;
 };
 export type MachineView = {
   def: string;
@@ -26,6 +28,8 @@ export type MachineView = {
   entity: string | null;
   machines: Machine[];
   channels: { id: string; name: string; rest: number }[];
+  /** The component's main (for Edit main from an instance). */
+  main_of: string | null;
 };
 export type Pin = { def: string; name: string | null; machine: string; state: string; scrub: { from: string; to: string; progress: number } | null };
 
@@ -35,6 +39,11 @@ class Machines {
   #users = 0;
   #timer: ReturnType<typeof setInterval> | null = null;
   #pending = false;
+  /** The main last seen selected, and its definition. */
+  #lastMain: { main: string; def: string } | null = null;
+  // The panel's session choices, kept while the panel closes and opens.
+  layoutChoice: "auto" | "strip" | "graph" = $state("auto");
+  chosen: Record<string, { from: string; to: string }> = $state({});
 
   async read() {
     if (this.#pending) return;
@@ -45,6 +54,12 @@ class Machines {
       if (r.ok) {
         if (JSON.stringify(r.view) !== JSON.stringify(this.view)) this.view = r.view;
         if (JSON.stringify(r.pinned) !== JSON.stringify(this.pinned)) this.pinned = r.pinned;
+        // Leaving a main lets go of a state previewed on it, so later edits
+        // there are not recorded into a state you can no longer see.
+        const main = r.view?.main ? { main: r.view.main, def: r.view.def } : null;
+        const left = this.#lastMain && this.#lastMain.main !== main?.main ? this.#lastMain : null;
+        this.#lastMain = main;
+        if (left && r.pinned?.def === left.def) await this.pin(left.def, r.pinned.machine, null);
       }
     } catch {
       // No engine session yet.

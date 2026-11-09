@@ -180,3 +180,70 @@ fn the_machine_panel_scrubs_retimes_and_lanes_show_state() {
     assert_eq!(lane.rest, Some(("default".into(), 0)));
     assert!(timeline_view::rows(&plan).iter().any(|r| r.lane));
 }
+
+/// The council's fixes: no pose is recorded while a transition is
+/// scrubbed; a pin whose state is gone lets go; the strip follows the
+/// chain; a transition an event started is reported with its states.
+#[test]
+fn scrubbing_records_nothing_and_events_report_their_states() {
+    let mut store = Store::new();
+    let ids = store.document().next_ids(6);
+    let [bench, model, library, def, template, dot] = ids[..] else { unreachable!() };
+    let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    let mut t = Template::default();
+    t.notation = Slot::Const(Value::Str("free".into()));
+    store
+        .apply(tx(
+            "card",
+            vec![
+                Op::Create { id: bench, ty: ty("composition"), parent: None, order: k(0), facets: vec![named("bench"), c.wrap()] },
+                Op::Create { id: model, ty: ty("model"), parent: None, order: k(1), facets: vec![] },
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k(2), facets: vec![] },
+                Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: k(0), facets: vec![named("card")] },
+                Op::Create { id: template, ty: ty("template"), parent: Some(def), order: k(0), facets: vec![t.wrap()] },
+                Op::Create { id: dot, ty: ty("rect"), parent: Some(template), order: k(0), facets: vec![Transform2d::default().wrap(), Size::default().wrap(), Appearance::default().wrap(), named("dot")] },
+            ],
+        ))
+        .unwrap();
+    let (ops, _) = machine::add_state_ops(store.document(), def).unwrap();
+    store.apply(tx("add state", ops)).unwrap();
+    let m = machine::machines(store.document(), def)[0].0;
+    store.pin_state(Some(machine::Pinned::state(def, m, "state_2")));
+    store.apply(tx("dim", vec![Op::Set { id: dot, path: path("appearance.opacity"), slot: Slot::Const(Value::Number(0.2)) }])).unwrap();
+    assert_eq!(machine::channels(store.document(), def).len(), 1);
+    // Scrubbed: an edit is a plain edit, no new channel, no pose.
+    store.pin_state(Some(machine::Pinned { def, machine: m, state: "default".into(), scrub: Some(("default".into(), "state_2".into(), 0.5)) }));
+    store.apply(tx("move", vec![Op::Set { id: dot, path: path("transform2d.x"), slot: Slot::Const(Value::Number(40.0)) }])).unwrap();
+    assert_eq!(machine::channels(store.document(), def).len(), 1, "nothing recorded while scrubbing");
+    assert_eq!(store.document().leaf(dot, path("transform2d.x")).unwrap().constant(), Some(&Value::Number(40.0)));
+    // A third state, and explicit transitions a: state_3 → default → state_2: the strip follows them.
+    let (ops, third) = machine::add_state_ops(store.document(), def).unwrap();
+    store.apply(tx("third", ops)).unwrap();
+    for (f, g) in [(third.as_str(), "default"), ("default", "state_2")] {
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        let (ops, _) = machine::add_transition_ops(store.document(), &read, def, m, f, g).unwrap();
+        store.apply(tx("own", ops)).unwrap();
+    }
+    {
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        assert_eq!(machine::strip_order(store.document(), &read, m), (vec![third.clone(), "default".into(), "state_2".into()], false));
+    }
+    // A pin on a state that is gone lets go.
+    store.pin_state(Some(machine::Pinned::state(def, m, "nope")));
+    assert!(store.pinned_state().is_none());
+    // An instance's state changed by an event reports its transition and states.
+    let (ops, summary) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
+    store.apply(tx("place", ops)).unwrap();
+    let line = summary.lines().find(|l| l.contains("<placed")).unwrap();
+    let start = line.find("entity=\"").unwrap() + 8;
+    let e: NodeId = line[start..start + line[start..].find('"').unwrap()].parse().unwrap();
+    store.advance_machines(0.0);
+    store.apply(tx("go", vec![Op::Set { id: e, path: path("args.state"), slot: Slot::Const(Value::Str("state_2".into())) }])).unwrap();
+    store.advance_machines(1.0);
+    store.advance_machines(1.1);
+    let r = store.running_machines().iter().find(|r| r.entity == e).expect("running");
+    assert_eq!((r.from.as_str(), r.to.as_str()), ("default", "state_2"));
+    assert!(r.progress > 0.0 && r.progress < 1.0);
+}

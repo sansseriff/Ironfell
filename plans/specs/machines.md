@@ -421,7 +421,33 @@ the agent can tell it caught an instance mid-way.
   view shows "Previewing *hidden* · component" (or "*a → b* at 40%") with a stop
   button.
 - `tests/machine_authoring.rs` (scrub, own timing, a slice, an unkeyed lane).
-- Not yet: per-instance overrides edited from the panel (instances are read-only
+- **Council fixes, the same day** (Opus and Sol reviewed the panel in the app):
+  - **Scrubbing records nothing.** A scrubbed transition is a moment between two
+    states, so edits then are plain edits (`machine::record` passes them through);
+    the panel's banner says so and the inspector shows no state as previewed.
+  - **Stopping a preview stops playback** (the chip, the banner's Stop previewing,
+    clicking a state or another pair); ▶ turns into ■ while it plays.
+  - **Leaving a main unpins it**, so later edits there are not recorded into a state
+    you can no longer see; a pin whose state is gone (deleted, a rename undone) lets
+    go; a rename moves the pin and a scrub's ends, within its machine.
+  - **The panel follows the component**: entering a main shows its states; selecting
+    another component or nothing shows the clock (it stuck before).
+  - **Live status for events too**: the player keeps what it ran last
+    (`Store::running_machines`, `Running.from`/`to`), so a transition started by an
+    event shows in the lane (`hidden → default 50%`) and the panel, which follows an
+    instance's running pair.
+  - **Shared timing says so**: tracks on a shared transition read "Shared · any
+    change: edits change every pair using it" with **Customize this pair** (was Own
+    timing); a pair's own reads "This pair" with **Use shared** to remove it. Shared
+    gaps in the strip are italic; the graph draws shared pairs dashed and selectable.
+  - **The strip follows the chain** (`machine::strip_order`) and closes a loop.
+  - **Rename and Edit main in the panel**: the preview banner holds the state's name
+    to rename; an instance's view has Edit main. Graph states and edges take the
+    keyboard; the graph draws at its real size; a lane shows the state held before its
+    first key; a formula length is read-only; the States button sits off the ruler.
+  - `tests/machine_authoring.rs` (`scrubbing_records_nothing_and_events_report_their_states`).
+- Not yet: the inspector's States section and the panel overlap (both pin, add and
+  rename); the council suggested one home, the panel. Per-instance overrides edited from the panel (instances are read-only
   there; edit the main); the panel's scrub on every instance in the view (it shows on
   the main); adding or removing explicit graph edges by dragging.
 

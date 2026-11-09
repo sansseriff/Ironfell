@@ -93,6 +93,8 @@ pub struct Segment {
     /// On a keyed state: each key's state and its index among the
     /// machine's states (its lane colour).
     pub states: Vec<(NodeId, String, usize)>,
+    /// The state it holds before its first key (its own argument).
+    pub before: Option<(String, usize)>,
 }
 
 fn ty(n: &str) -> TypeId {
@@ -161,7 +163,13 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
                 Some(n) => keys.iter().filter_map(|k| k.value.as_str().map(|v| (k.id, v.to_owned(), n.iter().position(|x| x == v).unwrap_or(0)))).collect(),
                 None => Vec::new(),
             };
-            let segment = Segment { clip, offset, label: label.clone(), keys: keys.iter().map(|k| k.id).collect(), bands, states };
+            let before = names.as_ref().and_then(|n| {
+                let port = prop.strip_prefix("args.")?;
+                let v = doc.leaf(r.to, LeafPath::new(FacetKind::Args, port).ok()?)?.constant()?.as_str()?.to_owned();
+                let i = n.iter().position(|x| *x == v).unwrap_or(0);
+                Some((v, i))
+            });
+            let segment = Segment { clip, offset, label: label.clone(), keys: keys.iter().map(|k| k.id).collect(), bands, states, before };
             match o.props.iter_mut().find(|p| p.prop == prop) {
                 Some(p) => p.segments.push(segment),
                 None => o.props.push(Prop { prop: prop.clone(), segments: vec![segment], lane: names.is_some(), rest: None }),
@@ -496,6 +504,9 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 stretch(&mut push, format!("{} {}", o.target, p.prop), "0".into(), lit(plan.end), state, *index, true);
             }
             for s in &p.segments {
+                if let (Some((name, index)), Some((first, ..))) = (&s.before, s.states.first()) {
+                    stretch(&mut push, format!("before {} {}", s.clip, o.target), "0".into(), key_x(s, *first), name, *index, true);
+                }
                 for (i, (k, name, index)) in s.states.iter().enumerate() {
                     let to = s.states.get(i + 1).map_or_else(|| lit(plan.end), |(n, ..)| key_x(s, *n));
                     stretch(&mut push, format!("{k} {}", o.target), key_x(s, *k), to, name, *index, false);

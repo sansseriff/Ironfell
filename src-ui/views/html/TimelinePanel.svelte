@@ -24,7 +24,7 @@
   let { panel }: { panel: string } = $props();
   const doc = controllerManager.docClient;
 
-  type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean; lane?: boolean; state?: { state: string | null; running: { name: string | null; progress: number } | null } | null };
+  type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean; lane?: boolean; state?: { state: string | null; running: { name: string | null; progress: number; from?: string; to?: string } | null } | null };
   type Rows = { ok: boolean; rows: Row[]; y0: number; zoom: number; label_w: number; ruler_h: number; row_h: number };
   let layout: Rows = $state({ ok: false, rows: [], y0: 0, zoom: 1, label_w: 160, ruler_h: 56, row_h: 22 });
   let root: HTMLDivElement | undefined = $state();
@@ -94,12 +94,15 @@
   const stopMachines = machines.use();
   onDestroy(stopMachines);
   let mode = $state<"timeline" | "states">("timeline");
-  let lastMain: string | null = null;
+  // Mode follows the component: a main entered shows its states, leaving
+  // it (or selecting another component, or nothing) shows the clock.
+  let lastKey: string | null = null;
   $effect(() => {
-    const main = machines.view?.main ?? null;
-    if (main !== lastMain) {
-      lastMain = main;
-      mode = main ? "states" : "timeline";
+    const v = machines.view;
+    const key = v ? `${v.def}|${v.main ?? ""}` : null;
+    if (key !== lastKey) {
+      lastKey = key;
+      mode = v?.main ? "states" : "timeline";
     }
   });
   const offered = $derived(!!machines.view && (!!machines.view.main || machines.view.machines.length > 0));
@@ -126,7 +129,7 @@
         {:else}
           <span class="prop" title={row.prop}>{row.label}</span>
           {#if row.lane && row.state}
-            <span class="now" title="At the playhead">{#if row.state.running}{row.state.running.name ?? "change"} {Math.round(row.state.running.progress * 100)}%{:else}{row.state.state ?? ""}{/if}</span>
+            <span class="now" title="At the playhead">{#if row.state.running}{row.state.running.from && row.state.running.to ? `${row.state.running.from} → ${row.state.running.to}` : (row.state.running.name ?? "change")} {Math.round(row.state.running.progress * 100)}%{:else}{row.state.state ?? ""}{/if}</span>
           {/if}
           <span class="keys">
             <IconButton icon={ChevronLeft} label="Previous key of {row.label}" title="Previous key" onclick={() => key("prev", row.clip)} data-key="prev" />
@@ -265,7 +268,7 @@
   }
   .now {
     flex: none;
-    max-width: 84px;
+    max-width: 110px;
     padding: 1px 6px;
     border-radius: 8px;
     background: var(--hover);
@@ -277,7 +280,7 @@
   }
   .to-states {
     position: absolute;
-    top: 6px;
+    bottom: 8px;
     right: 8px;
     height: 24px;
     padding: 0 10px;

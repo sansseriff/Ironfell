@@ -1319,7 +1319,19 @@ impl Store {
         self.machines.pinned.as_ref()
     }
 
+    /// What the machines were running at the last advance: each instance
+    /// mid-transition, which transition, how far, between which states.
+    pub fn running_machines(&self) -> &[machine::Running] {
+        &self.machines.running
+    }
+
     pub fn advance_machines(&mut self, now: f64) -> Vec<machine::Running> {
+        // A pin whose state is gone (deleted, or a rename undone) lets go.
+        if let Some(pin) = &self.machines.pinned
+            && !machine::state_names(&self.doc, pin.machine).contains(&pin.state)
+        {
+            self.machines.pinned = None;
+        }
         let (values, running) = {
             let reactive = &self.reactive;
             let doc = &self.doc;

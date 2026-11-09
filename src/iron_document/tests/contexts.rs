@@ -543,9 +543,26 @@ fn every_field_constant_names_its_field() {
         (Field::DOUBLE_CLICK, "tolerance.double_click"), (Field::HIT, "tolerance.hit"), (Field::SECTIONS, "inspector.sections"),
         (Field::HANDLE, "chrome.handle"), (Field::ACCENT, "chrome.accent"), (Field::GRIP, "chrome.grip"), (Field::GRIP_SHAPE, "chrome.grip_shape"), (Field::HOVER, "chrome.hover"),
         (Field::MATE, "plug.mate"), (Field::GRID, "snap.grid"), (Field::DELETE, "affords.delete"), (Field::COMPONENT, "chrome.component"), (Field::CURSOR, "affords.cursor"),
+        (Field::STRIP, "workspace.strip"),
     ];
     for (f, path) in named {
         assert_eq!(f.path(), path);
     }
     assert_eq!(named.len(), contexts::FIELDS.len(), "a field without a constant here");
+}
+
+/// The workspace's view selector strip (panel-primitives.md): its views come
+/// from `std:workspace`, and a document's override changes them.
+#[test]
+fn the_workspace_strip_is_context_data() {
+    let mut store = Store::new();
+    let strip = |s: &Store| Resolver::new(s.document(), s.contexts()).workspace_values().get(Field::STRIP).to_owned();
+    assert_eq!(strip(&store), "layers model narratives library");
+    let ctx = r#"<context name="std:workspace"><rule match="view" workspace.strip="model layers composition:library"/></context>"#;
+    let (ops, _) = contexts::put_ops(store.document(), ctx).unwrap();
+    store.apply(tx(ops)).unwrap();
+    assert_eq!(strip(&store), "model layers composition:library");
+    let bad = r#"<context name="std:workspace"><rule match="view" workspace.strip="layers nonsense"/></context>"#;
+    let refused = contexts::put_ops(store.document(), bad).map(|(ops, _)| store.apply(tx(ops)).is_err()).unwrap_or(true);
+    assert!(refused, "an unknown view is refused");
 }

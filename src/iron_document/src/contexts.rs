@@ -41,7 +41,15 @@ pub enum Kind {
     Number,
     /// A colour, `#rrggbb` or `#rrggbbaa`.
     Color,
+    /// Views, space-separated: `notation:source` as a view names itself
+    /// (`composition:library`, `narrative:Lesson 1` with `_` for spaces), or
+    /// a built-in's short name (`layers model library narratives`, the last
+    /// meaning every narrative).
+    Views,
 }
+
+/// The short names a `Views` field takes.
+pub const VIEW_NAMES: &[&str] = &["layers", "model", "library", "narratives", "inspector", "timeline", "document"];
 
 /// A declared transition, parsed (`motion.placement="out 160 layout"`).
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -157,6 +165,7 @@ pub const FIELDS: &[FieldSpec] = &[
     FieldSpec { domain: "affords", name: "delete", view: false, kind: Kind::Choice, options: &["self", "subject"], doc: "what deleting it removes: itself, or what it figures (an entity, with every figure of it and the connections on its ports; a connection, with its figures) or projects (a timeline bar's clip)" },
     FieldSpec { domain: "chrome", name: "component", view: true, kind: Kind::Choice, options: &["on", "off"], doc: "whether a component instance wears its authoring chrome: the violet frame, its chip, and its input pins for linking (match=\"view\")" },
     FieldSpec { domain: "affords", name: "cursor", view: false, kind: Kind::Choice, options: &["auto", "trim-start", "trim-end"], doc: "the cursor over it, when its press does something the arrow would not say: moving where a span starts or ends (a timeline clip's first or last key; auto: what the tool shows)" },
+    FieldSpec { domain: "workspace", name: "strip", view: true, kind: Kind::Views, options: &["layers model narratives library"], doc: "the views a view selector strip offers, in order (panel-primitives.md): its icons switch which of them a panel shows (std:workspace, match=\"view\")" },
 ];
 
 /// The inspector's sections (contexts.md §2.7): rich widgets the shell draws,
@@ -205,6 +214,7 @@ impl Field {
     pub const DELETE: Field = Field(26);
     pub const COMPONENT: Field = Field(27);
     pub const CURSOR: Field = Field(28);
+    pub const STRIP: Field = Field(29);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]
@@ -577,6 +587,16 @@ impl<'a> Resolver<'a> {
         v
     }
 
+    /// What the workspace offers (panel-primitives.md): the view rules of
+    /// `std:workspace` (and a document's override of it).
+    pub fn workspace_values(&self) -> Values {
+        let mut v = Values::default();
+        if let Some(c) = self.lib.get("std:workspace") {
+            self.apply(&mut v, c, None, &[], |p| p == Position::View);
+        }
+        v
+    }
+
     /// Apply a context's matching rules (after those of the built-in it
     /// extends). `ty` is `None` for a view, whose rules match no type.
     fn apply(&self, v: &mut Values, c: usize, ty: Option<TypeId>, states: &[&str], position: impl Fn(Position) -> bool) {
@@ -911,6 +931,12 @@ fn rule(attrs: Vec<(String, String)>) -> Result<Rule, String> {
                     return Err(format!("{k}=\"{v}\": expected none, or <ease> <ms> [<when>] with ease {} and when {}", EASES.join("|"), WHENS.join("|")));
                 }
                 Val::Text(Arc::from(v))
+            }
+            Kind::Views => {
+                if let Some(w) = v.split_whitespace().find(|w| !VIEW_NAMES.contains(w) && !w.split_once(':').is_some_and(|(n, s)| !n.is_empty() && !s.is_empty())) {
+                    return Err(format!("{k}=\"{v}\": {w} is not a view ({}, or notation:source)", VIEW_NAMES.join(", ")));
+                }
+                Val::Text(Arc::from(v.split_whitespace().collect::<Vec<_>>().join(" ")))
             }
             Kind::Keys => {
                 for pair in v.split_whitespace() {

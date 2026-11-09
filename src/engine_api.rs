@@ -3015,3 +3015,18 @@ pub fn state_key(app: &mut WorkerApp, key: String) -> String {
     };
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
+
+/// The workspace's view selector strip (panel-primitives.md): the views
+/// `std:workspace` (or a document's override of it) offers, in order.
+/// `{"ok", "strip": ["layers", "model", "composition:library", …]}`.
+pub fn workspace_strip(app: &mut WorkerApp) -> String {
+    let result = match app.world().get_resource::<crate::document_bridge::DocumentStore>() {
+        Some(store) => {
+            let r = iron_document::contexts::Resolver::new(store.0.document(), store.0.contexts());
+            let strip = r.workspace_values().get(iron_document::contexts::Field::STRIP).to_owned();
+            serde_json::json!({"ok": true, "strip": strip.split_whitespace().collect::<Vec<_>>()})
+        }
+        None => serde_json::json!({"ok": false, "error": "document bridge not installed"}),
+    };
+    result.to_string()
+}

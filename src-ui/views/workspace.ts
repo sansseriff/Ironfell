@@ -417,3 +417,43 @@ export function viewShowing(source: string): string | null {
   }).sort((a, b) => (lastActive.get(b.id) ?? 0) - (lastActive.get(a.id) ?? 0));
   return views[0]?.id ?? null;
 }
+
+/** The dock, for views that change what it shows (the view strip). */
+export function dockApi(): DockviewApi | null {
+  return current;
+}
+
+/**
+ * Show a strip item's view (panel-primitives.md §5) from the panel `from`:
+ * in `from`'s group, opening it there if it is not open and moving it there
+ * if it is open but hidden elsewhere; a view already showing in another
+ * group is focused where it is. `split` opens it in a split below `from`'s
+ * group instead, so two show at once.
+ */
+export function showStripView(from: { group: { id: string } }, spec: ViewSpec, id: string | undefined, title: string, split: boolean) {
+  const api = current;
+  if (!api) return;
+  const group = api.groups.find((g) => g.id === from.group.id);
+  if (!group) return;
+  const existing = api.panels.find((p) => {
+    const s = specOf(p);
+    return s?.notation === spec.notation && s.source === spec.source;
+  });
+  const freshPanel = (position: any) =>
+    api.addPanel({ id: id && !api.getPanel(id) ? id : freshId(api, title), component: 'view', title, params: { spec }, position });
+  if (existing && existing.group.id !== group.id && existing.api.isVisible) {
+    existing.api.setActive();
+    return;
+  }
+  if (split) {
+    if (existing) existing.api.moveTo({ group, position: 'bottom' });
+    else freshPanel({ referenceGroup: group, direction: 'below' });
+    return;
+  }
+  if (existing) {
+    if (existing.group.id !== group.id) existing.api.moveTo({ group });
+    existing.api.setActive();
+  } else {
+    freshPanel({ referenceGroup: group, direction: 'within' });
+  }
+}

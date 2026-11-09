@@ -21,6 +21,8 @@
   import { controllerManager } from "../controller-manager.svelte";
   import { NOTATIONS, type ViewSpec } from "./views";
   import { setInspecting, setShowFps } from "./workspace";
+  import ViewStrip from "./ViewStrip.svelte";
+  import { viewStrip } from "./view_strip.svelte";
 
   let { id, spec, api }: { id: string; spec: ViewSpec; api: DockviewPanelApi } = $props();
 
@@ -49,6 +51,12 @@
 
   setContext('iron-view-active', () => visible);
 
+  // A view the workspace's strip offers wears the strip at its left edge
+  // (panel-primitives.md §5); its content sits right of it.
+  const stopStrip = viewStrip.use();
+  onDestroy(stopStrip);
+  const stripped = $derived(!!viewStrip.itemOf(spec));
+
   const inspecting = $derived(spec.notation === "composition" && share !== undefined);
   const inspectId = $derived(`${id}.inspect`);
 
@@ -70,7 +78,8 @@
   }
 </script>
 
-<div class="row" bind:this={row}>
+<div class="row" class:stripped bind:this={row}>
+  {#if stripped}<ViewStrip {api} {spec} />{/if}
   {#if missing}
     <MissingComposition {spec} {api} />
   {:else}
@@ -116,6 +125,10 @@
     display: flex;
     width: 100%;
     height: 100%;
+    box-sizing: border-box;
+  }
+  .row.stripped {
+    padding-left: 40px;
   }
   .view {
     position: relative;

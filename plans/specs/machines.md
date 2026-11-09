@@ -501,3 +501,24 @@ horizontal (rows against milliseconds).
 - Not yet: several machines on one component show one at a time with no chooser yet;
   "Duplicate state"; an instance's own timing from the editor.
 
+**2026-11-09: the layout council's editor changes.** A third council round reviewed the
+whole workspace and the editor's use of space. In the editor:
+
+- **The graph is the state map when it shows:** a resizable pane (300 px, drawing
+  scaled to it), each direction of a pair its own curve with its own hit area and its
+  length as a label, the selected pair in the accent colour, no focus box; the
+  header then drops its neighbour-only arrows (the pills stay, for menus and renaming).
+- **A strip's loop is labelled** (`↺ idle`).
+- **A state's view uses the width:** the compact pose table (channel column 200 px,
+  the rest value greyed where a state does not set it) and, at the right, the
+  transitions out of that state (`→ hover · 300 ms · own|shared`), each opening its
+  tracks. "Editing" is said by the pill, the table column, the chip and the inspector
+  strip only. Empty states span the panel and say what to do (or offer Return to main).
+- **A transition's controls are one toolbar row** (pair, ▶, length, easing, then its
+  scope: Shared timing with Customize this pair, or This pair with Use shared), the
+  ruler and the rows below, the channel column 200 px.
+- **Several machines** get a chooser in the header.
+- **A focus on a state or pair that is gone** (deleted, renamed) falls back.
+- Not done: the dock's default sizes (a taller timeline, under the canvas only) wait,
+  because the smoke scripts drag at absolute window coordinates and all move with it.
+

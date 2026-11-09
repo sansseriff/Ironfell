@@ -46,7 +46,15 @@
   let machineId = $state<string | null>(null);
   const m = $derived(view?.machines.find((x) => x.id === machineId) ?? view?.machines[0] ?? null);
   const names = (mm: Machine) => mm.order?.[0] ?? mm.states.map((s) => s.name ?? "").filter(Boolean);
-  const focusOf = (mm: Machine): Focus => machines.focus[mm.id] ?? { kind: "state", state: mm.pinned };
+  // What the editor shows, falling back when it names a state or pair that
+  // is gone (deleted, renamed).
+  const focusOf = (mm: Machine): Focus => {
+    const f = machines.focus[mm.id];
+    const ns = names(mm);
+    if (f?.kind === "pair" && ns.includes(f.from) && ns.includes(f.to)) return f;
+    if (f?.kind === "state" && (f.state === null || ns.includes(f.state))) return f;
+    return { kind: "state", state: mm.pinned && ns.includes(mm.pinned) ? mm.pinned : null };
+  };
   const setFocus = (mm: Machine, f: Focus) => (machines.focus = { ...machines.focus, [mm.id]: f });
   const pairInfo = (mm: Machine, from: string, to: string): Pair | undefined => mm.pairs.find((x) => x.from === from && x.to === to);
   const transitionOf = (mm: Machine, id: string | null | undefined): Transition | undefined => mm.transitions.find((t) => t.id === id);
@@ -86,14 +94,16 @@
   }
 
   // ── Graph ─────────────────────────────────────────────────────────────
-  const GW = 220, GH = 150;
+  // The graph's drawing space; the SVG scales it to the pane (council:
+  // the drawing should use the pane, and grow with the screen).
+  const GW = 300, GH = 170;
   const showGraph = $derived(!!m && (machines.graph === "on" || (machines.graph === "auto" && m.layout === "graph")));
   function nodes(mm: Machine) {
     const ns = names(mm);
     const n = ns.length;
     return ns.map((name, i) => {
       const a = n === 2 ? (i === 0 ? Math.PI : 0) : -Math.PI / 2 + (i * 2 * Math.PI) / n;
-      return { name, x: GW / 2 + Math.cos(a) * (GW / 2 - 44), y: GH / 2 + Math.sin(a) * (GH / 2 - 20) };
+      return { name, x: GW / 2 + Math.cos(a) * (GW / 2 - 50), y: GH / 2 + Math.sin(a) * (GH / 2 - 22) };
     });
   }
   function edges(mm: Machine) {
@@ -103,9 +113,15 @@
       .map((q) => {
         const t = transitionOf(mm, q.transition)!;
         const a = at[q.from], b = at[q.to];
+        // Each direction bows to its own side, so a pair's two transitions
+        // are two curves, each with its own label and hit area.
         const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
-        const ox = (-dy / len) * 6, oy = (dx / len) * 6;
-        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, t, shared: !own(t, q.from, q.to), x1: a.x + (dx / len) * 30 + ox, y1: a.y + (dy / len) * 13 + oy, x2: b.x - (dx / len) * 30 + ox, y2: b.y - (dy / len) * 13 + oy };
+        const nx = -dy / len, ny = dx / len;
+        const x1 = a.x + (dx / len) * 34 + nx * 4, y1 = a.y + (dy / len) * 14 + ny * 4;
+        const x2 = b.x - (dx / len) * 34 + nx * 4, y2 = b.y - (dy / len) * 14 + ny * 4;
+        const cx = (x1 + x2) / 2 + nx * 18, cy = (y1 + y2) / 2 + ny * 18;
+        const lx = (x1 + x2) / 4 + cx / 2 + nx * 6, ly = (y1 + y2) / 4 + cy / 2 + ny * 6;
+        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, t, shared: !own(t, q.from, q.to), d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly, ms: q.ms };
       });
   }
   const keyActivate = (e: KeyboardEvent, f: () => void) => {
@@ -186,7 +202,7 @@
     if (drag) return;
     if (e.type === "pointerdown") {
       const at = e.target as Element;
-      if (at.closest(".bar, button, input, .label-col") || !at.closest(".ruler, .track")) return;
+      if (at.closest(".bar, button, input, .name-col") || !at.closest(".ruler, .track")) return;
       scrubDown = true;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       stopPlay();
@@ -219,6 +235,9 @@
     <button class="crumb" onclick={() => machines.close()} title="Back to the document's timeline (Done)"><ChevronLeft size={14} strokeWidth={1.75} />Timeline</button>
     <span class="sep">›</span>
     <span class="comp" title="Editing this component's states: changes affect every instance">{view?.name ?? "component"}</span>
+    {#if view && view.machines.length > 1}
+      <div class="machine-pick"><Select label="Machine" value={m?.id ?? ""} items={view.machines.map((x) => ({ value: x.id, label: x.port }))} onChange={(v) => (machineId = v)} /></div>
+    {/if}
     {#if m}
       <div class="pills" role="group" aria-label="States of {m.port}">
         {#each names(m) as s, i (s)}
@@ -247,13 +266,13 @@
               </DropdownMenu.Root>
             {/if}
           </span>
-          {#if i < names(m).length - 1 || (m.order?.[1] && names(m).length > 2)}
+          {#if !showGraph && (i < names(m).length - 1 || (m.order?.[1] && names(m).length > 2))}
             {@const next = names(m)[(i + 1) % names(m).length]}
             {@const fwd = between(m, s, next)}
             {@const back = between(m, next, s)}
             {@const f2 = focusOf(m)}
             <span class="gap">
-              <button class="arrow" class:shared={fwd.shared} class:none={!fwd.t} class:on={f2.kind === "pair" && f2.from === s && f2.to === next} onclick={() => timePair(m, s, next)} title={fwd.label} aria-label={fwd.label}><ArrowRight size={11} strokeWidth={2} /></button>
+              <button class="arrow" class:shared={fwd.shared} class:none={!fwd.t} class:on={f2.kind === "pair" && f2.from === s && f2.to === next} onclick={() => timePair(m, s, next)} title={fwd.label} aria-label={fwd.label}>{#if i === names(m).length - 1}<span class="loop">↺ {next}</span>{:else}<ArrowRight size={11} strokeWidth={2} />{/if}</button>
               {#if i < names(m).length - 1}
                 <button class="arrow back" class:shared={back.shared} class:none={!back.t} class:on={f2.kind === "pair" && f2.from === next && f2.to === s} onclick={() => timePair(m, next, s)} title={back.label} aria-label={back.label}><ArrowRight size={11} strokeWidth={2} /></button>
               {/if}
@@ -284,20 +303,22 @@
     <div class="body">
       {#if showGraph}
         <div class="graph-pane">
-          <svg width={GW} height={GH} viewBox="0 0 {GW} {GH}" role="group" aria-label="States of {m.port} as a graph">
+          <svg viewBox="0 0 {GW} {GH}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="States of {m.port} as a graph">
             <defs><marker id="se-arrow-{m.id}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="arrowhead" /></marker></defs>
             {#each edges(m) as e (e.key)}
               {@const on = f.kind === "pair" && f.from === e.from && f.to === e.to}
               <g class="edge" class:on class:shared={e.shared} role="button" tabindex="0" aria-label="Time {e.from} to {e.to}" onclick={() => timePair(m, e.from, e.to)} onkeydown={(ev) => keyActivate(ev, () => timePair(m, e.from, e.to))}>
                 <title>{e.from} → {e.to}: {e.t.name ?? "change"}{e.shared ? " (shared)" : ""}</title>
-                <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} class="hit" />
-                <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} marker-end="url(#se-arrow-{m.id})" />
+                <path d={e.d} class="hit" />
+                <path d={e.d} class="line" marker-end="url(#se-arrow-{m.id})" />
+                {#if !e.shared}<text class="elabel" x={e.lx} y={e.ly} text-anchor="middle">{Math.round(e.ms ?? 0)}</text>{/if}
               </g>
             {/each}
             {#each nodes(m) as n (n.name)}
               <g class="node" class:rec={recording(m, n.name)} role="button" tabindex="0" aria-label="Edit state {n.name}" onclick={() => editState(m, n.name)} onkeydown={(ev) => keyActivate(ev, () => editState(m, n.name))}>
-                <rect x={n.x - 30} y={n.y - 11} width="60" height="22" rx="11" />
-                <text x={n.x} y={n.y + 4} text-anchor="middle">{n.name.length > 9 ? n.name.slice(0, 8) + "…" : n.name}</text>
+                <title>{n.name}</title>
+                <rect x={n.x - 36} y={n.y - 12} width="72" height="24" rx="12" />
+                <text x={n.x} y={n.y + 4} text-anchor="middle">{n.name.length > 12 ? n.name.slice(0, 11) + "…" : n.name}</text>
               </g>
             {/each}
           </svg>
@@ -305,35 +326,61 @@
       {/if}
 
       {#if f.kind === "state"}
-        <!-- A state: the pose table, the edited state's column editable. -->
-        <div class="table-wrap">
-          <table class="poses">
-            <thead>
-              <tr>
-                <th class="label-col">{#if f.state && recording(m, f.state)}<span class="rec-note"><span class="dot"></span>Editing <strong>{f.state}</strong>: edits go into it</span>{:else}Pick a state to edit its look{/if}</th>
-                {#each names(m) as s (s)}
-                  <th class:col-on={recording(m, s)}><button class="col" onclick={() => editState(m, s)}>{s}</button></th>
-                {/each}
-              </tr>
-            </thead>
-            <tbody>
-              {#each view.channels as c (c.id)}
-                <tr>
-                  <td class="label-col" title={c.name}>{c.name}</td>
-                  {#each names(m) as s (s)}
-                    {@const st = m.states.find((x) => x.name === s)}
-                    <td class:col-on={recording(m, s)} class:rest={!st?.own.includes(c.name)}>
-                      {#if recording(m, s) && st}
-                        <input inputmode="decimal" aria-label="{c.name} in {s}" value={fmt(pose(m, s, c.name))} onchange={(e) => run(machines.patch(st.id, { [`args.${c.name}`]: e.currentTarget.value }, `set ${c.name} in ${s}`))} />
-                      {:else}{fmt(pose(m, s, c.name))}{/if}
-                    </td>
-                  {/each}
-                </tr>
+        <!-- A state: the pose table (compact; the edited state's column
+             editable), and beside it the transitions out of that state. -->
+        <div class="state-view">
+          {#if !view.channels.length}
+            <div class="empty-wide">
+              {#if machines.paused}
+                <span>Recording into <strong>{machines.paused.state}</strong> is paused: the selection left the component.</span><Button small variant="outline" onclick={() => machines.resume()}>Return to main</Button>
+              {:else if f.state && recording(m, f.state)}
+                <span>No channels yet. Select a part of <strong>{view.name ?? "the component"}</strong> on the canvas and change a number (opacity, a size, Trim): it records into <strong>{f.state}</strong>, and a row appears here.</span>
               {:else}
-                <tr><td class="label-col muted" colspan={names(m).length + 1}>No channels yet: edit a part while a state is being edited, and the edit becomes a channel here.</td></tr>
+                <span>Pick a state above to edit its look; each edit to a part becomes a row here.</span>
+              {/if}
+            </div>
+          {:else}
+            <div class="table-wrap">
+              <table class="poses">
+                <thead>
+                  <tr>
+                    <th class="name-col">Channel</th>
+                    {#each names(m) as s (s)}
+                      <th class:col-on={recording(m, s)}><button class="col" onclick={() => editState(m, s)} title="Edit {s}'s look">{#if recording(m, s)}<span class="dot"></span>{/if}{s}</button></th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each view.channels as c (c.id)}
+                    <tr>
+                      <td class="name-col" title={c.name}>{c.name}</td>
+                      {#each names(m) as s (s)}
+                        {@const st = m.states.find((x) => x.name === s)}
+                        <td class:col-on={recording(m, s)} class:rest={!st?.own.includes(c.name)} title={st?.own.includes(c.name) ? undefined : "The channel's rest value: this state does not set it"}>
+                          {#if recording(m, s) && st}
+                            <input inputmode="decimal" aria-label="{c.name} in {s}" value={fmt(pose(m, s, c.name))} onchange={(e) => run(machines.patch(st.id, { [`args.${c.name}`]: e.currentTarget.value }, `set ${c.name} in ${s}`))} />
+                          {:else}{fmt(pose(m, s, c.name))}{/if}
+                        </td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+          {#if f.state}
+            {@const out = m.pairs.filter((q) => q.from === f.state)}
+            <aside class="outgoing" aria-label="Transitions from {f.state}">
+              <div class="aside-title">From <strong>{f.state}</strong></div>
+              {#each out as q (q.to)}
+                {@const qt = transitionOf(m, q.transition)}
+                <button class="out" onclick={() => timePair(m, q.from, q.to)} title="Time {q.from} → {q.to}">
+                  <span>→ {q.to}</span>
+                  <span class="out-meta">{qt ? `${Math.round(q.ms ?? 0)} ms · ${own(qt, q.from, q.to) ? "own" : "shared"}` : "snaps"}</span>
+                </button>
               {/each}
-            </tbody>
-          </table>
+            </aside>
+          {/if}
         </div>
       {:else}
         {@const info = pairInfo(m, f.from, f.to)}
@@ -342,44 +389,39 @@
         {@const h = head(m, f.from, f.to)}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="tracks" onpointerdown={(e) => t && scrubFrom(e, m, f.from, f.to)} onpointermove={(e) => t && scrubFrom(e, m, f.from, f.to)} onpointerup={() => (scrubDown = false)} onpointercancel={() => (scrubDown = false)}>
-          <div class="corner label-col">
-            <div class="line">
-              <Select label="Transition" value={`${f.from}>${f.to}`} items={m.pairs.map((q) => ({ value: `${q.from}>${q.to}`, label: `${q.from} → ${q.to}` }))} onChange={(v) => { const [a, b] = v.split(">"); timePair(m, a, b); }} />
-              {#if t}
-                {#if isPlaying}<IconButton icon={Square} label="Stop" onclick={stopPlay} />
-                {:else}<IconButton icon={Play} label="Play {f.from} to {f.to} on the main" onclick={() => play(m, f.from, f.to, ms)} />{/if}
-              {/if}
-            </div>
+          <!-- One toolbar row (council: the corner was too cramped): the
+               pair, play, length, easing, then the timing's scope. -->
+          <div class="toolbar">
+            <div class="pair-pick"><Select label="Transition" value={`${f.from}>${f.to}`} items={m.pairs.map((q) => ({ value: `${q.from}>${q.to}`, label: `${q.from} → ${q.to}` }))} onChange={(v) => { const [a, b] = v.split(">"); timePair(m, a, b); }} /></div>
             {#if t}
-              <div class="line">
-                <label class="ms" title={t.ms_formula ? "Set by a formula: edit it in the inspector" : "How long it takes"}>
-                  {#if t.ms_formula}<span class="fx">ƒ</span>{/if}
-                  <input inputmode="decimal" aria-label="Length of {f.from} to {f.to}" disabled={t.ms_formula} value={t.ms ?? ""} onchange={(e) => run(machines.patch(t.id, { "transition.ms": e.currentTarget.value }, "transition length"))} /><span>ms</span>
-                </label>
-                <div class="ease"><EasingField label="Easing of {f.from} to {f.to}" value={t.ease} onChange={(v) => run(machines.patch(t.id, { "transition.ease": v }, "transition easing"))} /></div>
-              </div>
+              {#if isPlaying}<IconButton icon={Square} label="Stop" onclick={stopPlay} />
+              {:else}<IconButton icon={Play} label="Play {f.from} to {f.to} on the main" onclick={() => play(m, f.from, f.to, ms)} />{/if}
+              <label class="ms" title={t.ms_formula ? "Set by a formula: edit it in the inspector" : "How long it takes"}>
+                {#if t.ms_formula}<span class="fx">ƒ</span>{/if}
+                <input inputmode="decimal" aria-label="Length of {f.from} to {f.to}" disabled={t.ms_formula} value={t.ms ?? ""} onchange={(e) => run(machines.patch(t.id, { "transition.ms": e.currentTarget.value }, "transition length"))} /><span>ms</span>
+              </label>
+              <div class="ease"><EasingField label="Easing of {f.from} to {f.to}" value={t.ease} onChange={(v) => run(machines.patch(t.id, { "transition.ease": v }, "transition easing"))} /></div>
             {/if}
-          </div>
-          <div class="over">
+            <span class="tsep"></span>
             {#if !t}
-              <span class="scope none">No transition: {f.from} → {f.to} snaps.</span>
+              <span class="scope none">No transition: {f.from} → {f.to} snaps</span>
               <Button small variant="outline" onclick={() => run(machines.author("add_transition", { def: view!.def, machine: m.id, from: f.from, to: f.to }))}>Add transition</Button>
             {:else if own(t, f.from, f.to)}
-              <span class="scope own" title="Only {f.from} → {f.to} uses this timing">This pair's own timing</span>
+              <span class="scope own" title="Only {f.from} → {f.to} uses this timing">This pair</span>
               {#if sharedFor(m, f.from, f.to, t)}<Button small variant="outline" title="Remove this pair's own timing; it uses the shared one again" onclick={() => run(machines.author("remove_node", { node: t!.id }))}>Use shared</Button>{/if}
             {:else}
-              <span class="scope shared" title="Every pair this transition covers uses these settings">Shared · {describe(t)}: edits change every pair using it</span>
+              <span class="scope shared" title="Every pair {describe(t)} covers uses these settings: edits here change them all">Shared timing · {describe(t)}</span>
               <Button small variant="outline" title="Give {f.from} → {f.to} its own timing, starting from these settings" onclick={() => run(machines.author("add_transition", { def: view!.def, machine: m.id, from: f.from, to: f.to }))}>Customize this pair</Button>
             {/if}
-            {#if t}<span class="hint">Scrub or play: a preview only, nothing records</span>{/if}
+            {#if t}<span class="hint" title="Scrubbing or playing previews the transition on the main; nothing is recorded">preview only</span>{/if}
           </div>
           {#if t}
-            <div class="ruler"><span class="label-col"></span><div class="lane">{#each ticks(ms) as tk (tk)}<span class="tick" style:left="{(tk / ms) * 100}%">{tk >= 1000 ? `${tk / 1000}s` : `${tk}`}</span>{/each}</div></div>
+            <div class="ruler"><span class="name-col">{Math.round(ms)} ms</span><div class="lane">{#each ticks(ms) as tk (tk)}<span class="tick" style:left="{(tk / ms) * 100}%">{tk >= 1000 ? `${tk / 1000}s` : `${tk}`}</span>{/each}</div></div>
             <div class="rows">
               {#each view.channels as c (c.id)}
                 {@const w = t.tweens.find((x) => x.channel === c.name)}
                 <div class="row">
-                  <span class="label-col chan">
+                  <span class="name-col chan">
                     <span class="cname" title={c.name}>{c.name}</span>
                     <span class="vals">{fmt(pose(m, f.from, c.name))} → {fmt(pose(m, f.to, c.name))}</span>
                     {#if w}
@@ -426,7 +468,7 @@
                   </div>
                 </div>
               {:else}
-                <div class="row muted">No channels yet: edit a state's look first.</div>
+                <div class="empty-wide">No channels yet: edit a state's look first (pick a state above, then change a part on the canvas).</div>
               {/each}
             </div>
           {/if}
@@ -462,7 +504,7 @@
   :global(.pill-menu:hover) { background: var(--hover); color: var(--fg); }
   .rename { width: 90px; height: 20px; margin: 0 4px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 10px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 600; outline: none; }
   .gap { display: inline-flex; flex-direction: column; gap: 1px; margin: 0 1px; }
-  .arrow { display: grid; place-items: center; width: 26px; height: 13px; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--fg-muted); cursor: pointer; }
+  .arrow { display: grid; place-items: center; min-width: 26px; height: 13px; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--fg-muted); cursor: pointer; }
   .arrow.back :global(svg) { transform: scaleX(-1); }
   .arrow.shared { border-style: dashed; border-color: var(--border); }
   .arrow.none { opacity: 0.4; }
@@ -471,8 +513,8 @@
   .arrow:focus-visible { outline: 1px solid var(--accent); }
 
   .body { flex: 1; min-height: 0; display: flex; }
-  .graph-pane { flex: none; padding: 4px 8px; border-right: 1px solid var(--border); overflow: auto; }
-  .graph-pane svg { display: block; }
+  .graph-pane { flex: none; width: 300px; min-width: 200px; max-width: 50%; padding: 2px 6px; border-right: 1px solid var(--border); resize: horizontal; overflow: hidden; display: flex; }
+  .graph-pane svg { display: block; flex: 1; width: 100%; height: 100%; }
   .node rect { fill: var(--bg-sunken); stroke: var(--border-strong); }
   .node text { fill: var(--fg); font-size: 11px; font-weight: 600; }
   .node { cursor: pointer; }
@@ -480,49 +522,59 @@
   .node.rec rect { fill: rgba(255, 153, 51, 0.16); stroke: #ff9933; }
   .node:focus-visible, .edge:focus-visible { outline: none; }
   .edge { cursor: pointer; }
-  .edge line { stroke: var(--fg-muted); stroke-width: 1.5; }
-  .edge .hit { stroke: transparent; stroke-width: 10; }
-  .edge.shared line:not(.hit) { stroke-dasharray: 4 3; opacity: 0.7; }
-  .edge:hover line:not(.hit), .edge.on line:not(.hit), .edge:focus-visible line:not(.hit) { stroke: var(--accent); stroke-width: 2; opacity: 1; }
+  .edge path { fill: none; }
+  .edge .hit { stroke: transparent; stroke-width: 12; }
+  .edge .line { stroke: var(--fg-muted); stroke-width: 1.5; }
+  .edge.shared .line { stroke-dasharray: 4 3; opacity: 0.7; }
+  .edge:hover .line, .edge.on .line, .edge:focus-visible .line { stroke: var(--accent); stroke-width: 2.25; opacity: 1; }
+  .edge.on .elabel { fill: var(--accent); font-weight: 600; }
+  .elabel { fill: var(--fg-muted); font-size: 9px; }
+  .edge:focus, .node:focus { outline: none; }
+  .loop { font-size: 10px; padding: 0 2px; white-space: nowrap; }
   .arrowhead { fill: var(--fg-muted); }
 
-  .label-col { width: 160px; flex: none; box-sizing: border-box; padding: 0 8px; }
-  .table-wrap { flex: 1; overflow: auto; }
+  .name-col { width: 200px; flex: none; box-sizing: border-box; padding: 0 8px; }
+  .empty-wide { flex: 1; display: flex; align-items: center; gap: 12px; padding: 12px 14px; color: var(--fg-muted); line-height: 1.4; }
+  .state-view { flex: 1; min-width: 0; display: flex; }
+  .table-wrap { flex: 0 1 auto; min-width: 0; overflow: auto; }
   .poses { border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  .poses th, .poses td { height: 26px; padding: 0 10px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
-  .poses .label-col { text-align: left; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--fg-muted); width: 160px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+  .poses th, .poses td { height: 26px; padding: 0 12px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; min-width: 64px; }
+  .poses .name-col { text-align: left; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--fg-muted); width: 200px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
   .poses thead th { position: sticky; top: 0; background: var(--bg); font-weight: 600; }
-  .poses th.label-col { font-family: inherit; font-size: 11px; font-weight: 400; }
-  .poses .col { border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+  .poses th.name-col { font-family: inherit; font-weight: 400; }
+  .poses .col { display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
   .poses .col:hover { background: var(--hover); }
   .poses .col-on { background: rgba(255, 153, 51, 0.12); }
   .poses td.rest { color: var(--fg-muted); }
   .poses input { width: 64px; height: 20px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg); color: var(--fg); font: inherit; text-align: right; padding: 0 4px; }
   .poses input:focus { outline: none; border-color: var(--accent); }
-  .rec-note { color: var(--fg); }
+  .outgoing { flex: none; width: 240px; margin-left: auto; padding: 6px 10px; border-left: 1px solid var(--border); overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+  .aside-title { color: var(--fg-muted); font-size: 11px; padding: 2px 6px 4px; }
+  .out { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 26px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--fg); font: inherit; cursor: pointer; text-align: left; }
+  .out:hover { background: var(--hover); }
+  .out:focus-visible { outline: 1px solid var(--accent); }
+  .out-meta { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
 
-  .tracks { flex: 1; min-width: 0; display: grid; grid-template-columns: 160px 1fr; grid-template-rows: auto auto 1fr; overflow: hidden; }
-  .corner { grid-row: 1 / span 2; display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 3px 6px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-  .corner .line { display: flex; align-items: center; gap: 4px; min-width: 0; }
-  .corner .line :global(> *:first-child) { flex: 1; min-width: 0; }
-  .corner :global(button) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ms { display: flex; align-items: center; gap: 3px; height: 24px; padding: 0 6px; border-radius: 5px; background: var(--bg-sunken); color: var(--fg-muted); font-size: 11px; }
-  .ms input { width: 40px; border: 0; background: transparent; color: var(--fg); font: inherit; outline: none; text-align: right; }
+  .tracks { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .toolbar { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 8px; border-bottom: 1px solid var(--border); flex: none; white-space: nowrap; }
+  .pair-pick { width: 170px; flex: none; }
+  .pair-pick :global(button) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ms { display: flex; align-items: center; gap: 3px; height: 26px; padding: 0 6px; border-radius: 5px; background: var(--bg-sunken); color: var(--fg-muted); font-size: 11px; }
+  .ms input { width: 44px; border: 0; background: transparent; color: var(--fg); font: inherit; outline: none; text-align: right; }
   .ms:focus-within { box-shadow: inset 0 0 0 1px var(--accent); }
-  .corner .ease { flex: 1; min-width: 0; }
+  .toolbar .ease { width: 150px; flex: none; }
+  .tsep { width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
   .fx { color: var(--accent); font-style: italic; }
-  .over { display: flex; align-items: center; gap: 8px; padding: 3px 8px; min-width: 0; }
   .scope { font-size: 11px; padding: 2px 8px; border-radius: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .scope.shared { background: rgba(255, 153, 51, 0.16); }
   .scope.own { background: var(--accent-soft); }
   .hint { color: var(--fg-muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
-  .ruler { grid-column: 2; display: flex; height: 20px; border-bottom: 1px solid var(--border); cursor: ew-resize; }
-  .ruler .label-col { display: none; }
+  .ruler { display: flex; height: 20px; border-bottom: 1px solid var(--border); cursor: ew-resize; flex: none; }
+  .ruler .name-col { font-size: 10px; color: var(--fg-muted); display: flex; align-items: center; border-right: 1px solid var(--border); cursor: default; }
   .ruler .lane { position: relative; flex: 1; margin: 0 10px; }
   .tick { position: absolute; bottom: 2px; padding-left: 3px; border-left: 1px solid var(--border-strong); line-height: 1; font-size: 10px; color: var(--fg-muted); }
-  .rows { grid-column: 1 / span 2; overflow: auto; }
+  .rows { flex: 1; overflow: auto; }
   .row { display: flex; align-items: center; height: 26px; border-bottom: 1px solid var(--border); }
-  .row.muted { padding: 0 8px; }
   .chan { display: flex; align-items: center; gap: 6px; height: 100%; border-right: 1px solid var(--border); }
   .cname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--fg-muted); }
   .vals { color: var(--fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }

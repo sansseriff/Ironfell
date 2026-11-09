@@ -75,6 +75,11 @@
   .dock :global(.dv-tabs-container) {
     padding: 0 10px;
   }
+  /* A group whose views wear the view strip (ViewStrip.svelte) shows only
+     its active tab: the strip is how you switch (panel-primitives.md §5). */
+  .dock :global(.dv-groupview:has([data-view-strip]) .dv-tab:not(.dv-active-tab)) {
+    display: none;
+  }
   /* The scope menu (ScopeMenu.svelte) sits before the tabs and keeps its
      width; the tabs scroll instead. */
   .dock :global(.dv-pre-actions-container) {

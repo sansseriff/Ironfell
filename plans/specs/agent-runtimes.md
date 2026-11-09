@@ -318,6 +318,15 @@ Post-merge test isolation: Vite treats port 0 as its default port, not an epheme
 listener. Launcher tests now reserve an explicit ephemeral app port, so an unrelated
 dev server on 5173 cannot satisfy a post-shutdown request and produce a false failure.
 
+### Agent probe (2026-11-09)
+
+`.claude/skills/run-iron/agent-probe.ts` sends prompts to the Model chat through a real
+Codex or Claude runtime, or the fixture, and writes a report per run (`.agents/probe/`):
+replies, traces, edits, document diffs, screenshots, errors and the run's agent log. It
+starts its own Vite and bridge on free ports through `startAgentDev`, which gained
+`runtimes`, `logDir`, `token`, `totalTimeoutMs` and `quiet` options. Fixture run passes;
+usage in the run-iron skill, "Agent probe".
+
 ## 6. Follow-up plan
 
 1. ~~Explicit Stop and cancellation through all adapter lifetimes; panel progress

@@ -493,6 +493,9 @@ fn bake(key: &str) -> Baked {
     Baked { nodes, bounds }
 }
 
+/// Label slots per axis: enough for `ticks(…, 8)` (√2 · 8 + 1).
+const TICK_SLOTS: usize = 12;
+
 /// `std:plot` (plans/specs/plot.md §4): series against x, drawn from SVG
 /// path data, in a box of its own that reflows when resized. Ranges and
 /// the cursor default to NaN, "auto" and "none". Template parts read the
@@ -541,13 +544,13 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
         d.child(id, "port_spec", def, vec![named(name), port("value", "out", bound(e))]);
         sig(id)
     };
-    let x_lo = output(d, "x_lo", format!("isnan({x_min}) ? ({is_fn} ? 0 : min({xs})) : {x_min}"));
-    let x_hi = output(d, "x_hi", format!("isnan({x_max}) ? ({is_fn} ? 10 : max({xs})) : {x_max}"));
+    let x_lo = output(d, "x_lo", format!("isnan({x_min}) ? ({is_fn} ? 0 : (len({xs}) == 0 ? 0 : min({xs}))) : {x_min}"));
+    let x_hi = output(d, "x_hi", format!("isnan({x_max}) ? ({is_fn} ? 10 : (len({xs}) == 0 ? 1 : max({xs}))) : {x_max}"));
     // The function sampled for the range, at a fixed count (outputs do not
     // see a picture's box); the picture samples it at its own width.
     let ys_all = format!("concat({is_fn} ? sample({f}, {x_lo}, {x_hi}, 200) : {ys}, {ys2}, {ys3})");
-    let y_lo = output(d, "y_lo", format!("isnan({y_min}) ? nice_lo(min({ys_all}), max({ys_all}), 5) : {y_min}"));
-    let y_hi = output(d, "y_hi", format!("isnan({y_max}) ? nice_hi(min({ys_all}), max({ys_all}), 5) : {y_max}"));
+    let y_lo = output(d, "y_lo", format!("isnan({y_min}) ? (len({ys_all}) == 0 ? 0 : nice_lo(min({ys_all}), max({ys_all}), 5)) : {y_min}"));
+    let y_hi = output(d, "y_hi", format!("isnan({y_max}) ? (len({ys_all}) == 0 ? 1 : nice_hi(min({ys_all}), max({ys_all}), 5)) : {y_max}"));
     let y_at = output(d, "y_at_cursor", format!("isnan({cursor}) ? 0 / 0 : ({is_fn} ? {f}({cursor}) : interp({xs}, {ys}, {cursor}))"));
 
     // The vis machine (plans/specs/machines.md): hidden and shown, appear
@@ -612,6 +615,8 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let py1 = format!("({is_fn} ? sample({f}, {x_lo}, {x_hi}, {samples}) : {ys})");
     let xp = |v: &str| format!("scale({v}, {x_lo}, {x_hi}, 0, {aw})");
     let yp = |v: &str| format!("scale({v}, {y_lo}, {y_hi}, {ah}, 0)");
+    // `ticks` may give up to about √2·n + 1 values (d3's steps), so at most
+    // 8 asked for fits the TICK_SLOTS label slots.
     let xt = format!("ticks({x_lo}, {x_hi}, clamp(floor({aw} / 70), 2, 8))");
     let yt = format!("ticks({y_lo}, {y_hi}, clamp(floor({ah} / 40), 2, 8))");
     let ink = [0.2, 0.22, 0.27, 1.0];
@@ -698,8 +703,11 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line([0.9, 0.91, 0.94, 1.0], 1.0), no_fill(), None, Some(&ch_ticks));
     for (k, (sx, sy, c)) in [(xs.clone(), ys3.clone(), color3.clone()), (xs.clone(), ys2.clone(), color2.clone()), (px1.clone(), py1.clone(), color.clone())].into_iter().enumerate() {
         let (x, y) = (xp(&sx), yp(&sy));
+        // Bars and areas stand on y = 0 where it is in view, else the
+        // nearer edge.
+        let base = format!("clamp({}, 0, {ah})", yp(&format!("{y_lo} * 0")));
         let draw = format!(
-            "len({sy}) == 0 ? \"\" : ({style} == 'scatter' ? circles({x}, {y}, 3) : ({style} == 'smooth' ? smooth({x}, {y}) : ({style} == 'area' ? area({x}, {y}, {ah}) : ({style} == 'bars' ? bars({x}, {y}, {ah}, max(1, {aw} / max(1, len({sy})) * 0.7)) : 'M ' + points({x}, {y})))))"
+            "len({sy}) == 0 ? \"\" : ({style} == 'scatter' ? circles({x}, {y}, 3) : ({style} == 'smooth' ? smooth({x}, {y}) : ({style} == 'area' ? area({x}, {y}, {base}) : ({style} == 'bars' ? bars({x}, {y}, {base}, max(1, {aw} / max(1, len({sy})) * 0.7)) : (points({x}, {y}) == \"\" ? \"\" : 'M ' + points({x}, {y})) + ({style} == 'line+markers' ? ' ' + circles({x}, {y}, 3) : \"\")))))"
         );
         let solid = format!("({style} == 'scatter' || {style} == 'bars')");
         let mut stroke = line([0.0, 0.0, 0.0, 1.0], 2.0);
@@ -729,11 +737,11 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), Some(ch_ticks.clone()), None);
     let x_unit = format!("unit_of({px1})");
     let y_unit = format!("unit_of({py1})");
-    for i in 0..8 {
+    for i in 0..TICK_SLOTS {
         let v = format!("at({xt}, {i})");
         text_part(d, ids, axes, &format!("x tick {i}"), bound(format!("{} - 28", xp(&v))), bound(format!("{ah} + 7")), format!("{i} < len({xt}) ? fmt(in_unit({v}, {x_unit})) : \"\""), 10.0, 400.0, Some((56.0, "center")), 0.0, muted, &ch_ticks);
     }
-    for i in 0..8 {
+    for i in 0..TICK_SLOTS {
         let v = format!("at({yt}, {i})");
         text_part(d, ids, axes, &format!("y tick {i}"), n(-50.0), bound(format!("{} - 7", yp(&v))), format!("{i} < len({yt}) ? fmt(in_unit({v}, {y_unit})) : \"\""), 10.0, 400.0, Some((44.0, "right")), 0.0, muted, &ch_ticks);
     }

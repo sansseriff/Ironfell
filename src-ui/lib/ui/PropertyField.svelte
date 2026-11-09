@@ -1,14 +1,17 @@
 <script lang="ts" module>
-  export type Property = { leaf: string; field: string; kind: string | null; text: string | null; bind: string | null; edit: string; via: string | null; why: string | null; options?: string[] | null };
+  export type Property = { leaf: string; field: string; kind: string | null; text: string | null; full?: string | null; bind: string | null; edit: string; via: string | null; why: string | null; options?: string[] | null; key?: "none" | "animated" | "on"; error?: string | null };
 </script>
 
 <script lang="ts">
-  import { onDestroy, type Snippet } from "svelte";
+  import { onDestroy, tick, type Snippet } from "svelte";
+  import SquareFunction from "@lucide/svelte/icons/square-function";
+  import Unlink from "@lucide/svelte/icons/unlink";
+  import Diamond from "@lucide/svelte/icons/diamond";
   import Select from "./Select.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, inlineUnit = false, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8, zeroLabel }: {
     field: Property; node: string;
-    onSet: (field: Property, text: string) => void;
+    onSet: (field: Property, text: string) => void | Promise<void>;
     onRefresh: () => void; onError: (error: string) => void;
     compact?: boolean; label?: string; prefix?: string; icon?: Snippet; inlineUnit?: boolean; channel?: "alpha";
     scrubLeaves?: string[]; mixed?: boolean; hideSwatch?: boolean; colorDigits?: 6 | 8;
@@ -26,14 +29,59 @@
   const unit = $derived(percent || percentStored ? "%" : angle ? "°" : "");
   // The schema's values for an enum field (`facet.rs`).
   const options = $derived(f.options ?? undefined);
-  const labels: Record<string, string> = { x: "X", y: "Y", w: "W", h: "H", rot: "Rotation", sx: "Scale X", sy: "Scale Y", rx: "Radius X", ry: "Radius Y", opacity: "Opacity", kind: "Type", start: "Start", end: "End", enabled: "Clip content", radius: "Radius", color: "Colour", width: "Weight", fill_rule: "Fill rule", dash_offset: "Offset" };
+  const labels: Record<string, string> = { t: "Time (s)", value: "Value", easing: "Easing", mode: "Pieces", x: "X", y: "Y", w: "W", h: "H", rot: "Rotation", sx: "Scale X", sy: "Scale Y", rx: "Radius X", ry: "Radius Y", opacity: "Opacity", kind: "Type", start: "Start", end: "End", enabled: "Clip content", radius: "Radius", color: "Colour", width: "Weight", fill_rule: "Fill rule", dash_offset: "Offset" };
   const displayLabel = $derived(label ?? labels[f.field] ?? f.field.replaceAll("_", " "));
   const numberValue = $derived(channel === "alpha" ? Math.round(parseInt((f.text ?? "#000000ff").slice(7, 9) || "ff", 16) / 255 * 100) / 100 : Number(f.text));
-  function change(text: string) {
-    if (channel === "alpha") {
+  // Formulas (plans/specs/wires-and-formulas.md §2): any field takes one,
+  // typed after "=" as in a spreadsheet, or through the ƒx button. A bound
+  // field shows its formula; Remove keeps the value it shows now.
+  let formula = $state(false);
+  const editingFormula = $derived(formula || (!!f.bind && f.edit !== "via"));
+  const isFormula = (text: string) => /^\s*(=|\{=)/.test(text);
+  async function change(el: HTMLInputElement) {
+    const text = el.value;
+    if (isFormula(text) || editingFormula) {
+      await onSet(f, isFormula(text) ? text : `=${text}`);
+      formula = false;
+    } else if (channel === "alpha") {
       const alpha = Math.round(Math.max(0, Math.min(100, Number(text))) / 100 * 255).toString(16).padStart(2, "0");
-      onSet(f, (f.text ?? "#000000ff").slice(0, 7) + alpha);
-    } else { onSet(f, numeric ? String(Number(text) / factor) : text); }
+      await onSet(f, (f.text ?? "#000000ff").slice(0, 7) + alpha);
+    } else {
+      // A number field also takes a quantity ("400 nm"), sent as typed.
+      const n = Number(text);
+      await onSet(f, numeric && text.trim() !== "" && Number.isFinite(n) ? String(n / factor) : text);
+    }
+    // A refused edit leaves the field showing what it holds, not the typo.
+    await tick();
+    el.value = String(fieldText());
+  }
+  function fieldText(): string {
+    if (editingFormula) return f.bind ? `= ${f.bind}` : "= ";
+    if (mixed && !dragging) return "";
+    return String(!numeric && f.full ? f.full : shown);
+  }
+  async function openFormula(e: MouseEvent) {
+    formula = true;
+    await tick();
+    const input = (e.currentTarget as HTMLElement).closest(".field")?.querySelector("input.formula") as HTMLInputElement | null;
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  }
+  // ◇ (After Effects' stopwatch, timeline.md §12.3): key this property at
+  // the playhead, or remove the key there.
+  const animatable = $derived(!!f.key && !locked && !f.bind && (numeric || f.kind === "color" || f.kind === "quantity"));
+  async function keyHere() {
+    onError("");
+    const r = await doc.command({ op: 'inspect_animate', node, leaf: f.leaf, action: "key" });
+    if (!r.ok) onError(r.error);
+    onRefresh();
+  }
+  async function unbind() {
+    onError("");
+    const r = await doc.command({ op: 'inspect_patch', node, patch: JSON.stringify({ values: {}, unbind: [f.leaf], label: `remove formula from ${f.leaf}` }) });
+    if (!r.ok) onError(r.error);
+    formula = false;
+    onRefresh();
   }
   let alt = $state(false);
   let dragging = $state(false);
@@ -108,7 +156,14 @@
     onpointerdown={start} onpointermove={move} onpointerup={() => finish()} onpointercancel={() => finish(true)} onlostpointercapture={() => { if (session) finish(true); }}>
     {#if icon}<span class="field-icon" aria-hidden="true">{@render icon()}</span>{/if}
     {#if prefix}<span class="prefix">{prefix}</span>{/if}
-    {#if f.kind === "bool"}
+    {#if editingFormula}
+      <span class="fx" aria-hidden="true">ƒx</span>
+      <input aria-label={`${displayLabel} formula`} class="formula" type="text" spellcheck="false" value={fieldText()} disabled={locked}
+        placeholder="= #id.facet.field * 2"
+        onkeydown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); formula = false; e.currentTarget.value = fieldText(); e.currentTarget.blur(); } }}
+        onchange={(e) => change(e.currentTarget)} />
+      {#if f.bind && !locked}<button type="button" class="field-action" aria-label={`Remove the formula from ${displayLabel}`} title="Remove formula (keep the current value)" onclick={unbind}><Unlink size={13} strokeWidth={1.5} /></button>{/if}
+    {:else if f.kind === "bool"}
       <input aria-label={displayLabel} type="checkbox" checked={f.text === "true"} disabled={locked} onchange={(e) => onSet(f, String(e.currentTarget.checked))} />
     {:else if options}
       <Select label={displayLabel} value={f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
@@ -117,12 +172,16 @@
       <input aria-label={`${displayLabel} hex`} class="hex" value={(f.text ?? "").slice(1, colorDigits + 1).toUpperCase()} disabled={locked} onchange={(e) => onSet(f, `#${e.currentTarget.value.replace("#", "")}`)} />
     {:else}
       {@const zero = !!zeroLabel && !dragging && numeric && Number(shown) === 0}
-      <input aria-label={displayLabel} class:number={numeric} type={numeric ? "number" : "text"} step="any" value={(mixed && !dragging) || zero ? "" : shown} placeholder={mixed ? "Mixed" : zero ? zeroLabel : undefined} disabled={locked}
-        onchange={(e) => { if (!dragging) change(e.currentTarget.value); }} />
+      <input aria-label={displayLabel} class:number={numeric} type="text" inputmode={numeric ? "decimal" : undefined} value={zero ? "" : fieldText()} placeholder={mixed ? "Mixed" : zero ? zeroLabel : undefined} disabled={locked}
+        oninput={(e) => { if (isFormula(e.currentTarget.value)) formula = true; }}
+        onchange={(e) => { if (!dragging) change(e.currentTarget); }} />
       {#if unit && !(zeroLabel && !dragging && numeric && Number(shown) === 0)}<span class="unit">{unit}</span>{/if}
+      {#if animatable && !compact}<button type="button" class="field-action key" class:reveal={f.key === "none"} class:animated={f.key !== "none"} aria-label={f.key === "on" ? `Remove the key on ${displayLabel}` : `Key ${displayLabel} at the playhead`} title={f.key === "on" ? "Remove the key at the playhead" : f.key === "animated" ? "Add a key at the playhead" : "Animate: key this value at the playhead"} onclick={keyHere}><Diamond size={11} strokeWidth={1.75} fill={f.key === "on" ? "currentColor" : "none"} /></button>{/if}
+      {#if !locked && !compact}<button type="button" class="field-action reveal" aria-label={`Write a formula for ${displayLabel}`} title="Formula (or type =)" onclick={openFormula}><SquareFunction size={13} strokeWidth={1.5} /></button>{/if}
     {/if}
   </span>
-  {#if f.bind}<span class="binding">↳ {f.via ?? f.bind}</span>{/if}
+  {#if f.bind && !editingFormula}<span class="binding">↳ {f.via ?? f.bind}</span>{/if}
+  {#if f.error}<span class="field-error" role="alert">{f.error}</span>{/if}
 </label>
 
 <style>
@@ -140,8 +199,6 @@
   .control:focus-within { border-color: var(--accent); }
   .control:hover { border-color: var(--border-strong); }
   input:not([type="checkbox"]) { width: 100%; min-width: 0; border: none; background: transparent; box-shadow: none; font-size: 12px; padding: 6px 8px; outline: none; color: var(--fg); }
-  input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
-  input::-webkit-inner-spin-button, input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   .scrub, .scrub input, .dragging, .dragging input { cursor: ew-resize; user-select: none; }
   .dragging { border-color: var(--accent); }
   .compact .unit { padding-right: 8px; }
@@ -152,5 +209,14 @@
   .hex { font-variant-numeric: tabular-nums; }
   input[type="checkbox"] { margin: 8px; accent-color: var(--accent); }
   .locked { opacity: 0.55; }
+  .fx { color: var(--accent); font-size: 11px; font-style: italic; padding-left: 8px; }
+  input.formula { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--accent); }
+  .field-action { display: flex; align-items: center; justify-content: center; flex: 0 0 22px; height: 22px; margin-right: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--fg-muted); cursor: pointer; padding: 0; }
+  .field-action:hover { background: var(--bg-hover, var(--bg)); color: var(--fg); }
+  .field-action:focus-visible { outline: 1px solid var(--accent); }
+  .reveal { opacity: 0; }
+  .key.animated { color: var(--accent); }
+  .field-error { color: var(--danger); font-size: 10px; overflow-wrap: anywhere; }
+  .control:hover .reveal, .control:focus-within .reveal, .reveal:focus-visible { opacity: 1; }
   .control :global(.ui-select-trigger) { width: 100%; min-width: 0; border: 0; background: transparent; }
 </style>

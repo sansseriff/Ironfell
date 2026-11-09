@@ -35,25 +35,27 @@ so (§9).
 
 ## 2. Markup
 
+As built (phase 1; the names a document uses today):
+
 ```xml
 <definition name="Plot">
-  <port_spec name="vis" kind="state" dir="in" signal="shown"/>   <!-- M2 -->
-  <machine name="vis" initial="shown">
-    <channel name="fade"   value="1"/>
-    <channel name="reveal" value="1"/>
-    <channel name="lift"   value="0"/>
+  <port_spec name="vis" kind="value" dir="in" signal="shown"/>   <!-- M2 -->
+  <channel name="fade"   value="1"/>        <!-- channels belong to the definition -->
+  <channel name="reveal" value="1"/>
+  <channel name="lift"   value="0"/>
+  <machine name="vis">                      <!-- named for the input it follows -->
     <state name="hidden" fade="0" reveal="0" lift="12"/>
     <state name="shown"  fade="1" reveal="1" lift="0"/>
-    <transition name="appear" from="hidden" to="shown" ms="900" ease="out">
+    <transition name="appear" from="hidden" to="shown" ms="900" ease="ease_out">
       <tween channel="fade"   at="0"   ms="250"/>
-      <tween channel="lift"   at="0"   ms="350" ease="out"/>
-      <tween channel="reveal" at="250" ms="650" ease="in_out"/>
+      <tween channel="lift"   at="0"   ms="350" ease="ease_out"/>
+      <tween channel="reveal" at="250" ms="650" ease="easy_ease"/>
     </transition>
-    <transition name="disappear" from="shown" to="hidden" ms="300" ease="in"/>
+    <transition name="disappear" from="shown" to="hidden" ms="300" ease="ease_in"/>
   </machine>
   <template notation="free">
     <group name="body" appearance.opacity="{= #fade.channel.value}" y="{= #lift.channel.value}">
-      <path name="series 1" d="{= polyline(…, #reveal.channel.value)}"/>
+      <path name="series 1" d="{= 'M ' + points(…)}" trim.end="{= #reveal.channel.value}"/>
     </group>
   </template>
 </definition>
@@ -294,6 +296,22 @@ the agent can tell it caught an instance mid-way.
    an editor, bindings get a formula. Lambdas and timings are one-way, as tweens were:
    the player writes channels, templates read them, nothing flows back, so no inverse
    is needed. Built with step 8.
+
+8. **Authoring (council 2026-11-08, both members).** §6 covers editing but not
+   *creating* a machine; today only markup can. Add to step 8: on a main, **Add state**
+   records the current pose (Figma variants, Keynote Magic Move); edits made while a
+   state is pinned make a channel for each changed leaf and bind it; transitions are
+   derived and their band edited in the strip panel; a loud chip says which state is
+   being previewed. Exit: a person makes a two-state draw-on by hand, scrubs it
+   backwards, retimes one occurrence, and undoes.
+9. **Tweens in progress fractions, not ms** (council): M5 writes tweens against
+   `progress`, the code writes `at`/`ms`. With timing values (Q7) a tween is a window of
+   progress, so step 8's band is the same object as a clip.
+10. **Channels as out ports?** (council, Opus) A channel is a fourth kind of component
+    variable beside in, out and port. As an out port driven by the machine, pins, wires
+    and the inspector would show it with nothing new. Decide in step 8.
+11. **The plot's `reveal`** duplicates `vis` (council, Opus): two ways to draw the
+    series on. Proposed: drop `reveal` once the timeline keys state (step 8).
 
 ## 10. Done
 

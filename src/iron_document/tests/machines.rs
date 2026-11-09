@@ -183,3 +183,17 @@ fn a_change_without_a_transition_snaps() {
     assert!(store.advance_machines(1.0).is_empty());
     assert_eq!(channel(&store, entity, fade), 0.0);
 }
+
+/// An undo snaps only the instances whose state it changes: undoing an
+/// unrelated edit, then changing state, still plays the transition.
+#[test]
+fn an_unrelated_undo_does_not_snap_the_next_transition() {
+    let Card { mut store, entity, fade, .. } = card();
+    store.advance_machines(0.0);
+    store.apply(tx("rename", vec![Op::Set { id: entity, path: path("name.text"), slot: str_("renamed") }])).unwrap();
+    store.undo(0).unwrap().unwrap();
+    set_vis(&mut store, entity, "hidden");
+    store.advance_machines(1.0);
+    store.advance_machines(1.2);
+    assert!((channel(&store, entity, fade) - 0.5).abs() < 1e-9, "played, not snapped: {}", channel(&store, entity, fade));
+}

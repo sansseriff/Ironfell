@@ -15,6 +15,7 @@ export type DocumentCommand =
   | { op: 'timeline_axis'; fields: string }
   | { op: 'timeline_rows'; panel: string }
   | { op: 'timeline_key'; action: string; clip: string }
+  | { op: 'inspect_animate'; node: string; leaf: string; action: string }
   | { op: 'clock_read' }
   | { op: 'clock_set'; fields: string }
   | { op: 'narrative_probe'; node: string; action: string }
@@ -97,6 +98,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'timeline_axis': return { fn: command.op, args: [command.fields] };
     case 'timeline_rows': return { fn: command.op, args: [command.panel] };
     case 'timeline_key': return { fn: command.op, args: [command.action, command.clip] };
+    case 'inspect_animate': return { fn: command.op, args: [command.node, command.leaf, command.action] };
     case 'clock_read': return { fn: command.op, args: [] };
     case 'clock_set': return { fn: command.op, args: [command.fields] };
     case 'narrative_probe': return { fn: command.op, args: [command.node, command.action] };

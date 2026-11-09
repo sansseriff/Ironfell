@@ -414,7 +414,7 @@ facets! {
         from: Str = Value::Str("*".to_owned()),
         to: Str = Value::Str("*".to_owned()),
         ms: Number = Value::Number(300.0),
-        ease: Str = Value::Str("ease_in_out".to_owned()),
+        ease: Str = Value::Str("easy_ease".to_owned()),
     }
 
     /// One channel's motion inside a transition: from `at` for `ms`

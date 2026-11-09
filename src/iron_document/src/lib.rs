@@ -1715,13 +1715,13 @@ impl Store {
     /// Undo the most recent transaction. `ts` is the caller's clock.
     /// `None` when there is nothing to undo.
     pub fn undo(&mut self, ts: u64) -> Option<Result<Applied, Vec<ApplyError>>> {
-        // An undone state change snaps rather than playing back
-        // (plans/specs/machines.md §6).
-        self.machines.snap_next = true;
         if self.gesture.is_some() && self.history.can_undo() {
             self.end_gesture(GestureStatus::Cancelled("undo".into()));
         }
         let tx = self.history.past.pop()?;
+        // An undone state change snaps rather than playing back
+        // (plans/specs/machines.md §6), on the instances it touches.
+        self.machines.snap.extend(args_set(&tx.undo_ops()));
         let input = TransactionInput {
             label: format!("undo: {}", tx.label),
             actor: Actor::System,
@@ -1751,11 +1751,11 @@ impl Store {
     }
 
     pub fn redo(&mut self, ts: u64) -> Option<Result<Applied, Vec<ApplyError>>> {
-        self.machines.snap_next = true;
         if self.gesture.is_some() && self.history.can_redo() {
             self.end_gesture(GestureStatus::Cancelled("redo".into()));
         }
         let tx = self.history.future.pop()?;
+        self.machines.snap.extend(args_set(&tx.replay_ops()));
         // Requested and derived ops, no solve: the log is the ground truth.
         let input = TransactionInput {
             label: format!("redo: {}", tx.label),
@@ -2008,4 +2008,16 @@ impl Store {
 /// A field of the `clock` facet.
 fn clock_path(field: &str) -> LeafPath {
     LeafPath::new(FacetKind::Clock, field).expect("a clock field")
+}
+
+/// The nodes whose arguments `ops` set: an undo or redo of a state change
+/// snaps those instances' machines.
+fn args_set(ops: &[Op]) -> Vec<NodeId> {
+    ops.iter()
+        .filter_map(|o| match o {
+            Op::Set { id, path, .. } if path.facet == facet::FacetKind::Args => Some(*id),
+            Op::AddFacet { id, facet } if facet.kind() == facet::FacetKind::Args => Some(*id),
+            _ => None,
+        })
+        .collect()
 }

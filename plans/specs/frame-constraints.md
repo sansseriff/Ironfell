@@ -1,5 +1,7 @@
 # Frame constraints: Figma's resizing model for people
 
+**Council 2026-11-08:** name the facet `constraints` (Figma's word): "pin" already means a port shown on a component's edge (wires-and-formulas.md §4a). Pull a minimal Resizable workflow (the toggle and per-child constraints) ahead of the plot's axes/series split: it is the human path for sized instances, which shipped without one.
+
 **Proposed 2026-11-08, deferred until after `std:plot`** ([`plot.md`](plot.md) phase 3).
 How a person, not only the agent, makes a component (or any frame) that resizes well.
 

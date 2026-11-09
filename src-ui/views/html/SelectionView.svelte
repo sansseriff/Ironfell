@@ -8,6 +8,9 @@
   import { showIn as showPicture } from "../show_in";
   import Plus from "@lucide/svelte/icons/plus";
   import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
+  import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
+  import PenLine from "@lucide/svelte/icons/pen-line";
+  import { columnEdits, parseColumns } from "../../model/columns";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
   import { Popover, DropdownMenu } from "bits-ui";
@@ -118,12 +121,12 @@
   // supported effect; future renderable effect components get entries here.
   const effectTypes = [{ kind: "shadow", label: "Drop shadow" }];
   const effects = $derived(effectTypes.filter(e => fields(e.kind).length));
-  async function patch(values: Record<string, string>, remove: string[] = [], label = "edit appearance", target?: string) {
+  async function patch(values: Record<string, string>, remove: string[] = [], label = "edit appearance", target?: string, replace = false) {
     if (!inspected) return;
     const node = target ?? inspected.node;
     setError = "";
     try {
-      const r = await doc.command({ op: 'inspect_patch', node: node, patch: JSON.stringify({ values, remove, label }) });
+      const r = await doc.command({ op: 'inspect_patch', node: node, patch: JSON.stringify({ values, remove, label, replace }) });
       if (!r.ok) setError = r.error;
       await refresh();
     } catch (e) { setError = String(e); }
@@ -152,6 +155,27 @@
   }
   // A component input edits the instance's argument (component-model.md §4).
   function setInput(f: Field, text: string) { return inspected?.component ? patch({ [f.leaf]: text }, [], `set ${f.field}`, inspected.component.entity) : undefined; }
+  // "Draw on": Trim End keyed 0 → 1 over a second from the playhead.
+  async function drawOn() {
+    if (!inspected) return;
+    setError = "";
+    try {
+      const r = await doc.command({ op: 'inspect_animate', node: inspected.node, leaf: "trim.end", action: "draw_on" });
+      if (!r.ok) setError = r.error;
+      await refresh();
+    } catch (e) { setError = String(e); }
+  }
+  // Data from a spreadsheet or CSV on the clipboard into a component's series
+  // inputs (std:plot's xs, ys, …), one undo step (model/columns.ts).
+  async function pasteData() {
+    if (!inspected?.component) return;
+    setError = "";
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch (e) { setError = `Could not read the clipboard: ${String(e)}`; return; }
+    const cols = parseColumns(text);
+    if (!cols?.columns.length) { setError = "The clipboard holds no columns of numbers (copy cells from a spreadsheet, or CSV)."; return; }
+    await patch(columnEdits(cols, inspected.component.inputs), [], "paste data", inspected.component.entity, true);
+  }
   function setCorners(_f: Field, text: string) { return patch(Object.fromEntries(cornerLeaves.map(k => [k, text])), [], "round corners"); }
   function paintMode(mode: string) { return mode === "solid" ? patch({}, ["gradient"], "solid fill") : patch({ "gradient.kind": mode }, [], `${mode} fill`); }
   // Component authoring (component-authoring.md): ports, inputs, wrapping,
@@ -258,6 +282,9 @@
         {:else if section === "component" && (inspected.component)}
           <div class="property-section" data-section="component">
             <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<button class="property-icon" aria-label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach}><Unlink size={14} strokeWidth={1.5} /></button>{/if}</div>
+            {#if inspected.component.inputs.some((f: Field) => f.kind === "series")}
+              <div class="row"><Button small variant="outline" onclick={pasteData} title="Paste columns copied from a spreadsheet or CSV: the first into the first series input (xs), the next into ys, … A header like “λ (nm)” sets the unit and the axis label. Replaces their formulas."><ClipboardPaste size={13} strokeWidth={1.5} /> Paste data</Button><span class="hint">columns from a spreadsheet or CSV</span></div>
+            {/if}
             <div class="field-grid">{#each inspected.component.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
           </div>
         {:else if section === "table" && inspected.table && fields("transform2d").length}
@@ -359,6 +386,7 @@
                             <button class="property-icon" aria-label="Add trim" title="Add trim" onclick={() => component("trim", true)}><Plus size={15} strokeWidth={1.5} /></button>
                           {/if}
                         </div>
+                        <div class="trim-actions"><Button small variant="outline" onclick={drawOn} title="Key Trim End from 0 at the playhead to 100% a second later, with Easy Ease (adds Trim if needed)"><PenLine size={13} strokeWidth={1.5} /> Draw on</Button></div>
                         {#if fields("trim").length}
                           <div class="property-grid">
                             {#each fields("trim") as f (f.leaf)}
@@ -421,6 +449,8 @@
 
 <style>
   .properties { padding: 0 !important; font-size: 12px; }
+  .trim-actions { display: flex; margin: 6px 0 2px; }
+  .trim-actions :global(.ui-button), .row :global(.ui-button) { display: inline-flex; align-items: center; gap: 5px; }
   .trim-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
   .panel-heading { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
   .panel-heading span { border-bottom: 2px solid var(--accent); padding-bottom: 4px; }

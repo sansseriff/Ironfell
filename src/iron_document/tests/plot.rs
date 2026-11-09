@@ -178,3 +178,34 @@ fn the_model_view_omits_defaults() {
     assert!(brief.contains("Intensity") && brief.contains(".bind="));
     assert!(brief.len() * 10 < full.len() * 9, "{} vs {}", brief.len(), full.len());
 }
+
+/// Council findings: every tick gets a label on a wide plot, bars stand on
+/// zero, and empty data draws an empty frame without errors.
+#[test]
+fn wide_plots_label_every_tick_bars_stand_on_zero_and_empty_data_is_fine() {
+    let (mut store, _) = desk();
+    let (e, u) = place(&mut store, r#"w="900""#);
+    assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));
+    let marks = anchors(&store, part(&store, u, "tick marks"));
+    let labelled = (0..12).filter(|i| !text(&store, part(&store, u, &format!("x tick {i}"))).is_empty()).count();
+    let y_labelled = (0..12).filter(|i| !text(&store, part(&store, u, &format!("y tick {i}"))).is_empty()).count();
+    assert_eq!(marks, 2 * (labelled + y_labelled), "a label for every tick mark");
+
+    let (e, u) = place(&mut store, r#"xs="{= series(1, 2, 3)}" ys="{= series(-1, 2, -3)}" style="bars""#);
+    assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));
+    let g = contour::geometry(&store, part(&store, u, "series 1"));
+    assert_eq!(g.contours().len(), 3, "three bars");
+    let zero_line = |s: &Store| {
+        // Every bar shares one edge: the y = 0 line, inside the area.
+        let ys: Vec<f64> = contour::geometry(s, part(s, u, "series 1")).contours().iter().flat_map(|c| c.anchors.iter().map(|a| a.at.y)).collect();
+        ys
+    };
+    let ys = zero_line(&store);
+    let common = ys.iter().filter(|y| ys.iter().filter(|z| (*z - *y).abs() < 1e-6).count() >= 6).count();
+    assert!(common >= 6, "bars share a baseline: {ys:?}");
+    assert!(g.contours().iter().all(|c| { let h: Vec<f64> = c.anchors.iter().map(|a| a.at.y).collect(); h.iter().cloned().fold(f64::MIN, f64::max) - h.iter().cloned().fold(f64::MAX, f64::min) > 1.0 }), "no zero-height bar");
+
+    let (e, u) = place(&mut store, r#"xs="{= series()}" ys="{= series()}""#);
+    let errs = errors(&store, e, u);
+    assert!(errs.is_empty(), "{errs:#?}");
+}

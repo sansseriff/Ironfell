@@ -92,16 +92,20 @@ pub fn plan(doc: &Document, def: NodeId, machine: NodeId, from: &str, to: &str) 
     };
     let (id, t) = [(true, true), (true, false), (false, true), (false, false)].iter().find_map(|&(a, b)| ts.iter().find(|(_, t)| fits(t, a, b)))?;
     let ms = number(&t.ms).unwrap_or(300.0).max(0.0);
-    let curve = text(&t.ease).and_then(|e| curve(&e).ok()).unwrap_or(Curve::InOut);
+    // One default with the facets' (Easy Ease), for an unknown name too.
+    let easy = curve("easy_ease").expect("a named curve");
+    let curve = text(&t.ease).and_then(|e| curve(&e).ok()).unwrap_or(easy);
     let by_name: BTreeMap<String, NodeId> = channels(doc, def).into_iter().map(|(c, n, _)| (n, c)).collect();
     let mut tweens = BTreeMap::new();
     for w in children(doc, *id, "tween") {
         let Some(tw) = doc.get::<Tween>(w) else { continue };
         let Some(&c) = text(&tw.channel).and_then(|n| by_name.get(&n)) else { continue };
         let (at, len) = (number(&tw.at).unwrap_or(0.0), number(&tw.ms).unwrap_or(ms));
-        let e = text(&tw.ease).and_then(|e| crate::time::curve(&e).ok()).unwrap_or(Curve::InOut);
+        let e = text(&tw.ease).and_then(|e| crate::time::curve(&e).ok()).unwrap_or(easy);
+        // A tween ends with its transition at the latest (one running past
+        // it would jump to its end).
         if ms > 0.0 {
-            tweens.insert(c, (at / ms, (at + len) / ms, e));
+            tweens.insert(c, ((at / ms).clamp(0.0, 1.0), ((at + len) / ms).clamp(0.0, 1.0), e));
         }
     }
     Some(Plan { transition: *id, ms, curve, tweens })
@@ -138,8 +142,9 @@ struct Run {
 #[derive(Default)]
 pub struct Player {
     known: BTreeMap<(NodeId, NodeId), Known>,
-    /// The next change snaps instead of playing (an undo or redo).
-    pub snap_next: bool,
+    /// Instances whose next state change snaps instead of playing: those
+    /// an undo or redo set the state of.
+    pub snap: std::collections::BTreeSet<NodeId>,
 }
 
 /// What a running transition reports, for a probe or a view.
@@ -154,7 +159,7 @@ impl Player {
     /// Advance to `now` (seconds on the host's clock). Answers the channel
     /// values to publish (only those away from rest), and what is running.
     pub fn advance(&mut self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, now: f64) -> (BTreeMap<Leaf, Value>, Vec<Running>) {
-        let snap_all = std::mem::take(&mut self.snap_next);
+        let snap = std::mem::take(&mut self.snap);
         let mut seen = std::collections::BTreeSet::new();
         let entity_ty = crate::registry::TypeId::lookup("entity").expect("registered");
         for e in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e)).collect::<Vec<_>>() {
@@ -170,7 +175,7 @@ impl Player {
                     }
                     Some(k) if k.state != state => {
                         let from_state = std::mem::replace(&mut k.state, state.clone());
-                        match plan(doc, def, m, &from_state, &state).filter(|p| p.ms > 0.0 && !snap_all) {
+                        match plan(doc, def, m, &from_state, &state).filter(|p| p.ms > 0.0 && !snap.contains(&e)) {
                             Some(plan) => k.run = Some(Run { plan, start: now, from: k.values.clone(), to }),
                             None => {
                                 k.values = to;

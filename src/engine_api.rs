@@ -1261,6 +1261,15 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     };
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return "null".into() };
     let doc = store.0.document();
+    // A timeline's key diamond or clip bar (session glyphs) inspects the key
+    // or clip it projects: a selected key shows its time, value and easing.
+    let id = if id.is_session() {
+        doc.relations_from(id)
+            .find(|r| r.rel == iron_document::RelKind::Projects && doc.live(r.to).is_some_and(|t| matches!(t.ty.name(), "key" | "clip")))
+            .map_or(id, |r| r.to)
+    } else {
+        id
+    };
     let Some(n) = doc.live(id) else { return "null".into() };
     let name = doc.get::<iron_document::facet::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
     let components: Vec<serde_json::Value> = doc
@@ -1285,11 +1294,14 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
                         "field": field,
                         "kind": value.as_ref().map(|v| format!("{:?}", v.kind()).to_lowercase()),
                         "text": value.as_ref().map(|v| v.to_string()),
+                        "full": value.as_ref().map(|v| v.edit_text()),
                         "bind": slot.expr().map(|e| e.to_string()),
                         "edit": edit,
                         "via": via,
                         "why": why,
                         "options": kind.options(field),
+                        "key": key_state(&store.0, iron_document::Leaf { node: id, path }),
+                        "error": store.0.reactive().errors.get(&iron_document::Leaf { node: id, path }),
                     }))
                 })
                 .collect();
@@ -1403,10 +1415,12 @@ fn inspect_component(store: &iron_document::Store, id: iron_document::NodeId) ->
                 "field": input.name,
                 "kind": value.as_ref().map(|v| format!("{:?}", v.kind()).to_lowercase()),
                 "text": value.as_ref().map(|v| v.to_string()),
+                "full": value.as_ref().map(|v| v.edit_text()),
                 "bind": slot.expr().map(|e| e.to_string()),
                 "edit": edit,
                 "via": via,
                 "why": why,
+                "error": store.reactive().errors.get(&iron_document::Leaf { node: entity, path }),
             }))
         })
         .collect();
@@ -1431,12 +1445,34 @@ pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: 
     }
 }
 
+/// A property's animation, for the inspector's ◇: `"none"`, `"animated"`
+/// (a clip drives it) or `"on"` (a key sits at the playhead).
+fn key_state(store: &iron_document::Store, leaf: iron_document::Leaf) -> &'static str {
+    use iron_document::timeline_view as tv;
+    match tv::clip_of(store.document(), leaf) {
+        None => "none",
+        Some((clip, offset)) => {
+            let u = store.time() - iron_document::time::start(store.document(), clip) - offset;
+            if iron_document::time::keys(store.document(), clip).iter().any(|k| (k.t - u).abs() <= tv::AT_KEY) { "on" } else { "animated" }
+        }
+    }
+}
+
 fn inspector_current(store: &iron_document::Store, id: iron_document::NodeId, path: iron_document::LeafPath) -> Option<iron_document::Value> {
     store.resolved(id, path).or_else(|| {
         let node = store.document().live(id)?;
         if !node.ty.spec().allows(path.facet) || !INSPECTOR_OPTIONAL.contains(&path.facet.name()) { return None; }
         path.facet.default_facet().get(path.field).and_then(|s| s.constant()).cloned()
     })
+}
+
+/// The formula in a field's text, if it is one: `=expr` or `{= expr}`.
+fn inspector_formula(text: &str) -> Option<String> {
+    let t = text.trim();
+    if let Some(inner) = t.strip_prefix("{=").and_then(|r| r.strip_suffix('}')) {
+        return Some(inner.trim().to_owned());
+    }
+    t.strip_prefix('=').filter(|r| !r.trim().is_empty()).map(|r| r.trim().to_owned())
 }
 
 fn inspector_value(current: &iron_document::Value, text: &str) -> Result<iron_document::Value, String> {
@@ -1447,7 +1483,10 @@ fn inspector_value(current: &iron_document::Value, text: &str) -> Result<iron_do
         (v.len() == n && v.iter().all(|v| v.is_finite())).then_some(v)
     };
     let value = match current {
-        Value::Number(_) => t.parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Number),
+        // A number, or a quantity where the input takes one (an `auto`
+        // range takes `400 nm`; the store checks the kind).
+        Value::Number(_) => t.parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Number).or_else(|| Value::parse_quantity(t).ok()),
+        Value::Series { .. } => Value::parse_series(t).and_then(Result::ok),
         Value::Bool(_) => t.parse().ok().map(Value::Bool),
         Value::Str(_) => Some(Value::Str(t.to_owned())),
         Value::Enum(_) => Some(Value::Enum(t.to_owned())),
@@ -1475,11 +1514,26 @@ pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) 
         let patch: serde_json::Value = serde_json::from_str(&patch).map_err(|e| e.to_string())?;
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("no store")?;
         let mut writes: BTreeMap<Leaf, Value> = BTreeMap::new();
+        // Formulas (`=expr` or `{= expr}`, typed in any field) set the leaf's
+        // binding itself; `$self.k` is this entity's argument `k`.
+        let mut bindings: Vec<Op> = Vec::new();
         if let Some(values) = patch.get("values").and_then(|v| v.as_object()) {
             for (leaf, text) in values {
                 let path = leaf.parse::<LeafPath>().map_err(|e| e.to_string())?;
+                if let Some(formula) = text.as_str().and_then(inspector_formula) {
+                    let formula = formula.replace("$self.", &format!("#{}.args.", id.to_string().trim_start_matches('#')));
+                    let expr = iron_document::Expr::parse(&formula).map_err(|e| format!("formula: {e}"))?;
+                    bindings.push(Op::Set { id, path, slot: Slot::Bound(expr) });
+                    continue;
+                }
                 let current = inspector_current(&store.0, id, path).ok_or_else(|| format!("no property {id}.{path}"))?;
                 let value = inspector_value(&current, text.as_str().ok_or("a property value must be text")?)?;
+                // `replace` (pasted data): a constant replaces the formula
+                // instead of editing through it.
+                if patch.get("replace").and_then(|v| v.as_bool()) == Some(true) && store.0.document().leaf(id, path).is_some_and(|s| s.expr().is_some()) {
+                    bindings.push(Op::Set { id, path, slot: Slot::Const(value) });
+                    continue;
+                }
                 let (target, value) = iron_document::handle::resolve_target(store.0.document(), store.0.reactive(), Leaf { node: id, path }, value)?;
                 if let Some(prior) = writes.insert(target, value.clone()) && prior != value {
                     return Err(format!("linked fields require conflicting values of {target}"));
@@ -1496,8 +1550,31 @@ pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) 
                 ops.push(Op::Set { id: target.node, path: target.path, slot: Slot::Const(value) });
             }
         }
+        // Remove a formula: the leaf keeps the value it shows now.
+        if let Some(unbind) = patch.get("unbind").and_then(|v| v.as_array()) {
+            for leaf in unbind {
+                let path = leaf.as_str().ok_or("unbind takes leaf paths")?.parse::<LeafPath>().map_err(|e| e.to_string())?;
+                let value = store.0.resolved(id, path).ok_or_else(|| format!("{id}.{path} has no value to keep"))?;
+                if matches!(value, Value::Fn(_)) {
+                    return Err("a function has no constant form; edit its formula instead".into());
+                }
+                ops.push(Op::Set { id, path, slot: Slot::Const(value) });
+            }
+        }
         let mut added: Vec<_> = adds.into_iter().map(|((id, _), comp)| Op::AddFacet { id, facet: comp }).collect();
         added.append(&mut ops);
+        for op in bindings {
+            // A binding on an optional component not yet added adds it.
+            if let Op::Set { id, path, slot } = &op
+                && store.0.document().facet(*id, path.facet).is_none()
+            {
+                let mut comp = path.facet.default_facet();
+                comp.set(path.field, slot.clone()).map_err(|e| e.to_string())?;
+                added.push(Op::AddFacet { id: *id, facet: comp });
+            } else {
+                added.push(op);
+            }
+        }
         if let Some(remove) = patch.get("remove").and_then(|v| v.as_array()) {
             for kind in remove {
                 let kind = kind.as_str().and_then(FacetKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
@@ -1935,7 +2012,7 @@ pub fn solve_bench(iterations: u32, repeats: u32) -> String {
     .to_string()
 }
 
-const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip", "layout", "layout_item", "rules"];
+const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip", "layout", "layout_item", "rules", "trim"];
 
 /// The font picker's list (plans/specs/text.md §4): the catalog, the
 /// installed families on a native host, and which are loaded now.
@@ -2465,6 +2542,29 @@ pub fn timeline_key(app: &mut WorkerApp, action: String, clip: String) -> String
             }
             _ => Err(format!("timeline_key: unknown action {action:?} (prev, next, toggle)")),
         }
+    })
+}
+
+/// The inspector's animation actions on one property (timeline.md §12.3):
+/// `key` is the ◇ beside a field (toggle a key at the playhead, or start an
+/// animation there); `draw_on` keys `trim.end` 0 → 1 over a second with Easy
+/// Ease (`leaf` is ignored). One transaction each.
+pub fn inspect_animate(app: &mut WorkerApp, node: String, leaf: String, action: String) -> String {
+    narrative_run(app, |store| {
+        use iron_document::timeline_view as tv;
+        let id: iron_document::NodeId = node.parse().map_err(|_| format!("not a node id: {node}"))?;
+        let (ops, label) = match action.as_str() {
+            "key" => {
+                let path: iron_document::LeafPath = leaf.parse().map_err(|e| format!("{e}"))?;
+                let ops = tv::key_leaf_ops(store, iron_document::Leaf { node: id, path })?;
+                let label = if ops.iter().any(|o| matches!(o, iron_document::Op::Delete { .. })) { "remove key" } else { "add key" };
+                (ops, label)
+            }
+            "draw_on" => (tv::draw_on_ops(store, id, 1.0)?, "draw on"),
+            _ => return Err(format!("inspect_animate: unknown action {action:?} (key, draw_on)")),
+        };
+        let version = narrative_apply(store, label, "human", ops)?;
+        Ok(serde_json::json!({"ok": true, "version": version}))
     })
 }
 

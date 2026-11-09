@@ -92,7 +92,7 @@ pub fn render_tree(
             if crate::composition::composition_of(doc, c) != Some(c) {
                 return Err(ViewError(format!("{c} is not a live composition")));
             }
-            let q = ViewQuery { omit_defaults: false, scope: Some(q.scope.unwrap_or(c)), ..q.clone() };
+            let q = ViewQuery { scope: Some(q.scope.unwrap_or(c)), ..q.clone() };
             if crate::composition::composition_of(doc, q.scope.expect("set")) != Some(c) {
                 return Err(ViewError(format!("{} is not in composition {c}", q.scope.expect("set"))));
             }

@@ -1320,7 +1320,9 @@ impl Part {
         // from the start: one that returns there must be previewed back.
         let mut put = |path: &'static str, _start: f64, new: f64| {
             if new.is_finite() {
-                out.push((id, path, new));
+                // A size to six decimals: a drag leaves 395, not
+                // 395.00000000000006 (angles keep their exact snaps).
+                out.push((id, path, if path.starts_with("size.") { (new * 1e6).round() / 1e6 } else { new }));
             }
         };
         let (bw, bh) = (self.bounds.width(), self.bounds.height());

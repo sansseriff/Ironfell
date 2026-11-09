@@ -478,6 +478,9 @@ impl Writer<'_> {
                 attrs.push(("stroke-miterlimit", num(miter)));
             }
             let dash = crate::dashes(&style("stroke.dash", ""));
+            if !dash.is_empty() && self.has_trim(id) && (self.f(id, "trim.start", 0.0) > 0.0 || self.f(id, "trim.end", 1.0) < 1.0) {
+                self.cuts.add(format!("{id} is dashed and trimmed; SVG's dash carries the dashes, so the trim is left out"));
+            }
             if !dash.is_empty() {
                 attrs.push(("stroke-dasharray", dash.iter().map(|d| num(*d)).collect::<Vec<_>>().join(" ")));
                 let offset = self.f(id, "stroke.dash_offset", 0.0);

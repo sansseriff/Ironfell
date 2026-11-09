@@ -829,3 +829,75 @@ pub fn toggle_key_ops(store: &Store, clip: NodeId) -> Result<Vec<Op>, String> {
     insert_key(doc, clip, &keys, u, value, &mut ids, &mut ops);
     Ok(ops)
 }
+
+/// A new clip animating `leaf` with `keys` (clock times, values, easing):
+/// on the document's timeline, made if there is none.
+fn new_clip_ops(store: &Store, leaf: Leaf, keys: &[(f64, Value, &str)]) -> Vec<Op> {
+    let doc = store.document();
+    let mut ids = doc.next_ids(keys.len() + 2).into_iter();
+    let mut ops = Vec::new();
+    let tl = match doc.nodes_of_type(ty("timeline")).find(|t| !t.is_session()) {
+        Some(t) => t,
+        None => {
+            let id = ids.next().expect("an id");
+            let order = doc.roots().iter().filter(|r| !r.is_session()).last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
+            ops.push(Op::Create { id, ty: ty("timeline"), parent: None, order, facets: vec![named("main")] });
+            id
+        }
+    };
+    let clip = ids.next().expect("an id");
+    let mut timing = crate::facet::Timing::default();
+    timing.start = Slot::Const(Value::Number(0.0));
+    let mut c = crate::facet::Clip::default();
+    c.prop = Slot::Const(Value::Str(leaf.path.to_string()));
+    let label = format!("{} {}", name_of(store, leaf.node).unwrap_or_else(|| doc.live(leaf.node).map_or("node", |n| n.ty.name()).to_owned()), leaf.path.field);
+    let order = doc.children(tl).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |o| OrderKey::after(&o));
+    ops.push(Op::Create { id: clip, ty: ty("clip"), parent: Some(tl), order, facets: vec![timing.wrap(), c.wrap(), named(&label)] });
+    let mut k = OrderKey::first();
+    for (t, v, easing) in keys {
+        ops.push(Op::Create { id: ids.next().expect("an id"), ty: ty("key"), parent: Some(clip), order: k.clone(), facets: vec![key_facet(*t, v.clone(), easing)] });
+        k = OrderKey::after(&k);
+    }
+    let rel = doc.next_relation_ids(1)[0];
+    ops.push(Op::Link { rel: Relation { id: rel, from: clip, to: leaf.node, rel: RelKind::Animates, data: BTreeMap::new() } });
+    ops
+}
+
+/// The inspector's ◇ on a property (After Effects' stopwatch, timeline.md
+/// §12.3): an animated leaf toggles its key at the playhead; an unanimated
+/// one starts an animation with a key there holding its value now.
+pub fn key_leaf_ops(store: &Store, leaf: Leaf) -> Result<Vec<Op>, String> {
+    if let Some((clip, _)) = clip_of(store.document(), leaf) {
+        return toggle_key_ops(store, clip);
+    }
+    let value = store.resolved(leaf.node, leaf.path).ok_or("no value to key")?;
+    if crate::time::lerp(&value, &value, 0.5).is_none() {
+        return Err(format!("{} does not animate", leaf.path));
+    }
+    if store.document().leaf(leaf.node, leaf.path).is_some_and(|s| s.expr().is_some()) {
+        return Err(format!("{} is set by a formula; remove the formula to key it", leaf.path));
+    }
+    Ok(new_clip_ops(store, leaf, &[(store.time(), value, "easy_ease")]))
+}
+
+/// "Draw on" (After Effects' Trim Paths recipe): `trim.end` keyed from 0 at
+/// the playhead to 1 `secs` later with Easy Ease, adding the trim if the
+/// shape has none. One transaction.
+pub fn draw_on_ops(store: &Store, node: NodeId, secs: f64) -> Result<Vec<Op>, String> {
+    let doc = store.document();
+    let spec = doc.live(node).ok_or("no such node")?.ty.spec();
+    if !spec.allows(FacetKind::Trim) {
+        return Err("only rectangles, ellipses and paths draw on".into());
+    }
+    let leaf = Leaf { node, path: LeafPath::new(FacetKind::Trim, "end").expect("trim.end") };
+    if clip_of(doc, leaf).is_some() {
+        return Err("its trim end is already animated; edit those keys".into());
+    }
+    let mut ops = Vec::new();
+    if doc.facet(node, FacetKind::Trim).is_none() {
+        ops.push(Op::AddFacet { id: node, facet: FacetKind::Trim.default_facet() });
+    }
+    let now = store.time();
+    ops.extend(new_clip_ops(store, leaf, &[(now, Value::Number(0.0), "easy_ease"), (now + secs.max(0.05), Value::Number(1.0), "easy_ease")]));
+    Ok(ops)
+}

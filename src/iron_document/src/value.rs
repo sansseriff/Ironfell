@@ -432,6 +432,21 @@ pub const SERIES_SHOWN: usize = 16;
 /// numbers in one unit (`400 450 500 nm`), else a summary
 /// (`series(121 · nm, 400…700)`).
 fn series_text(data: &[f64], dim: Dim) -> String {
+    series_text_upto(data, dim, SERIES_SHOWN)
+}
+
+impl Value {
+    /// Text to edit this value in: a series in full (`"400 410 … 700 nm"`,
+    /// which `parse_series` reads back), anything else as `Display` shows it.
+    pub fn edit_text(&self) -> String {
+        match self {
+            Value::Series { data, dim } => series_text_upto(data, *dim, usize::MAX),
+            v => v.to_string(),
+        }
+    }
+}
+
+fn series_text_upto(data: &[f64], dim: Dim, shown: usize) -> String {
     let (unit, factor) = if dim.is_none() {
         (String::new(), 1.0)
     } else {
@@ -439,7 +454,7 @@ fn series_text(data: &[f64], dim: Dim) -> String {
         units::display_unit(biggest, dim)
     };
     let num = |x: f64| fmt_num(units::round12(x / factor));
-    if data.len() <= SERIES_SHOWN {
+    if data.len() <= shown {
         let mut out: Vec<String> = data.iter().map(|&x| num(x)).collect();
         if !unit.is_empty() {
             out.push(unit);
@@ -452,7 +467,11 @@ fn series_text(data: &[f64], dim: Dim) -> String {
     let lo = data.iter().copied().fold(f64::INFINITY, f64::min);
     let hi = data.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let unit = if unit.is_empty() { String::new() } else { format!(" · {unit}") };
-    format!("series({}{unit}, {}…{})", data.len(), num(lo), num(hi))
+    // Ends to nine digits of the larger: 1.5e-33 beside 1 reads as 0.
+    let big = lo.abs().max(hi.abs()) / factor;
+    let grain = if big > 0.0 && big.is_finite() { 10f64.powi(big.log10().floor() as i32 - 9) } else { 0.0 };
+    let end = |x: f64| if grain > 0.0 && grain.is_finite() { fmt_num(units::round12(((x / factor) / grain).round() * grain)) } else { num(x) };
+    format!("series({}{unit}, {}…{})", data.len(), end(lo), end(hi))
 }
 
 fn nonfinite(n: f64) -> &'static str {

@@ -50,8 +50,16 @@ dim      := "length" | "time" | "mass" | "power" | "voltage" | "current" | "freq
 ```
 
 Examples: `vis` is `choice(hidden|shown)`; `xs` is `series(any)`; `x_min` is
-`number | auto` (any quantity: the plot's axes are generic, see §3.3); `cursor` is
-`any | auto`; `f` is `fn(1)`; `color` is `color`; a laser's wavelength is `nm`.
+`like(xs) | auto` and `cursor` `like(xs) | auto`: a quantity whose dimension must be
+the data's (`like(input)` names another input's dimension; council 2026-11-08 found a
+plain `0` accepted for a range in metres, breaking the plot with errors nowhere near
+the input); `f` is `fn(1)`; `color` is `color`; a laser's wavelength is `nm`. Bound
+arguments are checked too, when their value is computed, not only constants.
+
+**One easing type** (council 2026-11-08): `key.easing` (an enum without
+`cubic-bezier`), `transition.ease` and `tween.ease` (free text) become one `easing`
+type: a curve name or `cubic-bezier(x1, y1, x2, y2)`, checked when set, one default
+(Easy Ease).
 
 Named dimensions are the `Dim` table's names (`units.rs`), plus the coherent derived
 units' quantities (`power` = W, `voltage` = V). `series(any)` takes a series of any
@@ -157,9 +165,9 @@ Schema version bumps once for `port.type`/`show`/`group` and the `q` triple.
 
 | Phase | Builds | Exit |
 |---|---|---|
-| 1 | `Type` and its parser; `port.type`; coercion at set and at connect; loose inference for undeclared ports; `std:plot` declared; `auto` | `vis="hiden"` refused with "vis is one of hidden, shown"; connecting a time into a length refused; all existing tests and the Library bake pass |
-| 2 | Literal unit hints; the `q` triple; display units on types and in contexts | `400 nm` round-trips as written; a wavelength edits in nm and accepts `1.55 µm` |
-| 3 | The inspector widgets (§3.1) | `vis` is a segmented toggle; `x_min` has an Auto toggle |
+| 1 | `Type` and its parser; `port.type`; coercion at set and at connect; loose inference for undeclared ports; `std:plot` declared; `auto`; `like(input)`; the `easing` type. **With phase 3's widgets in the same delivery** (council: a parser-only milestone leaves the workflow blocked) | `vis="hiden"` refused with "vis is one of hidden, shown"; `y_min="0"` on metre data refused at the input; connecting a time into a length refused; `vis` is a segmented toggle and `x_min` has an Auto toggle; all existing tests and the Library bake pass |
+| 2 | Literal unit hints; the `q` triple; display units on types and in contexts | `400 nm` round-trips as written (formulas no longer print `0.015 m` for `15 mm`); a wavelength edits in nm and accepts `1.55 µm` |
+| 3 | The remaining widgets (§3.1): series preview, colour tokens | — |
 | 4 | Pins: `show`, `group`, the pill, the Port section controls (§6) | selecting the plot shows its four pins and "+ 15 more" grouped |
 | later | Angles as a dimension; affine units; structured `fn` types | — |
 

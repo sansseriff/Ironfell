@@ -17,7 +17,7 @@ that knows its size) also serve hand-built components and the agent generally.
 | # | Decision |
 |---|---|
 | D1 | A **series** is a new value: numbers with one unit, `Value::Series(Arc<[f64]>, Dim)`. Not a general list. |
-| D2 | **Floor functions broadcast** over series, as NumPy's do: `pow(cos(pi * #s.xs / d), 2)` is a series. A function plot is a `ys` bound to an expression over `xs`. **No lambdas**, so dependencies stay static and nothing new can hide a reference. |
+| D2 | **Floor functions broadcast** over series, as NumPy's do: `pow(cos(pi * #s.xs / d), 2)` is a series. A function plot is a `ys` bound to an expression over `xs`. ~~No lambdas~~ *(superseded the same day: lambdas `x => …` were adopted, §1.4; they close over their references when evaluated, so dependencies stay static).* |
 | D3 | **`path.d` may be bound** to an expression that returns **SVG path data**, a string (`'M ' + points(xs, ys)`), which the engine parses after each change. Agents already write SVG fluently; helpers only write path-data text. A bound path is a third path form beside packed and expanded: drawn from its resolved value, never point-edited. Draw-on is SVG's own `pathLength` plus dash trick (`stroke.path_length`). |
 | D3b | **Functions are values**: `x => body`, JavaScript's arrow. A lambda's references are ordinary dependencies of the binding that holds it; its parameter is not. A plot given `f` samples it at its own resolution (one sample per 2 px), so resizing or rescaling an axis resamples. (Decided 2026-11-08.) |
 | D4 | **An instance can have a size.** A template may carry `size` (its default box); its parts bind to the template's `size.w/h`, which expansion maps to the `use`'s own `size`. Dragging a corner of such a use writes the use's `size`, not its parts. Text never stretches, because only positions bind to the size. |
@@ -208,7 +208,7 @@ too) stays possible for unsized templates and is not what a plot wants.
 | `xs` | series | `range(0, 10, 11)` | x samples |
 | `ys` | series | a parabola over the default `xs` | the first series |
 | `ys2`, `ys3` | series | empty | further series on the same `xs`; empty hides them |
-| `style` | enum `line \| smooth \| scatter \| area \| bars \| line+markers` | `line` | how series are drawn |
+| `style` | enum `line \| smooth \| scatter \| area \| bars \| line+markers` | `line` | how series are drawn (`line+markers`: hollow circles on the line, built after the council review) |
 | `x_min`, `x_max`, `y_min`, `y_max` | number or quantity | auto | the axes' range; auto is `nice_lo/nice_hi` of the data (§10 Q3 on how "auto" is spelt) |
 | `x_scale`, `y_scale` | enum `linear \| log` | `linear` | |
 | `x_label`, `y_label`, `title` | text | from the series' unit (`λ (nm)`), empty | |

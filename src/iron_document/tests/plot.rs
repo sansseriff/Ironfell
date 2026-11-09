@@ -209,3 +209,24 @@ fn wide_plots_label_every_tick_bars_stand_on_zero_and_empty_data_is_fine() {
     let errs = errors(&store, e, u);
     assert!(errs.is_empty(), "{errs:#?}");
 }
+
+/// The plot's colours are theme tokens (palette.rs): placing one brings the
+/// theme, and its frame and series follow light and dark; a series may have
+/// its own style.
+#[test]
+fn the_plot_follows_the_theme_and_styles_each_series() {
+    let (mut store, _) = desk();
+    let (e, u) = place(&mut store, r#"ys2="{= range(0, 1, 41)}" style2="scatter""#);
+    assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));
+    assert!(palette::tokens(store.document()).contains_key("series-1"));
+    let colour = |s: &Store, part_name: &str, leaf: &str| s.resolved(part(s, u, part_name), path(leaf));
+    let light = (colour(&store, "frame", "fill.color"), colour(&store, "series 1", "stroke.color"));
+    store.set_theme(true);
+    let dark = (colour(&store, "frame", "fill.color"), colour(&store, "series 1", "stroke.color"));
+    assert_ne!(light.0, dark.0, "the frame's surface");
+    assert_ne!(light.1, dark.1, "the series' colour");
+    assert!(errors(&store, e, u).is_empty());
+    // Series 2 is scatter: dots, no line.
+    assert_eq!(colour(&store, "series 2", "stroke.color"), Some(Value::Color([0.0, 0.0, 0.0, 0.0])));
+    assert_ne!(colour(&store, "series 1", "stroke.color"), Some(Value::Color([0.0, 0.0, 0.0, 0.0])));
+}

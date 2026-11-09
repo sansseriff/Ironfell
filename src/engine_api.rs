@@ -682,6 +682,16 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                 let extent = |n: iron_document::NodeId| store.0.extent(n);
                 (if on { "make resizable" } else { "make fixed size" }.into(), author::resizable(store.0.document(), def, on, &extent)?, None)
             }
+            "add_token" => {
+                // A new colour token (palette.rs) in the document's palette,
+                // made if there is none: light and dark as hex.
+                let name: String = a.get("name").and_then(|v| v.as_str()).map(|n| n.trim().trim_start_matches('@').to_owned()).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).ok_or("a token's name is letters, digits, - and _ (series-9)")?;
+                if iron_document::palette::tokens(doc).contains_key(&name) {
+                    return Err(format!("@{name} already exists"));
+                }
+                let colour = |k: &str| a.get(k).and_then(|v| v.as_str()).map(|h| iron_document::palette::hex(h)).ok_or(format!("{k} missing"));
+                (format!("add token @{name}"), iron_document::palette::add_ops(doc, &name, colour("light")?, colour("dark")?), None)
+            }
             "rename" => {
                 let node = id("node")?;
                 let name = a.get("name").and_then(|v| v.as_str()).map(str::trim).filter(|n| !n.is_empty()).ok_or("a name is needed")?;
@@ -1715,6 +1725,33 @@ pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, p
 
 /// The colours used in `node`'s composition, most used first (ties in tree
 /// order): the colour picker's "On this page" swatches.
+/// The colour picker's tokens (palette.rs): the document's, then the
+/// built-in ones it does not have yet (`id` null: using one adds the
+/// theme). Each with its light and dark value as hex, and which is shown.
+pub fn document_tokens(app: &mut WorkerApp) -> String {
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else { return "{}".into() };
+    let doc = store.0.document();
+    let hex = |v: Option<&iron_document::Value>| match v {
+        Some(iron_document::Value::Color(c)) => format!("#{}", c.iter().map(|x| format!("{:02x}", (x.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<String>()),
+        _ => "#000000ff".into(),
+    };
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let have = iron_document::palette::tokens(doc);
+    for (name, &t) in &have {
+        let tok = doc.get::<iron_document::facet::Token>(t);
+        out.push(serde_json::json!({"id": t.to_string(), "name": name, "light": hex(tok.and_then(|x| x.light.constant())), "dark": hex(tok.and_then(|x| x.dark.constant()))}));
+    }
+    // In the built-in order, the document's own after.
+    let order = |n: &str| iron_document::palette::BUILT_IN.iter().position(|(b, _, _)| *b == n).unwrap_or(usize::MAX);
+    out.sort_by_key(|t| order(t["name"].as_str().unwrap_or("")));
+    for (name, light, dark) in iron_document::palette::BUILT_IN {
+        if !have.contains_key(*name) {
+            out.push(serde_json::json!({"id": null, "name": name, "light": format!("{light}ff"), "dark": format!("{dark}ff")}));
+        }
+    }
+    serde_json::json!({"dark": store.0.dark(), "tokens": out}).to_string()
+}
+
 pub fn document_colors(app: &mut WorkerApp, node: String) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else { return "[]".into() };
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return "[]".into() };

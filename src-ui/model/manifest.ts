@@ -143,6 +143,15 @@ VALUES
   A series is numbers with one unit, written "0 0.4 0.9 1.6" or "400 450 500 nm"
   (two or more); a long one shows as series(121 · nm, 400…700).
 
+COLOURS  (theme tokens: light and dark, like CSS variables)
+  Prefer a token to a literal colour so drawings read in light and dark mode:
+  fill.color="@series-2", stroke.color="@ink", or inside formulas {= mix(@surface,
+  @accent, 0.2)}. Built in: surface ink ink-2 muted grid axis accent series-1 …
+  series-8 (series in this order for categories; text in ink, ink-2 or muted, never a
+  series colour). The first use adds the theme to the document: a palette root of
+  token nodes (token.light, token.dark), which you may edit with <set> or extend:
+  <create type="token" parent="#P" name="brand" light="#1d3557" dark="#a8dadc"/>.
+
 EXPRESSIONS (for {= …} bindings)
   #id.facet.field references a leaf; + - * / % < <= > >= == != && || !;
   cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
@@ -257,7 +266,8 @@ ${standard}
       style="area" x_label="y (mm)"/></edit>
   xs/ys are series (ys2, ys3 more series on the same xs), or f="{= x => …}" with
   x_min/x_max (sampled at the plot's width). $self.k reads this entity's argument k.
-  style line|smooth|scatter|area|bars|line+markers; x_min x_max y_min y_max cursor are
+  style line|smooth|scatter|area|bars|line+markers (style2, style3 for the other
+  series, default the same); color color2 color3 default to @series-1..3; x_min x_max y_min y_max cursor are
   in the data's unit (y_min="0 mW" for mW data) or auto; cursor
   marks an x and outputs y_at_cursor; reveal 0..1 draws the series on; axis titles
   default to the data's units; outputs x_lo x_hi y_lo y_hi are the ranges in use.

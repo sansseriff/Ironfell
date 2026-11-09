@@ -105,6 +105,8 @@ export function coerce(kind: Kind, raw: string): SlotJson {
     case 'function':
       throw new Error(`"${raw}": a function is written as a binding, {= x => …}`);
     case 'color':
+      // A colour token, as CSS writes a variable: `@series-2` (palette.rs).
+      if (/^@[A-Za-z0-9_-]+$/.test(text)) return { bind: text };
       return { rgba: parseColor(text) };
     case 'vec2':
     case 'vec3': {

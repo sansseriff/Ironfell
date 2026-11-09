@@ -64,6 +64,7 @@ export type DocumentCommand =
   | { op: 'inspect_patch'; node: string; patch: string }
   | { op: 'inspect_scrub'; node: string; leaf: string; phase: string; token: number; value: number; options: string | null }
   | { op: 'colors'; node: string }
+  | { op: 'tokens' }
   | { op: 'inspect_set'; node: string; leaf: string; text: string }
   | { op: 'compositions' }
   | { op: 'composition_info'; source: string }
@@ -147,6 +148,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'inspect_patch': return { fn: command.op, args: [command.node, command.patch] };
     case 'inspect_scrub': return { fn: command.op, args: [command.node, command.leaf, command.phase, command.token, command.value, command.options] };
     case 'colors': return { fn: command.op, args: [command.node] };
+    case 'tokens': return { fn: command.op, args: [] };
     case 'inspect_set': return { fn: command.op, args: [command.node, command.leaf, command.text] };
     case 'compositions': return { fn: command.op, args: [] };
     case 'composition_info': return { fn: command.op, args: [command.source] };

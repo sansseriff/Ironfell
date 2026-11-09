@@ -427,6 +427,14 @@ facets! {
         ease: Str = Value::Str("easy_ease".to_owned()),
     }
 
+    /// A colour token (palette.rs): its value in the light and the dark
+    /// theme; `color` is the one in use, published by the store.
+    Token / "token" => Token {
+        light: Color = Value::Color([0.0, 0.0, 0.0, 1.0]),
+        dark: Color = Value::Color([1.0, 1.0, 1.0, 1.0]),
+        color: Color = Value::Color([0.0, 0.0, 0.0, 1.0]),
+    }
+
     /// Figma's constraints (plans/specs/frame-constraints.md): how a part of
     /// a resizable component's picture follows the picture's box when it is
     /// resized, measured at the template's own size. `left` (and `top`)

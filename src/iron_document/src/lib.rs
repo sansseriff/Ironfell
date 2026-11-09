@@ -59,6 +59,7 @@ pub mod layout;
 pub mod narrative;
 pub mod table;
 pub mod time;
+pub mod palette;
 pub mod types;
 pub mod timeline_view;
 pub mod units;
@@ -216,6 +217,8 @@ pub struct Store {
     /// in a previewed order, the dragged item where the pointer holds it.
     /// Session state, never saved; a release commits one `Reorder`.
     layout_preview: Option<layout::Preview>,
+    /// The theme colour tokens resolve for (`set_theme`; palette.rs).
+    dark: bool,
     /// Declared transitions in flight (affordances.md §8.2), and what layout
     /// last asked for, which they ease towards. Off until a host with a
     /// clock turns it on (`set_motion`): a document read without one sees
@@ -322,6 +325,7 @@ impl Store {
             tables: Default::default(),
             contexts: None,
             layout_preview: None,
+            dark: false,
             motion: Motion::default(),
             machines: machine::Player::default(),
             interaction: BTreeMap::new(),
@@ -1213,6 +1217,7 @@ impl Store {
     /// groups' children (`layout.rs`), which may read it.
     pub fn resolve_physics(&mut self) {
         self.solve_network();
+        self.resolve_theme();
         self.resolve_layout();
         self.resolve_contexts();
     }
@@ -1357,6 +1362,30 @@ impl Store {
             let Some(m) = contexts::motion(&declared).filter(|m| matches!(m.when, "any" | "layout") && m.ms > 0.0) else { continue };
             self.motion.anims.insert(node, Anim { from: [sx, sy], to: [tx, ty], t0: self.motion.clock, ms: m.ms, ease: m.ease });
         }
+    }
+
+    /// The theme colour tokens resolve for: `dark` or light (the host's,
+    /// as its canvas is drawn). Everything using a token redraws.
+    pub fn set_theme(&mut self, dark: bool) {
+        if self.dark != dark {
+            self.dark = dark;
+            self.resolve_theme();
+            self.resolve_layout();
+        }
+    }
+
+    pub fn dark(&self) -> bool {
+        self.dark
+    }
+
+    /// Publish each token's colour for the theme (`ProducerId::THEME`).
+    fn resolve_theme(&mut self) {
+        let values = palette::publish(&self.doc, self.dark);
+        if values == self.reactive.published_by(ProducerId::THEME) {
+            return;
+        }
+        self.signal_stamp += 1;
+        self.reactive.publish(&self.doc, ProducerId::THEME, values, self.signal_stamp);
     }
 
     /// Lay a container out in a previewed order, or stop (`None`): the
@@ -1645,7 +1674,13 @@ impl Store {
         result
     }
 
-    fn apply_now(&mut self, input: TransactionInput) -> Result<Applied, Vec<ApplyError>> {
+    fn apply_now(&mut self, mut input: TransactionInput) -> Result<Applied, Vec<ApplyError>> {
+        // A built-in colour token used for the first time joins the
+        // document, in the same transaction (palette.rs).
+        // After the transaction's own ops: its ids come after theirs, and
+        // bindings are checked once all have applied.
+        let theme = palette::ensure_ops(&self.doc, &input.ops);
+        input.ops.extend(theme);
         if let Some(k) = &input.idempotency_key
             && let Some((_, v)) = self.recent_keys.iter().find(|(key, _)| key == k)
         {

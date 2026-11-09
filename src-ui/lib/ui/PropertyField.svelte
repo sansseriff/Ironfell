@@ -39,7 +39,9 @@
   // typed after "=" as in a spreadsheet, or through the ƒx button. A bound
   // field shows its formula; Remove keeps the value it shows now.
   let formula = $state(false);
-  const editingFormula = $derived(formula || (!!f.bind && f.edit !== "via"));
+  // A colour bound to a token (`@series-2`, palette.rs) shows as the token.
+  const token = $derived(f.kind === "color" ? f.bind?.match(/^@([A-Za-z0-9_-]+)$/)?.[1] ?? null : null);
+  const editingFormula = $derived(formula || (!!f.bind && f.edit !== "via" && !token));
   const isFormula = (text: string) => /^\s*(=|\{=)/.test(text);
   // `| auto` (stored as NaN): the field is empty with "Auto" in it, and the
   // Auto toggle puts it back.
@@ -168,7 +170,10 @@
     onpointerdown={start} onpointermove={move} onpointerup={() => finish()} onpointercancel={() => finish(true)} onlostpointercapture={() => { if (session) finish(true); }}>
     {#if icon}<span class="field-icon" aria-hidden="true">{@render icon()}</span>{/if}
     {#if prefix}<span class="prefix">{prefix}</span>{/if}
-    {#if editingFormula}
+    {#if token && !formula}
+      <span class="token-chip" title="Follows the colour token @{token} (light and dark theme). Detach to keep this colour."><span class="dot" style:background={f.text ?? "transparent"}></span>@{token}</span>
+      {#if !locked}<button type="button" class="field-action" aria-label={`Detach ${displayLabel} from @${token}`} title="Detach: keep this colour" onclick={unbind}><Unlink size={13} strokeWidth={1.5} /></button>{/if}
+    {:else if editingFormula}
       <span class="fx" aria-hidden="true">ƒx</span>
       <input aria-label={`${displayLabel} formula`} class="formula" type="text" spellcheck="false" value={fieldText()} disabled={locked}
         placeholder="= #id.facet.field * 2"
@@ -241,6 +246,8 @@
   .control :global(.segment:focus-visible) { outline: 1px solid var(--accent); }
   .auto-toggle { flex: 0 0 auto; margin-right: 4px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--fg-muted); font-size: 10px; padding: 2px 6px; cursor: pointer; }
   .auto-toggle:focus-visible { outline: 1px solid var(--accent); }
+  .token-chip { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 0 8px; font-size: 12px; color: var(--fg); overflow: hidden; white-space: nowrap; }
+  .token-chip .dot { flex: 0 0 12px; width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15); }
   .field-error { color: var(--danger); font-size: 10px; overflow-wrap: anywhere; }
   .control:hover .reveal, .control:focus-within .reveal, .reveal:focus-visible { opacity: 1; }
   .control :global(.ui-select-trigger) { width: 100%; min-width: 0; border: 0; background: transparent; }

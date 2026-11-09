@@ -75,6 +75,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "inspect_patch" => { arity(args,2)?; crate::engine_api::document_inspect_patch(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "inspect_scrub" => { arity(args,6)?; crate::engine_api::document_inspect_scrub(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<u32>(args,3)?,argument::<f64>(args,4)?,argument::<Option<String>>(args,5)?) },
         "colors" => { arity(args,1)?; crate::engine_api::document_colors(app,argument::<String>(args,0)?) },
+        "tokens" => { arity(args,0)?; crate::engine_api::document_tokens(app) },
         "inspect_set" => { arity(args,3)?; crate::engine_api::document_inspect_set(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "compositions" => { arity(args,0)?; crate::engine_api::document_compositions(app) },
         "composition_info" => { arity(args,1)?; crate::engine_api::document_composition_info(app,argument::<String>(args,0)?) },

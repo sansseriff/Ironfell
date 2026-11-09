@@ -389,6 +389,11 @@ pub(crate) fn sync_document(
     // The timeline follows the shell's theme, which sets the clear colour
     // (`engine_api::set_dark_mode`).
     let light = clear.0 == crate::bevy_app::CANVAS_LIGHT;
+    // Colour tokens resolve for the same theme (palette.rs); a switch
+    // republishes them, and what uses them redraws as any change does.
+    if store.0.dark() == light {
+        store.0.set_theme(!light);
+    }
     let session_named = |doc: &iron_document::Document, name: &str| doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name));
     let build_latency = latency.0 && !session_named(store.0.document(), iron_document::standard::LATENCY);
     if pending.0.is_empty()

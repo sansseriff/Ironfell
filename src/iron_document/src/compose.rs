@@ -299,8 +299,26 @@ fn place(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Re
         if !fresh {
             return Err(format!("{name}=…: set an existing entity's arguments with <set id=\"{entity}\" args.{name}=…/>"));
         }
-        // A NaN default ("auto") takes a quantity as well as a number.
-        let kind = if matches!(input.default, Value::Number(x) if x.is_nan()) && Value::parse_quantity(v.trim()).is_ok() { ValueKind::Quantity } else { input.kind };
+        // The declared type says how to read the text (types-and-units.md);
+        // a NaN default ("auto") takes a quantity as well as a number.
+        use crate::types::Base;
+        let declared = match &input.ty.base {
+            _ if v.trim() == "auto" && input.ty.auto => None,
+            Base::Choice(_) => Some(ValueKind::Enum),
+            Base::Color => Some(ValueKind::Color),
+            Base::Text => Some(ValueKind::Str),
+            Base::Bool => Some(ValueKind::Bool),
+            Base::Series(_) => Some(ValueKind::Series),
+            Base::Quantity { .. } | Base::Like(_) if Value::parse_quantity(v.trim()).is_ok() => Some(ValueKind::Quantity),
+            _ => None,
+        };
+        // A colour token (`@series-2`) is a binding to it.
+        if v.trim().starts_with('@') {
+            let slot = Expr::parse(v.trim()).map(Slot::Bound).map_err(|e| format!("{name}: {e}"))?;
+            sets.push(Op::Set { id: entity, path: format!("args.{name}").parse().map_err(|e| format!("args.{name}: {e:?}"))?, slot });
+            continue;
+        }
+        let kind = declared.unwrap_or(if matches!(input.default, Value::Number(x) if x.is_nan()) && Value::parse_quantity(v.trim()).is_ok() { ValueKind::Quantity } else { input.kind });
         let slot = arg_slot(kind, v, entity).map_err(|e| format!("{name}: {e}"))?;
         sets.push(Op::Set { id: entity, path: format!("args.{name}").parse().map_err(|e| format!("args.{name}: {e:?}"))?, slot });
     }

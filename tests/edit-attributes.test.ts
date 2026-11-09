@@ -56,3 +56,9 @@ test('a run of numbers is a series; two or three with commas stay a vector', asy
   assert.equal(coerce('any', '12'), 12);
   assert.equal(coerce('geometry', 'M 0 0 L 10 5'), 'M 0 0 L 10 5');
 });
+
+import { coerce as coerceToken } from "../src-ui/model/schema";
+test("a colour token is a binding", () => {
+  expect(coerceToken("color", "@series-2")).toEqual({ bind: "@series-2" });
+  expect(coerceToken("color", "{= mix(@surface, @accent, 0.5)}")).toEqual({ bind: "mix(@surface, @accent, 0.5)" });
+});

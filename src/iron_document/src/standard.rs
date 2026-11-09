@@ -505,7 +505,6 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let def = d.id;
     let nan = || Slot::Const(Value::Number(f64::NAN));
     let text_ = |t: &str| Slot::Const(Value::Str(t.into()));
-    let colour = |c: [f32; 4]| Slot::Const(Value::Color(c));
     let xs0: Vec<f64> = (0..=40).map(|i| i as f64 * 0.25).collect();
     let ys0: Vec<f64> = xs0.iter().map(|x| (x * 1.3).sin() * (-x / 5.0).exp()).collect();
     let none = || Slot::Const(Value::series(Vec::<f64>::new(), crate::units::Dim::NONE));
@@ -517,8 +516,9 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
             "ys2" | "ys3" => ("series", "auto", "Data"),
             "f" => ("fn(1) | auto", "pin", "Data"),
             "style" => ("choice(line|smooth|scatter|area|bars|line+markers)", "auto", "Look"),
+            "style2" | "style3" => ("choice(line|smooth|scatter|area|bars|line+markers) | auto", "settings", "Look"),
             "grid" => ("bool", "settings", "Look"),
-            "color" | "color2" | "color3" => ("color", "settings", "Look"),
+            "color" | "color2" | "color3" => ("color | auto", "settings", "Look"),
             "x_min" | "x_max" => ("like(xs) | auto", "auto", "Axes"),
             "y_min" | "y_max" => ("like(ys) | auto", "auto", "Axes"),
             "cursor" => ("like(xs) | auto", "pin", "Axes"),
@@ -552,14 +552,25 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let title = input(d, "title", text_(""));
     let cursor = input(d, "cursor", nan());
     let grid = input(d, "grid", Slot::Const(Value::Bool(true)));
-    let color = input(d, "color", colour([0.184, 0.435, 0.871, 1.0]));
-    let color2 = input(d, "color2", colour([0.91, 0.455, 0.231, 1.0]));
-    let color3 = input(d, "color3", colour([0.098, 0.663, 0.475, 1.0]));
+    // Colours default to the theme's series tokens (palette.rs: light and
+    // dark), and a style per series to the first's: `auto`.
+    let color = input(d, "color", nan());
+    let color2 = input(d, "color2", nan());
+    let color3 = input(d, "color3", nan());
+    let style2 = input(d, "style2", nan());
+    let style3 = input(d, "style3", nan());
     let reveal = input(d, "reveal", n(1.0));
     let _vis = input(d, "vis", Slot::Const(Value::Enum("shown".into())));
     let sig = |id: NodeId| format!("{id}.port.signal");
     let (xs, ys, ys2, ys3, f, style, x_min, x_max, y_min, y_max) = (sig(xs), sig(ys), sig(ys2), sig(ys3), sig(f), sig(style), sig(x_min), sig(x_max), sig(y_min), sig(y_max));
     let (x_label, y_label, title, cursor, grid, color, color2, color3, reveal) = (sig(x_label), sig(y_label), sig(title), sig(cursor), sig(grid), sig(color), sig(color2), sig(color3), sig(reveal));
+    let (style2, style3) = (sig(style2), sig(style3));
+    // A colour input left on auto takes its series token; a style on auto
+    // takes the first series' style.
+    let tinted = |c: &str, k: usize| format!("(kind({c}) == \"color\" ? {c} : @series-{k})");
+    let (color, color2, color3) = (tinted(&color, 1), tinted(&color2, 2), tinted(&color3, 3));
+    let styled = |s: &str| format!("(kind({s}) == \"number\" ? {style} : {s})");
+    let (style2, style3) = (styled(&style2), styled(&style3));
     let is_fn = format!("kind({f}) == \"function\"");
     // Outputs: the ranges in use, and the curve's value at the cursor.
     let mut output = |d: &mut Def, name: &str, e: String| {
@@ -642,15 +653,16 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     // 8 asked for fits the TICK_SLOTS label slots.
     let xt = format!("ticks({x_lo}, {x_hi}, clamp(floor({aw} / 70), 2, 8))");
     let yt = format!("ticks({y_lo}, {y_hi}, clamp(floor({ah} / 40), 2, 8))");
-    let ink = [0.2, 0.22, 0.27, 1.0];
-    let muted = [0.38, 0.41, 0.47, 1.0];
+    // Theme tokens (palette.rs), so the plot reads in light and dark.
+    let ink = "@ink";
+    let muted = "@muted";
 
     let fade_by = |e: &str| {
         let mut a = crate::facet::Appearance::default();
         a.opacity = bound(e.to_owned());
         a.wrap()
     };
-    let text_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, x: Slot, y: Slot, content: String, size_: f64, weight: f64, box_w: Option<(f64, &str)>, rot: f64, c: [f32; 4], fade: &str| {
+    let text_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, x: Slot, y: Slot, content: String, size_: f64, weight: f64, box_w: Option<(f64, &str)>, rot: f64, c: &str, fade: &str| {
         let id = ids.id();
         let mut tr = Transform2d::default();
         tr.x = x;
@@ -667,7 +679,9 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
             font.align = Slot::Const(Value::Enum(align.into()));
             facets.push(size(bw, size_ * 1.5));
         }
-        facets.extend([words.wrap(), font.wrap(), paint(c), named(name), fade_by(fade)]);
+        let mut ink = Fill::default();
+        ink.color = bound(c.to_owned());
+        facets.extend([words.wrap(), font.wrap(), ink.wrap(), named(name), fade_by(fade)]);
         d.child(id, "text", parent, facets);
     };
     let path_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, dd: String, stroke: Stroke, fill: Fill, trim_end: Option<String>, fade: Option<&str>| {
@@ -690,9 +704,9 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
         }
         d.child(id, "path", parent, facets);
     };
-    let line = |c: [f32; 4], width: f64| {
+    let line = |c: &str, width: f64| {
         let mut s = Stroke::default();
-        s.color = Slot::Const(Value::Color(c));
+        s.color = bound(c.to_owned());
         s.width = n(width);
         s
     };
@@ -711,7 +725,7 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let mut box_ = Size::default();
     box_.w = bound(w.clone());
     box_.h = bound(h.clone());
-    d.child(frame, "rect", t, vec![at(0.0, 0.0).wrap(), box_.wrap(), corners.wrap(), paint([1.0, 1.0, 1.0, 1.0]), line([0.82, 0.84, 0.88, 1.0], 1.0).wrap(), named("frame"), fade_by(&ch_frame)]);
+    d.child(frame, "rect", t, vec![at(0.0, 0.0).wrap(), box_.wrap(), corners.wrap(), { let mut f = Fill::default(); f.color = bound("@surface".into()); f.wrap() }, line("@grid", 1.0).wrap(), named("frame"), fade_by(&ch_frame)]);
     // 2. The title.
     text_part(d, ids, t, "title", n(14.0), n(8.0), title.clone(), 13.0, 600.0, None, 0.0, ink, &ch_frame);
     // 3. The plot area, clipped: grid, series, cursor.
@@ -723,8 +737,8 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     clip.w = bound(aw.clone());
     clip.h = bound(ah.clone());
     d.child(area, "group", t, vec![area_at.wrap(), clip.wrap(), named("area")]);
-    path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line([0.9, 0.91, 0.94, 1.0], 1.0), no_fill(), None, Some(&ch_ticks));
-    for (k, (sx, sy, c)) in [(xs.clone(), ys3.clone(), color3.clone()), (xs.clone(), ys2.clone(), color2.clone()), (px1.clone(), py1.clone(), color.clone())].into_iter().enumerate() {
+    path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line("@grid", 1.0), no_fill(), None, Some(&ch_ticks));
+    for (k, (sx, sy, c, style)) in [(xs.clone(), ys3.clone(), color3.clone(), style3.clone()), (xs.clone(), ys2.clone(), color2.clone(), style2.clone()), (px1.clone(), py1.clone(), color.clone(), style.clone())].into_iter().enumerate() {
         let (x, y) = (xp(&sx), yp(&sy));
         // Bars and areas stand on y = 0 where it is in view, else the
         // nearer edge.
@@ -733,7 +747,7 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
             "len({sy}) == 0 ? \"\" : ({style} == 'scatter' ? circles({x}, {y}, 3) : ({style} == 'smooth' ? smooth({x}, {y}) : ({style} == 'area' ? area({x}, {y}, {base}) : ({style} == 'bars' ? bars({x}, {y}, {base}, max(1, {aw} / max(1, len({sy})) * 0.7)) : (points({x}, {y}) == \"\" ? \"\" : 'M ' + points({x}, {y})) + ({style} == 'line+markers' ? ' ' + circles({x}, {y}, 3) : \"\")))))"
         );
         let solid = format!("({style} == 'scatter' || {style} == 'bars')");
-        let mut stroke = line([0.0, 0.0, 0.0, 1.0], 2.0);
+        let mut stroke = line("@ink", 2.0);
         stroke.color = bound(format!("{solid} ? rgb(0, 0, 0, 0) : {c}"));
         let mut fill = Fill::default();
         fill.color = bound(c.clone());
@@ -748,7 +762,7 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     path_part(d, ids, area, "cursor", format!("isnan({cursor}) ? \"\" : segments({cx}, 0, {cx}, {ah})"), dashed, no_fill(), None, Some(&ch_series));
     let mut dot_fill = Fill::default();
     dot_fill.color = bound(color.clone());
-    path_part(d, ids, area, "cursor dot", format!("isnan({cursor}) ? \"\" : circles({cx}, {cy}, 4)"), line([1.0, 1.0, 1.0, 1.0], 1.5), dot_fill, None, Some(&ch_series));
+    path_part(d, ids, area, "cursor dot", format!("isnan({cursor}) ? \"\" : circles({cx}, {cy}, 4)"), line("@surface", 1.5), dot_fill, None, Some(&ch_series));
     text_part(d, ids, area, "cursor value", bound(format!("isnan({cursor}) ? 0 : {cx} + 6")), bound(format!("isnan({cursor}) ? 0 : {cy} - 20")), format!("isnan({cursor}) ? \"\" : fmt(sig({y_at}, 3))"), 11.0, 600.0, None, 0.0, ink, &ch_series);
     // 4. Axes, tick marks and labels, unclipped, in the same space.
     let axes = ids.id();
@@ -756,8 +770,8 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     axes_at.x = n(left);
     axes_at.y = bound(top.clone());
     d.child(axes, "group", t, vec![axes_at.wrap(), named("axes")]);
-    path_part(d, ids, axes, "axis lines", format!("'M 0,0 L 0,' + str({ah}) + ' L ' + str({aw}) + ',' + str({ah})"), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), Some(ch_axes.clone()), None);
-    path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line([0.55, 0.57, 0.62, 1.0], 1.0), no_fill(), Some(ch_ticks.clone()), None);
+    path_part(d, ids, axes, "axis lines", format!("'M 0,0 L 0,' + str({ah}) + ' L ' + str({aw}) + ',' + str({ah})"), line("@axis", 1.0), no_fill(), Some(ch_axes.clone()), None);
+    path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line("@axis", 1.0), no_fill(), Some(ch_ticks.clone()), None);
     let x_unit = format!("unit_of({px1})");
     let y_unit = format!("unit_of({py1})");
     for i in 0..TICK_SLOTS {

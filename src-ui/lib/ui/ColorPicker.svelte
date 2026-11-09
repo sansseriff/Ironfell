@@ -47,6 +47,10 @@
   // (`inspect_scrub`, channel "color"): live on the canvas, one undo step.
   import { onDestroy, untrack } from "svelte";
   import Pipette from "@lucide/svelte/icons/pipette";
+  import Plus from "@lucide/svelte/icons/plus";
+  import Pencil from "@lucide/svelte/icons/pencil";
+  import Unlink from "@lucide/svelte/icons/unlink";
+  import Button from "./Button.svelte";
   import Select from "./Select.svelte";
   import type { Property } from "./PropertyField.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
@@ -207,6 +211,45 @@
     commit({ h, s, v, a: rgba[3] });
   }
 
+  // ── Tokens (palette.rs) ───────────────────────────────────────────────
+  // The document's colour tokens, each a light and a dark value, as CSS
+  // variables are: using one binds the colour to `@name`, so it follows
+  // the theme and every edit to the token. The built-in ones the document
+  // lacks are offered too; using one adds the theme to the document.
+  type Token = { id: string | null; name: string; light: string; dark: string };
+  let tokens = $state<Token[]>([]);
+  let dark = $state(false);
+  let editing = $state(false);
+  let naming = $state<string | null>(null);
+  async function loadTokens() {
+    const r = await doc.command<{ dark: boolean; tokens: Token[] }>({ op: "tokens" }).catch(() => null);
+    if (r?.tokens) { tokens = r.tokens; dark = r.dark; }
+  }
+  $effect(() => { void loadTokens(); });
+  const current = $derived(field.bind?.match(/^@([A-Za-z0-9_-]+)$/)?.[1] ?? null);
+  const own = $derived(tokens.filter((t) => t.id));
+  function useToken(name: string) { onSet(field, `=@${name}`); }
+  async function detach() {
+    const r = await doc.command({ op: "inspect_patch", node, patch: JSON.stringify({ values: {}, unbind: [field.leaf], label: "detach colour" }) });
+    if (!r.ok) onError(r.error);
+    onRefresh();
+  }
+  async function newToken(name: string) {
+    // The colour shown now, in both themes; edit either after.
+    const r = await doc.command({ op: "author", verb: "add_token", args: JSON.stringify({ name, light: hex, dark: hex }) });
+    naming = null;
+    if (!r.ok) { onError(r.error); return; }
+    useToken(name.trim().replace(/^@/, ""));
+    await loadTokens();
+  }
+  async function editToken(t: Token, leaf: string, value: string) {
+    if (!t.id) return;
+    const r = await doc.command({ op: "inspect_patch", node: t.id, patch: JSON.stringify({ values: { [leaf]: value }, label: `edit @${t.name}` }) });
+    if (!r.ok) onError(r.error);
+    await loadTokens();
+    onRefresh();
+  }
+
   // The browser's eyedropper (Chromium); hidden where there is none.
   const EyeDropperCtor = typeof window !== "undefined" ? (window as unknown as { EyeDropper?: new () => { open(): Promise<{ sRGBHex: string }> } }).EyeDropper : undefined;
   async function sample() {
@@ -262,6 +305,42 @@
   </div>
 </div>
 
+<div class="swatches-section tokens">
+  <div class="swatches-title tokens-head">
+    <span>Tokens</span>
+    <span class="token-actions">
+      {#if current}<button class="property-icon small" aria-label="Detach from @{current}" title="Detach: keep this colour, stop following @{current}" disabled={locked} onclick={detach}><Unlink size={13} strokeWidth={1.5} /></button>{/if}
+      {#if own.length}<button class="property-icon small" class:on={editing} aria-label="Edit tokens" aria-pressed={editing} title="Edit the document's tokens" onclick={() => editing = !editing}><Pencil size={13} strokeWidth={1.5} /></button>{/if}
+      <button class="property-icon small" aria-label="New token from this colour" title="New token from this colour" disabled={locked} onclick={() => naming = ""}><Plus size={14} strokeWidth={1.5} /></button>
+    </span>
+  </div>
+  {#if naming !== null}
+    <form class="token-new" onsubmit={(e) => { e.preventDefault(); if (naming) newToken(naming); }}>
+      <input aria-label="New token name" placeholder="brand-blue" bind:value={naming} spellcheck="false" />
+      <Button small variant="outline" type="submit" disabled={!naming}>Add</Button>
+    </form>
+  {/if}
+  {#if editing}
+    <div class="token-rows">
+      {#each own as t (t.id)}
+        <div class="token-row">
+          <input class="token-name" aria-label="Name of @{t.name}" value={t.name} spellcheck="false" onchange={(e) => editToken(t, "name.text", e.currentTarget.value)} />
+          <label title="Light theme"><span>Light</span><input type="color" value={t.light.slice(0, 7)} onchange={(e) => editToken(t, "token.light", e.currentTarget.value)} /></label>
+          <label title="Dark theme"><span>Dark</span><input type="color" value={t.dark.slice(0, 7)} onchange={(e) => editToken(t, "token.dark", e.currentTarget.value)} /></label>
+        </div>
+      {/each}
+    </div>
+  {:else}
+    <div class="swatches">
+      {#each tokens as t (t.name)}
+        <button class="swatch token" class:current={t.name === current} class:builtin={!t.id} aria-label="Use @{t.name}" title="@{t.name} · light {t.light.slice(0, 7).toUpperCase()} · dark {t.dark.slice(0, 7).toUpperCase()}{t.id ? '' : ' (adds the theme to the document)'}" disabled={locked} onclick={() => useToken(t.name)}>
+          <span style:--light={t.light} style:--dark={t.dark} class:dark></span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+</div>
+
 {#if swatches.length}
   <div class="swatches-section">
     <div class="swatches-title">On this page</div>
@@ -315,4 +394,21 @@
   .swatch:hover span, .swatch:focus-visible span { box-shadow: 0 0 0 2px var(--border-strong); }
   .swatch.current span { box-shadow: 0 0 0 2px var(--accent); }
   .swatch:focus-visible { outline: none; }
+  /* A token: its light value on the left, its dark on the right; the theme
+     in use is the larger half. */
+  .swatch.token span { background: linear-gradient(to right, var(--light) 60%, var(--dark) 60%); }
+  .swatch.token span.dark { background: linear-gradient(to right, var(--light) 40%, var(--dark) 40%); }
+  .swatch.token span::after { display: none; }
+  .swatch.builtin { opacity: .8; }
+  .tokens-head { display: flex; align-items: center; justify-content: space-between; }
+  .token-actions { display: flex; gap: 2px; }
+  .token-actions .on { color: var(--accent); }
+  .property-icon.small { width: 22px; height: 22px; padding: 4px; }
+  .token-new { display: flex; gap: 6px; }
+  .token-new input, .token-name { flex: 1; min-width: 0; height: 26px; border: 1px solid transparent; border-radius: 5px; background: var(--bg-sunken); color: var(--fg); font-size: 12px; padding: 0 8px; outline: none; }
+  .token-new input:focus, .token-name:focus { border-color: var(--accent); }
+  .token-rows { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; }
+  .token-row { display: flex; gap: 6px; align-items: center; }
+  .token-row label { display: flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: 10px; }
+  .token-row input[type="color"] { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
 </style>

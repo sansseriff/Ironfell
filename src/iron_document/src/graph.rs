@@ -44,7 +44,9 @@ impl ProducerId {
     /// Component state machines' channels (`machine.rs`).
     pub const MACHINES: ProducerId = ProducerId(3);
     /// The first id a host producer receives.
-    pub const FIRST_HOST: ProducerId = ProducerId(4);
+    /// Colour tokens' values for the theme in use (palette.rs).
+    pub const THEME: ProducerId = ProducerId(4);
+    pub const FIRST_HOST: ProducerId = ProducerId(5);
 }
 
 /// One published value: who published it and at which of their frames.
@@ -235,8 +237,11 @@ impl Reactive {
         // anchors' positions and followers' placements (`anchor`).
         let mut derived = crate::port::derived_signals(doc);
         derived.extend(crate::anchor::derived(doc));
+        let tokens = crate::palette::leaves(doc);
         for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
-            let deps = expr.deps();
+            let mut deps = expr.deps();
+            // `@name` reads its token's colour (palette.rs).
+            deps.extend(expr.tokens().iter().filter_map(|n| tokens.get(n).copied()));
             for d in &deps {
                 self.dependents.entry(*d).or_default().insert(leaf);
             }
@@ -381,6 +386,7 @@ impl Reactive {
     /// a node to its dependents only when its own value actually changed,
     /// which is the equality cutoff.
     fn evaluate(&mut self, doc: &Document, dirty: &BTreeSet<Leaf>, primed: &BTreeSet<Leaf>) {
+        let _tokens = crate::expr::TokenScope::new(crate::palette::leaves(doc));
         let mut primed = primed.clone();
         let mut order: Vec<(u32, Leaf)> = dirty.iter().map(|l| (self.nodes[l].height, *l)).collect();
         order.sort();

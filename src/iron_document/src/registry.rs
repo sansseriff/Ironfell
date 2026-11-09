@@ -211,6 +211,20 @@ static TYPES: &[TypeSpec] = &[
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["definition", "context"]),
     },
+    // Colour tokens (palette.rs): a palette root holds named tokens, each a
+    // light and a dark colour; formulas read them as `@name`.
+    TypeSpec {
+        name: "palette",
+        facets: &[(K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["token"]),
+    },
+    TypeSpec {
+        name: "token",
+        facets: &[(K::Name, true), (K::Token, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
     // A document's context (contexts.md §2.2): rules over the built-in
     // ones, in a library. Behaviour, never drawn.
     TypeSpec {

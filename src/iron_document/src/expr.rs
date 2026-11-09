@@ -24,7 +24,7 @@ use crate::facet::LeafPath;
 use crate::id::NodeId;
 use crate::value::Value;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// A leaf address: the unit of dependency.
@@ -60,6 +60,31 @@ pub enum Expr {
     /// A function value called: `f(x)`, where `f` is a parameter or a leaf
     /// holding a function.
     Apply(Box<Expr>, Vec<Expr>),
+    /// A colour token, `@series-2` (palette.rs): the document token of that
+    /// name, in the theme in use. The graph resolves it to the token's
+    /// `token.color` leaf when it builds and evaluates.
+    Token(String),
+}
+
+thread_local! {
+    /// The tokens `@name` reads, by name, while the graph evaluates.
+    static TOKENS: std::cell::RefCell<BTreeMap<String, Leaf>> = const { std::cell::RefCell::new(BTreeMap::new()) };
+}
+
+/// The tokens formulas resolve while this lives (the graph's evaluation).
+pub struct TokenScope(BTreeMap<String, Leaf>);
+
+impl TokenScope {
+    pub fn new(tokens: BTreeMap<String, Leaf>) -> TokenScope {
+        TokenScope(TOKENS.with(|t| std::mem::replace(&mut *t.borrow_mut(), tokens)))
+    }
+}
+
+impl Drop for TokenScope {
+    fn drop(&mut self) {
+        let previous = std::mem::take(&mut self.0);
+        TOKENS.with(|t| *t.borrow_mut() = previous);
+    }
 }
 
 /// A function value: parameters and a body with no references left in it
@@ -228,6 +253,41 @@ impl Expr {
         out
     }
 
+    /// The colour tokens (`@name`) this reads.
+    pub fn tokens(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        self.walk(&mut |e| {
+            if let Expr::Token(n) = e {
+                out.push(n.clone());
+            }
+        });
+        out
+    }
+
+    /// Visit this and every subexpression.
+    pub fn walk(&self, f: &mut dyn FnMut(&Expr)) {
+        f(self);
+        match self {
+            Expr::Neg(e) | Expr::Not(e) | Expr::Get(e, _) => e.walk(f),
+            Expr::Bin(_, a, b) => {
+                a.walk(f);
+                b.walk(f);
+            }
+            Expr::If(c, a, b) => {
+                c.walk(f);
+                a.walk(f);
+                b.walk(f);
+            }
+            Expr::Call(_, args) => args.iter().for_each(|a| a.walk(f)),
+            Expr::Lambda(_, body) => body.walk(f),
+            Expr::Apply(g, args) => {
+                g.walk(f);
+                args.iter().for_each(|a| a.walk(f));
+            }
+            Expr::Lit(_) | Expr::Const(_) | Expr::Ref(_) | Expr::Var(_) | Expr::Token(_) => {}
+        }
+    }
+
     fn collect_deps(&self, out: &mut BTreeSet<Leaf>) {
         match self {
             Expr::Lit(_) | Expr::Const(_) => {}
@@ -250,7 +310,7 @@ impl Expr {
                 }
             }
             Expr::Get(e, _) => e.collect_deps(out),
-            Expr::Var(_) => {}
+            Expr::Var(_) | Expr::Token(_) => {}
             Expr::Lambda(_, body) => body.collect_deps(out),
             Expr::Apply(f, args) => {
                 f.collect_deps(out);
@@ -273,7 +333,7 @@ impl Expr {
             Expr::If(c, a, b) => Expr::If(Box::new(c.map_refs(f)), Box::new(a.map_refs(f)), Box::new(b.map_refs(f))),
             Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.map_refs(f)).collect()),
             Expr::Get(e, field) => Expr::Get(Box::new(e.map_refs(f)), field),
-            Expr::Var(_) => self.clone(),
+            Expr::Var(_) | Expr::Token(_) => self.clone(),
             Expr::Lambda(ps, body) => Expr::Lambda(ps.clone(), Box::new(body.map_refs(f))),
             Expr::Apply(g, args) => Expr::Apply(Box::new(g.map_refs(f)), args.iter().map(|a| a.map_refs(f)).collect()),
         }
@@ -292,7 +352,7 @@ impl Expr {
             Expr::If(c, a, b) => Expr::If(Box::new(c.replace_refs(f)), Box::new(a.replace_refs(f)), Box::new(b.replace_refs(f))),
             Expr::Call(name, args) => Expr::Call(name.clone(), args.iter().map(|a| a.replace_refs(f)).collect()),
             Expr::Get(e, field) => Expr::Get(Box::new(e.replace_refs(f)), field),
-            Expr::Var(_) => self.clone(),
+            Expr::Var(_) | Expr::Token(_) => self.clone(),
             Expr::Lambda(ps, body) => Expr::Lambda(ps.clone(), Box::new(body.replace_refs(f))),
             Expr::Apply(g, args) => Expr::Apply(Box::new(g.replace_refs(f)), args.iter().map(|a| a.replace_refs(f)).collect()),
         }
@@ -306,6 +366,7 @@ impl Expr {
             Expr::Ref(l) => Expr::Lit(read(*l).ok_or(EvalError::Unresolved(*l))?),
             Expr::Var(name) if params.contains(name) => self.clone(),
             Expr::Var(name) => Expr::Lit(lookup(env, name)?),
+            Expr::Token(_) => Expr::Lit(self.eval_in(read, env)?),
             Expr::Neg(e) => Expr::Neg(Box::new(e.close(read, env, params)?)),
             Expr::Not(e) => Expr::Not(Box::new(e.close(read, env, params)?)),
             Expr::Bin(op, a, b) => Expr::Bin(*op, Box::new(a.close(read, env, params)?), Box::new(b.close(read, env, params)?)),
@@ -344,6 +405,10 @@ impl Expr {
             Expr::Const(c) => Ok(Value::Number(c.value())),
             Expr::Ref(l) => read(*l).ok_or(EvalError::Unresolved(*l)),
             Expr::Var(name) => lookup(env, name),
+            Expr::Token(name) => {
+                let leaf = TOKENS.with(|t| t.borrow().get(name).copied()).ok_or_else(|| EvalError::Type(format!("no colour token @{name}")))?;
+                read(leaf).ok_or(EvalError::Unresolved(leaf))
+            }
             Expr::Lambda(params, body) => Ok(Value::Fn(std::sync::Arc::new(Closure { params: params.clone(), body: body.close(read, env, params)? }))),
             Expr::Apply(f, args) => {
                 let f = f.eval_in(read, env)?;
@@ -456,6 +521,7 @@ impl Expr {
                 write!(f, ".{field}")
             }
             Expr::Var(name) => f.write_str(name),
+            Expr::Token(name) => write!(f, "@{name}"),
             Expr::Lambda(params, body) => {
                 let paren = PREC_TERNARY < parent;
                 if paren {
@@ -917,6 +983,7 @@ enum Tok {
     /// A quantity literal (a number followed by a unit), already in SI.
     Lit(Value),
     Str(String),
+    Token(String),
     Ident(String),
     Ref(Leaf),
     Op(&'static str),
@@ -1040,6 +1107,18 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                 // takes text naming one of its options (graph.rs).
                 out.push(Tok::Str(text[start..i].to_owned()));
                 i += 1;
+            }
+            // `@series-2`: a colour token's name, letters, digits, `-`, `_`.
+            b'@' => {
+                let start = i + 1;
+                i += 1;
+                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'-' || b[i] == b'_') {
+                    i += 1;
+                }
+                if i == start {
+                    return Err(ParseError("@ needs a token name: @series-2".into()));
+                }
+                out.push(Tok::Token(text[start..i].to_owned()));
             }
             b'#' => {
                 // #<id>.<facet>.<field>; an expanded id is `#<owner>/<local>`.
@@ -1308,6 +1387,7 @@ impl Parser {
             Some(Tok::Lit(v)) => Ok(Expr::Lit(v)),
             Some(Tok::Str(s)) => Ok(Expr::Lit(Value::Str(s))),
             Some(Tok::Ref(l)) => Ok(Expr::Ref(l)),
+            Some(Tok::Token(name)) => Ok(Expr::Token(name)),
             Some(Tok::LParen) => {
                 self.pos -= 1;
                 if let Some(params) = self.lambda_params() {

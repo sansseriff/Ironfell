@@ -98,10 +98,16 @@
 {/if}
 
 {#if shown && pin}
-  <div class="previewing canvas-ui" role="status">
+  <!-- Recording into a state (orange) and previewing a transition, which
+       records nothing (blue), never look alike. -->
+  <div class="previewing canvas-ui" class:scrub={!!pin.scrub} role="status">
     <span class="dot"></span>
-    <span>Previewing {#if pin.scrub}<strong>{pin.scrub.from} → {pin.scrub.to}</strong> at {Math.round(pin.scrub.progress * 100)}%{:else}<strong>{pin.state}</strong>{/if}{#if pin.name}<span class="of"> · {pin.name}</span>{/if}</span>
-    <button class="stop" onclick={() => machines.pin(pin.def, pin.machine, null)} title="Stop previewing: show the component at rest" aria-label="Stop previewing"><X size={13} strokeWidth={2} /></button>
+    {#if pin.scrub}
+      <span>Previewing <strong>{pin.scrub.from} → {pin.scrub.to}</strong> at {Math.round(pin.scrub.progress * 100)}%<span class="of"> · nothing records</span></span>
+    {:else}
+      <span>Editing <strong>{pin.state}</strong>{#if pin.name}<span class="of"> · {pin.name}</span>{/if}<span class="of"> · edits go into this state</span></span>
+    {/if}
+    <button class="stop" onclick={() => machines.pin(pin.def, pin.machine, null)} title={pin.scrub ? "Stop previewing" : "Stop editing this state: the component shows at rest"} aria-label={pin.scrub ? "Stop previewing" : "Stop editing this state"}><X size={13} strokeWidth={2} /></button>
   </div>
 {/if}
 
@@ -151,6 +157,8 @@
   .previewing .stop { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 11px; background: rgba(0, 0, 0, 0.12); color: inherit; cursor: pointer; }
   .previewing .stop:hover { background: rgba(0, 0, 0, 0.22); }
   .previewing .stop:focus-visible { outline: 2px solid #1d1203; }
+  .previewing.scrub { background: #4aa3ff; color: #04182c; }
+  .previewing.scrub .dot { background: #04182c; }
   .toolbar {
     position: absolute;
     left: 50%;

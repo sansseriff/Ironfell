@@ -97,7 +97,8 @@
      is a press on the bar. -->
 <context name="std:timeline-tracks">
   <rule match="self" affords.select="window" chrome.lit="none"/>
-  <rule match="children type:rect" affords.select="target" affords.drag="point" affords.delete="subject" chrome.lit="shape" snap.target="no"/>
+  <rule match="children type:rect" affords.select="target" affords.drag="point" affords.delete="subject" affords.enter="open" chrome.lit="shape" snap.target="no"/>
+  <rule match="children type:path" affords.select="target" affords.drag="none" affords.delete="subject" affords.enter="open" chrome.lit="shape" snap.target="no"/>
   <rule match="children type:text" affords.select="inert" chrome.lit="none" snap.target="no"/>
 </context>
 
@@ -107,7 +108,7 @@
      deletes the key. -->
 <context name="std:timeline-keys">
   <rule match="self" affords.select="window" chrome.lit="none"/>
-  <rule match="children" affords.select="target" affords.drag="point" affords.delete="subject" chrome.lit="shape" snap.target="no"/>
+  <rule match="children" affords.select="target" affords.drag="point" affords.delete="subject" affords.enter="open" chrome.lit="shape" snap.target="no"/>
 </context>
 
 <!-- An electrical schematic (schematic.md §3), in the spirit of a basic

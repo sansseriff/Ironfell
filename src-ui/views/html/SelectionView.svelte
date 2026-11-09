@@ -4,6 +4,7 @@
   // (plans/specs/panels-and-session.md).
   import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
+  import { machines, rootOf } from "../../lib/machines.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { showIn as showPicture } from "../show_in";
   import Plus from "@lucide/svelte/icons/plus";
@@ -192,6 +193,22 @@
   function paintMode(mode: string) { return mode === "solid" ? patch({}, ["gradient"], "solid fill") : patch({ "gradient.kind": mode }, [], `${mode} fill`); }
   // Component authoring (component-authoring.md): ports, inputs, wrapping,
   // renaming, each one transaction through `document_author`.
+  // A key on a state lane: ways into its component's state editor.
+  let stateKey = $state<{ state: string; from: string | null } | null>(null);
+  $effect(() => {
+    const node = inspected?.type === "key" ? inspected.node : null;
+    stateKey = null;
+    if (node) void doc.command<{ ok: boolean; state: string | null; from: string | null }>({ op: "state_key", key: node }).then((r) => { if (r.ok && r.state && inspected?.node === node) stateKey = { state: r.state, from: r.from }; });
+  });
+  // The first state: the machine, its new state recorded into, the editor open.
+  async function addFirstState() {
+    const def = inspected?.main?.def;
+    if (!def) return;
+    const r = await doc.command<{ ok: boolean; error?: string; state?: string }>({ op: "author", verb: "add_state", args: JSON.stringify({ def }) });
+    if (!r.ok) { setError = r.error ?? "Could not add a state"; return; }
+    await machines.open(def, { kind: "state", state: r.state ?? null });
+    await refresh();
+  }
   async function author(verb: string, args: Record<string, unknown>) {
     setError = "";
     try {
@@ -256,6 +273,15 @@
   {#if inspected}
     <div class="inspector">
       <div class="title"><strong>{inspected.name ?? inspected.type}</strong> <span class="mono">{inspected.type} {inspected.node}</span></div>
+      {#if machines.pinned && !machines.pinned.scrub && machines.view?.main_of && rootOf(inspected.node) === machines.view.main_of}
+        <p class="recording" role="status"><span class="dot"></span><span>Number edits go into <strong>{machines.pinned.state}</strong>; other edits (colour, text) change every state.</span></p>
+      {/if}
+      {#if stateKey}
+        <div class="state-key">
+          {#if stateKey.from}<Button small variant="outline" onclick={() => machines.openKey(inspected!.node, "band")} title="Its length, easing and slices are the component's: every instance's {stateKey.from} → {stateKey.state} changes">Edit transition {stateKey.from} → {stateKey.state}…</Button>{/if}
+          <Button small variant="outline" onclick={() => machines.openKey(inspected!.node, "lane")} title="Edit the look of {stateKey.state} (every instance's)">Edit state {stateKey.state}…</Button>
+        </div>
+      {/if}
       {#if setError}<p class="error">{setError}</p>{/if}
       {#if doc.selection.length > 1}<p class="selection-note">{doc.selection.length} selected · editing the first item</p>{/if}
       {#snippet portEditor(p: PortInfo, editable: boolean)}
@@ -296,34 +322,17 @@
               {/each}
             </div>
             <div class="row"><button onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture">+ input</button><span class="hint">Ports: the port tool, on the main</span></div>
-            <!-- States (machines.md §6, §9 Q8): Add state makes the machine (a `state`
-                 input, its states, one transition); clicking a state pins it on the
-                 main, and number edits made while it is pinned become its pose. -->
-            <div class="states" data-section="states">
-              <div class="subheading states-head"><span>States</span><Button small variant="outline" onclick={() => author("add_state", { def: inspected!.main!.def })} title="Add a state: edits made while it is selected here become its look; instances animate between states">+ State</Button></div>
-              {#each inspected.main.machines ?? [] as m (m.id)}
-                <div class="state-chips" role="group" aria-label="States of {m.port}">
-                  {#each m.states as st (st.id)}
-                    <button class="state-chip" class:pinned={m.pinned === st.name} aria-pressed={m.pinned === st.name} title={m.pinned === st.name ? "Previewing: edits shape this state. Click to stop." : "Preview this state and edit its look"}
-                      onclick={() => author("pin_state", m.pinned === st.name ? { def: inspected!.main!.def } : { def: inspected!.main!.def, machine: m.id, state: st.name })}>{st.name}</button>
-                  {/each}
-                </div>
-                {#if m.pinned}
-                  {@const pinnedState = m.states.find((x) => x.name === m.pinned)}
-                  <div class="pinned-banner" role="status"><span class="dot"></span>Previewing <strong>{m.pinned}</strong>: edit the parts to shape this state.
-                    {#if pinnedState}<input aria-label="Rename state {m.pinned}" value={m.pinned} onchange={(e) => author("rename_state", { state: pinnedState.id, name: e.currentTarget.value })} />{/if}
-                  </div>
-                {/if}
-                {#each m.transitions as t (t.id)}
-                  <div class="transition-row">
-                    <span class="mono" title="From {t.from} to {t.to} (* is any state)">{t.from === "*" && t.to === "*" ? "Any change" : `${t.from} → ${t.to}`}</span>
-                    <label class="ms" title="How long it takes">
-                      <input inputmode="decimal" aria-label="Duration of {t.name}" value={t.ms ?? ""} onchange={(e) => patch({ "transition.ms": e.currentTarget.value }, [], "transition length", t.id)} /><span>ms</span>
-                    </label>
-                    <EasingField label="Easing of {t.name}" value={t.ease} onChange={(v) => patch({ "transition.ease": v }, [], "transition easing", t.id)} />
-                  </div>
-                {/each}
-              {/each}
+            <!-- States (machines.md §6): a doorway into the state editor, which
+                 opens in the timeline panel; the inspector stays for values. -->
+            <div class="states-door" data-section="states">
+              {#if inspected.main.machines?.length}
+                {@const m0 = inspected.main.machines[0]}
+                <span class="door-label">States</span><span class="door-names" title={m0.states.map((s) => s.name).join(", ")}>{m0.states.map((s) => s.name).join(" · ")}</span>
+                <Button small variant="outline" onclick={() => machines.open(inspected!.main!.def)} title="Edit this component's states and their timing (opens in the timeline panel)">Edit states…</Button>
+              {:else}
+                <span class="door-label">States</span><span class="door-names hint">none</span>
+                <Button small variant="outline" onclick={addFirstState} title="A state is a look the component can be in; instances move between them">+ Add state</Button>
+              {/if}
             </div>
             <!-- Figma's "Resizing" (frame-constraints.md §4): the picture gets a box
                  of its parts' bounds; each part says how it follows the box. -->
@@ -340,6 +349,9 @@
         {:else if section === "component" && (inspected.component)}
           <div class="property-section" data-section="component">
             <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<button class="property-icon" aria-label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach}><Unlink size={14} strokeWidth={1.5} /></button>{/if}</div>
+            {#if machines.view?.entity === inspected.component.entity && machines.view.machines.length}
+              <div class="states-door"><span class="door-label">States</span><span class="door-names">{machines.view.machines[0].states.map((s) => s.name).join(" · ")}</span><Button small variant="outline" onclick={() => machines.open(machines.view!.def)} title="Edit the component's states and timing: every instance changes">Edit states…</Button></div>
+            {/if}
             {#if inspected.component.inputs.some((f: Field) => f.kind === "series")}
               <div class="row"><Button small variant="outline" onclick={pasteData} title="Paste columns copied from a spreadsheet or CSV: the first into the first series input (xs), the next into ys, … A header like “λ (nm)” sets the unit and the axis label. Replaces their formulas."><ClipboardPaste size={13} strokeWidth={1.5} /> Paste data</Button><span class="hint">columns from a spreadsheet or CSV</span></div>
             {/if}
@@ -532,22 +544,12 @@
 
 <style>
   .properties { padding: 0 !important; font-size: 12px; }
-  .states { padding: 8px 16px; display: flex; flex-direction: column; gap: 8px; }
-  .states-head { display: flex; justify-content: space-between; align-items: center; margin: 0; }
-  .state-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-  .state-chip { border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--fg); font-size: 11px; padding: 3px 10px; cursor: pointer; }
-  .state-chip:hover { border-color: var(--border-strong); }
-  .state-chip.pinned { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
-  .state-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .pinned-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg); font-size: 11px; }
-  .pinned-banner .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-  .pinned-banner input { flex: 1 0 100%; height: 24px; border: 1px solid transparent; border-radius: 4px; background: var(--bg); color: var(--fg); font-size: 11px; padding: 0 6px; outline: none; }
-  .pinned-banner input:focus { border-color: var(--accent); }
-  .transition-row { display: grid; grid-template-columns: 1fr 72px; gap: 6px; align-items: center; font-size: 11px; }
-  .transition-row :global(.easing-trigger) { grid-column: 1 / -1; }
-  .transition-row .ms { display: flex; align-items: center; height: 26px; border-radius: 5px; background: var(--bg-sunken); padding-right: 6px; }
-  .transition-row .ms input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font-size: 12px; padding: 0 6px; outline: none; }
-  .transition-row .ms span { color: var(--fg-faint); }
+  .states-door { display: flex; align-items: center; gap: 8px; min-height: 30px; font-size: 12px; }
+  .door-label { color: var(--fg-muted); font-size: 11px; }
+  .door-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recording { display: flex; align-items: flex-start; gap: 6px; margin: 0 12px 8px; padding: 6px 8px; border-radius: 5px; background: rgba(255, 153, 51, 0.16); font-size: 11px; line-height: 1.35; }
+  .recording .dot { flex: none; width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: #ff9933; }
+  .state-key { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; }
   .resizable { align-items: center; gap: 8px; font-size: 12px; }
   .resizable input { accent-color: var(--accent); margin: 0; }
   .constraints-head { margin-top: 12px; }

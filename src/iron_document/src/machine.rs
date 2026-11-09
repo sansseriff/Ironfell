@@ -484,6 +484,43 @@ pub fn rename_state_ops(doc: &Document, state: NodeId, name: &str) -> Result<Vec
     Ok(ops)
 }
 
+/// Delete a state, and what names it: transitions from or to it go, the
+/// port's choice loses it, and a default that was it becomes the first
+/// state left. A machine keeps at least one state.
+pub fn delete_state_ops(doc: &Document, state: NodeId) -> Result<Vec<crate::op::Op>, String> {
+    use crate::op::Op;
+    use crate::value::Slot;
+    let name = name_of(doc, state).ok_or("not a state")?;
+    let machine = doc.live(state).and_then(|n| n.parent).ok_or("a state belongs to a machine")?;
+    let def = doc.live(machine).and_then(|n| n.parent).ok_or("a machine belongs to a definition")?;
+    let names: Vec<String> = state_names(doc, machine).into_iter().filter(|n| *n != name).collect();
+    let Some(first) = names.first().cloned() else { return Err("a machine keeps at least one state".into()) };
+    let mut ops = vec![Op::Delete { id: state }];
+    for t in children(doc, machine, "transition") {
+        let ends = ["from", "to"].map(|e| doc.leaf(t, format!("transition.{e}").parse().expect("declared")).and_then(|s| s.constant()).and_then(|v| v.as_str()).map(str::to_owned));
+        if ends.iter().any(|e| e.as_deref() == Some(name.as_str())) {
+            ops.push(Op::Delete { id: t });
+        }
+    }
+    if let Some(spec) = state_port(doc, def, machine) {
+        ops.push(Op::Set { id: spec, path: "port.datatype".parse().expect("declared"), slot: Slot::Const(Value::Str(choice_of(&names))) });
+        if doc.get::<crate::facet::Port>(spec).and_then(|p| p.signal.constant()).and_then(|v| v.as_str()) == Some(name.as_str()) {
+            ops.push(Op::Set { id: spec, path: "port.signal".parse().expect("declared"), slot: Slot::Const(Value::Enum(first)) });
+        }
+    }
+    Ok(ops)
+}
+
+/// Make a state the machine's default: the state port's value where
+/// nothing sets it (new instances start in it).
+pub fn set_default_state_ops(doc: &Document, state: NodeId) -> Result<Vec<crate::op::Op>, String> {
+    let name = name_of(doc, state).ok_or("not a state")?;
+    let machine = doc.live(state).and_then(|n| n.parent).ok_or("a state belongs to a machine")?;
+    let def = doc.live(machine).and_then(|n| n.parent).ok_or("a machine belongs to a definition")?;
+    let spec = state_port(doc, def, machine).ok_or("the machine follows no port")?;
+    Ok(vec![crate::op::Op::Set { id: spec, path: "port.signal".parse().expect("declared"), slot: crate::value::Slot::Const(Value::Enum(name)) }])
+}
+
 /// A state pinned for editing on a main (session only): the main shows its
 /// pose, and number edits to the component's parts record into it.
 #[derive(Clone, Debug, PartialEq)]

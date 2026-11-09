@@ -489,27 +489,32 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
             // A state lane (machines.md §6): a stretch per state, named,
             // from its key to the next, under the bar (which stays, clear,
             // for dragging the clip). An unkeyed one holds all along.
-            let stretch = |push: &mut dyn FnMut(&'static str, String, &str, Vec<Facet>, Option<NodeId>), key: String, from: String, to: String, name: &str, index: usize, faint: bool| {
+            // A keyed stretch stands for its key (in the tracks: a click
+            // selects that occurrence, a drag moves it, a double-click opens
+            // the state); one before the first key, or an unkeyed lane's, is
+            // static.
+            let stretch = |push: &mut dyn FnMut(&'static str, String, &str, Vec<Facet>, Option<NodeId>), key: String, from: String, to: String, name: &str, index: usize, faint: bool, of: Option<NodeId>| {
                 let mut c = LANE[index % LANE.len()];
                 if faint {
                     c[3] *= 0.55;
                 }
-                push("backdrop", format!("lane {key}"), "rect", vec![place(&at(&from), &ry(row.y + 3.0)), sized(&format!("max(({to}) - ({from}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(c)], None);
+                let group = if of.is_some() { "tracks" } else { "backdrop" };
+                push(group, format!("lane {key}"), "rect", vec![place(&at(&from), &ry(row.y + 3.0)), sized(&format!("max(({to}) - ({from}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(c)], of);
                 let mut f = vec![place(&format!("{} + 7", at(&from)), &ry(row.y + 4.0))];
                 f.extend(words(name, 11.0, 600.0));
                 f.push(paint(if plan.light { [0.12, 0.12, 0.14, 0.92] } else { [1.0, 1.0, 1.0, 0.92] }));
-                push("backdrop", format!("lane label {key}"), "text", f, None);
+                push(group, format!("lane label {key}"), "text", f, None);
             };
             if let Some((state, index)) = &p.rest {
-                stretch(&mut push, format!("{} {}", o.target, p.prop), "0".into(), lit(plan.end), state, *index, true);
+                stretch(&mut push, format!("{} {}", o.target, p.prop), "0".into(), lit(plan.end), state, *index, true, None);
             }
             for s in &p.segments {
                 if let (Some((name, index)), Some((first, ..))) = (&s.before, s.states.first()) {
-                    stretch(&mut push, format!("before {} {}", s.clip, o.target), "0".into(), key_x(s, *first), name, *index, true);
+                    stretch(&mut push, format!("before {} {}", s.clip, o.target), "0".into(), key_x(s, *first), name, *index, true, None);
                 }
                 for (i, (k, name, index)) in s.states.iter().enumerate() {
                     let to = s.states.get(i + 1).map_or_else(|| lit(plan.end), |(n, ..)| key_x(s, *n));
-                    stretch(&mut push, format!("{k} {}", o.target), key_x(s, *k), to, name, *index, false);
+                    stretch(&mut push, format!("{k} {}", o.target), key_x(s, *k), to, name, *index, false, Some(*k));
                 }
             }
             for s in &p.segments {
@@ -523,7 +528,10 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 // retimes the clip (it projects the clip, so its start is
                 // the leaf the drag moves); Delete deletes the clip.
                 let x = at(&format!("{}.timing.start + {} + {lo}", s.clip, lit(s.offset)));
+                // A state lane's stretches stand in for its bar.
+                if s.states.is_empty() || plan.errors.contains(&s.clip) {
                 push("tracks", format!("bar {} {}", s.clip, o.target), "rect", vec![place(&x, &ry(row.y + 3.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
+                }
                 if s.states.is_empty() {
                     let mut f = vec![place(&format!("{x} + 8"), &ry(row.y + 4.0))];
                     f.extend(words(&s.label, 11.0, 500.0));

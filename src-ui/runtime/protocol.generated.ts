@@ -13,6 +13,7 @@ export type DocumentCommand =
   | { op: 'narrative_write'; source: string; after: string; markdown: string; actor: string }
   | { op: 'narrative_rewrite'; block: string; markdown: string; actor: string }
   | { op: 'timeline_axis'; fields: string }
+  | { op: 'state_key'; key: string }
   | { op: 'machine_view'; node: string }
   | { op: 'timeline_rows'; panel: string }
   | { op: 'timeline_key'; action: string; clip: string }
@@ -98,6 +99,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'narrative_write': return { fn: command.op, args: [command.source, command.after, command.markdown, command.actor] };
     case 'narrative_rewrite': return { fn: command.op, args: [command.block, command.markdown, command.actor] };
     case 'timeline_axis': return { fn: command.op, args: [command.fields] };
+    case 'state_key': return { fn: command.op, args: [command.key] };
     case 'machine_view': return { fn: command.op, args: [command.node] };
     case 'timeline_rows': return { fn: command.op, args: [command.panel] };
     case 'timeline_key': return { fn: command.op, args: [command.action, command.clip] };
@@ -218,4 +220,5 @@ export type EngineEvent =
   | { ty: 'linkDrop'; spec: string; node: string; x: number; y: number }
   | { ty: 'focus'; panel: string; palette: string; keys: string }
   | { ty: 'renderLost'; kind: string; error: string }
+  | { ty: 'open'; panel: string; node: string; name: string; stands_for: string | null }
 ;

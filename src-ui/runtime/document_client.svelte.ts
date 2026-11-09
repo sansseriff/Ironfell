@@ -149,6 +149,8 @@ export class DocumentClient {
   /** A link dropped on a main's part, waiting for its mapping
    *  (component-authoring.md §3; `lib/LinkPopover.svelte`). */
   linkDrop: { spec: string; node: string; x: number; y: number } | null = $state(null);
+  /** The last double-click that asked to open something (EngineEvent `open`). */
+  opened: { panel: string; node: string; name: string; standsFor: string | null; at: number } | null = $state(null);
   /** A pending merge question from Link (ECM I5): the person picks the survivor. */
   question: any = $state(null);
 

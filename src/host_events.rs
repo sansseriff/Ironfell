@@ -36,6 +36,12 @@ pub enum EngineEvent {
     /// error (`render_loss`). `kind` is wgpu's error type (`DeviceLost`,
     /// `Validation`, `OutOfMemory`, `Internal`). The main world still runs.
     RenderLost { kind: String, error: String },
+    /// A double-click on a node whose context says entering opens it
+    /// (`affords.enter="open"`): the shell opens what it stands for. `node`
+    /// is the clicked node, `name` its name (what kind of piece it is, as a
+    /// timeline names its pieces: `band <key> …`), `stands_for` what it
+    /// projects, if anything.
+    Open { panel: String, node: String, name: String, stands_for: Option<String> },
 }
 
 #[derive(Debug, Clone, Serialize)]

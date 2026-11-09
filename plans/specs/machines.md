@@ -451,3 +451,53 @@ the agent can tell it caught an instance mid-way.
   there; edit the main); the panel's scrub on every instance in the view (it shows on
   the main); adding or removing explicit graph edges by dragging.
 
+**2026-11-09: the state editor as a drill-in (two council rounds, design).**
+
+The rule (the user's): what you need most of the time lives in panels that stay in
+view; what belongs to one flow (configuring a component's behaviour) lives in a mode you
+enter and leave on purpose. Both rounds of the council chose the timeline drill-in over a
+panel on the right and over one on the left: the editor must leave Layers, the canvas,
+the inspector and the Model chat in view while a state is shaped, and timing is
+horizontal (rows against milliseconds).
+
+- **Always in view:** each instance's state over time (lanes; the row's readout), an
+  instance's state as an input value with ◇ (inspector), what the canvas is showing
+  (the chip). Retiming one occurrence is ordinary timeline work: a state key's
+  inspector (Span), never the editor.
+- **The editor** (`StateEditor.svelte`) is the timeline panel drilled into one
+  component, at its own size; it never resizes the dock. Entered from the inspector
+  (**Edit states…**, or **+ Add state** on a main with none), a double-click on a
+  lane's stretch (that state) or a transition band (that pair), a lane's readout, or a
+  state key's inspector (**Edit transition a → b…**, **Edit state b…**). Left with
+  **Done** or the breadcrumb (the preview ends, the clock is back). Selection never
+  switches it; selecting another component offers **Edit its states**.
+- **One header row:** `‹ Timeline › component`, the states as pills (click: edit its
+  look; double-click or ⋯: rename; ⋯: make default, delete; a house marks the default)
+  with each pair's transitions as two small arrows between them (dashed: shared, faint:
+  none), + (add a state), Graph (a pane at the left, automatic when the machine
+  branches), Done.
+- **A state shows the pose table:** a row per channel, a column per state, the edited
+  state's column editable; edits on the canvas record into it ("Editing *hidden*",
+  orange, in the pill, the table, the chip and a strip at the top of the inspector:
+  "Number edits go into *hidden*; other edits (colour, text) change every state").
+  Selecting outside the main pauses the recording ("Recording into *hidden* paused ·
+  Return to main"); it never resumes silently.
+- **A transition shows the timeline's grammar:** in the corner the pair, ▶, length and
+  easing; above the ruler its scope (Shared · any change, with **Customize this pair**;
+  or This pair's own, with **Use shared**); a row per channel with its from → to
+  values, its slice as a bar to drag, and a popover (⋯) with exact start and end in
+  ms, its easing, and Follow the transition. Scrubbing or playing previews only
+  (blue chip, "nothing records").
+- **Double-click opens** (contexts.md): `affords.enter="open"` makes a double-click
+  send the shell an `Open` event naming the node and what it projects; the timeline's
+  tracks and keys declare it, and a state lane's stretches now stand for their keys
+  (a click selects that occurrence, a drag moves it).
+- Engine: `state_key` (a key's component, machine, state and the one before),
+  `machine_view` by definition with each state's pose, `delete_state_ops`,
+  `set_default_state_ops`. `tests/machine_authoring.rs`
+  (`a_state_is_made_default_and_deleted`). In the app: + Add state, shape (Trim End 0
+  recorded), rename, pause and return, a pair's tracks, Done; a band's double-click
+  opens its pair and a stretch's its state.
+- Not yet: several machines on one component show one at a time with no chooser yet;
+  "Duplicate state"; an instance's own timing from the editor.
+

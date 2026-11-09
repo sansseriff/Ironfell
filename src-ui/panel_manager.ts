@@ -276,6 +276,11 @@ export class PanelManager {
       case 'convertQuestion':
         this.docClient.convertQuestion = data.question;
         break;
+      case 'open':
+        // A double-click asked to open what a node stands for (its
+        // context's `affords.enter="open"`): the view that handles it reads this.
+        this.docClient.opened = { panel: data.panel, node: data.node, name: data.name, standsFor: data.stands_for ?? null, at: performance.now() };
+        break;
       case 'linkDrop':
         this.docClient.linkDrop = { spec: data.spec, node: data.node, x: data.x, y: data.y };
         break;

@@ -247,3 +247,47 @@ fn scrubbing_records_nothing_and_events_report_their_states() {
     assert_eq!((r.from.as_str(), r.to.as_str()), ("default", "state_2"));
     assert!(r.progress > 0.0 && r.progress < 1.0);
 }
+
+/// The state menu: making a state the default, and deleting one (its
+/// transitions go, the port's choice loses it, a default moves on).
+#[test]
+fn a_state_is_made_default_and_deleted() {
+    let mut store = Store::new();
+    let ids = store.document().next_ids(4);
+    let [library, def, template, dot] = ids[..] else { unreachable!() };
+    let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let mut t = Template::default();
+    t.notation = Slot::Const(Value::Str("free".into()));
+    store
+        .apply(tx(
+            "card",
+            vec![
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k(0), facets: vec![] },
+                Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: k(0), facets: vec![named("card")] },
+                Op::Create { id: template, ty: ty("template"), parent: Some(def), order: k(0), facets: vec![t.wrap()] },
+                Op::Create { id: dot, ty: ty("rect"), parent: Some(template), order: k(0), facets: vec![Transform2d::default().wrap(), Size::default().wrap(), Appearance::default().wrap(), named("dot")] },
+            ],
+        ))
+        .unwrap();
+    let (ops, _) = machine::add_state_ops(store.document(), def).unwrap();
+    store.apply(tx("add", ops)).unwrap();
+    let m = machine::machines(store.document(), def)[0].0;
+    let state = |s: &Store, n: &str| s.document().children(m).iter().copied().find(|&c| s.document().get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(n)).unwrap();
+    let spec = store.document().children(def).iter().copied().find(|&c| store.document().get::<Port>(c).is_some()).unwrap();
+    let ops = machine::set_default_state_ops(store.document(), state(&store, "state_2")).unwrap();
+    store.apply(tx("default", ops)).unwrap();
+    assert_eq!(store.document().get::<Port>(spec).unwrap().signal.constant(), Some(&Value::Enum("state_2".into())));
+    // Own timing for default → state_2, then delete state_2: the transition goes too.
+    {
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        let (ops, _) = machine::add_transition_ops(store.document(), &read, def, m, "default", "state_2").unwrap();
+        store.apply(tx("own", ops)).unwrap();
+    }
+    let ops = machine::delete_state_ops(store.document(), state(&store, "state_2")).unwrap();
+    store.apply(tx("delete", ops)).unwrap();
+    assert_eq!(machine::state_names(store.document(), m), vec!["default".to_owned()]);
+    assert_eq!(store.document().get::<Port>(spec).unwrap().datatype.constant(), Some(&Value::Str("choice(default)".into())));
+    assert_eq!(store.document().get::<Port>(spec).unwrap().signal.constant(), Some(&Value::Enum("default".into())));
+    assert_eq!(store.document().children(m).iter().filter(|&&c| store.document().live(c).is_some_and(|n| n.ty.name() == "transition")).count(), 1, "the pair's own transition went with it");
+    assert!(machine::delete_state_ops(store.document(), state(&store, "default")).is_err(), "the last state stays");
+}

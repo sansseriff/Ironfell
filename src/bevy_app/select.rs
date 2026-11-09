@@ -2772,6 +2772,16 @@ pub fn select_tool_system(
             }
             // A double-click on a selected node enters it.
             let dbl = tool.last_click.is_some_and(|(t, p, id)| now - t <= tol.double_click && p.distance(pointer.screen) <= DOUBLE_CLICK.1 && id == chain[k]);
+            if dbl && sel.selected.contains(&chain[k]) && cx.values(&chain, k).is(Field::ENTER, "open") {
+                // Its context says entering opens it: the shell opens what
+                // it stands for (a timeline band, its transition).
+                tool.last_click = None;
+                let doc = store.0.document();
+                let name = doc.get::<iron_document::facet::Name>(chain[k]).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                let stands_for = doc.relations_from(chain[k]).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to.to_string());
+                events.push(crate::host_events::EngineEvent::Open { panel: view.panel.clone(), node: chain[k].to_string(), name, stands_for });
+                break 'press;
+            }
             if dbl && k + 1 < chain.len() && sel.selected.contains(&chain[k]) {
                 // Entering stops only on a target: a timeline bar's rect is
                 // a part of it, its end values are targets.

@@ -1,22 +1,29 @@
-// The machine panel's data (machines.md §6), shared by the timeline's
-// machine panel and the canvas's "Previewing" chip: the engine's
-// `machine_view` for the selection, polled while anything uses it. The
-// engine answers without asking for frames, so polling costs no rendering.
+// Components' states (plans/specs/machines.md §6): the state editor's data
+// and its mode, shared by the timeline panel (where the editor opens, as a
+// drill-in), the inspector (its doorway) and the canvas chip.
+//
+// The editor is a mode entered on purpose (Edit states…, a double-click on
+// a lane or a transition band) and left on purpose (Done, the breadcrumb).
+// It is bound to one component; selection never switches it. The engine's
+// `machine_view` answers without asking for frames, so polling it costs no
+// rendering.
 import { controllerManager } from "../controller-manager.svelte";
 
 export type Tween = { id: string; channel: string | null; start: number | null; end: number | null; ease: string | null; shaped: boolean };
 export type Transition = { id: string; name: string | null; from: string | null; to: string | null; ms: number | null; ease: string | null; tweens: Tween[]; ms_formula?: boolean };
 export type Pair = { from: string; to: string; transition: string | null; ms: number | null };
+export type State = { id: string; name: string | null; pose: Record<string, number | null>; own: string[] };
 export type Machine = {
   id: string;
   port: string;
-  states: { id: string; name: string | null }[];
+  states: State[];
   transitions: Transition[];
   pairs: Pair[];
   layout: "strip" | "graph";
   /** States in strip order, and whether the last runs back to the first. */
   order: [string[], boolean];
   pinned: string | null;
+  default: string | null;
   current: { state: string | null; transition: string | null; progress: number | null; from: string | null; to: string | null } | null;
 };
 export type MachineView = {
@@ -28,38 +35,61 @@ export type MachineView = {
   entity: string | null;
   machines: Machine[];
   channels: { id: string; name: string; rest: number }[];
-  /** The component's main (for Edit main from an instance). */
+  /** The component's main. */
   main_of: string | null;
 };
 export type Pin = { def: string; name: string | null; machine: string; state: string; scrub: { from: string; to: string; progress: number } | null };
+/** What the editor shows: a state's look, or a transition's timing. */
+export type Focus = { kind: "state"; state: string | null } | { kind: "pair"; from: string; to: string };
+
+type Reply = { ok: boolean; view: MachineView | null; pinned: Pin | null };
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** The main a node is in (a main's part is `#main/local`). */
+export const rootOf = (id: string | undefined) => (id ?? "").split("/")[0];
 
 class Machines {
+  /** The component being edited, or null: the timeline shows the clock. */
+  editing: { def: string } | null = $state(null);
+  /** The edited component's machines (or, not editing, the selection's). */
   view: MachineView | null = $state(null);
+  /** The component the selection is in, while editing another. */
+  selected: MachineView | null = $state(null);
   pinned: Pin | null = $state(null);
+  /** Per machine: what the editor shows. */
+  focus: Record<string, Focus> = $state({});
+  /** A state whose recording paused when the selection left its main. */
+  paused: { def: string; machine: string; state: string } | null = $state(null);
+  /** The graph pane: shown automatically for a branching machine, or chosen. */
+  graph: "auto" | "on" | "off" = $state("auto");
   #users = 0;
   #timer: ReturnType<typeof setInterval> | null = null;
   #pending = false;
-  /** The main last seen selected, and its definition. */
-  #lastMain: { main: string; def: string } | null = null;
-  // The panel's session choices, kept while the panel closes and opens.
-  layoutChoice: "auto" | "strip" | "graph" = $state("auto");
-  chosen: Record<string, { from: string; to: string }> = $state({});
+  /** The selection when the state was pinned: only a change away pauses. */
+  #pinnedWith: string | null = null;
 
   async read() {
     if (this.#pending) return;
     this.#pending = true;
     try {
       const doc = controllerManager.docClient;
-      const r = await doc.command<{ ok: boolean; view: MachineView | null; pinned: Pin | null }>({ op: "machine_view", node: doc.selection[0] ?? "" });
-      if (r.ok) {
-        if (JSON.stringify(r.view) !== JSON.stringify(this.view)) this.view = r.view;
-        if (JSON.stringify(r.pinned) !== JSON.stringify(this.pinned)) this.pinned = r.pinned;
-        // Leaving a main lets go of a state previewed on it, so later edits
-        // there are not recorded into a state you can no longer see.
-        const main = r.view?.main ? { main: r.view.main, def: r.view.def } : null;
-        const left = this.#lastMain && this.#lastMain.main !== main?.main ? this.#lastMain : null;
-        this.#lastMain = main;
-        if (left && r.pinned?.def === left.def) await this.pin(left.def, r.pinned.machine, null);
+      const sel = doc.selection[0] ?? "";
+      const r = await doc.command<Reply>({ op: "machine_view", node: this.editing?.def ?? sel });
+      if (!r.ok) return;
+      if (!same(r.view, this.view)) this.view = r.view;
+      if (!same(r.pinned, this.pinned)) this.pinned = r.pinned;
+      if (this.editing) {
+        const s = sel ? await doc.command<Reply>({ op: "machine_view", node: sel }) : null;
+        const other = s?.ok && s.view && s.view.def !== this.editing.def ? s.view : null;
+        if (!same(other, this.selected)) this.selected = other;
+        // Recording follows the main: selecting outside it pauses a
+        // recording state (said in the editor; resuming is explicit).
+        const main = r.view?.main_of;
+        const inMain = !!main && rootOf(sel) === main;
+        if (inMain) this.#pinnedWith = sel;
+        if (r.pinned && !r.pinned.scrub && r.pinned.def === this.editing.def && !inMain && sel !== this.#pinnedWith) {
+          this.paused = { def: r.pinned.def, machine: r.pinned.machine, state: r.pinned.state };
+          await this.pin(r.pinned.def, r.pinned.machine, null);
+        }
       }
     } catch {
       // No engine session yet.
@@ -82,8 +112,41 @@ class Machines {
     };
   }
 
+  /** Open the editor on a component, showing `focus` of its first machine. */
+  async open(def: string, focus?: Focus, machine?: string) {
+    this.editing = { def };
+    this.paused = null;
+    this.selected = null;
+    await this.read();
+    const m = machine ?? this.view?.machines[0]?.id;
+    if (m && focus) {
+      this.focus = { ...this.focus, [m]: focus };
+      if (focus.kind === "state" && focus.state) await this.pin(def, m, focus.state);
+    }
+  }
+
+  /** Leave the editor: preview off, the clock back. */
+  async close() {
+    const p = this.pinned;
+    this.editing = null;
+    this.paused = null;
+    this.selected = null;
+    if (p) await this.pin(p.def, p.machine, null);
+    await this.read();
+  }
+
+  /** Back to the paused state: select its main and record into it again. */
+  async resume() {
+    const p = this.paused;
+    const main = this.view?.main_of;
+    if (!p) return;
+    if (main) await controllerManager.docClient.command({ op: "narrative_probe", node: main, action: "select" });
+    this.paused = null;
+    await this.pin(p.def, p.machine, p.state);
+  }
+
   async author(verb: string, args: Record<string, unknown>) {
-    const r = await controllerManager.docClient.command<{ ok: boolean; error?: string; made?: string }>({ op: "author", verb, args: JSON.stringify(args) });
+    const r = await controllerManager.docClient.command<{ ok: boolean; error?: string; made?: string; state?: string }>({ op: "author", verb, args: JSON.stringify(args) });
     await this.read();
     return r;
   }
@@ -96,7 +159,17 @@ class Machines {
 
   /** Pin `state` on the main (or unpin with `null`), optionally showing a moment of a transition. */
   pin(def: string, machine: string, state: string | null, scrub?: { from: string; to: string; progress: number }) {
+    this.#pinnedWith = controllerManager.docClient.selection[0] ?? "";
     return this.author("pin_state", state === null ? { def } : { def, machine, state, ...(scrub ? { scrub } : {}) });
+  }
+
+  /** What a double-click on the timeline opened: a state key's band (its
+   *  transition) or stretch (its state). */
+  async openKey(key: string, part: "band" | "lane") {
+    const r = await controllerManager.docClient.command<{ ok: boolean; def: string; machine: string; state: string | null; from: string | null }>({ op: "state_key", key });
+    if (!r.ok || !r.state) return;
+    if (part === "band" && r.from) await this.open(r.def, { kind: "pair", from: r.from, to: r.state }, r.machine);
+    else await this.open(r.def, { kind: "state", state: r.state }, r.machine);
   }
 }
 

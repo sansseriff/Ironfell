@@ -699,6 +699,8 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                 let (ops, t) = iron_document::machine::add_transition_ops(doc, &read, id("def")?, id("machine")?, &s("from"), &s("to"))?;
                 ("add transition".into(), ops, Some(t))
             }
+            "delete_state" => ("delete state".into(), iron_document::machine::delete_state_ops(doc, id("state")?)?, None),
+            "set_default_state" => ("set default state".into(), iron_document::machine::set_default_state_ops(doc, id("state")?)?, None),
             "add_tween" => {
                 let (ops, w) = iron_document::machine::add_tween_ops(doc, id("transition")?, a.get("channel").and_then(|v| v.as_str()).unwrap_or(""))?;
                 ("add tween".into(), ops, Some(w))
@@ -2904,7 +2906,10 @@ pub fn machine_view(app: &mut WorkerApp, node: String) -> String {
         let entity = if main.is_some() { None } else {
             node.and_then(|n| if doc.live(n).is_some_and(|x| x.ty.name() == "entity") { Some(n) } else { iron_document::composition::figured_by(doc, n) })
         };
-        let def = main.and_then(|m| expand::main_definition(doc, m)).or_else(|| entity.and_then(|e| expand::linked_definition(doc, e)));
+        // A definition named directly: the editor opened on a component.
+        let named_def = node.filter(|&n| doc.live(n).is_some_and(|x| x.ty.name() == "definition"));
+        let entity = if named_def.is_some() { None } else { entity };
+        let def = named_def.or_else(|| main.and_then(|m| expand::main_definition(doc, m))).or_else(|| entity.and_then(|e| expand::linked_definition(doc, e)));
         let Some(def) = def else { return Ok(serde_json::json!({"ok": true, "view": null, "pinned": pinned})) };
         let now = store.time();
         let machines: Vec<serde_json::Value> = machine::machines(doc, def)
@@ -2927,7 +2932,15 @@ pub fn machine_view(app: &mut WorkerApp, node: String) -> String {
                         pairs.push(serde_json::json!({"from": a, "to": b, "transition": p.as_ref().map(|p| machine::copy_source(p.transition).to_string()), "ms": p.as_ref().map(|p| p.ms)}));
                     }
                 }
-                let state_ids: Vec<_> = kids(m, "state").into_iter().map(|s| serde_json::json!({"id": s.to_string(), "name": name_of(s)})).collect();
+                // Each state's pose: a value per channel, and which it sets
+                // itself (the rest are the channel's rest value).
+                let state_ids: Vec<_> = kids(m, "state").into_iter().map(|s| {
+                    let name = name_of(s).unwrap_or_default();
+                    let pose = machine::pose(doc, &read, def, m, &name).unwrap_or_default();
+                    let own: Vec<String> = doc.get::<iron_document::facet::Args>(s).map(|a| a.slots.keys().map(|k| k.to_string()).collect()).unwrap_or_default();
+                    let values: serde_json::Map<String, serde_json::Value> = machine::channels(doc, def).into_iter().map(|(c, n, _)| (n, serde_json::json!(pose.get(&c)))).collect();
+                    serde_json::json!({"id": s.to_string(), "name": name_of(s), "pose": values, "own": own})
+                }).collect();
                 let current = entity.map(|e| {
                     let leaf = iron_document::Leaf { node: e, path: iron_document::facet::LeafPath::new(iron_document::FacetKind::Args, &port).expect("an argument path") };
                     let state = read(leaf).and_then(|v| v.as_str().map(str::to_owned));
@@ -2939,6 +2952,7 @@ pub fn machine_view(app: &mut WorkerApp, node: String) -> String {
                     "layout": if machine::is_strip(doc, &read, m) { "strip" } else { "graph" },
                     "order": machine::strip_order(doc, &read, m),
                     "pinned": pin.as_ref().filter(|p| p.machine == m).map(|p| p.state.clone()),
+                    "default": doc.children(def).iter().copied().find(|&c| doc.get::<iron_document::facet::Port>(c).is_some() && name_of(c).as_deref() == Some(port.as_str())).and_then(|c| doc.get::<iron_document::facet::Port>(c).and_then(|p| p.signal.constant()).and_then(|v| v.as_str()).map(str::to_owned)),
                     "current": current,
                 })
             })
@@ -2971,4 +2985,33 @@ fn machine_running(store: &iron_document::Store, read: &dyn Fn(iron_document::Le
         let t = machine::copy_source(r.transition);
         (r.entity == entity && doc.live(t).and_then(|n| n.parent) == Some(m)).then(|| (t, r.progress, r.from.clone(), r.to.clone()))
     })
+}
+
+/// What a key on a state lane stands for (the timeline's double-click,
+/// machines.md §6): the component, machine and instance, the state it
+/// keys and the one before it. `{"ok", "def", "machine", "entity", "state",
+/// "from"}`, or `{"ok": false}` when it keys no machine's state.
+pub fn state_key(app: &mut WorkerApp, key: String) -> String {
+    let run = |store: &iron_document::Store| -> Result<serde_json::Value, String> {
+        use iron_document::{machine, NodeId};
+        let doc = store.document();
+        let key: NodeId = key.parse().map_err(|_| format!("not a node id: {key}"))?;
+        let clip = doc.live(key).and_then(|n| n.parent).ok_or("not a key")?;
+        let prop = doc.get::<iron_document::facet::Clip>(clip).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()).map(str::to_owned).ok_or("not a clip's key")?;
+        let port = prop.strip_prefix("args.").ok_or("not a state key")?.to_owned();
+        let entity = doc.relations_from(clip).find(|r| r.rel == iron_document::RelKind::Animates).map(|r| r.to).ok_or("animates nothing")?;
+        let def = iron_document::expand::linked_definition(doc, entity).ok_or("not an instance")?;
+        let (m, _) = machine::machines(doc, def).into_iter().find(|(_, p)| *p == port).ok_or("no machine follows it")?;
+        let keys = iron_document::time::keys(doc, clip);
+        let i = keys.iter().position(|k| k.id == key).ok_or("not in its clip")?;
+        let word = |v: &iron_document::Value| v.as_str().map(str::to_owned);
+        let state = word(&keys[i].value);
+        let from = if i > 0 { word(&keys[i - 1].value) } else { doc.leaf(entity, iron_document::facet::LeafPath::new(iron_document::FacetKind::Args, &port).map_err(|e| e.to_string())?).and_then(|s| s.constant()).and_then(word) };
+        Ok(serde_json::json!({"ok": true, "def": def.to_string(), "machine": m.to_string(), "entity": entity.to_string(), "state": state, "from": from.filter(|f| Some(f) != state.as_ref())}))
+    };
+    let result = match app.world().get_resource::<crate::document_bridge::DocumentStore>() {
+        Some(store) => run(&store.0),
+        None => Err("document bridge not installed".into()),
+    };
+    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }

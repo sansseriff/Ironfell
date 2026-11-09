@@ -1759,29 +1759,25 @@ prints it as markup, and the cell's computed `affords.enter` names `std:table ru
 from #…`. The same click and double-click now edit the cell, its word selected
 (`[true,"113","113"]`); one undo removes the context, and the double-click selects
 the cell again. Inspect `screenshots/contexts-edit.png` (the cell in text edit, the
-Text tool lit). Expected, minus screenshot, `nav` and `ready` lines:
+Text tool lit). The script reads the slide composition's id from its create (the
+demo's size moves ids). Expected, minus screenshot, `nav` and `ready` lines (2026-11-09):
 
 ```
 {"enabled":false,"guides":[]}
 1
 "slide"
-"<applied version=\"3\">\n  <table id=\"#3u\"/>\n</applied>"
+"<applied version=\"3\">\n  <table id=\"#3y\"/>\n</applied>"
 ["<context name=\"std:table\" for=\"type:table\">","<rule match=\"type:row\" affords.select=\"through\"/>"]
-["#44"]
-["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"select\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\"","affords.delete=\"self\""]
+["#48"]
+["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"select\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\"","affords.delete=\"self\"","affords.cursor=\"auto\""]
 "no textarea"
-"<applied version=\"4\">\n  <context id=\"#4A\"/>\n</applied>"
+"<applied version=\"4\">\n  <context id=\"#4E\"/>\n</applied>"
 ["<context id=\"#…\" name=\"std:table\">","<rule match=\"type:text\" affords.enter=\"edit\"/>","</context>"]
-["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"edit\" affords.enter.by=\"std:table rule 1 from #…\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\"","affords.delete=\"self\""]
+["affords.select=\"target\" affords.select.by=\"std:free-2d rule 1\"","affords.enter=\"edit\" affords.enter.by=\"std:table rule 1 from #…\"","affords.edit=\"text\" affords.edit.by=\"std:free-2d rule 7\"","affords.grips=\"box\" affords.grips.by=\"std:free-2d rule 1\"","affords.drag=\"point\" affords.drag.by=\"std:free-2d rule 1\"","affords.drives=\"\"","affords.activate=\"none\"","affords.step=\"1\"","affords.axis=\"x\"","affords.delete=\"self\"","affords.cursor=\"auto\""]
 [true,"113","113"]
 false
 false
 1
-applied "open demo scene" (298 ops, System) -> v1
-applied "model edit" (1 ops, Model) -> v2
-applied "add table" (16 ops, Model) -> v3
-applied "context" (1 ops, Model) -> v4
-applied "undo: context" (1 ops, System) -> v5
 (no page errors)
 ```
 

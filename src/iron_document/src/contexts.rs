@@ -94,7 +94,7 @@ pub const FIELDS: &[FieldSpec] = &[
         options: &["none", "target", "through", "closed", "window", "inert"],
         doc: "what a press reaches: a target; passed through to its children; a target never entered; a window (at the top of a view its content selects directly); inert; or nothing",
     },
-    FieldSpec { domain: "affords", name: "enter", view: false, kind: Kind::Choice, options: &["select", "edit"], doc: "what entering this node from its container does: select it, or start its edit" },
+    FieldSpec { domain: "affords", name: "enter", view: false, kind: Kind::Choice, options: &["select", "edit", "open"], doc: "what entering this node from its container does: select it, start its edit, or open it (a double-click asks the shell to open what it stands for: a timeline band opens its transition)" },
     FieldSpec { domain: "affords", name: "edit", view: false, kind: Kind::Choice, options: &["none", "text", "points"], doc: "what editing in place means: its words, or its points" },
     FieldSpec { domain: "chrome", name: "lit", view: false, kind: Kind::Choice, options: &["shape", "frame", "none"], doc: "how a selected or hovered node lights: its outline, its frame, or not at all" },
     FieldSpec { domain: "snap", name: "target", view: false, kind: Kind::Choice, options: &["no", "yes"], doc: "whether a moving selection snaps to it" },

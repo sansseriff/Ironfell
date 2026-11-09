@@ -138,7 +138,7 @@ fn arg_slot(kind: ValueKind, raw: &str, entity: NodeId) -> Result<Slot, String> 
 }
 
 /// `#rrggbb` or `#rrggbbaa`.
-fn hex_color(t: &str) -> Option<Value> {
+pub(crate) fn hex_color(t: &str) -> Option<Value> {
     let h = t.strip_prefix('#')?;
     if !matches!(h.len(), 6 | 8) || !h.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;

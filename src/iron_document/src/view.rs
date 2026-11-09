@@ -203,6 +203,10 @@ fn node(
         })
         .collect();
     let kids = kids_vec.as_slice();
+    // A repeat shows its template; its copies are derived and only counted.
+    if doc.facet(id, crate::facet::FacetKind::Repeat).is_some() {
+        attrs.push(("copies".into(), kids_all.iter().filter(|k| k.item_of(id).is_some()).count().to_string()));
+    }
     if id.is_expanded() {
         attrs.push(("derived".into(), "true".into()));
     }

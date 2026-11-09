@@ -1,0 +1,10 @@
+<!-- std:laser: a source of optical power; its beam glows with it. -->
+<definition name="laser">
+  <port_spec id="power" name="power" kind="value" dir="in" signal="10 mW"/>
+  <port_spec id="out" name="out" kind="optical_power" dir="out" signal="{= $power}"/>
+  <template notation="free">
+    <rect name="body" x="0" y="0" w="130" h="70" fill.color="#2e3342"/>
+    <rect name="beam" x="130" y="28" w="50" h="14" fill.color="#f2261a" fill.opacity="{= clamp($power / 20 mW, 0.15, 1)}"/>
+    <empty name="out" x="180" y="35" anchor.port="$out" anchor.follow="false"/>
+  </template>
+</definition>

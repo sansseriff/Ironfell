@@ -435,8 +435,12 @@ pub(super) fn reconcile(
 
 /// Nothing in a `library` is materialised but definitions' templates' 2D
 /// content: references draw it in place (instance-cache.md phase D), and
-/// it shows nowhere else, since no composition holds it.
+/// it shows nowhere else, since no composition holds it. A repeat's
+/// template is not drawn either; its copies are (plans/specs/repeat.md).
 fn drawable(doc: &iron_document::Document, id: NodeId) -> bool {
+    if iron_document::expand::in_repeat_template(doc, id) {
+        return false;
+    }
     let library = TypeId::lookup("library").expect("registered");
     let template = TypeId::lookup("template").expect("registered");
     let mut in_template = false;

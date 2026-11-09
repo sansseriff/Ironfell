@@ -1,0 +1,7 @@
+<!-- std:readout: a value as text. -->
+<definition name="readout">
+  <port_spec id="value" name="value" kind="value" dir="in" signal="0"/>
+  <template notation="free">
+    <text name="readout" x="0" y="0" content="{= fmt($value)}" fill.color="#1a1a1f"/>
+  </template>
+</definition>

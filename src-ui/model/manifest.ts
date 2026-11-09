@@ -32,7 +32,7 @@ function parts(schema: Schema) {
   return { types, comps, contextFields, standard };
 }
 
-export type TopicName = 'components' | 'data' | 'machines' | 'ports' | 'schematic' | 'contexts' | 'constraints' | 'layout' | 'tables' | 'time' | 'narratives';
+export type TopicName = 'components' | 'data' | 'machines' | 'ports' | 'schematic' | 'contexts' | 'constraints' | 'layout' | 'repeats' | 'tables' | 'time' | 'narratives';
 
 /** A topic: what it covers (listed in the core), its text, and when it is
  *  relevant without being asked for: the document holding what it is about
@@ -273,6 +273,27 @@ ${p.contextFields}`,
   w / h (auto or fill), align, absolute="true" (leaves the flow, keeps its own x, y),
   and in a grid column / row (1-based) with span_x / span_y. Order children with
   after= or <reparent>; the stack follows sibling order.`,
+  },
+  repeats: {
+    summary: 'repeats (one copy of a group\'s children per element or count) and lets (named values)',
+    doc: /repeat\.(?:each|count)=|<let /,
+    request: /\b(?:repeat|copies|for each|one per|each of|array|labels for|ticks|many (?:dots|cells|bars|rings|lines|labels|copies))/i,
+    text: () => `REPEATS AND LETS
+  A group with repeat.each (a series) or repeat.count (a number) draws its children
+  once per element, never more than repeat.max (1000). Its children are the template
+  for one item: inside it, #group.repeat.item is the element and #group.repeat.index
+  its index, and each copy reads its own. Write ONE template, never the copies:
+    <create id="$g" type="group" parent="#C" name="dots" repeat.each="{= range(0, 300, 13)}"/>
+    <create type="ellipse" parent="$g" x="{= $g.repeat.item}" y="{= 40 + 10 * sin($g.repeat.index)}" rx="4" ry="4"/>
+  The copies are derived, never saved, with ids like #4/~3/7 (copy 3 of template
+  node #7); you cannot edit one, edit the template. Their number follows each and count
+  when an edit applies. A path with generated path data (segments, circles, bars) is
+  lighter for marks that need no node each; use a repeat when each copy is its own
+  node: a label, a cell with its own colour, a component's part.
+  A let names a value for bindings to read, computed once: a series, a number, a
+  function. <create id="$aw" type="let" parent="#C" name="area w" value="{= #F.size.w - 70}"/>,
+  then {= $aw.let.value / 2}. In a definition's template each picture has its own copy,
+  so it may read the picture's box; in a definition's body each instance has one.`,
   },
   tables: {
     summary: 'tables: rows of words, merged cells, presets, the <table> verb',

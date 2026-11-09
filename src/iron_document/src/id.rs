@@ -80,6 +80,27 @@ fn expanded_raw(path: &[u64]) -> u64 {
     EXPANDED | paths::intern(path)
 }
 
+/// A repeat's copies (plans/specs/repeat.md): item `k` of repeat `r` is the
+/// path step `ITEM_BASE + k` after `r`'s path, then the template node it
+/// copies; shown and parsed as `~k`. No authored id reaches this range.
+const ITEM_BASE: u64 = SESSION_BASE - (1 << 32);
+
+fn is_item_step(n: u64) -> bool {
+    (ITEM_BASE..SESSION_BASE).contains(&n)
+}
+
+/// One step of an expanded path, as ids print it.
+fn step(n: u64) -> String {
+    if is_item_step(n) { format!("~{}", n - ITEM_BASE) } else { base62(n) }
+}
+
+fn parse_step(s: &str) -> Option<u64> {
+    match s.strip_prefix('~') {
+        Some(k) => k.parse::<u64>().ok().filter(|&k| k < (1 << 32)).map(|k| ITEM_BASE + k),
+        None => parse_base62(s),
+    }
+}
+
 pub(crate) fn base62(mut n: u64) -> String {
     if n == 0 {
         return "0".to_owned();
@@ -144,7 +165,7 @@ macro_rules! id_type {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 match expanded_path(self.0) {
                     Some(path) => {
-                        let parts: Vec<String> = path.iter().map(|&n| base62(n)).collect();
+                        let parts: Vec<String> = path.iter().map(|&n| step(n)).collect();
                         write!(f, "{}{}", $prefix, parts.join("/"))
                     }
                     None => write!(f, "{}{}", $prefix, base62(self.0)),
@@ -164,7 +185,7 @@ macro_rules! id_type {
                 let body = s.strip_prefix($prefix).unwrap_or(s);
                 let raw = if body.contains('/') {
                     body.split('/')
-                        .map(parse_base62)
+                        .map(parse_step)
                         .collect::<Option<Vec<u64>>>()
                         .filter(|p| p.len() >= 2 && p.iter().all(|&n| n & EXPANDED == 0 && n < SESSION_BASE))
                         .map(|p| expanded_raw(&p))
@@ -226,6 +247,27 @@ impl NodeId {
     /// The authored instance an expanded node ultimately belongs to.
     pub fn expanded_root(self) -> Option<NodeId> {
         expanded_path(self.0).and_then(|p| p.first().copied()).map(NodeId)
+    }
+
+    /// Item `k` of repeat `repeat`'s copy of template node `local` (its
+    /// last path step: the authored node a template node copies).
+    pub fn item(repeat: NodeId, k: usize, local: NodeId) -> Option<NodeId> {
+        let last = *local.path().last()?;
+        if k as u64 >= (1 << 32) || last.0 & EXPANDED != 0 || last.0 >= SESSION_BASE || repeat.is_session() {
+            return None;
+        }
+        let mut path: Vec<u64> = repeat.path().iter().map(|n| n.0).collect();
+        path.push(ITEM_BASE + k as u64);
+        path.push(last.0);
+        Some(NodeId(expanded_raw(&path)))
+    }
+
+    /// Which item of `repeat` this node is part of: the copy of a template
+    /// node, or anything inside one. `None` for the template itself.
+    pub fn item_of(self, repeat: NodeId) -> Option<usize> {
+        let (mine, theirs) = (self.path(), repeat.path());
+        let k = mine.get(theirs.len())?.0;
+        (mine.len() > theirs.len() + 1 && mine[..theirs.len()] == theirs[..] && is_item_step(k)).then(|| (k - ITEM_BASE) as usize)
     }
 
     /// The node's path: `[self]` for an authored node, the instance and

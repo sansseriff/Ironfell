@@ -407,6 +407,31 @@ facets! {
         value: Number = Value::Number(0.0),
     }
 
+    /// A repeat (plans/specs/repeat.md): a group that draws its children
+    /// once per element of `each` (a series), or `count` times when `each`
+    /// is not a series, never more than `max`. The group's own children are
+    /// the template for one item and are not drawn; the copies are derived
+    /// (expand.rs), with ids `#group/~k/local`. Inside the template,
+    /// `#group.repeat.item` reads the item and `#group.repeat.index` its
+    /// index; each copy reads its own. The template reads item 0. How many
+    /// copies there are follows `each` and `count` whenever a transaction
+    /// commits; between commits (a drag) a copy past the end is hidden.
+    Repeat / "repeat" => Repeat {
+        each: Any = Value::Number(f64::NAN),
+        count: Number = Value::Number(0.0),
+        max: Number = Value::Number(1000.0),
+        item: Any = Value::Number(0.0),
+        index: Number = Value::Number(0.0),
+    }
+
+    /// A named value (plans/specs/repeat.md §7): any value a binding
+    /// computes once for others to read as `#n.let.value`, a series, a
+    /// number, a function. Never drawn. In a definition's template, each
+    /// picture has its own copy, so it may read the picture's box.
+    Let / "let" => Let {
+        value: Any = Value::Number(f64::NAN),
+    }
+
     /// A transition between two states of a machine: `from` and `to` (state
     /// names, `*` for any), its length and its easing (a curve name or
     /// `cubic-bezier(…)`). Channels without a tween ease over all of it.

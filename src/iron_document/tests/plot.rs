@@ -65,6 +65,20 @@ fn errors(store: &Store, e: NodeId, u: NodeId) -> Vec<String> {
     store.reactive().errors.iter().filter(|(l, _)| l.node == u || l.node == e || l.node.expanded_parts().is_some_and(|(o, _)| o == u || o == e)).map(|(l, m)| format!("{l}: {m}")).collect()
 }
 
+/// The texts of the copies of the plot's tick label `name` (a repeat's
+/// copies, `#use/labels/~k/label`), in order.
+fn labels(store: &Store, u: NodeId, name: &str) -> Vec<String> {
+    let doc = store.document();
+    let mut copies: Vec<(String, NodeId)> = doc
+        .descendants(u)
+        .into_iter()
+        .filter(|&n| doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name))
+        .filter_map(|n| n.to_string().split("/~").nth(1).map(|k| (k.to_owned(), n)))
+        .collect();
+    copies.sort_by_key(|(k, _)| k.split('/').next().and_then(|k| k.parse::<usize>().ok()));
+    copies.into_iter().map(|(_, n)| text(store, n)).collect()
+}
+
 fn text(store: &Store, id: NodeId) -> String {
     store.resolved(id, path("text.content")).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
 }
@@ -81,8 +95,10 @@ fn a_default_plot_draws_its_sample_with_ticks_and_no_errors() {
     assert_eq!(anchors(&store, part(&store, u, "series 1")), 41);
     assert_eq!(anchors(&store, part(&store, u, "series 2")), 0, "an empty series draws nothing");
     assert!(anchors(&store, part(&store, u, "grid")) > 4);
-    assert_eq!(text(&store, part(&store, u, "x tick 0")), "0");
-    assert_eq!(text(&store, part(&store, u, "x tick 7")), "", "unused slots are empty");
+    // One label per tick, from the repeat: no empty slots.
+    let xs = labels(&store, u, "x tick");
+    assert_eq!(xs.first().map(String::as_str), Some("0"));
+    assert!(xs.len() >= 2 && xs.iter().all(|t| !t.is_empty()), "{xs:?}");
     assert_eq!(store.resolved(e, path("args.style")), Some(Value::Enum("line".into())));
 }
 
@@ -93,7 +109,7 @@ fn units_title_the_axes_and_a_resize_reflows() {
     assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));
     assert_eq!(text(&store, part(&store, u, "x title")), "nm");
     assert_eq!(text(&store, part(&store, u, "y title")), "mW");
-    assert_eq!(text(&store, part(&store, u, "x tick 0")), "400");
+    assert_eq!(labels(&store, u, "x tick").first().map(String::as_str), Some("400"));
     let width = |s: &Store| contour::geometry(s, part(s, u, "series 1")).bounds().width();
     let before = width(&store);
     store.apply(tx("wider", vec![Op::Set { id: u, path: path("size.w"), slot: Slot::Const(Value::Number(680.0)) }])).unwrap();
@@ -187,9 +203,9 @@ fn wide_plots_label_every_tick_bars_stand_on_zero_and_empty_data_is_fine() {
     let (e, u) = place(&mut store, r#"w="900""#);
     assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));
     let marks = anchors(&store, part(&store, u, "tick marks"));
-    let labelled = (0..12).filter(|i| !text(&store, part(&store, u, &format!("x tick {i}"))).is_empty()).count();
-    let y_labelled = (0..12).filter(|i| !text(&store, part(&store, u, &format!("y tick {i}"))).is_empty()).count();
-    assert_eq!(marks, 2 * (labelled + y_labelled), "a label for every tick mark");
+    let (labelled, y_labelled) = (labels(&store, u, "x tick"), labels(&store, u, "y tick"));
+    assert!(labelled.iter().chain(&y_labelled).all(|t| !t.is_empty()));
+    assert_eq!(marks, 2 * (labelled.len() + y_labelled.len()), "a label for every tick mark");
 
     let (e, u) = place(&mut store, r#"xs="{= series(1, 2, 3)}" ys="{= series(-1, 2, -3)}" style="bars""#);
     assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));

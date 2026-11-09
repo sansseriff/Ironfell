@@ -28,6 +28,7 @@ pub mod definition;
 pub mod document;
 pub mod expand;
 pub mod machine;
+pub mod markup;
 pub mod make;
 pub mod expr;
 pub mod geom;
@@ -231,6 +232,9 @@ pub struct Store {
     interaction: BTreeMap<NodeId, Vec<&'static str>>,
     /// What the last expansion could not derive (component-model.md §3).
     expansion_problems: Vec<String>,
+    /// How many copies each drawn repeat has (plans/specs/repeat.md), as
+    /// last settled from its `each` and `count`.
+    repeats: BTreeMap<NodeId, usize>,
     /// The gesture whose previews are in the overlay (`gesture`).
     gesture: Option<gesture::ActiveGesture>,
     /// How the last gesture ended, for its tool to find out.
@@ -330,6 +334,7 @@ impl Store {
             machines: machine::Player::default(),
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
+            repeats: BTreeMap::new(),
             gesture: None,
             ended: None,
             next_gesture: 1,
@@ -340,10 +345,11 @@ impl Store {
         };
         // A loaded document holds only authored nodes: derive its instances.
         let stamp = store.doc.version();
-        store.expansion_problems = expand::expand(&mut store.doc, stamp).1;
+        store.expansion_problems = expand::expand(&mut store.doc, stamp, &BTreeMap::new()).1;
         store.geometry.note_structure();
         store.reactive.rebuild(&store.doc);
         store.resample();
+        store.settle_repeats();
         store.rebuild_clusters();
         store.resolve_physics();
         store
@@ -1212,6 +1218,48 @@ impl Store {
         Ok(())
     }
 
+    /// Bring every drawn repeat's copies to its live count
+    /// (plans/specs/repeat.md §4): the length of `each` when it is a series,
+    /// else `count`, at most `max` (and 10,000). Where that differs from the
+    /// copies it has, re-expand and rebuild the graph; a repeat inside new
+    /// copies settles in the next round. Returns the ops applied, which
+    /// belong to the transaction that changed the counts.
+    fn settle_repeats(&mut self) -> Vec<Op> {
+        let group = TypeId::lookup("group").expect("registered");
+        let mut applied = Vec::new();
+        for _ in 0..8 {
+            let counts: BTreeMap<NodeId, usize> = self
+                .doc
+                .nodes_of_type(group)
+                .filter(|&g| self.doc.is_live(g) && expand::draws_repeat(&self.doc, g, &self.doc.facets_of(g).cloned().collect::<Vec<_>>()))
+                .map(|r| {
+                    let read = |f: &str| self.reactive.read(&self.doc, Leaf { node: r, path: LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf") });
+                    let n = match read("each") {
+                        Some(Value::Series { data, .. }) => data.len() as f64,
+                        _ => read("count").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    };
+                    let max = read("max").and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0);
+                    (r, if n.is_finite() { n.floor().clamp(0.0, max) as usize } else { 0 })
+                })
+                .collect();
+            if counts == self.repeats {
+                break;
+            }
+            self.repeats = counts;
+            let stamp = self.doc.version();
+            let (ops, problems) = expand::expand(&mut self.doc, stamp, &self.repeats);
+            self.expansion_problems = problems;
+            if ops.is_empty() {
+                break;
+            }
+            self.geometry.note_ops(ops.iter());
+            self.reactive.rebuild(&self.doc);
+            self.resample();
+            applied.extend(ops);
+        }
+        applied
+    }
+
     /// Recompute what the store derives after every change: the
     /// across/through network's solution, then the layouts that place
     /// groups' children (`layout.rs`), which may read it.
@@ -1599,7 +1647,7 @@ impl Store {
     }
 
     /// Keep the graph in step with a transaction that just applied.
-    fn after_transaction(&mut self, tx: &Transaction) {
+    fn after_transaction(&mut self, tx: &mut Transaction) {
         // Outside a gesture the overlay holds only a live solve's pose (a
         // producer's publish or a playhead move re-solves the clusters).
         // Nothing else owns it, so it would shadow what this transaction
@@ -1641,6 +1689,10 @@ impl Store {
             // Cheap enough to do unconditionally: clips are few.
             self.resample();
         }
+        // Repeats whose count this changed get their copies, as part of
+        // this transaction's derived structure.
+        let copies = self.settle_repeats();
+        tx.expanded.extend(copies);
         self.rebuild_clusters();
         if live && !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
@@ -1717,7 +1769,7 @@ impl Store {
         let exact = input.exact;
         let (mut tx, doc) = self.run(input)?;
         let old = std::mem::replace(&mut self.doc, doc);
-        self.after_transaction(&tx);
+        self.after_transaction(&mut tx);
         let solver = match self.post_apply(&mut tx, exact) {
             Ok(s) => s,
             Err(e) => {
@@ -1762,9 +1814,9 @@ impl Store {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let (applied, doc) = self.run(input)?;
+        let (mut applied, doc) = self.run(input)?;
         self.doc = doc;
-        self.after_transaction(&applied);
+        self.after_transaction(&mut applied);
         let version = applied.version;
         self.history.future.clear();
         self.history.past.push(applied.clone());
@@ -1791,9 +1843,9 @@ impl Store {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok((applied, doc)) => {
+            Ok((mut applied, doc)) => {
                 self.doc = doc;
-                self.after_transaction(&applied);
+                self.after_transaction(&mut applied);
                 let version = applied.version;
                 self.history.record(applied);
                 self.history.future.push(tx);
@@ -1826,9 +1878,9 @@ impl Store {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok((applied, doc)) => {
+            Ok((mut applied, doc)) => {
                 self.doc = doc;
-                self.after_transaction(&applied);
+                self.after_transaction(&mut applied);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
                 self.history.record(applied);
@@ -1958,7 +2010,7 @@ impl Store {
         // that read them (a connection to an expanded port).
         let mut expanded = Vec::new();
         if errors.is_empty() && expand::affected_by(&work, &input.ops) {
-            let (ops, problems) = expand::expand(&mut work, stamp);
+            let (ops, problems) = expand::expand(&mut work, stamp, &self.repeats);
             expanded = ops;
             self.expansion_problems = problems;
         }

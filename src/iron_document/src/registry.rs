@@ -51,7 +51,7 @@ static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "group",
         facets: &[(K::Name, false), (K::Transform2d, false),
- (K::Constraints, false), (K::Axis, false), (K::Track, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false)],
+ (K::Constraints, false), (K::Axis, false), (K::Track, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false), (K::Repeat, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -237,7 +237,7 @@ static TYPES: &[TypeSpec] = &[
         name: "definition",
         facets: &[(K::Name, true), (K::Import, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port_spec", "equation", "template", "entity", "connection", "channel", "machine"]),
+        children: ChildPolicy::Only(&["port_spec", "equation", "template", "entity", "connection", "channel", "machine", "let"]),
     },
     // A component's state machine (plans/specs/machines.md), named for the
     // `in` port whose value is its state: definition data a player reads.
@@ -263,6 +263,14 @@ static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "tween",
         facets: &[(K::Tween, true), (K::Name, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // A named value (plans/specs/repeat.md §7): a binding computed once
+    // for others to read. Never drawn.
+    TypeSpec {
+        name: "let",
+        facets: &[(K::Name, false), (K::Let, true)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
@@ -407,7 +415,7 @@ static TYPES: &[TypeSpec] = &[
         name: "entity",
         facets: &[(K::Instance, true), (K::Args, true), (K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection", "channel", "machine"]),
+        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection", "channel", "machine", "let"]),
     },
     // A relationship between operand nodes, solved in whatever direction a
     // drag chooses (constraint-system.md §4). Never materialised as content;

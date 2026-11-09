@@ -509,6 +509,10 @@ impl Scene {
     fn build_node(&mut self, store: &Store, id: NodeId, scope: Option<NodeId>, depth: u32, order: &BTreeMap<NodeId, u32>) -> bool {
         let doc = store.document();
         let Some(node) = doc.live(id) else { return false };
+        // A repeat's template is not drawn, so nothing in it can be hit.
+        if iron_document::expand::in_repeat_template(doc, id) {
+            return false;
+        }
         let ord = order.get(&id).copied().unwrap_or(0);
         let affine = affine_of(store.local_affine(id));
         let ty = node.ty.name();

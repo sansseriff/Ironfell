@@ -432,3 +432,15 @@ shows how often slots fall short.
   show. About 15 % smaller on a plot, more on plain shapes.
 - Follow-ups: `auto` as a type instead of NaN (types-and-units.md); quantity literals
   printed as written (same spec, §3.4).
+
+**2026-11-09: `std:plot` defined by markup alone ([`repeat.md` §9](repeat.md#9-done)).**
+
+- The plot is `src/iron_document/src/std/plot.xml`, read by the generic node markup
+  (`markup.rs`); the Rust builder is gone. What it needed from the engine is generic:
+  `let` nodes for shared values (the area's size, the data-to-pixel functions `xp` and
+  `yp`, the ticks, each series' colour and style), and a repeat for each axis's labels.
+- D6's fixed label slots are gone: each axis's labels are a repeat over its ticks, so a
+  wide plot has as many labels as ticks and no empty slots, and a resize that changes the
+  tick count adds or removes labels in the same transaction.
+- Behaviour is unchanged otherwise: `tests/plot.rs` passes as before, reading labels
+  from the repeat's copies.

@@ -1,7 +1,8 @@
 # Repeat: one child per element, derived
 
-**Proposed 2026-11-08.** Waits on the user; build after [`plot.md`](plot.md) phase 3
-and [`machines.md`](machines.md) phase 1. The plot ships with fixed label slots until then.
+**Proposed 2026-11-08. Phase 1 built 2026-11-09** (§9), with `let` (§7) and node markup
+(§8), so that `std:plot` is defined by markup alone. Where §2–§4 and §9 differ, §9 says
+what was built. Phase 2 (value keys, enter and exit) is open.
 
 ## 1. Why
 
@@ -87,3 +88,68 @@ code. A repeat makes the set of nodes a function of a value. The proposal:
 | 1 | `count` and `each` with index keys; expansion; view elision | 61 strip cells from one repeat; dragging a slider that changes `count` adds and removes copies; undo restores |
 | 2 | value keys, enter and exit through machines | a plot's tick labels slide on a range change; new ones fade in |
 | 3 | `std:plot` replaces its label slots with repeats | |
+
+## 7. Let: named values
+
+A `let` node holds one value a binding computes, for other bindings to read as
+`#n.let.value`: a series, a number, a string, a function (`v => scale(v, lo, hi, 0, w)`).
+It is never drawn. It is the floor's *derive* verb as a node (vision 02 §6.2), and what
+replaces a builder's habit of pasting one expression into many bindings.
+
+- In a **definition's template**, each picture gets its own copy (it is template
+  content), so a let may read the picture's box (`#T.size.w`).
+- In a **definition's body**, each instance gets its own copy, like a channel: values
+  the outputs share (`std:plot`'s every-series `ys_all`) without becoming ports.
+- Anywhere else (a composition, a group) it is just a node.
+
+## 8. Node markup
+
+`markup.rs` reads nodes written as XML: the element is the node type, attributes are
+its leaves (`facet.field`, or a bare field: the first of the type's facets, in registry
+order, that has it), children are child nodes. A value is a constant of the leaf's kind,
+a colour token (`@ink`), or a binding `{= expr}`. `id="x"` names a node for the rest of
+the markup: `$x` is its id in a binding or a reference; a bare `$x` in a binding reads
+the value a `let`, `port_spec` or `channel` holds. An input declared `choice(…)` holds an
+enum. This is the model's `<create>` vocabulary, nested.
+
+The standard components are written in it (`src/iron_document/src/std/*.xml`) and read
+when first placed; `standard.rs` keeps only the list of entries and the file for each
+key. Nothing in Rust knows what a standard component draws.
+
+## 9. Done
+
+**2026-11-09: phase 1, `let`, node markup, `std:plot` as markup.**
+
+- **The repeat is a facet on a group**, not a node type: `repeat.each`, `repeat.count`,
+  `repeat.max` (1,000; at most 10,000), and the read-only `repeat.item` and
+  `repeat.index`. Everything that handles groups (transforms, clipping, layers, the
+  select tool) handles a repeat.
+- **No free names.** Instead of `as="t"`, the template reads `#g.repeat.item` and
+  `#g.repeat.index`, ordinary leaves, so a saved template parses and evaluates like any
+  binding (the template reads item 0, so it has no errors). Expansion rewrites those
+  references in each copy: the item becomes `at(each, k)` (or `k` without a series),
+  the index the literal `k` (`Expr::replace_refs`).
+- **Copies** are derived by `expand.rs`, ids `repeat path / ~k / template node`
+  (`NodeId::item`, shown `#4/~3/7`), never saved, never in undo. Template references
+  inside a copy follow to that copy's nodes. A repeat inside a definition's template
+  expands in each picture's copy, not in the library. Repeats in copies expand in turn.
+- **When the count changes** (§4): after every transaction, undo, redo and load, the
+  store reads each drawn repeat's live count and, where it differs from its copies,
+  re-expands (`Store::settle_repeats`); the ops join that transaction's derived
+  structure, so hosts see them as any expansion. Between transactions (a drag, a clip
+  playing) the number of copies stays; a copy past the live count is hidden (its top
+  nodes' opacity is guarded by `k < count`), and missing ones arrive at the commit.
+- **Templates are not drawn or hit**: `expand::in_repeat_template`, used by the bridge's
+  materialiser, the spatial index and the Library tab's baked previews.
+- **Views** show the repeat with `copies="N"` and its template; copies are elided.
+- **`std:plot` is `std/plot.xml`**: inputs and outputs are ports, shared values lets,
+  marks paths with generated path data, the vis machine nodes, and each axis's labels
+  a repeat over its ticks, one text per tick and no fixed slots. The Rust `plot()`
+  builder and `TICK_SLOTS` are gone; the other five standard components are markup too.
+- **Tests:** `tests/repeat.rs` (count, undo and redo, each over a series, save and
+  load, a resize adding labels in the same transaction); `tests/plot.rs` unchanged but
+  for reading labels from the copies; `markup.rs`'s unit test.
+
+**Not yet:** value keys and enter/exit (phase 2); a `use` inside a repeat's template
+(repeating a component); overrides on a copy; layout groups ignoring a repeat's
+template; a list-of-series input, so the plot's three series could be one repeat.

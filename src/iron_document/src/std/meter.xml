@@ -1,0 +1,13 @@
+<!-- std:meter: a dial whose needle turns with the power in, over its range. -->
+<definition name="dial meter">
+  <port_spec id="in" name="in" kind="optical_power" dir="in" signal="0 W"/>
+  <port_spec id="range" name="range" kind="value" dir="in" signal="20 mW"/>
+  <template notation="free">
+    <ellipse name="dial" x="55" y="55" rx="55" ry="55" fill.color="#f2f5fa" stroke.color="#4d5261" stroke.width="3"/>
+    <empty name="in" x="0" y="55" rot="3.141592653589793" anchor.port="$in" anchor.follow="false"/>
+    <empty name="pivot" x="55" y="55" rot="{= -3.14159 + $in / $range * 3.14159}">
+      <rect name="needle" x="0" y="-2" w="50" h="4" fill.color="#d93326"/>
+    </empty>
+    <text name="readout" x="14" y="118" content="{= fmt($in, 'mW', 2)}" fill.color="#1a1a1f"/>
+  </template>
+</definition>

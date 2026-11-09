@@ -8,8 +8,7 @@
 
 use crate::definition::{self, Placement};
 use crate::document::Document;
-use crate::expr::Expr;
-use crate::facet::{Anchor, Composition, Facet, Fill, Font, Import, LeafStruct, Name, Port, Radius, Size, Slider, Stroke, Template, Text, Transform2d};
+use crate::facet::{Composition, Facet, Fill, Font, Import, LeafStruct, Name, Port, Size, Text, Transform2d};
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::order::OrderKey;
@@ -48,12 +47,6 @@ fn named(t: &str) -> Facet {
 fn n(v: f64) -> Slot {
     Slot::Const(Value::Number(v))
 }
-fn q(text: &str) -> Value {
-    Value::parse_quantity(text).expect("standard quantity")
-}
-fn bound(e: String) -> Slot {
-    Slot::Bound(Expr::parse(&e).unwrap_or_else(|err| panic!("standard binding {e}: {err}")))
-}
 fn at(x: f64, y: f64) -> Transform2d {
     let mut t = Transform2d::default();
     t.x = n(x);
@@ -71,19 +64,6 @@ fn paint(c: [f32; 4]) -> Facet {
     f.color = Slot::Const(Value::Color(c));
     f.wrap()
 }
-fn port(kind: &str, dir: &str, signal: Slot) -> Facet {
-    let mut p = Port::default();
-    p.kind = Slot::Const(Value::Str(kind.into()));
-    p.dir = Slot::Const(Value::Enum(dir.into()));
-    p.signal = signal;
-    p.wrap()
-}
-fn anchor(port: NodeId, follow: bool) -> Facet {
-    let mut a = Anchor::default();
-    a.port = Slot::Const(Value::Ref(port));
-    a.follow = Slot::Const(Value::Bool(follow));
-    a.wrap()
-}
 
 /// Fresh ids in creation order, from `next`.
 struct Ids(u64);
@@ -95,18 +75,18 @@ impl Ids {
     }
 }
 
-/// A definition being built: its node, and children in order.
-struct Def {
-    id: NodeId,
-    ops: Vec<Op>,
-    key: OrderKey,
-}
-impl Def {
-    fn child(&mut self, id: NodeId, ty_: &str, parent: NodeId, facets: Vec<Facet>) -> NodeId {
-        self.ops.push(Op::Create { id, ty: ty(ty_), parent: Some(parent), order: self.key.clone(), facets });
-        self.key = OrderKey::after(&self.key);
-        id
-    }
+/// Each standard component's markup (markup.rs): definitions as data, read
+/// at startup like the node types. Nothing here knows what one draws.
+fn source(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "slider" => include_str!("std/slider.xml"),
+        "readout" => include_str!("std/readout.xml"),
+        "laser" => include_str!("std/laser.xml"),
+        "fiber" => include_str!("std/fiber.xml"),
+        "meter" => include_str!("std/meter.xml"),
+        "plot" => include_str!("std/plot.xml"),
+        _ => return None,
+    })
 }
 
 /// The definition `key` already copied into `doc`, if any.
@@ -116,116 +96,22 @@ pub fn find(doc: &Document, key: &str) -> Option<NodeId> {
 }
 
 /// The ops creating standard definition `key` under `library`, with ids
-/// from `first`. Returns the ops and the definition.
+/// from `first`: its markup, marked `import.source = std:<key>` so later
+/// placements reuse the copy. Returns the ops and the definition.
 pub fn definition_ops(key: &str, library: NodeId, order: OrderKey, first: u64) -> Result<(Vec<Op>, NodeId), String> {
-    let entry = ENTRIES.iter().find(|e| e.key == key).ok_or_else(|| format!("no standard component {key:?}"))?;
-    let mut ids = Ids(first);
-    let def = ids.id();
+    let src = source(key).filter(|_| ENTRIES.iter().any(|e| e.key == key)).ok_or_else(|| format!("no standard component {key:?}"))?;
+    let mut built = crate::markup::ops(src, Some(library), order, NodeId::from_raw(first)).map_err(|e| format!("std:{key}: {e}"))?;
+    let def = match built.roots.as_slice() {
+        [d] => *d,
+        _ => return Err(format!("std:{key}: the markup must hold one definition")),
+    };
     let mut imp = Import::default();
     imp.source = Slot::Const(Value::Str(format!("std:{key}")));
     imp.version = Slot::Const(Value::Str("1".into()));
-    let mut d = Def { id: def, ops: vec![Op::Create { id: def, ty: ty("definition"), parent: Some(library), order, facets: vec![named(&entry.name.to_lowercase()), imp.wrap()] }], key: OrderKey::first() };
-    let template = |d: &mut Def, ids: &mut Ids| {
-        let mut t = Template::default();
-        t.notation = Slot::Const(Value::Str(NOTATION.into()));
-        let id = ids.id();
-        d.child(id, "template", d.id, vec![t.wrap()])
-    };
-    match key {
-        "slider" => {
-            let (level, min, max, unit, out) = (ids.id(), ids.id(), ids.id(), ids.id(), ids.id());
-            d.child(level, "port_spec", def, vec![named("level"), port("value", "in", n(10.0))]);
-            d.child(min, "port_spec", def, vec![named("min"), port("value", "in", n(0.0))]);
-            d.child(max, "port_spec", def, vec![named("max"), port("value", "in", n(20.0))]);
-            d.child(unit, "port_spec", def, vec![named("unit"), port("value", "in", Slot::Const(q("1 mW")))]);
-            d.child(out, "port_spec", def, vec![named("value"), port("value", "out", bound(format!("{level}.port.signal * {unit}.port.signal")))]);
-            let t = template(&mut d, &mut ids);
-            let mut s = Slider::default();
-            s.min = bound(format!("{min}.port.signal"));
-            s.max = bound(format!("{max}.port.signal"));
-            s.step = n(0.1);
-            s.value = bound(format!("{level}.port.signal"));
-            let knob = ids.id();
-            d.child(knob, "slider", t, vec![at(0.0, 0.0).wrap(), size(200.0, 24.0), s.wrap(), named("slider")]);
-        }
-        "readout" => {
-            let value = ids.id();
-            d.child(value, "port_spec", def, vec![named("value"), port("value", "in", n(0.0))]);
-            let t = template(&mut d, &mut ids);
-            let mut words = Text::default();
-            words.content = bound(format!("fmt({value}.port.signal)"));
-            let text = ids.id();
-            d.child(text, "text", t, vec![at(0.0, 0.0).wrap(), words.wrap(), Font::default().wrap(), paint([0.1, 0.1, 0.12, 1.0]), named("readout")]);
-        }
-        "laser" => {
-            let (power, out) = (ids.id(), ids.id());
-            d.child(power, "port_spec", def, vec![named("power"), port("value", "in", Slot::Const(q("10 mW")))]);
-            d.child(out, "port_spec", def, vec![named("out"), port("optical_power", "out", bound(format!("{power}.port.signal")))]);
-            let t = template(&mut d, &mut ids);
-            let mut glow = Fill::default();
-            glow.color = Slot::Const(Value::Color([0.95, 0.15, 0.1, 1.0]));
-            glow.opacity = bound(format!("clamp({power}.port.signal / 20 mW, 0.15, 1)"));
-            let (body, beam, out_at) = (ids.id(), ids.id(), ids.id());
-            d.child(body, "rect", t, vec![at(0.0, 0.0).wrap(), size(130.0, 70.0), paint([0.18, 0.2, 0.26, 1.0]), named("body")]);
-            d.child(beam, "rect", t, vec![at(130.0, 28.0).wrap(), size(50.0, 14.0), glow.wrap(), named("beam")]);
-            d.child(out_at, "empty", t, vec![at(180.0, 35.0).wrap(), anchor(out, false), named("out")]);
-        }
-        "fiber" => {
-            let (loss, length, input, output) = (ids.id(), ids.id(), ids.id(), ids.id());
-            d.child(loss, "port_spec", def, vec![named("loss_db_per_km"), port("value", "in", n(0.5))]);
-            d.child(length, "port_spec", def, vec![named("length_km"), port("value", "in", n(2.0))]);
-            d.child(input, "port_spec", def, vec![named("in"), port("optical_power", "in", Slot::Const(q("0 W")))]);
-            d.child(output, "port_spec", def, vec![named("out"), port("optical_power", "out", bound(format!("{input}.port.signal * pow(10, -{loss}.port.signal * {length}.port.signal / 10)")))]);
-            let t = template(&mut d, &mut ids);
-            let (in_at, out_at, curve, contour, a, b) = (ids.id(), ids.id(), ids.id(), ids.id(), ids.id(), ids.id());
-            d.child(in_at, "empty", t, vec![at(0.0, 0.0).wrap(), anchor(input, true), named("in")]);
-            d.child(out_at, "empty", t, vec![at(300.0, 0.0).wrap(), anchor(output, true), named("out")]);
-            let mut line = Stroke::default();
-            line.color = Slot::Const(Value::Color([0.96, 0.7, 0.15, 1.0]));
-            line.width = n(6.0);
-            d.child(curve, "path", t, vec![at(0.0, 0.0).wrap(), crate::facet::PathShape::default().wrap(), line.wrap(), named("fiber")]);
-            d.child(contour, "contour", curve, vec![crate::facet::Contour::default().wrap()]);
-            for (p, end) in [(a, in_at), (b, out_at)] {
-                let mut t2 = Transform2d::default();
-                t2.x = bound(format!("{end}.transform2d.x"));
-                t2.y = bound(format!("{end}.transform2d.y"));
-                let half = format!("({out_at}.transform2d.x - {in_at}.transform2d.x) / 2");
-                let mut h = crate::facet::Handles::default();
-                h.ix = bound(format!("-{half}"));
-                h.iy = n(0.0);
-                h.ox = bound(half);
-                h.oy = n(0.0);
-                d.child(p, "point", contour, vec![t2.wrap(), h.wrap()]);
-            }
-        }
-        "meter" => {
-            let (input, range) = (ids.id(), ids.id());
-            d.child(input, "port_spec", def, vec![named("in"), port("optical_power", "in", Slot::Const(q("0 W")))]);
-            d.child(range, "port_spec", def, vec![named("range"), port("value", "in", Slot::Const(q("20 mW")))]);
-            let t = template(&mut d, &mut ids);
-            let (dial, in_at, pivot, needle, readout) = (ids.id(), ids.id(), ids.id(), ids.id(), ids.id());
-            let mut r = Radius::default();
-            r.rx = n(55.0);
-            r.ry = n(55.0);
-            let mut rim = Stroke::default();
-            rim.color = Slot::Const(Value::Color([0.3, 0.32, 0.38, 1.0]));
-            rim.width = n(3.0);
-            d.child(dial, "ellipse", t, vec![at(55.0, 55.0).wrap(), r.wrap(), paint([0.95, 0.96, 0.98, 1.0]), rim.wrap(), named("dial")]);
-            let mut facing = at(0.0, 55.0);
-            facing.rot = n(std::f64::consts::PI);
-            d.child(in_at, "empty", t, vec![facing.wrap(), anchor(input, false), named("in")]);
-            let mut turn = at(55.0, 55.0);
-            turn.rot = bound(format!("-3.14159 + {input}.port.signal / {range}.port.signal * 3.14159"));
-            d.child(pivot, "empty", t, vec![turn.wrap(), named("pivot")]);
-            d.child(needle, "rect", pivot, vec![at(0.0, -2.0).wrap(), size(50.0, 4.0), paint([0.85, 0.2, 0.15, 1.0]), named("needle")]);
-            let mut words = Text::default();
-            words.content = bound(format!("fmt({input}.port.signal, \"mW\", 2)"));
-            d.child(readout, "text", t, vec![at(14.0, 118.0).wrap(), words.wrap(), Font::default().wrap(), paint([0.1, 0.1, 0.12, 1.0]), named("readout")]);
-        }
-        "plot" => plot(&mut d, &mut ids, template),
-        other => return Err(format!("no standard component {other:?}")),
+    if let Some(Op::Create { facets, .. }) = built.ops.first_mut() {
+        facets.push(imp.wrap());
     }
-    Ok((d.ops, def))
+    Ok((built.ops, def))
 }
 
 pub(crate) fn root_of(doc: &Document, ty_: &str) -> Option<NodeId> {
@@ -463,6 +349,11 @@ fn bake(key: &str) -> Baked {
     let mut stack: Vec<NodeId> = doc.children(u).iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
         let Some(node) = doc.live(id) else { continue };
+        // A repeat's template is not drawn, nor is a let: the copies are
+        // baked as plain shapes.
+        if crate::expand::in_repeat_template(doc, id) || node.ty.name() == "let" {
+            continue;
+        }
         // Anchors mark ports; a preview has none.
         if doc.facet(id, crate::facet::FacetKind::Anchor).is_some() && doc.children(id).is_empty() {
             continue;
@@ -470,7 +361,7 @@ fn bake(key: &str) -> Baked {
         let parent = node.parent.and_then(|p| index.iter().position(|&x| x == p));
         let facets: Vec<Facet> = doc
             .facets_of(id)
-            .filter(|f| !matches!(f, Facet::Anchor(_)))
+            .filter(|f| !matches!(f, Facet::Anchor(_) | Facet::Repeat(_)))
             .map(|f| {
                 let mut f = f.clone();
                 for field in f.field_names() {
@@ -492,301 +383,3 @@ fn bake(key: &str) -> Baked {
     let bounds = store.extent(u);
     Baked { nodes, bounds }
 }
-
-/// Label slots per axis: enough for `ticks(…, 8)` (√2 · 8 + 1).
-const TICK_SLOTS: usize = 12;
-
-/// `std:plot` (plans/specs/plot.md §4): series against x, drawn from SVG
-/// path data, in a box of its own that reflows when resized. Ranges and
-/// the cursor default to NaN, "auto" and "none". Template parts read the
-/// box (`#T.size.w/h`); the ranges are outputs, so other components can
-/// read them, and they do not depend on the box.
-fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> NodeId) {
-    let def = d.id;
-    let nan = || Slot::Const(Value::Number(f64::NAN));
-    let text_ = |t: &str| Slot::Const(Value::Str(t.into()));
-    let xs0: Vec<f64> = (0..=40).map(|i| i as f64 * 0.25).collect();
-    let ys0: Vec<f64> = xs0.iter().map(|x| (x * 1.3).sin() * (-x / 5.0).exp()).collect();
-    let none = || Slot::Const(Value::series(Vec::<f64>::new(), crate::units::Dim::NONE));
-    // Each input declares its type, whether it is a pin, and its group
-    // (plans/specs/types-and-units.md §6).
-    let typed = |name: &str| -> (&'static str, &'static str, &'static str) {
-        match name {
-            "xs" | "ys" => ("series", "pin", "Data"),
-            "ys2" | "ys3" => ("series", "auto", "Data"),
-            "f" => ("fn(1) | auto", "pin", "Data"),
-            "style" => ("choice(line|smooth|scatter|area|bars|line+markers)", "auto", "Look"),
-            "style2" | "style3" => ("choice(line|smooth|scatter|area|bars|line+markers) | auto", "settings", "Look"),
-            "grid" => ("bool", "settings", "Look"),
-            "color" | "color2" | "color3" => ("color | auto", "settings", "Look"),
-            "x_min" | "x_max" => ("like(xs) | auto", "auto", "Axes"),
-            "y_min" | "y_max" => ("like(ys) | auto", "auto", "Axes"),
-            "cursor" => ("like(xs) | auto", "pin", "Axes"),
-            "title" | "x_label" | "y_label" => ("text", "settings", "Labels"),
-            "vis" => ("choice(hidden|shown)", "auto", "Motion"),
-            _ => ("number", "auto", "Motion"),
-        }
-    };
-    let mut input = |d: &mut Def, name: &str, default: Slot| {
-        let id = ids.id();
-        let (datatype, show, group) = typed(name);
-        let Facet::Port(mut p) = port("value", "in", default) else { unreachable!("a port") };
-        p.datatype = Slot::Const(Value::Str(datatype.into()));
-        p.show = Slot::Const(Value::Enum(show.into()));
-        p.group = Slot::Const(Value::Str(group.into()));
-        d.child(id, "port_spec", def, vec![named(name), Facet::Port(p)]);
-        id
-    };
-    let xs = input(d, "xs", Slot::Const(Value::series(xs0, crate::units::Dim::NONE)));
-    let ys = input(d, "ys", Slot::Const(Value::series(ys0, crate::units::Dim::NONE)));
-    let ys2 = input(d, "ys2", none());
-    let ys3 = input(d, "ys3", none());
-    let f = input(d, "f", nan());
-    let style = input(d, "style", Slot::Const(Value::Enum("line".into())));
-    let x_min = input(d, "x_min", nan());
-    let x_max = input(d, "x_max", nan());
-    let y_min = input(d, "y_min", nan());
-    let y_max = input(d, "y_max", nan());
-    let x_label = input(d, "x_label", text_(""));
-    let y_label = input(d, "y_label", text_(""));
-    let title = input(d, "title", text_(""));
-    let cursor = input(d, "cursor", nan());
-    let grid = input(d, "grid", Slot::Const(Value::Bool(true)));
-    // Colours default to the theme's series tokens (palette.rs: light and
-    // dark), and a style per series to the first's: `auto`.
-    let color = input(d, "color", nan());
-    let color2 = input(d, "color2", nan());
-    let color3 = input(d, "color3", nan());
-    let style2 = input(d, "style2", nan());
-    let style3 = input(d, "style3", nan());
-    let reveal = input(d, "reveal", n(1.0));
-    let _vis = input(d, "vis", Slot::Const(Value::Enum("shown".into())));
-    let sig = |id: NodeId| format!("{id}.port.signal");
-    let (xs, ys, ys2, ys3, f, style, x_min, x_max, y_min, y_max) = (sig(xs), sig(ys), sig(ys2), sig(ys3), sig(f), sig(style), sig(x_min), sig(x_max), sig(y_min), sig(y_max));
-    let (x_label, y_label, title, cursor, grid, color, color2, color3, reveal) = (sig(x_label), sig(y_label), sig(title), sig(cursor), sig(grid), sig(color), sig(color2), sig(color3), sig(reveal));
-    let (style2, style3) = (sig(style2), sig(style3));
-    // A colour input left on auto takes its series token; a style on auto
-    // takes the first series' style.
-    let tinted = |c: &str, k: usize| format!("(kind({c}) == \"color\" ? {c} : @series-{k})");
-    let (color, color2, color3) = (tinted(&color, 1), tinted(&color2, 2), tinted(&color3, 3));
-    let styled = |s: &str| format!("(kind({s}) == \"number\" ? {style} : {s})");
-    let (style2, style3) = (styled(&style2), styled(&style3));
-    let is_fn = format!("kind({f}) == \"function\"");
-    // Outputs: the ranges in use, and the curve's value at the cursor.
-    let mut output = |d: &mut Def, name: &str, e: String| {
-        let id = ids.id();
-        d.child(id, "port_spec", def, vec![named(name), port("value", "out", bound(e))]);
-        sig(id)
-    };
-    let x_lo = output(d, "x_lo", format!("isnan({x_min}) ? ({is_fn} ? 0 : (len({xs}) == 0 ? 0 : min({xs}))) : {x_min}"));
-    let x_hi = output(d, "x_hi", format!("isnan({x_max}) ? ({is_fn} ? 10 : (len({xs}) == 0 ? 1 : max({xs}))) : {x_max}"));
-    // The function sampled for the range, at a fixed count (outputs do not
-    // see a picture's box); the picture samples it at its own width.
-    let ys_all = format!("concat({is_fn} ? sample({f}, {x_lo}, {x_hi}, 200) : {ys}, {ys2}, {ys3})");
-    let y_lo = output(d, "y_lo", format!("isnan({y_min}) ? (len({ys_all}) == 0 ? 0 : nice_lo(min({ys_all}), max({ys_all}), 5)) : {y_min}"));
-    let y_hi = output(d, "y_hi", format!("isnan({y_max}) ? (len({ys_all}) == 0 ? 1 : nice_hi(min({ys_all}), max({ys_all}), 5)) : {y_max}"));
-    let y_at = output(d, "y_at_cursor", format!("isnan({cursor}) ? 0 / 0 : ({is_fn} ? {f}({cursor}) : interp({xs}, {ys}, {cursor}))"));
-
-    // The vis machine (plans/specs/machines.md): hidden and shown, appear
-    // drawing the plot on in order (frame, axes, ticks, then the curve) with
-    // Easy Ease, disappear taking it away in reverse. Parts read its channels.
-    let channel = |d: &mut Def, ids: &mut Ids, name: &str| {
-        let id = ids.id();
-        let mut c = crate::facet::Channel::default();
-        c.value = n(1.0);
-        d.child(id, "channel", def, vec![named(name), c.wrap()]);
-        format!("{id}.channel.value")
-    };
-    let (ch_frame, ch_axes, ch_ticks, ch_series) = (channel(d, ids, "frame"), channel(d, ids, "axes"), channel(d, ids, "ticks"), channel(d, ids, "series"));
-    let machine = ids.id();
-    d.child(machine, "machine", def, vec![named("vis")]);
-    for (state, v) in [("hidden", 0.0), ("shown", 1.0)] {
-        let id = ids.id();
-        let mut pose = crate::facet::Args::default();
-        for c in ["frame", "axes", "ticks", "series"] {
-            pose.insert(c, n(v));
-        }
-        d.child(id, "state", machine, vec![named(state), pose.wrap()]);
-    }
-    for (name, from, to, ms, tweens) in [
-        ("appear", "hidden", "shown", 1400.0, [("frame", 0.0, 300.0, "ease_out"), ("axes", 150.0, 500.0, "easy_ease"), ("ticks", 450.0, 450.0, "easy_ease"), ("series", 650.0, 750.0, "easy_ease")]),
-        ("disappear", "shown", "hidden", 450.0, [("series", 0.0, 250.0, "ease_in"), ("ticks", 100.0, 250.0, "ease_in"), ("axes", 150.0, 250.0, "ease_in"), ("frame", 200.0, 250.0, "ease_in")]),
-    ] {
-        let id = ids.id();
-        let mut tr = crate::facet::Transition::default();
-        tr.from = text_(from);
-        tr.to = text_(to);
-        tr.ms = n(ms);
-        tr.ease = text_("ease_in_out");
-        d.child(id, "transition", machine, vec![tr.wrap(), named(name)]);
-        for (c, at, len, ease) in tweens {
-            let w = ids.id();
-            let mut tw = crate::facet::Tween::default();
-            tw.channel = text_(c);
-            // In fractions of the transition (retiming keeps proportions).
-            tw.start = n(at / ms);
-            tw.end = n((at + len) / ms);
-            tw.ease = text_(ease);
-            d.child(w, "tween", id, vec![tw.wrap()]);
-        }
-    }
-
-    let t = template(d, ids);
-    // The template's box: its picture's default size, read by every part.
-    d.ops.iter_mut().for_each(|op| {
-        if let Op::Create { id, facets, .. } = op
-            && *id == t
-        {
-            facets.push(size(360.0, 240.0));
-        }
-    });
-    let (w, h) = (format!("{t}.size.w"), format!("{t}.size.h"));
-    let top = format!("({title} != \"\" ? 30 : 14)");
-    let (left, right, bottom) = (54.0, 16.0, 40.0);
-    let aw = format!("max(1, {w} - {})", left + right);
-    let ah = format!("max(1, {h} - {top} - {bottom})");
-    let samples = format!("clamp(floor({aw} / 2), 2, 2000)");
-    let px1 = format!("({is_fn} ? range({x_lo}, {x_hi}, {samples}) : {xs})");
-    let py1 = format!("({is_fn} ? sample({f}, {x_lo}, {x_hi}, {samples}) : {ys})");
-    let xp = |v: &str| format!("scale({v}, {x_lo}, {x_hi}, 0, {aw})");
-    let yp = |v: &str| format!("scale({v}, {y_lo}, {y_hi}, {ah}, 0)");
-    // `ticks` may give up to about √2·n + 1 values (d3's steps), so at most
-    // 8 asked for fits the TICK_SLOTS label slots.
-    let xt = format!("ticks({x_lo}, {x_hi}, clamp(floor({aw} / 70), 2, 8))");
-    let yt = format!("ticks({y_lo}, {y_hi}, clamp(floor({ah} / 40), 2, 8))");
-    // Theme tokens (palette.rs), so the plot reads in light and dark.
-    let ink = "@ink";
-    let muted = "@muted";
-
-    let fade_by = |e: &str| {
-        let mut a = crate::facet::Appearance::default();
-        a.opacity = bound(e.to_owned());
-        a.wrap()
-    };
-    let text_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, x: Slot, y: Slot, content: String, size_: f64, weight: f64, box_w: Option<(f64, &str)>, rot: f64, c: &str, fade: &str| {
-        let id = ids.id();
-        let mut tr = Transform2d::default();
-        tr.x = x;
-        tr.y = y;
-        tr.rot = n(rot);
-        let mut words = Text::default();
-        words.content = bound(content);
-        let mut font = Font::default();
-        font.size = n(size_);
-        font.weight = n(weight);
-        let mut facets = vec![tr.wrap()];
-        if let Some((bw, align)) = box_w {
-            words.sizing = Slot::Const(Value::Enum("fixed".into()));
-            font.align = Slot::Const(Value::Enum(align.into()));
-            facets.push(size(bw, size_ * 1.5));
-        }
-        let mut ink = Fill::default();
-        ink.color = bound(c.to_owned());
-        facets.extend([words.wrap(), font.wrap(), ink.wrap(), named(name), fade_by(fade)]);
-        d.child(id, "text", parent, facets);
-    };
-    let path_part = |d: &mut Def, ids: &mut Ids, parent: NodeId, name: &str, dd: String, stroke: Stroke, fill: Fill, trim_end: Option<String>, fade: Option<&str>| {
-        let id = ids.id();
-        let mut shape = crate::facet::PathShape::default();
-        shape.d = bound(dd);
-        let mut facets = vec![at(0.0, 0.0).wrap(), shape.wrap(), stroke.wrap(), fill.wrap(), named(name)];
-        // Drawn on by `trim.end` (Trim Paths).
-        if let Some(e) = trim_end {
-            let mut t = crate::facet::Trim::default();
-            t.end = bound(e);
-            // A curve with breaks draws along its length; ticks grow together.
-            if name.starts_with("series") {
-                t.mode = Slot::Const(Value::Enum("individually".into()));
-            }
-            facets.push(t.wrap());
-        }
-        if let Some(f) = fade {
-            facets.push(fade_by(f));
-        }
-        d.child(id, "path", parent, facets);
-    };
-    let line = |c: &str, width: f64| {
-        let mut s = Stroke::default();
-        s.color = bound(c.to_owned());
-        s.width = n(width);
-        s
-    };
-    let no_fill = || {
-        let mut f = Fill::default();
-        f.opacity = n(0.0);
-        f
-    };
-
-    // 1. The frame, filling the box.
-    let frame = ids.id();
-    let mut corners = crate::facet::Corners::default();
-    for c in [&mut corners.tl, &mut corners.tr, &mut corners.br, &mut corners.bl] {
-        *c = n(6.0);
-    }
-    let mut box_ = Size::default();
-    box_.w = bound(w.clone());
-    box_.h = bound(h.clone());
-    d.child(frame, "rect", t, vec![at(0.0, 0.0).wrap(), box_.wrap(), corners.wrap(), { let mut f = Fill::default(); f.color = bound("@surface".into()); f.wrap() }, line("@grid", 1.0).wrap(), named("frame"), fade_by(&ch_frame)]);
-    // 2. The title.
-    text_part(d, ids, t, "title", n(14.0), n(8.0), title.clone(), 13.0, 600.0, None, 0.0, ink, &ch_frame);
-    // 3. The plot area, clipped: grid, series, cursor.
-    let area = ids.id();
-    let mut area_at = Transform2d::default();
-    area_at.x = n(left);
-    area_at.y = bound(top.clone());
-    let mut clip = crate::facet::GroupClip::default();
-    clip.w = bound(aw.clone());
-    clip.h = bound(ah.clone());
-    d.child(area, "group", t, vec![area_at.wrap(), clip.wrap(), named("area")]);
-    path_part(d, ids, area, "grid", format!("{grid} ? segments({xg}, 0, {xg}, {ah}) + ' ' + segments(0, {yg}, {aw}, {yg}) : \"\"", xg = xp(&xt), yg = yp(&yt)), line("@grid", 1.0), no_fill(), None, Some(&ch_ticks));
-    for (k, (sx, sy, c, style)) in [(xs.clone(), ys3.clone(), color3.clone(), style3.clone()), (xs.clone(), ys2.clone(), color2.clone(), style2.clone()), (px1.clone(), py1.clone(), color.clone(), style.clone())].into_iter().enumerate() {
-        let (x, y) = (xp(&sx), yp(&sy));
-        // Bars and areas stand on y = 0 where it is in view, else the
-        // nearer edge.
-        let base = format!("clamp({}, 0, {ah})", yp(&format!("{y_lo} * 0")));
-        let draw = format!(
-            "len({sy}) == 0 ? \"\" : ({style} == 'scatter' ? circles({x}, {y}, 3) : ({style} == 'smooth' ? smooth({x}, {y}) : ({style} == 'area' ? area({x}, {y}, {base}) : ({style} == 'bars' ? bars({x}, {y}, {base}, max(1, {aw} / max(1, len({sy})) * 0.7)) : (points({x}, {y}) == \"\" ? \"\" : 'M ' + points({x}, {y})) + ({style} == 'line+markers' ? ' ' + circles({x}, {y}, 3) : \"\")))))"
-        );
-        let solid = format!("({style} == 'scatter' || {style} == 'bars')");
-        let mut stroke = line("@ink", 2.0);
-        stroke.color = bound(format!("{solid} ? rgb(0, 0, 0, 0) : {c}"));
-        let mut fill = Fill::default();
-        fill.color = bound(c.clone());
-        let shown = format!("min({reveal}, {ch_series})");
-        fill.opacity = bound(format!("{solid} ? {shown} : ({style} == 'area' ? 0.18 * {shown} : 0)"));
-        path_part(d, ids, area, &format!("series {}", 3 - k), draw, stroke, fill, Some(shown.clone()), None);
-    }
-    let cx = xp(&cursor);
-    let cy = yp(&y_at);
-    let mut dashed = line(muted, 1.0);
-    dashed.dash = Slot::Const(Value::Str("4 3".into()));
-    path_part(d, ids, area, "cursor", format!("isnan({cursor}) ? \"\" : segments({cx}, 0, {cx}, {ah})"), dashed, no_fill(), None, Some(&ch_series));
-    let mut dot_fill = Fill::default();
-    dot_fill.color = bound(color.clone());
-    path_part(d, ids, area, "cursor dot", format!("isnan({cursor}) ? \"\" : circles({cx}, {cy}, 4)"), line("@surface", 1.5), dot_fill, None, Some(&ch_series));
-    text_part(d, ids, area, "cursor value", bound(format!("isnan({cursor}) ? 0 : {cx} + 6")), bound(format!("isnan({cursor}) ? 0 : {cy} - 20")), format!("isnan({cursor}) ? \"\" : fmt(sig({y_at}, 3))"), 11.0, 600.0, None, 0.0, ink, &ch_series);
-    // 4. Axes, tick marks and labels, unclipped, in the same space.
-    let axes = ids.id();
-    let mut axes_at = Transform2d::default();
-    axes_at.x = n(left);
-    axes_at.y = bound(top.clone());
-    d.child(axes, "group", t, vec![axes_at.wrap(), named("axes")]);
-    path_part(d, ids, axes, "axis lines", format!("'M 0,0 L 0,' + str({ah}) + ' L ' + str({aw}) + ',' + str({ah})"), line("@axis", 1.0), no_fill(), Some(ch_axes.clone()), None);
-    path_part(d, ids, axes, "tick marks", format!("segments({xg}, {ah}, {xg}, {ah} + 4) + ' ' + segments(-4, {yg}, 0, {yg})", xg = xp(&xt), yg = yp(&yt)), line("@axis", 1.0), no_fill(), Some(ch_ticks.clone()), None);
-    let x_unit = format!("unit_of({px1})");
-    let y_unit = format!("unit_of({py1})");
-    for i in 0..TICK_SLOTS {
-        let v = format!("at({xt}, {i})");
-        text_part(d, ids, axes, &format!("x tick {i}"), bound(format!("{} - 28", xp(&v))), bound(format!("{ah} + 7")), format!("{i} < len({xt}) ? fmt(in_unit({v}, {x_unit})) : \"\""), 10.0, 400.0, Some((56.0, "center")), 0.0, muted, &ch_ticks);
-    }
-    for i in 0..TICK_SLOTS {
-        let v = format!("at({yt}, {i})");
-        text_part(d, ids, axes, &format!("y tick {i}"), n(-50.0), bound(format!("{} - 7", yp(&v))), format!("{i} < len({yt}) ? fmt(in_unit({v}, {y_unit})) : \"\""), 10.0, 400.0, Some((44.0, "right")), 0.0, muted, &ch_ticks);
-    }
-    // 5. Axis titles: the label given, else the data's unit.
-    text_part(d, ids, t, "x title", bound(format!("{left} + {aw} / 2 - 120")), bound(format!("{h} - 18")), format!("{x_label} != \"\" ? {x_label} : {x_unit}"), 11.0, 500.0, Some((240.0, "center")), 0.0, muted, &ch_frame);
-    let mut y_title_rot = -std::f64::consts::FRAC_PI_2;
-    y_title_rot = (y_title_rot * 1e9).round() / 1e9;
-    text_part(d, ids, t, "y title", n(4.0), bound(format!("{top} + {ah} / 2 + 120")), format!("{y_label} != \"\" ? {y_label} : {y_unit}"), 11.0, 500.0, Some((240.0, "center")), y_title_rot, muted, &ch_frame);
-}
-

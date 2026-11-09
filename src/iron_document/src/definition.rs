@@ -45,6 +45,8 @@ pub struct InputInfo {
     pub name: &'static str,
     pub kind: ValueKind,
     pub default: Value,
+    /// Its declared type (`port.datatype`); loose when undeclared.
+    pub ty: crate::types::Type,
 }
 
 fn ty(name: &str) -> TypeId {
@@ -78,7 +80,8 @@ pub fn inputs_of(doc: &Document, def: NodeId) -> Result<Vec<InputInfo>, String> 
         if out.iter().any(|p: &InputInfo| p.name == name) {
             return Err(format!("definition {def} declares {name:?} twice"));
         }
-        out.push(InputInfo { spec: child, name: crate::sym::intern(&name), kind: default.kind(), default });
+        let ty = port.datatype.constant().and_then(|v| v.as_str()).map(crate::types::Type::parse).transpose().map_err(|e| format!("port_spec {child} ({name}): {e}"))?.unwrap_or(crate::types::Type::ANY);
+        out.push(InputInfo { spec: child, name: crate::sym::intern(&name), kind: default.kind(), default, ty });
     }
     Ok(out)
 }
@@ -97,7 +100,19 @@ pub fn validate_entity(doc: &Document, id: NodeId) -> Result<(), String> {
             return Err(format!("{id}: missing argument {:?} for an in port of {def}", spec.name));
         };
         if let Some(v) = slot.constant() {
-            check_kind(spec, v).map_err(|e| format!("{id}.args.{}: {e}", spec.name))?;
+            if spec.ty.is_loose() {
+                check_kind(spec, v).map_err(|e| format!("{id}.args.{}: {e}", spec.name))?;
+            } else {
+                // Declared: the type decides (types-and-units.md T5, T6);
+                // `like(…)` reads the other arguments' constants.
+                // A bound one is evaluated over the document's constants
+                // (one level: `range(0 mm, 10 mm, 11)`, `$self.xs * 2`).
+                let other = |n: &str| {
+                    let slot = args.slots.get(n)?;
+                    slot.constant().cloned().or_else(|| slot.expr()?.eval(&|l| doc.leaf(l.node, l.path).and_then(|s| s.constant()).cloned()).ok())
+                };
+                spec.ty.check(v, &other).map_err(|e| format!("{id}.args.{}: {e}", spec.name))?;
+            }
         }
     }
     for name in args.slots.keys() {

@@ -36,22 +36,53 @@ pub struct Pin {
 
 /// The settings and outputs with no place on the picture of the component
 /// `reach` shows, laid out on its box in `view`; `k` is CSS px → window px.
+/// On an instance, only the inputs that show as pins (§ `shows`).
 pub fn pins_of(geo: &Geo, view: &PanelView, reach: &Reach, k: f64) -> Vec<Pin> {
+    pin_layout(geo, view, reach, k, false).0
+}
+
+/// Whether an instance's input shows as a pin (types-and-units.md §6): its
+/// author's `port.show` (`pin` always, `settings` only when connected), and
+/// `auto`: when it is connected, bound, or set away from its default.
+fn shows(doc: &Document, spec: NodeId, entity: NodeId, port: NodeId, name: &str) -> bool {
+    let Some(p) = doc.get::<iron_document::facet::Port>(spec) else { return true };
+    let connected = iron_document::plug::connection_of(doc, port).is_some();
+    match p.show.constant().and_then(|v| v.as_str()) {
+        Some("pin") => true,
+        Some("settings") => connected,
+        _ => {
+            let arg = iron_document::LeafPath::new(iron_document::FacetKind::Args, name).ok().and_then(|path| doc.leaf(entity, path));
+            let changed = match (arg, p.signal.constant()) {
+                (Some(slot), _) if slot.expr().is_some() => true,
+                (Some(slot), Some(default)) => slot.constant().is_some_and(|v| match (v, default) {
+                    (iron_document::Value::Number(a), iron_document::Value::Number(b)) => !(a == b || (a.is_nan() && b.is_nan())),
+                    (a, b) => a.as_str().zip(b.as_str()).map_or(a != b, |(x, y)| x != y),
+                }),
+                _ => false,
+            };
+            connected || changed
+        }
+    }
+}
+
+/// Pins laid out (`all`: every input, as a line being drawn may land on
+/// one), and how many inputs are folded away.
+pub fn pin_layout(geo: &Geo, view: &PanelView, reach: &Reach, k: f64, all: bool) -> (Vec<Pin>, usize) {
     let doc = geo.doc();
     let owner = reach.node();
     let (def, entity, main) = match expand::main_definition(doc, owner) {
         Some(d) => (d, None, true),
         None => {
-            let Some(e) = expand::use_entity(doc, owner) else { return Vec::new() };
-            let Some(d) = expand::linked_definition(doc, e) else { return Vec::new() };
+            let Some(e) = expand::use_entity(doc, owner) else { return (Vec::new(), 0) };
+            let Some(d) = expand::linked_definition(doc, e) else { return (Vec::new(), 0) };
             (d, Some(e), false)
         }
     };
-    let Some(frame) = geo.frame(&reach.chain) else { return Vec::new() };
+    let Some(frame) = geo.frame(&reach.chain) else { return (Vec::new(), 0) };
     let r: Rect = (view.affine() * frame).transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0));
     let ports = iron_document::author::ports_of(doc, def);
     let mut out = Vec::new();
-    let (mut ins, mut outs) = (0, 0);
+    let (mut ins, mut outs, mut folded) = (0, 0, 0);
     for (spec, name, dir, placed) in ports {
         if placed {
             // On a main, a placed port links from where it sits (the dial
@@ -70,6 +101,14 @@ pub fn pins_of(geo: &Geo, view: &PanelView, reach: &Reach, k: f64) -> Vec<Pin> {
             },
             None => spec,
         };
+        if !all
+            && dir == "in"
+            && let Some(e) = entity
+            && !shows(doc, spec, e, port, &name)
+        {
+            folded += 1;
+            continue;
+        }
         let (x, i) = if dir == "out" {
             outs += 1;
             (r.x1, outs - 1)
@@ -79,7 +118,15 @@ pub fn pins_of(geo: &Geo, view: &PanelView, reach: &Reach, k: f64) -> Vec<Pin> {
         };
         out.push(Pin { owner, port, name, dir, main, at: Point::new(x, r.y0 + (PIN_TOP + PIN_STEP * i as f64) * k) });
     }
-    out
+    (out, folded)
+}
+
+/// Where the "+N more" pill sits: below the last input pin on the left.
+pub fn more_at(geo: &Geo, view: &PanelView, reach: &Reach, k: f64, pins: &[Pin]) -> Option<Point> {
+    let frame = geo.frame(&reach.chain)?;
+    let r: Rect = (view.affine() * frame).transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0));
+    let ins = pins.iter().filter(|p| p.dir == "in" && !p.main).count();
+    Some(Point::new(r.x0, r.y0 + (PIN_TOP + PIN_STEP * ins as f64) * k))
 }
 
 /// The pin under `screen`, if any.
@@ -135,4 +182,18 @@ pub fn noodle(a: Point, b: Point) -> kurbo::BezPath {
     let s = if b.x >= a.x { 1.0 } else { -1.0 };
     p.curve_to(a + kurbo::Vec2::new(dx * s, 0.0), b - kurbo::Vec2::new(dx * s, 0.0), b);
     p
+}
+
+/// Whether a line from pin `a` may land on pin `b` by their declared types
+/// (out feeds in; a loose end always may).
+pub fn fits(doc: &Document, a: &Pin, b: &Pin) -> bool {
+    let ty = |p: NodeId| {
+        doc.get::<iron_document::facet::Port>(p)
+            .and_then(|x| x.datatype.constant())
+            .and_then(|v| v.as_str())
+            .and_then(|t| iron_document::types::Type::parse(t).ok())
+            .unwrap_or(iron_document::types::Type::ANY)
+    };
+    let (from, to) = if a.dir == "out" { (a, b) } else { (b, a) };
+    ty(from.port).feeds(&ty(to.port)).is_ok()
 }

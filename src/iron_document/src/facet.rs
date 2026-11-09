@@ -649,6 +649,14 @@ facets! {
         // ("" matches any) and a gender (`any`, `male`, `female`, `neutral`).
         connector: Str = Value::Str(String::new()),
         gender: Enum = Value::Enum("any".to_owned()) => ["any", "male", "female", "neutral"],
+        // What it carries (plans/specs/types-and-units.md): `nm`,
+        // `choice(hidden|shown)`, `like(xs) | auto`…; empty is loose.
+        datatype: Str = Value::Str(String::new()),
+        // Whether it shows as a pin on the component's edge (§6): `auto`
+        // (when connected, bound or changed), `pin` (always), `settings`
+        // (only in the inspector); and the group it folds into.
+        show: Enum = Value::Enum("auto".to_owned()) => ["auto", "pin", "settings"],
+        group: Str = Value::Str(String::new()),
     }
 
     /// A behaviour equation of a definition or entity (ECM §6.1): `lhs` and
@@ -844,6 +852,11 @@ impl Facet {
             Slot::Const(Value::Str(text)) if expected == ValueKind::Geometry => {
                 let g = crate::geometry::Geometry::from_svg_path(&text).map_err(|message| LeafError::BadValue { path: LeafPath::new(kind, field).expect("field checked above"), message })?;
                 Slot::Const(Value::Geometry(std::sync::Arc::new(g)))
+            }
+            // A port's declared type must parse.
+            Slot::Const(Value::Str(text)) if kind == FacetKind::Port && field == "datatype" => {
+                crate::types::Type::parse(&text).map_err(|message| LeafError::BadValue { path: LeafPath::new(kind, field).expect("field checked above"), message })?;
+                Slot::Const(Value::Str(text))
             }
             slot => slot,
         };

@@ -125,7 +125,11 @@ pub fn validate_connection(doc: &Document, connection: NodeId) -> Result<(), Str
     }
     let k = kind(&ka).ok_or_else(|| format!("{connection}: unknown port kind {ka:?}"))?;
     if k.flow == Flow::Signal {
-        let (_, to) = direction(doc, a, b).ok_or_else(|| format!("{connection}: a {ka} connection joins an out port to an in port"))?;
+        let (from, to) = direction(doc, a, b).ok_or_else(|| format!("{connection}: a {ka} connection joins an out port to an in port"))?;
+        // Declared types must agree; a loose end is always allowed, and a
+        // typed input checks what arrives (types-and-units.md §3.5).
+        let ty = |p: NodeId| doc.get::<Port>(p).and_then(|x| x.datatype.constant()).and_then(|v| v.as_str()).and_then(|t| crate::types::Type::parse(t).ok()).unwrap_or(crate::types::Type::ANY);
+        ty(from).feeds(&ty(to)).map_err(|e| format!("{connection}: cannot connect {from} to {to}: {e}"))?;
         let ty = crate::registry::TypeId::lookup("connection").expect("registered");
         let feeds = doc
             .nodes_of_type(ty)

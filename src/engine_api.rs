@@ -1360,6 +1360,10 @@ fn port_json(store: &iron_document::Store, spec: iron_document::NodeId) -> serde
         "signal": p.signal.constant().map(|v| v.to_string()),
         "bind": p.signal.expr().map(|e| e.to_string()),
         "kinds": iron_document::port::KINDS.iter().map(|k| k.name).collect::<Vec<_>>(),
+        "datatype": p.datatype.constant().and_then(|v| v.as_str()).map(str::to_owned),
+        "show": text(&p.show),
+        "group": text(&p.group),
+        "suggest": iron_document::author::type_suggestions(doc, spec),
     })
 }
 
@@ -1421,6 +1425,13 @@ fn inspect_component(store: &iron_document::Store, id: iron_document::NodeId) ->
                 "via": via,
                 "why": why,
                 "error": store.reactive().errors.get(&iron_document::Leaf { node: entity, path }),
+                // Its declared type (types-and-units.md §3.1): the widget.
+                "datatype": (!input.ty.is_loose()).then(|| input.ty.to_string()),
+                "options": input.ty.options(),
+                "auto": input.ty.auto,
+                "unit": input_unit(store, entity, &input.ty),
+                "show": port_text(doc, input.spec, "show"),
+                "group": port_text(doc, input.spec, "group"),
             }))
         })
         .collect();
@@ -1443,6 +1454,27 @@ pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: 
         Ok(_) => serde_json::json!({"ok": true}).to_string(),
         Err(errors) => fail(errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")),
     }
+}
+
+/// The unit an input is typed in: its type's display unit, or, for
+/// `like(other)`, the unit the other input's data shows in.
+fn input_unit(store: &iron_document::Store, entity: iron_document::NodeId, ty: &iron_document::types::Type) -> Option<String> {
+    use iron_document::types::Base;
+    match &ty.base {
+        Base::Quantity { unit: Some(u), .. } => Some(u.clone()),
+        Base::Like(other) => {
+            let v = store.resolved(entity, iron_document::LeafPath::new(iron_document::FacetKind::Args, other).ok()?)?;
+            let (data, dim) = v.as_series().map(|(d, dim)| (d.iter().copied().filter(|x| x.is_finite()).fold(0.0f64, |m, x| m.max(x.abs())), dim)).or_else(|| v.as_quantity())?;
+            (!dim.is_none()).then(|| iron_document::units::display_unit(data, dim).0)
+        }
+        _ => None,
+    }
+}
+
+fn port_text(doc: &iron_document::Document, spec: iron_document::NodeId, field: &str) -> Option<String> {
+    let p = doc.get::<iron_document::facet::Port>(spec)?;
+    let slot = match field { "show" => &p.show, _ => &p.group };
+    slot.constant().and_then(|v| v.as_str()).filter(|t| !t.is_empty()).map(str::to_owned)
 }
 
 /// A property's animation, for the inspector's ◇: `"none"`, `"animated"`
@@ -1482,6 +1514,9 @@ fn inspector_value(current: &iron_document::Value, text: &str) -> Result<iron_do
         let v: Vec<f64> = t.split(',').map(|x| x.trim().parse().ok()).collect::<Option<_>>()?;
         (v.len() == n && v.iter().all(|v| v.is_finite())).then_some(v)
     };
+    if t == "auto" && matches!(current, Value::Number(_) | Value::Quantity { .. }) {
+        return Ok(Value::Number(f64::NAN));
+    }
     let value = match current {
         // A number, or a quantity where the input takes one (an `auto`
         // range takes `400 nm`; the store checks the kind).

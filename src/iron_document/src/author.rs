@@ -157,6 +157,14 @@ pub struct PortPatch {
     /// The default (an input's) or the value (an output's), as markup:
     /// `10 mW`, or `{= #power.port.signal}` for an expression.
     pub signal: Option<String>,
+    /// Its declared type (types-and-units.md): grammar text, `""` loose.
+    #[serde(default)]
+    pub datatype: Option<String>,
+    /// `auto`, `pin` or `settings`, and its group (§6).
+    #[serde(default)]
+    pub show: Option<String>,
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 /// The ops for `patch` on port_spec `spec`, and on its anchors and its
@@ -205,6 +213,20 @@ pub fn edit_port(doc: &Document, spec: NodeId, patch: &PortPatch) -> Result<Vec<
             return Err(format!("a gender is any, male, female or neutral, not {g:?}"));
         }
         ops.push(Op::Set { id: spec, path: path("gender"), slot: Slot::Const(Value::Enum(g.clone())) });
+    }
+    if let Some(t) = &patch.datatype {
+        let t = t.trim();
+        crate::types::Type::parse(t).map_err(|e| format!("data type: {e}"))?;
+        ops.push(Op::Set { id: spec, path: path("datatype"), slot: Slot::Const(Value::Str(t.to_owned())) });
+    }
+    if let Some(sh) = &patch.show {
+        if !matches!(sh.as_str(), "auto" | "pin" | "settings") {
+            return Err(format!("show as pin is auto, pin or settings, not {sh:?}"));
+        }
+        ops.push(Op::Set { id: spec, path: path("show"), slot: Slot::Const(Value::Enum(sh.clone())) });
+    }
+    if let Some(g) = &patch.group {
+        ops.push(Op::Set { id: spec, path: path("group"), slot: Slot::Const(Value::Str(g.trim().to_owned())) });
     }
     if let Some(text) = &patch.signal {
         let text = text.trim();
@@ -344,4 +366,28 @@ pub fn expose_control(doc: &Document, shown: NodeId, dir: &str, follow: bool) ->
     a.follow = Slot::Const(Value::Bool(follow));
     ops.push(Op::AddFacet { id: control, facet: a.wrap() });
     Ok(ops)
+}
+
+/// Types a loose port could adopt (types-and-units.md §3.5): what its
+/// value suggests, then the declared types of ports its instances are
+/// connected to. Each once, as grammar text.
+pub fn type_suggestions(doc: &Document, spec: NodeId) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |t: String| {
+        if t != "any" && !out.contains(&t) {
+            out.push(t);
+        }
+    };
+    if let Some(v) = doc.get::<crate::facet::Port>(spec).and_then(|p| p.signal.constant()) {
+        add(crate::types::Type::of_value(v).to_string());
+    }
+    for e in entities_of(doc, doc.live(spec).and_then(|n| n.parent).unwrap_or(spec)) {
+        let Some(port) = NodeId::expanded(e, spec) else { continue };
+        if let Some((_, partner)) = crate::plug::connection_of(doc, port)
+            && let Some(t) = doc.get::<crate::facet::Port>(partner).and_then(|p| p.datatype.constant()).and_then(|v| v.as_str()).filter(|t| !t.is_empty())
+        {
+            add(t.to_owned());
+        }
+    }
+    out
 }

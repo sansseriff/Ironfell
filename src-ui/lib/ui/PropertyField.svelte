@@ -1,5 +1,7 @@
 <script lang="ts" module>
-  export type Property = { leaf: string; field: string; kind: string | null; text: string | null; full?: string | null; bind: string | null; edit: string; via: string | null; why: string | null; options?: string[] | null; key?: "none" | "animated" | "on"; error?: string | null };
+  export type Property = { leaf: string; field: string; kind: string | null; text: string | null; full?: string | null; bind: string | null; edit: string; via: string | null; why: string | null; options?: string[] | null; key?: "none" | "animated" | "on"; error?: string | null;
+    /** A component input's declared type (types-and-units.md §3.1). */
+    datatype?: string | null; auto?: boolean; unit?: string | null; show?: string | null; group?: string | null };
 </script>
 
 <script lang="ts">
@@ -8,6 +10,7 @@
   import Unlink from "@lucide/svelte/icons/unlink";
   import Diamond from "@lucide/svelte/icons/diamond";
   import Select from "./Select.svelte";
+  import { ToggleGroup } from "bits-ui";
   import { controllerManager } from "../../controller-manager.svelte";
   let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, inlineUnit = false, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8, zeroLabel }: {
     field: Property; node: string;
@@ -38,8 +41,14 @@
   let formula = $state(false);
   const editingFormula = $derived(formula || (!!f.bind && f.edit !== "via"));
   const isFormula = (text: string) => /^\s*(=|\{=)/.test(text);
+  // `| auto` (stored as NaN): the field is empty with "Auto" in it, and the
+  // Auto toggle puts it back.
+  const isAuto = $derived(!!f.auto && (f.text === "NaN" || f.text === "auto"));
   async function change(el: HTMLInputElement) {
-    const text = el.value;
+    let text = el.value;
+    // A bare number in a field with a unit is in that unit (`3` → 3 mm).
+    if (f.unit && text.trim() !== "" && Number.isFinite(Number(text))) text = `${text.trim()} ${f.unit}`;
+    if (f.auto && text.trim() === "") text = "auto";
     if (isFormula(text) || editingFormula) {
       await onSet(f, isFormula(text) ? text : `=${text}`);
       formula = false;
@@ -49,7 +58,7 @@
     } else {
       // A number field also takes a quantity ("400 nm"), sent as typed.
       const n = Number(text);
-      await onSet(f, numeric && text.trim() !== "" && Number.isFinite(n) ? String(n / factor) : text);
+      await onSet(f, numeric && !f.unit && text.trim() !== "" && Number.isFinite(n) ? String(n / factor) : text);
     }
     // A refused edit leaves the field showing what it holds, not the typo.
     await tick();
@@ -58,6 +67,9 @@
   function fieldText(): string {
     if (editingFormula) return f.bind ? `= ${f.bind}` : "= ";
     if (mixed && !dragging) return "";
+    if (isAuto) return "";
+    // A quantity in its field's unit shows as the number alone.
+    if (f.unit && f.text?.endsWith(` ${f.unit}`)) return f.text.slice(0, -f.unit.length - 1);
     return String(!numeric && f.full ? f.full : shown);
   }
   async function openFormula(e: MouseEvent) {
@@ -165,6 +177,10 @@
       {#if f.bind && !locked}<button type="button" class="field-action" aria-label={`Remove the formula from ${displayLabel}`} title="Remove formula (keep the current value)" onclick={unbind}><Unlink size={13} strokeWidth={1.5} /></button>{/if}
     {:else if f.kind === "bool"}
       <input aria-label={displayLabel} type="checkbox" checked={f.text === "true"} disabled={locked} onchange={(e) => onSet(f, String(e.currentTarget.checked))} />
+    {:else if options && options.length <= 4}
+      <ToggleGroup.Root type="single" class="segmented" value={f.text ?? options[0]} disabled={locked} aria-label={displayLabel} onValueChange={(v) => { if (v && v !== f.text) onSet(f, v); }}>
+        {#each options as o (o)}<ToggleGroup.Item class="segment" value={o}>{o[0].toUpperCase() + o.slice(1)}</ToggleGroup.Item>{/each}
+      </ToggleGroup.Root>
     {:else if options}
       <Select label={displayLabel} value={f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
     {:else if f.kind === "color" && channel !== "alpha"}
@@ -172,10 +188,12 @@
       <input aria-label={`${displayLabel} hex`} class="hex" value={(f.text ?? "").slice(1, colorDigits + 1).toUpperCase()} disabled={locked} onchange={(e) => onSet(f, `#${e.currentTarget.value.replace("#", "")}`)} />
     {:else}
       {@const zero = !!zeroLabel && !dragging && numeric && Number(shown) === 0}
-      <input aria-label={displayLabel} class:number={numeric} type="text" inputmode={numeric ? "decimal" : undefined} value={zero ? "" : fieldText()} placeholder={mixed ? "Mixed" : zero ? zeroLabel : undefined} disabled={locked}
+      <input aria-label={displayLabel} class:number={numeric} type="text" inputmode={numeric ? "decimal" : undefined} value={zero ? "" : fieldText()} placeholder={mixed ? "Mixed" : zero ? zeroLabel : isAuto ? "Auto" : undefined} disabled={locked}
         oninput={(e) => { if (isFormula(e.currentTarget.value)) formula = true; }}
         onchange={(e) => { if (!dragging) change(e.currentTarget); }} />
       {#if unit && !(zeroLabel && !dragging && numeric && Number(shown) === 0)}<span class="unit">{unit}</span>{/if}
+      {#if f.unit && !isAuto}<span class="unit">{f.unit}</span>{/if}
+      {#if f.auto && !locked && !isAuto && !editingFormula}<button type="button" class="auto-toggle" title="Back to automatic" onclick={() => onSet(f, "auto")}>Auto</button>{/if}
       {#if animatable && !compact}<button type="button" class="field-action key" class:reveal={f.key === "none"} class:animated={f.key !== "none"} aria-label={f.key === "on" ? `Remove the key on ${displayLabel}` : `Key ${displayLabel} at the playhead`} title={f.key === "on" ? "Remove the key at the playhead" : f.key === "animated" ? "Add a key at the playhead" : "Animate: key this value at the playhead"} onclick={keyHere}><Diamond size={11} strokeWidth={1.75} fill={f.key === "on" ? "currentColor" : "none"} /></button>{/if}
       {#if !locked && !compact}<button type="button" class="field-action reveal" aria-label={`Write a formula for ${displayLabel}`} title="Formula (or type =)" onclick={openFormula}><SquareFunction size={13} strokeWidth={1.5} /></button>{/if}
     {/if}
@@ -216,6 +234,13 @@
   .field-action:focus-visible { outline: 1px solid var(--accent); }
   .reveal { opacity: 0; }
   .key.animated { color: var(--accent); }
+  .control :global(.segmented) { display: flex; width: 100%; padding: 2px; gap: 2px; }
+  .control :global(.segment) { flex: 1 1 0; min-width: 0; border: 0; border-radius: 4px; background: transparent; color: var(--fg-muted); font-size: 11px; padding: 4px 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .control :global(.segment:hover) { color: var(--fg); }
+  .control :global(.segment[data-state="on"]) { background: var(--bg); color: var(--fg); box-shadow: 0 0 0 1px var(--border); }
+  .control :global(.segment:focus-visible) { outline: 1px solid var(--accent); }
+  .auto-toggle { flex: 0 0 auto; margin-right: 4px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--fg-muted); font-size: 10px; padding: 2px 6px; cursor: pointer; }
+  .auto-toggle:focus-visible { outline: 1px solid var(--accent); }
   .field-error { color: var(--danger); font-size: 10px; overflow-wrap: anywhere; }
   .control:hover .reveal, .control:focus-within .reveal, .reveal:focus-visible { opacity: 1; }
   .control :global(.ui-select-trigger) { width: 100%; min-width: 0; border: 0; background: transparent; }

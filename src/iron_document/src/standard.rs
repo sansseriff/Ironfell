@@ -509,9 +509,32 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
     let xs0: Vec<f64> = (0..=40).map(|i| i as f64 * 0.25).collect();
     let ys0: Vec<f64> = xs0.iter().map(|x| (x * 1.3).sin() * (-x / 5.0).exp()).collect();
     let none = || Slot::Const(Value::series(Vec::<f64>::new(), crate::units::Dim::NONE));
+    // Each input declares its type, whether it is a pin, and its group
+    // (plans/specs/types-and-units.md §6).
+    let typed = |name: &str| -> (&'static str, &'static str, &'static str) {
+        match name {
+            "xs" | "ys" => ("series", "pin", "Data"),
+            "ys2" | "ys3" => ("series", "auto", "Data"),
+            "f" => ("fn(1) | auto", "pin", "Data"),
+            "style" => ("choice(line|smooth|scatter|area|bars|line+markers)", "auto", "Look"),
+            "grid" => ("bool", "settings", "Look"),
+            "color" | "color2" | "color3" => ("color", "settings", "Look"),
+            "x_min" | "x_max" => ("like(xs) | auto", "auto", "Axes"),
+            "y_min" | "y_max" => ("like(ys) | auto", "auto", "Axes"),
+            "cursor" => ("like(xs) | auto", "pin", "Axes"),
+            "title" | "x_label" | "y_label" => ("text", "settings", "Labels"),
+            "vis" => ("choice(hidden|shown)", "auto", "Motion"),
+            _ => ("number", "auto", "Motion"),
+        }
+    };
     let mut input = |d: &mut Def, name: &str, default: Slot| {
         let id = ids.id();
-        d.child(id, "port_spec", def, vec![named(name), port("value", "in", default)]);
+        let (datatype, show, group) = typed(name);
+        let Facet::Port(mut p) = port("value", "in", default) else { unreachable!("a port") };
+        p.datatype = Slot::Const(Value::Str(datatype.into()));
+        p.show = Slot::Const(Value::Enum(show.into()));
+        p.group = Slot::Const(Value::Str(group.into()));
+        d.child(id, "port_spec", def, vec![named(name), Facet::Port(p)]);
         id
     };
     let xs = input(d, "xs", Slot::Const(Value::series(xs0, crate::units::Dim::NONE)));

@@ -395,7 +395,15 @@ impl Reactive {
                 let runtime = &self.runtime;
                 let resolved = &self.resolved;
                 let nodes = &self.nodes;
-                expr.eval(&|l| read_with(overlay, runtime, resolved, nodes, doc, l)).and_then(|v| as_leaf_kind(leaf, v))
+                let read = |l| read_with(overlay, runtime, resolved, nodes, doc, l);
+                expr.eval(&read).and_then(|v| as_leaf_kind(leaf, v)).and_then(|v| match crate::types::declared(doc, leaf) {
+                    // A boundary leaf with a declared type checks what it
+                    // computes or receives (types-and-units.md §3.3, §3.5).
+                    Some((ty, owner)) => ty
+                        .check(&v, &|name| crate::facet::LeafPath::new(crate::facet::FacetKind::Args, name).ok().and_then(|path| read(Leaf { node: owner, path })))
+                        .map_err(|e| crate::expr::EvalError::Type(format!("{}: {e}", boundary_name(doc, leaf)))),
+                    None => Ok(v),
+                })
             };
             match result {
                 Ok(v) => {
@@ -450,5 +458,14 @@ fn as_leaf_kind(leaf: Leaf, v: Value) -> Result<Value, crate::expr::EvalError> {
         Value::Str(text) if leaf.path.kind() == crate::value::ValueKind::Enum => Ok(Value::Enum(text)),
         Value::Enum(text) if leaf.path.kind() == crate::value::ValueKind::Str => Ok(Value::Str(text)),
         v => Ok(v),
+    }
+}
+
+/// How a boundary leaf is named in its type error: an argument by its
+/// name, a port's signal by the port's name.
+fn boundary_name(doc: &Document, leaf: Leaf) -> String {
+    match leaf.path.facet {
+        crate::facet::FacetKind::Port => doc.get::<crate::facet::Name>(leaf.node).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("port").to_owned(),
+        _ => leaf.path.field.to_owned(),
     }
 }

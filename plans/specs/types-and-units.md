@@ -24,7 +24,7 @@ types.
 
 | # | Decision |
 |---|---|
-| T1 | A port spec gains `port.type`, one text leaf in a small grammar (§2). `port.kind` stays the **domain** (signal vs. pair flow, `optical_power`, `electrical`); the domain kinds imply their type (`optical_power` is `power`). |
+| T1 | A port spec gains `port.datatype` (`datatype=` in markup: `type=` already names a node's type), one text leaf in a small grammar (§2). `port.kind` stays the **domain** (signal vs. pair flow, `optical_power`, `electrical`); the domain kinds imply their type (`optical_power` is `power`). |
 | T2 | Types: `number`, a **quantity** by dimension or unit (`length`, `nm`, `W/m2`), `series(<dim>)`, `choice(a\|b\|c)`, `bool`, `color`, `text`, `fn(n)`, `any`; any of them `\| auto`. |
 | T3 | A quantity type names a **display unit** (`quantity(nm)` or `length in nm`). The inspector shows and edits in it, accepts any compatible unit, and a context can override it (a lesson in µm). |
 | T4 | **Literals keep their unit as written.** `400 nm` in a formula prints as `400 nm`; a constant quantity saves as `[si, canonical, written]`. Values at run time stay SI plus dimension; the hint lives on literals and on types, not on computed values. |
@@ -32,6 +32,8 @@ types.
 | T6 | **Coercions are part of the type, not exceptions:** a `choice` accepts text that is one of its options; `\| auto` accepts `auto`; `number` accepts a dimensionless quantity. Everything else is an error that names the expected type. |
 | T7 | **Undeclared ports infer a loose type** from their default at load (today's behaviour, unchanged), so old files keep working; Make component and the agent's `<port>` declare. |
 | T8 | **Pins:** `port.show` (`auto`, `pin`, `settings`) and `port.group`, with the author-override flow in §6. |
+| T10 | **Gradual typing** (user, 2026-11-08): a person playing with ideas connects things before deciding what they are. An undeclared port is **loose** (`any`), never an obstacle: §3.5. |
+| T11 | `auto` is stored as NaN (files already carry it, `{"num": "NaN"}`) and shown and typed as `auto`. |
 | T9 | Later: an angle dimension (`deg`, `rad`) as an eighth base; affine units (°C, °F) at input and display only; structured function types (`fn(length -> power)`). |
 
 ## 2. The type grammar
@@ -117,6 +119,31 @@ with `LeafError::BadValue` naming the type, so the agent's edit fails at once.
   (`units.length = µm`) for a lesson or a notation (contexts.md); the type's own unit
   wins over the context's only when the author pinned it.
 
+### 3.5 Gradual typing: connecting before types are decided
+
+Typing must never get in the way of trying things. The rules, from loosest to
+strictest:
+
+| Connecting | What happens |
+|---|---|
+| loose → loose | Always allowed; nothing is checked (today's behaviour). |
+| loose → typed | Allowed. The typed input checks each value that **arrives**; a misfit is an error on that input (a red pin, the message under its inspector field), the way a formula error shows, not a refused connection. Values are coerced where the type says how (text naming a choice, a number into `number`). |
+| typed → loose | Allowed. The loose input takes whatever comes. |
+| typed → typed, fits | Allowed (same dimension; a choice whose options are a subset; `any` either side). |
+| typed → typed, misfits | Refused, with the reason ("cursor takes a length; time gives a duration"). |
+
+And two ways to firm up later, both one click, both undoable:
+
+- **Adopt the type.** When a loose port meets a typed one, the inspector's port row
+  offers "Make `level` a length (mm)": the loose port takes the type it is connected
+  to. Blender's sockets and TypeScript's inference work this way.
+- **Infer from the value.** An undeclared port's Data type field offers the type its
+  current value suggests ("number", "length in nm", "choice of 'shown'…"); choosing it
+  declares it.
+
+Make component and the agent's `<port>` may still declare types up front. Nothing is
+required: a document with no declared types behaves exactly as today.
+
 ## 4. Markup
 
 ```xml
@@ -143,7 +170,7 @@ default-omission work). `std:plot` declares all its inputs.
 | `schema.ts`, the inspector | the widget table of §3.1 |
 | `manifest.ts` | the `type=` attribute and its grammar |
 
-Schema version bumps once for `port.type`/`show`/`group` and the `q` triple.
+Schema version bumps once for `port.datatype`/`show`/`group` and the `q` triple.
 
 ## 6. Pins: what shows, and who decides (T8)
 
@@ -165,7 +192,7 @@ Schema version bumps once for `port.type`/`show`/`group` and the `q` triple.
 
 | Phase | Builds | Exit |
 |---|---|---|
-| 1 | `Type` and its parser; `port.type`; coercion at set and at connect; loose inference for undeclared ports; `std:plot` declared; `auto`; `like(input)`; the `easing` type. **With phase 3's widgets in the same delivery** (council: a parser-only milestone leaves the workflow blocked) | `vis="hiden"` refused with "vis is one of hidden, shown"; `y_min="0"` on metre data refused at the input; connecting a time into a length refused; `vis` is a segmented toggle and `x_min` has an Auto toggle; all existing tests and the Library bake pass |
+| 1 | `Type` and its parser; `port.datatype`; coercion at set and at connect; loose inference for undeclared ports; `std:plot` declared; `auto`; `like(input)`; the `easing` type. **With phase 3's widgets in the same delivery** (council: a parser-only milestone leaves the workflow blocked) | `vis="hiden"` refused with "vis is one of hidden, shown"; `y_min="0"` on metre data refused at the input; connecting a time into a length refused; `vis` is a segmented toggle and `x_min` has an Auto toggle; all existing tests and the Library bake pass |
 | 2 | Literal unit hints; the `q` triple; display units on types and in contexts | `400 nm` round-trips as written (formulas no longer print `0.015 m` for `15 mm`); a wavelength edits in nm and accepts `1.55 µm` |
 | 3 | The remaining widgets (§3.1): series preview, colour tokens | — |
 | 4 | Pins: `show`, `group`, the pill, the Port section controls (§6) | selecting the plot shows its four pins and "+ 15 more" grouped |
@@ -181,3 +208,33 @@ Schema version bumps once for `port.type`/`show`/`group` and the `q` triple.
    Worth adding with the types, or wait?
 3. **Series length.** Should `series(nm, 61)` constrain length? Proposed: no, until a
    case needs it.
+
+## 9. Done
+
+**2026-11-08: phase 1 with its widgets, and phase 4 (pins).**
+
+- `types.rs`: the grammar (`nm`, `length in nm`, `number`, `series(length)`,
+  `choice(a|b)`, `bool`, `color`, `text`, `fn(n)`, `like(input)`, `any`, `| auto`),
+  `Type::check` (with coercions: a choice from text, a bare number into a typed unit,
+  `auto` as NaN), `Type::feeds` (connections), `Type::of_value` (inference).
+  `like(x)` enforces a unit only when `x`'s data has one (a function plot's range sets
+  its own beside the default sample).
+- `port.datatype`, `port.show`, `port.group` (the field is `datatype`: `type=` already
+  names a node's type in markup). A datatype must parse when set.
+- Checks: a constant argument when set (`definition::validate_entity`; `like` reads
+  the other input's constant, or evaluates its formula over the document's
+  constants); a computed argument or an arriving port signal in the graph, as an error
+  on that leaf naming the input; a connection between two declared ports
+  (`port::validate_connection`). Loose ends always connect (§3.5).
+- `std:plot` declares every input, its pin visibility and its group (Data, Look,
+  Axes, Labels, Motion).
+- Inspector: a choice of up to four options is a segmented control, more a select; an
+  `| auto` input shows "Auto" when automatic and an Auto button to go back; a unit
+  input takes bare numbers in its unit; inputs grouped under their headings. The Port
+  section has Data type (with "Use …" suggestions from the value and from typed ports
+  its instances connect to), Show as pin, and Group.
+- Pins: an instance shows `pin` inputs, and `auto` ones that are connected, bound or
+  changed; the rest fold into a "+N more" pill. A line being drawn shows every input
+  of the components it may land on, filtered by type fit. The main shows all.
+- Not yet: phase 2 (literals keep their unit), the easing type (moved to step 6 with
+  timing values), the pill as a menu (wires-and-formulas phase 3's drop menu).

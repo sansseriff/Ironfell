@@ -3146,8 +3146,11 @@ pub fn select_tool_system(
                         l.targets = crate::bevy_app::links::components_in(geo.doc(), view)
                             .iter()
                             .filter(|r| r.node() != l.from.owner && iron_document::expand::main_definition(geo.doc(), r.node()).is_none())
-                            .flat_map(|r| crate::bevy_app::links::pins_of(&geo, view, r, k))
-                            .filter(|p| p.dir == want)
+                            // Every input, folded or not, that the line's
+                            // type fits (types-and-units.md §3.5: a loose
+                            // end fits anything).
+                            .flat_map(|r| crate::bevy_app::links::pin_layout(&geo, view, r, k, true).0)
+                            .filter(|p| p.dir == want && crate::bevy_app::links::fits(geo.doc(), &l.from, p))
                             .collect();
                         l.target = l.targets.iter().filter(|p| p.at.distance(screen) <= crate::bevy_app::links::PIN_HIT * 2.5 * k).min_by(|a, b| a.at.distance(screen).total_cmp(&b.at.distance(screen))).cloned().map(LinkTarget::Pin);
                     }
@@ -4137,9 +4140,21 @@ pub fn draw_select_overlay(
                             let line = crate::bevy_app::links::noodle(a, bb);
                             if link { b.stroke(Affine::IDENTITY, dashed.clone(), violet, line) } else { b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5 * k), teal, line) }
                         }
-                        for p in crate::bevy_app::links::pins_of(&geo, view, r, k) {
-                            pin_dot(b, &p, false);
-                            label(b, &p);
+                        let (pins, folded) = crate::bevy_app::links::pin_layout(&geo, view, r, k, false);
+                        for p in &pins {
+                            pin_dot(b, p, false);
+                            label(b, p);
+                        }
+                        // Inputs folded away (types-and-units.md §6): a pill
+                        // under the pins; they are in the inspector, by group.
+                        if folded > 0
+                            && let Some(at) = crate::bevy_app::links::more_at(&geo, view, r, k, &pins)
+                            && let Some((path, w)) = label_outline(&format!("+{folded} more"), (10.0 * k) as f32)
+                        {
+                            let pill = kurbo::RoundedRect::new(at.x - w - 18.0 * k, at.y - 8.0 * k, at.x - 4.0 * k, at.y + 8.0 * k, 8.0 * k);
+                            b.fill(Affine::IDENTITY, white, pill);
+                            b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.0 * k), teal, pill);
+                            b.fill(Affine::translate((at.x - w - 11.0 * k, at.y - 6.0 * k)), peniko::Color::new([0.35, 0.35, 0.42, 1.0]), path);
                         }
                     }
                     if let Gesture::Link(l) = &tool.gesture

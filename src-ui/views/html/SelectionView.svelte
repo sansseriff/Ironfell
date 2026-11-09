@@ -61,7 +61,7 @@
   // the first selected node's fields, each edited through its handle, so a
   // linearly bound value edits its source and a locked one says why.
   type Field = Property;
-  type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean };
+  type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean; datatype?: string | null; show?: string | null; group?: string | null; suggest?: string[] };
   type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[] };
   type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null; sections?: string[] };
   // Every section, in the built-in order: what an older engine's inspection
@@ -155,6 +155,15 @@
   }
   // A component input edits the instance's argument (component-model.md §4).
   function setInput(f: Field, text: string) { return inspected?.component ? patch({ [f.leaf]: text }, [], `set ${f.field}`, inspected.component.entity) : undefined; }
+  function inputGroups(inputs: Field[]) {
+    const groups: { name: string; inputs: Field[] }[] = [];
+    for (const f of inputs) {
+      const name = f.group ?? "";
+      const g = groups.find((x) => x.name === name) ?? (groups.push({ name, inputs: [] }), groups[groups.length - 1]);
+      g.inputs.push(f);
+    }
+    return groups;
+  }
   // "Draw on": Trim End keyed 0 → 1 over a second from the playhead.
   async function drawOn() {
     if (!inspected) return;
@@ -254,6 +263,17 @@
           {#if p.follow !== null}<label class="check">Loose end<input type="checkbox" checked={!!p.follow} disabled={!editable} onchange={(e) => editPort(p.spec, { follow: e.currentTarget.checked })} /></label>{/if}
           <label>Connector<input value={p.connector ?? ""} placeholder="any" disabled={!editable} onchange={(e) => editPort(p.spec, { connector: e.currentTarget.value })} /></label>
           <label>Gender<select value={p.gender ?? "any"} disabled={!editable} onchange={(e) => editPort(p.spec, { gender: e.currentTarget.value })}>{#each GENDERS as g (g)}<option value={g}>{g}</option>{/each}</select></label>
+          <!-- Its type (types-and-units.md): empty is loose, connecting to
+               anything; the suggestions come from its value and from typed
+               ports its instances are connected to (§3.5). -->
+          <label class="wide">Data type<input class="mono" value={p.datatype ?? ""} placeholder="any (loose)" disabled={!editable} title="nm, length, choice(a|b), bool, color, text, series, fn(1), like(input); add | auto. Empty: loose, it connects to anything." onchange={(e) => editPort(p.spec, { datatype: e.currentTarget.value })} /></label>
+          {#if editable && !p.datatype && p.suggest?.length}
+            <div class="wide type-suggest"><span class="hint">Use</span>{#each p.suggest as t (t)}<Button small variant="outline" onclick={() => editPort(p.spec, { datatype: t })} title="Declare this type">{t}</Button>{/each}</div>
+          {/if}
+          {#if p.dir !== "out"}
+            <label>Show as pin<select value={p.show ?? "auto"} disabled={!editable} onchange={(e) => editPort(p.spec, { show: e.currentTarget.value })}><option value="auto">Auto</option><option value="pin">Always</option><option value="settings">In settings only</option></select></label>
+            <label>Group<input value={p.group ?? ""} placeholder="none" disabled={!editable} onchange={(e) => editPort(p.spec, { group: e.currentTarget.value })} /></label>
+          {/if}
           <label class="wide">{p.dir === "out" ? "Value" : "Default"}<input class="mono" value={p.bind ? `{= ${p.bind}}` : (p.signal ?? "")} disabled={!editable} title="A number or quantity (10 mW), or an expression in braces: {'{'}= #power.port.signal{'}'}" onchange={(e) => editPort(p.spec, { signal: e.currentTarget.value })} /></label>
         </div>
       {/snippet}
@@ -285,7 +305,11 @@
             {#if inspected.component.inputs.some((f: Field) => f.kind === "series")}
               <div class="row"><Button small variant="outline" onclick={pasteData} title="Paste columns copied from a spreadsheet or CSV: the first into the first series input (xs), the next into ys, … A header like “λ (nm)” sets the unit and the axis label. Replaces their formulas."><ClipboardPaste size={13} strokeWidth={1.5} /> Paste data</Button><span class="hint">columns from a spreadsheet or CSV</span></div>
             {/if}
-            <div class="field-grid">{#each inspected.component.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+            <!-- Inputs by their author's groups (types-and-units.md §6), in order. -->
+            {#each inputGroups(inspected.component.inputs) as g (g.name)}
+              {#if g.name}<div class="subheading input-group">{g.name}</div>{/if}
+              <div class="field-grid">{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+            {/each}
           </div>
         {:else if section === "table" && inspected.table && fields("transform2d").length}
             <div class="property-section" data-section="table">
@@ -449,6 +473,8 @@
 
 <style>
   .properties { padding: 0 !important; font-size: 12px; }
+  .type-suggest { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .input-group { margin: 12px 0 6px; font-weight: 600; color: var(--fg); }
   .trim-actions { display: flex; margin: 6px 0 2px; }
   .trim-actions :global(.ui-button), .row :global(.ui-button) { display: inline-flex; align-items: center; gap: 5px; }
   .trim-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }

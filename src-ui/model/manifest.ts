@@ -195,7 +195,14 @@ DEFINITIONS
   its port_spec children: an in port (port.dir="in", port.kind="value" or a typed
   kind) is an input whose port.signal is its default; out ports and across/through
   pairs as below. A template child's subtree is the picture for one notation, and
-  may bind to a port_spec's port.signal. A template with a size (size.w, size.h) is
+  may bind to a port_spec's port.signal. A port_spec may declare what it carries,
+  datatype="…": nm (a length shown in nm; a bare 1550 means 1550 nm), length, number,
+  text, bool, color, series, choice(a|b|c), fn(1), like(xs) (in the unit of input xs),
+  any; add "| auto" for an automatic default (datatype="like(xs) | auto"). Declared
+  inputs refuse misfits when set ("vis is one of hidden, shown") and get the right
+  control in the inspector; leave datatype off while exploring: an undeclared port
+  connects to anything. show="pin"|"auto"|"settings" and group="Axes" say how an
+  input appears on the component's edge and in the inspector. A template with a size (size.w, size.h) is
   resizable: its parts bind to the template's own size ({= #T.size.w - 20}), each
   picture of it holds its own size, and dragging a picture's corner (or setting its
   size.w/size.h) reflows its parts; give text a fixed font size and bind only its
@@ -247,7 +254,8 @@ ${standard}
       style="area" x_label="y (mm)"/></edit>
   xs/ys are series (ys2, ys3 more series on the same xs), or f="{= x => …}" with
   x_min/x_max (sampled at the plot's width). $self.k reads this entity's argument k.
-  style line|smooth|scatter|area|bars; x_min x_max y_min y_max default auto; cursor
+  style line|smooth|scatter|area|bars|line+markers; x_min x_max y_min y_max cursor are
+  in the data's unit (y_min="0 mW" for mW data) or auto; cursor
   marks an x and outputs y_at_cursor; reveal 0..1 draws the series on; axis titles
   default to the data's units; outputs x_lo x_hi y_lo y_hi are the ranges in use.
   vis="hidden" or "shown" plays its disappear or appear (axes, ticks, then the curve).
@@ -255,7 +263,7 @@ ${standard}
 STATE MACHINES  (a component's states and animated transitions)
   A definition holds channels (numbers its template binds to) and a machine named for
   an in port whose value is the state:
-    <create id="$v" type="port_spec" parent="$d" name="vis" kind="value" dir="in" signal="shown"/>
+    <create id="$v" type="port_spec" parent="$d" name="vis" kind="value" dir="in" signal="shown" datatype="choice(hidden|shown)"/>
     <create id="$f" type="channel" parent="$d" name="fade" value="1"/>
     <create id="$m" type="machine" parent="$d" name="vis"/>
     <create type="state" parent="$m" name="hidden" args.fade="0"/>

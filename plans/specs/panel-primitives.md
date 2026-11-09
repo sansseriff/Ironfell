@@ -110,6 +110,14 @@ a small grab pill at its top centre (`GroupGrab.svelte`) stands in for the tabs:
 - **The scope menu** sits in the leftmost top tab bar that is showing, so hiding the
   left side's bar moves it to the centre's, beside the document's composition tabs.
 
+### The default layout (2026-11-09)
+
+The layout council's sizes: the sides run the full height and the timeline sits under the
+canvas only (1680×1000: left 340, Inspector 300, timeline 250; `baseLayout` scales them
+with the window), and the left side's tab bar starts hidden, since its strip switches its
+views; the scope menu then sits beside the composition tabs. A saved layout keeps its own
+arrangement (Settings → Reset layout gives the new one).
+
 ## 6. Not yet
 
 - `std:tabs` as a document component (the strip is its HTML widget only).

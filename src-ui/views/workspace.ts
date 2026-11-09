@@ -38,19 +38,31 @@ function baseLayout(api: DockviewApi) {
   if (new URLSearchParams(location.search).has('meters')) {
     view('meters', 'Meters', { source: 'meters', notation: 'composition' }, { referencePanel: 'viewer', direction: 'within' });
   }
-  // The timeline: the session's generated `timeline` composition
-  // (plans/specs/timeline.md), drawn like any other.
-  view('timeline', 'Timeline', { source: 'timeline', notation: 'composition' }, { direction: 'below' }, { initialHeight: 220 });
+  // The sides first, so they run the window's full height; then the
+  // timeline under the canvas only (the layout council, 2026-11-09). Sizes
+  // follow the window: at 1680×1000, 340 left, 300 right, a 250 timeline.
+  const W = window.innerWidth, H = window.innerHeight;
+  const left = W >= 1900 ? 360 : W >= 1600 ? 340 : 320;
+  const right = W >= 1600 ? 300 : 280;
+  const below = H >= 1060 ? 290 : H >= 960 ? 250 : 230;
   // The Document view (the document as markup) is not open by default; the
   // add-view menu opens it.
-  view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: 380 });
+  view('model', 'Model', { source: 'document', notation: 'conversation' }, { referencePanel: 'viewer', direction: 'left' }, { initialWidth: left });
   // The standard components (component-authoring.md §6): a view onto the
   // session's library composition; drag one onto a canvas to place it.
   view('library', 'Library', { source: 'library', notation: 'composition' }, { referencePanel: 'model', direction: 'within' }, { inactive: true });
   // The layers panel (plans/specs/layers-panel.md): the front tab on the left,
   // following the composition view used last.
   view('layers', 'Layers', { source: 'follow', notation: 'layers' }, { referencePanel: 'model', direction: 'within', index: 0 });
-  view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: 280 });
+  view('selection', 'Inspector', { source: 'selection', notation: 'selection' }, { referencePanel: 'viewer', direction: 'right' }, { initialWidth: right });
+  // The timeline: the session's generated `timeline` composition
+  // (plans/specs/timeline.md), drawn like any other, under the canvas.
+  view('timeline', 'Timeline', { source: 'timeline', notation: 'composition' }, { referencePanel: 'viewer', direction: 'below' }, { initialHeight: below });
+  // The left side's views are switched by their strip (panel-primitives.md
+  // §5), so its tab bar starts hidden; its grab pill shows it again. The
+  // scope menu moves to the centre's tab bar, beside the compositions.
+  const leftGroup = api.getPanel('layers')?.group;
+  if (leftGroup) leftGroup.header.hidden = true;
 }
 
 /** A readable view id from a name, unique among the open views. */

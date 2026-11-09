@@ -446,11 +446,20 @@ GPU=1 SIZE=1680x1000@1 bun run drive.ts < regression.txt
 GPU=1 SIZE=1680x1000@1 bun run drive.ts < gestures.txt
 ```
 
+**The default layout (2026-11-09, the layout council).** The sides run the window's full
+height and the timeline sits under the canvas only: at `SIZE=1680x1000@1` the left side is
+340 px (its tab bar hidden; its view strip switches Layers, Model and Library; the grab pill
+at its top shows the bar again), the Inspector 300 px, the timeline 250 px, and the viewer
+reads `viewer panel {"x":340,"y":36,"w":1040,"h":714}`. The scope menu sits at the left of
+the centre's tab bar. `workspace.ts` `baseLayout` scales the sizes with the window.
+**Known broken, before this:** `schematic.txt` parses markup the demo no longer prints (R2
+is now a resistor component, not a slider), 3 step errors on the old layout and the new.
+
 **Which scripts are checks (2026-11-09).** A script earns its place by driving an
 interaction a unit test cannot reach: a real pointer or keyboard gesture through the
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `sequence.txt`, `text.txt`,
-`text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt`, `contexts.txt`,
+`text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
 `narrative.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,

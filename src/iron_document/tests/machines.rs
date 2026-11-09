@@ -249,3 +249,53 @@ fn an_instance_times_its_transitions_by_an_input_or_an_override() {
     store.advance_machines(6.05);
     assert!((channel(&store, entity, fade) - 0.5).abs() < 1e-9, "100 ms on this instance: {}", channel(&store, entity, fade));
 }
+
+/// State keyed on the timeline (machines.md §4.2): the clock drives the
+/// transition, so any playhead time shows the same picture, forwards or
+/// backwards; a key's span retimes that one occurrence; undo restores it.
+#[test]
+fn keyed_state_scrubs_and_one_occurrence_retimes() {
+    let Card { mut store, entity, fade, .. } = card();
+    let ids = store.document().next_ids(4);
+    let (timeline, clip, k0, k1) = (ids[0], ids[1], ids[2], ids[3]);
+    let key = |t: f64, v: &str| {
+        let mut k = facet::Key::default();
+        k.t = n(t);
+        k.value = Slot::Const(Value::Enum(v.into()));
+        k.easing = Slot::Const(Value::Enum("hold".into()));
+        k.wrap()
+    };
+    let mut c = facet::Clip::default();
+    c.prop = str_("args.vis");
+    let first = OrderKey::first();
+    let last = store.document().roots().iter().filter_map(|&r| store.document().live(r)).map(|x| x.order.clone()).max().unwrap();
+    store
+        .apply(tx(
+            "key the state",
+            vec![
+                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::after(&last), facets: vec![] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: first.clone(), facets: vec![facet::Timing::default().wrap(), c.wrap()] },
+                Op::Create { id: k0, ty: ty("key"), parent: Some(clip), order: first.clone(), facets: vec![key(0.0, "shown")] },
+                Op::Create { id: k1, ty: ty("key"), parent: Some(clip), order: OrderKey::after(&first), facets: vec![key(2.0, "hidden")] },
+                Op::Link { rel: Relation { id: store.document().next_relation_id(), from: clip, to: entity, rel: RelKind::Animates, data: Default::default() } },
+            ],
+        ))
+        .unwrap();
+    let at = |s: &mut Store, t: f64| {
+        s.set_time(t);
+        s.advance_machines(100.0 + t);
+        channel(s, entity, fade)
+    };
+    // disappear is 400 ms, linear: half-way at 2.2 s.
+    assert_eq!(at(&mut store, 1.0), 1.0);
+    assert!((at(&mut store, 2.2) - 0.5).abs() < 1e-9);
+    assert_eq!(at(&mut store, 3.0), 0.0);
+    // Backwards: the same picture at the same time.
+    assert!((at(&mut store, 2.1) - 0.75).abs() < 1e-9, "scrubbing back");
+    assert_eq!(at(&mut store, 0.5), 1.0);
+    // Retime this occurrence: 2 s instead of 0.4.
+    store.apply(tx("retime", vec![Op::Set { id: k1, path: path("key.span"), slot: n(2.0) }])).unwrap();
+    assert!((at(&mut store, 3.0) - 0.5).abs() < 1e-9, "half-way through the slow occurrence");
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(at(&mut store, 3.0), 0.0, "undo restores the transition's own length");
+}

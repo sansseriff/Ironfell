@@ -198,9 +198,10 @@ pub struct Running {
 impl Player {
     /// Advance to `now` (seconds on the host's clock). Answers the channel
     /// values to publish (only those away from rest), and what is running.
-    pub fn advance(&mut self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, now: f64) -> (BTreeMap<Leaf, Value>, Vec<Running>) {
+    pub fn advance(&mut self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clock: f64) -> (BTreeMap<Leaf, Value>, Vec<Running>) {
         let snap = std::mem::take(&mut self.snap);
         let mut seen = std::collections::BTreeSet::new();
+        let mut running = Vec::new();
         let entity_ty = crate::registry::TypeId::lookup("entity").expect("registered");
         for e in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e)).collect::<Vec<_>>() {
             let Some(def) = crate::expand::linked_definition(doc, e) else { continue };
@@ -208,6 +209,17 @@ impl Player {
                 let Ok(path) = LeafPath::new(crate::facet::FacetKind::Args, &port) else { continue };
                 let Some(state) = read(Leaf { node: e, path }).and_then(|v| v.as_str().map(str::to_owned)) else { continue };
                 let mc = copy_of(doc, Some(e), m);
+                // State keyed on the timeline (machines.md §4.2): the clock
+                // drives the transition, so scrubbing shows it mid-way,
+                // forwards and backwards.
+                if let Some((values, run)) = clocked(doc, read, def, mc, Leaf { node: e, path }, clock) {
+                    seen.insert((e, m));
+                    if let Some(r) = run {
+                        running.push(Running { entity: e, transition: r.0, progress: r.1 });
+                    }
+                    self.known.insert((e, m), Known { state, values, run: None });
+                    continue;
+                }
                 let Some(to) = pose(doc, read, def, mc, &state) else { continue };
                 seen.insert((e, m));
                 match self.known.get_mut(&(e, m)) {
@@ -232,7 +244,6 @@ impl Player {
             }
         }
         self.known.retain(|key, _| seen.contains(key));
-        let mut running = Vec::new();
         let mut out = BTreeMap::new();
         let value_path: LeafPath = "channel.value".parse().expect("declared leaf");
         for (&(e, _), k) in self.known.iter_mut() {
@@ -260,4 +271,34 @@ impl Player {
         }
         (out, running)
     }
+}
+
+/// A machine whose state is keyed on the timeline, at clock time `clock`:
+/// the channels' values, and the transition running and its progress. The
+/// transition a key selects runs from the key's time for its length (or
+/// the key's `span`, one occurrence retimed), from the previous state's
+/// pose, so any time gives the same picture. `None` when no clip drives
+/// the state, or the playhead is before its first key.
+fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(BTreeMap<NodeId, f64>, Option<(NodeId, f64)>)> {
+    let (clip, offset) = crate::timeline_view::clip_of(doc, state)?;
+    let keys = crate::time::keys(doc, clip);
+    let u = clock - crate::time::start(doc, clip) - offset;
+    let i = keys.iter().rposition(|k| k.t <= u + 1e-9)?;
+    let word = |v: &Value| v.as_str().map(str::to_owned);
+    let to_state = word(&keys[i].value)?;
+    let from_state = if i > 0 { word(&keys[i - 1].value) } else { doc.leaf(state.node, state.path).and_then(|s| s.constant()).and_then(word) };
+    let to = pose(doc, read, def, machine, &to_state)?;
+    let Some(from_state) = from_state.filter(|f| *f != to_state) else { return Some((to, None)) };
+    let Some(plan) = plan(doc, read, def, machine, &from_state, &to_state).filter(|p| p.ms > 0.0) else { return Some((to, None)) };
+    let span = doc.get::<crate::facet::Key>(keys[i].id).and_then(|k| number(&k.span)).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(plan.ms / 1000.0);
+    let p = ((u - keys[i].t) / span).clamp(0.0, 1.0);
+    if p >= 1.0 {
+        return Some((to, None));
+    }
+    let from = pose(doc, read, def, machine, &from_state)?;
+    let values = to.iter().map(|(&c, &b)| {
+        let a = from.get(&c).copied().unwrap_or(b);
+        (c, a + (b - a) * plan.shaped(c, p))
+    }).collect();
+    Some((values, Some((plan.transition, p))))
 }

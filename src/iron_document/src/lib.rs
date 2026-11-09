@@ -1312,7 +1312,7 @@ impl Store {
             let reactive = &self.reactive;
             let doc = &self.doc;
             let read = |l: Leaf| reactive.read(doc, l);
-            self.machines.advance(doc, &read, now)
+            self.machines.advance(doc, &read, now, self.time())
         };
         if values != self.reactive.published_by(ProducerId::MACHINES) {
             self.publish(ProducerId::MACHINES, values);

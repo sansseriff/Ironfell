@@ -495,6 +495,10 @@ facets! {
         t: Number = Value::Number(0.0),
         value: Any = Value::Number(0.0),
         easing: Enum = Value::Enum("linear".to_owned()) => ["linear", "ease_in", "ease_out", "ease_in_out", "ease", "easy_ease", "hold"],
+        // On a key that changes a component's state (machines.md §4.2): how
+        // long this occurrence of the transition takes, in seconds; `auto`
+        // (NaN), the transition's own length. Retimes one occurrence.
+        span: Number = Value::Number(f64::NAN),
     }
 
     /// The playhead (timeline.md §4.1): the time clips are sampled at, and

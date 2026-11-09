@@ -7,8 +7,9 @@
   import { DropdownMenu } from "bits-ui";
   import Plus from "@lucide/svelte/icons/plus";
   import Settings from "@lucide/svelte/icons/settings";
+  import PanelTopClose from "@lucide/svelte/icons/panel-top-close";
   import NewCompositionDialog from "./NewCompositionDialog.svelte";
-  import { addCompositionView } from "./workspace";
+  import { addCompositionView, setTabBarHidden } from "./workspace";
   import type { CompositionEntry } from "../runtime/document_client.svelte";
   import { controllerManager } from "../controller-manager.svelte";
   import { FIXED_VIEWS, LATENCY_VIEW, SETTINGS_VIEW, titleOf, viewId, type ViewSpec } from "./views";
@@ -77,6 +78,9 @@
 </script>
 
 <div class="add">
+  <button class="action" title="Hide the tab bar: the views keep a grab handle to switch, drag and show it again" aria-label="Hide tab bar" onclick={() => setTabBarHidden(group.id, true)}>
+    <PanelTopClose size={15} strokeWidth={1.75} />
+  </button>
   <button class="action" title="Settings" aria-label="Settings" onclick={settings}>
     <Settings size={15} strokeWidth={1.75} />
   </button>

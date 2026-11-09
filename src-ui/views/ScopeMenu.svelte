@@ -17,6 +17,7 @@
   import TextInput from "../lib/ui/TextInput.svelte";
   import type { ScopeMeta } from "../runtime/scope_storage";
 
+  import { dockState } from "./dock_state.svelte";
   let { api, group }: { api: DockviewApi; group: DockviewGroupPanel } = $props();
 
   const doc = controllerManager.docClient;
@@ -33,15 +34,22 @@
   let error = $state("");
   let fileInput: HTMLInputElement | undefined = $state();
 
-  // Only the group at the top left shows the menu: one per window.
+  // One per window: in the leftmost tab bar along the top that is showing
+  // (a group with its tab bar hidden passes it on, panel-primitives.md).
   function place() {
-    const r = group.element.getBoundingClientRect();
-    shown = r.left < 2 && r.top < 2;
+    const top = api.groups
+      .filter((g) => !g.header.hidden && g.element.getBoundingClientRect().top < 2)
+      .sort((a, b) => a.element.getBoundingClientRect().left - b.element.getBoundingClientRect().left);
+    shown = top[0]?.id === group.id;
   }
   onMount(() => {
     place();
     const d = api.onDidLayoutChange(place);
     return () => d.dispose();
+  });
+  $effect(() => {
+    void dockState.hidden;
+    place();
   });
 
   const current = $derived(doc.scope.current);

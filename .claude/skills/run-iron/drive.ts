@@ -396,7 +396,7 @@ async function run(line: string) {
     case "tint": {
       // tint <panel> x y w h #rrggbb: how many pixels of a panel-relative
       // box are near a colour (each channel within 40), for chrome whose
-      // look is the point (chrome.txt).
+      // look is the point.
       const r = await panelRect(rest[0]);
       const [x, y, w, h] = rest.slice(1, 5).map(Number);
       const want = [1, 3, 5].map((i) => parseInt(rest[5].slice(i, i + 2), 16));
@@ -437,10 +437,17 @@ async function run(line: string) {
       return;
     }
     case "tab": {
-      // Activate the dock tab with this title (the workspace, src-ui/views).
+      // Activate the dock view with this title (the workspace, src-ui/views):
+      // through the dock, so a view whose tab is hidden (a group switched by
+      // the view strip, or with its tab bar hidden) is reached as well.
       const title = rest.join(" ");
-      const tab = page.locator(".dv-tab", { hasText: new RegExp(`^\\s*${title}\\s*$`) }).first();
-      await tab.click();
+      const ok = await page.evaluate((t) => {
+        const p = (window as any).__dock?.panels.find((x: any) => x.title === t);
+        if (!p) return false;
+        p.api.setActive();
+        return true;
+      }, title);
+      if (!ok) await page.locator(".dv-tab", { hasText: new RegExp(`^\\s*${title}\\s*$`) }).first().click();
       await page.waitForTimeout(400);
       return out(`tab ${title}`);
     }

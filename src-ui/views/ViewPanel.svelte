@@ -22,6 +22,8 @@
   import { NOTATIONS, type ViewSpec } from "./views";
   import { setInspecting, setShowFps } from "./workspace";
   import ViewStrip from "./ViewStrip.svelte";
+  import GroupGrab from "./GroupGrab.svelte";
+  import { dockState } from "./dock_state.svelte";
   import { viewStrip } from "./view_strip.svelte";
 
   let { id, spec, api }: { id: string; spec: ViewSpec; api: DockviewPanelApi } = $props();
@@ -56,6 +58,8 @@
   const stopStrip = viewStrip.use();
   onDestroy(stopStrip);
   const stripped = $derived(!!viewStrip.itemOf(spec));
+  // Its group's tab bar hidden: a grab handle instead (GroupGrab).
+  const bare = $derived(dockState.hidden.includes(api.group.id));
 
   const inspecting = $derived(spec.notation === "composition" && share !== undefined);
   const inspectId = $derived(`${id}.inspect`);
@@ -80,6 +84,7 @@
 
 <div class="row" class:stripped bind:this={row}>
   {#if stripped}<ViewStrip {api} {spec} />{/if}
+  {#if bare && visible}<GroupGrab {api} />{/if}
   {#if missing}
     <MissingComposition {spec} {api} />
   {:else}

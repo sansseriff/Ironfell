@@ -96,6 +96,20 @@ council). It now has Blender's strip:
   A group with a strip shows only its active tab, beside the scope menu.
 - Tests: `tests/contexts.rs` (`the_workspace_strip_is_context_data`).
 
+### Hiding a group's tab bar (2026-11-09)
+
+A group's header gains **Hide tab bar** (beside Settings and +), a person's choice saved
+with the layout (dockview's `hideHeader`). A hidden group's view starts at the very top;
+a small grab pill at its top centre (`GroupGrab.svelte`) stands in for the tabs:
+
+- **Click:** the group's views (to switch), Show tab bar, Close.
+- **Drag:** this dockview build drags with its own pointer controller (not the browser's
+  drag), which it does not export, so the pill hands the press to the group's hidden
+  active tab (with Alt, to the header's empty part, which drags the whole group) and
+  dockview runs its usual drag: threshold, ghost, drop zones, split or move.
+- **The scope menu** sits in the leftmost top tab bar that is showing, so hiding the
+  left side's bar moves it to the centre's, beside the document's composition tabs.
+
 ## 6. Not yet
 
 - `std:tabs` as a document component (the strip is its HTML widget only).

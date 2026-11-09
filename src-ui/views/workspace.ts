@@ -16,6 +16,7 @@ import ViewPanel from './ViewPanel.svelte';
 import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
+import { dockState } from './dock_state.svelte';
 import { LATENCY_VIEW, titleOf, type ViewSpec } from './views';
 import { controllerManager } from '../controller-manager.svelte';
 import { lastActive, noteActive } from './active_view.svelte';
@@ -253,6 +254,8 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
   baseLayout(api);
   applying--;
   api.onDidLayoutChange(scheduleSave);
+  // A restored layout may hide some groups' tab bars.
+  api.onDidLayoutChange(syncHiddenHeaders);
   // The layers panel follows the composition view used last (layers-panel.md §4).
   api.onDidActivePanelChange(({ panel }) => {
     if (!panel) return;
@@ -416,6 +419,22 @@ export function viewShowing(source: string): string | null {
     return spec?.notation === 'composition' && (spec.source === source || (!!c && (spec.source === c.id || spec.source === c.name)));
   }).sort((a, b) => (lastActive.get(b.id) ?? 0) - (lastActive.get(a.id) ?? 0));
   return views[0]?.id ?? null;
+}
+
+/** Hide or show a group's tab bar (a person's choice, saved with the
+ *  layout as dockview's `hideHeader`): a hidden one leaves the group's
+ *  views a grab handle to switch, drag and show the bar again. */
+export function setTabBarHidden(groupId: string, hidden: boolean) {
+  const g = current?.groups.find((x) => x.id === groupId);
+  if (!g) return;
+  g.header.hidden = hidden;
+  syncHiddenHeaders();
+  scheduleSave();
+}
+
+/** Which groups' tab bars are hidden, for views to react to. */
+export function syncHiddenHeaders() {
+  dockState.hidden = (current?.groups ?? []).filter((g) => g.header.hidden).map((g) => g.id);
 }
 
 /** The dock, for views that change what it shows (the view strip). */

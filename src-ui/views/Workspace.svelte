@@ -7,6 +7,7 @@
   import type { DockviewApi } from "dockview-core";
   import { createWorkspace, destroyWorkspace } from "./workspace";
   import { controllerManager } from "../controller-manager.svelte";
+  import { dockState } from "./dock_state.svelte";
 
   let el: HTMLDivElement;
   let api: DockviewApi | null = null;
@@ -36,7 +37,7 @@
   });
 </script>
 
-<div bind:this={el} class="dock" class:dragging></div>
+<div bind:this={el} class="dock" class:dragging={dragging || dockState.dragging}></div>
 
 <style>
   .dock {

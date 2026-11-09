@@ -48,17 +48,13 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ `build.sh` cold | ~5 min (5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06) |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4 min (cargo 3m 25s, plus binding generation; 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |
-| ⏱ `smoke-full.txt` (`GPU=1`), broad regression | ~3.5–5 min (3m 34s, 2026-11-04; 5m 05s, 2026-11-08, with the stage E section timing out, see "Broad regression smoke") |
-| `piston.txt` | ~1 min |
+| `regression.txt` (`GPU=1`): bindings, model edits, the pendulum, linking, save/load | ~1 min (1m 09s, 2026-11-09) |
+| ⏱ `gestures.txt` (`GPU=1`): select tool, pen, shapes, clipboard, Alt-drag, gizmo, SVG, components | ~2.5 min (2m 25s, 2026-11-09) |
 | `snapping.txt` | ~30 s |
 | `layout.txt` | ~35 s |
 | `contexts.txt` | ~35 s |
-| `focus.txt` | ~40 s |
 | `keys.txt` | ~30 s |
 | `sequence.txt` | ~30 s |
-| `controls.txt` | ~30 s |
-| `showcase.txt` | ~30 s |
-| `chrome.txt` | ~30 s |
 | `schematic.txt` | ~40 s |
 | `scopes.txt` | ~15 s |
 | `workspace.txt` | ~25 s |
@@ -443,24 +439,34 @@ results are polled with a five-second timeout instead of fixed post-command slee
 
 Run the relevant focused fixture alongside it when changing a feature (for example,
 `attachments.ts` for shared point controls, `timeline.txt` for timeline behavior).
-Use the broad suite for cross-cutting changes or before a release:
+Use the broad pair for cross-cutting changes or before a release:
 
 ```sh
-GPU=1 SIZE=1680x1000@1 bun run drive.ts < smoke-full.txt
+GPU=1 SIZE=1680x1000@1 bun run drive.ts < regression.txt
+GPU=1 SIZE=1680x1000@1 bun run drive.ts < gestures.txt
 ```
 
-### Broad regression smoke (preserved)
+**Which scripts are checks (2026-11-09).** A script earns its place by driving an
+interaction a unit test cannot reach: a real pointer or keyboard gesture through the
+canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
+`timeline.txt`, `layers.txt`, `snapping.txt`, `sequence.txt`, `text.txt`,
+`text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt`, `contexts.txt`,
+`narrative.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
+`protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
+`raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
+`selection-cache.txt`. Retired: `smoke-full.txt` (split into `regression.txt` and
+`gestures.txt`), and the exit demos `chrome`, `controls`, `showcase`, `piston`, `focus`.
+**Positions are relative to views** (`pmove`, `pdrag`, `pclick`, `pdouble`, `dmove`,
+`ddrag`, `dclick`): no script uses raw window coordinates, so a layout change moves
+nothing; `tab <title>` activates a view through the dock, so a hidden tab is reached.
 
-The former default is preserved as `smoke-full.txt`, with all its cases intact.
+### Regression and gestures (the broad pair)
 
-**Known drift (2026-11-08):** the second `nav` (stage E, "on a fresh app") reloads in
-the same browser profile, and the app now boots back into the durable scope with its
-saved layout, so the viewer reads `viewer panel {"x":0,"y":0,"w":0,"h":0}` and every
-later step fails to find its nodes. Run alone in a fresh profile, lines 225 to the
-end pass with no errors (`(sed -n 1,4p smoke-full.txt; sed -n '225,$p' smoke-full.txt)
-> part2.txt`, ~2.5 min). The first section (to line 220) passes as is. The fix is a
-nav that starts a fresh scope and layout; until then judge the suite by its two halves.
-Its expected output and walkthrough below describe this broad suite.
+`smoke-full.txt` was split in two on 2026-11-09 at its stage E, which began with a
+fresh `nav`: `regression.txt` (to the save/load round trip) and `gestures.txt` (stage E
+on). Splitting ended the old drift where the second `nav` booted back into the durable
+scope; its few raw coordinates became view-relative. Both pass with no errors.
+The walkthrough and expected output below describe the pair, in order.
 It opens the app, waits for the engine, screenshots, drags the
 square (step by step, with a mid-drag screenshot and view showing the
 shadow rect bound to it following) and the torus, undoes both with Cmd+Z,
@@ -517,88 +523,169 @@ imported into the Controls tab by `__iron.importSvg` as one "import SVG": two re
 selection's SVG on the clipboard; undo; the same SVG imported by a paste event and
 by the model's `<import-svg>`, each undone; each count is the Controls
 composition's nodes). Expected output, minus screenshot lines,
-`nav`/`ready` lines, and the per-frame `solve:` lines:
+`nav`/`ready` lines, and the per-frame `solve:` lines (2026-11-09; `regression.txt`, then
+`gestures.txt`; a long number's last digits and a hunt's found point may vary):
 
 ```
 {"enabled":false,"guides":[]}
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-redraw (document): 2 of 36 nodes changed [#3b #3i/3b]; damage 539,114–661,269
-redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
+DEBUG src/document_bridge/render.rs:408 redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #11.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#11.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
-"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,4.88…,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
+"<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,4.886921905584122,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
 {"ok":true,"version":9,"aliases":{"$n":"#3x"}}
-"<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" verb=\"set #zz\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" verb=\"set #N\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
 "<rect id=\"#3x\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
-["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.12…\""," h=\"240\""]
-"move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-"<ellipse id=\"#a\" name=\"ball\" x=\"323.71…\" x.by=\"#V\" y=\"359.97…\" y.by=\"#V\""
+["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.1254151928860334\""," h=\"240\""]
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 25 iterations, 5546 evaluations, 1.15 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 3 iterations, 1159 evaluations, 0.31 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.13 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.13 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 26 iterations, 5318 evaluations, 0.95 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 3 iterations, 394 evaluations, 0.27 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.13 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.20 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.15 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.06 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.18 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.25 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.26 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.21 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.20 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.27 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.22 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/document_bridge/mod.rs:497 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+"<ellipse id=\"#a\" name=\"ball\" x=\"323.714903353\" x.by=\"#V\" y=\"359.976998273\" y.by=\"#V\""
 ["<ellipse id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<ellipse id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
-#b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
-#b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
-"<applied version=\"14\">\n  <solver clusters=\"#V\" moved=\"#Y #Z #a\"/>\n  <unmet leaf=\"#a.transform2d.x\" requested=\"900\" solved=\"619.99…\">constrained by cluster #V: the constraints allow 619.99… at most</unmet>\n</applied>"
-"<edit-failed applied=\"none\" version=\"14\">\n  <error op=\"0\" kind=\"unsatisfiable\">exact transaction not honoured: #a.transform2d.x requested 900 but constraints allow 619.99…</error>\n</edit-failed>"
-"<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00…\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
+DEBUG src/bevy_app/select.rs:3010 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+DEBUG src/bevy_app/select.rs:3010 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+"<applied version=\"14\">\n  <solver clusters=\"#V\" moved=\"#Y #Z #a\"/>\n  <unmet leaf=\"#a.transform2d.x\" requested=\"900\" solved=\"619.999999990091\">constrained by cluster #V: the constraints allow 619.999999990091 at most</unmet>\n</applied>"
+"<edit-failed applied=\"none\" version=\"14\">\n  <error op=\"0\" verb=\"set #a\" kind=\"unsatisfiable\">exact transaction not honoured: #a.transform2d.x requested 900 but constraints allow 619.999999999234</error>\n</edit-failed>"
+"<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00000000000001\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
 true
 "<ellipse id=\"#a\" name=\"ball\" x=\"320\" y=\"420\""
-["<ellipse id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"281.00…\" x.by=\"#V\" y=\"38.19…\" y.by=\"#V\""]
+["<ellipse id=\"#a\" name=\"ball\" x=\"320\" y=\"420\"","<rect id=\"#W\" name=\"platform\" x=\"281.006443362\" x.by=\"#V\" y=\"38.199796347\" y.by=\"#V\""]
 "x.by=\"#V\""
 "#s"
-found at … (a point on the card dot; varies with the sweep)
+found at 940 165
 true
 ["#l","#Q"]
 clicked Link
-applied "link" (4 ops, Human) -> v21
+DEBUG src/document_bridge/mod.rs:492 applied "link" (4 ops, Human) -> v21
 "<entity id=\"#3z\" name=\"box\" def=\"#3y\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
 "<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3z\">"
 clicked Show in assembly
 clicked Show in scene
-focus #Q: panel viewer pans to centre it
-focus #l: panel viewer pans to centre it
+INFO src/bevy_app/scene3d.rs:258 focus #Q: panel assembly camera frames it
+INFO src/bevy_app/scene3d.rs:258 focus #Q: panel assembly camera frames it
+INFO src/bevy_app/scene3d.rs:232 focus #l: panel scene pans to centre it
+INFO src/bevy_app/scene3d.rs:232 focus #l: panel scene pans to centre it
 false
 true
 "<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#41\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#41\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":59691}
+{"roundtrip_equal":true,"bytes":61933}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" run=\"auto\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
-applied "open demo scene" (302 ops, System) -> v1
-applied "move rect" (2 ops, Human) -> v2
-applied "move mesh" (1 ops, Human) -> v3
-applied "undo: move mesh" (1 ops, System) -> v4
-applied "undo: move rect" (2 ops, System) -> v5
-applied "redo: move rect" (2 ops, System) -> v6
-applied "set slider" (1 ops, Human) -> v7
-applied "move rect" (2 ops, Human) -> v8
-applied "model edit" (2 ops, Model) -> v9
-applied "move ellipse" (2 ops, Human) -> v10
-"move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-applied "move ellipse" (3 ops, Human) -> v11
-"move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-applied "undo: move ellipse" (7 ops, System) -> v12
-applied "undo: move ellipse" (6 ops, System) -> v13
-#b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
-#b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
-applied "model edit" (1 ops, Model) -> v14
-"model edit" by Model: cluster #V re-solved; moved 3 node(s): #Y #Z #a; unmet: #a.transform2d.x wanted 900 got 619.99…
-applied "undo: model edit" (7 ops, System) -> v15
-applied "set slider" (1 ops, Human) -> v16
-"set slider" by Human: cluster #V re-solved; moved 3 node(s): #Y #Z #a
-applied "model edit" (2 ops, Model) -> v17
-applied "move rect" (3 ops, Human) -> v18
-"move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
-applied "move ellipse" (2 ops, Human) -> v19
-"move ellipse" by Human: cluster #V re-solved; moved 1 node(s): #W
-applied "undo: move ellipse" (3 ops, System) -> v20
-applied "link" (4 ops, Human) -> v21
-"link" by Human: cluster #V re-solved; moved 1 node(s): #W
-applied "undo: link" (5 ops, System) -> v22
-applied "link" (4 ops, Model) -> v23
-"link" by Model: cluster #V re-solved; moved 1 node(s): #W
-applied "link" (5 ops, Model) -> v24
-applied "undo: link" (5 ops, System) -> v25
-loaded document v25 (294 live nodes)
+Access to fetch at 'http://127.0.0.1:4318/pair' from origin 'http://localhost:5173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+DEBUG src/document_bridge/mod.rs:492 applied "open demo scene" (302 ops, System) -> v1
+DEBUG src/document_bridge/mod.rs:492 applied "move rect" (2 ops, Human) -> v2
+DEBUG src/document_bridge/mod.rs:492 applied "move mesh" (1 ops, Human) -> v3
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move mesh" (1 ops, System) -> v4
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move rect" (2 ops, System) -> v5
+DEBUG src/document_bridge/mod.rs:492 applied "redo: move rect" (2 ops, System) -> v6
+DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v7
+DEBUG src/document_bridge/mod.rs:492 applied "move rect" (2 ops, Human) -> v8
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v9
+DEBUG src/document_bridge/mod.rs:492 applied "move ellipse" (2 ops, Human) -> v10
+DEBUG src/document_bridge/mod.rs:497 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+DEBUG src/document_bridge/mod.rs:492 applied "move ellipse" (3 ops, Human) -> v11
+DEBUG src/document_bridge/mod.rs:497 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move ellipse" (7 ops, System) -> v12
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move ellipse" (6 ops, System) -> v13
+DEBUG src/bevy_app/select.rs:3010 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+DEBUG src/bevy_app/select.rs:3010 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v14
+DEBUG src/document_bridge/mod.rs:497 "model edit" by Model: cluster #V re-solved; moved 3 node(s): #Y #Z #a; unmet: #a.transform2d.x wanted 900 got 619.999999990091
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (7 ops, System) -> v15
+DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v16
+DEBUG src/document_bridge/mod.rs:497 "set slider" by Human: cluster #V re-solved; moved 3 node(s): #Y #Z #a
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v17
+DEBUG src/document_bridge/mod.rs:492 applied "move rect" (3 ops, Human) -> v18
+DEBUG src/document_bridge/mod.rs:497 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
+DEBUG src/document_bridge/mod.rs:492 applied "move ellipse" (2 ops, Human) -> v19
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move ellipse" (2 ops, System) -> v20
+DEBUG src/document_bridge/mod.rs:492 applied "link" (4 ops, Human) -> v21
+DEBUG src/document_bridge/mod.rs:492 applied "undo: link" (4 ops, System) -> v22
+DEBUG src/document_bridge/mod.rs:492 applied "link" (4 ops, Model) -> v23
+DEBUG src/document_bridge/mod.rs:492 applied "link" (5 ops, Model) -> v24
+DEBUG src/document_bridge/mod.rs:492 applied "undo: link" (5 ops, System) -> v25
+DEBUG src/document_bridge/mod.rs:433 loaded document v25 (294 live nodes)
 (no page errors)
+```
+
+```
 {"enabled":false,"guides":[]}
 undefined
 ["#M"]
@@ -639,10 +726,10 @@ tab Optics
 undefined
 undefined
 [190.6,71.5]
-["power=\"10 mW\"","signal=\"7.94… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>","<connection a=\"source.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
+["power=\"10 mW\"","signal=\"7.94328234724 mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>","<connection a=\"source.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
 [75.9,28.5]
-["power=\"15.78… mW\"","signal=\"4.99… mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>","<connection a=\"source.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
-"<edit-failed applied=\"none\" version=\"27\">\n  <error op=\"2\" kind=\"bad_connection\">#…: cannot connect rf_voltage (#…) to optical_power (#…); a connection joins ports of one kind</error>\n</edit-failed>"
+["power=\"15.7894737167 mW\"","signal=\"4.99307 mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>","<connection a=\"source.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
+"<edit-failed applied=\"none\" version=\"27\">\n  <error op=\"2\" verb=\"link $c connects $p\" kind=\"bad_connection\">$c: cannot connect rf_voltage ($p) to optical_power (#…); a connection joins ports of one kind</error>\n</edit-failed>"
 tab Thermal
 undefined
 ["out 303.15 K -5 W","a 303.15 K 5 W","b 293.15 K -5 W","p 293.15 K 5 W"]
@@ -666,7 +753,7 @@ tab Controls
 clicked Add effect
 clicked [data-effect-type="shadow"]
 " shadow.color=\"#00000040\" dx=\"0\" dy=\"4\" blur=\"4\""
-"<ellipse id=\"#44\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.57…\" inner=\"0\""
+"<ellipse id=\"#44\" name=\"ellipse\" x=\"770\" y=\"140\" rot=\"0\" sx=\"1\" sy=\"1\" rx=\"70\" ry=\"40\" start=\"0\" sweep=\"1.5707963267948966\" inner=\"0\""
 tab Optics
 undefined
 undefined
@@ -698,7 +785,7 @@ tab Main
 [false,true]
 tab Controls
 undefined
-"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"30\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.0914 38.6599 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.57… 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
+"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"741\" height=\"527\" viewBox=\"99 98 741 527\" data-iron=\"1\">\n  <defs>\n    <filter id=\"shadow-1\" filterUnits=\"userSpaceOnUse\" x=\"494\" y=\"98\" width=\"152\" height=\"92\" color-interpolation-filters=\"sRGB\">\n      <feDropShadow dx=\"0\" dy=\"4\" stdDeviation=\"2\" flood-color=\"#000000\" flood-opacity=\"0.25\"/>\n    </filter>\n  </defs>\n  <g id=\"level\" data-iron-type=\"slider\" data-iron-name=\"level\" transform=\"translate(100 600)\">\n    <rect y=\"9\" width=\"300\" height=\"6\" rx=\"3\" fill=\"#bfc2cc\"/>\n    <rect y=\"9\" width=\"120\" height=\"6\" rx=\"3\" fill=\"#3380e6\"/>\n    <circle cx=\"120\" cy=\"12\" r=\"12\" fill=\"#ffffff\" stroke=\"#4d4d59\" stroke-width=\"1.5\"/>\n  </g>\n  <path id=\"path\" data-iron-type=\"path\" data-iron-name=\"path\" transform=\"translate(200 200)\" d=\"M0 0 C0 0 160 -60 220 0 C280 60 130 220 130 220\" fill=\"none\" stroke=\"#000000\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>\n  <g filter=\"url(#shadow-1)\">\n    <rect id=\"rectangle\" data-iron-type=\"rect\" data-iron-name=\"rectangle\" transform=\"translate(500 100)\" width=\"140\" height=\"80\" rx=\"30\" fill=\"#d9d9d9\" data-iron-shadow=\"#000000 0.25 0 4 4\"/>\n  </g>\n  <path id=\"ellipse\" data-iron-type=\"ellipse\" data-iron-name=\"ellipse\" transform=\"translate(770 140)\" d=\"M0 0 L70 0 C70 22.0914 38.6599 40 0 40 Z\" data-iron-rx=\"70\" data-iron-ry=\"40\" data-iron-arc=\"0 1.5707963267948966 0\" fill=\"#d9d9d9\"/>\n</svg>\n"
 ["slider level is exported as a picture of itself; it imports as shapes"]
 4
 {"anchors":2,"cuts":["filters are not imported"],"definitions":0,"nodes":4,"ok":true,"references":0}
@@ -717,10 +804,10 @@ tab Components
 undefined
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
 undefined
-["#…/3V","7.94… mW"]
+["#…/3V","7.94328234724 mW"]
 {"derivedNodesSaved":0,"connectionsToPorts":4}
 [0,5]
-["#…/3V","15.88… mW"]
+["#…/3V","15.8865646945 mW"]
 ["source lasersource",["power"]]
 clicked button[aria-label="Detach instance"]
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser detached","short fiber linked","long fiber linked"]
@@ -736,8 +823,8 @@ undefined
 [true,[[645,435],[645,435]]]
 [[545,175],[545,175]]
 clicked button[title^="Make a component"]
-[["power value in","out optical_power out"],"#….slider.value * 0.00… W",["fiber detached","meter detached","meter linked","spare laser linked","short fiber linked","long fiber linked"]]
-["#…/3V","15.88… mW"]
+[["power value in","out optical_power out"],"#….slider.value * 0.001 W",["fiber detached","meter detached","meter linked","spare laser linked","short fiber linked","long fiber linked"]]
+["#…/3V","15.8865646945 mW"]
 undefined
 [2,[[240,175],[545,175]]]
 [2,[[240,175],[665,435]]]
@@ -747,9 +834,9 @@ undefined
 undefined
 [[545,175],[240,475],["meter 10 mW","short fiber 0 W"]]
 [[340,475],[340,475]]
-[[545,175],[545,175],["meter 15.88… mW","short fiber 0 W"]]
-[[240,475],["meter 15.88… mW","short fiber 10 mW"]]
-["meter 15.88… mW","short fiber 0 W"]
+[[545,175],[545,175],["meter 15.8865646945 mW","short fiber 0 W"]]
+[[240,475],["meter 15.8865646945 mW","short fiber 10 mW"]]
+["meter 15.8865646945 mW","short fiber 0 W"]
 clicked button[title^="Make a component"]
 "component use #52"
 clicked button[title="Shape tools"]
@@ -762,120 +849,120 @@ clicked .link-popover button.primary
 1
 [[545,175],[683,320],["meter 0 W","short fiber 0 W"]]
 [[465,300],[545,175]]
-[[600,300],[600,300],["meter 15.88… mW","short fiber 0 W"]]
+[[600,300],[600,300],["meter 15.8865646945 mW","short fiber 0 W"]]
 tab Library
 ["slider level 18","laser power 18 mW"]
 tab Controls
 "controls"
 ["Render inspector watching controls","Chunks","1 1 in view","Nodes","8"]
-applied "open demo scene" (302 ops, System) -> v1
-applied "resize rect" (2 ops, Human) -> v2
-applied "rotate rect" (3 ops, Human) -> v3
-applied "undo: rotate rect" (3 ops, System) -> v4
-applied "undo: resize rect" (2 ops, System) -> v5
-applied "nudge rect" (1 ops, Human) -> v6
-applied "nudge rect" (1 ops, Human) -> v7
-applied "delete group" (1 ops, Human) -> v8
-applied "undo: delete group" (16 ops, System) -> v9
-applied "draw path" (3 ops, Human) -> v10
-applied "add point" (1 ops, Human) -> v11
-applied "add point" (1 ops, Human) -> v12
-applied "close path" (1 ops, Human) -> v13
-applied "undo: close path" (1 ops, System) -> v14
-applied "move point" (2 ops, Human) -> v15
-applied "add point" (5 ops, Human) -> v16
-applied "undo: add point" (5 ops, System) -> v17
-applied "bend segment" (4 ops, Human) -> v18
-applied "undo: bend segment" (4 ops, System) -> v19
-applied "delete point" (1 ops, Human) -> v20
-applied "undo: delete point" (1 ops, System) -> v21
-applied "delete point" (1 ops, Human) -> v22
-applied "undo: delete point" (1 ops, System) -> v23
-applied "set size.w" (1 ops, Human) -> v24
-applied "set transform2d.x" (1 ops, Human) -> v25
-applied "set slider" (1 ops, Human) -> v26
-applied "resize rect" (1 ops, Human) -> v27
-applied "set slider" (1 ops, Human) -> v28
-applied "draw rectangle" (1 ops, Human) -> v29
-applied "draw ellipse" (1 ops, Human) -> v30
-applied "resize ellipse" (2 ops, Human) -> v31
-applied "convert ellipse to path" (7 ops, Human) -> v32
-applied "undo: convert ellipse to path" (7 ops, System) -> v33
-applied "round corners" (1 ops, Human) -> v34
-applied "add shadow" (1 ops, Human) -> v35
-applied "edit arc" (1 ops, Human) -> v36
-applied "duplicate 2 nodes" (7 ops, Human) -> v37
-applied "paste 2 nodes" (7 ops, Human) -> v38
-applied "cut 2 nodes" (2 ops, Human) -> v39
-applied "paste 2 nodes" (4 ops, Human) -> v40
-applied "undo: paste 2 nodes" (4 ops, System) -> v41
-applied "undo: cut 2 nodes" (2 ops, System) -> v42
-applied "undo: paste 2 nodes" (7 ops, System) -> v43
-applied "undo: duplicate 2 nodes" (7 ops, System) -> v44
-applied "model edit" (1 ops, Model) -> v45
-applied "model edit" (1 ops, Model) -> v46
-applied "move rect" (2 ops, Human) -> v47
-applied "undo: move rect" (2 ops, System) -> v48
-applied "undo: model edit" (1 ops, System) -> v49
-applied "undo: model edit" (1 ops, System) -> v50
-applied "duplicate rect" (5 ops, Human) -> v51
-applied "duplicate rect" (2 ops, Human) -> v52
-applied "undo: duplicate rect" (7 ops, System) -> v53
-applied "move mesh" (1 ops, Human) -> v54
-applied "undo: move mesh" (1 ops, System) -> v55
-applied "import SVG" (4 ops, Human) -> v56
-applied "undo: import SVG" (4 ops, System) -> v57
-applied "import SVG" (4 ops, Human) -> v58
-applied "undo: import SVG" (4 ops, System) -> v59
-applied "import SVG" (4 ops, Model) -> v60
-applied "undo: import SVG" (4 ops, System) -> v61
-applied "set slider" (1 ops, Human) -> v62
-applied "detach instance" (6 ops, Human) -> v63
-applied "undo: detach instance" (6 ops, System) -> v64
-applied "model edit" (1 ops, Model) -> v65
-applied "undo: model edit" (1 ops, System) -> v66
-applied "model edit" (2 ops, Model) -> v67
-applied "undo: model edit" (2 ops, System) -> v68
-applied "model edit" (2 ops, Model) -> v69
-applied "model edit" (1 ops, Model) -> v70
-applied "undo: model edit" (1 ops, System) -> v71
-applied "undo: model edit" (2 ops, System) -> v72
-applied "make component component" (24 ops, Human) -> v73
-applied "model edit" (2 ops, Model) -> v74
-applied "undo: model edit" (2 ops, System) -> v75
-applied "undo: make component component" (24 ops, System) -> v76
-applied "disconnect in" (3 ops, Human) -> v77
-applied "disconnect in" (2 ops, Human) -> v78
-applied "connect in to out" (2 ops, Human) -> v79
-applied "connect in to out" (3 ops, Human) -> v80
-applied "move use" (2 ops, Human) -> v81
-applied "undo: move use" (4 ops, System) -> v82
-applied "undo: connect in to out" (10 ops, System) -> v83
-applied "connect in to out" (3 ops, Human) -> v84
-applied "undo: connect in to out" (3 ops, System) -> v85
-applied "draw ellipse" (1 ops, Human) -> v86
-applied "draw rectangle" (1 ops, Human) -> v87
-applied "make component component" (9 ops, Human) -> v88
-applied "add port" (2 ops, Human) -> v89
-applied "wrap in empty" (4 ops, Human) -> v90
-applied "bind transform2d.rot" (1 ops, Human) -> v91
-applied "duplicate use" (3 ops, Human) -> v92
-applied "disconnect in" (3 ops, Human) -> v93
-applied "disconnect in" (2 ops, Human) -> v94
-applied "disconnect in" (2 ops, Human) -> v95
-applied "undo: disconnect in" (7 ops, System) -> v96
-applied "disconnect out" (3 ops, Human) -> v97
-applied "disconnect out" (2 ops, Human) -> v98
-applied "disconnect out" (2 ops, Human) -> v99
-applied "undo: disconnect out" (7 ops, System) -> v100
-applied "move use" (2 ops, Human) -> v101
-applied "undo: move use" (2 ops, System) -> v102
-applied "add slider" (8 ops, Human) -> v103
-applied "add slider" (3 ops, Human) -> v104
-applied "add laser" (7 ops, Human) -> v105
-applied "add laser" (3 ops, Human) -> v106
-applied "connect value to power" (3 ops, Human) -> v107
-applied "set slider" (1 ops, Human) -> v108
+DEBUG src/document_bridge/mod.rs:492 applied "open demo scene" (302 ops, System) -> v1
+DEBUG src/document_bridge/mod.rs:492 applied "resize rect" (2 ops, Human) -> v2
+DEBUG src/document_bridge/mod.rs:492 applied "rotate rect" (3 ops, Human) -> v3
+DEBUG src/document_bridge/mod.rs:492 applied "undo: rotate rect" (3 ops, System) -> v4
+DEBUG src/document_bridge/mod.rs:492 applied "undo: resize rect" (2 ops, System) -> v5
+DEBUG src/document_bridge/mod.rs:492 applied "nudge rect" (1 ops, Human) -> v6
+DEBUG src/document_bridge/mod.rs:492 applied "nudge rect" (1 ops, Human) -> v7
+DEBUG src/document_bridge/mod.rs:492 applied "delete group" (1 ops, Human) -> v8
+DEBUG src/document_bridge/mod.rs:492 applied "undo: delete group" (16 ops, System) -> v9
+DEBUG src/document_bridge/mod.rs:492 applied "draw path" (3 ops, Human) -> v10
+DEBUG src/document_bridge/mod.rs:492 applied "add point" (1 ops, Human) -> v11
+DEBUG src/document_bridge/mod.rs:492 applied "add point" (1 ops, Human) -> v12
+DEBUG src/document_bridge/mod.rs:492 applied "close path" (1 ops, Human) -> v13
+DEBUG src/document_bridge/mod.rs:492 applied "undo: close path" (1 ops, System) -> v14
+DEBUG src/document_bridge/mod.rs:492 applied "move point" (2 ops, Human) -> v15
+DEBUG src/document_bridge/mod.rs:492 applied "add point" (5 ops, Human) -> v16
+DEBUG src/document_bridge/mod.rs:492 applied "undo: add point" (5 ops, System) -> v17
+DEBUG src/document_bridge/mod.rs:492 applied "bend segment" (4 ops, Human) -> v18
+DEBUG src/document_bridge/mod.rs:492 applied "undo: bend segment" (4 ops, System) -> v19
+DEBUG src/document_bridge/mod.rs:492 applied "delete point" (1 ops, Human) -> v20
+DEBUG src/document_bridge/mod.rs:492 applied "undo: delete point" (1 ops, System) -> v21
+DEBUG src/document_bridge/mod.rs:492 applied "delete point" (1 ops, Human) -> v22
+DEBUG src/document_bridge/mod.rs:492 applied "undo: delete point" (1 ops, System) -> v23
+DEBUG src/document_bridge/mod.rs:492 applied "set size.w" (1 ops, Human) -> v24
+DEBUG src/document_bridge/mod.rs:492 applied "set transform2d.x" (1 ops, Human) -> v25
+DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v26
+DEBUG src/document_bridge/mod.rs:492 applied "resize rect" (1 ops, Human) -> v27
+DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v28
+DEBUG src/document_bridge/mod.rs:492 applied "draw rectangle" (1 ops, Human) -> v29
+DEBUG src/document_bridge/mod.rs:492 applied "draw ellipse" (1 ops, Human) -> v30
+DEBUG src/document_bridge/mod.rs:492 applied "resize ellipse" (2 ops, Human) -> v31
+DEBUG src/document_bridge/mod.rs:492 applied "convert ellipse to path" (7 ops, Human) -> v32
+DEBUG src/document_bridge/mod.rs:492 applied "undo: convert ellipse to path" (7 ops, System) -> v33
+DEBUG src/document_bridge/mod.rs:492 applied "round corners" (1 ops, Human) -> v34
+DEBUG src/document_bridge/mod.rs:492 applied "add shadow" (1 ops, Human) -> v35
+DEBUG src/document_bridge/mod.rs:492 applied "edit arc" (1 ops, Human) -> v36
+DEBUG src/document_bridge/mod.rs:492 applied "duplicate 2 nodes" (7 ops, Human) -> v37
+DEBUG src/document_bridge/mod.rs:492 applied "paste 2 nodes" (7 ops, Human) -> v38
+DEBUG src/document_bridge/mod.rs:492 applied "cut 2 nodes" (2 ops, Human) -> v39
+DEBUG src/document_bridge/mod.rs:492 applied "paste 2 nodes" (4 ops, Human) -> v40
+DEBUG src/document_bridge/mod.rs:492 applied "undo: paste 2 nodes" (4 ops, System) -> v41
+DEBUG src/document_bridge/mod.rs:492 applied "undo: cut 2 nodes" (2 ops, System) -> v42
+DEBUG src/document_bridge/mod.rs:492 applied "undo: paste 2 nodes" (7 ops, System) -> v43
+DEBUG src/document_bridge/mod.rs:492 applied "undo: duplicate 2 nodes" (7 ops, System) -> v44
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v45
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v46
+DEBUG src/document_bridge/mod.rs:492 applied "move rect" (2 ops, Human) -> v47
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move rect" (2 ops, System) -> v48
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (1 ops, System) -> v49
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (1 ops, System) -> v50
+DEBUG src/document_bridge/mod.rs:492 applied "duplicate rect" (5 ops, Human) -> v51
+DEBUG src/document_bridge/mod.rs:492 applied "duplicate rect" (2 ops, Human) -> v52
+DEBUG src/document_bridge/mod.rs:492 applied "undo: duplicate rect" (7 ops, System) -> v53
+DEBUG src/document_bridge/mod.rs:492 applied "move mesh" (1 ops, Human) -> v54
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move mesh" (1 ops, System) -> v55
+DEBUG src/document_bridge/mod.rs:492 applied "import SVG" (4 ops, Human) -> v56
+DEBUG src/document_bridge/mod.rs:492 applied "undo: import SVG" (4 ops, System) -> v57
+DEBUG src/document_bridge/mod.rs:492 applied "import SVG" (4 ops, Human) -> v58
+DEBUG src/document_bridge/mod.rs:492 applied "undo: import SVG" (4 ops, System) -> v59
+DEBUG src/document_bridge/mod.rs:492 applied "import SVG" (4 ops, Model) -> v60
+DEBUG src/document_bridge/mod.rs:492 applied "undo: import SVG" (4 ops, System) -> v61
+DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v62
+DEBUG src/document_bridge/mod.rs:492 applied "detach instance" (6 ops, Human) -> v63
+DEBUG src/document_bridge/mod.rs:492 applied "undo: detach instance" (6 ops, System) -> v64
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v65
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (1 ops, System) -> v66
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v67
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (2 ops, System) -> v68
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v69
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v70
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (1 ops, System) -> v71
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (2 ops, System) -> v72
+DEBUG src/document_bridge/mod.rs:492 applied "make component component" (24 ops, Human) -> v73
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v74
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (2 ops, System) -> v75
+DEBUG src/document_bridge/mod.rs:492 applied "undo: make component component" (24 ops, System) -> v76
+DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (3 ops, Human) -> v77
+DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (2 ops, Human) -> v78
+DEBUG src/document_bridge/mod.rs:492 applied "connect in to out" (2 ops, Human) -> v79
+DEBUG src/document_bridge/mod.rs:492 applied "connect in to out" (3 ops, Human) -> v80
+DEBUG src/document_bridge/mod.rs:492 applied "move use" (2 ops, Human) -> v81
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move use" (4 ops, System) -> v82
+DEBUG src/document_bridge/mod.rs:492 applied "undo: connect in to out" (10 ops, System) -> v83
+DEBUG src/document_bridge/mod.rs:492 applied "connect in to out" (3 ops, Human) -> v84
+DEBUG src/document_bridge/mod.rs:492 applied "undo: connect in to out" (3 ops, System) -> v85
+DEBUG src/document_bridge/mod.rs:492 applied "draw ellipse" (1 ops, Human) -> v86
+DEBUG src/document_bridge/mod.rs:492 applied "draw rectangle" (1 ops, Human) -> v87
+DEBUG src/document_bridge/mod.rs:492 applied "make component component" (9 ops, Human) -> v88
+DEBUG src/document_bridge/mod.rs:492 applied "add port" (2 ops, Human) -> v89
+DEBUG src/document_bridge/mod.rs:492 applied "wrap in empty" (4 ops, Human) -> v90
+DEBUG src/document_bridge/mod.rs:492 applied "bind transform2d.rot" (1 ops, Human) -> v91
+DEBUG src/document_bridge/mod.rs:492 applied "duplicate use" (3 ops, Human) -> v92
+DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (3 ops, Human) -> v93
+DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (2 ops, Human) -> v94
+DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (2 ops, Human) -> v95
+DEBUG src/document_bridge/mod.rs:492 applied "undo: disconnect in" (7 ops, System) -> v96
+DEBUG src/document_bridge/mod.rs:492 applied "disconnect out" (3 ops, Human) -> v97
+DEBUG src/document_bridge/mod.rs:492 applied "disconnect out" (2 ops, Human) -> v98
+DEBUG src/document_bridge/mod.rs:492 applied "disconnect out" (2 ops, Human) -> v99
+DEBUG src/document_bridge/mod.rs:492 applied "undo: disconnect out" (7 ops, System) -> v100
+DEBUG src/document_bridge/mod.rs:492 applied "move use" (2 ops, Human) -> v101
+DEBUG src/document_bridge/mod.rs:492 applied "undo: move use" (2 ops, System) -> v102
+DEBUG src/document_bridge/mod.rs:492 applied "add slider" (8 ops, Human) -> v103
+DEBUG src/document_bridge/mod.rs:492 applied "add slider" (3 ops, Human) -> v104
+DEBUG src/document_bridge/mod.rs:492 applied "add laser" (7 ops, Human) -> v105
+DEBUG src/document_bridge/mod.rs:492 applied "add laser" (3 ops, Human) -> v106
+DEBUG src/document_bridge/mod.rs:492 applied "connect value to power" (3 ops, Human) -> v107
+DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v108
 (no page errors)
 ```
 
@@ -1282,7 +1369,7 @@ asked for, or a bound leaf). `await __iron.producer('gas', 'freeze' | 'stop' |
 stops it, stops it, or runs it again. `piston.txt` drives the Piston tab:
 
 ```bash
-cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < piston.txt; cd -
+# piston.txt was retired 2026-11-09 (an exit demo for a finished feature; its logic has Rust tests). The walkthrough below is history.
 ```
 
 Expected: `gas()` names `clips holds 0`, `network holds 8` (the thermal demo's
@@ -1797,7 +1884,7 @@ reach tools through the keymap of the view under the pointer
 (`bevy_app/view_focus.rs`). After a build, with Vite up:
 
 ```sh
-cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < focus.txt; cd -
+# focus.txt was retired 2026-11-09 (an exit demo for a finished feature; its logic has Rust tests). The walkthrough below is history.
 ```
 
 The Main view's toolbar and `viewContext` are `std:free-2d`'s (the shapes share a
@@ -1957,7 +2044,7 @@ moves its source, one that cannot follow is refused with a reason ("cannot follo
 After a build, with Vite up:
 
 ```sh
-cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < controls.txt; cd -
+# controls.txt was retired 2026-11-09 (an exit demo for a finished feature; its logic has Rust tests). The walkthrough below is history.
 ```
 
 In a fresh `kit` composition: a slider `level` (0.5); a needle whose rotation is
@@ -2021,7 +2108,7 @@ demo scene as before; this script navigates without it. A saved layout from befo
 layout**. After a build, with Vite up:
 
 ```sh
-cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < showcase.txt; cd -
+# showcase.txt was retired 2026-11-09 (an exit demo for a finished feature; its logic has Rust tests). The walkthrough below is history.
 ```
 
 Inspect `screenshots/showcase-outline.png`, `showcase-pitch.png` and
@@ -2068,7 +2155,7 @@ panel-relative box's pixels near a colour (each channel within 40). After a buil
 with Vite up:
 
 ```sh
-cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < chrome.txt; cd -
+# chrome.txt was retired 2026-11-09 (an exit demo for a finished feature; its logic has Rust tests). The walkthrough below is history.
 ```
 
 Inspect `screenshots/chrome-grips.png`, `chrome-handle.png`, `chrome-hover.png` and

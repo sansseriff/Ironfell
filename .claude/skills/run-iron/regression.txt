@@ -1,0 +1,223 @@
+# Regression (split from the broad smoke, 2026-11-09): bindings and their
+# inversion, a model edit on the same undo, the pendulum, a 2D composition in
+# 3D, linking, save/load round trip. Run at SIZE=1680x1000@1.
+# Run at SIZE=1680x1000@1: the 280 px inspector leaves the fixture its 1020 px canvas.
+# Default flow: open, wait, screenshot, drag the square (document 500,420 80x80)
+# and the torus (in the assembly panel), undo both, redo one, then round-trip
+# the document through save and load and show the transactions that applied.
+nav
+ready
+# Snapping off (plans/specs/snapping.md): these drags aim at exact points; snapping.txt covers it
+eval __iron.snapping(false)
+shot start
+# Stage A exit: the shadow rect, bound to the square's position, follows it
+# during the drag, not after. The drag is spelled out so a screenshot and a
+# view can be taken mid-gesture; the view reads the gesture overlay.
+dmove 540 460
+down
+sleep 300
+dmove 600 420
+sleep 300
+dmove 660 380
+sleep 400
+shot mid-drag-bound-follows
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const a = v.match(/<rect[^>]*name="square"[^>]*>/); const b = v.match(/<rect[^>]*name="shadow"[^>]*>/); return [a && a[0].replace(/ rot=.*/, ''), b && b[0].replace(/ rot=.*/, '')]; })()
+# Stage A exit: the 2D layer reports which nodes each redraw was for. A drag
+# frame names the square and its shadow (two of the drawn nodes) and the
+# damage rectangle covering their old and new bounds.
+peek redraw \(document\): 2 of
+dmove 690 360
+sleep 300
+up
+sleep 600
+shot after-square-drag
+# The torus is in the 3D "assembly" composition, which the viewer's `main`
+# composition embeds as a camera view at (815,10) 200x350; the derived
+# default view frames the torus and the card plane, the torus near
+# document (875,200).
+ddrag 875 200 845 245
+shot after-torus-drag
+key Meta+z
+key Meta+z
+sleep 500
+shot after-undo-both
+key Meta+Shift+z
+sleep 500
+shot after-redo-one
+# Exit criterion 3: scrub the slider (document 100,600 300x24) to about 90%;
+# the bar's bound height and top follow in the same frame, and the release
+# is one "set slider" transaction.
+ddrag 220 612 370 612
+shot after-slider-scrub
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="bar"[^>]*>/); return m ? m[0] : v.slice(0, 200); })()
+# Stage A, linear binding inversion: the bar's y is bound to
+# `640 - slider.value * 300`, so dragging the bar down by 30 sets the slider
+# to 0.8 and the bar's height follows; x is a constant and moves directly.
+# One "move rect" transaction carries both.
+ddrag 810 500 760 530
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="bar"[^>]*>/); return m ? m[0].replace(/ y\.bind=.*/, '') : v.slice(0, 200); })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<slider[^>]*name="level"[^>]*>/); return m ? m[0].replace(/.* value=/, 'value=') : v.slice(0, 200); })()
+# Exit criterion 4: scrub the timeline to 3 s by its playhead grip (the
+# timeline is a composition since timeline.md phase 2: the grip sits at
+# label_w 160 + t * 100 px). The "spin" clip turns the torus and the "slide"
+# clip has moved the square; the torus view names the clip that drives it.
+pdrag timeline 160 10 460 10
+shot after-timeline-scrub
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<mesh[\s\S]*?(\/>|<\/mesh>)/); return m ? m[0].replace(/\s+/g, ' ') : v.slice(0, 200); })()
+# Exit criterion 5: an edit in the model's markup lands on the same undo
+# stack as a model-actor transaction. Create a rect under the scene, bind its
+# width to the slider, and recolour the ellipse; then a bad edit is rejected
+# with every error named.
+eval (async () => { const r = await __iron.edit('<edit><create id="$n" type="rect" parent="#1" name="from-model" x="300" y="120" w="{= #O.slider.value * 100}" h="40" color="#22aa55"/><set id="#N" fill.color="#ff3333"/></edit>'); return r; })()
+eval (async () => { const r = await __iron.edit('<edit><set id="#zz" x="1"/><set id="#N" radius.rx="{= #N.radius.rx + 1}"/></edit>'); return r.failure; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<rect[^>]*name="from-model"[^>]*>/); return m ? m[0] : 'not found'; })()
+sleep 800
+shot after-model-edit
+# CS phase 3, the pendulum (document space: platform (240,40)-(400,60), hinge
+# (320,60), joints every 100 px down, ball at (320,360) r=14, length slider
+# (100,660)-(400,684), height bar at x=700).
+# The pendulum is a group, so a plain click selects the whole group (Figma's
+# rule; bevy_app/select.rs). Cmd held reaches its parts directly: deep
+# select, for every pendulum step below.
+keydown Meta
+# 1. Drag the ball: the arms follow every frame and the height bar tracks it;
+#    a mid-drag view shows the previewed joints and the arm's solved rotation.
+dmove 320 360
+down
+sleep 300
+dmove 380 330
+sleep 300
+dmove 440 300
+sleep 400
+shot pendulum-mid-drag
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); const a = v.match(/<rect[^>]*name="arm3"[^>]*>/); const h = v.match(/<rect[^>]*name="height"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), a && a[0].match(/ rot="[^"]*"/)[0], h && h[0].match(/ h="[^"]*"/)[0]]; })()
+# 9. Solve time per frame, logged by the bridge (budget 2 ms).
+peek solve: cluster
+up
+sleep 600
+# 3. Release is one "move ellipse" transaction whose derived ops are the
+#    joints; the cause line names the cluster and what moved.
+peek "move ellipse" by Human
+# 2. Beyond reach: the chain straightens and the ball stops at full extension
+#    under the pointer, no jitter. The grab is off-centre, clear of the arm
+#    that ends at the ball's centre.
+sleep 300
+ddrag 448 306 328 706
+shot pendulum-extended
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
+# Undo both drags returns every part.
+key Meta+z
+key Meta+z
+keydown Meta
+sleep 500
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); const j = v.match(/<ellipse[^>]*name="j1"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), j && j[0].replace(/ rot=.*/, '')]; })()
+# 6. A node whose position is bound (arm1) does not drag; the reason shows.
+ddrag 320 110 360 110
+peek locked for this drag
+# 7. A scripted edit out of reach is adjusted and reported; with exact="true"
+#    it is rejected.
+eval (async () => { const r = await __iron.edit('<edit><set id="#a" x="900"/></edit>'); return r.summary; })()
+eval (async () => { const r = await __iron.edit('<edit exact="true"><set id="#a" x="900"/></edit>'); return r.failure; })()
+key Meta+z
+keydown Meta
+sleep 400
+# 5. Scrub the length slider to about 1.2: the links re-solve live and the
+#    release is one "set slider" transaction. Rest on the knob first, so the
+#    press lands on a picked slider rather than a frame behind the pointer.
+dmove 250 672
+sleep 400
+ddrag 250 672 310 672
+# The release commits on the next frame; at a few fps the model edit below
+# would otherwise apply first and the slider's commit re-solve from the
+# ball's fix (the platform would rise instead of the ball dropping).
+sleep 400
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const l = v.match(/<constraint[^>]*name="link1"[^>]*>/); return l && l[0]; })()
+# 4. Move the fix from the platform to the ball (one model transaction), then
+#    drag the platform: the arms bend and the ball stays put.
+eval (async () => { const r = await __iron.edit('<edit><unlink id="r3"/><link from="#g" to="#a" rel="constrains" role="a"/></edit>'); return r.ok; })()
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); return b && b[0].replace(/ rot=.*/, ''); })()
+ddrag 260 50 300 50
+shot pendulum-platform-drag
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const b = v.match(/<ellipse[^>]*name="ball"[^>]*>/); const p = v.match(/<rect[^>]*name="platform"[^>]*>/); return [b && b[0].replace(/ rot=.*/, ''), p && p[0].replace(/ rot=.*/, '')]; })()
+keyup Meta
+# 8. The view marks the solver's variables with the cluster that keeps them.
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const j = v.match(/<ellipse[^>]*name="j1"[^>]*>/); return j && j[0].match(/x\.by="[^"]*"/)[0]; })()
+# A 2D composition inside a 3D one (ECM §7.4; view-textures step 4): the
+# `card` composition is a plane beside the torus in the assembly, drawn in
+# perspective. Find its dot by hovering (picking goes 2D view -> 3D view ->
+# plane -> 2D card), then drag it: the pointer maps through the plane. The
+# plane is an embed inside the view, so its content is Cmd (deep) away.
+keydown Meta
+eval (async () => { const v = await __iron.view({fidelity:'full'}); window.__dot = v.match(/<ellipse id="([^"]+)" name="card dot"/)[1]; return window.__dot; })()
+hunt 900 120 1010 230 5 __iron.hovered().includes(window.__dot)
+dragfound 15 0
+keyup Meta
+sleep 600
+shot card-dot-dragged
+eval (async () => { const v = await __iron.view({fidelity:'full'}); const m = v.match(/<ellipse[^>]*name="card dot" x="([^"]+)"/); return Number(m[1]) > 60; })()
+key Meta+z
+sleep 400
+# Stage C1 (ECM phase 2 exit), in the main layout (ECM §7.4): the cartoon
+# box (scene, document 520,590 110x70) and the torus (the assembly's view,
+# near 875,200) are two compositions side by side in one viewer. Select the
+# box, shift-click the torus, press Link: one "link" transaction creates
+# one entity with both as figures.
+pclick viewer 575 625
+# A frame between the click and the modifier: at a few fps both can land in
+# one frame, and the click then reads as a shift-click that adds.
+sleep 400
+keydown Shift
+pclick viewer 875 200
+keyup Shift
+sleep 400
+eval __iron.selection()
+click Link
+sleep 600
+peek applied "link"
+# The model view lists the entity with both figures.
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return v.match(/<entity[^>]*name="box"[\s\S]*?<\/entity>/)?.[0]; })()
+# The composition view names the entity with of=.
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:{composition:'#P'}}); return v.match(/<mesh[^>]*>/)?.[0].replace(/ pos=.* asset/, ' … asset'); })()
+# Hovering either picture highlights both: the box outline in the scene and
+# the torus's box in the assembly panel.
+pclick viewer 300 720
+dmove 575 625
+sleep 600
+shot c1-hover-box
+dmove 875 200
+sleep 600
+shot c1-hover-torus
+# Show in frames the counterpart: from the box, the viewer pans the
+# assembly's view to its centre (the torus then near 473,388); from the
+# torus, it pans the box to the centre.
+pclick viewer 575 625
+sleep 400
+click Show in assembly
+sleep 600
+shot c1-show-in-assembly
+pclick viewer 473 388
+sleep 400
+click Show in scene
+sleep 600
+shot c1-show-in-scene
+peek focus
+# Undo of the link is one step: the entity and both relations go.
+key Meta+z
+sleep 600
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return /name="box"/.test(v); })()
+# The model surface links the same way; when both pictures already have
+# entities it is asked which survives, and answers with keep.
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#l" b="#Q"/></edit>'); return r.ok; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#12" b="#Q"/></edit>'); return r.failure; })()
+eval (async () => { const r = await __iron.edit('<edit><link-figures a="#12" b="#Q" keep="#10"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
+key Meta+z
+# Long enough for the undo to land before the load replaces the history
+# (a slow frame here once left "nothing to Undo" after the load).
+sleep 1000
+# Exit criterion 2: save, load, save again; the bytes must match.
+eval (async () => { const a = await __iron.save(); await __iron.load(a); await new Promise(r => setTimeout(r, 800)); const b = await __iron.save(); return { roundtrip_equal: a === b, bytes: a.length }; })()
+sleep 500
+shot after-load
+eval (async () => (await __iron.view({fidelity:'full'})).split("\n").slice(0, 4).join(" | "))()
+logs applied|rejected|loaded document|nothing to|panicked|binding|locked|differs|by Human|by Model
+errors

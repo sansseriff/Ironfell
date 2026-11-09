@@ -431,7 +431,91 @@ pub fn compute(store: &Store) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate:
             }
         }
     }
+    out.extend(constrained(store));
     (out, grids)
+}
+
+/// Figma's constraints (frame-constraints.md §3): on every picture of a
+/// resizable component at a size other than its template's, each part
+/// with a `constraints` facet placed for the new box. Read from the
+/// picture's own copy (so an instance's overrides count) and published on
+/// it; a bound leaf keeps its binding (one writer, F5).
+fn constrained(store: &Store) -> BTreeMap<Leaf, Value> {
+    use crate::facet::Constraints;
+    let doc = &store.doc;
+    let mut out = BTreeMap::new();
+    let use_ty = TypeId::lookup("use").expect("registered");
+    for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some()) {
+        let def = crate::expand::main_definition(doc, u).or_else(|| crate::expand::use_entity(doc, u).and_then(|e| crate::expand::linked_definition(doc, e)));
+        let Some(def) = def else { continue };
+        let notation = doc.get::<crate::facet::Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
+        let Some(t) = crate::definition::template_of(doc, def, &notation) else { continue };
+        let constant = |id: NodeId, leaf: &str| doc.leaf(id, path(leaf)).and_then(|s| s.constant()).and_then(|v| v.as_f64());
+        let (Some(w0), Some(h0)) = (constant(t, "size.w"), constant(t, "size.h")) else { continue };
+        let (w, h) = (num(store, u, "size.w", w0), num(store, u, "size.h", h0));
+        if (w - w0).abs() < 1e-9 && (h - h0).abs() < 1e-9 {
+            continue;
+        }
+        for &part in doc.children(t) {
+            let Some(c) = doc.get::<Constraints>(part) else { continue };
+            let Some(copy) = NodeId::expanded(u, part) else { continue };
+            if !doc.is_live(copy) {
+                continue;
+            }
+            let mode = |slot: &crate::value::Slot, d: &str| slot.constant().and_then(|v| v.as_str()).unwrap_or(d).to_owned();
+            let (mh, mv) = (mode(&c.horizontal, "left"), mode(&c.vertical, "top"));
+            let ty = doc.live(copy).map_or("", |n| n.ty.name());
+            // The part's box: a rect's (and anything sized) from its corner,
+            // an ellipse's around its centre; anything else a point.
+            let (bx, by, bw, bh, sized) = match ty {
+                "ellipse" => {
+                    let (rx, ry) = (constant(copy, "radius.rx").unwrap_or(0.0), constant(copy, "radius.ry").unwrap_or(0.0));
+                    let (cx, cy) = (constant(copy, "transform2d.x").unwrap_or(0.0), constant(copy, "transform2d.y").unwrap_or(0.0));
+                    (cx - rx, cy - ry, 2.0 * rx, 2.0 * ry, true)
+                }
+                _ => {
+                    let x = constant(copy, "transform2d.x").unwrap_or(0.0);
+                    let y = constant(copy, "transform2d.y").unwrap_or(0.0);
+                    match (constant(copy, "size.w"), constant(copy, "size.h")) {
+                        (Some(sw), Some(sh)) if ty != "text" || word(store, copy, "text.sizing") == "fixed" => (x, y, sw, sh, true),
+                        _ => (x, y, 0.0, 0.0, false),
+                    }
+                }
+            };
+            let axis = |m: &str, pos: f64, len: f64, d0: f64, d: f64| -> (f64, f64) {
+                let dd = d - d0;
+                match m {
+                    "right" | "bottom" => (pos + dd, len),
+                    "left_right" | "top_bottom" => (pos, (len + dd).max(0.0)),
+                    "center" => (pos + dd / 2.0, len),
+                    "scale" if d0 > 0.0 => (pos * d / d0, len * d / d0),
+                    _ => (pos, len),
+                }
+            };
+            let (nx, nw) = axis(&mh, bx, bw, w0, w);
+            let (ny, nh) = axis(&mv, by, bh, h0, h);
+            let free = |leaf: &str| doc.leaf(copy, path(leaf)).is_none_or(|s| s.constant().is_some());
+            let mut put = |leaf: &str, v: f64| {
+                if free(leaf) {
+                    out.insert(Leaf { node: copy, path: path(leaf) }, Value::Number(v));
+                }
+            };
+            if ty == "ellipse" {
+                put("transform2d.x", nx + nw / 2.0);
+                put("transform2d.y", ny + nh / 2.0);
+                put("radius.rx", nw / 2.0);
+                put("radius.ry", nh / 2.0);
+            } else {
+                put("transform2d.x", nx);
+                put("transform2d.y", ny);
+                if sized {
+                    put("size.w", nw);
+                    put("size.h", nh);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Add auto layout (Figma's Shift+A; layout-and-tables.md §2.4): a group

@@ -23,6 +23,7 @@
   import X from "@lucide/svelte/icons/x";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import Button from "../../lib/ui/Button.svelte";
+  import Select from "../../lib/ui/Select.svelte";
   import Unlink from "@lucide/svelte/icons/unlink";
   import type { ViewSpec } from "../views";
 
@@ -62,8 +63,8 @@
   // linearly bound value edits its source and a locked one says why.
   type Field = Property;
   type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean; datatype?: string | null; show?: string | null; group?: string | null; suggest?: string[] };
-  type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[] };
-  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null; sections?: string[] };
+  type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[]; resizable?: boolean };
+  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null; sections?: string[]; constraints?: { node: string; horizontal: string; vertical: string } | null };
   // Every section, in the built-in order: what an older engine's inspection
   // (without `sections`) shows.
   const SECTIONS = ["main", "port", "component", "table", "position", "text", "layout", "appearance", "fill", "stroke", "effects", "other", "add"];
@@ -113,7 +114,7 @@
   // layout already places it (its position is locked by it).
   const placedByLayout = $derived(fields("transform2d").some(f => f.edit === "locked" && (f.why ?? "").includes("layout")));
   const addKinds = $derived(["arc", "group_clip", "layout", "rules", ...(placedByLayout ? ["layout_item"] : [])]);
-  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "trim", "shadow", "text", "font", "args"].includes(c.kind)));
+  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "trim", "constraints", "shadow", "text", "font", "args"].includes(c.kind)));
   // A text node's box is its words' unless it is fixed (or wraps): only
   // then are W and H its own (plans/specs/text.md §2).
   const textSizing = $derived(fields("text").length ? (field("text", "sizing", "auto_width", "enum").text ?? "auto_width") : null);
@@ -293,6 +294,12 @@
               {/each}
             </div>
             <div class="row"><button onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture">+ input</button><span class="hint">Ports: the port tool, on the main</span></div>
+            <!-- Figma's "Resizing" (frame-constraints.md §4): the picture gets a box
+                 of its parts' bounds; each part says how it follows the box. -->
+            <label class="row resizable" title="Each picture of this component gets its own size; drag a corner to resize it. Set how each part follows in its Constraints.">
+              <input type="checkbox" checked={!!inspected.main.resizable} onchange={(e) => author("resizable", { def: inspected!.main!.def, on: e.currentTarget.checked })} />
+              Resizable<span class="hint">{inspected.main.resizable ? "parts follow their constraints" : "pictures keep the main's size"}</span>
+            </label>
           </div>
         {:else if section === "port" && (inspected.port)}
           <div class="property-section" data-section="port">
@@ -334,6 +341,27 @@
               {#each ["x", "y"] as axis}<PropertyField field={field("transform2d", axis)} node={inspected.node} compact prefix={axis.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
               <PropertyField field={field("transform2d", "rot")} node={inspected.node} label="Rotation" onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
             </div>
+            {#if inspected.constraints}
+              {@const c = inspected.constraints}
+              <!-- Constraints (frame-constraints.md §3): how this part follows a
+                   resized picture of its component. -->
+              <div class="subheading constraints-head">Constraints</div>
+              <div class="constraints">
+                <div class="constraints-box" aria-hidden="true">
+                  <span class="bar left" class:on={c.horizontal === "left" || c.horizontal === "left_right"}></span>
+                  <span class="bar right" class:on={c.horizontal === "right" || c.horizontal === "left_right"}></span>
+                  <span class="bar top" class:on={c.vertical === "top" || c.vertical === "top_bottom"}></span>
+                  <span class="bar bottom" class:on={c.vertical === "bottom" || c.vertical === "top_bottom"}></span>
+                  <span class="bar midh" class:on={c.horizontal === "center"}></span>
+                  <span class="bar midv" class:on={c.vertical === "center"}></span>
+                  <span class="core"></span>
+                </div>
+                <div class="constraints-selects">
+                  <Select label="Horizontal" value={c.horizontal} items={[{ value: "left", label: "Left" }, { value: "right", label: "Right" }, { value: "left_right", label: "Left & right" }, { value: "center", label: "Center" }, { value: "scale", label: "Scale" }]} onChange={(v) => patch({ "constraints.horizontal": v }, [], "constraints", c.node)} />
+                  <Select label="Vertical" value={c.vertical} items={[{ value: "top", label: "Top" }, { value: "bottom", label: "Bottom" }, { value: "top_bottom", label: "Top & bottom" }, { value: "center", label: "Center" }, { value: "scale", label: "Scale" }]} onChange={(v) => patch({ "constraints.vertical": v }, [], "constraints", c.node)} />
+                </div>
+              </div>
+            {/if}
             <details class="advanced"><summary>Scale</summary><div class="field-grid">
               {#each ["sx", "sy"] as axis}<PropertyField field={field("transform2d", axis, "1")} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
             </div></details>
@@ -473,6 +501,22 @@
 
 <style>
   .properties { padding: 0 !important; font-size: 12px; }
+  .resizable { align-items: center; gap: 8px; font-size: 12px; }
+  .resizable input { accent-color: var(--accent); margin: 0; }
+  .constraints-head { margin-top: 12px; }
+  .constraints { display: flex; gap: 10px; align-items: center; }
+  .constraints-box { position: relative; flex: 0 0 64px; height: 64px; border-radius: 4px; background: var(--bg-sunken); }
+  .constraints-box .core { position: absolute; inset: 22px; border: 1px solid var(--border-strong); border-radius: 2px; }
+  .constraints-box .bar { position: absolute; background: var(--border-strong); border-radius: 1px; }
+  .constraints-box .bar.on { background: var(--accent); }
+  .constraints-box .left { left: 6px; top: 31px; width: 12px; height: 2px; }
+  .constraints-box .right { right: 6px; top: 31px; width: 12px; height: 2px; }
+  .constraints-box .top { top: 6px; left: 31px; width: 2px; height: 12px; }
+  .constraints-box .bottom { bottom: 6px; left: 31px; width: 2px; height: 12px; }
+  .constraints-box .midh { left: 26px; top: 31px; width: 12px; height: 2px; opacity: 0; }
+  .constraints-box .midv { top: 26px; left: 31px; width: 2px; height: 12px; opacity: 0; }
+  .constraints-box .midh.on, .constraints-box .midv.on { opacity: 1; }
+  .constraints-selects { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
   .type-suggest { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   .input-group { margin: 12px 0 6px; font-weight: 600; color: var(--fg); }
   .trim-actions { display: flex; margin: 6px 0 2px; }

@@ -206,7 +206,10 @@ DEFINITIONS
   resizable: its parts bind to the template's own size ({= #T.size.w - 20}), each
   picture of it holds its own size, and dragging a picture's corner (or setting its
   size.w/size.h) reflows its parts; give text a fixed font size and bind only its
-  position, so it moves but never stretches. An entity instantiates a definition:
+  position, so it moves but never stretches. Simpler than bindings, as in Figma: give
+  a sized template's parts constants and constraints.horizontal="left|right|left_right|
+  center|scale" constraints.vertical="top|bottom|top_bottom|center|scale" (a corner
+  button: right + bottom; a title bar: left_right + top); a resized picture places them. An entity instantiates a definition:
   instance.def names it and args.<name> holds one value per in port, each bindable
   (args.level="{= #O.slider.value}"). Instantiation gives the entity one port per
   port_spec; an in port reads its argument unless a connection feeds it. Its

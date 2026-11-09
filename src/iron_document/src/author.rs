@@ -391,3 +391,71 @@ pub fn type_suggestions(doc: &Document, spec: NodeId) -> Vec<String> {
     }
     out
 }
+
+/// Every picture of `def`: its main and its linked instances' uses.
+pub fn pictures_of(doc: &Document, def: NodeId) -> Vec<NodeId> {
+    let use_ty = crate::registry::TypeId::lookup("use").expect("registered");
+    doc.nodes_of_type(use_ty)
+        .filter(|&u| doc.is_live(u) && !u.is_expanded())
+        .filter(|&u| crate::expand::main_definition(doc, u) == Some(def) || crate::expand::use_entity(doc, u).and_then(|e| crate::expand::linked_definition(doc, e)) == Some(def))
+        .collect()
+}
+
+/// The main's **Resizable** toggle (frame-constraints.md §4): on gives the
+/// template a size equal to its parts' bounds, moving the parts so that box
+/// starts at 0, 0 (and each picture by as much the other way, so nothing
+/// moves on screen), and gives every picture that size; each part then
+/// takes `constraints`. Off removes the sizes. `extent` is a node's bounds
+/// in its parent's space.
+pub fn resizable(doc: &Document, def: NodeId, on: bool, extent: &dyn Fn(NodeId) -> Option<kurbo::Rect>) -> Result<Vec<Op>, String> {
+    let template = doc.children(def).iter().copied().find(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "template")).ok_or("the component has no picture to resize")?;
+    let pictures = pictures_of(doc, def);
+    let mut ops = Vec::new();
+    if !on {
+        if doc.facet(template, FacetKind::Size).is_none() {
+            return Err("the component is not resizable".into());
+        }
+        ops.push(Op::RemoveFacet { id: template, kind: FacetKind::Size });
+        for u in pictures {
+            if doc.facet(u, FacetKind::Size).is_some() {
+                ops.push(Op::RemoveFacet { id: u, kind: FacetKind::Size });
+            }
+        }
+        return Ok(ops);
+    }
+    if doc.facet(template, FacetKind::Size).is_some() {
+        return Err("the component is already resizable".into());
+    }
+    let parts: Vec<NodeId> = doc.children(template).iter().copied().filter(|c| !c.is_expanded() && doc.is_live(*c)).collect();
+    let bounds = parts.iter().filter_map(|&p| extent(p)).reduce(|a, b| a.union(b)).unwrap_or(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0));
+    let (x0, y0) = (bounds.x0, bounds.y0);
+    let num = |id: NodeId, f: &str| doc.leaf(id, LeafPath::new(FacetKind::Transform2d, f).expect("declared")).and_then(|s| s.constant()).and_then(|v| v.as_f64());
+    let set = |id: NodeId, f: &str, v: f64| Op::Set { id, path: LeafPath::new(FacetKind::Transform2d, f).expect("declared"), slot: Slot::Const(Value::Number(v)) };
+    if x0.abs() > 1e-9 || y0.abs() > 1e-9 {
+        for &p in &parts {
+            if let (Some(x), Some(y)) = (num(p, "x"), num(p, "y")) {
+                ops.push(set(p, "x", x - x0));
+                ops.push(set(p, "y", y - y0));
+            }
+        }
+        for &u in &pictures {
+            if let (Some(x), Some(y)) = (num(u, "x"), num(u, "y")) {
+                ops.push(set(u, "x", x + x0));
+                ops.push(set(u, "y", y + y0));
+            }
+        }
+    }
+    let size = || {
+        let mut s = crate::facet::Size::default();
+        s.w = Slot::Const(Value::Number((bounds.width() * 1e6).round() / 1e6));
+        s.h = Slot::Const(Value::Number((bounds.height() * 1e6).round() / 1e6));
+        s.wrap()
+    };
+    ops.push(Op::AddFacet { id: template, facet: size() });
+    for u in pictures {
+        if doc.facet(u, FacetKind::Size).is_none() {
+            ops.push(Op::AddFacet { id: u, facet: size() });
+        }
+    }
+    Ok(ops)
+}

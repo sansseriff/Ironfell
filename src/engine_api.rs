@@ -676,6 +676,12 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                 let shown = parent.and_then(|p| p.path().first().copied()).filter(|&m| iron_document::expand::main_definition(store.0.document(), m).is_some()).and_then(|m| iron_document::NodeId::expanded(m, empty));
                 ("wrap in empty".into(), ops, Some(shown.unwrap_or(empty)))
             }
+            "resizable" => {
+                let def = id("def")?;
+                let on = a.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
+                let extent = |n: iron_document::NodeId| store.0.extent(n);
+                (if on { "make resizable" } else { "make fixed size" }.into(), author::resizable(store.0.document(), def, on, &extent)?, None)
+            }
             "rename" => {
                 let node = id("node")?;
                 let name = a.get("name").and_then(|v| v.as_str()).map(str::trim).filter(|n| !n.is_empty()).ok_or("a name is needed")?;
@@ -1313,6 +1319,7 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     let addable: Vec<&str> = iron_document::FacetKind::ALL.iter().copied().filter(|&k| optional(k) && doc.facet(id, k).is_none()).map(|k| k.name()).collect();
     let removable: Vec<&str> = doc.facets_of(id).map(|c| c.kind()).filter(|&k| optional(k)).map(|k| k.name()).collect();
     let component = inspect_component(&store.0, id);
+    let constraints = inspect_constraints(&store.0, id);
     let main = inspect_main(&store.0, id);
     let port = inspect_port(&store.0, id);
     // The table this node is, or is a cell of (layout-and-tables.md §5.1).
@@ -1326,7 +1333,31 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
         .and_then(|r| app.world().get_resource::<crate::bevy_app::view_focus::ViewFocus>()?.views.iter().find(|(p, ..)| *p == r.panel).map(|(_, f, _)| f.clone()))
         .unwrap_or_else(|| iron_document::contexts::Focus { world: iron_document::composition::composition_of(doc, id), ..Default::default() });
     let sections = iron_document::contexts::Resolver::new(doc, store.0.contexts()).view_values(&focus).get(iron_document::contexts::Field::SECTIONS).to_owned();
-    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component, "main": main, "port": port, "table": table, "sections": sections.split_whitespace().collect::<Vec<_>>()}).to_string()
+    serde_json::json!({"node": id.to_string(), "type": n.ty.name(), "name": name, "components": components, "addable": addable, "removable": removable, "component": component, "main": main, "port": port, "table": table, "constraints": constraints, "sections": sections.split_whitespace().collect::<Vec<_>>()}).to_string()
+}
+
+/// A part of a resizable component's picture, selected on its main
+/// (frame-constraints.md §4): the template part its constraints are set on,
+/// and their values. Null for anything else.
+fn inspect_constraints(store: &iron_document::Store, id: iron_document::NodeId) -> serde_json::Value {
+    use iron_document::{expand, FacetKind};
+    let doc = store.document();
+    let part = match id.expanded_parts() {
+        Some((owner, local)) if expand::main_definition(doc, owner).is_some() => local,
+        Some(_) => return serde_json::Value::Null,
+        None => id,
+    };
+    let Some(parent) = doc.live(part).and_then(|n| n.parent) else { return serde_json::Value::Null };
+    if !doc.live(parent).is_some_and(|n| n.ty.name() == "template") || doc.facet(parent, FacetKind::Size).is_none() || !doc.live(part).is_some_and(|n| n.ty.spec().allows(FacetKind::Constraints)) {
+        return serde_json::Value::Null;
+    }
+    let c = doc.get::<iron_document::facet::Constraints>(part);
+    let word = |s: Option<&iron_document::Slot>, d: &str| s.and_then(|s| s.constant()).and_then(|v| v.as_str()).unwrap_or(d).to_owned();
+    serde_json::json!({
+        "node": part.to_string(),
+        "horizontal": word(c.map(|c| &c.horizontal), "left"),
+        "vertical": word(c.map(|c| &c.vertical), "top"),
+    })
 }
 
 /// A main (component-authoring.md §1): its definition and the definition's
@@ -1340,7 +1371,8 @@ fn inspect_main(store: &iron_document::Store, id: iron_document::NodeId) -> serd
         .map(|(spec, name, dir, placed)| serde_json::json!({"spec": spec.to_string(), "name": name, "dir": dir, "placed": placed, "port": port_json(store, spec)}))
         .collect();
     let instances = iron_document::author::entities_of(doc, def).len();
-    serde_json::json!({"def": def.to_string(), "name": name, "ports": ports, "instances": instances})
+    let resizable = doc.children(def).iter().any(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "template") && doc.facet(c, iron_document::FacetKind::Size).is_some());
+    serde_json::json!({"def": def.to_string(), "name": name, "ports": ports, "instances": instances, "resizable": resizable})
 }
 
 fn port_json(store: &iron_document::Store, spec: iron_document::NodeId) -> serde_json::Value {
@@ -2047,7 +2079,7 @@ pub fn solve_bench(iterations: u32, repeats: u32) -> String {
     .to_string()
 }
 
-const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip", "layout", "layout_item", "rules", "trim"];
+const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip", "layout", "layout_item", "rules", "trim", "constraints"];
 
 /// The font picker's list (plans/specs/text.md §4): the catalog, the
 /// installed families on a native host, and which are loaded now.

@@ -50,7 +50,8 @@ use FacetKind as K;
 static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "group",
-        facets: &[(K::Name, false), (K::Transform2d, false), (K::Axis, false), (K::Track, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false)],
+        facets: &[(K::Name, false), (K::Transform2d, false),
+ (K::Constraints, false), (K::Axis, false), (K::Track, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -58,6 +59,7 @@ static TYPES: &[TypeSpec] = &[
         name: "rect",
         facets: &[
             (K::Transform2d, true),
+            (K::Constraints, false),
             (K::Size, true),
             (K::Corners, false),
             (K::Fill, false),
@@ -79,6 +81,7 @@ static TYPES: &[TypeSpec] = &[
         name: "ellipse",
         facets: &[
             (K::Transform2d, true),
+            (K::Constraints, false),
             (K::Radius, true),
             (K::Arc, false),
             (K::Fill, false),
@@ -100,6 +103,7 @@ static TYPES: &[TypeSpec] = &[
         name: "text",
         facets: &[
             (K::Transform2d, true),
+            (K::Constraints, false),
             (K::Text, true),
             (K::Font, true),
             (K::Size, false),
@@ -121,6 +125,7 @@ static TYPES: &[TypeSpec] = &[
         name: "table",
         facets: &[
             (K::Transform2d, true),
+            (K::Constraints, false),
             (K::Table, true),
             (K::Affords, false), (K::Interaction, false), (K::ContextOf, false),
             (K::Rules, false),
@@ -148,6 +153,7 @@ static TYPES: &[TypeSpec] = &[
         name: "path",
         facets: &[
             (K::Transform2d, true),
+            (K::Constraints, false),
             (K::PathShape, true),
             (K::Fill, false),
             (K::Gradient, false),
@@ -187,6 +193,7 @@ static TYPES: &[TypeSpec] = &[
         name: "slider",
         facets: &[
             (K::Transform2d, true),
+            (K::Constraints, false),
             (K::Slider, true),
             (K::Size, false),
             (K::Name, false),
@@ -336,6 +343,7 @@ static TYPES: &[TypeSpec] = &[
             // it sits, not its frame (`frame.x`), which is the less common.
             (K::Embed, true),
             (K::Transform2d, false),
+            (K::Constraints, false),
             (K::Transform3d, false),
             (K::Size, false),
             (K::EmbedCamera, false),
@@ -365,7 +373,8 @@ static TYPES: &[TypeSpec] = &[
     // whose children are its definition's template, expanded, never stored.
     TypeSpec {
         name: "use",
-        facets: &[(K::Use, true), (K::Transform2d, true), (K::Name, false), (K::Appearance, false), (K::Instance, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false), (K::Size, false)],
+        facets: &[(K::Use, true), (K::Transform2d, true),
+ (K::Constraints, false), (K::Name, false), (K::Appearance, false), (K::Instance, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false), (K::Size, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },

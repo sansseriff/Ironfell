@@ -72,3 +72,30 @@ bounding box, as Figma's do.
 1. Figma's "Scale" also scales stroke widths and text when the whole frame scales (K
    key). Iron keeps scaling as the `use`'s own `sx/sy`, separate from resizing?
 2. Min and max sizes on a template (plot.md §3.2) belong here too.
+
+## 7. Done
+
+**2026-11-08: phases 1 and 2, minimal (step 4 of the current order).**
+
+- A `constraints` facet (`horizontal`: left, right, left_right, center, scale;
+  `vertical`: top, bottom, top_bottom, center, scale), named for Figma's word (the
+  council: "pin" means a port on the edge). Allowed on every 2D type.
+- `layout::constrained`: on every picture of a sized template at a size other than
+  the template's, each top-level part with constraints is placed for the new box,
+  read from the picture's own copy (an instance's overrides count) and published
+  under the layout producer on the copy; a bound leaf keeps its binding (F5). Rects
+  and anything sized move and stretch by their box, ellipses about their centre,
+  fixed-width text by its box; other parts (paths, groups without a size, auto-sized
+  text) move by their origin only.
+- `author::resizable` (the main's **Resizable** checkbox): the template gets its parts'
+  bounds as its size, parts move so the box starts at 0, 0 and every picture moves the
+  other way (nothing moves on screen), every picture gets the size. Off removes the
+  sizes. One undo step.
+- Inspector: on a main's part, a Constraints widget (a box with lit bars and two
+  selects) in the Position section.
+- The agent writes `constraints.horizontal="right" constraints.vertical="bottom"`.
+- Not yet: the main previewing a resize and springing back on release (today a
+  resized main stays resized and its constrained parts are locked until it is set back
+  to the template's size); paths stretching under `left_right`/`scale`; frames
+  (sized groups) outside components; auto layout's inspector section (phase 3); moving
+  `std:plot` onto constraints (phase 4).

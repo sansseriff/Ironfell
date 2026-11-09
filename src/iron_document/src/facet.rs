@@ -427,6 +427,18 @@ facets! {
         ease: Str = Value::Str("easy_ease".to_owned()),
     }
 
+    /// Figma's constraints (plans/specs/frame-constraints.md): how a part of
+    /// a resizable component's picture follows the picture's box when it is
+    /// resized, measured at the template's own size. `left` (and `top`)
+    /// stays put; `right` keeps its distance to the right edge;
+    /// `left_right` stretches with the box; `center` keeps its offset from
+    /// the centre; `scale` moves and stretches in proportion. Published by
+    /// the layout step on each instance's copy, never stored.
+    Constraints / "constraints" => Constraints {
+        horizontal: Enum = Value::Enum("left".to_owned()) => ["left", "right", "left_right", "center", "scale"],
+        vertical: Enum = Value::Enum("top".to_owned()) => ["top", "bottom", "top_bottom", "center", "scale"],
+    }
+
     /// After Effects' Trim Paths (plans/specs/wires-and-formulas.md §5): the
     /// part of a shape's outline that is stroked, as fractions of its length,
     /// `start` to `end`, shifted by `offset` (wrapping). The fill is whole.

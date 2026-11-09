@@ -55,7 +55,7 @@ fn quantities_round_trip_through_the_file_with_their_unit() {
     assert_eq!(loaded.save(), text);
     assert_eq!(loaded.document().leaf(a, "key.value".parse().unwrap()).unwrap().constant(), Some(&q("9.58 mW")));
     // Views show the engineering form.
-    let v = loaded.view(&ViewQuery { expand: Vec::new(), relation: Default::default(), scope: Some(a), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = loaded.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(a), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(r#"value="9.58 mW""#), "{v}");
 }
 

@@ -134,7 +134,7 @@ fn a_document_context_reads_as_its_markup() {
     let mut store = Store::new();
     let (ops, node) = contexts::put_ops(store.document(), CELLS_EDIT).unwrap();
     store.apply(tx(ops)).unwrap();
-    let q = view::ViewQuery { relation: Default::default(), scope: None, fidelity: view::Fidelity::Summary, depth: None, expand: vec![] };
+    let q = view::ViewQuery { omit_defaults: false, relation: Default::default(), scope: None, fidelity: view::Fidelity::Summary, depth: None, expand: vec![] };
     let v = store.view(&q).unwrap();
     let want = format!("<context id=\"{node}\" name=\"std:table\">\n      <rule match=\"type:text\" affords.enter=\"edit\"/>\n    </context>");
     assert!(v.contains(&want), "{v}");

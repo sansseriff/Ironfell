@@ -13,7 +13,7 @@
 //! Coordinates are plain numbers (document pixels); a non-finite sample
 //! breaks the line, as plotting libraries do with NaN.
 
-use crate::expr::{BinOp, Closure, EvalError, MAX_SAMPLES};
+use crate::expr::{charge, BinOp, Closure, EvalError, MAX_SAMPLES};
 use crate::units::Dim;
 use crate::value::Value;
 
@@ -105,6 +105,7 @@ fn count(func: &str, v: &Value) -> Result<usize, EvalError> {
     if n > MAX_SAMPLES {
         return err(format!("{func}: at most {MAX_SAMPLES} samples, asked for {n}"));
     }
+    charge(n)?;
     Ok(n)
 }
 
@@ -142,6 +143,7 @@ pub fn binary(op: BinOp, a: &Value, b: &Value) -> Option<Result<Value, EvalError
     Some((|| {
         let (x, y) = (numeric("an operator", a)?, numeric("an operator", b)?);
         let n = common_len("an operator", &[x, y])?;
+        charge(n)?;
         let (dx, dy) = (x.dim(), y.dim());
         let same = || if dx == dy { Ok(()) } else { err(format!("cannot combine {} and {} element by element", describe(dx), describe(dy))) };
         let (dim, f): (Dim, fn(f64, f64) -> f64) = match op {
@@ -246,6 +248,7 @@ fn concat(args: &[Value]) -> Result<Value, EvalError> {
             Some(e) if e != u => return err(format!("concat: series in different units, {} and {}", describe(e), describe(u))),
             _ => dim = Some(u),
         }
+        charge(d.len())?;
         data.extend_from_slice(d);
     }
     Ok(Value::series(data, dim.unwrap_or(Dim::NONE)))
@@ -286,6 +289,7 @@ fn in_unit(args: &[Value]) -> Result<Value, EvalError> {
 fn broadcast(func: &str, args: &[Value]) -> Result<Value, EvalError> {
     let parts: Vec<Arg> = args.iter().map(|a| numeric(func, a)).collect::<Result<_, _>>()?;
     let n = common_len(func, &parts)?;
+    charge(n)?;
     collect(func, (0..n).map(|i| {
         let one: Vec<Value> = parts.iter().map(|p| Value::quantity(p.at(i), p.dim())).collect();
         crate::expr::floor::scalar(func, &one)
@@ -340,6 +344,7 @@ fn step(args: &[Value]) -> Result<Value, EvalError> {
     if n > MAX_SAMPLES as f64 {
         return err(format!("step: at most {MAX_SAMPLES} samples, asked for {n}"));
     }
+    charge(n as usize)?;
     Ok(Value::series((0..n as usize).map(|i| a + d * i as f64).collect::<Vec<_>>(), dim))
 }
 
@@ -669,7 +674,7 @@ fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
         }
         // area(xs, ys, base): each run closed down to y = base.
         _ => {
-            let b = p[2].at(0);
+            let b = if n == 0 { f64::NAN } else { p[2].at(0) };
             if b.is_finite() {
                 for run in runs(p[0], p[1], n) {
                     let (first, last) = (run[0], run[run.len() - 1]);

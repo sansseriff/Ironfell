@@ -291,6 +291,7 @@ impl Value {
             J::Object(m) if m.len() == 1 => {
                 let (k, inner) = m.iter().next().expect("len 1");
                 match k.as_str() {
+                    "num" => inner.as_str().and_then(parse_nonfinite).map(Value::Number).ok_or_else(|| "num must be \"NaN\", \"inf\" or \"-inf\"".to_owned()),
                     "rgba" => {
                         let ch: Option<Vec<f64>> = inner
                             .as_array()
@@ -318,7 +319,7 @@ impl Value {
                     "q" => match inner {
                         J::Array(a) => match a.as_slice() {
                             [n, J::String(u)] => {
-                                let si = n.as_f64().ok_or_else(|| "quantity magnitude must be a number".to_owned())?;
+                                let si = f64_json(n).ok_or_else(|| "quantity magnitude must be a number".to_owned())?;
                                 let unit = units::parse_unit(u).map_err(|e| e.to_string())?;
                                 Ok(Value::quantity(si * unit.factor, unit.dim))
                             }
@@ -346,7 +347,7 @@ impl Value {
                     "ser" => match inner {
                         J::Array(a) => match a.as_slice() {
                             [J::Array(items), J::String(u)] => {
-                                let data: Option<Vec<f64>> = items.iter().map(|i| i.as_f64()).collect();
+                                let data: Option<Vec<f64>> = items.iter().map(f64_json).collect();
                                 let data = data.ok_or_else(|| "ser holds numbers".to_owned())?;
                                 let (factor, dim) = if u.is_empty() { (1.0, Dim::NONE) } else { let u = units::parse_unit(u).map_err(|e| e.to_string())?; (u.factor, u.dim) };
                                 Ok(Value::series(data.into_iter().map(|x| x * factor).collect::<Vec<_>>(), dim))
@@ -454,6 +455,28 @@ fn series_text(data: &[f64], dim: Dim) -> String {
     format!("series({}{unit}, {}…{})", data.len(), num(lo), num(hi))
 }
 
+fn nonfinite(n: f64) -> &'static str {
+    if n.is_nan() { "NaN" } else if n > 0.0 { "inf" } else { "-inf" }
+}
+
+fn parse_nonfinite(t: &str) -> Option<f64> {
+    match t {
+        "NaN" => Some(f64::NAN),
+        "inf" => Some(f64::INFINITY),
+        "-inf" => Some(f64::NEG_INFINITY),
+        _ => None,
+    }
+}
+
+/// A number for JSON: itself when finite, else its name as text.
+fn json_f64(n: f64) -> serde_json::Value {
+    if n.is_finite() { serde_json::json!(n) } else { serde_json::Value::String(nonfinite(n).into()) }
+}
+
+fn f64_json(v: &serde_json::Value) -> Option<f64> {
+    v.as_f64().or_else(|| v.as_str().and_then(parse_nonfinite))
+}
+
 /// Shortest faithful rendering: `120` not `120.0`, `0.1` not `0.10000000000000001`.
 pub(crate) fn fmt_num(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1e15 {
@@ -466,6 +489,13 @@ pub(crate) fn fmt_num(n: f64) -> String {
 impl Serialize for Value {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
+            // JSON has no NaN or infinity: `{"num": "NaN"}` (an unset input,
+            // a break in a plotted line) keeps them through a save.
+            Value::Number(n) if !n.is_finite() => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("num", &nonfinite(*n))?;
+                m.end()
+            }
             Value::Number(n) => s.serialize_f64(*n),
             Value::Bool(b) => s.serialize_bool(*b),
             Value::Str(t) => s.serialize_str(t),
@@ -488,7 +518,7 @@ impl Serialize for Value {
             }
             Value::Quantity { si, dim } => {
                 let mut m = s.serialize_map(Some(1))?;
-                m.serialize_entry("q", &(si, dim.canonical_unit()))?;
+                m.serialize_entry("q", &(json_f64(*si), dim.canonical_unit()))?;
                 m.end()
             }
             Value::Record { kind, fields } => {
@@ -505,7 +535,8 @@ impl Serialize for Value {
             Value::Series { data, dim } => {
                 let unit = if dim.is_none() { String::new() } else { dim.canonical_unit() };
                 let mut m = s.serialize_map(Some(1))?;
-                m.serialize_entry("ser", &(&**data, unit))?;
+                let items: Vec<serde_json::Value> = data.iter().map(|&x| json_f64(x)).collect();
+                m.serialize_entry("ser", &(items, unit))?;
                 m.end()
             }
             // Never saved (a file or op cannot hold one; `from_json` refuses

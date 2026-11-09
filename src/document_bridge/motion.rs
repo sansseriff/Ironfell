@@ -40,9 +40,9 @@ pub fn advance_machines(mut store: ResMut<DocumentStore>, time: Res<Time>, mut s
     if running.is_empty() && marked.is_empty() {
         return;
     }
-    if !running.is_empty() {
-        store.set_changed();
-    }
+    // Including the frame a transition ends on: its final pose publishes
+    // with nothing left running.
+    store.set_changed();
     let doc = store.0.document();
     let figures = |e: NodeId| doc.relations_to(e).filter(|r| r.rel == iron_document::RelKind::Figures).map(|r| r.from).collect::<Vec<_>>();
     let comps: BTreeSet<NodeId> = running.iter().flat_map(|r| figures(r.entity)).filter_map(|u| iron_document::composition::composition_of(doc, u)).collect();

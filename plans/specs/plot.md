@@ -407,3 +407,28 @@ shows how often slots fall short.
   inputs down its left edge; a quieter chrome for many-input components is a chrome.md
   question.
 
+
+**2026-11-08: quoting, review fixes, and the model's view without defaults.**
+
+- Quoting: `'…'` and `"…"` are both text in a formula (an edit's attributes are
+  double-quoted, so formulas there write single quotes). A choice leaf takes text
+  naming an option (`{= 'evenodd'}`), a choice on a text leaf is its word, and `==`
+  compares a choice with text by its word. Text prints with single quotes when it
+  can. The enum literal is gone from the lexer; typed choices come from
+  `types-and-units.md`.
+- Files hold non-finite numbers: `{"num": "NaN"}`, and `"NaN"`, `"inf"`, `"-inf"`
+  inside `ser` and `q`. A document with a `std:plot` (NaN "auto" inputs) failed to
+  load after a save before this.
+- Every binding has a work budget (`expr::MAX_WORK`, 5 M elements or calls summed
+  over the evaluation, so nested `map`s cannot hang the engine) and a call depth
+  (`MAX_DEPTH` 64: `(f => f(f))(f => f(f))` errors instead of overflowing the stack).
+- `area()` on empty series draws nothing (it panicked); SVG path data leaves no
+  one-point contour between `Z` and the next `M` (every `circles`, `bars` and
+  multi-run `area` had them).
+- An inner sized picture binds to its own box on the first expansion (it read the
+  document for a node expansion had not created yet).
+- The model's view (`ViewQuery::omit_defaults`, used by the agent) leaves out
+  constant leaves at their default; bound leaves, solver and layout variables always
+  show. About 15 % smaller on a plot, more on plain shapes.
+- Follow-ups: `auto` as a type instead of NaN (types-and-units.md); quantity literals
+  printed as written (same spec, §3.4).

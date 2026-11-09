@@ -54,6 +54,11 @@ pub struct ViewQuery {
     /// interface, are shown of what it derives.
     #[serde(default)]
     pub expand: Vec<NodeId>,
+    /// Leave out constant leaves at their facet's default (`rot="0"`,
+    /// `opacity="1"`): what the model reads, where every attribute is a cost.
+    /// Bound leaves and solver variables always show.
+    #[serde(default)]
+    pub omit_defaults: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,7 +92,7 @@ pub fn render_tree(
             if crate::composition::composition_of(doc, c) != Some(c) {
                 return Err(ViewError(format!("{c} is not a live composition")));
             }
-            let q = ViewQuery { scope: Some(q.scope.unwrap_or(c)), ..q.clone() };
+            let q = ViewQuery { omit_defaults: false, scope: Some(q.scope.unwrap_or(c)), ..q.clone() };
             if crate::composition::composition_of(doc, q.scope.expect("set")) != Some(c) {
                 return Err(ViewError(format!("{} is not in composition {c}", q.scope.expect("set"))));
             }
@@ -126,7 +131,7 @@ fn node(
 ) {
     let n = doc.live(id).expect("live");
     let indent = "  ".repeat(level as usize + 1);
-    let mut attrs = leaf_attrs(doc, reactive, by, q.fidelity, id);
+    let mut attrs = leaf_attrs(doc, reactive, by, q, id);
     // A table reads as its rows of words (layout-and-tables.md §5.2), unless
     // its cells are asked for (`expand`).
     if n.ty.name() == "table" && q.fidelity != Fidelity::Skeleton && !q.expand.contains(&id) {
@@ -287,7 +292,7 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
         if q.scope.is_some_and(|s| s != id) {
             continue;
         }
-        let mut attrs = leaf_attrs(doc, reactive, by, q.fidelity, id);
+        let mut attrs = leaf_attrs(doc, reactive, by, q, id);
         let def = doc.get::<crate::facet::Instance>(id).and_then(|i| i.def.constant()).and_then(|v| match v {
             crate::value::Value::Ref(d) => Some(*d),
             _ => None,
@@ -365,7 +370,8 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
 /// A node's id, name and (unless skeleton) leaves: each as its current
 /// value, plus `<attr>.bind` for a binding and `<attr>.by` for a solver
 /// variable.
-fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fidelity: Fidelity, id: NodeId) -> Vec<(String, String)> {
+fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &ViewQuery, id: NodeId) -> Vec<(String, String)> {
+    let fidelity = q.fidelity;
     let mut attrs: Vec<(String, String)> = vec![("id".into(), id.to_string())];
 
     let comps: Vec<&Facet> = doc.facets_of(id).collect();
@@ -412,6 +418,14 @@ fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, fideli
                     node: id,
                     path: crate::facet::LeafPath::new(c.kind(), f).expect("declared"),
                 };
+                if q.omit_defaults
+                    && let Some(v) = slot.constant()
+                    && !by.contains_key(&leaf)
+                    && reactive.signal(leaf).is_none()
+                    && c.kind().default_facet().get(f).and_then(|d| d.constant()).is_some_and(|d| d == v)
+                {
+                    continue;
+                }
                 let value = reactive
                     .read(doc, leaf)
                     .map(|v| v.to_string())

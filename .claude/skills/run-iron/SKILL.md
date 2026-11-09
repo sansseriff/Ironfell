@@ -48,7 +48,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ `build.sh` cold | ~5 min (5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06) |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4 min (cargo 3m 25s, plus binding generation; 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |
-| ⏱ `smoke-full.txt` (`GPU=1`), broad regression | ~3.5–4 min (3m 34s, 2026-11-04) |
+| ⏱ `smoke-full.txt` (`GPU=1`), broad regression | ~3.5–5 min (3m 34s, 2026-11-04; 5m 05s, 2026-11-08, with the stage E section timing out, see "Broad regression smoke") |
 | `piston.txt` | ~1 min |
 | `snapping.txt` | ~30 s |
 | `layout.txt` | ~35 s |
@@ -452,6 +452,14 @@ GPU=1 SIZE=1680x1000@1 bun run drive.ts < smoke-full.txt
 ### Broad regression smoke (preserved)
 
 The former default is preserved as `smoke-full.txt`, with all its cases intact.
+
+**Known drift (2026-11-08):** the second `nav` (stage E, "on a fresh app") reloads in
+the same browser profile, and the app now boots back into the durable scope with its
+saved layout, so the viewer reads `viewer panel {"x":0,"y":0,"w":0,"h":0}` and every
+later step fails to find its nodes. Run alone in a fresh profile, lines 225 to the
+end pass with no errors (`(sed -n 1,4p smoke-full.txt; sed -n '225,$p' smoke-full.txt)
+> part2.txt`, ~2.5 min). The first section (to line 220) passes as is. The fix is a
+nav that starts a fresh scope and layout; until then judge the suite by its two halves.
 Its expected output and walkthrough below describe this broad suite.
 It opens the app, waits for the engine, screenshots, drags the
 square (step by step, with a mid-drag screenshot and view showing the

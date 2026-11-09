@@ -178,7 +178,7 @@ fn power_flows_down_the_chain_and_follows_every_parameter() {
     let w = lab.store.resolved(bar, path("size.w")).unwrap().as_f64().unwrap();
     assert!((w - 0.010 * 10f64.powf(-0.5) / 0.001 * 20.0).abs() < 1e-9, "{w}");
     // The model view shows the chain.
-    let view = lab.store.view(&ViewQuery { expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
+    let view = lab.store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
     assert!(view.contains(r#"a="laser.out" b="fiber.in" kind="optical_power""#), "{view}");
     assert!(view.contains(r#"<port"#) && view.contains("signal="), "{view}");
 }
@@ -302,7 +302,7 @@ fn a_heater_settles_through_its_thermal_link() {
     // A solved value is not edited directly.
     assert!(lab.store.handle(h, path("port.across")).is_locked());
     // The model view shows the pair.
-    let view = lab.store.view(&ViewQuery { expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
+    let view = lab.store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
     assert!(view.contains(r#"kind="heat_flow""#) && view.contains("across=") && view.contains("through="), "{view}");
 }
 
@@ -474,7 +474,7 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     assert!((watts(&lab.signal(made.entity, "out")) - reading).abs() < 1e-15);
     assert!(port("power").is_expanded());
     // The model view lists the source, not its insides.
-    let view = lab.store.view(&ViewQuery { expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
+    let view = lab.store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
     assert!(view.contains(r#"name="source""#), "{view}");
     assert!(!view.contains(r#"name="laser""#), "{view}");
     // The slider still drives the meter, through the source.

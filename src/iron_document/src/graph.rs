@@ -441,11 +441,13 @@ fn read_with(
 /// on a text leaf is text.
 fn as_leaf_kind(leaf: Leaf, v: Value) -> Result<Value, crate::expr::EvalError> {
     match v {
-        // '…' lexes as an enum literal; either quoting is text here.
+        // Text on a path is SVG path data.
         Value::Str(text) | Value::Enum(text) if leaf.path.kind() == crate::value::ValueKind::Geometry => crate::geometry::Geometry::from_svg_path(&text)
             .map(|g| Value::Geometry(std::sync::Arc::new(g)))
             .map_err(crate::expr::EvalError::Type),
-        // '…' lexes as an enum literal; on a text leaf it means text.
+        // Text on a choice leaf names the option (`{= 'evenodd'}`), and a
+        // choice on a text leaf is its word.
+        Value::Str(text) if leaf.path.kind() == crate::value::ValueKind::Enum => Ok(Value::Enum(text)),
         Value::Enum(text) if leaf.path.kind() == crate::value::ValueKind::Str => Ok(Value::Str(text)),
         v => Ok(v),
     }

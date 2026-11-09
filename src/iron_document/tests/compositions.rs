@@ -240,7 +240,7 @@ fn the_model_and_composition_views_match_their_golden_files() {
     let tx = t.store.link(t.boxed, t.torus, None, Actor::Human).unwrap();
     t.store.apply(tx).unwrap();
     let (_, entity) = composition::figure_of(t.store.document(), t.boxed).unwrap();
-    let q = |relation| ViewQuery { expand: Vec::new(), relation, scope: None, fidelity: Fidelity::Full, depth: None };
+    let q = |relation| ViewQuery { omit_defaults: false, expand: Vec::new(), relation, scope: None, fidelity: Fidelity::Full, depth: None };
 
     // The model view lists the entity with both figures (the phase 2 exit's
     // last clause) and where each is drawn.

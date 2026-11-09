@@ -3,7 +3,7 @@
 //! a shape's outline cut by arc length.
 
 use iron_document::facet::{Clip, Key, Timing, Transform2d};
-use iron_document::geometry::trim;
+use iron_document::geometry::{trim, TrimMode};
 use iron_document::time::{curve, Curve};
 use iron_document::*;
 use kurbo::{BezPath, ParamCurveArclen, Shape};
@@ -70,20 +70,52 @@ fn trim_cuts_an_outline_by_length() {
     line.move_to((0.0, 0.0));
     line.line_to((100.0, 0.0));
     line.line_to((100.0, 100.0));
-    assert!((length(&trim(&line, 0.0, 0.25, 0.0)) - 50.0).abs() < 1e-6);
-    let mid = trim(&line, 0.25, 0.75, 0.0);
+    assert!((length(&trim(&line, 0.0, 0.25, 0.0, I)) - 50.0).abs() < 1e-6);
+    let mid = trim(&line, 0.25, 0.75, 0.0, I);
     assert!((length(&mid) - 100.0).abs() < 1e-6);
     // One run across the corner, not two.
     assert_eq!(mid.elements().iter().filter(|e| matches!(e, kurbo::PathEl::MoveTo(_))).count(), 1);
-    assert!(trim(&line, 0.5, 0.5, 0.0).elements().is_empty());
-    assert_eq!(trim(&line, 0.0, 1.0, 0.3), line, "the whole outline, whatever the offset");
+    assert!(trim(&line, 0.5, 0.5, 0.0, I).elements().is_empty());
+    assert_eq!(trim(&line, 0.0, 1.0, 0.3, I), line, "the whole outline, whatever the offset");
     // An offset wraps the kept span around the end.
-    let wrapped = trim(&line, 0.0, 0.25, 0.9);
+    let wrapped = trim(&line, 0.0, 0.25, 0.9, I);
     assert!((length(&wrapped) - 50.0).abs() < 1e-6);
     assert_eq!(wrapped.elements().iter().filter(|e| matches!(e, kurbo::PathEl::MoveTo(_))).count(), 2);
     // A closed shape's outline, as a rect is drawn.
     let rect = kurbo::Rect::new(0.0, 0.0, 40.0, 10.0).to_path(0.1);
-    assert!((length(&trim(&rect, 0.0, 0.5, 0.0)) - 50.0).abs() < 1e-6);
+    assert!((length(&trim(&rect, 0.0, 0.5, 0.0, I)) - 50.0).abs() < 1e-6);
+    // Wrapping over a closed shape's start joins there: one run, no notch.
+    let over = trim(&rect, 0.0, 0.5, 0.875, I);
+    assert!((length(&over) - 50.0).abs() < 1e-6);
+    assert_eq!(moves(&over), 1, "{over:?}");
+}
+
+const I: TrimMode = TrimMode::Individually;
+
+fn moves(p: &BezPath) -> usize {
+    p.elements().iter().filter(|e| matches!(e, kurbo::PathEl::MoveTo(_))).count()
+}
+
+/// Several pieces (tick marks): simultaneously trims each by the same
+/// fractions; individually runs through them one after another.
+#[test]
+fn trim_mode_treats_pieces_together_or_in_turn() {
+    let mut ticks = BezPath::new();
+    for x in [0.0, 10.0, 20.0, 30.0] {
+        ticks.move_to((x, 0.0));
+        ticks.line_to((x, 10.0));
+    }
+    let each = trim(&ticks, 0.0, 0.5, 0.0, TrimMode::Simultaneously);
+    assert_eq!(moves(&each), 4);
+    assert!((length(&each) - 20.0).abs() < 1e-6, "half of every tick");
+    let along = trim(&ticks, 0.0, 0.5, 0.0, I);
+    assert_eq!(moves(&along), 2, "the first two ticks whole");
+    assert!((length(&along) - 20.0).abs() < 1e-6);
+    // A closed piece kept whole stays closed.
+    let mut two = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0).to_path(0.1);
+    two.extend(kurbo::Rect::new(20.0, 0.0, 30.0, 10.0).to_path(0.1));
+    let first = trim(&two, 0.0, 0.5, 0.0, I);
+    assert!(first.elements().iter().any(|e| matches!(e, kurbo::PathEl::ClosePath)), "{first:?}");
 }
 
 /// A clip key takes the new curves by name.

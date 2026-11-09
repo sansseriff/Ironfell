@@ -149,14 +149,14 @@ fn wanted(doc: &Document) -> Wanted {
     for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && !u.is_expanded()).collect::<Vec<_>>() {
         if let Some(def) = main_definition(doc, u) {
             if let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned) {
-                want_use(doc, u, None, def, &notation, 0, &mut out);
+                want_use(doc, u, doc.facet(u, FacetKind::Size).is_some(), None, def, &notation, 0, &mut out);
             }
             continue;
         }
         let Some(entity) = use_entity(doc, u) else { continue };
         let Some(def) = linked_definition(doc, entity) else { continue };
         let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned) else { continue };
-        want_use(doc, u, Some(entity), def, &notation, 0, &mut out);
+        want_use(doc, u, doc.facet(u, FacetKind::Size).is_some(), Some(entity), def, &notation, 0, &mut out);
     }
     out
 }
@@ -213,15 +213,15 @@ fn want_entity(doc: &Document, entity: NodeId, def: NodeId, depth: usize, out: &
 /// the template pictures one of the definition's inner entities, so its
 /// copy figures that entity's copy and derives that entity's picture. A
 /// main has no entity: references to the definition's body stay on it.
-fn want_use(doc: &Document, u: NodeId, entity: Option<NodeId>, def: NodeId, notation: &str, depth: usize, out: &mut Wanted) {
+fn want_use(doc: &Document, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, depth: usize, out: &mut Wanted) {
     if depth > MAX_DEPTH {
         return;
     }
     let Some(template) = definition::template_of(doc, def, notation) else { return };
     let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
     // A sized picture (plans/specs/plot.md §3): the template's own `size`,
-    // which its parts read, is this use's.
-    let sized = doc.facet(u, FacetKind::Size).is_some();
+    // which its parts read, is this use's (`sized`: the use has a size;
+    // an inner use's copy may not exist yet, so the caller says).
     let follow = |leaf: Leaf| -> Leaf {
         if leaf.node == template {
             return if sized && leaf.path.facet == FacetKind::Size { Leaf { node: u, path: leaf.path } } else { leaf };
@@ -271,7 +271,7 @@ fn want_use(doc: &Document, u: NodeId, entity: Option<NodeId>, def: NodeId, nota
                     (i.mode.constant().and_then(|v| v.as_str()) == Some("linked")).then(|| i.def.constant().and_then(|v| v.as_ref())).flatten()
                 });
                 if let (Some(n), Some(d)) = (inner_notation, inner_def) {
-                    want_use(doc, id, Some(inner_entity), d, &n, depth + 1, out);
+                    want_use(doc, id, facets.iter().any(|f| matches!(f, Facet::Size(_))), Some(inner_entity), d, &n, depth + 1, out);
                 }
             }
             continue;

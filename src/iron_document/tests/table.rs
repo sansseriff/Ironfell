@@ -235,7 +235,7 @@ fn deleting_a_cell_disturbs_only_its_row() {
 }
 
 fn view(store: &Store) -> String {
-    store.view(&ViewQuery { relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: Vec::new() }).unwrap()
+    store.view(&ViewQuery { omit_defaults: false, relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: Vec::new() }).unwrap()
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn a_model_reads_a_table_as_its_rows() {
     let body: Vec<&str> = squeezed.iter().map(String::as_str).collect();
     assert!(body.iter().any(|l| l.starts_with(&format!("<table id=\"{t}\" name=\"table\" x=\"40\" y=\"30\"")) && l.contains("preset=\"light\" header=\"1\" columns=\"auto auto auto auto auto auto\" label-col=\"true\" emphasis=\"3\"")), "{v}");
     assert!(body.contains(&"PI per side (µm) | 75 | 100 | 125 | 150 | 200"), "{v}");
-    assert!(body.contains(&"Loss 2 GHz (dB) | 1.10 | 0.89 | 0.79 | {= fmt(0.5, \"dB\", 2)} | 0.74"), "{v}");
+    assert!(body.contains(&"Loss 2 GHz (dB) | 1.10 | 0.89 | 0.79 | {= fmt(0.5, 'dB', 2)} | 0.74"), "{v}");
     assert!(body.contains(&"W / 1000 lines | 0.40 | 0.40 | 0.41 | 0.42\\n0.43 | <"), "{v}");
     assert!(body.iter().any(|l| l.starts_with("<cells>") && l.contains(" / ")));
     assert!(body.contains(&format!("<style cell=\"{}\" color=\"#cc1a1aff\"/>", cells[9]).as_str()), "{v}");

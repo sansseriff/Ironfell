@@ -82,9 +82,18 @@ impl Geometry {
             }
         };
         let corner = |p: Point| Anchor { at: p, inn: Vec2::ZERO, out: Vec2::ZERO };
+        // `cur` is only the pen left by a Z, with nothing drawn from it yet:
+        // not a contour unless a segment follows.
+        let mut pen_only = false;
         for el in path.elements() {
+            if !matches!(el, PathEl::MoveTo(_) | PathEl::ClosePath) {
+                pen_only = false;
+            }
             match *el {
                 PathEl::MoveTo(p) => {
+                    if std::mem::take(&mut pen_only) {
+                        cur = None;
+                    }
                     finish(cur.take(), &mut contours);
                     cur = Some(PackedContour { closed: false, anchors: vec![corner(p)] });
                 }
@@ -114,15 +123,12 @@ impl Geometry {
                     // SVG: after Z the pen is back at the subpath's start.
                     if let Some(at) = start {
                         cur = Some(PackedContour { closed: false, anchors: vec![corner(at)] });
+                        pen_only = true;
                     }
                 }
             }
         }
-        // A pen left after Z with nothing drawn from it is not a contour.
-        if let Some(c) = &cur
-            && c.anchors.len() == 1
-            && contours.last().is_some_and(|l| l.closed && l.anchors.first().map(|a| a.at) == Some(c.anchors[0].at))
-        {
+        if pen_only {
             cur = None;
         }
         finish(cur, &mut contours);
@@ -272,12 +278,78 @@ fn thousands(n: usize) -> String {
     out
 }
 
-/// `path` cut to the part from `start` to `end` of its length (fractions,
-/// every subpath in order, as one run), shifted by `offset` and wrapping:
-/// After Effects' Trim Paths (plans/specs/wires-and-formulas.md §5).
-pub fn trim(path: &BezPath, start: f64, end: f64, offset: f64) -> BezPath {
-    use kurbo::{ParamCurve, ParamCurveArclen};
+/// One drawn segment of a path, with which subpath it belongs to.
+#[derive(Clone, Copy)]
+struct Piece {
+    seg: kurbo::PathSeg,
+    len: f64,
+    sub: usize,
+}
+
+/// A path's segments by subpath (a closing `Z` is its line back to the
+/// start), and whether each subpath is closed.
+fn pieces(path: &BezPath) -> (Vec<Piece>, Vec<bool>) {
+    use kurbo::{ParamCurveArclen, PathEl, PathSeg};
     const ACC: f64 = 1e-3;
+    let (mut out, mut closed) = (Vec::new(), Vec::new());
+    let (mut start, mut at) = (Point::ZERO, Point::ZERO);
+    let mut push = |seg: PathSeg, out: &mut Vec<Piece>, sub: usize| out.push(Piece { len: seg.arclen(ACC), seg, sub });
+    for el in path.elements() {
+        let sub = closed.len().saturating_sub(1);
+        match *el {
+            PathEl::MoveTo(p) => {
+                closed.push(false);
+                (start, at) = (p, p);
+            }
+            PathEl::LineTo(p) => {
+                push(PathSeg::Line(kurbo::Line::new(at, p)), &mut out, sub);
+                at = p;
+            }
+            PathEl::QuadTo(c, p) => {
+                push(PathSeg::Quad(kurbo::QuadBez::new(at, c, p)), &mut out, sub);
+                at = p;
+            }
+            PathEl::CurveTo(c1, c2, p) => {
+                push(PathSeg::Cubic(kurbo::CubicBez::new(at, c1, c2, p)), &mut out, sub);
+                at = p;
+            }
+            PathEl::ClosePath => {
+                if (at - start).hypot() > 1e-9 {
+                    push(PathSeg::Line(kurbo::Line::new(at, start)), &mut out, sub);
+                }
+                if let Some(c) = closed.last_mut() {
+                    *c = true;
+                }
+                at = start;
+            }
+        }
+    }
+    (out, closed)
+}
+
+/// How Trim Paths treats a path of several subpaths (After Effects' "Trim
+/// Multiple Shapes").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrimMode {
+    /// Each subpath trimmed by the same fractions at once (tick marks all
+    /// growing together). After Effects' default.
+    Simultaneously,
+    /// The subpaths as one path, one after another (a curve with breaks
+    /// drawn along its length).
+    Individually,
+}
+
+impl TrimMode {
+    pub fn named(name: &str) -> TrimMode {
+        if name == "individually" { TrimMode::Individually } else { TrimMode::Simultaneously }
+    }
+}
+
+/// After Effects' Trim Paths: the part of `path` from `start` to `end`
+/// (fractions of its length, clamped to 0..1), shifted by `offset`, which
+/// wraps around the end. A span over a closed subpath's start joins there;
+/// a closed subpath kept whole stays closed.
+pub fn trim(path: &BezPath, start: f64, end: f64, offset: f64, mode: TrimMode) -> BezPath {
     let (start, end) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
     if end <= start {
         return BezPath::new();
@@ -285,39 +357,68 @@ pub fn trim(path: &BezPath, start: f64, end: f64, offset: f64) -> BezPath {
     if end - start >= 1.0 {
         return path.clone();
     }
-    let segs: Vec<kurbo::PathSeg> = path.segments().collect();
-    let lens: Vec<f64> = segs.iter().map(|s| s.arclen(ACC)).collect();
-    let total: f64 = lens.iter().sum();
+    let (all, closed) = pieces(path);
+    let mut out = BezPath::new();
+    match mode {
+        TrimMode::Individually => cut(&all, &closed, start, end, offset, &mut out),
+        TrimMode::Simultaneously => {
+            for sub in 0..closed.len() {
+                let one: Vec<Piece> = all.iter().copied().filter(|p| p.sub == sub).collect();
+                cut(&one, &closed, start, end, offset, &mut out);
+            }
+        }
+    }
+    out
+}
+
+/// Append the kept part of `segs` (one stretch of 0..1 by arc length).
+fn cut(segs: &[Piece], closed: &[bool], start: f64, end: f64, offset: f64, out: &mut BezPath) {
+    use kurbo::{ParamCurve, ParamCurveArclen};
+    const ACC: f64 = 1e-3;
+    let total: f64 = segs.iter().map(|p| p.len).sum();
     if !(total > 0.0) {
-        return BezPath::new();
+        return;
     }
     let a = (start + offset).rem_euclid(1.0);
     let b = a + (end - start);
     // The kept spans in 0..1; a span past 1 wraps to the start.
     let spans: Vec<(f64, f64)> = if b <= 1.0 { vec![(a, b)] } else { vec![(a, 1.0), (0.0, b - 1.0)] };
-    let mut out = BezPath::new();
+    // The pen carries across the wrap, so a closed subpath's start joins.
+    let mut pen: Option<Point> = None;
     for (lo, hi) in spans {
         let (lo, hi) = (lo * total, hi * total);
         let mut at = 0.0;
-        let mut pen: Option<Point> = None;
-        for (seg, len) in segs.iter().zip(&lens) {
-            let (s0, s1) = (at, at + len);
+        // The subpath being drawn and whether every segment of it so far
+        // was kept whole from its first.
+        let mut whole: Option<(usize, bool)> = None;
+        for (i, p) in segs.iter().enumerate() {
+            let (s0, s1) = (at, at + p.len);
             at = s1;
-            if s1 <= lo || s0 >= hi || *len <= 0.0 {
+            if s1 <= lo || s0 >= hi || p.len <= 0.0 {
+                whole = None;
                 continue;
             }
-            let t0 = if lo > s0 { seg.inv_arclen(lo - s0, ACC) } else { 0.0 };
-            let t1 = if hi < s1 { seg.inv_arclen(hi - s0, ACC) } else { 1.0 };
-            let piece = seg.subsegment(t0..t1);
+            let t0 = if lo > s0 { p.seg.inv_arclen(lo - s0, ACC) } else { 0.0 };
+            let t1 = if hi < s1 { p.seg.inv_arclen(hi - s0, ACC) } else { 1.0 };
+            let piece = p.seg.subsegment(t0..t1);
             let from = piece.start();
-            if pen.is_none_or(|p| (p - from).hypot() > 1e-9) {
+            let first_of_sub = i == 0 || segs[i - 1].sub != p.sub;
+            if pen.is_none_or(|q| (q - from).hypot() > 1e-9) {
                 out.move_to(from);
             }
+            whole = match whole {
+                Some((sub, w)) if sub == p.sub => Some((sub, w && t0 == 0.0 && t1 == 1.0)),
+                _ => Some((p.sub, first_of_sub && t0 == 0.0 && t1 == 1.0)),
+            };
             out.push(piece.as_path_el());
             pen = Some(piece.end());
+            let last_of_sub = segs.get(i + 1).is_none_or(|n| n.sub != p.sub);
+            if last_of_sub && closed.get(p.sub) == Some(&true) && whole == Some((p.sub, true)) {
+                out.close_path();
+                pen = None;
+            }
         }
     }
-    out
 }
 
 fn preview(data: &str) -> String {

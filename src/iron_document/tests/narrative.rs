@@ -96,7 +96,7 @@ fn the_span_index_finds_mentions_and_marks_them_stale() {
 #[test]
 fn the_model_reads_markdown_with_block_ids() {
     let (store, n, rect) = scene();
-    let view = store.view(&ViewQuery { relation: Default::default(), scope: None, fidelity: Fidelity::Full, depth: None, expand: vec![] }).unwrap();
+    let view = store.view(&ViewQuery { omit_defaults: false, relation: Default::default(), scope: None, fidelity: Fidelity::Full, depth: None, expand: vec![] }).unwrap();
     let first = narrative::blocks(store.document(), n)[0].0;
     assert!(view.contains(&format!("<narrative id=\"{n}\" name=\"lesson\" count=\"3\">")), "{view}");
     assert!(view.contains(&format!("[{first}] # A lesson")), "{view}");

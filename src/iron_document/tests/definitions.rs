@@ -142,7 +142,7 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     assert_eq!((rels[0].from, rels[0].rel), (u, RelKind::Figures));
     // The model view shows one element for the entity, with its port; the
     // tree view shows the `use` without its derived insides unless asked.
-    let tree = |expand: Vec<NodeId>| store.view(&ViewQuery { expand, relation: Default::default(), scope: Some(scene), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let tree = |expand: Vec<NodeId>| store.view(&ViewQuery { omit_defaults: false, expand, relation: Default::default(), scope: Some(scene), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(!tree(vec![]).contains(&copy.to_string()), "{}", tree(vec![]));
     assert!(tree(vec![u]).contains(&format!(r#"<rect id="{copy}" derived="true""#)) || tree(vec![u]).contains(&format!(r#"id="{copy}""#)), "{}", tree(vec![u]));
     // Editing the definition reaches the instance in the same transaction.
@@ -225,7 +225,7 @@ fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
     store.preview_target(copy, path("transform2d.y"), Value::Number(370.0)).unwrap();
     store.commit_gesture("set slider", Actor::Human, 1).unwrap().unwrap();
     // The view names the definition and shows the argument and its binding.
-    let v = store.view(&ViewQuery { expand: Vec::new(), relation: Default::default(), scope: Some(entity), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(entity), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!(r#"<entity id="{entity}" name="bar" def="{def}" mode="linked" level="0.9" level.bind="{slider}.slider.value" power="1 mW""#)), "{v}");
     assert!(v.contains(&format!(r#"<driven-by ref="{u}" rel="figures"/>"#)), "{v}");
     // Everything round-trips through the file.

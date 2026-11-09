@@ -71,17 +71,57 @@ pub struct Closure {
     pub body: Expr,
 }
 
-/// Most samples any function may produce or apply in one evaluation.
+/// Most samples one function call may produce.
 pub const MAX_SAMPLES: usize = 100_000;
+
+/// Most work one evaluation of a binding may do: elements produced and
+/// function applications, summed over every call inside it (nested `map`s
+/// multiply), so no document or agent edit can hang the engine.
+pub const MAX_WORK: u64 = 5_000_000;
+
+/// How deep functions may call functions (`(f => f(f))(f => f(f))` recurses
+/// forever; the stack would overflow first).
+pub const MAX_DEPTH: u32 = 64;
+
+thread_local! {
+    /// (evaluations in progress, apply depth, work done) for the outermost
+    /// evaluation on this thread.
+    static BUDGET: std::cell::Cell<(u32, u32, u64)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+/// Count `n` units of work against the current evaluation's budget.
+pub(crate) fn charge(n: usize) -> Result<(), EvalError> {
+    BUDGET.with(|b| {
+        let (nest, depth, work) = b.get();
+        let work = work.saturating_add(n as u64);
+        b.set((nest, depth, work));
+        if work > MAX_WORK { Err(EvalError::Type(format!("too much work: more than {MAX_WORK} elements or calls in one binding"))) } else { Ok(()) }
+    })
+}
 
 impl Closure {
     pub fn apply(&self, args: &[Value]) -> Result<Value, EvalError> {
         if args.len() != self.params.len() {
             return Err(EvalError::Arity { func: self.to_string(), expected: self.params.len(), got: args.len() });
         }
-        let env: Vec<(&'static str, Value)> = self.params.iter().copied().zip(args.iter().cloned()).collect();
-        // Closed: the body reads no leaf.
-        self.body.eval_in(&|_| None, &env)
+        charge(1)?;
+        let depth = BUDGET.with(|b| {
+            let (nest, depth, work) = b.get();
+            b.set((nest, depth + 1, work));
+            depth + 1
+        });
+        let out = if depth > MAX_DEPTH {
+            Err(EvalError::Type(format!("functions nested more than {MAX_DEPTH} deep (does one call itself?)")))
+        } else {
+            let env: Vec<(&'static str, Value)> = self.params.iter().copied().zip(args.iter().cloned()).collect();
+            // Closed: the body reads no leaf.
+            self.body.eval_in(&|_| None, &env)
+        };
+        BUDGET.with(|b| {
+            let (nest, depth, work) = b.get();
+            b.set((nest, depth.saturating_sub(1), work));
+        });
+        out
     }
 }
 
@@ -284,7 +324,17 @@ impl Expr {
     /// resolver and nowhere else, which is the hook a tracking evaluator
     /// would use later.
     pub fn eval(&self, read: &dyn Fn(Leaf) -> Option<Value>) -> Result<Value, EvalError> {
-        self.eval_in(read, &[])
+        // The outermost evaluation starts a fresh budget.
+        BUDGET.with(|b| {
+            let (nest, depth, work) = b.get();
+            b.set(if nest == 0 { (1, 0, 0) } else { (nest + 1, depth, work) });
+        });
+        let out = self.eval_in(read, &[]);
+        BUDGET.with(|b| {
+            let (nest, depth, work) = b.get();
+            b.set((nest.saturating_sub(1), depth, work));
+        });
+        out
     }
 
     /// Evaluate with the locals `env` in scope (innermost last).
@@ -440,8 +490,10 @@ fn lookup(env: &[(&'static str, Value)], name: &str) -> Result<Value, EvalError>
 
 fn write_lit(v: &Value, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match v {
-        Value::Str(s) => write!(f, "{:?}", s),
-        Value::Enum(s) => write!(f, "'{s}'"),
+        // Single quotes where they can hold the text: formulas sit inside
+        // double-quoted attributes in the model's markup.
+        Value::Str(s) | Value::Enum(s) if !s.contains(['\'', '\\', '\n', '\t']) => write!(f, "'{s}'"),
+        Value::Str(s) | Value::Enum(s) => write!(f, "{:?}", s),
         Value::Vec2([a, b]) => write!(f, "[{}, {}]", crate::value::fmt_num(*a), crate::value::fmt_num(*b)),
         Value::Vec3([a, b, c]) => write!(
             f,
@@ -543,8 +595,7 @@ fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
     if let Some(r) = quantity_op(op, &a, &b) {
         return r;
     }
-    // Text joins: '…' lexes as an enum literal, so a quoted word in either
-    // style joins like a string (`'λ = ' + fmt(x)`).
+    // Text joins: a choice's value joins like text (`'mode: ' + $self.style`).
     if op == BinOp::Add
         && let (Str(_) | Enum(_), Str(_) | Enum(_)) = (&a, &b)
         && (matches!(a, Str(_)) || matches!(b, Str(_)))
@@ -575,13 +626,22 @@ fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
             }),
             _ => return Err(EvalError::Type(format!("{} {} {}", a.kind().name(), op.symbol(), b.kind().name()))),
         },
-        BinOp::Eq => Bool(a == b),
-        BinOp::Ne => Bool(a != b),
+        // A choice equals text naming it (`$self.style == 'line'`).
+        BinOp::Eq => Bool(same(&a, &b)),
+        BinOp::Ne => Bool(!same(&a, &b)),
         BinOp::And | BinOp::Or => match (&a, &b) {
             (Bool(x), Bool(y)) => Bool(if op == BinOp::And { *x && *y } else { *x || *y }),
             _ => return Err(EvalError::Type(format!("{} {} {}", a.kind().name(), op.symbol(), b.kind().name()))),
         },
     })
+}
+
+/// Equality, with a choice and text equal when they name the same word.
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Str(x) | Value::Enum(x), Value::Str(y) | Value::Enum(y)) => x == y,
+        _ => a == b,
+    }
 }
 
 /// A number as text: fixed `digits` after the point, or, without, up to
@@ -857,7 +917,6 @@ enum Tok {
     /// A quantity literal (a number followed by a unit), already in SI.
     Lit(Value),
     Str(String),
-    Enum(String),
     Ident(String),
     Ref(Leaf),
     Op(&'static str),
@@ -974,9 +1033,12 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                     i += 1;
                 }
                 if i >= b.len() {
-                    return Err(ParseError("unterminated enum literal".into()));
+                    return Err(ParseError("unterminated text literal".into()));
                 }
-                out.push(Tok::Enum(text[start..i].to_owned()));
+                // Either quote is text (an edit's attributes are in double
+                // quotes, so formulas there write single ones). A choice leaf
+                // takes text naming one of its options (graph.rs).
+                out.push(Tok::Str(text[start..i].to_owned()));
                 i += 1;
             }
             b'#' => {
@@ -1245,7 +1307,6 @@ impl Parser {
             Some(Tok::Num(n)) => Ok(Expr::Lit(Value::Number(n))),
             Some(Tok::Lit(v)) => Ok(Expr::Lit(v)),
             Some(Tok::Str(s)) => Ok(Expr::Lit(Value::Str(s))),
-            Some(Tok::Enum(s)) => Ok(Expr::Lit(Value::Enum(s))),
             Some(Tok::Ref(l)) => Ok(Expr::Ref(l)),
             Some(Tok::LParen) => {
                 self.pos -= 1;
@@ -1323,7 +1384,8 @@ mod tests {
             "clamp(#3.slider.value * 2, 0, 1)",
             "scale(#3.slider.value, 0, 1, 0, 300)",
             "!true && false || 1 < 2",
-            "\"a\" + \"b\"",
+            "'a' + 'b'",
+            "\"it's\" + 'b'",
             "'linear'",
             "[1, 2] * 2",
             "1 - (2 - 3)",

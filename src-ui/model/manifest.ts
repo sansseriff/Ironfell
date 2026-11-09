@@ -31,7 +31,8 @@ what the request needs.
 
 VIEW
   <document version="N"> holds nodes. Every node has an opaque id like #3F; copy
-  ids exactly, never invent one. Attributes are the node's leaves. attr.bind="expr"
+  ids exactly, never invent one. Attributes are the node's leaves; one at its
+  default is left out (no rot="0", sx="1", opacity="1"). attr.bind="expr"
   means the attr is bound to an expression and its shown value is derived; write
   a binding as attr="{= expr}" (attr.bind="expr" is accepted too).
   <driven-by ref="#clip" prop="…"/> means a clip animates that leaf. A node with

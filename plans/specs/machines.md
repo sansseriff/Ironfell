@@ -263,6 +263,11 @@ the agent can tell it caught an instance mid-way.
    compositions appears in both at once. That suits a model component. A picture-level
    override (show it in the overview, not in the detail view) would be a `use`-level
    argument override; leave it until someone needs it?
+   **User, 2026-11-08:** per entity is fine for now, but views will need their own
+   machines: a phase modulator's diagram animating through states in one view while its
+   schematic stays constant in another. The likely form is that `use`-level override of
+   the state argument (or of the channels), so one entity has a state per picture.
+   Revisit after step 8.
 3. **Triggers inside the component** (`on="press"`, `on="hover"`, `on="mount"` from
    vision 05 §4 and vision 06 §2): phase 1 changes state only from outside. A click that
    toggles a component's own state is `affords.activate="cycle"` driving the state port
@@ -276,6 +281,19 @@ the agent can tell it caught an instance mid-way.
    instance. Is a transition a node with a `progress` leaf (simplest for clips), or is
    progress a port on the entity (`#plot1.appear`)? Proposed: a leaf on the expanded
    transition node, so clips animate it like any leaf.
+
+7. **Tracks as timing values (direction agreed 2026-11-08).** Tweens and
+   `ease(window(progress))` bindings are two spellings of one thing and should
+   coalesce. Not by pattern-matching formulas in the timeline: a **timing** becomes a
+   value kind, as a colour or path data is, built by `ease(curve)`, `window(a, b, t)`,
+   `then(…)`, `keys(…)` and `custom(p => …)`. A transition holds one track per channel
+   whose value is a timing; the player computes `from + (to − from) · timing(progress)`.
+   The timeline edits a **constant** timing's structure directly (segments, handles);
+   a **bound** timing (its window depends on an input) shows its formula, like every
+   bound leaf in the inspector. The same rule as everywhere: constant typed values get
+   an editor, bindings get a formula. Lambdas and timings are one-way, as tweens were:
+   the player writes channels, templates read them, nothing flows back, so no inverse
+   is needed. Built with step 8.
 
 ## 10. Done
 

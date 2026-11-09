@@ -151,3 +151,30 @@ fn the_plot_appears_and_disappears_in_order() {
     assert_eq!(at(&store, "series 1", "trim.end"), 1.0);
     assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));
 }
+
+/// A placed plot's unset inputs (NaN until `auto`, types-and-units.md)
+/// survive a save and load.
+#[test]
+fn a_document_with_a_plot_saves_and_loads() {
+    let (mut store, _) = desk();
+    let (e, u) = place(&mut store, "");
+    let text = store.save();
+    let mut again = Store::load(&text).unwrap_or_else(|err| panic!("{err:?}"));
+    assert_eq!(again.save(), text);
+    assert!(errors(&again, e, u).is_empty(), "{:#?}", errors(&again, e, u));
+    assert!(again.resolved(e, path("args.cursor")).unwrap().as_f64().unwrap().is_nan());
+    again.advance_machines(0.0);
+}
+
+/// The model's view leaves out leaves at their default, and keeps bound
+/// ones.
+#[test]
+fn the_model_view_omits_defaults() {
+    let (mut store, bench) = desk();
+    let (_, u) = place(&mut store, r#"title="Intensity""#);
+    let q = |omit: bool| ViewQuery { omit_defaults: omit, relation: Default::default(), scope: Some(bench), fidelity: Fidelity::Full, depth: None, expand: vec![u] };
+    let (full, brief) = (store.view(&q(false)).unwrap(), store.view(&q(true)).unwrap());
+    assert!(full.contains(r#" rot="0""#) && !brief.contains(r#" rot="0""#), "{brief}");
+    assert!(brief.contains("Intensity") && brief.contains(".bind="));
+    assert!(brief.len() * 10 < full.len() * 9, "{} vs {}", brief.len(), full.len());
+}

@@ -64,7 +64,7 @@ fn main() {
     println!(
         "=== view (full) ===\n{}",
         store
-            .view(&ViewQuery { expand: Vec::new(), relation: Default::default(),
+            .view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(),
                 scope: None,
                 fidelity: Fidelity::Full,
                 depth: None

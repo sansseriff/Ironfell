@@ -362,7 +362,7 @@
                         {#if fields("trim").length}
                           <div class="property-grid">
                             {#each fields("trim") as f (f.leaf)}
-                              <PropertyField field={f} node={inspected.node} label={{ start: "Start", end: "End", offset: "Offset" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+                              <PropertyField field={f} node={inspected.node} label={{ start: "Start", end: "End", offset: "Offset", mode: "Pieces" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
                             {/each}
                           </div>
                         {/if}

@@ -625,7 +625,8 @@ fn trimmed(r: &Reader, shape: Shape2d) -> Shape2d {
     if start <= 0.0 && end >= 1.0 {
         return shape;
     }
-    let cut = |outline: &kurbo::BezPath| std::sync::Arc::new(iron_document::geometry::trim(outline, start, end, offset));
+    let mode = iron_document::geometry::TrimMode::named(&r.str("trim.mode").unwrap_or_default());
+    let cut = |outline: &kurbo::BezPath| std::sync::Arc::new(iron_document::geometry::trim(outline, start, end, offset, mode));
     match shape {
         Shape2d::Path { outline, fill, even_odd } => Shape2d::Path { outline: cut(&outline), fill, even_odd },
         Shape2d::Rect { w, h, radii } => {

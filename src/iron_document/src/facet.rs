@@ -430,11 +430,14 @@ facets! {
     /// After Effects' Trim Paths (plans/specs/wires-and-formulas.md §5): the
     /// part of a shape's outline that is stroked, as fractions of its length,
     /// `start` to `end`, shifted by `offset` (wrapping). The fill is whole.
-    /// "Draw this line on" is `trim.end` going from 0 to 1.
+    /// "Draw this line on" is `trim.end` going from 0 to 1. `mode`: a path
+    /// of several pieces trims each at once (`simultaneously`) or as one
+    /// line, piece after piece (`individually`).
     Trim / "trim" => Trim {
         start: Number = Value::Number(0.0),
         end: Number = Value::Number(1.0),
         offset: Number = Value::Number(0.0),
+        mode: Enum = Value::Enum("simultaneously".to_owned()) => ["simultaneously", "individually"],
     }
 
     /// Which mesh asset a `mesh` node shows.

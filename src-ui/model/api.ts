@@ -32,6 +32,8 @@ export interface DocumentApi {
     /** Instances (an entity, or a use) whose derived insides to show, marked
      *  `derived` (component-model.md §9). */
     expand?: string[];
+    /** Leave out constant leaves at their default (what the model reads). */
+    omit_defaults?: boolean;
   }): MaybePromise<string>;
   version(): MaybePromise<number>;
   nextIds(n: number): MaybePromise<string[]>;

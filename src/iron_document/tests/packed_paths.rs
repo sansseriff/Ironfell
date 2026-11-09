@@ -81,7 +81,7 @@ fn a_packed_path_saves_and_loads_exactly() {
 #[test]
 fn the_view_summarises_a_packed_path() {
     let (store, _) = with_packed();
-    let q = ViewQuery { relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: Vec::new() };
+    let q = ViewQuery { omit_defaults: false, relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: Vec::new() };
     let view = store.view(&q).unwrap();
     assert!(view.contains(r#"d="2 contours, 6 anchors""#), "{view}");
 }

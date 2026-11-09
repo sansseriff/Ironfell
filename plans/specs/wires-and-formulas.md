@@ -204,3 +204,16 @@ than a separate mechanism (to be folded into machines.md when it is built).
 - Not yet: the easing menu with curve previews (phase 3 and the timeline), Trim on
   text or tables, `smooth` (§6 Q2).
 
+**2026-11-08: trim modes and review fixes.**
+
+- `trim.mode` (After Effects' "Trim Multiple Shapes"): `simultaneously` (the default:
+  each subpath trimmed by the same fractions, so tick marks grow together) or
+  `individually` (the subpaths as one run, one after another). `std:plot`'s series use
+  `individually`, so a curve with breaks draws along its length. The Trim group shows
+  it as Pieces.
+- A span wrapping over a closed subpath's start joins there (no notch at a rect's
+  corner), and a closed subpath kept whole stays closed (its corner keeps its join).
+- Not yet: SVG export still uses the dash trick, which matches `individually` only
+  and starts a rounded rect at a different point than the canvas; exporting the cut
+  outline itself would make both exact.
+

@@ -651,6 +651,10 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
         if let Some(e) = trim_end {
             let mut t = crate::facet::Trim::default();
             t.end = bound(e);
+            // A curve with breaks draws along its length; ticks grow together.
+            if name.starts_with("series") {
+                t.mode = Slot::Const(Value::Enum("individually".into()));
+            }
             facets.push(t.wrap());
         }
         if let Some(f) = fade {

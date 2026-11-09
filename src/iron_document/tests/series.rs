@@ -172,3 +172,42 @@ fn a_path_bound_to_path_data_follows_its_inputs() {
     let err = store.apply(tx("mixed", vec![Op::Create { id: contour, ty: ty("contour"), parent: Some(curve), order: OrderKey::first(), facets: vec![] }]));
     assert!(err.is_err());
 }
+
+/// What no binding may do to the engine: recurse without end, or do
+/// unbounded work through nested functions.
+#[test]
+fn runaway_functions_fail_instead_of_hanging() {
+    assert!(eval("(f => f(f))(f => f(f))").unwrap_err().contains("deep"));
+    let e = eval("sum(map(range(0, 1, 100000), x => sum(range(0, x, 3000))))").unwrap_err();
+    assert!(e.contains("too much work"), "{e}");
+    // An ordinary nested map is well inside the budget.
+    assert_eq!(nums(&eval("map(range(1, 3, 3), x => sum(range(0, x, 10)))").unwrap()).len(), 3);
+    // And each binding starts a fresh budget.
+    for _ in 0..3 {
+        assert!(eval("sum(range(0, 1, 100000)) + sum(range(0, 1, 100000))").is_ok());
+    }
+}
+
+#[test]
+fn an_empty_area_draws_nothing() {
+    assert_eq!(eval("area(range(0, 1, 0), range(0, 1, 0), range(0, 1, 0))").unwrap().as_str(), Some(""));
+}
+
+/// `Z` then `M`: the pen left at the first subpath's start is not a contour.
+#[test]
+fn closed_subpaths_leave_no_stray_points() {
+    let g = Geometry::from_svg_path("M0 0 L10 0 L10 10 Z M20 20 L30 20 L30 30 Z").unwrap();
+    assert_eq!(g.contours().iter().map(|c| (c.closed, c.anchors.len())).collect::<Vec<_>>(), vec![(true, 3), (true, 3)]);
+    let open_after = Geometry::from_svg_path("M0 0 L10 0 L10 10 Z L5 5").unwrap();
+    assert_eq!(open_after.contours().len(), 2, "a segment after Z starts from the pen");
+}
+
+/// NaN (a break in a line, an unset input) and infinities survive a save.
+#[test]
+fn non_finite_numbers_round_trip_through_json() {
+    for v in [Value::Number(f64::NAN), Value::Number(f64::INFINITY), Value::series(vec![1.0, f64::NAN, f64::NEG_INFINITY], Dim::LENGTH)] {
+        let text = serde_json::to_string(&v).unwrap();
+        let back = Value::from_json(&serde_json::from_str(&text).unwrap()).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{v:?}"), "{text}");
+    }
+}

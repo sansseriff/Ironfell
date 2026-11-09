@@ -4,7 +4,7 @@ import { documentArguments } from '../src-ui/runtime/protocol.generated';
 import { makeDocumentApi } from '../src-ui/model/api';
 import { applyEdit } from '../src-ui/model/edit';
 import { ask, lookRequest } from '../src-ui/model/agent';
-import { manifest } from '../src-ui/model/manifest';
+import { manifest, topicRequest, topicsFor } from '../src-ui/model/manifest';
 
 /** A document API whose engine records each call and answers from `answer`. */
 function fake(answer: (name: string, args: unknown[]) => unknown = () => ({ ok: true })) {
@@ -59,6 +59,46 @@ test('a look shows the named instances expanded, and is not a repair attempt', a
   assert.match(seen[1], /^LOOK\n/);
   assert.deepEqual(lookRequest('<look expand="u7"/>'), ['#u7']);
   assert.equal(lookRequest('no look here'), null);
+});
+
+test('the prompt comes in topics: a core, the relevant ones, an index of the rest', () => {
+  const schema = { types: {}, facets: {}, standard: [{ key: 'laser', ports: [{ name: 'power', dir: 'in', kind: 'value', default: '10 mW' }] }] };
+  const core = manifest(schema, false, []);
+  // The core keeps what every edit needs, and lists every topic it leaves out.
+  assert.match(core, /VERBS, inside <edit/);
+  assert.match(core, /MORE TOPICS/);
+  assert.match(core, /\n  tables\s+tables: rows of words/);
+  assert.doesNotMatch(core, /std:laser/);
+  // A topic included is shown, and leaves the index.
+  const withTables = manifest(schema, false, ['tables']);
+  assert.match(withTables, /preset \(light: hairlines/);
+  assert.doesNotMatch(withTables, /\n  tables\s+tables: rows of words/);
+  // Chosen by the document and the request.
+  assert.deepEqual(topicsFor('<document><rect id="#1"/></document>', 'make it red'), []);
+  assert.deepEqual(topicsFor('<composition id="#c" name="sheet" notation="schematic">', 'make it red'), ['schematic']);
+  assert.deepEqual(topicsFor('<document/>', 'add a table of the results'), ['tables']);
+  assert.deepEqual(topicRequest('<topic name="tables layout"/>'), ['tables', 'layout']);
+  assert.equal(topicRequest('nothing'), null);
+});
+
+test('a topic request is answered with that topic, and is not a repair attempt', async () => {
+  const { api } = fake(name => (name === 'compose' ? { ok: true, version: 4, summary: '' } : { ok: true }));
+  const replies = ['<topic name="tables"/>', '<edit><table to="#C" x="0" y="0">a | b</table></edit>'];
+  const seen: string[] = [];
+  let system = '';
+  const transport = {
+    name: 'script',
+    complete: async (s: string, messages: { role: string; content: string }[]) => {
+      system = s;
+      seen.push(messages[messages.length - 1].content);
+      return { text: replies.shift() ?? '' };
+    },
+  };
+  const result = await ask(api, transport as never, 'make it red');
+  assert.equal(result.attempts, 1);
+  assert.doesNotMatch(system, /preset \(light: hairlines/, 'tables was not in the prompt');
+  assert.match(seen[1], /^TOPIC\nTABLES/);
+  assert.deepEqual(result.trace?.find((s) => s.kind === 'topic'), { attempt: 1, kind: 'topic', names: ['tables'] });
 });
 
 test('the manifest lists the standard components from the schema', () => {

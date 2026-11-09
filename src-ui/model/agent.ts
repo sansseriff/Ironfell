@@ -5,7 +5,7 @@
  */
 import type { DocumentApi } from './api';
 import { applyEdit, extractEdit, type EditOutcome } from './edit';
-import { manifest } from './manifest';
+import { manifest, topicRequest, topicsFor, topicText } from './manifest';
 import { extractRevise, revise } from './revise';
 import { changesSince, conflicts, deletedNamed } from './merge';
 import type { ModelTransport } from './transport';
@@ -31,6 +31,7 @@ export interface AskResult {
 /** One model reply in a turn: a look, prose, an edit (applied or rejected), or why it ended. */
 export type AskStep =
   | { attempt: number; kind: 'look'; ids: string[] }
+  | { attempt: number; kind: 'topic'; names: string[] }
   | { attempt: number; kind: 'prose' }
   | { attempt: number; kind: 'edit'; ok: boolean; failure?: string; summary?: string; version?: number; revised?: boolean; merged?: number }
   | { attempt: number; kind: 'revise'; ok: false; failure: string }
@@ -68,7 +69,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   const emit = live.onEvent ?? (() => {});
   emit({ kind: 'phase', phase: 'reading', attempt: 1 });
   const snapshotVersion = await api.version();
-  const system = manifest(await api.schema(), options.allowTextReply) + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
+  const schema = await api.schema();
   // The model view first (what things are and where each is drawn, ECM §11),
   // then the tree, which also holds what no composition does (the library,
   // timelines, loose roots).
@@ -78,6 +79,12 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   const sheets = [...tree.matchAll(/<composition id="[^"]+" name="([^"]+)" notation="schematic"/g)].map((m) => m[1]);
   const netlists = (await Promise.all(sheets.map((s) => api.netlist(s)))).filter((n) => n.ok).map((n) => `<netlist>\n${n.netlist}\n</netlist>`);
   const view = [await api.view({ fidelity: 'full', relation: 'model', omit_defaults: true }), tree, ...netlists].join('\n');
+  // The prompt in topics (manifest.ts): the core, the topics this document
+  // and request make relevant (recent conversation counts as the request),
+  // and an index of the rest, which the model may ask for with <topic>.
+  const asked = [instruction, ...(options.history ?? []).slice(-4).map((m) => m.content)].join('\n');
+  const topics = topicsFor(view, asked);
+  const system = manifest(schema, options.allowTextReply, topics) + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
   // What the person has selected, so "this" and "the selected one" resolve.
   const picked = await api.selection();
   const selection = picked.length
@@ -97,6 +104,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   let lastOutcome: EditOutcome | null = null;
   let note = '';
   let looks = 0;
+  let topicAsks = 0;
   const unmerged = (edit: string): AskResult => {
     trace.push({ attempt: attempts, kind: 'stale' });
     return { ok: false, note, edit, outcome: null, attempts, transport: transport.name, error: UNMERGEABLE };
@@ -131,6 +139,19 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       messages.push({ role: 'assistant', content: text });
       emit({ kind: 'phase', phase: 'looking', attempt: attempts + 1 });
       messages.push({ role: 'user', content: await lookView(api, look) });
+      continue;
+    }
+    // `<topic name="tables"/>` with no edit: send that part of the prompt
+    // and ask again; not a repair attempt.
+    const wanted = topicRequest(text);
+    if (wanted && !extractEdit(text) && topicAsks < MAX_TOPIC_ASKS) {
+      topicAsks += 1;
+      trace.push({ attempt: attempts, kind: 'topic', names: wanted });
+      attempts -= 1;
+      messages.push({ role: 'assistant', content: text });
+      emit({ kind: 'phase', phase: 'looking', attempt: attempts + 1 });
+      const texts = wanted.map((n) => topicText(schema, n) ?? `(no topic "${n}")`);
+      messages.push({ role: 'user', content: `TOPIC\n${texts.join('\n\n')}\n\nNow answer the REQUEST: one <edit>, or prose if no change is needed.` });
       continue;
     }
     const executable = options.allowTextReply ? executableReply(text) : text;
@@ -223,6 +244,9 @@ const REPAIR = 'Fix what it names with a <revise> of that edit (only the ops tha
 
 /** Looks one request may take before it must answer. */
 const MAX_LOOKS = 2;
+
+/** Topic requests one request may make before it must answer. */
+const MAX_TOPIC_ASKS = 2;
 
 /** The ids a reply's `<look expand="…"/>` names, if it has one. */
 export function lookRequest(text: string): string[] | null {

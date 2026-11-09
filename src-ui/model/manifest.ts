@@ -2,10 +2,19 @@
  * The system prompt: generated from the registry schema so the vocabulary
  * the model is told about and the vocabulary the validator enforces cannot
  * drift (doc 04 §9.7).
+ *
+ * In topics (the prompt-topics step, 2026-11-09): a core every edit needs
+ * (the view, types, facets, verbs, values, expressions, colours, how to fix
+ * a rejected edit), and topics a request may need (components, data and
+ * plots, state machines, ports, schematics, contexts, constraints, layout,
+ * tables, time, narratives). `topicsFor` picks the topics the document and
+ * the request make relevant; the core lists the rest, and the model may ask
+ * for any with <topic name="…"/>, answered before it edits (agent.ts).
  */
 import type { Schema } from './schema';
 
-export function manifest(schema: Schema, conversation = false): string {
+/** Everything the prompt draws on from the schema. */
+function parts(schema: Schema) {
   const types = Object.entries(schema.types)
     .map(([name, t]) => {
       const comps = t.facets.map((c) => (c.required ? c.kind : `${c.kind}?`)).join(' ');
@@ -20,186 +29,27 @@ export function manifest(schema: Schema, conversation = false): string {
   const standard = (schema.standard ?? [])
     .map((e) => `    std:${e.key.padEnd(8)} ${e.ports.map((p) => `${p.dir} ${p.name} ${p.kind}${p.default ? ` ${p.default}` : ''}`).join('; ')}`)
     .join('\n');
-  const response = conversation
-    ? `You are a companion for a scientific-visualisation document. You are given the current document as an XML-ish VIEW, recent conversation, and a request. Answer questions in readable Markdown. When the request needs a document change, include ONE executable <edit> block outside Markdown code fences, with any explanation in prose. Code examples inside Markdown are display-only, not document edits. Never claim to have changed the document without an edit. `
-    : `You edit a scene document for a scientific-visualisation tool. You are given the
-document as an XML-ish VIEW and a request. Reply with ONE <edit> block that makes
-the change, and at most one short sentence before it. `;
-  return `${response}Read markup, write ops:
-never rewrite the document; name each node by the id you saw and change only
-what the request needs.
+  return { types, comps, contextFields, standard };
+}
 
-VIEW
-  <document version="N"> holds nodes. Every node has an opaque id like #3F; copy
-  ids exactly, never invent one. Attributes are the node's leaves; one at its
-  default is left out (no rot="0", sx="1", opacity="1"). attr.bind="expr"
-  means the attr is bound to an expression and its shown value is derived; write
-  a binding as attr="{= expr}" (attr.bind="expr" is accepted too).
-  <driven-by ref="#clip" prop="…"/> means a clip animates that leaf. A node with
-  elided has children you were not shown; count="N" is the real count.
+export type TopicName = 'components' | 'data' | 'machines' | 'ports' | 'schematic' | 'contexts' | 'constraints' | 'layout' | 'tables' | 'time' | 'narratives';
 
-NODE TYPES  (facet? = optional)
-${types}
+/** A topic: what it covers (listed in the core), its text, and when it is
+ *  relevant without being asked for: the document holding what it is about
+ *  (`doc`, against the view), or the request naming it (`request`). */
+interface Topic {
+  summary: string;
+  doc?: RegExp;
+  request?: RegExp;
+  text: (p: ReturnType<typeof parts>) => string;
+}
 
-FACETS AND FIELDS  (field:kind, or field:a|b|c for an enum's values)
-${comps}
-
-VERBS, inside <edit expect-version="N">  (N = the version you read)
-  <create id="$a" type="rect" parent="#1" x="10" y="20" w="30" h="30" color="#ff0000"/>
-      $a is an alias you choose; later verbs in the same edit may use it anywhere
-      an id goes, bindings included: h="{= $a.size.w * 2}". id is optional; leave it
-      off a node nothing else in the edit names.
-      after="#id" or first="true" places it; default is last child. parent omitted = root.
-  <set id="#P" x="12" size.h="{= #O.slider.value * 200}"/>
-      attributes are leaves: facet.field, or a bare field name, which means the
-      first of the node's facets (in the order listed above) that has that field:
-      on a rect, color is fill.color, so a stroke colour is written stroke.color.
-      {= expr} binds the leaf to an expression instead of a value.
-  <add id="#N" stroke.width="2"/>            add an optional facet with fields
-  <delete id="#3"/>                          deletes the subtree
-  <reparent id="#4" to="#1" after="#2"/>
-  <link from="#clip" to="#node" rel="animates" offset="0.5"/>
-  <unlink id="r1"/>
-  <link-figures a="#box" b="#torus"/>          make two pictures pictures of one entity
-      (alone in its <edit>). If both already picture different entities you get a
-      <question>; resend with keep="#entity" naming the one to keep.
-  <import-svg to="#comp" x="100" y="50"><svg …>…</svg></import-svg>
-      SVG's shapes as new nodes under #comp (or a group), the SVG's origin at x, y
-      (alone in its <edit>). Paths stay paths; what SVG cannot carry (text, images,
-      gradients beyond their first colour, filters) is listed as <cut> lines.
-
-CONTEXTS  (how things behave: data, not code)
-  Behaviour comes from contexts: rules matching nodes and declaring fields. Built-in
-  ones (std:free-2d, std:3d, and std:table for a table's rows and cells) are never
-  saved. A node's values come from its world's context (by type), its own context,
-  and its direct container's; a node with affords.select="through" (a table's row) is
-  passed over, so its container's rules reach its children. Write rules with
-      <context name="std:table">
-        <rule match="type:text" affords.enter="edit"/>
-      </context>
-  alone in its <edit>: rules after the built-in's, so they win, in this document only.
-  match is all, self or children, with type:a|b and state:s. Writing a name again
-  replaces its rules; <delete> its id removes them. Views print a document's contexts
-  in this markup. One node's exception is its affords facet, CSS's style attribute:
-      <set id="#n" affords.style="drag: ring; drives: transform2d.rot"/>
-  (a bare field is affords.*; affords.scope="children" applies it to its children).
-  On a definition's template part it holds for every instance. A gesture drives the
-  node's own leaf through its binding, so a needle bound to a slider moves the slider.
-  Fields:
-${contextFields}
-
-SCHEMATICS  (a composition with notation="schematic")
-  Parts are components from a parts library: resistor (R, pins a b), capacitor (C, a b),
-  inductor (L, a b), vsource (V, pins p n), isource (I, p n; I flows out of p), ground
-  (pin g, 0 V), probe (pin t, shows its net's voltage), junction (pin j, a T in a wire).
-  Pins are electrical ports; a connection between two is a wire, and every pin joined
-  by wires is one net, solved live (DC: capacitors open, inductors short). The netlist
-  of each sheet comes with the view. Draw or extend one, alone in its <edit>:
-    <edit><circuit sheet="circuit">
-      <place part="vsource" name="V1" x="120" y="220" V="9 V"/>
-      <place part="resistor" name="R1" x="220" y="160" R="1 kΩ"/>
-      <place part="resistor" name="R2" x="300" y="220" rot="90" R="2 kΩ"/>
-      <place part="ground" x="120" y="300"/>
-      <wire from="V1.p" to="R1.a" via="120,160"/>
-      <wire from="R1.b" to="R2.a"/>
-    </circuit></edit>
-  x, y is a part's origin, on the 10 px grid; a resistor's pins sit 30 px left and right of
-  it (a source's 30 px above and below), turned with rot (90, 180, 270). name is the
-  designator (R1; next free if left out); other attributes set inputs. A wire joins
-  designator.pin to designator.pin through via corners, then one elbow (horizontal first);
-  every leg must be horizontal or vertical. Parts placed before may be wired by name.
-  The answer carries the sheet's netlist. Change a value with <set id="#entity"
-  args.R="4.7 kΩ"/>. To remove a part, <delete> its use, its entity, and each
-  connection on its pins with that connection's wire path, in one <edit>.
-
-VALUES
-  numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or
-  0,1.5,0; enums by name (easing: linear ease_in ease_out ease_in_out; host: canvas dom;
-  path.fill_rule: nonzero evenodd; stroke.join: round miter bevel; stroke.cap: round butt
-  square); stroke.dash is dash and gap lengths, "6 3", empty for a solid line;
-  quantities as a magnitude and unit, 9.58 mW or 1550 nm (SI units with prefixes;
-  compound like kg*m2/s3). Plain numbers are dimensionless: 2 mW * 3 works,
-  2 mW + 3 is an error, and so is adding mW to nm. Angles are plain radians.
-  appearance.opacity (0..1) composites a whole shape or group once, including overlaps.
-  gradient is an optional two-stop fill: kind linear|radial, start/end colours (with
-  alpha), x0/y0/x1/y1 as fractions of local shape bounds. It replaces the solid fill;
-  fill.opacity still multiplies its stops. Radial uses the first point as centre and
-  the distance to the second as radius. Remove gradient to reveal the solid fill.
-  group_clip is an optional local group frame: enabled, shape rect|ellipse, w/h and
-  radius (rounded rect). It clips all descendants and their shadows, including embeds.
-  Use explicit appearance.opacity versus fill.opacity when setting opacity.
-  Document 2D space is y-down with the origin at the viewer's top-left, one unit per
-  pixel; rect origin is its top-left corner; an ellipse is centred on its origin
-  with radii rx, ry (a circle is an ellipse with rx = ry). A path holds contours, each an
-  outline holding its points in order (x, y in the path's space; handles ix iy ox oy
-  relative to the point) and closed or not; a second contour inside the first is a hole
-  when it runs the other way, or always under fill_rule evenodd. Write a path's shape
-  as SVG path data instead: <create type="path" d="M 0 0 C 20 0 20 40 40 40"/>, and
-  bind d to path data to draw a curve from numbers (EXPRESSIONS); such a path has no
-  contour children. trim (rect, ellipse, path) is Trim Paths: trim.start..trim.end of
-  the outline is stroked (fractions; trim.offset shifts it), the fill stays whole, so
-  trim.end="{= …}" from 0 to 1 draws a shape on. stroke.path_length is SVG's
-  pathLength, scaling dash and dash_offset.
-  A series is numbers with one unit, written "0 0.4 0.9 1.6" or "400 450 500 nm"
-  (two or more); a long one shows as series(121 · nm, 400…700).
-
-COLOURS  (theme tokens: light and dark, like CSS variables)
-  Prefer a token to a literal colour so drawings read in light and dark mode:
-  fill.color="@series-2", stroke.color="@ink", or inside formulas {= mix(@surface,
-  @accent, 0.2)}. Built in: surface ink ink-2 muted grid axis accent series-1 …
-  series-8 (series in this order for categories; text in ink, ink-2 or muted, never a
-  series colour). The first use adds the theme to the document: a palette root of
-  token nodes (token.light, token.dark), which you may edit with <set> or extend:
-  <create type="token" parent="#P" name="brand" light="#1d3557" dark="#a8dadc"/>.
-
-EXPRESSIONS (for {= …} bindings)
-  #id.facet.field references a leaf; + - * / % < <= > >= == != && || !;
-  cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
-  lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan atan2(y,x) sqrt pow(x,y) hypot(x,y);
-  the constant pi; angles in radians; quantity literals 9.58 mW. A binding may not
-  depend on itself. Inside an attribute write < as &lt; (or flip the comparison).
-  Text: '…' strings (single quotes inside an attribute), + joins them; fmt(x) a
-  number or quantity as text, fmt(x, d) with d decimals, fmt(q, 'nm', d) converted
-  to that unit with it appended, sci(x, d) scientific, str(v) anything. So a text
-  node shows a live value: content="{= 'λ = ' + fmt(#L.port.signal, 'nm', 0)}".
-  Series (never type out sample values; generate them): range(a, b, n) n values a..b,
-  step(a, b, d), series(a, b, …). Arithmetic and every function above apply per
-  element (NumPy-style), a number meeting every element: pow(cos(pi * xs / d), 2).
-  len at(s, i) first last sum mean, min(s) max(s), interp(xs, ys, x), where(cond, a, b)
-  (comparisons give 1/0 per element), ticks(lo, hi, n) about n round values,
-  ease(curve, t) shapes progress t (0–1) by an easing curve: linear ease_in ease_out
-  ease_in_out ease easy_ease hold, or "cubic-bezier(x1, y1, x2, y2)"; window(t, a, b)
-  maps the slice a–b of t to 0–1 (a delay or stagger): a staggered draw-on is
-  trim.end="{= ease('easy_ease', window(#p, 0.3, 0.6))}". Clip keys take the same
-  names in easing.
-  nice_lo/nice_hi(lo, hi, n), log10 ln exp, sinc(x) = sin(x)/x, sig(x, n) n significant
-  figures, isnan(x), kind(v), concat(s1, s2, …), unit_of(x), in_unit(x, 'nm').
-  Functions: x => body or (x, y) => body is a function value; map(s, f), sample(f, a, b,
-  n), and f(x) calls one. Its references are read when it is made, so a function bound
-  to a slider is remade when the slider moves.
-  Path data (plain-number coordinates, pixels) for a bound path.d: 'M ' + points(xs, ys)
-  a polyline, smooth(xs, ys) a curve through the points, circles(xs, ys, r) scatter
-  dots, segments(x0, y0, x1, y1) ticks or grid lines, bars(xs, ys, base, w), area(xs,
-  ys, base); a non-finite sample breaks the line. Map data to pixels with scale(xs,
-  lo, hi, 0, w). Colours: rgb(r, g, b[, a]) 0–255, hsl(h, s, l[, a]) degrees and 0–100,
-  mix(c1, c2, t), spectrum(λ) visible light's colour for a wavelength.
-
-MODEL AND COMPOSITIONS
-  Two views come first. <model-view> lists entities: what things are, each with its
-  definition, its arguments, and a <figure> for every picture of it with the composition
-  it is drawn in. The <document> tree follows: a composition root (notation, dims 2d
-  or 3d) is one diagram, shown in its own panel; its children are its layout. A node
-  with a figures relation pictures an entity; pictures in different compositions of
-  one entity are the same thing drawn differently. Local geometry (brackets, posts,
-  decoration) has no figures relation. The model root holds entities.
-  An embed node shows one composition inside another by reference (embed.source):
-  2D in 2D or 3D in 3D places and clips it like a group; a 3D composition in a 2D
-  one is a camera view (embed_camera.camera names a camera node of the 3D
-  composition; without it, a default view frames everything); a 2D composition in a
-  3D one is a plane. frame gives a manual bounding box. Editing the embedded
-  composition changes every embed of it. An embed may not loop back to itself.
-
-DEFINITIONS
+export const TOPICS: Record<TopicName, Topic> = {
+  components: {
+    summary: 'definitions (components), instances, ports of a component, make-component and place, the standard components',
+    doc: /<(?:entity|definition|use) /,
+    request: /\b(?:component|instance|place|definition|std:|laser|fiber|meter|slider)/i,
+    text: (p) => `DEFINITIONS
   A library root holds definition nodes (components). A definition's interface is
   its port_spec children: an in port (port.dir="in", port.kind="value" or a typed
   kind) is an input whose port.signal is its default; out ports and across/through
@@ -258,7 +108,7 @@ COMPONENT VERBS  (place instances and pictures; in an <edit> of their own, any n
   pictured in a 3D composition yet: draw a mesh there and <link-figures> it.
   Standard components (std:<key>, copied in once; each port: name, its kind, an
   input's default):
-${standard}
+${p.standard}
   std:plot draws data in a box you size and the person can resize; use it for any
   curve, scatter or bar chart instead of drawing points or rects:
     <edit><place def="std:plot" in="#C" x="40" y="300" w="480" h="280" title="Screen"
@@ -271,9 +121,39 @@ ${standard}
   in the data's unit (y_min="0 mW" for mW data) or auto; cursor
   marks an x and outputs y_at_cursor; reveal 0..1 draws the series on; axis titles
   default to the data's units; outputs x_lo x_hi y_lo y_hi are the ranges in use.
-  vis="hidden" or "shown" plays its disappear or appear (axes, ticks, then the curve).
-
-STATE MACHINES  (a component's states and animated transitions)
+  vis="hidden" or "shown" plays its disappear or appear (axes, ticks, then the curve).`,
+  },
+  data: {
+    summary: 'series and data functions, drawing curves from numbers, std:plot for any chart',
+    doc: /std:plot|series\(/,
+    request: /\b(?:plot|graph|chart|curve|data|series|scatter|bar chart|histogram|spectrum|sample|function of)/i,
+    text: () => `EXPRESSIONS FOR DATA\n  Series (never type out sample values; generate them): range(a, b, n) n values a..b,
+  step(a, b, d), series(a, b, …). Arithmetic and every function above apply per
+  element (NumPy-style), a number meeting every element: pow(cos(pi * xs / d), 2).
+  len at(s, i) first last sum mean, min(s) max(s), interp(xs, ys, x), where(cond, a, b)
+  (comparisons give 1/0 per element), ticks(lo, hi, n) about n round values,
+  ease(curve, t) shapes progress t (0–1) by an easing curve: linear ease_in ease_out
+  ease_in_out ease easy_ease hold, or "cubic-bezier(x1, y1, x2, y2)"; window(t, a, b)
+  maps the slice a–b of t to 0–1 (a delay or stagger): a staggered draw-on is
+  trim.end="{= ease('easy_ease', window(#p, 0.3, 0.6))}". Clip keys take the same
+  names in easing.
+  nice_lo/nice_hi(lo, hi, n), log10 ln exp, sinc(x) = sin(x)/x, sig(x, n) n significant
+  figures, isnan(x), kind(v), concat(s1, s2, …), unit_of(x), in_unit(x, 'nm').
+  Functions: x => body or (x, y) => body is a function value; map(s, f), sample(f, a, b,
+  n), and f(x) calls one. Its references are read when it is made, so a function bound
+  to a slider is remade when the slider moves.
+  Path data (plain-number coordinates, pixels) for a bound path.d: 'M ' + points(xs, ys)
+  a polyline, smooth(xs, ys) a curve through the points, circles(xs, ys, r) scatter
+  dots, segments(x0, y0, x1, y1) ticks or grid lines, bars(xs, ys, base, w), area(xs,
+  ys, base); a non-finite sample breaks the line. Map data to pixels with scale(xs,
+  lo, hi, 0, w). Colours: rgb(r, g, b[, a]) 0–255, hsl(h, s, l[, a]) degrees and 0–100,
+  mix(c1, c2, t), spectrum(λ) visible light's colour for a wavelength.`,
+  },
+  machines: {
+    summary: "a component's states and animated transitions (channels, machines, states, transitions, tweens)",
+    doc: /<machine /,
+    request: /\b(?:state|transition|appear|disappear|hover|pressed|toggle|tween)/i,
+    text: () => `STATE MACHINES  (a component's states and animated transitions)
   A definition holds channels (numbers its template binds to) and a machine named for
   an in port whose value is the state:
     <create id="$v" type="port_spec" parent="$d" name="vis" kind="value" dir="in" signal="shown" datatype="choice(hidden|shown)"/>
@@ -291,9 +171,13 @@ STATE MACHINES  (a component's states and animated transitions)
   transition, so retiming keeps proportions; shape="{= p => …}" for any curve); no
   transition snaps. Channel values are not saved. A transition's ms may read an input
   ({= $len.port.signal}), so each instance times its own; setting ms on an instance's
-  copy of the transition overrides it there only.
-
-PORTS AND SIGNALS
+  copy of the transition overrides it there only.`,
+  },
+  ports: {
+    summary: 'ports and signals between entities, connections, across/through pairs',
+    doc: /<connection /,
+    request: /\b(?:connect|port|signal|wire up|feed)/i,
+    text: () => `PORTS AND SIGNALS
   An entity has port children (name; port.kind, port.dir in|out, port.signal), one per
   port_spec of its definition. Kinds: optical_power (W), rf_voltage (V), value carry a
   one-way signal; electrical and heat_flow carry an across/through pair. An out port's
@@ -306,9 +190,65 @@ PORTS AND SIGNALS
   A connection joins two ports of one kind, an out to an in, and an in port takes
   one connection; anything else is rejected as bad_connection. Readers bind to a
   port's signal ({= #port.port.signal / 1 mW}). The model view lists every port with
-  its live signal and every connection as entity.port names.
-
-CONSTRAINTS
+  its live signal and every connection as entity.port names.`,
+  },
+  schematic: {
+    summary: 'schematic sheets: electrical parts, wires, the live netlist, the <circuit> verb',
+    doc: /notation="schematic"/,
+    request: /\b(?:circuit|schematic|resistor|capacitor|inductor|voltage|current|ground|netlist)/i,
+    text: () => `SCHEMATICS  (a composition with notation="schematic")
+  Parts are components from a parts library: resistor (R, pins a b), capacitor (C, a b),
+  inductor (L, a b), vsource (V, pins p n), isource (I, p n; I flows out of p), ground
+  (pin g, 0 V), probe (pin t, shows its net's voltage), junction (pin j, a T in a wire).
+  Pins are electrical ports; a connection between two is a wire, and every pin joined
+  by wires is one net, solved live (DC: capacitors open, inductors short). The netlist
+  of each sheet comes with the view. Draw or extend one, alone in its <edit>:
+    <edit><circuit sheet="circuit">
+      <place part="vsource" name="V1" x="120" y="220" V="9 V"/>
+      <place part="resistor" name="R1" x="220" y="160" R="1 kΩ"/>
+      <place part="resistor" name="R2" x="300" y="220" rot="90" R="2 kΩ"/>
+      <place part="ground" x="120" y="300"/>
+      <wire from="V1.p" to="R1.a" via="120,160"/>
+      <wire from="R1.b" to="R2.a"/>
+    </circuit></edit>
+  x, y is a part's origin, on the 10 px grid; a resistor's pins sit 30 px left and right of
+  it (a source's 30 px above and below), turned with rot (90, 180, 270). name is the
+  designator (R1; next free if left out); other attributes set inputs. A wire joins
+  designator.pin to designator.pin through via corners, then one elbow (horizontal first);
+  every leg must be horizontal or vertical. Parts placed before may be wired by name.
+  The answer carries the sheet's netlist. Change a value with <set id="#entity"
+  args.R="4.7 kΩ"/>. To remove a part, <delete> its use, its entity, and each
+  connection on its pins with that connection's wire path, in one <edit>.`,
+  },
+  contexts: {
+    summary: 'how things behave as data: context rules, the affords facet, gestures driving leaves',
+    doc: /<context /,
+    request: /\b(?:behav|drag|gesture|double-click|click|afford|context|interact|draggable|knob|dial)/i,
+    text: (p) => `CONTEXTS  (how things behave: data, not code)
+  Behaviour comes from contexts: rules matching nodes and declaring fields. Built-in
+  ones (std:free-2d, std:3d, and std:table for a table's rows and cells) are never
+  saved. A node's values come from its world's context (by type), its own context,
+  and its direct container's; a node with affords.select="through" (a table's row) is
+  passed over, so its container's rules reach its children. Write rules with
+      <context name="std:table">
+        <rule match="type:text" affords.enter="edit"/>
+      </context>
+  alone in its <edit>: rules after the built-in's, so they win, in this document only.
+  match is all, self or children, with type:a|b and state:s. Writing a name again
+  replaces its rules; <delete> its id removes them. Views print a document's contexts
+  in this markup. One node's exception is its affords facet, CSS's style attribute:
+      <set id="#n" affords.style="drag: ring; drives: transform2d.rot"/>
+  (a bare field is affords.*; affords.scope="children" applies it to its children).
+  On a definition's template part it holds for every instance. A gesture drives the
+  node's own leaf through its binding, so a needle bound to a slider moves the slider.
+  Fields:
+${p.contextFields}`,
+  },
+  constraints: {
+    summary: 'geometric constraints and the solver (x.by="#cluster", exact edits)',
+    doc: /<constraint |\.by="#/,
+    request: /\b(?:constrain|coincident|pendulum|linkage|distance between|keep .* apart)/i,
+    text: () => `CONSTRAINTS
   A constraint node (kind: coincident distance pin fix angle horizontal vertical;
   value; enabled) names its operands with constrains relations
   (<link from="#c" to="#node" rel="constrains" role="a" anchor="80,20"/>). The solver
@@ -317,9 +257,13 @@ CONSTRAINTS
   far as the constraints allow; the reply then carries a <solver> summary with any
   <unmet> request. Put exact="true" on <edit> to have such an edit rejected instead.
   A value may be bound (a driving dimension); binding it to one of the cluster's own
-  variables is a cycle and is rejected.
-
-LAYOUT
+  variables is a cycle and is rejected.`,
+  },
+  layout: {
+    summary: 'stacks and grids that place their children (layout, layout_item)',
+    doc: /layout\.mode=/,
+    request: /\b(?:stack|grid|layout|column|row|align|distribute|evenly)/i,
+    text: () => `LAYOUT
   A group with layout.mode stack_x, stack_y or grid places its children: gap,
   row_gap (grids), pad_t pad_r pad_b pad_l, align (start center end stretch),
   justify (start center end between), columns and rows (grids: "auto 120 1fr"),
@@ -328,9 +272,13 @@ LAYOUT
   are the layout's and cannot be set. A child's layout_item says how it sits:
   w / h (auto or fill), align, absolute="true" (leaves the flow, keeps its own x, y),
   and in a grid column / row (1-based) with span_x / span_y. Order children with
-  after= or <reparent>; the stack follows sibling order.
-
-TABLES
+  after= or <reparent>; the stack follows sibling order.`,
+  },
+  tables: {
+    summary: 'tables: rows of words, merged cells, presets, the <table> verb',
+    doc: /<table /,
+    request: /\btable/i,
+    text: () => `TABLES
   A table reads as its rows of words, one line per row, cells split by |:
     <table id="#T" x="80" y="400" w="464" h="200" preset="light" header="1" columns="auto auto auto" label-col="true" emphasis="2">
       Param  | A    | B
@@ -352,9 +300,13 @@ TABLES
     S (µm)           | 85 | 113 | 140
     </table></edit>
   Rewrite one's words with <table id="#T">rows</table> (same rows and merges keep every
-  cell's id); preset= or header= there restyle it.
-
-TIME
+  cell's id); preset= or header= there restyle it.`,
+  },
+  time: {
+    summary: 'clips and keys on the timeline (animation over the clock)',
+    doc: /<clip |<timeline /,
+    request: /\b(?:animat|keyframe|key frame|clip|timeline|over time|seconds|second|loop)/i,
+    text: () => `TIME
   A clip node (child of a timeline) animates one property: timing.start (where its
   keys are measured from, seconds on the clock) and clip.prop (the leaf, e.g.
   transform2d.x), with key children: <create type="key" parent="$clip" t="0"
@@ -363,9 +315,13 @@ TIME
   clip needs two keys to move anything; before its first key the authored value
   shows, after its last it holds that value. It reaches its target through <link
   from="#clip" to="#target" rel="animates"/>. A leaf may be bound or animated, not
-  both.
-
-NARRATIVES
+  both.`,
+  },
+  narratives: {
+    summary: 'narratives: lesson text with mentions and live values, the <write> and <rewrite> verbs',
+    doc: /<narrative /,
+    request: /\b(?:narrative|lesson|paragraph|write|explain|section|heading|caption|text block|cursor)/i,
+    text: () => `NARRATIVES
   A <narrative id="#N" name="…"> in the view is flowing text: each block's first line
   starts [#B] (its id), then markdown. Inline: **strong**, *em*, \`code\`, [words](url),
   :e[words]{#id} (a mention: words that point at a node), :val{#id.facet.field unit=mm
@@ -376,7 +332,153 @@ NARRATIVES
     <edit><rewrite block="#B">The block's new text.</rewrite></edit>
   after="end" appends; after="" puts it first. Rewriting with nothing deletes the block.
   Escape <, > and & in the markdown as XML text. If REQUEST says where the cursor is,
-  write there unless it names another place.
+  write there unless it names another place.`,
+  },
+};
+
+const ALL = Object.keys(TOPICS) as TopicName[];
+
+/** The topics the document (its view) and the request make relevant. */
+export function topicsFor(view: string, request: string): TopicName[] {
+  return ALL.filter((t) => TOPICS[t].doc?.test(view) || TOPICS[t].request?.test(request));
+}
+
+/** A topic's text, for a <topic> request; null for an unknown name. */
+export function topicText(schema: Schema, name: string): string | null {
+  const t = TOPICS[name as TopicName];
+  return t ? t.text(parts(schema)) : null;
+}
+
+/** The names a reply's <topic name="…"/> asks for (several space-separated). */
+export function topicRequest(text: string): string[] | null {
+  const names = [...text.matchAll(/<topic\s[^>]*?name="([^"]*)"[^>]*\/?>/g)].flatMap((m) => m[1].split(/[\s,]+/)).filter(Boolean);
+  return names.length ? [...new Set(names)] : null;
+}
+
+/** The prompt: the core, the topics given (all of them when `topics` is
+ *  omitted), and an index of the rest. */
+export function manifest(schema: Schema, conversation = false, topics: readonly TopicName[] = ALL): string {
+  const p = parts(schema);
+  const { types, comps } = p;
+  const response = conversation
+    ? `You are a companion for a scientific-visualisation document. You are given the current document as an XML-ish VIEW, recent conversation, and a request. Answer questions in readable Markdown. When the request needs a document change, include ONE executable <edit> block outside Markdown code fences, with any explanation in prose. Code examples inside Markdown are display-only, not document edits. Never claim to have changed the document without an edit. `
+    : `You edit a scene document for a scientific-visualisation tool. You are given the
+document as an XML-ish VIEW and a request. Reply with ONE <edit> block that makes
+the change, and at most one short sentence before it. `;
+  const included = ALL.filter((t) => topics.includes(t));
+  const rest = ALL.filter((t) => !topics.includes(t));
+  const index = rest.length
+    ? `\n\nMORE TOPICS  (not shown; ask before you edit with <topic name="tables"/>, several names allowed, and the text comes back)\n${rest.map((t) => `  ${t.padEnd(12)} ${TOPICS[t].summary}`).join('\n')}`
+    : '';
+  const shown = included.map((t) => TOPICS[t].text(p)).join('\n\n');
+  return `${response}Read markup, write ops:
+never rewrite the document; name each node by the id you saw and change only
+what the request needs.
+
+VIEW
+  <document version="N"> holds nodes. Every node has an opaque id like #3F; copy
+  ids exactly, never invent one. Attributes are the node's leaves; one at its
+  default is left out (no rot="0", sx="1", opacity="1"). attr.bind="expr"
+  means the attr is bound to an expression and its shown value is derived; write
+  a binding as attr="{= expr}" (attr.bind="expr" is accepted too).
+  <driven-by ref="#clip" prop="…"/> means a clip animates that leaf. A node with
+  elided has children you were not shown; count="N" is the real count.
+
+NODE TYPES  (facet? = optional)
+${types}
+
+FACETS AND FIELDS  (field:kind, or field:a|b|c for an enum's values)
+${comps}
+
+VERBS, inside <edit expect-version="N">  (N = the version you read)
+  <create id="$a" type="rect" parent="#1" x="10" y="20" w="30" h="30" color="#ff0000"/>
+      $a is an alias you choose; later verbs in the same edit may use it anywhere
+      an id goes, bindings included: h="{= $a.size.w * 2}". id is optional; leave it
+      off a node nothing else in the edit names.
+      after="#id" or first="true" places it; default is last child. parent omitted = root.
+  <set id="#P" x="12" size.h="{= #O.slider.value * 200}"/>
+      attributes are leaves: facet.field, or a bare field name, which means the
+      first of the node's facets (in the order listed above) that has that field:
+      on a rect, color is fill.color, so a stroke colour is written stroke.color.
+      {= expr} binds the leaf to an expression instead of a value.
+  <add id="#N" stroke.width="2"/>            add an optional facet with fields
+  <delete id="#3"/>                          deletes the subtree
+  <reparent id="#4" to="#1" after="#2"/>
+  <link from="#clip" to="#node" rel="animates" offset="0.5"/>
+  <unlink id="r1"/>
+  <link-figures a="#box" b="#torus"/>          make two pictures pictures of one entity
+      (alone in its <edit>). If both already picture different entities you get a
+      <question>; resend with keep="#entity" naming the one to keep.
+  <import-svg to="#comp" x="100" y="50"><svg …>…</svg></import-svg>
+      SVG's shapes as new nodes under #comp (or a group), the SVG's origin at x, y
+      (alone in its <edit>). Paths stay paths; what SVG cannot carry (text, images,
+      gradients beyond their first colour, filters) is listed as <cut> lines.
+
+VALUES
+  numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or
+  0,1.5,0; enums by name (easing: linear ease_in ease_out ease_in_out; host: canvas dom;
+  path.fill_rule: nonzero evenodd; stroke.join: round miter bevel; stroke.cap: round butt
+  square); stroke.dash is dash and gap lengths, "6 3", empty for a solid line;
+  quantities as a magnitude and unit, 9.58 mW or 1550 nm (SI units with prefixes;
+  compound like kg*m2/s3). Plain numbers are dimensionless: 2 mW * 3 works,
+  2 mW + 3 is an error, and so is adding mW to nm. Angles are plain radians.
+  appearance.opacity (0..1) composites a whole shape or group once, including overlaps.
+  gradient is an optional two-stop fill: kind linear|radial, start/end colours (with
+  alpha), x0/y0/x1/y1 as fractions of local shape bounds. It replaces the solid fill;
+  fill.opacity still multiplies its stops. Radial uses the first point as centre and
+  the distance to the second as radius. Remove gradient to reveal the solid fill.
+  group_clip is an optional local group frame: enabled, shape rect|ellipse, w/h and
+  radius (rounded rect). It clips all descendants and their shadows, including embeds.
+  Use explicit appearance.opacity versus fill.opacity when setting opacity.
+  Document 2D space is y-down with the origin at the viewer's top-left, one unit per
+  pixel; rect origin is its top-left corner; an ellipse is centred on its origin
+  with radii rx, ry (a circle is an ellipse with rx = ry). A path holds contours, each an
+  outline holding its points in order (x, y in the path's space; handles ix iy ox oy
+  relative to the point) and closed or not; a second contour inside the first is a hole
+  when it runs the other way, or always under fill_rule evenodd. Write a path's shape
+  as SVG path data instead: <create type="path" d="M 0 0 C 20 0 20 40 40 40"/>, and
+  bind d to path data to draw a curve from numbers (EXPRESSIONS); such a path has no
+  contour children. trim (rect, ellipse, path) is Trim Paths: trim.start..trim.end of
+  the outline is stroked (fractions; trim.offset shifts it), the fill stays whole, so
+  trim.end="{= …}" from 0 to 1 draws a shape on. stroke.path_length is SVG's
+  pathLength, scaling dash and dash_offset.
+  A series is numbers with one unit, written "0 0.4 0.9 1.6" or "400 450 500 nm"
+  (two or more); a long one shows as series(121 · nm, 400…700).
+
+COLOURS  (theme tokens: light and dark, like CSS variables)
+  Prefer a token to a literal colour so drawings read in light and dark mode:
+  fill.color="@series-2", stroke.color="@ink", or inside formulas {= mix(@surface,
+  @accent, 0.2)}. Built in: surface ink ink-2 muted grid axis accent series-1 …
+  series-8 (series in this order for categories; text in ink, ink-2 or muted, never a
+  series colour). The first use adds the theme to the document: a palette root of
+  token nodes (token.light, token.dark), which you may edit with <set> or extend:
+  <create type="token" parent="#P" name="brand" light="#1d3557" dark="#a8dadc"/>.
+
+EXPRESSIONS (for {= …} bindings)
+  #id.facet.field references a leaf; + - * / % < <= > >= == != && || !;
+  cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
+  lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan atan2(y,x) sqrt pow(x,y) hypot(x,y);
+  the constant pi; angles in radians; quantity literals 9.58 mW. A binding may not
+  depend on itself. Inside an attribute write < as &lt; (or flip the comparison).
+  Text: '…' strings (single quotes inside an attribute), + joins them; fmt(x) a
+  number or quantity as text, fmt(x, d) with d decimals, fmt(q, 'nm', d) converted
+  to that unit with it appended, sci(x, d) scientific, str(v) anything. So a text
+  node shows a live value: content="{= 'λ = ' + fmt(#L.port.signal, 'nm', 0)}".
+
+MODEL AND COMPOSITIONS
+  Two views come first. <model-view> lists entities: what things are, each with its
+  definition, its arguments, and a <figure> for every picture of it with the composition
+  it is drawn in. The <document> tree follows: a composition root (notation, dims 2d
+  or 3d) is one diagram, shown in its own panel; its children are its layout. A node
+  with a figures relation pictures an entity; pictures in different compositions of
+  one entity are the same thing drawn differently. Local geometry (brackets, posts,
+  decoration) has no figures relation. The model root holds entities.
+  An embed node shows one composition inside another by reference (embed.source):
+  2D in 2D or 3D in 3D places and clips it like a group; a 3D composition in a 2D
+  one is a camera view (embed_camera.camera names a camera node of the 3D
+  composition; without it, a default view frames everything); a 2D composition in a
+  3D one is a plane. frame gives a manual bounding box. Editing the embedded
+  composition changes every embed of it. An embed may not loop back to itself.${index}${shown ? `\n\n${shown}` : ''}
 
 If an <edit-failed> block comes back, nothing was applied. Its op="N" counts your
 edit's verbs from 0 (ops="…" lists several with the same error). Fix exactly what it

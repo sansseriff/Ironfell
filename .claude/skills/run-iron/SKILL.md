@@ -75,6 +75,8 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `chat-ui.ts`, fixture, worker or main | ~4–7 s; capped at 55 s |
 | `chat-history.ts`, fixture, saved scope | ~10 s; capped at 55 s |
 | `chat-ui.ts`, real Codex prose/visual + shape, worker | ~10–25 s; capped at 55 s |
+| `agent-probe.ts`, fixture, two turns (Vite cold in a new worktree) | ~15 s (2026-11-09) |
+| ⏱ `agent-probe.ts`, live Codex or Claude, per turn | ~20 s to several min; `TURN_MINUTES` caps each (default 10) |
 | `tables.txt` (`GPU=1`), warm | ~25 s |
 | `document-calls.txt`, each browser runtime (`GPU=1`) | ~3–5 s |
 | `protocol-lifecycle.txt` (`GPU=1`) | ~10 s |
@@ -268,6 +270,56 @@ PASS FIXTURE COMPONENTS main: make, place in two compositions, std:laser with an
 Both pass 2026-11-06 on a fresh webgl2 build. Evidence: `.agents/agent-runtime/components-fixture-*.json`.
 On the same day `chat-ui.ts` times out waiting for the Lesson tab, with or without this
 change (it predates it; not yet investigated).
+
+## Agent probe: prompt the in-app agent, read what it did
+
+`agent-probe.ts` lets a coding agent (or you) send prompts to Iron's own agent and read the
+result, for a tight loop of prompting, finding a bug, fixing it and prompting again. It starts
+its own Vite and agent bridge on free ports (`startAgentDev` in `scripts/dev-agent.ts`; no
+need for `dev:agent`, and a running one on 5175/4318 is left alone), opens headless Chrome
+on `?demo`, pairs the Model chat with the probe's bridge, sends each prompt in order in one
+conversation, and waits for each turn to finish.
+
+```sh
+bun .claude/skills/run-iron/agent-probe.ts "Draw a pendulum with a bob and a rod" "Now label the bob"
+bun .claude/skills/run-iron/agent-probe.ts --file prompts.txt     # prompts separated by lines of ---
+PROVIDER=claude MODEL=claude-opus-5-5 bun .claude/skills/run-iron/agent-probe.ts "…"
+FIXTURE=1 bun .claude/skills/run-iron/agent-probe.ts chat-test-prose chat-test-stream   # no model usage
+```
+
+Settings: `PROVIDER=codex|claude` (default codex), `MODEL` (default: the runtime's own),
+`TURN_MINUTES` (per-turn limit, default 10; a turn past it is stopped and the run ends),
+`APP_PATH` (path and query on the probe's server, default `/Ironfell/?gfx=webgl2&demo`),
+`RUNTIME=worker|main`, `HEADED=1` to watch, `SIZE=WxH`, `FIXTURE=1` for the scripted runtime
+(`tests/fixtures/fake-agent-runtime.ts`). Live runs use the signed-in Codex or Claude Code
+login and consume its usage: ask the user before running them.
+
+Each run writes `.agents/probe/<timestamp>/` (gitignored):
+
+- `report.md`: per turn, the prompt, status and duration, attempts and the trace (looks,
+  prose, edits applied or rejected with the failure), the reply, the edit, each model call's
+  reply when there was a repair or failure, a diff of the document, the screenshot; then page
+  and console errors.
+- `turn-N-before.xml`, `turn-N-after.xml`: the whole document (`__iron.view`, full fidelity),
+  read once it has stopped changing.
+- `turn-N.png`: the page after the turn.
+- `agent-log.jsonl`: this run's agent log (system prompt, every call, every turn outcome).
+
+Read `report.md` and the screenshots first; the log holds the full system prompt and
+messages. The page's boot-time pairing attempt on 4318 is filtered from console errors.
+Expected fixture output:
+
+```text
+turn 1/2: completed in 1.6 s
+turn 2/2: completed in 3.1 s
+PROBE DONE: 2 turn(s), 0 page error(s). Report: .agents/probe/<timestamp>/report.md
+```
+
+The fixture report (2026-11-09) shows turn 1 prose with no document change and turn 2 the
+pump's three rects applied in one attempt. It also lists one console error present on every
+boot, `Engine message failed theme Error: engine is not attached` (worker mode; not yet
+investigated). The final line says `with failures` when a turn failed, was stopped or timed
+out; the exit code is non-zero only when the probe itself could not run.
 
 ## Shared Model/Lesson chat
 

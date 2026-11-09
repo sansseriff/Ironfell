@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'vite';
 import { createAgentBridge } from './agent-bridge/server';
 import { agentLog, agentLogDir } from './agent-bridge/log';
-import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth } from './agent-bridge/runtimes';
+import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type Runtime } from './agent-bridge/runtimes';
 import { resolveClaude, resolveCodex } from './agent-bridge/resolve';
 
 export { resolveCodex, resolveClaude } from './agent-bridge/resolve';
@@ -12,18 +12,21 @@ export { resolveCodex, resolveClaude } from './agent-bridge/resolve';
 // vite.config.ts serves the app cross-origin isolated, which the worker
 // frame hold needs (plans/rendering/worker-frame-hold.md §5), unless IRON_COI=0.
 
-export async function startAgentDev(options: { root?: string; codexBin?: string; claudeBin?: string; appPort?: number; bridgePort?: number; demo?: boolean } = {}) {
+/** `runtimes` replaces both CLIs (a scripted fixture: no CLI is resolved);
+ *  `logDir` replaces the agent log folder (`null` for none); `token` lets a
+ *  test hand the page the bridge token instead of pairing on port 4318. */
+export async function startAgentDev(options: { root?: string; codexBin?: string; claudeBin?: string; appPort?: number; bridgePort?: number; demo?: boolean; runtimes?: { codex: Runtime; claude: Runtime }; logDir?: string | null; totalTimeoutMs?: number; token?: string; quiet?: boolean } = {}) {
   const root = options.root ?? fileURLToPath(new URL('..', import.meta.url));
-  const codexBin = await resolveCodex(options.codexBin);
+  const codexBin = options.runtimes ? 'fixture' : await resolveCodex(options.codexBin);
   // Claude Code is optional: without it, Codex still works and Claude says why it cannot.
-  const claudeBin = await resolveClaude(options.claudeBin).catch(() => null);
+  const claudeBin = options.runtimes ? 'fixture' : await resolveClaude(options.claudeBin).catch(() => null);
   const auth = claudeAuth();
   const path = `/Ironfell/${options.demo ? '?demo' : '?scope=last'}`;
   const isolated = process.env.IRON_COI !== '0';
-  const vite = await createServer({ root, clearScreen: false, server: { host: '127.0.0.1', port: options.appPort ?? 5175, strictPort: true, open: false } });
+  const vite = await createServer({ root, clearScreen: false, ...(options.quiet ? { logLevel: 'error' as const } : {}), server: { host: '127.0.0.1', port: options.appPort ?? 5175, strictPort: true, open: false } });
   let bridge: ReturnType<typeof createAgentBridge> | undefined;
   // Model calls and turn outcomes, for debugging the agent (agent-bridge/log.ts).
-  const logDir = agentLogDir(root);
+  const logDir = options.logDir !== undefined ? options.logDir : agentLogDir(root);
   let stopping: Promise<void> | undefined;
   const stop = () => stopping ??= (async () => {
     if (bridge) {
@@ -38,12 +41,13 @@ export async function startAgentDev(options: { root?: string; codexBin?: string;
     const appPort = (vite.httpServer!.address() as { port: number }).port;
     const origin = `http://127.0.0.1:${appPort}`;
     bridge = createAgentBridge({
-      token: randomBytes(24).toString('hex'),
+      token: options.token ?? randomBytes(24).toString('hex'),
       origins: [origin, `http://localhost:${appPort}`],
       allowPairing: true,
+      ...(options.totalTimeoutMs ? { totalTimeoutMs: options.totalTimeoutMs } : {}),
       log: logDir ? agentLog(logDir) : null,
-      runtimes: { codex: codexRuntime(codexBin), claude: claudeRuntime(claudeBin ?? 'claude', auth) },
-      models: { codex: codexModels(codexBin), claude: claudeModels },
+      runtimes: options.runtimes ?? { codex: codexRuntime(codexBin), claude: claudeRuntime(claudeBin ?? 'claude', auth) },
+      models: options.runtimes ? {} : { codex: codexModels(codexBin), claude: claudeModels },
     });
     await new Promise<void>((resolve, reject) => {
       bridge!.server.once('error', reject);

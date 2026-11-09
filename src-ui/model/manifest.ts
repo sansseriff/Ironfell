@@ -282,13 +282,16 @@ STATE MACHINES  (a component's states and animated transitions)
     <create type="state" parent="$m" name="hidden" args.fade="0"/>
     <create type="state" parent="$m" name="shown" args.fade="1"/>
     <create id="$a" type="transition" parent="$m" name="appear" from="hidden" to="shown" ms="900" ease="ease_in_out"/>
-    <create type="tween" parent="$a" channel="fade" at="200" ms="700" ease="easy_ease"/>
+    <create type="tween" parent="$a" channel="fade" start="0.2" end="1" ease="easy_ease"/>
   A state's args are its pose (a value per channel; unset: the channel's value). A
   part reads a channel: opacity="{= $f.channel.value}", trim.end="{= $f.channel.value}".
   Setting the instance's state, <set id="#entity" args.vis="hidden"/>, plays the
   transition from that state to the new one (from/to may be *), each channel easing
-  over the whole transition or its tween's slice (at, ms in milliseconds); no
-  transition snaps. Channel values are not saved.
+  over the whole transition or its tween's slice (start, end: fractions of the
+  transition, so retiming keeps proportions; shape="{= p => …}" for any curve); no
+  transition snaps. Channel values are not saved. A transition's ms may read an input
+  ({= $len.port.signal}), so each instance times its own; setting ms on an instance's
+  copy of the transition overrides it there only.
 
 PORTS AND SIGNALS
   An entity has port children (name; port.kind, port.dir in|out, port.signal), one per

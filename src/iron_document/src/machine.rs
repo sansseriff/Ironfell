@@ -20,7 +20,7 @@
 
 use crate::document::Document;
 use crate::expr::Leaf;
-use crate::facet::{Args, Channel, LeafPath, Name, Transition, Tween};
+use crate::facet::{Args, Channel, LeafPath, Name};
 use crate::id::NodeId;
 use crate::time::{curve, Curve};
 use crate::value::Value;
@@ -34,16 +34,30 @@ fn name_of(doc: &Document, n: NodeId) -> Option<String> {
     doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned)
 }
 
-fn text(slot: &crate::value::Slot) -> Option<String> {
-    slot.constant().and_then(|v| v.as_str()).map(str::to_owned)
-}
-
 fn number(slot: &crate::value::Slot) -> Option<f64> {
     slot.constant().and_then(Value::as_f64)
 }
 
+/// A node's children of a type: authored ones under an authored node, the
+/// instance's copies under a copy.
 fn children(doc: &Document, n: NodeId, ty: &str) -> Vec<NodeId> {
-    doc.children(n).iter().copied().filter(|&c| !c.is_expanded() && ty_of(doc, c) == Some(ty)).collect()
+    doc.children(n).iter().copied().filter(|&c| c.is_expanded() == n.is_expanded() && ty_of(doc, c) == Some(ty)).collect()
+}
+
+/// What the player reads: resolved leaves (constants, bindings and an
+/// instance's overrides alike).
+type Read<'a> = &'a dyn Fn(Leaf) -> Option<Value>;
+
+fn leaf(node: NodeId, path: &str) -> Leaf {
+    Leaf { node, path: path.parse().expect("declared leaf") }
+}
+
+fn read_text(read: Read, node: NodeId, path: &str) -> Option<String> {
+    read(leaf(node, path)).and_then(|v| v.as_str().map(str::to_owned))
+}
+
+fn read_num(read: Read, node: NodeId, path: &str) -> Option<f64> {
+    read(leaf(node, path)).and_then(|v| v.as_f64())
 }
 
 /// A definition's channels: (node, name, rest value).
@@ -59,63 +73,89 @@ pub fn machines(doc: &Document, def: NodeId) -> Vec<(NodeId, String)> {
     children(doc, def, "machine").into_iter().filter_map(|m| Some((m, name_of(doc, m)?))).collect()
 }
 
-/// The pose a machine gives `state`: a value per channel, the channel's
-/// rest value where the state says nothing.
-pub fn pose(doc: &Document, def: NodeId, machine: NodeId, state: &str) -> Option<BTreeMap<NodeId, f64>> {
+/// The machine an instance runs: its copy of `m` (machines.md §9 Q12), or
+/// `m` itself (a main, or before expansion).
+pub fn copy_of(doc: &Document, entity: Option<NodeId>, m: NodeId) -> NodeId {
+    entity.and_then(|e| NodeId::expanded(e, m)).filter(|&c| doc.is_live(c)).unwrap_or(m)
+}
+
+/// The pose machine `machine` (a definition's or an instance's copy) gives
+/// `state`: a value per channel of `def`, the channel's rest value where
+/// the state says nothing.
+pub fn pose(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: &str) -> Option<BTreeMap<NodeId, f64>> {
     let s = children(doc, machine, "state").into_iter().find(|&s| name_of(doc, s).as_deref() == Some(state))?;
-    let args = doc.get::<Args>(s);
+    let has = doc.get::<Args>(s).map(|a| a.slots.keys().map(|k| k.to_string()).collect::<Vec<_>>()).unwrap_or_default();
     Some(
         channels(doc, def)
             .into_iter()
-            .map(|(c, name, rest)| (c, args.and_then(|a| a.slots.get(name.as_str())).and_then(number).unwrap_or(rest)))
+            .map(|(c, name, rest)| (c, if has.contains(&name) { read_num(read, s, &format!("args.{name}")).unwrap_or(rest) } else { rest }))
             .collect(),
     )
 }
 
+/// How one channel moves through a transition: a window of its progress
+/// with an easing, or a function of progress (`tween.shape`).
+#[derive(Clone, Debug)]
+pub enum Shape {
+    Window(f64, f64, Curve),
+    Fn(std::sync::Arc<crate::expr::Closure>),
+}
+
+impl PartialEq for Shape {
+    fn eq(&self, o: &Shape) -> bool {
+        match (self, o) {
+            (Shape::Window(a, b, c), Shape::Window(x, y, z)) => a == x && b == y && c == z,
+            (Shape::Fn(a), Shape::Fn(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
 /// A transition's plan: its length, curve, and each tweened channel's
-/// (start, end) as fractions of the transition and curve.
+/// shape.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plan {
     pub transition: NodeId,
     pub ms: f64,
     pub curve: Curve,
-    pub tweens: BTreeMap<NodeId, (f64, f64, Curve)>,
+    pub tweens: BTreeMap<NodeId, Shape>,
 }
 
 /// The transition `machine` runs from `from` to `to`: an exact match first,
 /// then `*` on either side. `None` snaps.
-pub fn plan(doc: &Document, def: NodeId, machine: NodeId, from: &str, to: &str) -> Option<Plan> {
-    let ts: Vec<(NodeId, Transition)> = children(doc, machine, "transition").into_iter().filter_map(|t| Some((t, doc.get::<Transition>(t)?.clone()))).collect();
-    let fits = |t: &Transition, exact_from: bool, exact_to: bool| {
-        let (f, g) = (text(&t.from).unwrap_or_else(|| "*".into()), text(&t.to).unwrap_or_else(|| "*".into()));
-        (if exact_from { f == from } else { f == "*" || f == from }) && (if exact_to { g == to } else { g == "*" || g == to })
-    };
-    let (id, t) = [(true, true), (true, false), (false, true), (false, false)].iter().find_map(|&(a, b)| ts.iter().find(|(_, t)| fits(t, a, b)))?;
-    let ms = number(&t.ms).unwrap_or(300.0).max(0.0);
+pub fn plan(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Option<Plan> {
+    let ts: Vec<(NodeId, String, String)> = children(doc, machine, "transition")
+        .into_iter()
+        .map(|t| (t, read_text(read, t, "transition.from").unwrap_or_else(|| "*".into()), read_text(read, t, "transition.to").unwrap_or_else(|| "*".into())))
+        .collect();
+    let fits = |f: &str, g: &str, exact_from: bool, exact_to: bool| (if exact_from { f == from } else { f == "*" || f == from }) && (if exact_to { g == to } else { g == "*" || g == to });
+    let &(id, _, _) = [(true, true), (true, false), (false, true), (false, false)].iter().find_map(|&(a, b)| ts.iter().find(|(_, f, g)| fits(f, g, a, b)))?;
+    let ms = read_num(read, id, "transition.ms").unwrap_or(300.0).max(0.0);
     // One default with the facets' (Easy Ease), for an unknown name too.
     let easy = curve("easy_ease").expect("a named curve");
-    let curve = text(&t.ease).and_then(|e| curve(&e).ok()).unwrap_or(easy);
+    let ease = |n: NodeId, p: &str| read_text(read, n, p).and_then(|e| curve(&e).ok()).unwrap_or(easy);
     let by_name: BTreeMap<String, NodeId> = channels(doc, def).into_iter().map(|(c, n, _)| (n, c)).collect();
     let mut tweens = BTreeMap::new();
-    for w in children(doc, *id, "tween") {
-        let Some(tw) = doc.get::<Tween>(w) else { continue };
-        let Some(&c) = text(&tw.channel).and_then(|n| by_name.get(&n)) else { continue };
-        let (at, len) = (number(&tw.at).unwrap_or(0.0), number(&tw.ms).unwrap_or(ms));
-        let e = text(&tw.ease).and_then(|e| crate::time::curve(&e).ok()).unwrap_or(easy);
-        // A tween ends with its transition at the latest (one running past
-        // it would jump to its end).
-        if ms > 0.0 {
-            tweens.insert(c, ((at / ms).clamp(0.0, 1.0), ((at + len) / ms).clamp(0.0, 1.0), e));
-        }
+    for w in children(doc, id, "tween") {
+        let Some(&c) = read_text(read, w, "tween.channel").and_then(|n| by_name.get(&n)) else { continue };
+        let shape = match read(leaf(w, "tween.shape")) {
+            Some(Value::Fn(f)) => Shape::Fn(f),
+            _ => {
+                let (a, b) = (read_num(read, w, "tween.start").unwrap_or(0.0).clamp(0.0, 1.0), read_num(read, w, "tween.end").unwrap_or(1.0).clamp(0.0, 1.0));
+                Shape::Window(a, b, ease(w, "tween.ease"))
+            }
+        };
+        tweens.insert(c, shape);
     }
-    Some(Plan { transition: *id, ms, curve, tweens })
+    Some(Plan { transition: id, ms, curve: ease(id, "transition.ease"), tweens })
 }
 
 impl Plan {
     /// How far channel `c` has gone, 0 → 1, at transition progress `p`.
     pub fn shaped(&self, c: NodeId, p: f64) -> f64 {
         match self.tweens.get(&c) {
-            Some(&(a, b, e)) => e.at(if b > a { (p - a) / (b - a) } else if p >= b { 1.0 } else { 0.0 }),
+            Some(Shape::Window(a, b, e)) => e.at(if b > a { (p - a) / (b - a) } else if p >= *b { 1.0 } else { 0.0 }),
+            Some(Shape::Fn(f)) => f.apply(&[Value::Number(p)]).ok().and_then(|v| v.as_f64()).unwrap_or(if p >= 1.0 { 1.0 } else { 0.0 }),
             None => self.curve.at(p),
         }
     }
@@ -167,7 +207,8 @@ impl Player {
             for (m, port) in machines(doc, def) {
                 let Ok(path) = LeafPath::new(crate::facet::FacetKind::Args, &port) else { continue };
                 let Some(state) = read(Leaf { node: e, path }).and_then(|v| v.as_str().map(str::to_owned)) else { continue };
-                let Some(to) = pose(doc, def, m, &state) else { continue };
+                let mc = copy_of(doc, Some(e), m);
+                let Some(to) = pose(doc, read, def, mc, &state) else { continue };
                 seen.insert((e, m));
                 match self.known.get_mut(&(e, m)) {
                     None => {
@@ -175,7 +216,7 @@ impl Player {
                     }
                     Some(k) if k.state != state => {
                         let from_state = std::mem::replace(&mut k.state, state.clone());
-                        match plan(doc, def, m, &from_state, &state).filter(|p| p.ms > 0.0 && !snap.contains(&e)) {
+                        match plan(doc, read, def, mc, &from_state, &state).filter(|p| p.ms > 0.0 && !snap.contains(&e)) {
                             Some(plan) => k.run = Some(Run { plan, start: now, from: k.values.clone(), to }),
                             None => {
                                 k.values = to;

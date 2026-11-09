@@ -407,7 +407,7 @@ static TYPES: &[TypeSpec] = &[
         name: "entity",
         facets: &[(K::Instance, true), (K::Args, true), (K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection", "channel"]),
+        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection", "channel", "machine"]),
     },
     // A relationship between operand nodes, solved in whatever direction a
     // drag chooses (constraint-system.md §4). Never materialised as content;

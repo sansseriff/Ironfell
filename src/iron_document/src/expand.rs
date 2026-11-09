@@ -124,7 +124,7 @@ fn relocate(owner: NodeId, n: NodeId) -> Option<NodeId> {
 /// A definition's own content an entity derives: its port_specs,
 /// equations, inner entities and connections.
 fn is_body(doc: &Document, def: NodeId, node: NodeId) -> bool {
-    doc.node(node).is_some_and(|n| n.parent == Some(def) && matches!(n.ty.name(), "port_spec" | "equation" | "entity" | "connection" | "channel"))
+    doc.node(node).is_some_and(|n| n.parent == Some(def) && matches!(n.ty.name(), "port_spec" | "equation" | "entity" | "connection" | "channel" | "machine"))
 }
 
 /// The definition an entity instantiates and is linked to, read from an
@@ -179,7 +179,7 @@ fn want_entity(doc: &Document, entity: NodeId, def: NodeId, depth: usize, out: &
         let Some(node) = doc.live(child) else { continue };
         let ty = match node.ty.name() {
             "port_spec" => TypeId::lookup("port").expect("registered"),
-            "equation" | "entity" | "connection" | "channel" => node.ty,
+            "equation" | "entity" | "connection" | "channel" | "machine" => node.ty,
             _ => continue,
         };
         let Some(id) = NodeId::expanded(entity, child) else { continue };
@@ -204,6 +204,20 @@ fn want_entity(doc: &Document, entity: NodeId, def: NodeId, depth: usize, out: &
         }
         if let Some(inner) = inner_def {
             want_entity(doc, id, inner, depth + 1, out);
+        }
+    }
+    // A machine's states, transitions and tweens, copied for this instance
+    // (machines.md §9 Q12): their timing may read the instance's inputs,
+    // and the instance may override any of it. After the ports they read.
+    for &machine in doc.children(def).iter().filter(|&&c| doc.live(c).is_some_and(|n| n.ty.name() == "machine")) {
+        let mut stack: Vec<NodeId> = doc.children(machine).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
+        while let Some(local) = stack.pop() {
+            let Some(n) = doc.live(local) else { continue };
+            let (Some(copy), Some(parent)) = (NodeId::expanded(entity, local), n.parent.and_then(|p| NodeId::expanded(entity, p))) else { continue };
+            let mut facets = rewritten(doc, local, &follow);
+            apply_overrides(doc, entity, local, n.ty, &mut facets);
+            out.nodes.push(Want { id: copy, ty: n.ty, parent, order: n.order.clone(), facets });
+            stack.extend(doc.children(local).iter().rev().copied().filter(|c| !c.is_expanded()));
         }
     }
 }

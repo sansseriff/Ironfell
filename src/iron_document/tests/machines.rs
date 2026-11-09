@@ -77,8 +77,8 @@ fn card() -> Card {
     };
     let mut tw = Tween::default();
     tw.channel = str_("reveal");
-    tw.at = n(500.0);
-    tw.ms = n(500.0);
+    tw.start = n(0.5);
+    tw.end = n(1.0);
     tw.ease = str_("linear");
     let mut t = Template::default();
     t.notation = str_("free");
@@ -168,7 +168,9 @@ fn a_state_change_plays_its_transition_and_interruptions_start_where_things_are(
     set_vis(&mut store, entity, "hidden");
     store.advance_machines(4.0);
     store.advance_machines(4.2);
-    assert!(!store.save().contains("0.5"), "channel values are presentation state");
+    assert!((channel(&store, entity, fade) - 0.5).abs() < 1e-9, "mid-way now");
+    let saved = Store::load(&store.save()).unwrap();
+    assert_eq!(saved.document().get::<Channel>(fade).unwrap().value.constant(), Some(&Value::Number(1.0)), "channel values are presentation state");
 }
 
 #[test]
@@ -196,4 +198,54 @@ fn an_unrelated_undo_does_not_snap_the_next_transition() {
     store.advance_machines(1.0);
     store.advance_machines(1.2);
     assert!((channel(&store, entity, fade) - 0.5).abs() < 1e-9, "played, not snapped: {}", channel(&store, entity, fade));
+}
+
+fn named_child(store: &Store, parent: NodeId, ty_name: &str, name: &str) -> NodeId {
+    let doc = store.document();
+    doc.nodes_of_type(ty(ty_name)).find(|&n| !n.is_expanded() && doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name) && doc.is_ancestor(parent, n)).unwrap()
+}
+
+/// Timing customised from outside (machines.md §9 Q12): (b) the author
+/// binds a transition's length to an input, so each instance sets its own;
+/// (c) an instance overrides a transition without the author planning it.
+#[test]
+fn an_instance_times_its_transitions_by_an_input_or_an_override() {
+    let Card { mut store, entity, fade, .. } = card();
+    let doc = store.document();
+    let def = doc.get::<facet::Instance>(entity).unwrap().def.constant().unwrap().as_ref().unwrap();
+    let disappear = named_child(&store, def, "transition", "disappear");
+    // (b) An input `out_ms` (default 400) the transition's length reads.
+    let spec = store.document().next_id();
+    let mut p = Port::default();
+    p.kind = str_("value");
+    p.dir = Slot::Const(Value::Enum("in".into()));
+    p.signal = n(400.0);
+    let after = store.document().children(def).iter().filter_map(|&c| store.document().live(c)).map(|x| x.order.clone()).max().unwrap();
+    store
+        .apply(tx(
+            "input",
+            vec![
+                Op::Create { id: spec, ty: ty("port_spec"), parent: Some(def), order: OrderKey::after(&after), facets: vec![named("out_ms"), p.wrap()] },
+                Op::Set { id: disappear, path: path("transition.ms"), slot: Slot::Bound(Expr::parse(&format!("{spec}.port.signal")).unwrap()) },
+            ],
+        ))
+        .unwrap();
+    store.apply(tx("slow", vec![Op::Set { id: entity, path: path("args.out_ms"), slot: n(1000.0) }])).unwrap();
+    store.advance_machines(0.0);
+    set_vis(&mut store, entity, "hidden");
+    store.advance_machines(1.0);
+    store.advance_machines(1.2);
+    assert!((channel(&store, entity, fade) - 0.8).abs() < 1e-9, "1000 ms from the argument: {}", channel(&store, entity, fade));
+    store.advance_machines(2.5);
+    // (c) The instance overrides its copy of appear (1000 ms in the
+    // definition): 100 ms, here only.
+    let appear = named_child(&store, def, "transition", "appear");
+    let copy = NodeId::expanded(entity, appear).unwrap();
+    store.apply(tx("override", vec![Op::Set { id: copy, path: path("transition.ms"), slot: n(100.0) }])).unwrap();
+    assert!(store.document().nodes_of_type(ty("override")).any(|o| store.document().is_live(o)), "an override on the instance");
+    assert_eq!(store.resolved(appear, path("transition.ms")), Some(Value::Number(1000.0)), "the definition keeps its own");
+    set_vis(&mut store, entity, "shown");
+    store.advance_machines(6.0);
+    store.advance_machines(6.05);
+    assert!((channel(&store, entity, fade) - 0.5).abs() < 1e-9, "100 ms on this instance: {}", channel(&store, entity, fade));
 }

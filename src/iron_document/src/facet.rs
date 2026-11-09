@@ -417,14 +417,18 @@ facets! {
         ease: Str = Value::Str("easy_ease".to_owned()),
     }
 
-    /// One channel's motion inside a transition: from `at` for `ms`
-    /// (milliseconds into the transition), shaped by `ease`. The same as a
-    /// binding `ease(curve, window(progress, at/T, (at+ms)/T))`.
+    /// One channel's motion inside a transition, as fractions of it: from
+    /// `start` to `end` (0..1 of the transition's progress), shaped by
+    /// `ease`; so retiming the transition keeps its proportions. The same
+    /// as `ease(curve, window(progress, start, end))`. `shape`, when bound
+    /// to a function of progress (`{= p => …}`), replaces all three: any
+    /// motion, an overshoot or a pulse (machines.md §9 Q7).
     Tween / "tween" => Tween {
         channel: Str = Value::Str(String::new()),
-        at: Number = Value::Number(0.0),
-        ms: Number = Value::Number(300.0),
+        start: Number = Value::Number(0.0),
+        end: Number = Value::Number(1.0),
         ease: Str = Value::Str("easy_ease".to_owned()),
+        shape: Any = Value::Number(f64::NAN),
     }
 
     /// A colour token (palette.rs): its value in the light and the dark

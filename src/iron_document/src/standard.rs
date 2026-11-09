@@ -623,8 +623,9 @@ fn plot(d: &mut Def, ids: &mut Ids, template: impl Fn(&mut Def, &mut Ids) -> Nod
             let w = ids.id();
             let mut tw = crate::facet::Tween::default();
             tw.channel = text_(c);
-            tw.at = n(at);
-            tw.ms = n(len);
+            // In fractions of the transition (retiming keeps proportions).
+            tw.start = n(at / ms);
+            tw.end = n((at + len) / ms);
             tw.ease = text_(ease);
             d.child(w, "tween", id, vec![tw.wrap()]);
         }

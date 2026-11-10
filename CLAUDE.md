@@ -14,6 +14,9 @@ Icons: import each Lucide icon from its own path only,
 `import Plus from "@lucide/svelte/icons/plus"`, never `{ Plus }` from
 `@lucide/svelte`, `@lucide/svelte/icons` or `lucide-svelte` (AGENTS.md says why).
 
+Breaking changes are welcome: never keep backwards compatibility, no migrations or
+shims; a format change bumps the schema and old files stop loading (AGENTS.md).
+
 Council: two members only, the latest Claude Opus and the latest GPT Sol, at high
 effort. Don't require a third provider (AGENTS.md, "Council review").
 

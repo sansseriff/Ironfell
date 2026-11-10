@@ -30,7 +30,7 @@ types.
 | T4 | **Literals keep their unit as written.** `400 nm` in a formula prints as `400 nm`; a constant quantity saves as `[si, canonical, written]`. Values at run time stay SI plus dimension; the hint lives on literals and on types, not on computed values. |
 | T5 | **Checks at the boundary only:** setting an argument, connecting two ports, and an output's value each check against the declared type. Inside formulas nothing changes. |
 | T6 | **Coercions are part of the type, not exceptions:** a `choice` accepts text that is one of its options; `\| auto` accepts `auto`; `number` accepts a dimensionless quantity. Everything else is an error that names the expected type. |
-| T7 | **Undeclared ports infer a loose type** from their default at load (today's behaviour, unchanged), so old files keep working; Make component and the agent's `<port>` declare. |
+| T7 | **Undeclared ports infer a loose type** from their default at load (today's behaviour, unchanged); Make component and the agent's `<port>` declare. |
 | T8 | **Pins:** `port.show` (`auto`, `pin`, `settings`) and `port.group`, with the author-override flow in §6. |
 | T10 | **Gradual typing** (user, 2026-11-08): a person playing with ideas connects things before deciding what they are. An undeclared port is **loose** (`any`), never an obstacle: §3.5. |
 | T11 | `auto` is stored as NaN (files already carry it, `{"num": "NaN"}`) and shown and typed as `auto`. |
@@ -108,7 +108,7 @@ with `LeafError::BadValue` naming the type, so the agent's edit fails at once.
 
 - **Literal hint.** `Expr::Lit` gains the unit text as written. Printing a binding
   prints the literal as written (`range(400 nm, 700 nm, 61)`). Constant quantities save
-  as `{"q":[1.55e-6,"m","nm"]}`; the third element is optional, so old files load, and
+  as `{"q":[1.55e-6,"m","nm"]}`; the third element is optional (a quantity with no written unit omits it), and
   the value is exactly the SI number, so nothing round-trips lossily.
 - **Display.** A value with no hint shows in its type's display unit, else in the
   engineering-prefixed canonical unit (`units::display_unit`, as now).

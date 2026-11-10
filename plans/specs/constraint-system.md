@@ -565,8 +565,8 @@ gravity, charged particles in a box) and respond when grabbed.
 Toward the optical table.
 
 - `transform3d.rot` is currently Euler XYZ (`EulerRot::XYZ` in `materialize.rs`). Euler
-  angles make a poor solver variable (gimbal lock), so add `Value::Quat` and migrate
-  `rot` to a quaternion, with a schema bump. The solver works in a local 3-vector
+  angles make a poor solver variable (gimbal lock), so add `Value::Quat` and change
+  `rot` to a quaternion, with a schema bump and no migration. The solver works in a local 3-vector
   rotation increment and re-normalises.
 - Kinds: `coincident` (point–point), `concentric` (axis–axis), `coplanar` (plane–plane,
   with flip), `distance`, `angle`, `point_on_plane`. Anchors become frames (point plus
@@ -890,8 +890,8 @@ phases above assume.
   box tree. See [`../vision/10_engine-boundary.md`](../vision/10_engine-boundary.md)
   §1–3. Its §8 Q1 reopens where §11's simulation runs (in `iron_solve` or as a
   Bevy-side producer); the pose still flows through the simulation layer either way.
-- **I6. Quaternion migration** (§12): the timing and the file migration for existing
-  documents.
+- **I6. Quaternion switch** (§12): when to make it. It is a schema bump with no
+  migration; existing documents need not load afterwards.
 - **I7. Cross-platform floating point.** Replay is safe because it applies recorded ops.
   But re-solving the same document natively and in wasm may differ in the last bits,
   because transcendental functions differ between platforms. Does anything need

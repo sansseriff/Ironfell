@@ -17,6 +17,21 @@ which plans are historical. Where plans disagree, that index decides.
   "Typical durations" table (marked ⏱); say which step and its estimate, and add or
   correct a row when a step's time is new or off.
 
+## Breaking changes are welcome
+
+Iron has no users or saved files to protect, so never write code to stay backwards
+compatible. When a file format, op, API, facet or name changes, change every caller
+and delete the old path in the same change.
+
+- **No migrations.** A file format change bumps `serial::SCHEMA`, and older files stop
+  loading (`serial.rs`; scopes.md D4). Don't write readers, upgraders or fallbacks for
+  old schemas, old clipboard fragments, old OPFS scopes or old local storage.
+- **No compatibility shims:** no deprecated aliases, `#[serde(alias)]` for old names,
+  "legacy" branches, or optional fields that exist only so old data still parses.
+- **Prefer the clean design** over the one that avoids a schema bump. Plans that say
+  older files "load unchanged" describe what happened, not a requirement.
+- If you find code that exists only for backwards compatibility, delete it.
+
 ## Council review
 
 The `council` skill (from tstack) runs when the user says "council". This setup has

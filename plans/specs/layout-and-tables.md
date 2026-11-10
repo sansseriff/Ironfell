@@ -364,7 +364,7 @@ Deviations from §2:
   change, with an early return when nothing has a layout and no republish when
   nothing moved; text layouts are cached by `iron_text`, so a stack of a few dozen
   nodes costs little. Dirty containers (§2.3) wait for a measurement that needs them.
-- **No schema bump.** The two facets are additive; older files load unchanged.
+- **No schema bump.** The two facets are additive.
 - **A laid-out group's box** is still its children's union for selection and
   picking: its padding is not part of its bounds, and it draws nothing. Tables
   (phase 2) draw their own box.

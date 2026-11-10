@@ -24,8 +24,8 @@
 //! §9) asks the same boundary question of a selection: what crosses it.
 //!
 //! The fragment's text form is the canonical file format wrapped with the
-//! paste metadata, so a fragment survives the system clipboard and old
-//! fragments migrate like old files.
+//! paste metadata, so a fragment survives the system clipboard. A fragment
+//! from an older schema is refused, as an old file is.
 
 use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::composition;

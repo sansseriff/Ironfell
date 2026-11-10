@@ -118,9 +118,8 @@ The value is written as SVG path data in **Iron's own convention**, the one
 drops it). A packed path never holds one. A path with such a contour (a pen path
 after its first click) stays expanded (§4).
 
-**Schema 8.** A new value kind is something older builds can't read. Nothing needs
-migrating: every schema 7 path is an expanded path and stays valid. Load doesn't
-pack old files. They're small, and packing a path changes its point ids.
+**Schema 8.** A new value kind, so the schema was bumped. Expanded paths stay valid
+alongside packed ones. (Older schemas no longer load at all: scopes.md D4.)
 
 ### 2.4 In the model surface
 
@@ -264,7 +263,7 @@ outlines. Move every reader in §3's table to `geometry`. Tests:
 - the `d` round-trip is bit-exact, including closing lines vs. closing curves, open
   contours and holes;
 - a packed path and its expanded twin render, hit-test, bound and export identically;
-- a file with packed paths saves and loads, and schema 7 files load unchanged;
+- a file with packed paths saves and loads;
 - `Bound` on `path.d` is refused;
 - undo and redo of a `Set` on `path.d`.
 

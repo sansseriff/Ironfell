@@ -184,8 +184,8 @@ Show a plain-language operation description before claiming the semantics are se
 
 ### Phase 1 — typed offers and acquisition
 
-Introduce typed resolved behavior incrementally with serialization compatibility and
-provenance. Document the press-priority rules and acquired offer for representative
+Introduce typed resolved behavior incrementally, with provenance. Change the file
+format freely if it helps; no compatibility with older files is needed. Document the press-priority rules and acquired offer for representative
 interactions. Confirm click, slop, immediate controls, modifiers and focus transitions.
 Extract modules by responsibility without changing gesture semantics incidentally.
 

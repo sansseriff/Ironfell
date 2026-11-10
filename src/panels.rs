@@ -20,7 +20,7 @@ use bevy::prelude::*;
 use kurbo;
 
 /// The main viewer's view. It also draws 2D nodes outside every
-/// composition (loose roots from older files).
+/// composition (loose roots).
 pub const VIEWER_PANEL: &str = "viewer";
 /// The kind of a panel that shows one composition.
 pub const COMPOSITION_PANEL: &str = "composition";

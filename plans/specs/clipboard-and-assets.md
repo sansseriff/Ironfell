@@ -82,8 +82,8 @@ The worker has no `navigator.clipboard`, and the store lives in the worker.
 - **When the system clipboard refuses the write**, the tab keeps the text and the
   next paste uses it.
 - **The text** is the canonical file format of the fragment's small document,
-  wrapped with the paste metadata (`Fragment::to_text`, format 1). Old fragments
-  therefore migrate as old files do.
+  wrapped with the paste metadata (`Fragment::to_text`, format 1). A fragment from
+  an older schema is refused, as an old file is.
 - **Same document or not** is decided by an origin token (`DocumentOrigin`): random
   per session, renewed on every load. A paste in another tab, or after a reload,
   freezes outside reads rather than guess that equal ids mean the same nodes.

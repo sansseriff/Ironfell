@@ -30,7 +30,7 @@ pub enum Dims {
 
 /// The composition `id` is drawn in: itself or its nearest composition
 /// ancestor. `None` for nodes outside every composition (the model tree,
-/// the library, the timeline, and loose roots from older files).
+/// the library, the timeline, and loose roots).
 pub fn composition_of(doc: &Document, id: NodeId) -> Option<NodeId> {
     let composition = TypeId::lookup("composition").expect("registered");
     let mut cur = Some(id);

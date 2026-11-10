@@ -538,7 +538,7 @@ share the solver, but never travel through physical ports. Physics flows through
 and models; placement goes through constraints (vision 09 §1).
 
 Order inside phase 3:
-1. The port-spec format with both variable kinds, so files never need migrating.
+1. The port-spec format with both variable kinds.
 2. One-way signals and dragging the meter's reading: laser → fiber → meter.
 3. Pairs solved as equations, with a thermal or electrical example.
 

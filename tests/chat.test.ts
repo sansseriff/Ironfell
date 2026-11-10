@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { contentParts, failureSummary, safeChatUrl, chatHistory, shouldSubmit, narrativeMode, nearBottom, type ChatTurn } from '../src-ui/chat/conversation';
+import { appliedEdits, contentParts, failureSummary, safeChatUrl, chatHistory, shouldSubmit, narrativeMode, nearBottom, type ChatTurn } from '../src-ui/chat/conversation';
 import { boundedHistory } from '../src-ui/model/conversation';
 
 test('content parts preserve prose and ordered composition visuals', () => {
@@ -140,13 +140,47 @@ test('a turn log carries the turn as the chat saw it, and where its calls are lo
   assert.deepEqual([log.failure, log.trace.length, 'streamed' in log], ['<edit-failed/>', 1, false]);
 });
 
-test('history keeps recent image bytes intact under a separate budget', () => {
-  const image = { name: 'reference.png', mediaType: 'image/png' as const, data: 'AAAA'.repeat(600_000) };
+/** A valid PNG header padded to `chars` base64 characters. */
+const bigPng = (chars: number) => ({ name: 'reference.png', mediaType: 'image/png' as const, data: 'iVBORw0KGgoAAAAN' + 'A'.repeat(chars - 16) });
+
+test('history keeps recent image bytes intact under a separate budget, and says what it left out', () => {
+  const image = bigPng(2_400_000);
   const history = boundedHistory([
     { role: 'user', content: 'Older reference', images: [image] },
     { role: 'assistant', content: 'Older reply' },
     { role: 'user', content: 'New reference', images: [image] },
   ]);
   assert.equal(history[0].images, undefined);
+  assert.match(history[0].content, /\[1 image attached here is not resent\]/);
   assert.deepEqual(history[2].images, [image]);
+  assert.equal(history[2].content, 'New reference');
+});
+
+test('history keeps what fits of one message\'s images rather than dropping them all', () => {
+  const image = bigPng(2_400_000);
+  const [message] = boundedHistory([{ role: 'user', content: 'Two references', images: [image, image] }]);
+  assert.equal(message.images?.length, 1);
+  assert.match(message.content, /\[1 image attached here is not resent\]/);
+});
+
+test('saved previews and thumbnails never reach a model', () => {
+  const preview = { name: 'old.png', mediaType: 'image/jpeg' as const, data: '/9j/4AAQSkZJRgABAQAAAQABAAD/', preview: true as const };
+  const full = { name: 'new.png', mediaType: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', thumb: '/9j/4AAQSkZJRgABAQAAAQABAAD/' };
+  const [message] = boundedHistory([{ role: 'user', content: 'refs', images: [preview, full] }]);
+  assert.deepEqual(message.images, [{ name: 'new.png', mediaType: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==' }]);
+  assert.match(message.content, /1 image attached here is not resent/);
+});
+
+test('a turn stopped or failed after applying edits stays in history and says so', () => {
+  const base = { target: 'Document', startedAt: 0 };
+  const stopped: ChatTurn = { ...base, id: 's', instruction: 'Match the reference', status: 'stopped',
+    result: { ok: false, note: '', edit: null, outcome: null, attempts: 2, transport: 't', error: 'stopped', trace: [{ attempt: 1, kind: 'edit', ok: true, summary: 'created rect #9' }] } };
+  const nothing: ChatTurn = { ...base, id: 'n', instruction: 'never mind', status: 'stopped',
+    result: { ok: false, note: '', edit: null, outcome: null, attempts: 1, transport: 't', error: 'stopped', trace: [] } };
+  assert.equal(appliedEdits(stopped).length, 1);
+  const history = chatHistory([stopped, nothing]);
+  assert.deepEqual(history.map(m => m.role), ['user', 'assistant']);
+  assert.match(history[1].content, /was stopped after 1 applied edit, which remain in the document: created rect #9/);
+  const failure = '<edit-failed applied="none"><error kind="x">bad op</error></edit-failed>';
+  assert.match(failureSummary(failure, 1, true), /^Earlier edits in this turn remain applied; the next edit was rejected, so that edit was not applied: bad op$/);
 });

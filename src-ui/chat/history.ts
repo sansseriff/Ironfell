@@ -6,7 +6,7 @@
  * conversation is on disk, its title, and what is kept. The reactive store is
  * sessions.svelte.ts.
  */
-import { validImages } from '../model/images';
+import { previewOf, validImages, type ModelImage } from '../model/images';
 import type { ChatSession, ChatTurn } from './conversation';
 
 /** One conversation in a panel's history. */
@@ -28,7 +28,7 @@ export interface SavedChats { version: 1; views: Record<string, SavedView> }
 export const MAX_THREADS = 50;
 
 export function newThread(now = Date.now()): ChatThread {
-  return { id: crypto.randomUUID(), created: now, updated: now, draft: '', turns: [], annotations: {} };
+  return { id: crypto.randomUUID(), created: now, updated: now, draft: '', draftImages: [], turns: [], annotations: {} };
 }
 
 /** A conversation's name: its first request's first line, shortened. */
@@ -47,14 +47,35 @@ export function savedThread(thread: ChatThread): ChatThread {
   return { id: thread.id, created: thread.created, updated: thread.updated, draft: thread.draft, draftImages: thread.draftImages, turns, annotations };
 }
 
+/** Base64 characters of full images a panel's saved history keeps, newest
+ *  first (drafts before turns). Beyond it an image is saved as its small
+ *  thumbnail, shown but never sent to a model again. `chats.json` is rewritten
+ *  whole on every save, so this is what bounds it. */
+export const SAVED_IMAGE_BUDGET = 8_000_000;
+
 /** A panel's history as saved: conversations with something in them (and
- *  the current one), most recent first, at most `MAX_THREADS`. */
+ *  the current one), most recent first, at most `MAX_THREADS`, with image
+ *  bytes held to `SAVED_IMAGE_BUDGET`. */
 export function savedView(threads: ChatThread[], current: string): SavedView {
   const kept = threads.filter(thread => thread.id === current || thread.turns.length || (thread.draft.trim() || thread.draftImages?.length))
     .map(savedThread)
     .sort((a, b) => b.updated - a.updated)
     .slice(0, MAX_THREADS);
-  return { current: kept.some(thread => thread.id === current) ? current : kept[0]?.id ?? '', threads: kept };
+  return { current: kept.some(thread => thread.id === current) ? current : kept[0]?.id ?? '', threads: budgetImages(kept) };
+}
+
+function budgetImages(threads: ChatThread[]): ChatThread[] {
+  let budget = SAVED_IMAGE_BUDGET;
+  const fit = (images: ModelImage[]) => images.flatMap(image => {
+    if (!image.preview && image.data.length <= budget) { budget -= image.data.length; return [image]; }
+    const preview = previewOf(image);
+    return preview ? [preview] : [];
+  });
+  return threads.map(thread => {
+    const draftImages = thread.draftImages?.length ? fit(thread.draftImages) : thread.draftImages;
+    const turns = [...thread.turns].reverse().map(turn => turn.images?.length ? { ...turn, images: fit(turn.images) } : turn).reverse();
+    return { ...thread, draftImages, turns };
+  });
 }
 
 /** Read `chats.json`; anything unreadable is an empty history, never an error. */

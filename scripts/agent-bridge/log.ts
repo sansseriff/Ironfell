@@ -8,12 +8,19 @@
  *   { kind: 'call', turn, … }        one model call, from the bridge
  *   { kind: 'turn', turn, … }        a turn's outcome, from the page (POST /log)
  *
+ * Image attachments never go into the JSONL: a call's message keeps
+ * `{ name, mediaType, bytes, sha256, file }`, and the image itself is written
+ * once to `images/<sha256>.<ext>` beside the day's files, so an agent reading
+ * the log sees plain text and can open the picture by its `file` path.
+ *
  * Logs hold document content and prompts: what the model provider already
  * receives. They stay on this machine.
  */
-import { appendFile, mkdir, stat } from 'node:fs/promises';
+import { appendFile, mkdir, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+
+interface LoggedMessage { role: string; content: string; images?: readonly { name: string; mediaType: string; data: string }[] }
 
 export interface AgentLog {
   readonly dir: string;
@@ -21,6 +28,8 @@ export interface AgentLog {
   write(record: Record<string, unknown>): void;
   /** The hash a call names its system prompt by, writing the prompt the first time. */
   system(text: string): string;
+  /** A call's messages as logged: each image replaced by a reference to its file. */
+  messages(messages: readonly LoggedMessage[]): unknown[];
   /** Resolves once every record so far is on disk. */
   flushed(): Promise<void>;
 }
@@ -67,6 +76,25 @@ export function agentLog(dir: string, maxBytes = 200_000_000): AgentLog {
       const key = `${day()}:${hash}`;
       if (!seen.has(key)) { seen.add(key); write({ kind: 'system', hash, text }); }
       return hash;
+    },
+    messages(messages) {
+      return messages.map(message => {
+        if (!message.images?.length) return message;
+        const images = message.images.map(image => {
+          const bytes = Buffer.from(image.data, 'base64');
+          const sha256 = createHash('sha256').update(bytes).digest('hex');
+          const file = `images/${sha256.slice(0, 32)}.${image.mediaType.split('/')[1] ?? 'bin'}`;
+          if (!seen.has(file)) {
+            seen.add(file);
+            chain = chain.then(async () => {
+              await mkdir(join(dir, 'images'), { recursive: true });
+              await writeFile(join(dir, file), bytes, { flag: 'wx' }).catch(error => { if (error?.code !== 'EEXIST') throw error; });
+            }).catch(error => console.error('Agent log image write failed:', error));
+          }
+          return { name: image.name, mediaType: image.mediaType, bytes: bytes.length, sha256, file };
+        });
+        return { ...message, images };
+      });
     },
     flushed: () => chain,
   };

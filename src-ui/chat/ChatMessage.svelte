@@ -11,7 +11,7 @@
   import ChatProgress from './ChatProgress.svelte';
   import PencilLine from '@lucide/svelte/icons/pencil-line';
   import ClipboardList from '@lucide/svelte/icons/clipboard-list';
-  import { contentParts, streamView, turnLog, type ChatTurn } from './conversation';
+  import { appliedEdits, contentParts, streamView, turnLog, type ChatTurn } from './conversation';
   import type { Snippet } from 'svelte';
 
   let { turn, retry, review }: { turn: ChatTurn; retry: () => void; review?: Snippet<[ChatTurn]> } = $props();
@@ -42,7 +42,7 @@
 
 <article class="chat-turn" data-turn-id={turn.id} data-status={turn.status}>
   <div class="user-row">
-    <div class="user-message"><p>{turn.instruction}</p>{#each turn.images ?? [] as image}<img class="attached-image" src={imageUrl(image)} alt={image.name} />{/each}</div>
+    <div class="user-message"><p>{turn.instruction}</p>{#each turn.images ?? [] as image}<img class="attached-image" class:preview={image.preview} src={imageUrl(image)} alt={image.name} title={image.preview ? `${image.name} (a saved preview; the full image is no longer kept)` : image.name} />{/each}</div>
     {#if turn.target}<span class="target">{turn.target}</span>{/if}
   </div>
   <div class="assistant-message">
@@ -71,13 +71,13 @@
       {/if}
     {:else if turn.status === 'stopped'}
       <p class="summary">{turn.result?.trace?.some(step => step.kind === 'edit' && step.ok) ? 'Stopped. Earlier edits in this turn were applied.' : 'Stopped. Nothing was changed.'}</p>
-      <div class="meta"><Button small variant="outline" onclick={retry}>Restore prompt</Button><IconButton icon={logCopied ? Check : ClipboardList} label={logCopied ? 'Turn log copied' : 'Copy turn log (for a bug report)'} onclick={copyLog} /></div>
+      <div class="meta">{#if !appliedEdits(turn).length}<Button small variant="outline" onclick={retry}>Restore prompt</Button>{/if}<IconButton icon={logCopied ? Check : ClipboardList} label={logCopied ? 'Turn log copied' : 'Copy turn log (for a bug report)'} onclick={copyLog} /></div>
     {:else}
       {#each parts as part, index (index)}
         {#if part.kind === 'markdown'}<ChatMarkdown text={part.text} />{:else}<ChatVisual show={part.show} focus={part.focus} />{/if}
       {/each}
       {#if !parts.length && turn.result?.ok}<p class="summary">{turn.result.outcome ? 'Document updated.' : 'Done.'}</p>{/if}
-      {#if turn.error}<p class="error" role="alert">{turn.error}</p><Button small variant="outline" onclick={retry}>Restore prompt</Button>{/if}
+      {#if turn.error}<p class="error" role="alert">{turn.error}</p>{#if !appliedEdits(turn).length}<Button small variant="outline" onclick={retry}>Restore prompt</Button>{/if}{/if}
       {@render review?.(turn)}
       {#if turn.result?.edit}
         <Collapsible.Root>
@@ -93,6 +93,7 @@
 
 <style>
   .attached-image { max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 6px; margin-top: 8px; }
+  .attached-image.preview { max-height: 96px; }
   .chat-turn { width: min(100%, 736px); margin: 0 auto; min-width: 0; }
   /* The user's turn: a bubble on the right, as T3 Code's; the reply below it
      is plain text across the column. */

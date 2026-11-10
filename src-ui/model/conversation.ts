@@ -1,4 +1,4 @@
-import { validImages, type ModelImage } from './images';
+import { validImages, wireImages, type ModelImage } from './images';
 import { marked } from 'marked';
 
 export interface ConversationMessage {
@@ -33,11 +33,17 @@ export function boundedHistory(messages: ConversationMessage[] = []): Conversati
     if (!message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string') continue;
     const content = message.content.slice(0, Math.min(8000, remaining));
     if (!content) break;
-    const images = message.role === 'user' && validImages(message.images) ? message.images : [];
-    const bytes = images.reduce((sum, image) => sum + image.data.length, 0);
-    const keepImages = bytes > 0 && bytes <= imageBudget;
-    if (keepImages) imageBudget -= bytes;
-    result.unshift({ role: message.role, content, ...(keepImages ? { images } : {}) });
+    // Newest first, each image on its own: the most recent references are the
+    // ones kept, and the model is told when any were left out.
+    const attached = message.role === 'user' && validImages(message.images) ? message.images : [];
+    const images = wireImages(attached).filter(image => {
+      if (image.data.length > imageBudget) return false;
+      imageBudget -= image.data.length;
+      return true;
+    });
+    const omitted = attached.length - images.length;
+    const note = omitted ? `\n[${omitted} image${omitted === 1 ? '' : 's'} attached here ${omitted === 1 ? 'is' : 'are'} not resent]` : '';
+    result.unshift({ role: message.role, content: content + note, ...(images.length ? { images } : {}) });
     remaining -= content.length;
   }
   return result;

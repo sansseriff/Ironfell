@@ -290,7 +290,14 @@ export function turnLog(turn: ChatTurn, now = Date.now()) {
 
 /** A rejected edit's `<edit-failed>` markup as a sentence: its errors' text,
  *  unescaped; the markup itself stays in the edit details. */
-export function failureSummary(failure: string, attempts = 1): string {
+/** The edits a turn applied before it ended, whatever its status: a stopped
+ *  or failed turn can have applied earlier ones (a picture refinement). */
+export function appliedEdits(turn: Pick<ChatTurn, 'result'>): { summary?: string }[] {
+  return (turn.result?.trace ?? []).filter(step => step.kind === 'edit' && step.ok) as { summary?: string }[];
+}
+
+/** `applied`: earlier edits in the turn went in, so only the last was rejected. */
+export function failureSummary(failure: string, attempts = 1, applied = false): string {
   const errors = [...failure.matchAll(/<error\b[^>]*>([\s\S]*?)<\/error>/g)]
     .map(m => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&').trim())
     .filter(Boolean);
@@ -298,7 +305,9 @@ export function failureSummary(failure: string, attempts = 1): string {
   if (!errors.length && revise) errors.push(`the revise could not be applied: ${revise[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim()}`);
   if (!errors.length) return failure.trim() || 'The request could not be completed.';
   const tries = attempts > 1 ? ` after ${attempts} attempts` : '';
-  return `The edit was rejected${tries}, so nothing changed: ${errors.join('; ')}`;
+  return applied
+    ? `Earlier edits in this turn remain applied; the next edit was rejected${tries}, so that edit was not applied: ${errors.join('; ')}`
+    : `The edit was rejected${tries}, so nothing changed: ${errors.join('; ')}`;
 }
 
 export function safeChatUrl(value: string, image = false): string | null {
@@ -309,10 +318,20 @@ export function safeChatUrl(value: string, image = false): string | null {
 }
 
 export function chatHistory(turns: ChatTurn[]): ConversationMessage[] {
-  return boundedHistory(turns.filter(turn => turn.status === 'completed' && turn.result?.ok).flatMap(turn => [
+  // A turn that changed the document belongs in the history even if it was
+  // stopped or failed later on, so the next request knows those edits happened.
+  return boundedHistory(turns.filter(turn => (turn.status === 'completed' && turn.result?.ok) || appliedEdits(turn).length).flatMap(turn => [
     { role: 'user' as const, content: turn.instruction, ...(turn.images?.length ? { images: turn.images } : {}) },
-    { role: 'assistant' as const, content: [turn.result?.note, turn.result?.edit].filter(Boolean).join('\n\n') || 'The requested document edit was applied.' },
+    { role: 'assistant' as const, content: turn.status === 'completed' && turn.result?.ok
+      ? [turn.result?.note, turn.result?.edit].filter(Boolean).join('\n\n') || 'The requested document edit was applied.'
+      : interruptedSummary(turn) },
   ]));
+}
+
+function interruptedSummary(turn: ChatTurn): string {
+  const edits = appliedEdits(turn);
+  const summaries = edits.map(edit => edit.summary).filter(Boolean);
+  return `[This request ${turn.status === 'stopped' ? 'was stopped' : 'failed'} after ${edits.length} applied edit${edits.length === 1 ? '' : 's'}, which remain in the document${summaries.length ? `: ${summaries.join('; ')}` : ''}.]`;
 }
 
 /** Enter sends, as T3 Code's composer (Cmd/Ctrl+Enter too); Shift+Enter or

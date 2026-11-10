@@ -8,10 +8,14 @@ import { fileURLToPath } from 'node:url';
 import type { CompletionRequest } from '../../src-ui/model/runtime-options';
 import { isEffort, isLoopbackOrigin, isServiceTier } from '../../src-ui/model/runtime-options';
 
+/** History (12) + request + a turn's pictures, looks, topics and repairs (each a
+ *  reply and an answer), with room to spare. */
+const MAX_MESSAGES = 48;
+
 export function validateRequest(value: unknown): CompletionRequest {
   const request = value as CompletionRequest;
   if (!request || !['codex', 'claude'].includes(request.provider) || typeof request.system !== 'string' || !request.system.trim() ||
-    !Array.isArray(request.messages) || !request.messages.length || request.messages.length > 32 ||
+    !Array.isArray(request.messages) || !request.messages.length || request.messages.length > MAX_MESSAGES ||
     request.messages.some(message => !message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string' || (message.images !== undefined && (message.role !== 'user' || !validImages(message.images)))) ||
     (request.model !== undefined && (typeof request.model !== 'string' || request.model.length > 200)) ||
     (request.effort !== undefined && !isEffort(request.effort)) ||
@@ -27,12 +31,16 @@ function isTurnId(value: unknown): value is string {
   return typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
 }
 
-async function readBody(request: IncomingMessage) {
+/** Image-bearing completions may be large; every other route stays small. */
+const SMALL_BODY = 1_000_000;
+const COMPLETION_BODY = 32_000_000;
+
+async function readBody(request: IncomingMessage, limit = SMALL_BODY) {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of request) {
     bytes += chunk.length;
-    if (bytes > 32_000_000) throw new Error('Request exceeds 32 MB limit');
+    if (bytes > limit) throw new Error(`Request exceeds ${limit / 1_000_000} MB limit`);
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -146,7 +154,7 @@ export function createAgentBridge(options: {
     let reply: string | undefined;
     let failure: string | undefined;
     try {
-      payload = validateRequest(await readBody(request));
+      payload = validateRequest(await readBody(request, COMPLETION_BODY));
       if (streaming) {
         response.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         ping = setInterval(() => line({ type: 'ping' }), options.pingMs ?? 10000);
@@ -175,7 +183,7 @@ export function createAgentBridge(options: {
           kind: 'call', turn: payload.turn ?? null, provider: payload.provider, model: payload.model ?? null, effort: payload.effort ?? null, serviceTier: payload.serviceTier ?? null,
           ms: Date.now() - started, firstTokenMs: firstTokenMs ?? null, usage: usage ?? null,
           ...(failure ? { error: failure } : {}),
-          system: log.system(payload.system), messages: payload.messages,
+          system: log.system(payload.system), messages: log.messages(payload.messages),
           reply: reply ?? null, ...(reasoning ? { reasoning } : {}),
         });
       }

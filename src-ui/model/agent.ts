@@ -8,7 +8,7 @@ import { applyEdit, extractEdit, type EditOutcome } from './edit';
 import { manifest, topicRequest, topicsFor, topicText } from './manifest';
 import { extractRevise, revise } from './revise';
 import { changesSince, conflicts, deletedNamed } from './merge';
-import { validImages } from './images';
+import { validImages, wireImages } from './images';
 import type { ModelTransport } from './transport';
 import { boundedHistory, executableReply, type ConversationOptions } from './conversation';
 import { STOPPED, type AskLive } from './progress';
@@ -69,6 +69,8 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
 
 async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: string, options: ConversationOptions, live: AskLive, trace: AskStep[]): Promise<AskResult> {
   if (options.images !== undefined && !validImages(options.images)) throw new Error('Invalid image attachments');
+  // A saved preview (chat/history.ts) is shown, never sent as the reference.
+  const attached = wireImages(options.images);
   const emit = live.onEvent ?? (() => {});
   emit({ kind: 'phase', phase: 'reading', attempt: 1 });
   const snapshotVersion = await api.version();
@@ -87,7 +89,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   // and an index of the rest, which the model may ask for with <topic>.
   const asked = [instruction, ...(options.history ?? []).slice(-4).map((m) => m.content)].join('\n');
   const topics = topicsFor(view, asked);
-  const system = manifest(schema, options.allowTextReply, topics) + (api.picture ? '\nVISION\nYou can inspect actual 2D composition pixels with <look picture="composition name or #id"/>. It captures the whole content on white, without editor overlays, at up to 1568 pixels. 3D capture is unavailable. To check a visual edit, append a look request after </edit>; the edit is applied before capture, and you may then refine it or finish with prose. At most three pictures and three edits/repair attempts per request. Attached user images are visual references.\n' : '') + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
+  const system = manifest(schema, options.allowTextReply, topics) + (api.picture ? `\nVISION\nYou can inspect actual 2D composition pixels with <look picture="composition name or #id"/>. It captures the whole content on white, without editor overlays, at up to 1568 pixels. 3D capture is unavailable. To check a visual edit, append a look request after </edit>; the edit is applied before capture, and you may then refine it or finish with prose. At most ${MAX_PICTURES} pictures and ${MAX_ATTEMPTS} edits/repair attempts per request. Attached user images are visual references.\n` : '') + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
   // What the person has selected, so "this" and "the selected one" resolve.
   const picked = await api.selection();
   const selection = picked.length
@@ -95,7 +97,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     : '';
   const messages: import('./conversation').ConversationMessage[] = [
     ...boundedHistory(options.history),
-    { role: 'user', content: `${view}\n\n${selection}REQUEST\n${instruction}`, ...(options.images?.length ? { images: options.images } : {}) },
+    { role: 'user', content: `${view}\n\n${selection}REQUEST\n${instruction}`, ...(attached.length ? { images: attached } : {}) },
   ];
   let attempts = 0;
   let lastEdit: string | null = null;
@@ -109,6 +111,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   let note = '';
   let looks = 0;
   let pictures = 0;
+  let toldNoPictures = false;
   let applied = false;
   let lastApplied: { edit: string; outcome: EditOutcome } | null = null;
   const pictureMessage = async (source: string) => {
@@ -116,12 +119,12 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     pictures++;
     try {
       if (!api.picture) throw new Error('Composition capture is unavailable');
-      const image = await api.picture(source, live.signal);
+      const { node, ...image } = await api.picture(source, live.signal);
       trace.push({ attempt: attempts, kind: 'picture', source, ok: true });
-      return { role: 'user' as const, content: `PICTURE of ${source}. Inspect it, then refine with an edit or finish with prose.`, images: [image] };
+      return { node, message: { role: 'user' as const, content: `PICTURE of ${source}. Inspect it, then refine with an edit or finish with prose.`, images: wireImages([image]) } };
     } catch (error) {
       trace.push({ attempt: attempts, kind: 'picture', source, ok: false });
-      return { role: 'user' as const, content: `Picture failed: ${String(error)}. Do not claim you saw it. Finish or continue from document data.` };
+      return { node: undefined, message: { role: 'user' as const, content: `Picture failed: ${String(error)}. Do not claim you saw it. Finish or continue from document data.` } };
     }
   };
   let topicAsks = 0;
@@ -152,10 +155,20 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // `<look expand="#u #e"/>` with no edit: show those instances' derived
     // insides (component-model.md §9) and ask again; not a repair attempt.
     const picture = pictureRequest(executableReply(text));
-    if (picture && !extractEdit(text) && pictures < 3) {
+    if (picture && !extractEdit(text) && pictures < MAX_PICTURES) {
       messages.push({ role: 'assistant', content: text });
-      messages.push(await pictureMessage(picture));
+      messages.push((await pictureMessage(picture)).message);
       attempts -= 1;
+      continue;
+    }
+    // Out of pictures: say so rather than end the turn on a reply with no edit.
+    // Free the first time (so a prose answer still counts as the first reply);
+    // after that it spends an attempt, so it cannot loop.
+    if (picture && !extractEdit(text) && !lookRequest(text) && !executableReply(text).replace(/<look\s+picture=["'][^"'<>]+["']\s*\/?>/g, '').trim()) {
+      trace.push({ attempt: attempts, kind: 'picture', source: picture, ok: false });
+      messages.push({ role: 'assistant', content: text });
+      messages.push({ role: 'user', content: `No more pictures this request (at most ${MAX_PICTURES}). Finish with an <edit> or with prose from what you have seen.` });
+      if (!toldNoPictures) { toldNoPictures = true; attempts -= 1; }
       continue;
     }
     const look = lookRequest(text);
@@ -249,10 +262,15 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       since = lastOutcome.version ?? await api.version();
       cycleVersion = since;
       rejected = null;
-      if (picture && pictures < 3 && attempts < MAX_ATTEMPTS) {
+      if (picture && pictures < MAX_PICTURES && attempts < MAX_ATTEMPTS) {
         messages.push({ role: 'assistant', content: text });
-        messages.push({ role: 'user', content: `Edit applied successfully. Current document:\n${await api.view({ fidelity: 'full', omit_defaults: true })}` });
-        messages.push(await pictureMessage(picture));
+        // The captured composition as it now is, not the whole document again:
+        // each refinement would otherwise add another copy of the full tree.
+        const shot = await pictureMessage(picture);
+        const current = shot.node
+          ? await api.view({ fidelity: 'full', scope: shot.node, omit_defaults: true })
+          : (await api.version()) === since ? '(unchanged since your edit)' : await api.view({ fidelity: 'full', omit_defaults: true });
+        messages.push({ ...shot.message, content: `Edit applied successfully. ${shot.node ? `Current ${shot.node}` : 'Current document'}:\n${current}\n\n${shot.message.content}` });
         continue;
       }
       break;
@@ -282,6 +300,8 @@ const REPAIR = 'Fix what it names with a <revise> of that edit (only the ops tha
 
 /** Looks one request may take before it must answer. */
 const MAX_LOOKS = 2;
+/** `<look picture>` captures a turn may take, refining an edit or not. */
+const MAX_PICTURES = 3;
 
 /** Topic requests one request may make before it must answer. */
 const MAX_TOPIC_ASKS = 2;

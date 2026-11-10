@@ -36,7 +36,10 @@
     reading = true;
     try {
       const added = await Promise.all(files.map(readChatImage));
+      // The draft moved on while the files were read (another chat opened, or
+      // an image removed): say so rather than add them to the wrong draft.
       if (images === original) images = [...images, ...added];
+      else imageError = 'The draft changed while the images were read; attach them again.';
     } catch (error) { imageError = error instanceof Error ? error.message : String(error); }
     finally { reading = false; }
   }
@@ -85,7 +88,11 @@
 </script>
 
 <form class="composer" class:compact aria-label="Chat composer"
-  onpaste={(event) => { const files = Array.from(event.clipboardData?.files ?? []); if (files.length) { event.preventDefault(); event.stopPropagation(); void attach(files); } }}
+  onpaste={(event) => {
+    // Text wins: an app that copies text with an image of it pastes the text.
+    const files = Array.from(event.clipboardData?.files ?? []);
+    if (files.length && !event.clipboardData?.getData('text/plain')) { event.preventDefault(); event.stopPropagation(); void attach(files); }
+  }}
   ondragover={(event) => { if (event.dataTransfer?.types.includes('Files')) event.preventDefault(); }}
   ondrop={(event) => { if (event.dataTransfer?.files.length) { event.preventDefault(); event.stopPropagation(); void attach(Array.from(event.dataTransfer.files)); } }}
   onsubmit={(event) => { event.preventDefault(); sync(); if (!blocked) { imageError = ''; submit(); } }}>

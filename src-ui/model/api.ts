@@ -22,7 +22,9 @@ export interface ApplyResult {
 type MaybePromise<T> = T | Promise<T>;
 
 export interface DocumentApi {
-  picture?(source: string, signal?: AbortSignal): Promise<import('./images').ModelImage>;
+  /** A content-only GPU picture of a 2D composition, and the composition's id
+   *  (`#…`) when the engine resolved it. */
+  picture?(source: string, signal?: AbortSignal): Promise<import('./images').ModelImage & { node?: string }>;
   schema(): MaybePromise<Schema>;
   view(query: {
     scope?: string | null;
@@ -116,10 +118,10 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
         const deadline = Date.now() + 20000;
         while (Date.now() < deadline) {
           signal?.throwIfAborted();
-          const result = await json<{ pending?: boolean; ok?: boolean; image?: import('./images').ModelImage; error?: string }>({ op: 'picture_poll', ticket, cancel: false });
+          const result = await json<{ pending?: boolean; ok?: boolean; image?: import('./images').ModelImage; node?: string; error?: string }>({ op: 'picture_poll', ticket, cancel: false });
           if (!result.pending) {
             if (!result.ok || !result.image) throw new Error(result.error ?? 'Could not capture composition');
-            return result.image;
+            return { ...result.image, ...(result.node ? { node: result.node } : {}) };
           }
           await new Promise(resolve => setTimeout(resolve, 50));
         }

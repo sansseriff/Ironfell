@@ -3147,6 +3147,14 @@ URL=http://localhost:5183/Ironfell/ BACKEND=webgpu RUNTIME=worker DPR=1 bun run 
 
 Repeat with `BACKEND=webgl2`, `RUNTIME=main` and `DPR=2`. Expected output:
 `PASS <backend> <runtime> DPR <n>: offscreen GPU pixels, read-only capture, image attachment through bridge, transcript thumbnail`.
+Capture's Rust unit tests (`encode()` row padding and premultiplied flattening,
+abandoned-ticket expiry) run natively: `cargo test -p ironfell --lib --features
+native --target aarch64-apple-darwin --profile dev-opt capture::tests` (~9 s warm,
+~3 min cold). **Known broken (2026-11-09, also on `master`):** the crate's lib tests
+do not compile, because `bevy_app/schematic_tool.rs`'s test calls the private
+`NodeId::from_raw`; to run these, patch it locally to `"#1".parse::<NodeId>()`.
+Agent-log check: call records keep image references, and images are files under
+the log folder's `images/` (`tests/agent-runtime.test.ts`).
 Captures and chat screenshots are in `.agents/vision/` (ignored). Native package
 and live-provider inference are separate checks and were not run for this change.
 The existing fast smoke, regression and gestures expected outputs are unchanged;

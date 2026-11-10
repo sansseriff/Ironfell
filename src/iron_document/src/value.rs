@@ -50,6 +50,11 @@ pub enum Value {
     /// its body was replaced by its value when the lambda was evaluated. It
     /// exists only as a resolved value; no file or op holds one.
     Fn(Arc<crate::expr::Closure>),
+    /// An ordered run of any values (plans/specs/reactivity.md §7): text,
+    /// references, records, numbers of mixed units. A series is the packed
+    /// form for numbers with one unit and is accepted wherever a list is.
+    /// Shared, so copies are free.
+    List(Arc<[Value]>),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -67,6 +72,7 @@ pub enum ValueKind {
     Geometry,
     Series,
     Fn,
+    List,
     /// Only as a declared field kind: the field accepts any value. Used by
     /// clip endpoints, whose kind is the target leaf's. No value has it.
     Any,
@@ -87,6 +93,7 @@ impl ValueKind {
         ValueKind::Geometry,
         ValueKind::Series,
         ValueKind::Fn,
+        ValueKind::List,
         ValueKind::Any,
     ];
 
@@ -109,6 +116,7 @@ impl ValueKind {
             ValueKind::Geometry => "geometry",
             ValueKind::Series => "series",
             ValueKind::Fn => "function",
+            ValueKind::List => "list",
             ValueKind::Any => "any",
         }
     }
@@ -130,6 +138,29 @@ impl Value {
             Value::Geometry(_) => ValueKind::Geometry,
             Value::Series { .. } => ValueKind::Series,
             Value::Fn(_) => ValueKind::Fn,
+            Value::List(_) => ValueKind::List,
+        }
+    }
+
+    pub fn list(items: impl Into<Arc<[Value]>>) -> Value {
+        Value::List(items.into())
+    }
+
+    /// The elements of a list or a series (each a number or quantity).
+    pub fn elements(&self) -> Option<Vec<Value>> {
+        match self {
+            Value::List(items) => Some(items.to_vec()),
+            Value::Series { data, dim } => Some(data.iter().map(|&x| Value::quantity(x, *dim)).collect()),
+            _ => None,
+        }
+    }
+
+    /// How many elements a list or series has.
+    pub fn len(&self) -> Option<usize> {
+        match self {
+            Value::List(items) => Some(items.len()),
+            Value::Series { data, .. } => Some(data.len()),
+            _ => None,
         }
     }
 
@@ -358,6 +389,7 @@ impl Value {
                         _ => Err("ser must be [[numbers], \"unit\"] or \"numbers unit\"".to_owned()),
                     },
                     "fn" => Err("a function cannot be a constant; write it as a binding, {= x => …}".to_owned()),
+                    "list" => inner.as_array().ok_or_else(|| "list must be an array".to_owned())?.iter().map(Value::from_json).collect::<Result<Vec<_>, _>>().map(Value::list),
                     other => Err(format!("unknown value tag {other:?}")),
                 }
             }
@@ -421,6 +453,22 @@ impl fmt::Display for Value {
             Value::Geometry(g) => write!(f, "{g}"),
             Value::Series { data, dim } => f.write_str(&series_text(data, *dim)),
             Value::Fn(c) => write!(f, "{c}"),
+            Value::List(items) => {
+                f.write_str("[")?;
+                for (i, v) in items.iter().take(SERIES_SHOWN).enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    match v {
+                        Value::Str(s) | Value::Enum(s) => write!(f, "'{s}'")?,
+                        v => write!(f, "{v}")?,
+                    }
+                }
+                if items.len() > SERIES_SHOWN {
+                    write!(f, ", … {} in all", items.len())?;
+                }
+                f.write_str("]")
+            }
         }
     }
 }
@@ -563,6 +611,11 @@ impl Serialize for Value {
             Value::Fn(c) => {
                 let mut m = s.serialize_map(Some(1))?;
                 m.serialize_entry("fn", &c.to_string())?;
+                m.end()
+            }
+            Value::List(items) => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("list", &items.iter().collect::<Vec<_>>())?;
                 m.end()
             }
         }

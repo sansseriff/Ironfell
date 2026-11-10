@@ -30,11 +30,16 @@ fn sheet(markup: &str) -> (Store, std::collections::BTreeMap<String, NodeId>) {
     (store, built.named)
 }
 
+/// A repeat's items, in order.
+fn items(store: &Store, g: NodeId) -> Vec<NodeId> {
+    let doc = store.document();
+    doc.children(g).iter().copied().filter(|c| c.is_item_scope() && doc.is_live(*c)).collect()
+}
+
 /// The copies a repeat has, in order, and each one's resolved `x`.
 fn copies(store: &Store, g: NodeId) -> Vec<f64> {
     let doc = store.document();
-    let mut items: Vec<NodeId> = doc.children(g).iter().copied().filter(|c| c.is_item_scope() && doc.is_live(*c)).collect();
-    items.sort_by_key(|c| c.item_of(g));
+    let items = items(store, g);
     // Each item is a group holding its copy of the template's one shape.
     items.iter().map(|&i| store.resolved(doc.children(i)[0], path("transform2d.x")).unwrap().as_f64().unwrap()).collect()
 }
@@ -50,10 +55,17 @@ fn a_repeat_draws_one_copy_per_count_and_settles_with_undo() {
     assert!(store.document().children(g).iter().filter(|c| c.item_of(g).is_some()).all(|&c| !expand::in_repeat_template(store.document(), c)));
     store.apply(tx("more", vec![Op::Set { id: g, path: path("repeat.count"), slot: Slot::Const(Value::Number(5.0)) }])).unwrap();
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0, 60.0, 80.0]);
-    // A copy is not edited: the error names the template node to edit.
-    let item = store.document().children(g).iter().copied().find(|c| c.is_item_scope()).unwrap();
+    // A copy's value can differ: it is the repeat's override of that item,
+    // one undo step. Its structure is the template's: that is refused.
+    let item = items(&store, g)[0];
     let copy = store.document().children(item)[0];
-    let refused = store.apply(tx("nudge", vec![Op::Set { id: copy, path: path("transform2d.y"), slot: Slot::Const(Value::Number(5.0)) }])).unwrap_err();
+    store.apply(tx("nudge", vec![Op::Set { id: copy, path: path("transform2d.y"), slot: Slot::Const(Value::Number(5.0)) }])).unwrap();
+    assert_eq!(store.resolved(copy, path("transform2d.y")), Some(Value::Number(5.0)));
+    let other = store.document().children(items(&store, g)[1])[0];
+    assert_eq!(store.resolved(other, path("transform2d.y")), Some(Value::Number(0.0)));
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(store.resolved(copy, path("transform2d.y")), Some(Value::Number(0.0)));
+    let refused = store.apply(tx("remove", vec![Op::Delete { id: copy }])).unwrap_err();
     assert!(refused[0].message.contains(&format!("edit its template, {template}")), "{}", refused[0].message);
     store.undo(0).unwrap().unwrap();
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0]);

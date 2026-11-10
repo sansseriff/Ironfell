@@ -165,5 +165,10 @@ parts of the entry above:
 - An edit aimed at a copy is refused, naming the template. A repeat cut at its `max`
   is a problem on the repeat, shown in the view and the layers panel.
 
-**Not yet:** value keys and enter/exit; overrides on a copy; layout groups ignoring a repeat's
+**2026-11-09, later still** ([reactivity.md §13](reactivity.md#13-done), phases 3–5):
+`each` takes a list as well as a series; items are named by key (`#g/~beta`,
+`repeat.key`); a value set on a copy is the repeat's override of that item; `when` is
+the same mechanism with one item.
+
+**Not yet:** enter/exit; layout groups ignoring a repeat's
 template; a list-of-series input, so the plot's three series could be one repeat.

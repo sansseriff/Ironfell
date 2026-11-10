@@ -32,7 +32,7 @@ function parts(schema: Schema) {
   return { types, comps, contextFields, standard };
 }
 
-export type TopicName = 'components' | 'data' | 'machines' | 'ports' | 'schematic' | 'contexts' | 'constraints' | 'layout' | 'repeats' | 'tables' | 'time' | 'narratives';
+export type TopicName = 'components' | 'data' | 'machines' | 'ports' | 'schematic' | 'contexts' | 'constraints' | 'layout' | 'repeats' | 'state' | 'tables' | 'time' | 'narratives';
 
 /** A topic: what it covers (listed in the core), its text, and when it is
  *  relevant without being asked for: the document holding what it is about
@@ -275,28 +275,74 @@ ${p.contextFields}`,
   after= or <reparent>; the stack follows sibling order.`,
   },
   repeats: {
-    summary: 'repeats (one copy of a group\'s children per element or count) and lets (named values)',
-    doc: /repeat\.(?:each|count)=|<let /,
-    request: /\b(?:repeat|copies|for each|one per|each of|array|labels for|ticks|many (?:dots|cells|bars|rings|lines|labels|copies))/i,
-    text: () => `REPEATS AND LETS
-  A group with repeat.each (a series) or repeat.count (a number) draws its children
-  once per element, never more than repeat.max (1000). Its children are the template
-  for one item: inside it, #group.repeat.item is the element and #group.repeat.index
-  its index, and each copy reads its own. Write ONE template, never the copies:
+    summary: 'repeats (one copy of a group\'s children per element), when (children that exist only while a condition holds), lists and records, lets (named values)',
+    doc: /repeat\.(?:each|count)=|<let |when(?:\.is)?=/,
+    request: /\b(?:repeat|copies|for each|one per|each of|array|lists?\b|legend|labels for|ticks|conditional|only (?:when|if|while)|show(?:s|n)? (?:when|if)|many (?:dots|cells|bars|rings|lines|labels|copies))/i,
+    text: () => `REPEATS, WHEN, LISTS AND LETS
+  A group with repeat.each (a series or a list) or repeat.count (a number) draws its
+  children once per element, never more than repeat.max (1000). Its children are the
+  template for one item: inside it, #group.repeat.item is the element and
+  #group.repeat.index its index, and each copy reads its own. Write ONE template,
+  never the copies:
     <create id="$g" type="group" parent="#C" name="dots" repeat.each="{= range(0, 300, 13)}"/>
     <create type="ellipse" parent="$g" x="{= $g.repeat.item}" y="{= 40 + 10 * sin($g.repeat.index)}" rx="4" ry="4"/>
-  The items are derived, never saved: #4/~3 is item 3 (a group), #4/~3/7 its copy of
-  template node #7. You cannot edit one, edit the template; the view shows the repeat
-  with copies="N", and <look expand="#4"/> shows the items. Their number follows each
-  and count as they change. The template may hold a component: an entity bound to the
-  item (args.in="{= $g.repeat.item * 1 mW}") and a use with a figures link to it give
-  every item its own instance. A path with generated path data (segments, circles,
-  bars) is lighter for marks that need no node each; use a repeat when each copy is
-  its own node: a label, a cell with its own colour, a component.
+  The items are derived, never saved: #4/~3 is the item with key 3 (a group), #4/~3/7
+  its copy of template node #7. The view shows the repeat with copies="N";
+  <look expand="#4"/> shows the items. Their number follows each and count as they
+  change. Setting a value on a copy (<set id="#4/~3/7" …/>) changes that item only (it
+  is kept as an override on the repeat); anything else about a copy is the template's.
+  Keys: an item's key is its place in ids, so its overrides, state and selection follow
+  it when the list is reordered. A list of words is keyed by word (#4/~beta), of node
+  references by node, of records by their id field; numbers by index unless
+  repeat.key="{= t => t}" (a function of the item) says otherwise. Two items with one
+  key is a problem on the repeat.
+  when: a group with when.is="{= cond}" has its children only while cond is true
+  (the reactive if; one derived copy, #group/~on/…). Unlike opacity 0, a false one has
+  no nodes: nothing to hit, nothing drawn. A group may have both repeat and when.
+  Lists hold any values: list('a', 'b'), list(#3, #4) (node references),
+  list(record(id: 1, label: 'a'), …). r.label or get(r, 'label', fallback) reads a
+  record's field. len at first last map(xs, x => …) filter(xs, x => …)
+  sort_by(xs, x => …) zip(a, b) enumerate(xs) unique(xs) concat(a, b) take lists
+  and series alike.
+  The template may hold a component: an entity bound to the item
+  (args.in="{= $g.repeat.item * 1 mW}") and a use with a figures link to it give every
+  item its own instance. A path with generated path data (segments, circles, bars) is
+  lighter for marks that need no node each; use a repeat when each copy is its own
+  node: a label, a cell with its own colour, a component.
   A let names a value for bindings to read, computed once: a series, a number, a
   function. <create id="$aw" type="let" parent="#C" name="area w" value="{= #F.size.w - 70}"/>,
   then {= $aw.let.value / 2}. In a definition's template each picture has its own copy,
   so it may read the picture's box; in a definition's body each instance has one.`,
+  },
+  state: {
+    summary: 'state and actions: a let that clicks change (toggle, counter, current tab), on click/enter/leave, session state, reading the selected node',
+    doc: /type="on"|<on |keep="session"|deref\(|selection\./,
+    request: /\b(?:click\w*|toggl\w*|buttons?|accordions?|tabs?|expand\w*|collaps\w*|hover\w*|state|counters?|interactive|press\w*|selected node|inspector)\b/i,
+    text: () => `STATE AND ACTIONS
+  State is a let holding a constant: <create id="$open" type="let" parent="#C"
+  name="open" value="false"/>. Where it is declared says whose it is: in a
+  definition's template, one per picture (each instance has its own); in a repeat's
+  template, one per item; in a composition, one for the document. let.keep="session"
+  makes it session state: never saved, not in undo (hover, a menu that is open).
+  An action writes state when something happens on a node. An on node listens on its
+  parent (or on.node="#n"), and an event on anything inside that node reaches it:
+    <create id="$btn" type="group" parent="#C" name="header"/> … its shapes …
+    <create type="on" parent="$btn" name="toggle" event="click" write.target="$open" write.to="{= !$open.let.value}"/>
+  event: click, press, release, enter, leave. One write is the on's own write facet:
+  target (the let, or any node), prop (default let.value), to (an expression), or
+  verb="toggle", or verb="step" with by. For several, give the on children of type set,
+  each with a write facet. All of an action's writes read the values from before it
+  ran (to="{= $b.let.value}" and to="{= $a.let.value}" swap), and one firing is one
+  undo step, named by the on's name. A click on a node with an action runs it instead
+  of selecting the node (Cmd-click selects).
+  Show by state with when (repeats topic): a group with when.is="{= $open.let.value}".
+  A tracked read follows a reference held in a value:
+  deref(ref, 'facet.field', fallback) reads that leaf of whichever node ref names now,
+  and follows both. With a let holding a node (value="{= #7}", or set by an action), or
+  with the viewer's selection: a let or group given selection.count="0" has
+  selection.node (the first selected node), selection.nodes (a list) and
+  selection.count published on it:
+    content="{= $sel.selection.count == 0 ? '' : fmt(deref($sel.selection.node, 'size.w', 0))}"`,
   },
   tables: {
     summary: 'tables: rows of words, merged cells, presets, the <table> verb',
@@ -409,7 +455,8 @@ VIEW
   elided has children you were not shown; count="N" is the real count.
   problem="…" on a node says what is wrong with it or with what it derives: a binding
   that failed (whatever reads it fails too, "depends on #x…": mend the one named), a
-  repeat cut at its max, nesting deeper than 16. A failed leaf shows its last good value.
+  repeat cut at its max or with two items of one key, nesting deeper than 16. A failed
+  leaf shows its last good value.
 
 NODE TYPES  (facet? = optional)
 ${types}

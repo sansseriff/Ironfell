@@ -195,9 +195,23 @@ fn linked_def_of(doc: &Document, facets: &[Facet]) -> Option<NodeId> {
     }).filter(|&d| doc.live(d).is_some_and(|n| n.ty.name() == "definition"))
 }
 
+/// The items each repeat and conditional has now, by key, in order.
+pub type Items = BTreeMap<NodeId, Vec<String>>;
+
+/// Whether a facet makes its node's children a template whose copies are
+/// its items: a repeat, or a conditional (`when`).
+fn owns_items(kind: FacetKind) -> bool {
+    matches!(kind, FacetKind::Repeat | FacetKind::When)
+}
+
+/// Whether `id` is a repeat or a conditional.
+pub fn is_item_owner(doc: &Document, id: NodeId) -> bool {
+    doc.facet(id, FacetKind::Repeat).is_some() || doc.facet(id, FacetKind::When).is_some()
+}
+
 /// Every expanded node and relation a document should have, with
-/// `counts[r]` items of each repeat `r`.
-fn wanted(doc: &Document, counts: &BTreeMap<NodeId, usize>) -> Wanted {
+/// `counts[r]` the items of each repeat and conditional `r`.
+fn wanted(doc: &Document, counts: &Items) -> Wanted {
     let mut out = Wanted::default();
     let entity_ty = TypeId::lookup("entity").expect("registered");
     for entity in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e) && !e.is_expanded()).collect::<Vec<_>>() {
@@ -229,7 +243,7 @@ pub fn in_repeat_template(doc: &Document, id: NodeId) -> bool {
     let mut at = doc.node(id).and_then(|n| n.parent);
     while let Some(p) = at {
         let Some(node) = doc.node(p) else { return false };
-        if doc.facet(p, FacetKind::Repeat).is_some() && id.item_of(p).is_none() {
+        if is_item_owner(doc, p) && id.item_of(p).is_none() {
             return true;
         }
         at = node.parent;
@@ -244,7 +258,7 @@ type TemplateNode = (NodeId, NodeId, TypeId, OrderKey, Vec<Facet>);
 /// outside the library (a definition's template copies it into each
 /// picture, and the picture's copy is the one that repeats).
 pub(crate) fn draws_repeat(doc: &Document, id: NodeId, facets: &[Facet]) -> bool {
-    facets.iter().any(|f| f.kind() == FacetKind::Repeat) && !id.path().first().is_some_and(|&root| in_library(doc, root))
+    facets.iter().any(|f| owns_items(f.kind())) && !id.path().first().is_some_and(|&root| in_library(doc, root))
 }
 
 /// Every drawn repeat of a document: the authored ones and the derived
@@ -252,7 +266,7 @@ pub(crate) fn draws_repeat(doc: &Document, id: NodeId, facets: &[Facet]) -> bool
 pub(crate) fn drawn_repeats(doc: &Document) -> Vec<NodeId> {
     let group = TypeId::lookup("group").expect("registered");
     doc.nodes_of_type(group)
-        .filter(|&g| doc.is_live(g) && doc.facet(g, FacetKind::Repeat).is_some() && !g.path().first().is_some_and(|&root| in_library(doc, root)) && !in_repeat_template(doc, g))
+        .filter(|&g| doc.is_live(g) && is_item_owner(doc, g) && !g.path().first().is_some_and(|&root| in_library(doc, root)) && !in_repeat_template(doc, g))
         .collect()
 }
 
@@ -263,8 +277,8 @@ pub(crate) fn drawn_repeats(doc: &Document) -> Vec<NodeId> {
 fn in_template(doc: &Document, out: &Wanted, id: NodeId) -> bool {
     let parent_of = |n: NodeId| out.get(n).map(|w| w.parent).or_else(|| doc.node(n).and_then(|x| x.parent));
     let is_repeat = |n: NodeId| match out.get(n) {
-        Some(w) => w.facets.iter().any(|f| f.kind() == FacetKind::Repeat),
-        None => doc.facet(n, FacetKind::Repeat).is_some(),
+        Some(w) => w.facets.iter().any(|f| owns_items(f.kind())),
+        None => is_item_owner(doc, n),
     };
     let mut at = parent_of(id);
     while let Some(p) = at {
@@ -281,7 +295,7 @@ fn in_template(doc: &Document, out: &Wanted, id: NodeId) -> bool {
 /// ports of an instance and the picture of a `use`. So a component in a
 /// repeat's template, a repeat in a component's, and repeats in repeats
 /// all expand, each scope under the one that made it.
-fn want_scopes(doc: &Document, counts: &BTreeMap<NodeId, usize>, out: &mut Wanted) {
+fn want_scopes(doc: &Document, counts: &Items, out: &mut Wanted) {
     let mut repeats: Vec<NodeId> = drawn_repeats(doc).into_iter().filter(|g| !g.is_expanded()).collect();
     let mut done = BTreeSet::new();
     let mut seen = 0;
@@ -324,7 +338,7 @@ fn want_scopes(doc: &Document, counts: &BTreeMap<NodeId, usize>, out: &mut Wante
         }
         let Some(r) = repeats.pop() else { break };
         if done.insert(r) && !in_template(doc, out, r) {
-            want_items(doc, r, counts.get(&r).copied().unwrap_or(0), out);
+            want_items(doc, r, counts.get(&r).map_or(&[][..], Vec::as_slice), out);
         }
     }
 }
@@ -338,16 +352,18 @@ fn template_of_repeat(doc: &Document, r: NodeId, out: &Wanted) -> (Vec<TemplateN
     if r.is_expanded() {
         let mut parents = BTreeSet::from([r]);
         for w in &out.nodes {
-            if parents.contains(&w.parent) && w.id.item_of(r).is_none() {
+            if parents.contains(&w.parent) && w.id.item_of(r).is_none() && w.ty.name() != "override" {
                 parents.insert(w.id);
                 nodes.push((w.id, w.parent, w.ty, w.order.clone(), w.facets.clone()));
             }
         }
         rels.extend(out.rels.iter().filter(|x| parents.contains(&x.rel.from) && x.rel.from != r).map(|x| x.rel.clone()));
     } else {
+        // An override is the repeat's own opinion about one item's copy,
+        // not part of what items copy.
         let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
         while let Some(n) = stack.pop() {
-            let Some(node) = doc.live(n) else { continue };
+            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
             nodes.push((n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
             stack.extend(doc.children(n).iter().rev().copied().filter(|c| !c.is_expanded()));
@@ -356,14 +372,15 @@ fn template_of_repeat(doc: &Document, r: NodeId, out: &Wanted) -> (Vec<TemplateN
     (nodes, rels)
 }
 
-/// `count` items of repeat `r`. Each is a scope: a derived group
-/// `#r/~k` with an `item` facet, holding a copy of the template. In a
+/// The items of repeat (or conditional) `r`, by key. Each is a scope: a
+/// derived group `#r/~key` with an `item` facet, holding a copy of the
+/// template, with the repeat's overrides of that item applied. In a
 /// copy, references to the template follow to the item's own copies, and
 /// `#r.repeat.item` / `.index` read the item's `item.value` / `.index`,
 /// which the store publishes (`Store::settle_repeats`): so an item
 /// re-evaluates when its own element changes, not when any does.
-fn want_items(doc: &Document, r: NodeId, count: usize, out: &mut Wanted) {
-    if count == 0 || !out.enter(r) {
+fn want_items(doc: &Document, r: NodeId, keys: &[String], out: &mut Wanted) {
+    if keys.is_empty() || !out.enter(r) {
         return;
     }
     let (template, rels) = template_of_repeat(doc, r, out);
@@ -373,8 +390,9 @@ fn want_items(doc: &Document, r: NodeId, count: usize, out: &mut Wanted) {
     let inside: BTreeSet<NodeId> = template.iter().map(|t| t.0).collect();
     let group = TypeId::lookup("group").expect("registered");
     let mut key = template.iter().filter(|t| t.1 == r).map(|t| t.3.clone()).max().unwrap_or_else(OrderKey::first);
-    for k in 0..count {
-        let Some(scope) = NodeId::item_scope(r, k) else { break };
+    for k in keys {
+        let k = k.as_str();
+        let Some(scope) = NodeId::item_scope(r, k) else { continue };
         key = OrderKey::after(&key);
         if !out.push(Want { id: scope, ty: group, parent: r, order: key.clone(), facets: vec![FacetKind::Item.default_facet()], scoped: true }) {
             return;
@@ -393,7 +411,7 @@ fn want_items(doc: &Document, r: NodeId, count: usize, out: &mut Wanted) {
         };
         for (id, parent, ty, order, facets) in &template {
             let (Some(copy), Some(parent_copy)) = (NodeId::item(r, k, *id), if *parent == r { Some(scope) } else { NodeId::item(r, k, *parent) }) else { continue };
-            let facets: Vec<Facet> = facets
+            let mut facets: Vec<Facet> = facets
                 .iter()
                 .map(|f| {
                     let mut f = f.clone();
@@ -413,6 +431,9 @@ fn want_items(doc: &Document, r: NodeId, count: usize, out: &mut Wanted) {
                     f
                 })
                 .collect();
+            if let Some(&local) = id.path().last() {
+                apply_overrides(doc, scope, local, *ty, &mut facets);
+            }
             if !out.push(Want { id: copy, ty: *ty, parent: parent_copy, order: order.clone(), facets, scoped: false }) {
                 return;
             }
@@ -643,6 +664,16 @@ pub fn stale_overrides(doc: &Document) -> Vec<(NodeId, String)> {
     let mut out = Vec::new();
     for o in doc.nodes_of_type(ty).filter(|&o| doc.is_live(o)) {
         let Some(owner) = doc.live(o).and_then(|n| n.parent) else { continue };
+        // A repeat's (or conditional's) override of one item's copy: stale
+        // while that item is not there.
+        if is_item_owner(doc, owner) {
+            let target = doc.get::<Override>(o).and_then(|f| f.target.constant().and_then(|v| v.as_ref()));
+            let derived = target.and_then(|t| NodeId::from_path(&[owner.path(), t.path()].concat()));
+            if !derived.is_some_and(|d| doc.is_live(d)) {
+                out.push((o, format!("{owner} has no such item now")));
+            }
+            continue;
+        }
         let entity = if doc.live(owner).is_some_and(|n| n.ty.name() == "use") { use_entity(doc, owner) } else { Some(owner) };
         let Some(def) = entity.and_then(|e| linked_definition(doc, e)) else {
             out.push((o, format!("{owner} is not a linked instance")));
@@ -694,7 +725,7 @@ fn rewritten(doc: &Document, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec
 /// Returns the ops applied (for consumers that follow ops) and the problems
 /// met (a template node the registry no longer admits, say), which leave
 /// that node out rather than failing the transaction.
-pub fn expand(doc: &mut Document, stamp: Version, counts: &BTreeMap<NodeId, usize>) -> (Vec<Op>, Vec<Problem>) {
+pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, Vec<Problem>) {
     let Wanted { nodes: want, rels: want_rels, mut problems, .. } = wanted(doc, counts);
     let wanted_ids: BTreeSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
@@ -838,18 +869,21 @@ pub fn refuse(op: &Op) -> Option<String> {
 /// Every other op passes through; `refuse` turns away structural edits.
 pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>) -> Result<Vec<Op>, crate::op::ApplyError> {
     use crate::op::{ApplyError, ErrorKind};
-    // A repeat's items are copies of its template: an edit to one is
-    // refused, naming what to edit (per-item state is reactivity.md §5).
+    // A repeat's items are copies of its template. A value set on a copy
+    // is the repeat's override of that item, as for an instance's part
+    // (below); the item's own node and the copies' structure are not
+    // edited: that is refused, naming what to edit.
     for (i, op) in ops.iter().enumerate() {
         let target = match op {
             Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } => [Some(*id), *parent].into_iter().flatten().find(|n| n.repeat_item().is_some()),
-            Op::Delete { id } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => Some(*id),
+            Op::Delete { id } | Op::Reorder { id, .. } | Op::RemoveFacet { id, .. } => Some(*id),
+            Op::Set { id, .. } | Op::AddFacet { id, .. } => Some(*id).filter(|n| n.is_item_scope()),
             Op::Link { rel } => Some(rel.from),
             Op::Unlink { .. } => None,
         };
         if let Some((target, (repeat, k, template))) = target.and_then(|t| t.repeat_item().map(|r| (t, r))) {
-            let what = if template == repeat { format!("set {repeat}'s repeat.each or repeat.count") } else { format!("edit its template, {template}") };
-            return Err(ApplyError { op: i, kind: ErrorKind::BadId, message: format!("{target} is item {k} of repeat {repeat}, a copy: {what}") });
+            let what = if template == repeat { format!("set {repeat}'s repeat.each, repeat.count or when.is") } else { format!("edit its template, {template}; only a copy's values can differ per item") };
+            return Err(ApplyError { op: i, kind: ErrorKind::BadId, message: format!("{target} is item {k} of {repeat}, a copy: {what}") });
         }
     }
     // Fresh ids for created overrides go past anything the transaction itself

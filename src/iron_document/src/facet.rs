@@ -416,12 +416,28 @@ facets! {
     /// index; each copy reads its own item's (`#group/~k.item.value`). The
     /// template reads item 0. The copies follow `each` and `count` whenever
     /// either changes: an edit, a drag, a published value, the clock.
+    ///
+    /// `each` is a series or a list (reactivity.md §7). `key`, a function
+    /// of an item (`{= item => item.id}`), names each item in its id
+    /// (`#group/~B12/local`), so selection, overrides and state follow an
+    /// item when the list is reordered or grows at the front. Without one:
+    /// a node reference is its own key, a record's `id` field is, else the
+    /// value when every value is distinct, else the index.
     Repeat / "repeat" => Repeat {
         each: Any = Value::Number(f64::NAN),
         count: Number = Value::Number(0.0),
         max: Number = Value::Number(1000.0),
+        key: Any = Value::Number(f64::NAN),
         item: Any = Value::Number(0.0),
         index: Number = Value::Number(0.0),
+    }
+
+    /// A conditional (reactivity.md §3.1): a group whose children exist
+    /// only while `is` is true. They are a template, as a repeat's are; the
+    /// one copy, `#group/~on/local`, is derived while the condition holds
+    /// and removed when it does not, with whatever session state it held.
+    When / "when" => When {
+        is: Bool = Value::Bool(true),
     }
 
     /// One item of a repeat (plans/specs/reactivity.md §3.1): on the derived
@@ -437,8 +453,51 @@ facets! {
     /// computes once for others to read as `#n.let.value`, a series, a
     /// number, a function. Never drawn. In a definition's template, each
     /// picture has its own copy, so it may read the picture's box.
+    ///
+    /// A `let` holding a constant is a **state cell** (reactivity.md §5.1):
+    /// actions write it (`on`), and where it is declared decides whose it
+    /// is (a picture's, an item's, the document's). `keep` says how long it
+    /// lives: `document`, saved and undoable (a write to a copy is an
+    /// override on its instance or repeat); `session`, never saved and not
+    /// in undo, reset when its scope goes.
     Let / "let" => Let {
         value: Any = Value::Number(f64::NAN),
+        keep: Enum = Value::Enum("document".to_owned()) => ["document", "session"],
+    }
+
+    /// What the viewer has selected, for bindings to read (reactivity.md
+    /// §2): the store publishes it on every node that carries this facet.
+    /// `node` is the first selected node (`ref(#0)`, no node, when nothing
+    /// is), `nodes` all of them in pick order, `count` how many. Read a
+    /// leaf of the selected node with a tracked read:
+    /// `deref(#n.selection.node, 'size.w', 0)`. Session state: the
+    /// authored values stay as they are and nothing of it is saved.
+    Selection / "selection" => Selection {
+        node: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
+        nodes: Any = Value::Number(f64::NAN),
+        count: Number = Value::Number(0.0),
+    }
+
+    /// An action (reactivity.md §5.2): writes that run when `event` happens
+    /// on `node` (its parent, when unset), or on something inside it. The
+    /// writes are its own `write` facet and its `set` children, all
+    /// computed before any is applied; one firing is one undo step.
+    /// `emit` names an event for the host, queued when it fires.
+    On / "on" => On {
+        event: Enum = Value::Enum("click".to_owned()) => ["click", "press", "release", "enter", "leave"],
+        node: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
+        emit: Str = Value::Str(String::new()),
+    }
+
+    /// One write of an action: `target`'s leaf `prop` (a `let`'s value,
+    /// unless said) becomes `to`; or, with `verb` `toggle`, its opposite;
+    /// with `step`, itself plus `by`.
+    Write / "write" => Write {
+        target: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
+        prop: Str = Value::Str("let.value".to_owned()),
+        verb: Enum = Value::Enum("set".to_owned()) => ["set", "toggle", "step"],
+        to: Any = Value::Number(f64::NAN),
+        by: Number = Value::Number(1.0),
     }
 
     /// A transition between two states of a machine: `from` and `to` (state

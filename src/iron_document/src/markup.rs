@@ -96,12 +96,14 @@ fn leaf(ty: TypeId, attr: &str) -> Result<(FacetKind, String), String> {
         }
         return Ok((kind, field.to_owned()));
     }
-    spec.facets
-        .iter()
-        .map(|(k, _)| *k)
-        .find(|k| k.fields().iter().any(|(n, _)| *n == attr))
-        .map(|k| (k, attr.to_owned()))
-        .ok_or_else(|| format!("{attr:?} is not a field of {}", spec.name))
+    if let Some(found) = spec.facets.iter().map(|(k, _)| *k).find(|k| k.fields().iter().any(|(n, _)| *n == attr)) {
+        return Ok((found, attr.to_owned()));
+    }
+    // A facet with one field, by the facet's name: `when="{= … }"`.
+    match FacetKind::from_name(attr).filter(|k| spec.allows(*k)).map(|k| (k, k.fields())) {
+        Some((k, [(only, _)])) => Ok((k, (*only).to_owned())),
+        _ => Err(format!("{attr:?} is not a field of {}", spec.name)),
+    }
 }
 
 /// A node's facets: those its attributes name, then its type's required
@@ -172,7 +174,8 @@ fn resolve(text: &str, named: &BTreeMap<String, (NodeId, TypeId)>) -> Result<Str
             "let" => ".let.value",
             "port_spec" => ".port.signal",
             "channel" => ".channel.value",
-            other => return Err(format!("${name} is a {other}: write the leaf it reads, ${name}.facet.field")),
+            // Any other node, bare, is the node itself: `list($a, $b)`.
+            _ => "",
         });
     }
     Ok(out)
@@ -221,6 +224,7 @@ fn slot(kind: ValueKind, raw: &str, named: &BTreeMap<String, (NodeId, TypeId)>) 
         ValueKind::Series => Value::parse_series(t).unwrap_or_else(|| Err("expected two or more numbers, then an optional unit".into()))?,
         ValueKind::Geometry => Value::Str(t.to_owned()),
         ValueKind::Fn => return Err("a function is written as a binding, {= x => …}".into()),
+        ValueKind::List => return Err("a list is written as a binding, {= list(…)}".into()),
         ValueKind::Record => return Err("a record is set by a binding".into()),
         ValueKind::Any => {
             if t == "[]" {

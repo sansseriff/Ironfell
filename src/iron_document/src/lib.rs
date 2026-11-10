@@ -57,6 +57,7 @@ pub mod sym;
 pub mod text;
 pub mod layers;
 pub mod layout;
+pub mod list;
 pub mod narrative;
 pub mod table;
 pub mod time;
@@ -232,13 +233,20 @@ pub struct Store {
     interaction: BTreeMap<NodeId, Vec<&'static str>>,
     /// What the last expansion could not derive (component-model.md §3).
     expansion_problems: Vec<expand::Problem>,
-    /// How many items each drawn repeat has (plans/specs/repeat.md), as
-    /// last settled from its `each` and `count`.
-    repeats: BTreeMap<NodeId, usize>,
-    /// The drawn repeats, and each one's `each` and `count` as last
-    /// settled: what `settle_repeats` compares before doing any work.
-    /// `None` after structure changed, until the next settle.
-    repeat_inputs: Option<Vec<(NodeId, Option<Value>, Option<Value>)>>,
+    /// The items each drawn repeat and conditional has, by key
+    /// (plans/specs/repeat.md), as last settled from its inputs.
+    repeats: expand::Items,
+    /// The drawn repeats and conditionals, and each one's `each`, `count`,
+    /// `key` and `when.is` as last settled: what `settle_repeats` compares
+    /// before doing any work. `None` after structure changed, until the
+    /// next settle.
+    repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
+    /// Session state cells (`let.keep = session`) that differ from their
+    /// initial value (reactivity.md §5.1): published over the constant,
+    /// never saved, dropped with their node.
+    session_state: BTreeMap<Leaf, Value>,
+    /// Events actions emitted for the host (`take_emitted`).
+    emitted: Vec<(NodeId, String)>,
     /// Repeats that asked for more items than `repeat.max` allows.
     truncated: Vec<expand::Problem>,
     /// Derived structure made outside a transaction (a repeat that grew
@@ -347,6 +355,8 @@ impl Store {
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
             repeat_inputs: None,
+            session_state: BTreeMap::new(),
+            emitted: Vec::new(),
             truncated: Vec::new(),
             derived_ops: Vec::new(),
             settling: false,
@@ -1235,14 +1245,17 @@ impl Store {
         Ok(())
     }
 
-    /// Bring every drawn repeat's items to what its `each` and `count`
-    /// say now (reactivity.md §3.3): as many items as `each` has elements
-    /// when it is a series, else `count`, at most `max` (and 10,000), each
-    /// item's value and index published on its node. Runs whenever values
-    /// may have moved: after a transaction, a publish, a preview, the
-    /// clock. Where the number of items changed it re-expands and rebuilds
-    /// the graph; a repeat inside new items settles in the next round.
-    /// Returns the structural ops applied.
+    /// Bring every drawn repeat's and conditional's items to what its
+    /// inputs say now (reactivity.md §3.2, §3.3). A repeat has an item per
+    /// element of `each` (a series or a list), else `count` items, at most
+    /// `max` (and 10,000); a conditional has one item while `when.is` is
+    /// true. Each item's key (its place in ids) comes from `repeat.key`, or
+    /// by default: a node reference, a record's `id`, text when all texts
+    /// differ, else the index. Each item's value and index are published
+    /// on its node. Runs whenever values may have moved: after a
+    /// transaction, a publish, a preview, the clock. Where the items
+    /// changed it re-expands and rebuilds the graph; a repeat inside new
+    /// items settles in the next round. Returns the structural ops applied.
     fn settle_repeats(&mut self) -> Vec<Op> {
         if self.settling {
             return Vec::new();
@@ -1251,47 +1264,71 @@ impl Store {
         let mut applied = Vec::new();
         let path = |f: &str| LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf");
         let item = |f: &str| LeafPath::new(facet::FacetKind::Item, f).expect("declared leaf");
+        let when = LeafPath::new(facet::FacetKind::When, "is").expect("declared leaf");
         // A round per level of nesting, and one more to see nothing change.
         for round in 0..=expand::DEPTH_MAX + 1 {
             let repeats: Vec<NodeId> = match &self.repeat_inputs {
                 Some(known) => known.iter().map(|k| k.0).collect(),
                 None => expand::drawn_repeats(&self.doc),
             };
-            let inputs: Vec<(NodeId, Option<Value>, Option<Value>)> = repeats.iter().map(|&r| (r, self.reactive.read(&self.doc, Leaf { node: r, path: path("each") }), self.reactive.read(&self.doc, Leaf { node: r, path: path("count") }))).collect();
+            let inputs: Vec<(NodeId, [Option<Value>; 4])> = repeats
+                .iter()
+                .map(|&r| (r, [path("each"), path("count"), path("key"), when].map(|p| self.reactive.read(&self.doc, Leaf { node: r, path: p }))))
+                .collect();
             // NaN is a value here ("no series"), so compare by text too.
             if self.repeat_inputs.as_ref().is_some_and(|known| known.len() == inputs.len() && known.iter().zip(&inputs).all(|(a, b)| a == b || format!("{a:?}") == format!("{b:?}"))) {
                 break;
             }
-            let mut counts = BTreeMap::new();
+            let mut counts = expand::Items::new();
             let mut values = BTreeMap::new();
             let mut truncated = Vec::new();
-            for (r, each, count) in &inputs {
-                let max = self.reactive.read(&self.doc, Leaf { node: *r, path: path("max") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0) as usize;
-                let series = match each {
-                    Some(Value::Series { data, dim }) => Some((data.clone(), *dim)),
-                    _ => None,
-                };
-                let asked = match &series {
-                    Some((data, _)) => data.len(),
-                    None => count.as_ref().and_then(|v| v.as_f64()).filter(|n| n.is_finite()).map_or(0, |n| n.floor().max(0.0) as usize),
-                };
+            for (r, [each, count, key, shown]) in &inputs {
+                let r = *r;
+                let is_repeat = self.doc.facet(r, facet::FacetKind::Repeat).is_some();
+                // A conditional that fails to evaluate shows nothing.
+                let shown = self.doc.facet(r, facet::FacetKind::When).is_none() || (shown.as_ref().and_then(|v| v.as_bool()) == Some(true) && !self.reactive.errors.contains_key(&Leaf { node: r, path: when }));
+                if !is_repeat {
+                    if shown && let Some(scope) = NodeId::item_scope(r, "on") {
+                        counts.insert(r, vec!["on".to_owned()]);
+                        values.insert(Leaf { node: scope, path: item("value") }, Value::Bool(true));
+                        values.insert(Leaf { node: scope, path: item("index") }, Value::Number(0.0));
+                    } else {
+                        counts.insert(r, Vec::new());
+                    }
+                    continue;
+                }
+                let max = self.reactive.read(&self.doc, Leaf { node: r, path: path("max") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0) as usize;
+                let listed = each.as_ref().and_then(|v| v.len());
+                let asked = listed.unwrap_or_else(|| count.as_ref().and_then(|v| v.as_f64()).filter(|n| n.is_finite()).map_or(0, |n| n.floor().max(0.0) as usize));
                 let n = asked.min(max);
                 if asked > max {
-                    truncated.push(expand::Problem { node: *r, kind: "truncated", message: format!("{asked} items asked for; repeat.max allows {max}") });
+                    truncated.push(expand::Problem { node: r, kind: "truncated", message: format!("{asked} items asked for; repeat.max allows {max}") });
                 }
-                counts.insert(*r, n);
-                let element = |k: usize| match &series {
-                    Some((data, dim)) => Value::quantity(data[k], *dim),
-                    None => Value::Number(k as f64),
+                let mut elements: Vec<Value> = match (listed, each) {
+                    (Some(_), Some(each)) => each.elements().unwrap_or_default(),
+                    _ => (0..n).map(|k| Value::Number(k as f64)).collect(),
                 };
+                elements.truncate(n);
                 // The template reads the first item's.
-                if n > 0 {
-                    values.insert(Leaf { node: *r, path: path("item") }, element(0));
+                if let Some(first) = elements.first() {
+                    values.insert(Leaf { node: r, path: path("item") }, first.clone());
                 }
-                for k in 0..n {
-                    let Some(scope) = NodeId::item_scope(*r, k) else { break };
-                    values.insert(Leaf { node: scope, path: item("value") }, element(k));
-                    values.insert(Leaf { node: scope, path: item("index") }, Value::Number(k as f64));
+                let keys = match item_keys(&elements, listed.is_some(), key.as_ref()) {
+                    Ok(keys) => keys,
+                    Err(why) => {
+                        truncated.push(expand::Problem { node: r, kind: "keys", message: format!("{why}; items are keyed by index instead") });
+                        (0..elements.len()).map(|k| k.to_string()).collect()
+                    }
+                };
+                if shown {
+                    for (k, (key, element)) in keys.iter().zip(elements).enumerate() {
+                        let Some(scope) = NodeId::item_scope(r, key) else { continue };
+                        values.insert(Leaf { node: scope, path: item("value") }, element);
+                        values.insert(Leaf { node: scope, path: item("index") }, Value::Number(k as f64));
+                    }
+                    counts.insert(r, keys);
+                } else {
+                    counts.insert(r, Vec::new());
                 }
             }
             self.truncated = truncated;
@@ -1317,10 +1354,214 @@ impl Store {
                 self.repeat_inputs = None;
                 self.reactive.rebuild(&self.doc);
                 self.resample();
+                self.publish_state();
             }
         }
         self.settling = false;
         applied
+    }
+
+    /// Publish the session state cells (`let.keep = session`) that still
+    /// have a node; one whose scope went is forgotten, so it starts from
+    /// its initial value if the scope returns (reactivity.md §5.1).
+    fn publish_state(&mut self) {
+        if self.session_state.is_empty() && self.reactive.published_by(ProducerId::STATE).is_empty() {
+            return;
+        }
+        let doc = &self.doc;
+        self.session_state.retain(|leaf, _| doc.is_live(leaf.node));
+        if self.session_state != self.reactive.published_by(ProducerId::STATE) {
+            self.signal_stamp += 1;
+            self.reactive.publish(&self.doc, ProducerId::STATE, self.session_state.clone(), self.signal_stamp);
+        }
+    }
+
+    /// Publish what is selected onto every node with a `selection` facet.
+    fn publish_selection(&mut self) {
+        let nodes: Vec<NodeId> = self.doc.nodes_with(facet::FacetKind::Selection).filter(|&n| self.doc.is_live(n)).collect();
+        if nodes.is_empty() && self.reactive.published_by(ProducerId::SELECTION).is_empty() {
+            return;
+        }
+        let picked: Vec<NodeId> = self.selection().into_iter().map(|(n, _)| n).collect();
+        let leaf = |f: &str| LeafPath::new(facet::FacetKind::Selection, f).expect("declared leaf");
+        let mut values = BTreeMap::new();
+        for n in nodes {
+            values.insert(Leaf { node: n, path: leaf("node") }, Value::Ref(picked.first().copied().unwrap_or(NodeId::from_raw(0))));
+            values.insert(Leaf { node: n, path: leaf("nodes") }, Value::list(picked.iter().map(|&p| Value::Ref(p)).collect::<Vec<_>>()));
+            values.insert(Leaf { node: n, path: leaf("count") }, Value::Number(picked.len() as f64));
+        }
+        if values != self.reactive.published_by(ProducerId::SELECTION) {
+            self.signal_stamp += 1;
+            self.reactive.publish(&self.doc, ProducerId::SELECTION, values, self.signal_stamp);
+        }
+    }
+
+    /// Whether `leaf` is a session state cell: the value of a `let` whose
+    /// `keep` is `session`.
+    pub fn is_session_state(&self, leaf: Leaf) -> bool {
+        leaf.path.facet == facet::FacetKind::Let
+            && leaf.path.field == "value"
+            && self.doc.get::<facet::Let>(leaf.node).is_some_and(|l| l.keep.constant().and_then(|v| v.as_str()) == Some("session") && l.value.expr().is_none())
+    }
+
+    /// Set a session state cell. Not a transaction: never saved, never in
+    /// undo. Refused for any other leaf.
+    pub fn set_state(&mut self, leaf: Leaf, value: Value) -> Result<(), String> {
+        if !self.is_session_state(leaf) {
+            return Err(format!("{leaf} is not session state (a let with keep=\"session\" holding a constant)"));
+        }
+        // Back at its initial value, it is no longer held.
+        if self.doc.leaf(leaf.node, leaf.path).and_then(|s| s.constant()) == Some(&value) {
+            self.session_state.remove(&leaf);
+        } else {
+            self.session_state.insert(leaf, value);
+        }
+        self.publish_state();
+        if !self.clusters.list.is_empty() {
+            self.resolve_clusters_live();
+        }
+        self.resolve_physics();
+        Ok(())
+    }
+
+    /// Every live action for `event`, by the node it listens on: `on.node`
+    /// when set, else its parent.
+    fn listeners(&self, event: &str) -> BTreeMap<NodeId, Vec<NodeId>> {
+        let ty = TypeId::lookup("on").expect("registered");
+        let mut by_node: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        for on in self.doc.nodes_of_type(ty).filter(|&n| self.doc.is_live(n) && !expand::in_repeat_template(&self.doc, n)) {
+            let Some(f) = self.doc.get::<facet::On>(on) else { continue };
+            if f.event.constant().and_then(|v| v.as_str()) != Some(event) {
+                continue;
+            }
+            let named = f.node.constant().and_then(|v| v.as_ref()).filter(|n| n.raw() != 0);
+            let Some(listens) = named.or_else(|| self.doc.node(on).and_then(|n| n.parent)) else { continue };
+            by_node.entry(listens).or_default().push(on);
+        }
+        by_node
+    }
+
+    /// The `on` nodes that `event` on `node` runs (reactivity.md §5.2): those
+    /// of the nearest node at or above `node` that has any for this event,
+    /// as a click on a button's label reaches the button. With that node.
+    pub fn handlers(&self, node: NodeId, event: &str) -> Option<(NodeId, Vec<NodeId>)> {
+        let mut by_node = self.listeners(event);
+        if by_node.is_empty() {
+            return None;
+        }
+        let mut at = Some(node);
+        while let Some(n) = at {
+            if let Some(found) = by_node.remove(&n) {
+                return Some((n, found));
+            }
+            at = self.doc.node(n).and_then(|x| x.parent);
+        }
+        None
+    }
+
+    /// Every node at or above `node` that listens for the pointer coming
+    /// or going (`enter`, `leave`): what the pointer is inside, for a host
+    /// to compare from one frame to the next.
+    pub fn hover_listeners(&self, node: NodeId) -> Vec<NodeId> {
+        let (enter, leave) = (self.listeners("enter"), self.listeners("leave"));
+        if enter.is_empty() && leave.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut at = Some(node);
+        while let Some(n) = at {
+            if enter.contains_key(&n) || leave.contains_key(&n) {
+                out.push(n);
+            }
+            at = self.doc.node(n).and_then(|x| x.parent);
+        }
+        out
+    }
+
+    /// Whether the document declares any action at all.
+    pub fn has_actions(&self) -> bool {
+        self.doc.nodes_with(facet::FacetKind::On).next().is_some()
+    }
+
+    /// Run what `event` on `node`, or on the nearest node above it that
+    /// listens, declares (`handlers`); see `fire_at`.
+    pub fn fire(&mut self, node: NodeId, event: &str, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
+        match self.handlers(node, event) {
+            Some((listens, _)) => self.fire_at(listens, event, actor, ts),
+            None => Ok(None),
+        }
+    }
+
+    /// Run what `event` declares on exactly `listens`. Every write is
+    /// computed from the values before any of them applies, so the result
+    /// does not depend on their order. Writes to the document are one
+    /// transaction, one undo step; writes to session state leave no
+    /// history. `Ok(None)` when nothing listens or nothing changes the
+    /// document.
+    pub fn fire_at(&mut self, listens: NodeId, event: &str, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
+        let Some(actions) = self.listeners(event).remove(&listens) else { return Ok(None) };
+        let leaf_of = |f: &str| LeafPath::new(facet::FacetKind::Write, f).expect("declared leaf");
+        let mut ops: Vec<Op> = Vec::new();
+        let mut session: Vec<(Leaf, Value)> = Vec::new();
+        let mut label = None;
+        for on in actions {
+            if let Some(name) = self.doc.get::<facet::On>(on).and_then(|f| f.emit.constant()).and_then(|v| v.as_str()).filter(|n| !n.is_empty()) {
+                self.emitted.push((listens, name.to_owned()));
+            }
+            if label.is_none() {
+                label = self.doc.get::<facet::Name>(on).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).filter(|n| !n.is_empty()).map(str::to_owned);
+            }
+            let writers: Vec<NodeId> = std::iter::once(on).chain(self.doc.children(on).iter().copied()).filter(|&w| self.doc.is_live(w) && self.doc.facet(w, facet::FacetKind::Write).is_some()).collect();
+            for w in writers {
+                let read = |f: &str| self.reactive.read(&self.doc, Leaf { node: w, path: leaf_of(f) });
+                let Some(target) = read("target").and_then(|v| v.as_ref()).filter(|n| n.raw() != 0) else { continue };
+                let prop = read("prop").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+                let path: LeafPath = prop.parse().map_err(|e| format!("{w}: write.prop {prop:?}: {e}"))?;
+                let leaf = Leaf { node: target, path };
+                let now = self.reactive.read(&self.doc, leaf);
+                let value = match read("verb").as_ref().and_then(|v| v.as_str()) {
+                    Some("toggle") => match now {
+                        Some(Value::Bool(b)) => Value::Bool(!b),
+                        other => return Err(format!("{w}: toggle needs a yes/no value at {leaf}, found {}", other.map_or("nothing".to_owned(), |v| v.kind().name().to_owned()))),
+                    },
+                    Some("step") => {
+                        let by = read("by").and_then(|v| v.as_quantity()).ok_or_else(|| format!("{w}: write.by is not a number"))?;
+                        match now.as_ref().and_then(|v| v.as_quantity()) {
+                            Some((x, dim)) if dim == by.1 || by.1.is_none() => Value::quantity(x + by.0, dim),
+                            _ => return Err(format!("{w}: step needs a number at {leaf}, in the unit of write.by")),
+                        }
+                    }
+                    _ => {
+                        if let Some(why) = self.reactive.errors.get(&Leaf { node: w, path: leaf_of("to") }) {
+                            return Err(format!("{w}: write.to failed: {why}"));
+                        }
+                        read("to").ok_or_else(|| format!("{w}: write.to has no value"))?
+                    }
+                };
+                if self.is_session_state(leaf) {
+                    session.push((leaf, value));
+                } else {
+                    let (source, v) = handle::resolve_target(&self.doc, &self.reactive, leaf, value)?;
+                    if self.reactive.read(&self.doc, source).as_ref() != Some(&v) {
+                        ops.push(Op::Set { id: source.node, path: source.path, slot: Slot::Const(v) });
+                    }
+                }
+            }
+        }
+        for (leaf, value) in session {
+            self.set_state(leaf, value)?;
+        }
+        if ops.is_empty() {
+            return Ok(None);
+        }
+        let label = label.unwrap_or_else(|| event.to_owned());
+        self.apply(TransactionInput { label, actor, ts, idempotency_key: None, ops, exact: false }).map(Some).map_err(|errors| errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+    }
+
+    /// Events actions asked the host to hear (`on.emit`), with the node
+    /// each fired on, since the last take.
+    pub fn take_emitted(&mut self) -> Vec<(NodeId, String)> {
+        std::mem::take(&mut self.emitted)
     }
 
     /// Structure derived since the last take, outside any transaction
@@ -1376,8 +1617,10 @@ impl Store {
     /// groups' children (`layout.rs`), which may read it.
     pub fn resolve_physics(&mut self) {
         // Structure first: what follows places and styles the new items.
+        self.publish_selection();
         let derived = self.settle_repeats();
         self.derived_ops.extend(derived);
+        self.publish_state();
         self.solve_network();
         self.resolve_theme();
         self.resolve_layout();
@@ -1757,7 +2000,15 @@ impl Store {
         for ((to, data), id) in items.iter().zip(self.doc.next_session_relation_ids(items.len())) {
             ops.push(Op::Link { rel: Relation { id, from: sel, to: *to, rel: RelKind::Selects, data: data.clone() } });
         }
-        self.apply_session(ops)
+        self.apply_session(ops)?;
+        // Bindings that read the selection follow it.
+        if self.doc.nodes_with(facet::FacetKind::Selection).next().is_some() {
+            if !self.clusters.list.is_empty() {
+                self.resolve_clusters_live();
+            }
+            self.resolve_physics();
+        }
+        Ok(())
     }
 
     /// Keep the graph in step with a transaction that just applied.
@@ -2252,4 +2503,55 @@ fn args_set(ops: &[Op]) -> Vec<NodeId> {
             _ => None,
         })
         .collect()
+}
+
+/// An item's key from a value (reactivity.md §3.2): a number or quantity
+/// by its digits, text by its characters, a node by its id.
+fn key_text(v: &Value) -> String {
+    let text = match v {
+        Value::Number(n) => value::fmt_num(*n),
+        Value::Quantity { si, .. } => value::fmt_num(*si),
+        Value::Ref(id) => id.to_string().trim_start_matches('#').to_owned(),
+        v => v.to_string(),
+    };
+    id::item_key(&text)
+}
+
+/// The key of each element of a repeat. With a `repeat.key` function, what
+/// it gives for each; otherwise a node reference is its own key, a record's
+/// `id` is, text is when the repeat is over a list of texts, and anything
+/// else is keyed by index (numbers too: a series that slides would remake
+/// every item on every change; give `key` to key numbers by value). An
+/// error when two items share a key or the function fails.
+fn item_keys(elements: &[Value], listed: bool, key: Option<&Value>) -> Result<Vec<String>, String> {
+    let by_index = || (0..elements.len()).map(|k| k.to_string()).collect::<Vec<_>>();
+    let keys: Vec<String> = match key {
+        Some(Value::Fn(f)) if f.params.len() == 1 => {
+            let mut out = Vec::with_capacity(elements.len());
+            for e in elements {
+                out.push(key_text(&f.apply(std::slice::from_ref(e)).map_err(|err| format!("repeat.key failed: {err}"))?));
+            }
+            out
+        }
+        Some(Value::Fn(f)) => return Err(format!("repeat.key takes one item; this function takes {}", f.params.len())),
+        _ if !listed || elements.is_empty() => return Ok(by_index()),
+        _ if elements.iter().all(|e| matches!(e, Value::Ref(_))) => elements.iter().map(key_text).collect(),
+        _ if elements.iter().all(|e| e.field("id").is_some()) => elements.iter().map(|e| key_text(e.field("id").expect("checked"))).collect(),
+        _ if elements.iter().all(|e| matches!(e, Value::Str(_) | Value::Enum(_))) => {
+            let keys: Vec<String> = elements.iter().map(key_text).collect();
+            // Repeated words are legitimate in a list of labels.
+            let distinct: std::collections::BTreeSet<&String> = keys.iter().collect();
+            if distinct.len() != keys.len() {
+                return Ok(by_index());
+            }
+            keys
+        }
+        _ => return Ok(by_index()),
+    };
+    let distinct: std::collections::BTreeSet<&String> = keys.iter().collect();
+    if distinct.len() != keys.len() {
+        let twice = keys.iter().find(|k| keys.iter().filter(|x| x == k).count() > 1).cloned().unwrap_or_default();
+        return Err(format!("two items share the key {twice}"));
+    }
+    Ok(keys)
 }

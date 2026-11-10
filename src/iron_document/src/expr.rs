@@ -325,6 +325,9 @@ impl Expr {
     /// when a template is copied: its references move to the copy.
     pub fn map_refs(&self, f: &dyn Fn(Leaf) -> Leaf) -> Expr {
         match self {
+            // A node named as a value follows too (`list(#3, #4)` in a
+            // template names each copy's own nodes).
+            Expr::Lit(Value::Ref(n)) => Expr::Lit(Value::Ref(f(Leaf { node: *n, path: LeafPath::new(crate::facet::FacetKind::Name, "text").expect("declared") }).node)),
             Expr::Lit(_) | Expr::Const(_) => self.clone(),
             Expr::Ref(l) => Expr::Ref(f(*l)),
             Expr::Neg(e) => Expr::Neg(Box::new(e.map_refs(f))),
@@ -441,7 +444,11 @@ impl Expr {
             },
             Expr::Call(name, args) => {
                 let vals: Result<Vec<Value>, EvalError> = args.iter().map(|a| a.eval_in(read, env)).collect();
-                floor::call(name, &vals?)
+                let vals = vals?;
+                if name == "deref" {
+                    return deref(&vals, read);
+                }
+                floor::call(name, &vals)
             }
             Expr::Get(e, field) => match e.eval_in(read, env)? {
                 Value::Record { kind, fields } => fields.get(field).cloned().ok_or_else(|| {
@@ -508,11 +515,16 @@ impl Expr {
             }
             Expr::Call(name, args) => {
                 write!(f, "{name}(")?;
+                // record(name: value, …) prints as it is written.
+                let named = name == "record" && args.len() % 2 == 0 && args.chunks(2).all(|p| matches!(&p[0], Expr::Lit(Value::Str(n)) if is_name(n)));
                 for (i, a) in args.iter().enumerate() {
                     if i > 0 {
-                        f.write_str(", ")?;
+                        f.write_str(if named && i % 2 == 1 { ": " } else { ", " })?;
                     }
-                    a.write(f, PREC_TERNARY)?;
+                    match a {
+                        Expr::Lit(Value::Str(n)) if named && i % 2 == 0 => f.write_str(n)?,
+                        a => a.write(f, PREC_TERNARY)?,
+                    }
                 }
                 f.write_str(")")
             }
@@ -550,12 +562,65 @@ impl Expr {
     }
 }
 
+/// `deref(node, 'facet.field')`: a leaf of whichever node the first
+/// argument names now (plans/specs/reactivity.md §2): a *tracked read*,
+/// the one read whose target is a value. The graph records what it read
+/// (`graph.rs`), so the binding follows both the reference and the leaf.
+/// `deref(node, 'facet.field', fallback)` gives the fallback when there is
+/// no such node or leaf.
+fn deref(args: &[Value], read: &dyn Fn(Leaf) -> Option<Value>) -> Result<Value, EvalError> {
+    let (target, path, fallback) = match args {
+        [t, p] => (t, p, None),
+        [t, p, f] => (t, p, Some(f)),
+        _ => return Err(EvalError::Arity { func: "deref".to_owned(), expected: 2, got: args.len() }),
+    };
+    let path = path.as_str().ok_or_else(|| EvalError::Type(format!("deref: the leaf is text, 'size.w'; got {}", path.kind().name())))?;
+    let path: LeafPath = path.parse().map_err(|e| EvalError::Type(format!("deref: {e}")))?;
+    let node = match (target, fallback) {
+        (Value::Ref(n), _) => *n,
+        (_, Some(f)) => return Ok(f.clone()),
+        (v, None) => return Err(EvalError::Type(format!("deref takes a node reference, got {}", v.kind().name()))),
+    };
+    let leaf = Leaf { node, path };
+    match (read(leaf), fallback) {
+        (Some(v), _) => Ok(v),
+        (None, Some(f)) => Ok(f.clone()),
+        (None, None) => Err(EvalError::Unresolved(leaf)),
+    }
+}
+
 fn lookup(env: &[(&'static str, Value)], name: &str) -> Result<Value, EvalError> {
     env.iter().rev().find(|(n, _)| *n == name).map(|(_, v)| v.clone()).ok_or_else(|| EvalError::Type(format!("{name} is not defined here")))
 }
 
+/// Whether `s` can be written as a bare field name.
+fn is_name(s: &str) -> bool {
+    s.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 fn write_lit(v: &Value, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match v {
+        Value::List(items) => {
+            f.write_str("list(")?;
+            for (i, v) in items.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                write_lit(v, f)?;
+            }
+            f.write_str(")")
+        }
+        Value::Record { kind, fields } if *kind == "record" && fields.keys().all(|k| is_name(k)) => {
+            f.write_str("record(")?;
+            for (i, (k, v)) in fields.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                write!(f, "{k}: ")?;
+                write_lit(v, f)?;
+            }
+            f.write_str(")")
+        }
         // Single quotes where they can hold the text: formulas sit inside
         // double-quoted attributes in the model's markup.
         Value::Str(s) | Value::Enum(s) if !s.contains(['\'', '\\', '\n', '\t']) => write!(f, "'{s}'"),
@@ -569,7 +634,7 @@ fn write_lit(v: &Value, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             crate::value::fmt_num(*c)
         ),
         Value::Color([r, g, b, a]) => write!(f, "rgba({r}, {g}, {b}, {a})"),
-        Value::Ref(id) => write!(f, "ref({id})"),
+        Value::Ref(id) => write!(f, "{id}"),
         // The exact magnitude in the canonical unit, so parse(print(q)) == q.
         Value::Quantity { si, dim } => write!(f, "{} {}", crate::value::fmt_num(*si), dim.canonical_unit()),
         // Exact SI magnitudes, so parse(print(s)) == s: `series(0.1, 0.2)`,
@@ -778,7 +843,7 @@ pub mod floor {
         "pow", "hypot", "log10", "ln", "exp", "sinc", "fmt", "sci", "str", "series", "range", "step", "len", "at", "first",
         "last", "sum", "mean", "interp", "ticks", "nice_lo", "nice_hi", "where", "map", "sample", "rgb", "hsl", "mix",
         "spectrum", "points", "smooth", "circles", "segments", "bars", "area", "isnan", "kind", "concat", "unit_of", "in_unit", "sig",
-        "ease", "window",
+        "ease", "window", "list", "record", "get", "filter", "sort_by", "zip", "enumerate", "unique", "deref",
     ];
 
     /// The scalar arms of [`call`], for the series module to apply per element.
@@ -827,6 +892,9 @@ pub mod floor {
     pub fn call(func: &str, args: &[Value]) -> Result<Value, EvalError> {
         // Series, functions, colours and path data (plot.md §1–§2), and
         // broadcasting the scalar functions below over series.
+        if let Some(r) = crate::list::call(func, args) {
+            return r;
+        }
         if let Some(r) = crate::series::call(func, args) {
             return r;
         }
@@ -1127,9 +1195,12 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                 while i < b.len() && b[i].is_ascii_alphanumeric() {
                     i += 1;
                 }
-                if i + 1 < b.len() && b[i] == b'/' && b[i + 1].is_ascii_alphanumeric() {
-                    i += 1;
-                    while i < b.len() && b[i].is_ascii_alphanumeric() {
+                // Each further step: a definition-local id, or `~key`, an
+                // item of a repeat (letters, digits, `_` and `-`).
+                while i + 1 < b.len() && b[i] == b'/' && (b[i + 1].is_ascii_alphanumeric() || b[i + 1] == b'~') {
+                    let item = b[i + 1] == b'~';
+                    i += 2;
+                    while i < b.len() && (b[i].is_ascii_alphanumeric() || (item && matches!(b[i], b'_' | b'-'))) {
                         i += 1;
                     }
                 }
@@ -1144,8 +1215,14 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                     }
                     parts.push(&text[s..i]);
                 }
+                // A bare id is the node itself, a reference value:
+                // `list(#3, #4)`, `deref(#3, 'size.w')`.
+                if parts.is_empty() {
+                    out.push(Tok::Lit(Value::Ref(node)));
+                    continue;
+                }
                 if parts.len() != 2 {
-                    return Err(ParseError(format!("reference {node} needs .component.field")));
+                    return Err(ParseError(format!("reference {node} needs .component.field, or nothing after it to mean the node")));
                 }
                 let path: LeafPath =
                     format!("{}.{}", parts[0], parts[1]).parse().map_err(|e| ParseError(format!("{e}")))?;
@@ -1337,6 +1414,29 @@ impl Parser {
         }
     }
 
+    /// A record's fields after an opening `(`, through the closing `)`:
+    /// `name: value, …`, as name and value in turn. A field may also be
+    /// written as two arguments, `'name', value`.
+    fn fields(&mut self) -> Result<Vec<Expr>, ParseError> {
+        let mut args = Vec::new();
+        if self.peek() == Some(&Tok::RParen) {
+            self.next();
+            return Ok(args);
+        }
+        loop {
+            if let (Some(Tok::Ident(n)), Some(Tok::Colon)) = (self.tokens.get(self.pos), self.tokens.get(self.pos + 1)) {
+                args.push(Expr::Lit(Value::Str(n.clone())));
+                self.pos += 2;
+            }
+            args.push(self.expr(PREC_TERNARY)?);
+            match self.next() {
+                Some(Tok::Comma) => continue,
+                Some(Tok::RParen) => return Ok(args),
+                got => return Err(ParseError(format!("expected , or ) in record, got {got:?}"))),
+            }
+        }
+    }
+
     /// `(a, b) => …` from the `(` at the cursor: the parameter names, or
     /// `None` (cursor unmoved) when this `(` opens something else.
     fn lambda_params(&mut self) -> Option<Vec<String>> {
@@ -1435,7 +1535,7 @@ impl Parser {
                         return Err(ParseError(format!("{name} is not defined here: a function call needs (…), and a name is only defined inside a lambda that takes it (x => …)")));
                     }
                     self.next();
-                    let args = self.args()?;
+                    let args = if name == "record" { self.fields()? } else { self.args()? };
                     Ok(Expr::Call(name, args))
                 }
             },

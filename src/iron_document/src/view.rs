@@ -226,7 +226,7 @@ fn node(
         .collect();
     let kids = kids_vec.as_slice();
     // A repeat shows its template; its items are derived and only counted.
-    if doc.facet(id, crate::facet::FacetKind::Repeat).is_some() {
+    if crate::expand::is_item_owner(doc, id) {
         attrs.push(("copies".into(), kids_all.iter().filter(|k| k.is_item_scope() && k.item_of(id).is_some()).count().to_string()));
     }
     if id.is_expanded() {

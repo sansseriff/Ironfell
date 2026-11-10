@@ -351,7 +351,7 @@ fn bake(key: &str) -> Baked {
         let Some(node) = doc.live(id) else { continue };
         // A repeat's template is not drawn, nor is a let: the copies are
         // baked as plain shapes.
-        if crate::expand::in_repeat_template(doc, id) || node.ty.name() == "let" {
+        if crate::expand::in_repeat_template(doc, id) || matches!(node.ty.name(), "let" | "on" | "set") {
             continue;
         }
         // Anchors mark ports; a preview has none.
@@ -361,7 +361,7 @@ fn bake(key: &str) -> Baked {
         let parent = node.parent.and_then(|p| index.iter().position(|&x| x == p));
         let facets: Vec<Facet> = doc
             .facets_of(id)
-            .filter(|f| !matches!(f, Facet::Anchor(_) | Facet::Repeat(_) | Facet::Item(_)))
+            .filter(|f| !matches!(f, Facet::Anchor(_) | Facet::Repeat(_) | Facet::Item(_) | Facet::When(_) | Facet::Selection(_)))
             .map(|f| {
                 let mut f = f.clone();
                 for field in f.field_names() {

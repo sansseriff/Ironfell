@@ -12,9 +12,14 @@
 //! living in the store, so the manipulation loop never leaves the process
 //! (doc 02 invariant 8).
 //!
-//! Dependencies are static today (`Expr::deps`). Every read during
-//! evaluation goes through one resolver, which is where tracked reads would
-//! hook in if dynamic dependencies are ever needed.
+//! Dependencies are static (`Expr::deps`), with one exception: a **tracked
+//! read**, `deref(node, 'facet.field')`, whose target is a value
+//! (plans/specs/reactivity.md §2). A binding that holds one records what it
+//! read each time it is evaluated; those leaves are its dependencies until
+//! the next evaluation, as Svelte's and Solid's are. A leaf it starts to
+//! read may be evaluated after it in the same pass, in which case it is
+//! evaluated again; a tracked read that reaches its own binding is an
+//! error on that leaf, since the applier cannot refuse it ahead of time.
 
 use crate::document::Document;
 use crate::expr::{Expr, Leaf};
@@ -47,8 +52,12 @@ impl ProducerId {
     pub const THEME: ProducerId = ProducerId(4);
     /// Repeat items' values and indices (`Store::settle_repeats`).
     pub const ITEMS: ProducerId = ProducerId(5);
+    /// Session state cells (`let.keep = session`; `Store::set_state`).
+    pub const STATE: ProducerId = ProducerId(6);
+    /// What is selected, on nodes that ask (`selection` facet).
+    pub const SELECTION: ProducerId = ProducerId(7);
     /// The first id a host producer receives.
-    pub const FIRST_HOST: ProducerId = ProducerId(6);
+    pub const FIRST_HOST: ProducerId = ProducerId(8);
 }
 
 /// One published value: who published it and at which of their frames.
@@ -63,6 +72,10 @@ pub struct Signal {
 struct BoundNode {
     expr: Expr,
     deps: BTreeSet<Leaf>,
+    /// Whether the expression holds a tracked read (`deref`).
+    tracks: bool,
+    /// What its tracked reads read at the last evaluation, beyond `deps`.
+    tracked: BTreeSet<Leaf>,
     height: u32,
 }
 
@@ -212,7 +225,7 @@ impl Reactive {
         let mut stack = vec![leaf];
         while let Some(l) = stack.pop() {
             if let Some(n) = self.nodes.get(&l) {
-                for d in &n.deps {
+                for d in n.deps.iter().chain(&n.tracked) {
                     if out.insert(*d) {
                         stack.push(*d);
                     }
@@ -249,11 +262,15 @@ impl Reactive {
             for d in &deps {
                 self.dependents.entry(*d).or_default().insert(leaf);
             }
+            let mut tracks = false;
+            expr.walk(&mut |e| tracks |= matches!(e, Expr::Call(name, _) if name == "deref"));
             self.nodes.insert(
                 leaf,
                 BoundNode {
                     expr: expr.clone(),
                     deps,
+                    tracks,
+                    tracked: BTreeSet::new(),
                     height: 0,
                 },
             );
@@ -370,6 +387,7 @@ impl Reactive {
                 let h = 1 + self.nodes[&k]
                     .deps
                     .iter()
+                    .chain(&self.nodes[&k].tracked)
                     .filter_map(|d| self.nodes.get(d).map(|n| n.height))
                     .max()
                     .unwrap_or(0);
@@ -385,21 +403,47 @@ impl Reactive {
         }
     }
 
+    /// Whether `from` reads `target`, directly or through other bindings.
+    fn reaches(&self, from: Leaf, target: Leaf) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![from];
+        while let Some(l) = stack.pop() {
+            if l == target {
+                return true;
+            }
+            if let Some(n) = self.nodes.get(&l) {
+                stack.extend(n.deps.iter().chain(&n.tracked).filter(|d| seen.insert(**d)).copied());
+            }
+        }
+        false
+    }
+
     /// Evaluate `dirty` in height order. A node runs only if it is primed:
     /// a leaf it reads changed since the last pass. Primed-ness spreads from
     /// a node to its dependents only when its own value actually changed,
-    /// which is the equality cutoff.
+    /// which is the equality cutoff. A binding with a tracked read may find
+    /// it depends on a leaf evaluated after it; when that leaf changes, the
+    /// binding is queued again.
     fn evaluate(&mut self, doc: &Document, dirty: &BTreeSet<Leaf>, primed: &BTreeSet<Leaf>) {
         let _tokens = crate::expr::TokenScope::new(crate::palette::leaves(doc));
         let mut primed = primed.clone();
-        let mut order: Vec<(u32, Leaf)> = dirty.iter().map(|l| (self.nodes[l].height, *l)).collect();
-        order.sort();
-        for (_, leaf) in order {
-            if !primed.contains(&leaf) {
+        let mut queue: BTreeSet<(u32, Leaf)> = dirty.iter().map(|l| (self.nodes[l].height, *l)).collect();
+        // Static dependencies never queue a node twice; tracked ones may, a
+        // bounded number of times in an acyclic graph. The limit is a guard.
+        let mut budget = dirty.len().saturating_mul(4) + 1024;
+        while let Some((_, leaf)) = queue.pop_first() {
+            if !primed.remove(&leaf) {
                 continue;
             }
+            if budget == 0 {
+                self.errors.insert(leaf, "did not settle: tracked reads keep changing each other".into());
+                continue;
+            }
+            budget -= 1;
             self.evaluations += 1;
             let expr = self.nodes[&leaf].expr.clone();
+            let tracks = self.nodes[&leaf].tracks;
+            let reads: std::cell::RefCell<BTreeSet<Leaf>> = Default::default();
             let result = {
                 let overlay = &self.overlay;
                 let runtime = &self.runtime;
@@ -409,6 +453,9 @@ impl Reactive {
                 // The first failed input this binding read, if any.
                 let upstream: std::cell::Cell<Option<Leaf>> = std::cell::Cell::new(None);
                 let read = |l| {
+                    if tracks {
+                        reads.borrow_mut().insert(l);
+                    }
                     if errors.contains_key(&l) && !overlay.contains_key(&l) {
                         if upstream.get().is_none() {
                             upstream.set(Some(l));
@@ -436,6 +483,44 @@ impl Reactive {
                     (Ok(v), _) => Ok(v),
                 }
             };
+            // What the tracked reads read this time becomes what this
+            // binding depends on, beyond its static dependencies.
+            let mut result = result;
+            if tracks {
+                let node = &self.nodes[&leaf];
+                let tracked: BTreeSet<Leaf> = reads.into_inner().into_iter().filter(|l| !node.deps.contains(l)).collect();
+                if tracked != node.tracked {
+                    let old = node.tracked.clone();
+                    if let Some(own) = tracked.iter().find(|t| **t == leaf || self.reaches(**t, leaf)) {
+                        result = Err(format!("reads {own} through deref, which depends on this leaf: a cycle"));
+                    } else {
+                        for gone in old.difference(&tracked) {
+                            if let Some(ds) = self.dependents.get_mut(gone) {
+                                ds.remove(&leaf);
+                            }
+                        }
+                        for new in tracked.difference(&old) {
+                            self.dependents.entry(*new).or_default().insert(leaf);
+                        }
+                        // A newly read binding still waiting in this pass:
+                        // read it again once it has been evaluated.
+                        let waiting = tracked.difference(&old).any(|t| primed.contains(t) && self.nodes.contains_key(t));
+                        // Heights move only when it now reads something
+                        // at or above its own.
+                        let need = 1 + tracked.iter().filter_map(|t| self.nodes.get(t).map(|n| n.height)).max().unwrap_or(0);
+                        let node = self.nodes.get_mut(&leaf).expect("bound");
+                        node.tracked = tracked;
+                        if need > node.height {
+                            self.compute_heights();
+                        }
+                        if waiting {
+                            primed.insert(leaf);
+                            queue.insert((self.nodes[&leaf].height, leaf));
+                            continue;
+                        }
+                    }
+                }
+            }
             // Readers run again when this value changes, and when it starts
             // or stops failing (a recovery to the same value still clears
             // their errors).
@@ -453,7 +538,13 @@ impl Reactive {
                 Err(e) => self.errors.insert(leaf, e).is_none(),
             };
             if changed && let Some(ds) = self.dependents.get(&leaf) {
-                primed.extend(ds.iter().copied());
+                for d in ds {
+                    primed.insert(*d);
+                    // A reader by a tracked read may already have run.
+                    if let Some(n) = self.nodes.get(d) {
+                        queue.insert((n.height, *d));
+                    }
+                }
             }
         }
     }

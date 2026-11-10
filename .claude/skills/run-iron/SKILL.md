@@ -60,6 +60,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `workspace.txt` | ~25 s |
 | `layers.txt` (`GPU=1`) | ~22 s (21.5 s, 2026-11-06) |
 | `scope-menu.txt` | ~20 s |
+| `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
 | `timeline.txt` | ~30 s |
 | ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–2.5 min (2m 28s with every test binary relinking, 2026-11-09) |
@@ -117,6 +118,25 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `bench-large-svg.txt` | ~1 min |
 | a short ad-hoc driver script (a few commands) | 20–40 s |
 | ⏱ `cargo test -p iron_document`, after a dependency change | a few minutes (not yet timed) |
+
+## State and actions (2026-11-09)
+
+`plans/specs/reactivity.md` §13. `actions.txt` builds an accordion in the scene through
+the model's edit surface: a header group with `on` nodes (click toggles a document
+`let`, enter and leave set a session `let`), and a body that is a `when` group holding
+a repeat over `list('alpha', 'beta', 'gamma')`. It then hovers, clicks twice and undoes
+with the real pointer.
+
+```sh
+cd .claude/skills/run-iron && GPU=1 SIZE=1680x1000@1 bun run drive.ts < actions.txt; cd -
+```
+
+Expected: six `assertion passed` lines (closed and grey at version 2; hovered blue with
+the version unchanged; open with three rows at version 3 and nothing selected; grey
+again off the header; closed at version 4; open again after Cmd+Z), then
+`applied "toggle legend"` twice and `applied "undo: toggle legend"`, and
+`(no page errors)`. Inspect `screenshots/actions-open.png`. A text made by a model edit
+needs a `fill.color` to draw, which the script gives its texts.
 
 ## Local agent runtime bootstrap
 
@@ -524,7 +544,7 @@ interaction a unit test cannot reach: a real pointer or keyboard gesture through
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `sequence.txt`, `text.txt`,
 `text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
-`narrative.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
+`narrative.txt`, `actions.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
 `selection-cache.txt`. Retired: `smoke-full.txt` (split into `regression.txt` and

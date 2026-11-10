@@ -51,7 +51,7 @@ static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "group",
         facets: &[(K::Name, false), (K::Transform2d, false),
- (K::Constraints, false), (K::Axis, false), (K::Track, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false), (K::Repeat, false), (K::Item, false)],
+ (K::Constraints, false), (K::Axis, false), (K::Track, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false), (K::Repeat, false), (K::Item, false), (K::When, false), (K::Selection, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },
@@ -270,7 +270,21 @@ static TYPES: &[TypeSpec] = &[
     // for others to read. Never drawn.
     TypeSpec {
         name: "let",
-        facets: &[(K::Name, false), (K::Let, true)],
+        facets: &[(K::Name, false), (K::Let, true), (K::Selection, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // An action (reactivity.md §5.2): what an event writes. Never drawn.
+    TypeSpec {
+        name: "on",
+        facets: &[(K::Name, false), (K::On, true), (K::Write, false)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::Only(&["set"]),
+    },
+    // One of an action's writes, when it has more than one.
+    TypeSpec {
+        name: "set",
+        facets: &[(K::Name, false), (K::Write, true)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },

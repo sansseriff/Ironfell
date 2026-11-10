@@ -1,6 +1,6 @@
 # Reactivity: one model for values, structure, state and events
 
-**Proposed 2026-11-09. Phases 1 and 2 built the same day** (§13); phases 3–7 wait on the user. Follows the council review of `e6c81de`
+**Proposed 2026-11-09. Phases 1 to 5 built the same day** (§13, where what was built differs from §3–§7 it says so); phases 6 and 7 wait on a need. Follows the council review of `e6c81de`
 (repeat, let, components as markup; [`repeat.md`](repeat.md) §9) and a study of Svelte 5's
 runtime source. It answers the council's problems and the user's six decisions, and
 orders the work as phases. Nothing here is built.
@@ -371,3 +371,78 @@ and the place to look if a large document with a live repeat is slow.
 count reads the level slider goes from 4 to 8 dots mid-drag at the same document
 version, the release commits one "set slider", undo returns to 4; a placed `std:plot`
 draws its tick labels; a repeat asking for 5 with `max` 2 shows the marker in Layers.
+
+**2026-11-09, later: phases 3, 4 and 5.**
+
+Phase 3, lists, keys and `when`:
+
+- **Lists and records** (§7, `list.rs`, `Value::List`): `list(…)`, `record(name: value, …)`,
+  `get`, `len`, `at`, `first`, `last`, `map`, `filter`, `sort_by`, `zip`, `enumerate`,
+  `unique`, `concat`. A series is taken wherever a list is; `map` and `filter` over a
+  series give a series back. A bare `#id` in a formula is the node itself, a reference
+  value (`list(#3, #4)`), and follows into copies as leaf references do. Not built:
+  `children(#node)`.
+- **Keys in ids** (§3.2, `id.rs`): an item's path step is its key as text, interned
+  (`#g/~beta/7`, `#g/~3/7`). `repeat.key` is a function of the item (`{= r => r.id}`).
+  Without one: a list of node references is keyed by node, of records by their `id`,
+  of words by word when all differ, anything else by index. Two items with one key is
+  a problem on the repeat, and it falls back to index keys.
+- **`when`** (§3.1): a `when` facet (`is`) on a group. Its children are a template with
+  one derived copy, `#g/~on/…`, while the condition is true. A repeat and a
+  conditional are the same code path (`expand::is_item_owner`).
+- **A copy's values can differ per item:** a constant set on a copy is stored as an
+  `override` on the repeat, targeting `~key/local`, as for an instance's part. It
+  follows the key, survives the item leaving and returning, and is saved.
+
+Phase 4, state and actions:
+
+- **`let.keep`** (§5.1): `document` (default) or `session`. A write to a derived `let`
+  is an override on its instance or repeat, so each picture and each item has its own.
+  Session cells are held by the store, published under `ProducerId::STATE`, never
+  saved, never in undo, and dropped when their node goes (open question 1: they
+  reset, as Svelte's do).
+- **`on` nodes** (§5.2): `on.event` is `click`, `press`, `release`, `enter` or `leave`;
+  it listens on its parent, or on `on.node`. An event on a node reaches the nearest
+  listener at or above it. A write is a `write` facet (`target`, `prop`, default
+  `let.value`, `to`, or `verb` `toggle` or `step` with `by`), on the `on` itself or on
+  `set` children. All writes read the values from before the action; one firing is
+  one transaction named by the `on`. `Store::fire`, `fire_at`, `handlers`,
+  `hover_listeners`.
+- **The host** (`bevy_app/select.rs`): a press on something that listens runs the
+  action on release instead of selecting it (Cmd-click selects); the pointer coming
+  and going fires `enter` and `leave`.
+
+Phase 5, tracked reads:
+
+- **`deref(ref, 'facet.field', fallback?)`** (§2): the graph records what a binding
+  holding one read at each evaluation and keeps those as its dependencies until the
+  next. A dependency found late in a pass is evaluated first and the binding again. A
+  read that reaches its own binding is an error on that leaf ("a cycle"), not a hang.
+- **`selection` facet**: a `let` or group that carries it has `selection.node`,
+  `.nodes` and `.count` published by the store, so a binding can read the selected
+  node.
+
+**Differs from the proposal:**
+
+- Numbers are keyed by index unless `repeat.key` is given (§3.2 said by value when
+  distinct). Keyed by value, a range that slides remakes structure on every change,
+  and with index keys only the values move. For the same reason `std:plot`'s tick
+  labels keep index keys until phase 7 gives value keys something to show (labels
+  that slide and fade); `tests/reactivity.rs` shows ticks keyed by value.
+- Actions have no key events, no machine-state or condition triggers, and no `call`
+  (phase 6). `on.emit` is queued in the store (`take_emitted`); no host reads it yet.
+- A template's own bindings are still evaluated once (reading item 0, or as if a
+  `when` held), so a false conditional costs its template's bindings, not its copies'.
+- `deref` inside a lambda's body does not resolve (the body is closed before it runs).
+- Tracked reads are opaque to render analysis: a part that uses one is drawn live.
+- Still whole-document: any change to a repeat's items or a conditional re-expands
+  the document and rebuilds the graph.
+
+**Checked:** `tests/reactivity.rs` (14: the floor's lists and records; a legend over a
+list whose items keep node, state and selection when a word is added in front; ticks
+keyed by value; a conditional; an accordion component in markup, per instance, one
+undo per click, session hover; parallel writes; a readout of the selected node's
+width following selection and resize; a tracked cycle), the whole `iron_document`
+suite, `bun test` (115). In the app, `actions.txt` (run-iron skill): an accordion made
+through the model's edit surface, hovered, clicked twice and undone with the real
+pointer.

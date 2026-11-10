@@ -447,6 +447,12 @@ impl PathEdit {
 
 #[derive(Resource, Default)]
 pub struct SelectTool {
+    /// The deepest node under the pointer, and the nodes at or above it
+    /// that listen for `enter` or `leave` (the document's `on` actions).
+    over: Option<NodeId>,
+    inside: Vec<NodeId>,
+    /// A press or release to tell the document's actions about.
+    fired: Option<(NodeId, &'static str)>,
     /// How each selected node was reached. A selection made elsewhere (the
     /// shell, Show in) is resolved to a reach when first needed.
     pub reach: HashMap<NodeId, Reach>,
@@ -607,9 +613,19 @@ impl Drive {
 enum Control {
     Drive(Drive),
     Activate { id: NodeId, leaf: LeafPath, kind: String, step: f64 },
+    /// An action declared in the document (`on`, reactivity.md §5.2): the
+    /// node that was pressed.
+    Fire { node: NodeId },
 }
 
 fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Point) -> Option<Control> {
+    // The document's own actions: a press on something that listens.
+    if let Some(&node) = chain.last()
+        && geo.store.has_actions()
+        && ["click", "press", "release"].iter().any(|e| geo.store.handlers(node, e).is_some())
+    {
+        return Some(Control::Fire { node });
+    }
     let cx = geo.contexts();
     for j in (k..chain.len()).rev() {
         let v = cx.values(chain, j);
@@ -813,6 +829,8 @@ enum AfterPress {
     Library { key: String, click: Click },
     /// A click activates a control (`affords.activate`); a drag does nothing.
     Activate { id: NodeId, leaf: LeafPath, kind: String, step: f64 },
+    /// A click runs the document's `on` actions for the pressed node.
+    Fire { node: NodeId },
 }
 
 /// What a press that did not become a drag does on release.
@@ -2747,6 +2765,11 @@ pub fn select_tool_system(
                         tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Activate { id, leaf, kind, step } };
                         break 'press;
                     }
+                    Control::Fire { node } => {
+                        tool.fired = Some((node, "press"));
+                        tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Fire { node } };
+                        break 'press;
+                    }
                 }
             }
             // A node its context declares not a target (`affords.select=
@@ -2977,6 +3000,10 @@ pub fn select_tool_system(
                 AfterPress::Move { .. } if sequence.is_some() => tool.gesture = Gesture::Sequence(sequence.take().expect("checked")),
                 // A drag off a control is not a click: nothing happens.
                 AfterPress::Activate { .. } => tool.gesture = Gesture::Idle,
+                AfterPress::Fire { node } => {
+                    tool.fired = Some((*node, "release"));
+                    tool.gesture = Gesture::Idle;
+                }
                 AfterPress::Move { .. } => {
                     let mine = movers(&reaches, &view.panel);
                     let mut drags = Vec::new();
@@ -3227,10 +3254,18 @@ pub fn select_tool_system(
                     None => info!("{id}: {kind} needs a {} leaf", match kind.as_str() { "toggle" => "yes/no", "step" => "number", _ => "choice" }),
                 }
             }
+            Gesture::Press { then: AfterPress::Fire { node }, .. } => {
+                let ts = crate::host_services::unix_millis();
+                for event in ["release", "click"] {
+                    if let Err(why) = store.0.fire(node, event, Actor::Human, ts) {
+                        warn!("{event} on {node}: {why}");
+                    }
+                }
+            }
             Gesture::Press { then, .. } => {
                 let click = match then {
                     AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } | AfterPress::Link { click, .. } | AfterPress::JointMove { click, .. } | AfterPress::Library { click, .. } => click,
-                    AfterPress::Activate { .. } => Click::Keep,
+                    AfterPress::Activate { .. } | AfterPress::Fire { .. } => Click::Keep,
                 };
                 match click {
                     Click::Keep => {}
@@ -3418,6 +3453,14 @@ pub fn select_tool_system(
         if tool.hover != hover {
             tool.hover = hover;
         }
+        // The deepest node under the pointer, for `enter` and `leave`.
+        let over = match (view, top_hit(&hits)) {
+            (Some(_), Some((chain, _))) if !on_grip && !gizmo_hot => chain.last().copied(),
+            _ => None,
+        };
+        if tool.over != over {
+            tool.over = over;
+        }
         if tool.cursor != cursor {
             events.cursor(cursor.clone());
             tool.cursor = cursor;
@@ -3463,6 +3506,32 @@ pub fn select_tool_system(
     let hovered = tool.hover.as_ref().map(Reach::node).or(sel.probe);
     if sel.hovered != hovered {
         sel.hovered = hovered;
+    }
+    // The document's actions (reactivity.md §5.2): a press or a drag-off
+    // noted above, and the pointer coming and going.
+    if store.0.has_actions() || !tool.inside.is_empty() {
+        let ts = crate::host_services::unix_millis();
+        if let Some((node, event)) = tool.fired.take()
+            && let Err(why) = store.0.fire(node, event, Actor::Human, ts)
+        {
+            warn!("{event} on {node}: {why}");
+        }
+        let inside = tool.over.map(|n| store.0.hover_listeners(n)).unwrap_or_default();
+        if inside != tool.inside {
+            let was = std::mem::replace(&mut tool.inside, inside.clone());
+            for n in was.iter().filter(|n| !inside.contains(n)) {
+                if let Err(why) = store.0.fire_at(*n, "leave", Actor::Human, ts) {
+                    warn!("leave on {n}: {why}");
+                }
+            }
+            for n in inside.iter().rev().filter(|n| !was.contains(n)) {
+                if let Err(why) = store.0.fire_at(*n, "enter", Actor::Human, ts) {
+                    warn!("enter on {n}: {why}");
+                }
+            }
+        }
+    } else {
+        tool.fired = None;
     }
 }
 

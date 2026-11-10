@@ -80,23 +80,92 @@ fn expanded_raw(path: &[u64]) -> u64 {
     EXPANDED | paths::intern(path)
 }
 
-/// A repeat's copies (plans/specs/repeat.md): item `k` of repeat `r` is the
-/// path step `ITEM_BASE + k` after `r`'s path, then the template node it
-/// copies; shown and parsed as `~k`. No authored id reaches this range.
+/// A repeat's copies (plans/specs/repeat.md, reactivity.md §3.2): the item
+/// with key `k` of repeat `r` is a path step after `r`'s path, then the
+/// template node it copies; shown and parsed as `~k` (`#g/~3/7`,
+/// `#g/~B12/7`). The key is text (letters, digits, `_`, `-`): the item's
+/// index, or what its `repeat.key` gives, so everything attached to the id
+/// follows the item when the list is reordered. Keys are interned, as
+/// paths are: step `ITEM_BASE + slot`. No authored id reaches this range.
 const ITEM_BASE: u64 = SESSION_BASE - (1 << 32);
+
+mod keys {
+    use std::collections::HashMap;
+    use std::sync::{OnceLock, RwLock};
+
+    #[derive(Default)]
+    struct Registry {
+        keys: Vec<String>,
+        slots: HashMap<String, u64>,
+    }
+
+    fn registry() -> &'static RwLock<Registry> {
+        static R: OnceLock<RwLock<Registry>> = OnceLock::new();
+        R.get_or_init(Default::default)
+    }
+
+    pub fn intern(key: &str) -> Option<u64> {
+        if let Some(&slot) = registry().read().expect("key registry").slots.get(key) {
+            return Some(slot);
+        }
+        let mut r = registry().write().expect("key registry");
+        if let Some(&slot) = r.slots.get(key) {
+            return Some(slot);
+        }
+        let slot = r.keys.len() as u64;
+        if slot >= (1 << 32) {
+            return None;
+        }
+        r.keys.push(key.to_owned());
+        r.slots.insert(key.to_owned(), slot);
+        Some(slot)
+    }
+
+    pub fn text(slot: u64) -> Option<String> {
+        registry().read().expect("key registry").keys.get(slot as usize).cloned()
+    }
+}
 
 fn is_item_step(n: u64) -> bool {
     (ITEM_BASE..SESSION_BASE).contains(&n)
 }
 
+fn is_key(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn item_step(key: &str) -> Option<u64> {
+    is_key(key).then(|| keys::intern(key)).flatten().map(|slot| ITEM_BASE + slot)
+}
+
+fn step_key(n: u64) -> Option<String> {
+    is_item_step(n).then(|| keys::text(n - ITEM_BASE)).flatten()
+}
+
+/// Any text as an item key: itself when it is letters, digits, `_` and
+/// `-`; otherwise those of its characters, and a short hash of the whole
+/// so two texts never share a key.
+pub fn item_key(text: &str) -> String {
+    if is_key(text) {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(24).collect();
+    // FNV-1a.
+    let hash = text.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    format!("{kept}_{}", base62(hash & 0xffff_ffff))
+}
+
 /// One step of an expanded path, as ids print it.
 fn step(n: u64) -> String {
-    if is_item_step(n) { format!("~{}", n - ITEM_BASE) } else { base62(n) }
+    match step_key(n) {
+        Some(k) => format!("~{k}"),
+        None => base62(n),
+    }
 }
 
 fn parse_step(s: &str) -> Option<u64> {
     match s.strip_prefix('~') {
-        Some(k) => k.parse::<u64>().ok().filter(|&k| k < (1 << 32)).map(|k| ITEM_BASE + k),
+        Some(k) => item_step(k),
         None => parse_base62(s),
     }
 }
@@ -249,42 +318,46 @@ impl NodeId {
         expanded_path(self.0).and_then(|p| p.first().copied()).map(NodeId)
     }
 
-    /// Item `k` of repeat `repeat`: the derived group that holds the item's
+    /// The item of repeat `repeat` with key `key` (letters, digits, `_`,
+    /// `-`; see [`item_key`]): the derived group that holds the item's
     /// copies and its `item.value` and `item.index` (reactivity.md §3.1).
-    pub fn item_scope(repeat: NodeId, k: usize) -> Option<NodeId> {
-        if k as u64 >= (1 << 32) || repeat.is_session() {
+    pub fn item_scope(repeat: NodeId, key: &str) -> Option<NodeId> {
+        if repeat.is_session() {
             return None;
         }
         let mut path: Vec<u64> = repeat.path().iter().map(|n| n.0).collect();
-        path.push(ITEM_BASE + k as u64);
+        path.push(item_step(key)?);
         Some(NodeId(expanded_raw(&path)))
     }
 
-    /// Item `k` of repeat `repeat`'s copy of template node `local` (its
+    /// Item `key` of repeat `repeat`'s copy of template node `local` (its
     /// last path step: the authored node a template node copies).
-    pub fn item(repeat: NodeId, k: usize, local: NodeId) -> Option<NodeId> {
+    pub fn item(repeat: NodeId, key: &str, local: NodeId) -> Option<NodeId> {
         let last = *local.path().last()?;
         if last.0 & EXPANDED != 0 || last.0 >= SESSION_BASE {
             return None;
         }
-        let mut path: Vec<u64> = NodeId::item_scope(repeat, k)?.path().iter().map(|n| n.0).collect();
+        let mut path: Vec<u64> = NodeId::item_scope(repeat, key)?.path().iter().map(|n| n.0).collect();
         path.push(last.0);
         Some(NodeId(expanded_raw(&path)))
     }
 
-    /// Which item of `repeat` this node is, or is part of: the item's own
-    /// node, a copy of a template node, or anything inside one. `None` for
-    /// the template itself.
-    pub fn item_of(self, repeat: NodeId) -> Option<usize> {
+    /// Which item of `repeat` this node is, or is part of, by key: the
+    /// item's own node, a copy of a template node, or anything inside one.
+    /// `None` for the template itself.
+    pub fn item_of(self, repeat: NodeId) -> Option<String> {
         let (mine, theirs) = (self.path(), repeat.path());
         let k = mine.get(theirs.len())?.0;
-        (mine[..theirs.len()] == theirs[..] && is_item_step(k)).then(|| (k - ITEM_BASE) as usize)
+        if mine[..theirs.len()] != theirs[..] {
+            return None;
+        }
+        step_key(k)
     }
 
     /// For a node inside a repeat item (or the item's own node): the
-    /// repeat, the item's index, and the template node this is a copy of
+    /// repeat, the item's key, and the template node this is a copy of
     /// (the repeat itself, for the item's node). The innermost repeat's.
-    pub fn repeat_item(self) -> Option<(NodeId, usize, NodeId)> {
+    pub fn repeat_item(self) -> Option<(NodeId, String, NodeId)> {
         let path = expanded_path(self.0)?;
         let at = path.iter().rposition(|&n| is_item_step(n))?;
         let node = |steps: &[u64]| match steps {
@@ -295,7 +368,7 @@ impl NodeId {
         let template: Vec<u64> = path[..at].iter().chain(&path[at + 1..]).copied().collect();
         // A template node of an authored repeat is authored: its own id.
         let template = if path[at + 1..].is_empty() { repeat } else if at == 1 && repeat.0 & EXPANDED == 0 { NodeId(*path.last()?) } else { node(&template)? };
-        Some((repeat, (path[at] - ITEM_BASE) as usize, template))
+        Some((repeat, step_key(path[at])?, template))
     }
 
     /// Whether this is a repeat item's own node (`#g/~k`).

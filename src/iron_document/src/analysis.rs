@@ -162,8 +162,9 @@ impl Resolver<'_> {
         // (`Store::settle_repeats`): they depend on what those depend on.
         if self.reactive.driven_by(leaf, crate::graph::ProducerId::ITEMS) {
             let repeat = if leaf.path.facet == FacetKind::Item { leaf.node.repeat_item().map(|(r, ..)| r) } else { Some(leaf.node) };
-            for field in ["each", "count"] {
-                if let (Some(r), Ok(path)) = (repeat, LeafPath::new(FacetKind::Repeat, field)) {
+            let inputs = [(FacetKind::Repeat, "each"), (FacetKind::Repeat, "count"), (FacetKind::Repeat, "key"), (FacetKind::When, "is")];
+            for (facet, field) in inputs {
+                if let (Some(r), Ok(path)) = (repeat, LeafPath::new(facet, field)) {
                     let x = self.leaf(Leaf { node: r, path });
                     d.absorb(&x);
                 }
@@ -178,6 +179,12 @@ impl Resolver<'_> {
             if !self.inside(leaf.node) {
                 d.opaque.insert(format!("reads {leaf}, outside the instance"));
                 return d;
+            }
+            // What a tracked read reads is known only when it runs.
+            let mut tracked = false;
+            expr.walk(&mut |e| tracked |= matches!(e, crate::expr::Expr::Call(name, _) if name == "deref"));
+            if tracked {
+                d.opaque.insert(format!("a tracked read, deref, in {leaf}"));
             }
             for dep in expr.deps() {
                 let x = self.leaf(dep);

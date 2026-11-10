@@ -513,9 +513,17 @@ facets! {
     /// computed before any is applied; one firing is one undo step.
     /// `emit` names an event for the host, queued when it fires.
     On / "on" => On {
-        event: Enum = Value::Enum("click".to_owned()) => ["click", "press", "release", "enter", "leave"],
+        event: Enum = Value::Enum("click".to_owned()) => ["click", "press", "release", "enter", "leave", "drag", "wheel"],
         node: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
         emit: Str = Value::Str(String::new()),
+        // What a `drag` or `wheel` carries, published as it happens: how
+        // far the pointer moved since the last event (document px), where
+        // it is in the listening node's space, and the wheel (px).
+        dx: Number = Value::Number(0.0),
+        dy: Number = Value::Number(0.0),
+        x: Number = Value::Number(0.0),
+        y: Number = Value::Number(0.0),
+        delta: Number = Value::Number(0.0),
     }
 
     /// A value's recent past (step.rs): `of` is what it follows, `delay`

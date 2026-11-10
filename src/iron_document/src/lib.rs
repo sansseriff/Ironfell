@@ -1586,9 +1586,70 @@ impl Store {
     /// history. `Ok(None)` when nothing listens or nothing changes the
     /// document.
     pub fn fire_at(&mut self, listens: NodeId, event: &str, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
+        let Some((writes, session, label)) = self.action_writes(listens, event)? else { return Ok(None) };
+        let mut ops: Vec<Op> = Vec::new();
+        for (leaf, value) in writes {
+            let (source, v) = handle::resolve_target(&self.doc, &self.reactive, leaf, value)?;
+            if self.reactive.read(&self.doc, source).as_ref() != Some(&v) {
+                ops.push(Op::Set { id: source.node, path: source.path, slot: Slot::Const(v) });
+            }
+        }
+        for (leaf, value) in session {
+            self.set_state(leaf, value)?;
+        }
+        if ops.is_empty() {
+            return Ok(None);
+        }
+        let label = label.unwrap_or_else(|| event.to_owned());
+        self.apply(TransactionInput { label, actor, ts, idempotency_key: None, ops, exact: false }).map(Some).map_err(|errors| errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+    }
+
+    /// A continuous event on `node`: `drag` (the pointer moved while held)
+    /// or `wheel`. `payload` is what the action's formulas read on their
+    /// own `on` node: `dx`, `dy` (how far the pointer moved since the last
+    /// event, document px), `x`, `y` (where it is, in the listening node's
+    /// own space) and `delta` (the wheel, px). The writes are **previewed**,
+    /// not applied: every event of one drag reads what the one before left,
+    /// and the host ends it with `commit_gesture`, one undo step. Answers
+    /// the action's name when something listened.
+    pub fn pointer_action(&mut self, node: NodeId, event: &str, payload: [f64; 5]) -> Result<Option<String>, String> {
+        let Some((listens, actions)) = self.handlers(node, event) else { return Ok(None) };
+        let mut shown = self.reactive.published_by(ProducerId::EVENTS);
+        for on in actions {
+            for (field, v) in ["dx", "dy", "x", "y", "delta"].into_iter().zip(payload) {
+                shown.insert(Leaf { node: on, path: LeafPath::new(facet::FacetKind::On, field).expect("declared leaf") }, Value::Number(v));
+            }
+        }
+        let doc = &self.doc;
+        shown.retain(|l, _| doc.is_live(l.node));
+        self.signal_stamp += 1;
+        self.reactive.publish(&self.doc, ProducerId::EVENTS, shown, self.signal_stamp);
+        let Some((writes, session, label)) = self.action_writes(listens, event)? else { return Ok(None) };
+        for (leaf, value) in writes {
+            self.preview_target(leaf.node, leaf.path, value)?;
+        }
+        for (leaf, value) in session {
+            self.set_state(leaf, value)?;
+        }
+        Ok(Some(label.unwrap_or_else(|| event.to_owned())))
+    }
+
+    /// Where `node` or something above it listens for `event`.
+    pub fn listens_for(&self, node: NodeId, event: &str) -> Option<NodeId> {
+        if !self.has_actions() {
+            return None;
+        }
+        self.handlers(node, event).map(|(listens, _)| listens)
+    }
+
+    /// What the actions listening on `listens` for `event` would write
+    /// now: the document leaves and their values, the session cells, and
+    /// the first action's name. Every value is read before any is written.
+    #[allow(clippy::type_complexity)]
+    fn action_writes(&mut self, listens: NodeId, event: &str) -> Result<Option<(Vec<(Leaf, Value)>, Vec<(Leaf, Value)>, Option<String>)>, String> {
         let Some(actions) = self.listeners(event).remove(&listens) else { return Ok(None) };
         let leaf_of = |f: &str| LeafPath::new(facet::FacetKind::Write, f).expect("declared leaf");
-        let mut ops: Vec<Op> = Vec::new();
+        let mut writes: Vec<(Leaf, Value)> = Vec::new();
         let mut session: Vec<(Leaf, Value)> = Vec::new();
         let mut label = None;
         for on in actions {
@@ -1628,21 +1689,11 @@ impl Store {
                 if self.is_session_state(leaf) {
                     session.push((leaf, value));
                 } else {
-                    let (source, v) = handle::resolve_target(&self.doc, &self.reactive, leaf, value)?;
-                    if self.reactive.read(&self.doc, source).as_ref() != Some(&v) {
-                        ops.push(Op::Set { id: source.node, path: source.path, slot: Slot::Const(v) });
-                    }
+                    writes.push((leaf, value));
                 }
             }
         }
-        for (leaf, value) in session {
-            self.set_state(leaf, value)?;
-        }
-        if ops.is_empty() {
-            return Ok(None);
-        }
-        let label = label.unwrap_or_else(|| event.to_owned());
-        self.apply(TransactionInput { label, actor, ts, idempotency_key: None, ops, exact: false }).map(Some).map_err(|errors| errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+        Ok(Some((writes, session, label)))
     }
 
     /// Events actions asked the host to hear (`on.emit`), with the node

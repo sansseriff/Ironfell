@@ -676,3 +676,65 @@ fn items_enter_and_leave_over_time() {
     store.advance_presence(0.95);
     assert!(panel(&store).is_empty());
 }
+
+/// Continuous events (reactivity.md §13): a drag's and a wheel's writes are
+/// previewed as they happen, each reading what the last left, and commit
+/// as one undo step.
+#[test]
+fn a_drag_previews_its_writes_and_commits_one_step() {
+    let (mut store, _, n) = sheet(
+        r##"<let id="pan" name="pan" value="0"/>
+        <let id="zoom" name="zoom" value="1"/>
+        <group id="pad" name="pad">
+          <rect id="hit" name="hit" w="100" h="100"/>
+          <on id="d" name="pan view" event="drag" target="$pan" to="{= $pan - $d.on.dx / $zoom}"/>
+          <on id="w" name="zoom view" event="wheel" target="$zoom" to="{= $zoom * exp(-$w.on.delta / 100)}"/>
+        </group>
+        <text id="t" name="t" content="{= fmt($pan, 1)}"/>"##,
+    );
+    let history = store.history().past().len();
+    assert_eq!(store.listens_for(n["hit"], "drag"), Some(n["pad"]));
+    assert_eq!(store.pointer_action(n["hit"], "drag", [10.0, 0.0, 10.0, 5.0, 0.0]).unwrap().as_deref(), Some("pan view"));
+    store.pointer_action(n["hit"], "drag", [5.0, 0.0, 15.0, 5.0, 0.0]).unwrap();
+    assert_eq!(text_of(&store, n["t"]), "-15.0", "previewed, each move from where the last left");
+    assert_eq!(store.history().past().len(), history);
+    store.commit_gesture("pan view", Actor::Human, 0).unwrap().unwrap();
+    assert_eq!(store.history().past().len(), history + 1);
+    assert_eq!(store.resolved(n["pan"], path("let.value")), Some(Value::Number(-15.0)));
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(text_of(&store, n["t"]), "0.0");
+    store.pointer_action(n["hit"], "wheel", [0.0, 0.0, 50.0, 50.0, -100.0]).unwrap();
+    store.commit_gesture("zoom view", Actor::Human, 0).unwrap().unwrap();
+    assert!((store.resolved(n["zoom"], path("let.value")).unwrap().as_f64().unwrap() - std::f64::consts::E).abs() < 1e-9);
+}
+
+/// `std:plot` pans by a drag in its plot area and zooms by the wheel about
+/// the pointer: its view is state on the instance, one undo step a gesture.
+#[test]
+fn the_plot_pans_by_drag_and_zooms_by_wheel() {
+    let (mut store, comp, _) = sheet(r#"<group name="spare"/>"#);
+    let plot = store.place_standard("plot", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let e = expand::use_entity(store.document(), plot).unwrap();
+    let out = |s: &Store, name: &str| {
+        let p = s.document().children(e).iter().copied().find(|&p| s.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap();
+        s.resolved(p, path("port.signal")).unwrap().as_f64().unwrap()
+    };
+    assert_eq!((out(&store, "x_lo"), out(&store, "x_hi")), (0.0, 10.0));
+    let area = named(&store, plot, "plot area")[0];
+    let history = store.history().past().len();
+    // The area is 290 px wide (360 less the margins): half of it is 5 units.
+    store.pointer_action(area, "drag", [-100.0, 0.0, 0.0, 0.0, 0.0]).unwrap().unwrap();
+    store.pointer_action(area, "drag", [-45.0, 0.0, 0.0, 0.0, 0.0]).unwrap().unwrap();
+    assert!((out(&store, "x_lo") - 5.0).abs() < 1e-9 && (out(&store, "x_hi") - 15.0).abs() < 1e-9, "{} {}", out(&store, "x_lo"), out(&store, "x_hi"));
+    store.commit_gesture("pan plot", Actor::Human, 0).unwrap().unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(store.history().past().len(), history + 1);
+    assert!((out(&store, "x_lo") - 5.0).abs() < 1e-9);
+    // Zoom in 2x about the left edge: the left edge stays, the span halves.
+    let delta = -(2f64.ln()) / 0.002;
+    store.pointer_action(area, "wheel", [0.0, 0.0, 0.0, 0.0, delta]).unwrap().unwrap();
+    store.commit_gesture("zoom plot", Actor::Human, 0).unwrap().unwrap_or_else(|e| panic!("{e:?}"));
+    assert!((out(&store, "x_lo") - 5.0).abs() < 1e-9 && (out(&store, "x_hi") - 10.0).abs() < 1e-9, "{} {}", out(&store, "x_lo"), out(&store, "x_hi"));
+    store.undo(0).unwrap().unwrap();
+    store.undo(0).unwrap().unwrap();
+    assert_eq!((out(&store, "x_lo"), out(&store, "x_hi")), (0.0, 10.0));
+}

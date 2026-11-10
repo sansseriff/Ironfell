@@ -542,6 +542,10 @@ enum Gesture {
     /// turned (`ring`) or slid (`track` along `axis`), through the leaf's
     /// binding (affordances.md §5.2, §5.4).
     Drive(Drive),
+    /// A drag the document declares an action for (`on` with event
+    /// `drag`, reactivity.md §13): each move's writes are previewed, the
+    /// release commits them as one step named `label`.
+    Action { view: PanelView, node: NodeId, last: Point, label: String },
     /// A trim by one of a node's `ends` (`affords.grips`): its own x and
     /// width, through their bindings (a timeline bar's clip start and
     /// duration, timeline.md §6).
@@ -622,7 +626,7 @@ fn control_at(geo: &Geo, view: &PanelView, chain: &[NodeId], k: usize, start: Po
     // The document's own actions: a press on something that listens.
     if let Some(&node) = chain.last()
         && geo.store.has_actions()
-        && ["click", "press", "release"].iter().any(|e| geo.store.handlers(node, e).is_some())
+        && ["click", "press", "release", "drag"].iter().any(|e| geo.store.handlers(node, e).is_some())
     {
         return Some(Control::Fire { node });
     }
@@ -726,7 +730,7 @@ impl SelectTool {
 
     /// Whether the selection is being dragged (moved, driven, reordered).
     pub(crate) fn dragging(&self) -> bool {
-        matches!(self.gesture, Gesture::Edit(_) | Gesture::Sequence(_) | Gesture::Drive(_) | Gesture::Ends(_))
+        matches!(self.gesture, Gesture::Edit(_) | Gesture::Sequence(_) | Gesture::Drive(_) | Gesture::Ends(_) | Gesture::Action { .. })
     }
 }
 
@@ -2047,7 +2051,7 @@ pub fn select_tool_system(
                         }
                     }
                     Gesture::Sequence(_) => store.0.set_layout_preview(None),
-                    Gesture::Drive(_) | Gesture::Ends(_) => store.0.cancel_gesture(),
+                    Gesture::Drive(_) | Gesture::Ends(_) | Gesture::Action { .. } => store.0.cancel_gesture(),
                     _ => {}
                 }
                 tool.marquee = None;
@@ -2967,6 +2971,7 @@ pub fn select_tool_system(
         Gesture::Marquee { view, .. } => follow(view),
         Gesture::Sequence(q) => follow(&mut q.view),
         Gesture::Drive(d) => follow(&mut d.view),
+        Gesture::Action { view, .. } => follow(view),
         Gesture::Ends(e) => follow(&mut e.view),
         Gesture::Edit(m) => m.view_mut().is_some_and(follow),
         _ => false,
@@ -3000,6 +3005,10 @@ pub fn select_tool_system(
                 AfterPress::Move { .. } if sequence.is_some() => tool.gesture = Gesture::Sequence(sequence.take().expect("checked")),
                 // A drag off a control is not a click: nothing happens.
                 AfterPress::Activate { .. } => tool.gesture = Gesture::Idle,
+                // A drag the document listens for; else a drag off is no click.
+                AfterPress::Fire { node } if geo.store.listens_for(*node, "drag").is_some() => {
+                    tool.gesture = Gesture::Action { view: view.clone(), node: *node, last: p0, label: String::new() };
+                }
                 AfterPress::Fire { node } => {
                     tool.fired = Some((*node, "release"));
                     tool.gesture = Gesture::Idle;
@@ -3117,6 +3126,23 @@ pub fn select_tool_system(
                 }
             }
             Gesture::Library { at, .. } => *at = screen,
+            Gesture::Action { view, node, last, label } => {
+                let at = view.affine().inverse() * screen;
+                let d = at - *last;
+                if d.x != 0.0 || d.y != 0.0 {
+                    // Where the pointer is in the listening node's own space.
+                    let local = {
+                        let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
+                        geo.store.listens_for(*node, "drag").map_or(at, |l| geo.world(l).inverse() * at)
+                    };
+                    match store.0.pointer_action(*node, "drag", [d.x, d.y, local.x, local.y, 0.0]) {
+                        Ok(Some(name)) => *label = name,
+                        Ok(None) => {}
+                        Err(why) => warn!("drag on {node}: {why}"),
+                    }
+                    *last = at;
+                }
+            }
             Gesture::Drive(d) => {
                 let at = d.view.affine().inverse() * screen;
                 let v = if d.ring {
@@ -3320,6 +3346,7 @@ pub fn select_tool_system(
             }
             Gesture::Marquee { .. } => tool.marquee = None,
             Gesture::Drive(d) => gestures.0.push(GestureRequest::Commit(d.label)),
+            Gesture::Action { label, .. } => gestures.0.push(GestureRequest::Commit(if label.is_empty() { "drag".into() } else { label })),
             Gesture::Ends(e) => gestures.0.push(GestureRequest::Commit(e.label)),
             // Dropped where it started: nothing to write.
             Gesture::Sequence(q) => {
@@ -4364,8 +4391,45 @@ pub fn navigate_views(
     spatial: Res<crate::document_bridge::SpatialScene>,
     drawables: Res<crate::document_bridge::Drawables>,
     dpr: Res<crate::Dpr>,
+    time: Res<Time>,
+    mut gestures: ResMut<GestureRequests>,
+    mut wheeling: Local<Option<(f64, String)>>,
 ) {
     let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two);
+    // The wheel over something that listens for it (`on` with event
+    // `wheel`) is the document's: its writes are previewed, and commit as
+    // one step once the wheel has rested. Ctrl/Cmd+wheel still zooms the view.
+    let now = time.elapsed_secs_f64();
+    let mut taken = false;
+    if scroll.delta != Vec2::ZERO
+        && !(pointer.modifiers.ctrl || pointer.modifiers.meta)
+        && !tool.pressing()
+        && let Some(view) = under
+        && let Some(node) = tool.over
+        && let Some(listens) = store.0.listens_for(node, "wheel")
+    {
+        let px = match scroll.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => scroll.delta.y * 16.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel => scroll.delta.y,
+        };
+        let at = view.affine().inverse() * Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
+        let local = Geo { store: &store.0, drawables: &drawables, spatial: &spatial }.world(listens).inverse() * at;
+        match store.0.pointer_action(node, "wheel", [0.0, 0.0, local.x, local.y, px as f64]) {
+            Ok(Some(name)) => {
+                *wheeling = Some((now, name));
+                taken = true;
+            }
+            Ok(None) => {}
+            Err(why) => warn!("wheel on {node}: {why}"),
+        }
+    }
+    if let Some((at, name)) = wheeling.as_ref()
+        && (now - at > 0.3 || !!tool.pressing())
+    {
+        gestures.0.push(GestureRequest::Commit(name.clone()));
+        *wheeling = None;
+    }
+    let under = if taken { None } else { under };
     // The timeline (timeline.md §6) navigates time on its axis, so text
     // and corners never stretch: the wheel's horizontal part pans `t0`,
     // Ctrl/Cmd zooms `pps` about the pointer, and only the rows scroll.

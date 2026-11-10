@@ -364,6 +364,17 @@ ${p.contextFields}`,
   selection.node (the first selected node), selection.nodes (a list) and
   selection.count published on it:
     content="{= $sel.selection.count == 0 ? '' : fmt(deref($sel.selection.node, 'size.w', 0))}"
+  DRAG AND WHEEL: an on with event="drag" or event="wheel" runs as the pointer moves
+  or the wheel turns over its node. Its formulas read what the event carries on the
+  on itself: $o.on.dx and $o.on.dy (how far the pointer moved since the last event, in
+  document px), $o.on.x and $o.on.y (where it is, in the listening node's own space)
+  and $o.on.delta (the wheel, px; negative is away from you). Each event reads what
+  the last one wrote, and the whole drag (or burst of wheel) is one undo step:
+    <create id="$o" type="on" parent="#pad" name="pan view" event="drag"
+      write.target="#pan" write.to="{= #pan.let.value - $o.on.dx}"/>
+  std:plot does this itself: drag its plot area to pan, wheel to zoom about the
+  pointer (state lets zoom, centre x, centre y on the instance; its margins still
+  move it).
   CONTEXT: @name reads the nearest value of that name provided above the reader, with
   no port in between, so one component reads different values where it is placed. A
   let provides: <create type="let" parent="#group" name="gap" let.provide="yes"

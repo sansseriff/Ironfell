@@ -63,7 +63,9 @@ impl ProducerId {
     pub const QUERIES: ProducerId = ProducerId(9);
     /// Items entering and leaving (`Store::advance_presence`).
     pub const PRESENCE: ProducerId = ProducerId(10);
-    pub const FIRST_HOST: ProducerId = ProducerId(11);
+    /// What the last drag or wheel event carried, on its `on` nodes.
+    pub const EVENTS: ProducerId = ProducerId(11);
+    pub const FIRST_HOST: ProducerId = ProducerId(12);
 }
 
 /// One published value: who published it and at which of their frames.

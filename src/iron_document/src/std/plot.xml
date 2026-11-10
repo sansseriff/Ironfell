@@ -37,13 +37,25 @@
   <!-- Every series' values, for the y range: a function sampled at a fixed
        count (outputs do not see a picture's box). -->
   <let id="is_fn" name="is function" value="{= kind($f) == 'function'}"/>
-  <let id="ys_all" name="all ys" value="{= concat($is_fn ? sample($f, $x_lo, $x_hi, 200) : $ys, $ys2, $ys3)}"/>
+  <!-- The range before any panning or zooming: the inputs, or auto. -->
+  <let id="bx0" name="base x lo" value="{= isnan($x_min) ? ($is_fn ? 0 : (len($xs) == 0 ? 0 : min($xs))) : $x_min}"/>
+  <let id="bx1" name="base x hi" value="{= isnan($x_max) ? ($is_fn ? 10 : (len($xs) == 0 ? 1 : max($xs))) : $x_max}"/>
+  <let id="ys_all" name="all ys" value="{= concat($is_fn ? sample($f, $bx0, $bx1, 200) : $ys, $ys2, $ys3)}"/>
+  <let id="by0" name="base y lo" value="{= isnan($y_min) ? (len($ys_all) == 0 ? 0 : nice_lo(min($ys_all), max($ys_all), 5)) : $y_min}"/>
+  <let id="by1" name="base y hi" value="{= isnan($y_max) ? (len($ys_all) == 0 ? 1 : nice_hi(min($ys_all), max($ys_all), 5)) : $y_max}"/>
+  <!-- The view (reactivity.md §13): state the picture's drag and wheel
+       actions write. `zoom` magnifies about the view's centre, which is a
+       fraction of the base range (0.5 is its middle). At 1, 0.5, 0.5 the
+       plot shows the base range. -->
+  <let id="vz" name="zoom" value="1"/>
+  <let id="vcx" name="centre x" value="0.5"/>
+  <let id="vcy" name="centre y" value="0.5"/>
 
   <!-- Outputs: the ranges in use, and the curve's value at the cursor. -->
-  <port_spec id="x_lo" name="x_lo" kind="value" dir="out" signal="{= isnan($x_min) ? ($is_fn ? 0 : (len($xs) == 0 ? 0 : min($xs))) : $x_min}"/>
-  <port_spec id="x_hi" name="x_hi" kind="value" dir="out" signal="{= isnan($x_max) ? ($is_fn ? 10 : (len($xs) == 0 ? 1 : max($xs))) : $x_max}"/>
-  <port_spec id="y_lo" name="y_lo" kind="value" dir="out" signal="{= isnan($y_min) ? (len($ys_all) == 0 ? 0 : nice_lo(min($ys_all), max($ys_all), 5)) : $y_min}"/>
-  <port_spec id="y_hi" name="y_hi" kind="value" dir="out" signal="{= isnan($y_max) ? (len($ys_all) == 0 ? 1 : nice_hi(min($ys_all), max($ys_all), 5)) : $y_max}"/>
+  <port_spec id="x_lo" name="x_lo" kind="value" dir="out" signal="{= $bx0 + ($bx1 - $bx0) * ($vcx - 0.5 / $vz)}"/>
+  <port_spec id="x_hi" name="x_hi" kind="value" dir="out" signal="{= $bx0 + ($bx1 - $bx0) * ($vcx + 0.5 / $vz)}"/>
+  <port_spec id="y_lo" name="y_lo" kind="value" dir="out" signal="{= $by0 + ($by1 - $by0) * ($vcy - 0.5 / $vz)}"/>
+  <port_spec id="y_hi" name="y_hi" kind="value" dir="out" signal="{= $by0 + ($by1 - $by0) * ($vcy + 0.5 / $vz)}"/>
   <port_spec id="y_at" name="y_at_cursor" kind="value" dir="out" signal="{= isnan($cursor) ? 0 / 0 : ($is_fn ? $f($cursor) : interp($xs, $ys, $cursor))}"/>
 
   <!-- The vis machine (plans/specs/machines.md): appear draws the plot on
@@ -109,6 +121,19 @@
 
     <!-- The plot area, clipped: grid, series, cursor. -->
     <group name="area" x="54" y="{= $top}" group_clip.w="{= $aw}" group_clip.h="{= $ah}">
+      <!-- Dragging here pans the view and the wheel zooms it about the
+           pointer; the margins still move the plot. -->
+      <rect name="plot area" x="0" y="0" w="{= $aw}" h="{= $ah}" fill.color="@surface" appearance.opacity="{= $ch_frame}"/>
+      <on id="pan" name="pan plot" event="drag">
+        <set target="$vcx" to="{= $vcx - $pan.on.dx / $aw / $vz}"/>
+        <set target="$vcy" to="{= $vcy + $pan.on.dy / $ah / $vz}"/>
+      </on>
+      <let id="nz" name="next zoom" value="{= clamp($vz * exp(-$zoom.on.delta * 0.002), 0.25, 1000)}"/>
+      <on id="zoom" name="zoom plot" event="wheel">
+        <set target="$vz" to="{= $nz}"/>
+        <set target="$vcx" to="{= $vcx + ($zoom.on.x / $aw - 0.5) * (1 / $vz - 1 / $nz)}"/>
+        <set target="$vcy" to="{= $vcy + (0.5 - $zoom.on.y / $ah) * (1 / $vz - 1 / $nz)}"/>
+      </on>
       <path name="grid" x="0" y="0" d="{= $grid ? segments($xp($xt), 0, $xp($xt), $ah) + ' ' + segments(0, $yp($yt), $aw, $yp($yt)) : ''}"
         stroke.color="@grid" stroke.width="1" fill.opacity="0" appearance.opacity="{= $ch_ticks}"/>
       <!-- One path per series, drawn by its style; drawn on by trim. -->

@@ -1,0 +1,31 @@
+nav
+ready
+eval __iron.snapping(false)
+eval (window.__p=async()=>{const v=await __iron.view({fidelity:'full'});const u=(v.match(/<use id="(#[^"]+)"/)||[])[1];const w=await __iron.view({fidelity:'full',scope:u,expand:[u]});return {tick:(w.match(/name="x tick"[^>]*content="([^"]*)"/)||[])[1],x:+(v.match(/<use id="[^"]+"[^>]* x="([-\d.]+)"/)||[])[1],version:+(v.match(/<document version="(\d+)"/)||[])[1]}}, true)
+eval (async()=>{const r=await __iron.edit('<edit><place def="std:plot" in="#1" x="40" y="60" w="420" h="280" name="P1"/></edit>');return r.ok?true:r})()
+sleep 600
+assert (async()=>{const a=await __p();window.__v0=a.version;return a.tick==='0'&&a.x===40})()
+shot plot-before
+ddrag 400 180 225 180 12
+sleep 600
+assert (async()=>{const a=await __p();window.__t1=a.tick;return +a.tick>=5&&+a.tick<=6&&a.x===40&&a.version===window.__v0+1})()
+shot plot-panned
+eval (window.addEventListener('pointermove',e=>{window.__m=[e.clientX,e.clientY]},true), true)
+dmove 260 180
+dmove 269 187
+sleep 200
+eval (async()=>{const [x,y]=window.__m;const el=document.elementFromPoint(x,y);for(let i=0;i<6;i++){el.dispatchEvent(new WheelEvent('wheel',{deltaY:-60,deltaMode:0,clientX:x,clientY:y,bubbles:true,cancelable:true}));await new Promise(r=>setTimeout(r,50))}return el.tagName})()
+sleep 900
+assert (async()=>{const a=await __p();return a.tick!==window.__t1&&a.x===40&&a.version===window.__v0+2})()
+shot plot-zoomed
+key Meta+z
+sleep 400
+key Meta+z
+sleep 500
+assert (async()=>{const a=await __p();return a.tick==='0'})()
+ddrag 60 320 100 320 8
+sleep 500
+assert (async()=>{const a=await __p();return a.x===80&&a.tick==='0'})()
+logs applied "(pan|zoom|move)
+errors
+quit

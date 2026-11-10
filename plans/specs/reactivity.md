@@ -489,6 +489,26 @@ Phase 7, second part (2026-11-10): a parent's machine over its children's
 along its states, `machine.running` says a machine is moving, and a parent's tweened
 channels walk each nested part through the part's own transition, handing back at rest.
 
+Continuous events and the zoomable plot (2026-11-10):
+
+- **`on.event` `drag` and `wheel`**, with what the event carries published on the
+  `on` node (`ProducerId::EVENTS`): `dx`, `dy` (document px since the last event), `x`,
+  `y` (the pointer in the listening node's space), `delta` (the wheel, px).
+  `Store::pointer_action` **previews** the writes, so each event reads what the last
+  left and the document is untouched until the host commits: a drag on release, a
+  burst of wheel once it has rested 0.3 s, each one undo step named by the `on`.
+- **The host** (`bevy_app/select.rs`): a press on something that listens for `drag`
+  becomes `Gesture::Action` when it travels; `navigate_views` gives the wheel to a
+  listener under the pointer before the view (Ctrl/Cmd+wheel still zooms the view).
+- **`std:plot` pans and zooms**: three state lets on the instance (`zoom`, `centre x`,
+  `centre y`, as fractions of the base range) from which `x_lo` … `y_hi` are computed;
+  a `plot area` rect with a `drag` action (pan both axes) and a `wheel` action (zoom
+  about the pointer). No machine is involved: state, two actions, and bindings. The
+  margins still move the plot. `plot-view.txt` (run-iron).
+- **`std:laser` pulses**: `pulse_hz` and `duty`, timed by an `accumulate` phase.
+  `pulses.txt` (run-iron) runs it through a 2 s `std:fiber` into `std:meter`: three
+  pulses on the curve at once, and the meter reading 12 mW and 0 in turn.
+
 **Differs from the proposal:**
 
 - Numbers are keyed by index unless `repeat.key` is given (§3.2 said by value when
@@ -511,6 +531,8 @@ channels walk each nested part through the part's own transition, handing back a
 - Enter and exit are a `presence` number, not a `vis` machine on the item (repeat.md
   §3 said machines): a template that wants a designed appear binds its component's
   `vis` to `presence > 0.5` or `!leaving`. Linear in time; shape it with `ease`.
+- The plot has no reset of its view yet (undo steps back), no zoom of one axis alone,
+  and its tick labels are still index-keyed. There are no key events.
 - Still whole-document: any change to a repeat's items or a conditional re-expands
   the document and rebuilds the graph.
 

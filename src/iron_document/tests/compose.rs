@@ -119,7 +119,7 @@ fn refusals_say_what_to_do_instead() {
     let (mut store, [_, overview, scene, ..]) = desk();
     let err = |store: &mut Store, m: &str| run(store, m).unwrap_err();
     assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{scene}"/>"#)).contains("<link-figures>"));
-    assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}" wattage="3"/>"#)).contains("no input \"wattage\" (power)"));
+    assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}" wattage="3"/>"#)).contains("no input \"wattage\" (power, pulse_hz, duty)"));
     assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}" notation="schematic"/>"#)).contains("it has free"));
     assert!(err(&mut store, &format!(r#"<place def="std:lamp" in="{overview}"/>"#)).contains("std:laser"));
     assert!(err(&mut store, r#"<place entity="$nope" in="overview"/>"#).contains("not named by an earlier verb"));
@@ -134,5 +134,5 @@ fn the_schema_lists_each_standard_component_s_ports() {
     let schema = registry::schema_json();
     let laser = schema["standard"].as_array().unwrap().iter().find(|e| e["key"] == "laser").unwrap();
     let ports: Vec<String> = laser["ports"].as_array().unwrap().iter().map(|p| format!("{} {} {} {}", p["name"].as_str().unwrap(), p["dir"].as_str().unwrap(), p["kind"].as_str().unwrap(), p["default"])).collect();
-    assert_eq!(ports, ["power in value \"10 mW\"", "out out optical_power null"]);
+    assert_eq!(ports, ["power in value \"10 mW\"", "pulse_hz in value \"0\"", "duty in value \"0.5\"", "out out optical_power null"]);
 }

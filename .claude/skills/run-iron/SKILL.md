@@ -61,6 +61,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `layers.txt` (`GPU=1`) | ~22 s (21.5 s, 2026-11-06) |
 | `scope-menu.txt` | ~20 s |
 | `query.txt` (`GPU=1`, with `model-server.ts`): a plot of a 1.5 s Model's answer | ~12 s (2026-11-10) |
+| `plot-view.txt`, `pulses.txt` (`GPU=1`) | ~12 s each (2026-11-10) |
 | `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
@@ -158,6 +159,34 @@ from the start, two numbers, with one new version; lit throughout after 2 s, an 
 dash; after the second click `0 gap lit 1`, the tail travelling; dark again), then
 `(no page errors)`. Inspect `screenshots/fiber-travel.png` and `fiber-tail.png`: a pale
 stretch on the amber curve. The version rises only by the two clicks.
+
+## The zoomable plot and pulses on a fiber (2026-11-10)
+
+`plans/specs/reactivity.md` §13. `plot-view.txt` places `std:plot` and, with the real
+pointer, drags its plot area left by half its width, sends a burst of six wheel events
+over it (dispatched in one `eval`: the driver's own `wheel` waits 400 ms, longer than
+the 0.3 s rest that ends a wheel gesture), undoes both, and drags the plot by its margin.
+
+```sh
+cd .claude/skills/run-iron && GPU=1 SIZE=1680x1000@1 bun run drive.ts < plot-view.txt; cd -
+```
+
+Expected: five `assertion passed` lines (first x tick 0; after the drag between 5 and 6
+with one new version; changed again after the wheel with one more; 0 again after two
+undos; the plot at x 80 after the margin drag), then `applied "pan plot"`, one
+`applied "zoom plot"` and `applied "move use"`, and `(no page errors)`.
+
+`pulses.txt` places `std:laser` (`pulse_hz="1.5" duty="0.35"`), `std:fiber`
+(`delay_s="2"`) and `std:meter`, connects them, and samples for 3 s.
+
+```sh
+cd .claude/skills/run-iron && GPU=1 SIZE=1680x1000@1 bun run drive.ts < pulses.txt; cd -
+```
+
+Expected: four `assertion passed` lines (a dash with at least four runs, so two pulses
+on the curve at once; at least eight different dashes; the meter reading both 12 mW and
+0; the version unchanged), `(no page errors)`. `screenshots/pulses.png` shows pale
+dashes along the amber fiber.
 
 ## Queries to a slow Model (2026-11-10)
 
@@ -582,7 +611,7 @@ interaction a unit test cannot reach: a real pointer or keyboard gesture through
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `sequence.txt`, `text.txt`,
 `text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
-`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
+`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
 `selection-cache.txt`. Retired: `smoke-full.txt` (split into `regression.txt` and

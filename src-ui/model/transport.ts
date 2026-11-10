@@ -13,7 +13,7 @@ import type { AgentEvent } from './progress';
 /** A turn's outcome as the agent log records it (agent.ts writes it). */
 export interface TurnRecord { turn: string; [key: string]: unknown }
 
-type Message = { role: 'user' | 'assistant'; content: string };
+type Message = import('./conversation').ConversationMessage;
 /** Where a streaming completion sends its deltas, and how it is stopped. */
 export interface CompleteLive {
   onEvent?: (event: AgentEvent) => void;
@@ -157,7 +157,9 @@ export class AnthropicTransport implements ModelTransport {
       thinking: { type: 'adaptive', display: 'summarized' },
       ...(this.effort ? { output_config: { effort: this.effort as Anthropic.OutputConfig['effort'] } } : {}),
       system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
-      messages,
+      messages: messages.map(message => ({ role: message.role, content: message.images?.length
+        ? [{ type: 'text' as const, text: message.content }, ...message.images.map(image => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.mediaType, data: image.data } }))]
+        : message.content })),
     }, { signal: live.signal });
     if (live.onEvent) {
       const onEvent = live.onEvent;

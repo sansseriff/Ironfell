@@ -228,6 +228,7 @@ fn new_target_image(size: UVec2) -> Image {
     );
     image.texture_descriptor.usage = wgpu::TextureUsages::TEXTURE_BINDING
         | wgpu::TextureUsages::COPY_DST
+        | wgpu::TextureUsages::COPY_SRC
         | wgpu::TextureUsages::RENDER_ATTACHMENT;
     // The app installs `ImagePlugin::default_nearest()` for pixel-art assets,
     // and this composite would otherwise inherit it. At an exact 1:1 blit

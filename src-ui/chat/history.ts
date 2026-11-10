@@ -6,6 +6,7 @@
  * conversation is on disk, its title, and what is kept. The reactive store is
  * sessions.svelte.ts.
  */
+import { validImages } from '../model/images';
 import type { ChatSession, ChatTurn } from './conversation';
 
 /** One conversation in a panel's history. */
@@ -43,13 +44,13 @@ export function savedThread(thread: ChatThread): ChatThread {
   const turns = thread.turns.filter((turn: ChatTurn) => turn.status !== 'running');
   const ids = new Set(turns.map(turn => turn.id));
   const annotations = Object.fromEntries(Object.entries(thread.annotations).filter(([id]) => ids.has(id)));
-  return { id: thread.id, created: thread.created, updated: thread.updated, draft: thread.draft, turns, annotations };
+  return { id: thread.id, created: thread.created, updated: thread.updated, draft: thread.draft, draftImages: thread.draftImages, turns, annotations };
 }
 
 /** A panel's history as saved: conversations with something in them (and
  *  the current one), most recent first, at most `MAX_THREADS`. */
 export function savedView(threads: ChatThread[], current: string): SavedView {
-  const kept = threads.filter(thread => thread.id === current || thread.turns.length || thread.draft.trim())
+  const kept = threads.filter(thread => thread.id === current || thread.turns.length || (thread.draft.trim() || thread.draftImages?.length))
     .map(savedThread)
     .sort((a, b) => b.updated - a.updated)
     .slice(0, MAX_THREADS);
@@ -70,7 +71,8 @@ export function parseChats(json: string | null): SavedChats {
         .map((t: any) => ({
           id: t.id, created: Number(t.created) || 0, updated: Number(t.updated) || 0,
           draft: typeof t.draft === 'string' ? t.draft : '',
-          turns: t.turns.filter((turn: any) => typeof turn?.id === 'string' && typeof turn.instruction === 'string' && turn.status !== 'running'),
+          draftImages: validImages(t.draftImages) ? t.draftImages : [],
+          turns: t.turns.filter((turn: any) => typeof turn?.id === 'string' && typeof turn.instruction === 'string' && turn.status !== 'running').map((turn: ChatTurn) => ({ ...turn, images: validImages(turn.images) ? turn.images : [] })),
           annotations: typeof t.annotations === 'object' && t.annotations ? t.annotations : {},
         }));
       views[key] = { current: typeof view.current === 'string' ? view.current : '', threads };
@@ -87,7 +89,7 @@ export function parseChats(json: string | null): SavedChats {
 export function mergeView(live: ChatThread[], current: string, saved: SavedView | undefined): SavedView {
   if (!saved?.threads.length) return { current, threads: live };
   const active = live.find(thread => thread.id === current);
-  const started = live.filter(thread => thread.turns.length || thread.draft.trim());
+  const started = live.filter(thread => thread.turns.length || (thread.draft.trim() || thread.draftImages?.length));
   if (!started.length) {
     const shown = saved.threads.some(thread => thread.id === saved.current) ? saved.current : saved.threads[0].id;
     return { current: shown, threads: saved.threads };

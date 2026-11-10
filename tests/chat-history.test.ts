@@ -66,3 +66,17 @@ test('scope storage keeps chats.json per scope, counted in its size', async () =
   await storage.writeChats('missing', 'x');
   assert.equal(await storage.readChats('missing'), null);
 });
+
+test('saved chat images and image-only drafts round trip, invalid attachments are dropped', () => {
+  const image = { name: 'picture.png', mediaType: 'image/png' as const, data: 'AAAA' };
+  const chat = thread('images', [{ ...turn('image', 'Inspect this'), images: [image] }]);
+  chat.draftImages = [image];
+  const saved = savedView([chat], chat.id);
+  const loaded = parseChats(JSON.stringify({ version: 1, views: { model: saved } })).views.model.threads[0];
+  assert.deepEqual(loaded.turns[0].images, [image]);
+  assert.deepEqual(loaded.draftImages, [image]);
+  const draft = thread('draft', []); draft.draftImages = [image];
+  assert.equal(mergeView([draft], draft.id, saved).current, draft.id);
+  const malformed = JSON.stringify({ version: 1, views: { model: saved } }).replaceAll('image/png', 'image/svg+xml');
+  assert.deepEqual(parseChats(malformed).views.model.threads[0].turns[0].images, []);
+});

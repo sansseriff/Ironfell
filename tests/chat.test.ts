@@ -139,3 +139,14 @@ test('a turn log carries the turn as the chat saw it, and where its calls are lo
   assert.deepEqual(log.steps, [{ step: 'Wrote the edit', attempt: 1, seconds: 4, tokens: { tokens: 50, thinking: 20, exact: true }, reasoning: 'hm' }]);
   assert.deepEqual([log.failure, log.trace.length, 'streamed' in log], ['<edit-failed/>', 1, false]);
 });
+
+test('history keeps recent image bytes intact under a separate budget', () => {
+  const image = { name: 'reference.png', mediaType: 'image/png' as const, data: 'AAAA'.repeat(600_000) };
+  const history = boundedHistory([
+    { role: 'user', content: 'Older reference', images: [image] },
+    { role: 'assistant', content: 'Older reply' },
+    { role: 'user', content: 'New reference', images: [image] },
+  ]);
+  assert.equal(history[0].images, undefined);
+  assert.deepEqual(history[2].images, [image]);
+});

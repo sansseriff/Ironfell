@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { imageUrl } from '../model/images';
   import { Collapsible } from 'bits-ui';
   import Copy from '@lucide/svelte/icons/copy';
   import Check from '@lucide/svelte/icons/check';
@@ -41,7 +42,7 @@
 
 <article class="chat-turn" data-turn-id={turn.id} data-status={turn.status}>
   <div class="user-row">
-    <div class="user-message"><p>{turn.instruction}</p></div>
+    <div class="user-message"><p>{turn.instruction}</p>{#each turn.images ?? [] as image}<img class="attached-image" src={imageUrl(image)} alt={image.name} />{/each}</div>
     {#if turn.target}<span class="target">{turn.target}</span>{/if}
   </div>
   <div class="assistant-message">
@@ -69,7 +70,7 @@
         </div>
       {/if}
     {:else if turn.status === 'stopped'}
-      <p class="summary">Stopped. Nothing was changed.</p>
+      <p class="summary">{turn.result?.trace?.some(step => step.kind === 'edit' && step.ok) ? 'Stopped. Earlier edits in this turn were applied.' : 'Stopped. Nothing was changed.'}</p>
       <div class="meta"><Button small variant="outline" onclick={retry}>Restore prompt</Button><IconButton icon={logCopied ? Check : ClipboardList} label={logCopied ? 'Turn log copied' : 'Copy turn log (for a bug report)'} onclick={copyLog} /></div>
     {:else}
       {#each parts as part, index (index)}
@@ -91,6 +92,7 @@
 </article>
 
 <style>
+  .attached-image { max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 6px; margin-top: 8px; }
   .chat-turn { width: min(100%, 736px); margin: 0 auto; min-width: 0; }
   /* The user's turn: a bubble on the right, as T3 Code's; the reply below it
      is plain text across the column. */

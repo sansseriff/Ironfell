@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 
 const mode = process.env.IRON_TEST_RUNTIME_MODE;
@@ -22,13 +23,18 @@ if (process.argv.includes('app-server')) {
       reply({ id: message.id, result: { turn: { id: 'fixture-turn' } } });
       if (mode === 'approval') { reply({ id: 99, method: 'item/commandExecution/requestApproval', params: {} }); return; }
       if (mode === 'timeout') return;
-      const input = message.params.input[0].text;
+      const input = message.params.input.filter((i: any) => i.type === 'text').map((i: any) => i.text).join('\n\n');
       const target = input.match(/TARGET (#\w+)/)?.[1] ?? '#1';
       const shape = input.match(/SHAPE (#\w+)/)?.[1] ?? '#fixture';
       let text = input.includes('edit-test-shape')
         ? `<edit><set id="${shape}" x="240" fill.color="#22aa55"/></edit>`
         : `<edit><create id="$shape" type="rect" parent="${target}" name="agent-test-shape" x="100" y="120" w="80" h="60" color="#ff2200"/></edit>`;
       if (input.includes('chat-test-prose')) text = '## A shared conversation\n\nA **rectangle** is a 2D shape.\n\n| Property | Meaning |\n| --- | --- |\n| width | horizontal size |\n\n```ts\nconst safe = true;\n```\n\n::view{show=main}\n\n<script>window.chatInjected = true</script>\n\n[unsafe](javascript:alert(1))';
+      if (input.includes('image-wire-test')) {
+        const image = message.params.input.find((i: any) => i.type === 'localImage');
+        const bytes = image ? await readFile(image.path) : Buffer.alloc(0);
+        text = bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'image received' : 'missing image';
+      }
       if (input.includes('effort-test')) text = `effort=${message.params.effort ?? 'none'} tier=${message.params.serviceTier ?? 'none'}`;
       if (input.includes('chat-test-follow-up')) text = input.includes('A **rectangle** is a 2D shape.') ? 'The previous reply described a rectangle.' : 'ERROR: missing history';
       if (input.includes('chat-test-lesson')) text = '### Lesson companion\n\nWe can discuss the lesson without editing it.\n\n::view{show=main}';
@@ -93,6 +99,14 @@ if (process.argv.includes('app-server')) {
   if (bare && !process.env.ANTHROPIC_API_KEY) process.exit(3);
   if (safe && (process.env.ANTHROPIC_API_KEY || process.env.CLAUDECODE || Object.keys(process.env).some(k => k.startsWith('CLAUDE_CODE_')))) process.exit(4);
   if (process.argv[process.argv.indexOf('--output-format') + 1] !== 'stream-json' || !process.argv.includes('--verbose')) process.exit(5);
+  if (input.includes('image-wire-test')) {
+    if (!process.argv.includes('--input-format')) process.exit(6);
+    const envelope = JSON.parse(input);
+    const image = envelope.message.content.find((i: any) => i.type === 'image');
+    const bytes = Buffer.from(image?.source?.data ?? '', 'base64');
+    reply({ type: 'result', result: bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'image received' : 'missing image' });
+    process.exit(0);
+  }
   reply({ type: 'system', subtype: 'init' });
   if (input.includes('effort-test')) {
     const effort = process.argv.includes('--effort') ? process.argv[process.argv.indexOf('--effort') + 1] : 'none';

@@ -69,6 +69,8 @@ native = ["bevy/multi_threaded", "iron_text/system"]
 
 
 [dependencies]
+base64 = "0.22"
+png = "0.18"
 bevy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

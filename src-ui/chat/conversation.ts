@@ -1,3 +1,4 @@
+import type { ModelImage } from '../model/images';
 import { marked } from 'marked';
 import type { AskResult } from '../model/agent';
 import { boundedHistory, type ConversationMessage } from '../model/conversation';
@@ -9,6 +10,7 @@ export type ContentPart = { kind: 'markdown'; text: string } | { kind: 'view'; s
 export interface ChatTurn {
   id: string;
   instruction: string;
+  images?: ModelImage[];
   target: string;
   status: 'running' | 'completed' | 'failed' | 'stopped';
   startedAt: number;
@@ -219,6 +221,7 @@ function describeVerb(verb: string, attrText: string): string {
 
 export interface ChatSession {
   draft: string;
+  draftImages?: ModelImage[];
   turns: ChatTurn[];
   annotations: Record<string, unknown>;
 }
@@ -307,7 +310,7 @@ export function safeChatUrl(value: string, image = false): string | null {
 
 export function chatHistory(turns: ChatTurn[]): ConversationMessage[] {
   return boundedHistory(turns.filter(turn => turn.status === 'completed' && turn.result?.ok).flatMap(turn => [
-    { role: 'user' as const, content: turn.instruction },
+    { role: 'user' as const, content: turn.instruction, ...(turn.images?.length ? { images: turn.images } : {}) },
     { role: 'assistant' as const, content: [turn.result?.note, turn.result?.edit].filter(Boolean).join('\n\n') || 'The requested document edit was applied.' },
   ]));
 }

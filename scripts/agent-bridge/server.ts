@@ -1,3 +1,4 @@
+import { validImages } from '../../src-ui/model/images';
 import { createServer, type IncomingMessage } from 'node:http';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type ModelEntry, type ModelLister, type Runtime } from './runtimes';
@@ -10,8 +11,8 @@ import { isEffort, isLoopbackOrigin, isServiceTier } from '../../src-ui/model/ru
 export function validateRequest(value: unknown): CompletionRequest {
   const request = value as CompletionRequest;
   if (!request || !['codex', 'claude'].includes(request.provider) || typeof request.system !== 'string' || !request.system.trim() ||
-    !Array.isArray(request.messages) || !request.messages.length || request.messages.length > 16 ||
-    request.messages.some(message => !message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string') ||
+    !Array.isArray(request.messages) || !request.messages.length || request.messages.length > 32 ||
+    request.messages.some(message => !message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string' || (message.images !== undefined && (message.role !== 'user' || !validImages(message.images)))) ||
     (request.model !== undefined && (typeof request.model !== 'string' || request.model.length > 200)) ||
     (request.effort !== undefined && !isEffort(request.effort)) ||
     (request.serviceTier !== undefined && (request.provider !== 'codex' || !isServiceTier(request.serviceTier))) ||
@@ -31,7 +32,7 @@ async function readBody(request: IncomingMessage) {
   let bytes = 0;
   for await (const chunk of request) {
     bytes += chunk.length;
-    if (bytes > 1_000_000) throw new Error('Request exceeds 1 MB limit');
+    if (bytes > 32_000_000) throw new Error('Request exceeds 32 MB limit');
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));

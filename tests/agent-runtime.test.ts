@@ -476,3 +476,52 @@ test('ask sends the turn id with each call and logs each reply\'s fate once the 
   await ask(fixtureDoc.api, transport, 'add another');
   assert.equal(records.length, 1);
 });
+
+const testImage = { name: 'reference.png', mediaType: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==' };
+
+test('image request validation rejects SVG, malformed bytes and excess attachments', () => {
+  const withImages = (images: unknown) => ({ ...payload, messages: [{ role: 'user', content: 'reference', images }] });
+  assert.equal(validateRequest(withImages([testImage])).messages[0].images?.length, 1);
+  for (const images of [[{ ...testImage, mediaType: 'image/svg+xml' }], [{ ...testImage, data: 'https://example.com/image' }], Array(5).fill(testImage)]) assert.throws(() => validateRequest(withImages(images)));
+});
+
+test('agent receives pasted pixels and can inspect an applied edit then refine it', async () => {
+  const fixtureDoc = documentFixture();
+  let captured = 0;
+  fixtureDoc.api.picture = async () => { assert.ok(fixtureDoc.calls() > 0); captured++; return testImage; };
+  let calls = 0;
+  const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
+    calls++;
+    if (calls === 1) {
+      assert.deepEqual(messages.at(-1)?.images, [testImage]);
+      return { text: '<edit><create type="rect" parent="#1"/></edit><look picture="test"/>' };
+    }
+    assert.deepEqual(messages.at(-1)?.images, [testImage]);
+    if (calls === 2) return { text: '<edit><set id="#fixture" x="240"/></edit><look picture="test"/>' };
+    return { text: 'The composition now matches the reference.' };
+  } }, 'Match this picture', { images: [testImage], allowTextReply: true });
+  assert.equal(result.ok, true);
+  assert.equal(captured, 2);
+  assert.equal(fixtureDoc.calls(), 2);
+  assert.equal(fixtureDoc.nodes['#fixture'].x, 240);
+  assert.equal(result.outcome?.ok, true);
+});
+
+test('capture failures are reported to the model and repeated pictures are bounded', async () => {
+  const fixtureDoc = documentFixture();
+  let captures = 0;
+  fixtureDoc.api.picture = async () => { captures++; throw new Error('readback failed'); };
+  const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
+    if (captures) assert.match(messages.at(-1)!.content, /Picture failed/);
+    return { text: '<look picture="test"/>' };
+  } }, 'Inspect this', { allowTextReply: false });
+  assert.equal(captures, 3);
+  assert.equal(result.ok, false);
+});
+
+
+test('both local runtime subprocesses receive actual image bytes', async () => {
+  const request: CompletionRequest = { ...payload, messages: [{ role: 'user', content: 'image-wire-test', images: [testImage] }] };
+  assert.equal((await codexRuntime(fixture)(request, AbortSignal.timeout(3000))).text, 'image received');
+  assert.equal((await claudeRuntime(fixture, 'subscription')(request, AbortSignal.timeout(3000))).text, 'image received');
+});

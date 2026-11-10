@@ -113,7 +113,7 @@ const LOG_IDS: usize = 12;
 pub fn render_document_layer(
     mut commands: Commands,
     mut panel_layers: Query<(Entity, &mut DisplayList, &DocumentPanelLayer), (Without<super::planes::PlaneLayer>, Without<ChunkLayer>)>,
-    mut plane_layers: Query<(&mut DisplayList, &super::planes::PlaneLayer, &VectorView), (Without<DocumentPanelLayer>, Without<ChunkLayer>)>,
+    mut plane_layers: Query<(&mut DisplayList, &super::planes::PlaneLayer, &VectorView, Has<super::capture::CaptureView>), (Without<DocumentPanelLayer>, Without<ChunkLayer>)>,
     mut chunk_layers: Query<(Entity, &ChunkLayer, &mut DisplayList, &mut VectorLayer), (Without<DocumentPanelLayer>, Without<super::planes::PlaneLayer>)>,
     mut chunks: ResMut<Chunks>,
     time: Res<Time>,
@@ -376,8 +376,9 @@ pub fn render_document_layer(
     // A plane's view: its composition's region, at its density, into its
     // own texture (`planes`), lit nodes outlined.
     cx.highlights = Some(&highlights);
-    for (mut plane_list, layer, vview) in &mut plane_layers {
-        if !planes_only && !shows(Some(layer.source), false) {
+    for (mut plane_list, layer, vview, capture) in &mut plane_layers {
+        cx.highlights = if capture { None } else { Some(&highlights) };
+        if !capture && !planes_only && !shows(Some(layer.source), false) {
             skipped += 1;
             continue;
         }

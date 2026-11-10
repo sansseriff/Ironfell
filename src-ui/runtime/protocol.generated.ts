@@ -49,6 +49,8 @@ export type DocumentCommand =
   | { op: 'contexts' }
   | { op: 'circuit'; markup: string }
   | { op: 'compose'; markup: string }
+  | { op: 'picture'; source: string }
+  | { op: 'picture_poll'; ticket: number; cancel: boolean }
   | { op: 'netlist'; sheet: string }
   | { op: 'table_edit'; table: string; verb: string; cells: string }
   | { op: 'link'; a: string; b: string; keep: string; actor: string }
@@ -136,6 +138,8 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'contexts': return { fn: command.op, args: [] };
     case 'circuit': return { fn: command.op, args: [command.markup] };
     case 'compose': return { fn: command.op, args: [command.markup] };
+    case 'picture': return { fn: command.op, args: [command.source] };
+    case 'picture_poll': return { fn: command.op, args: [command.ticket, command.cancel] };
     case 'netlist': return { fn: command.op, args: [command.sheet] };
     case 'table_edit': return { fn: command.op, args: [command.table, command.verb, command.cells] };
     case 'link': return { fn: command.op, args: [command.a, command.b, command.keep, command.actor] };

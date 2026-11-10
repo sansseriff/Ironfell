@@ -3034,3 +3034,14 @@ pub fn workspace_strip(app: &mut WorkerApp) -> String {
     };
     result.to_string()
 }
+
+/// Request/poll a content-only GPU picture. These only mutate session resources.
+pub fn document_picture(app: &mut WorkerApp, source: String) -> String {
+    match crate::document_bridge::capture::start(app.world_mut(), &source) {
+        Ok(ticket) => serde_json::json!({"ok": true, "ticket": ticket}),
+        Err(error) => serde_json::json!({"ok": false, "error": error}),
+    }.to_string()
+}
+pub fn document_picture_poll(app: &mut WorkerApp, ticket: u64, cancel: bool) -> String {
+    crate::document_bridge::capture::poll(app.world_mut(), ticket, cancel).to_string()
+}

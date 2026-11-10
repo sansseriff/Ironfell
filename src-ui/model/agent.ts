@@ -8,6 +8,7 @@ import { applyEdit, extractEdit, type EditOutcome } from './edit';
 import { manifest, topicRequest, topicsFor, topicText } from './manifest';
 import { extractRevise, revise } from './revise';
 import { changesSince, conflicts, deletedNamed } from './merge';
+import { validImages } from './images';
 import type { ModelTransport } from './transport';
 import { boundedHistory, executableReply, type ConversationOptions } from './conversation';
 import { STOPPED, type AskLive } from './progress';
@@ -31,6 +32,7 @@ export interface AskResult {
 /** One model reply in a turn: a look, prose, an edit (applied or rejected), or why it ended. */
 export type AskStep =
   | { attempt: number; kind: 'look'; ids: string[] }
+  | { attempt: number; kind: 'picture'; source: string; ok: boolean }
   | { attempt: number; kind: 'topic'; names: string[] }
   | { attempt: number; kind: 'prose' }
   | { attempt: number; kind: 'edit'; ok: boolean; failure?: string; summary?: string; version?: number; revised?: boolean; merged?: number }
@@ -66,6 +68,7 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
 }
 
 async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: string, options: ConversationOptions, live: AskLive, trace: AskStep[]): Promise<AskResult> {
+  if (options.images !== undefined && !validImages(options.images)) throw new Error('Invalid image attachments');
   const emit = live.onEvent ?? (() => {});
   emit({ kind: 'phase', phase: 'reading', attempt: 1 });
   const snapshotVersion = await api.version();
@@ -84,15 +87,15 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   // and an index of the rest, which the model may ask for with <topic>.
   const asked = [instruction, ...(options.history ?? []).slice(-4).map((m) => m.content)].join('\n');
   const topics = topicsFor(view, asked);
-  const system = manifest(schema, options.allowTextReply, topics) + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
+  const system = manifest(schema, options.allowTextReply, topics) + (api.picture ? '\nVISION\nYou can inspect actual 2D composition pixels with <look picture="composition name or #id"/>. It captures the whole content on white, without editor overlays, at up to 1568 pixels. 3D capture is unavailable. To check a visual edit, append a look request after </edit>; the edit is applied before capture, and you may then refine it or finish with prose. At most three pictures and three edits/repair attempts per request. Attached user images are visual references.\n' : '') + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
   // What the person has selected, so "this" and "the selected one" resolve.
   const picked = await api.selection();
   const selection = picked.length
     ? `SELECTED\n${picked.map((p) => `${p.node} (${p.type ?? 'node'}${p.name ? ` "${p.name}"` : ''})`).join('\n')}\n\n`
     : '';
-  const messages: { role: 'user' | 'assistant'; content: string }[] = [
+  const messages: import('./conversation').ConversationMessage[] = [
     ...boundedHistory(options.history),
-    { role: 'user', content: `${view}\n\n${selection}REQUEST\n${instruction}` },
+    { role: 'user', content: `${view}\n\n${selection}REQUEST\n${instruction}`, ...(options.images?.length ? { images: options.images } : {}) },
   ];
   let attempts = 0;
   let lastEdit: string | null = null;
@@ -100,10 +103,27 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   let rejected: string | null = null;
   /** The version the agent knows of: what it read, or newer once told of a conflict. */
   let since = snapshotVersion;
+  let cycleVersion = snapshotVersion;
   let mergedWith = 0;
   let lastOutcome: EditOutcome | null = null;
   let note = '';
   let looks = 0;
+  let pictures = 0;
+  let applied = false;
+  let lastApplied: { edit: string; outcome: EditOutcome } | null = null;
+  const pictureMessage = async (source: string) => {
+    emit({ kind: 'phase', phase: 'looking', attempt: attempts });
+    pictures++;
+    try {
+      if (!api.picture) throw new Error('Composition capture is unavailable');
+      const image = await api.picture(source, live.signal);
+      trace.push({ attempt: attempts, kind: 'picture', source, ok: true });
+      return { role: 'user' as const, content: `PICTURE of ${source}. Inspect it, then refine with an edit or finish with prose.`, images: [image] };
+    } catch (error) {
+      trace.push({ attempt: attempts, kind: 'picture', source, ok: false });
+      return { role: 'user' as const, content: `Picture failed: ${String(error)}. Do not claim you saw it. Finish or continue from document data.` };
+    }
+  };
   let topicAsks = 0;
   const unmerged = (edit: string): AskResult => {
     trace.push({ attempt: attempts, kind: 'stale' });
@@ -111,7 +131,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   };
   const stopped = () => {
     trace.push({ attempt: attempts, kind: 'stopped' });
-    return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: STOPPED };
+    return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: STOPPED, ...(applied ? { note: 'Stopped after applying changes. ' + note } : {}) };
   };
   while (attempts < MAX_ATTEMPTS) {
     attempts += 1;
@@ -131,6 +151,13 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     if (live.signal?.aborted) return stopped();
     // `<look expand="#u #e"/>` with no edit: show those instances' derived
     // insides (component-model.md §9) and ask again; not a repair attempt.
+    const picture = pictureRequest(executableReply(text));
+    if (picture && !extractEdit(text) && pictures < 3) {
+      messages.push({ role: 'assistant', content: text });
+      messages.push(await pictureMessage(picture));
+      attempts -= 1;
+      continue;
+    }
     const look = lookRequest(text);
     if (look && !extractEdit(text) && looks < MAX_LOOKS) {
       looks += 1;
@@ -159,7 +186,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // A <revise> patches the edit just rejected (revise.ts): the full edit it
     // makes is what is applied, shown and logged.
     const patch = !edit && rejected ? extractRevise(executable) : null;
-    note = text.replace(edit ?? patch ?? '', '').trim();
+    note = text.replace(edit ?? patch ?? '', '').replace(/<look\s+picture=["'][^"'<>]+["']\s*\/?>/g, '').trim();
     if (patch && rejected) {
       const revised = revise(rejected, patch);
       if (!revised.ok) {
@@ -173,9 +200,9 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       edit = revised.edit;
     }
     if (!edit) {
-      const prose = !!(options.allowTextReply && note && attempts === 1);
+      const prose = !!((options.allowTextReply || applied) && note && (attempts === 1 || (applied && lastOutcome?.ok)));
       trace.push(prose ? { attempt: attempts, kind: 'prose' } : { attempt: attempts, kind: 'no-edit' });
-      if (prose) return { ok: true, note, edit: null, outcome: null, attempts, transport: transport.name };
+      if (prose) return { ok: true, note, edit: lastApplied?.edit ?? null, outcome: lastApplied?.outcome ?? null, attempts, transport: transport.name, ...(mergedWith ? { merged: mergedWith } : {}) };
       return { ok: false, note, edit: null, outcome: null, attempts, transport: transport.name, error: 'the reply had no <edit> block' };
     }
     lastEdit = edit;
@@ -198,7 +225,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
           const result = await api.apply(transaction, current);
           // Another change landed between the check and the apply: check again.
           if (!result.ok && tries < 2 && result.errors?.some((e) => e.kind === 'stale')) continue;
-          if (result.ok) merged = current - snapshotVersion;
+          if (result.ok) merged = current - cycleVersion;
           return result;
         }
       },
@@ -213,10 +240,21 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       : await applyEdit(mergingApi, edit, `model: ${instruction.slice(0, 60)}`);
     if (unmergeable) return unmerged(edit);
     if (store.length) since = before;
-    if (lastOutcome.ok && STORE_BUILT.test(edit)) merged = before - snapshotVersion;
+    if (lastOutcome.ok && STORE_BUILT.test(edit)) merged = before - cycleVersion;
     trace.push({ attempt: attempts, kind: 'edit', ok: lastOutcome.ok, ...(lastOutcome.failure ? { failure: lastOutcome.failure } : {}), ...(lastOutcome.summary ? { summary: lastOutcome.summary } : {}), ...(lastOutcome.version !== undefined ? { version: lastOutcome.version } : {}), ...(patch ? { revised: true } : {}), ...(merged > 0 ? { merged } : {}) });
     if (lastOutcome.ok) {
-      if (merged > 0) mergedWith = merged;
+      if (merged > 0) mergedWith += merged;
+      applied = true;
+      lastApplied = { edit, outcome: lastOutcome };
+      since = lastOutcome.version ?? await api.version();
+      cycleVersion = since;
+      rejected = null;
+      if (picture && pictures < 3 && attempts < MAX_ATTEMPTS) {
+        messages.push({ role: 'assistant', content: text });
+        messages.push({ role: 'user', content: `Edit applied successfully. Current document:\n${await api.view({ fidelity: 'full', omit_defaults: true })}` });
+        messages.push(await pictureMessage(picture));
+        continue;
+      }
       break;
     }
     rejected = edit;
@@ -267,4 +305,9 @@ async function lookView(api: DocumentApi, ids: string[]): Promise<string> {
     }
   }));
   return `LOOK\n${parts.join('\n')}\n\nNow answer the REQUEST: one <edit>, or prose if no change is needed.`;
+}
+
+/** Only executable markup is passed here; examples in fenced code do not capture. */
+export function pictureRequest(text: string): string | null {
+  return text.match(/<look\s+picture=["']([^"'<>]{1,200})["']\s*\/?>/)?.[1] ?? null;
 }

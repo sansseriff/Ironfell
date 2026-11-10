@@ -1,6 +1,6 @@
 # Reactivity: one model for values, structure, state and events
 
-**Proposed 2026-11-09.** Waits on the user. Follows the council review of `e6c81de`
+**Proposed 2026-11-09. Phases 1 and 2 built the same day** (§13); phases 3–7 wait on the user. Follows the council review of `e6c81de`
 (repeat, let, components as markup; [`repeat.md`](repeat.md) §9) and a study of Svelte 5's
 runtime source. It answers the council's problems and the user's six decisions, and
 orders the work as phases. Nothing here is built.
@@ -320,3 +320,54 @@ UI state expressive; 5 to 7 can each wait on a need.
 2. Whether an item node's layout facets come from the repeat or from the template's
    single top node.
 3. The node budget's default, and whether it is per document or per composition.
+
+## 13. Done
+
+**2026-11-09: phases 1 and 2.**
+
+Phase 1, the core fixes:
+
+- **Errors propagate** (§4.1, `graph.rs`): a leaf whose input failed fails too, with
+  "depends on #n.leaf, which failed: …" naming the root cause; it recovers when the
+  input does. A read from outside the graph still returns the last good value.
+- **Presentation state through lets** (§4.2, `op.rs`, `Document::reads_interaction`):
+  the look-only rule is transitive. A `let` may hold an interaction-derived value;
+  a content leaf that reads it, at any distance, is refused.
+- **Problems are data** (§4.3): `expand::Problem {node, kind, message}` from expansion
+  (depth, node budget, a repeat cut at its max) plus binding errors, read with
+  `Store::problems()`. The model's view prints `problem="…"` on the authored node
+  (rolled up from derived nodes); the layers panel shows a warning marker with the
+  message as its tooltip.
+- **Depth:** nesting past 16 is reported as a problem and still expands; 128 stops it
+  (`DEPTH_REPORTED`, `DEPTH_MAX`); 50,000 derived nodes is the budget.
+
+Phase 2, scopes:
+
+- **One expansion** (`expand.rs`, `want_scopes`): a worklist expands instances, pictures
+  and repeats until nothing is left, so a component inside a repeat's template and a
+  repeat inside a component both work. Content inside a template is never expanded in
+  place, only in its copies.
+- **Item nodes:** each item of a repeat is a derived group `#g/~k` with an `item` facet
+  (`value`, `index`) the store publishes (producer `ITEMS`); copies are `#g/~k/local`
+  and read their own item's leaves. Changing one element re-evaluates that item's
+  readers only (2 evaluations in `tests/reactivity.rs`).
+- **Structure settles with values** (§3.3, `Store::settle_repeats`): whenever values
+  resolve (a transaction, a gesture preview, a producer's publish, a clock tick), each
+  drawn repeat's count is read; where it differs, copies are made or removed and the
+  ops queue for the host (`take_derived_ops`), which the bridge drains each frame. A
+  drag of a slider bound to `count` adds copies during the drag, with no transaction.
+  The opacity guard is gone.
+- **A component per item:** an entity and a `use` with a figures link in a template
+  give each item its own instance (`tests/reactivity.rs`, a repeat of `std:meter`).
+- **Edits to a copy are refused** with the template to edit instead.
+
+**Differs from the proposal:** `when` (conditional scopes) is left to phase 3 with
+keys, so phase 2's "conditionals" is not built. A count change re-expands the whole
+document and rebuilds the graph, rather than the one owner; fine at the sizes tested,
+and the place to look if a large document with a live repeat is slow.
+
+**Checked:** `tests/reactivity.rs` (6), `tests/repeat.rs`, `tests/plot.rs`, the whole
+`iron_document` suite; `bun test` (100); the fast smoke. In the app: a repeat whose
+count reads the level slider goes from 4 to 8 dots mid-drag at the same document
+version, the release commits one "set slider", undo returns to 4; a placed `std:plot`
+draws its tick labels; a repeat asking for 5 with `max` 2 shows the marker in Layers.

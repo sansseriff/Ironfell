@@ -33,9 +33,10 @@ fn sheet(markup: &str) -> (Store, std::collections::BTreeMap<String, NodeId>) {
 /// The copies a repeat has, in order, and each one's resolved `x`.
 fn copies(store: &Store, g: NodeId) -> Vec<f64> {
     let doc = store.document();
-    let mut kids: Vec<NodeId> = doc.children(g).iter().copied().filter(|c| c.item_of(g).is_some() && doc.is_live(*c)).collect();
-    kids.sort_by_key(|c| c.item_of(g));
-    kids.iter().map(|&c| store.resolved(c, path("transform2d.x")).unwrap().as_f64().unwrap()).collect()
+    let mut items: Vec<NodeId> = doc.children(g).iter().copied().filter(|c| c.is_item_scope() && doc.is_live(*c)).collect();
+    items.sort_by_key(|c| c.item_of(g));
+    // Each item is a group holding its copy of the template's one shape.
+    items.iter().map(|&i| store.resolved(doc.children(i)[0], path("transform2d.x")).unwrap().as_f64().unwrap()).collect()
 }
 
 #[test]
@@ -49,6 +50,11 @@ fn a_repeat_draws_one_copy_per_count_and_settles_with_undo() {
     assert!(store.document().children(g).iter().filter(|c| c.item_of(g).is_some()).all(|&c| !expand::in_repeat_template(store.document(), c)));
     store.apply(tx("more", vec![Op::Set { id: g, path: path("repeat.count"), slot: Slot::Const(Value::Number(5.0)) }])).unwrap();
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0, 60.0, 80.0]);
+    // A copy is not edited: the error names the template node to edit.
+    let item = store.document().children(g).iter().copied().find(|c| c.is_item_scope()).unwrap();
+    let copy = store.document().children(item)[0];
+    let refused = store.apply(tx("nudge", vec![Op::Set { id: copy, path: path("transform2d.y"), slot: Slot::Const(Value::Number(5.0)) }])).unwrap_err();
+    assert!(refused[0].message.contains(&format!("edit its template, {template}")), "{}", refused[0].message);
     store.undo(0).unwrap().unwrap();
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0]);
     store.redo(0).unwrap().unwrap();

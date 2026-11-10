@@ -333,6 +333,26 @@ impl Document {
         false
     }
 
+    /// Whether `expr` reads interaction state (hover, pressed, selected),
+    /// directly or through other bindings: its value is then presentation,
+    /// not content (reactivity.md §4.2).
+    pub fn reads_interaction(&self, expr: &Expr) -> bool {
+        let mut stack: Vec<Leaf> = expr.deps().into_iter().collect();
+        let mut seen = BTreeSet::new();
+        while let Some(l) = stack.pop() {
+            if l.path.facet == FacetKind::Interaction {
+                return true;
+            }
+            if !seen.insert(l) {
+                continue;
+            }
+            if let Some(e) = self.leaf(l.node, l.path).and_then(|s| s.expr()) {
+                stack.extend(e.deps());
+            }
+        }
+        false
+    }
+
     pub fn relation(&self, id: RelationId) -> Option<&Relation> {
         self.relations.get(&id)
     }

@@ -51,7 +51,7 @@ static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "group",
         facets: &[(K::Name, false), (K::Transform2d, false),
- (K::Constraints, false), (K::Axis, false), (K::Track, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false), (K::Repeat, false)],
+ (K::Constraints, false), (K::Axis, false), (K::Track, false), (K::Appearance, false), (K::GroupClip, false), (K::Host, false), (K::Layout, false), (K::Size, false), (K::LayoutItem, false), (K::Affords, false), (K::Interaction, false), (K::ContextOf, false), (K::Repeat, false), (K::Item, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },

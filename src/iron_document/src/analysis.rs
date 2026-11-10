@@ -157,6 +157,19 @@ impl Resolver<'_> {
             d.inputs.insert(spec);
             return d;
         }
+        // A repeat item's value and index, and the template's own
+        // `repeat.item`, are the repeat's `each` and `count` taken apart
+        // (`Store::settle_repeats`): they depend on what those depend on.
+        if self.reactive.driven_by(leaf, crate::graph::ProducerId::ITEMS) {
+            let repeat = if leaf.path.facet == FacetKind::Item { leaf.node.repeat_item().map(|(r, ..)| r) } else { Some(leaf.node) };
+            for field in ["each", "count"] {
+                if let (Some(r), Ok(path)) = (repeat, LeafPath::new(FacetKind::Repeat, field)) {
+                    let x = self.leaf(Leaf { node: r, path });
+                    d.absorb(&x);
+                }
+            }
+            return d;
+        }
         if self.reactive.is_driven(leaf) {
             d.opaque.insert(format!("driven by a producer ({leaf})"));
             return d;

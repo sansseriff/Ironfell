@@ -43,10 +43,12 @@ impl ProducerId {
     pub const LAYOUT: ProducerId = ProducerId(2);
     /// Component state machines' channels (`machine.rs`).
     pub const MACHINES: ProducerId = ProducerId(3);
-    /// The first id a host producer receives.
     /// Colour tokens' values for the theme in use (palette.rs).
     pub const THEME: ProducerId = ProducerId(4);
-    pub const FIRST_HOST: ProducerId = ProducerId(5);
+    /// Repeat items' values and indices (`Store::settle_repeats`).
+    pub const ITEMS: ProducerId = ProducerId(5);
+    /// The first id a host producer receives.
+    pub const FIRST_HOST: ProducerId = ProducerId(6);
 }
 
 /// One published value: who published it and at which of their frames.
@@ -88,8 +90,10 @@ pub struct Reactive {
     /// geometry revisions (`geom::Revisions`), so the two consumers never
     /// starve each other.
     touched: BTreeSet<Leaf>,
-    /// Errors from the last evaluation pass, by leaf. A leaf in error keeps
-    /// its previous resolved value.
+    /// Bindings that failed, by leaf, with why. A leaf in error keeps its
+    /// last good value for whoever draws it (`read`), but a binding that
+    /// reads it fails too, "depends on …, which failed" (reactivity.md
+    /// §4.1): nothing is computed from a failed input as if it were good.
     pub errors: BTreeMap<Leaf, String>,
     /// Expressions evaluated since construction. Tests use it to check that
     /// the schedule is glitch-free and the cutoff works.
@@ -401,30 +405,55 @@ impl Reactive {
                 let runtime = &self.runtime;
                 let resolved = &self.resolved;
                 let nodes = &self.nodes;
-                let read = |l| read_with(overlay, runtime, resolved, nodes, doc, l);
-                expr.eval(&read).and_then(|v| as_leaf_kind(leaf, v)).and_then(|v| match crate::types::declared(doc, leaf) {
+                let errors = &self.errors;
+                // The first failed input this binding read, if any.
+                let upstream: std::cell::Cell<Option<Leaf>> = std::cell::Cell::new(None);
+                let read = |l| {
+                    if errors.contains_key(&l) && !overlay.contains_key(&l) {
+                        if upstream.get().is_none() {
+                            upstream.set(Some(l));
+                        }
+                        return None;
+                    }
+                    read_with(overlay, runtime, resolved, nodes, doc, l)
+                };
+                let out = expr.eval(&read).and_then(|v| as_leaf_kind(leaf, v)).and_then(|v| match crate::types::declared(doc, leaf) {
                     // A boundary leaf with a declared type checks what it
                     // computes or receives (types-and-units.md §3.3, §3.5).
                     Some((ty, owner)) => ty
                         .check(&v, &|name| crate::facet::LeafPath::new(crate::facet::FacetKind::Args, name).ok().and_then(|path| read(Leaf { node: owner, path })))
                         .map_err(|e| crate::expr::EvalError::Type(format!("{}: {e}", boundary_name(doc, leaf)))),
                     None => Ok(v),
-                })
+                });
+                match (out, upstream.get()) {
+                    (Err(_), Some(failed)) => {
+                        // Name the input at the root of the failure.
+                        let why = errors.get(&failed).map(String::as_str).unwrap_or("");
+                        let root = why.strip_prefix("depends on ").unwrap_or("");
+                        Err(if root.is_empty() { format!("depends on {failed}, which failed: {why}") } else { format!("depends on {root}") })
+                    }
+                    (Err(e), None) => Err(e.to_string()),
+                    (Ok(v), _) => Ok(v),
+                }
             };
-            match result {
+            // Readers run again when this value changes, and when it starts
+            // or stops failing (a recovery to the same value still clears
+            // their errors).
+            let changed = match result {
                 Ok(v) => {
-                    self.errors.remove(&leaf);
+                    let recovered = self.errors.remove(&leaf).is_some();
                     if self.resolved.get(&leaf) != Some(&v) {
                         self.resolved.insert(leaf, v.clone());
                         self.note(leaf, v);
-                        if let Some(ds) = self.dependents.get(&leaf) {
-                            primed.extend(ds.iter().copied());
-                        }
+                        true
+                    } else {
+                        recovered
                     }
                 }
-                Err(e) => {
-                    self.errors.insert(leaf, e.to_string());
-                }
+                Err(e) => self.errors.insert(leaf, e).is_none(),
+            };
+            if changed && let Some(ds) = self.dependents.get(&leaf) {
+                primed.extend(ds.iter().copied());
             }
         }
     }

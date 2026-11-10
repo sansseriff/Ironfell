@@ -1930,7 +1930,11 @@ pub fn document_layers(app: &mut WorkerApp, source: String, open_json: String) -
         Ok(o) => o,
         Err(e) => return fail(format!("open: {e}")),
     };
-    let rows = iron_document::layers::rows(doc, c, &open);
+    let mut rows = iron_document::layers::rows(doc, c, &open);
+    let notes = store.0.problem_notes();
+    for row in &mut rows {
+        row.problem = row.id.parse().ok().and_then(|id| notes.get(&id)).map(|n| n.join("\n"));
+    }
     let dims = match iron_document::composition::dims(doc, c) {
         Some(iron_document::composition::Dims::Three) => "3d",
         _ => "2d",

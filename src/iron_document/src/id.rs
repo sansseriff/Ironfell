@@ -249,25 +249,68 @@ impl NodeId {
         expanded_path(self.0).and_then(|p| p.first().copied()).map(NodeId)
     }
 
-    /// Item `k` of repeat `repeat`'s copy of template node `local` (its
-    /// last path step: the authored node a template node copies).
-    pub fn item(repeat: NodeId, k: usize, local: NodeId) -> Option<NodeId> {
-        let last = *local.path().last()?;
-        if k as u64 >= (1 << 32) || last.0 & EXPANDED != 0 || last.0 >= SESSION_BASE || repeat.is_session() {
+    /// Item `k` of repeat `repeat`: the derived group that holds the item's
+    /// copies and its `item.value` and `item.index` (reactivity.md §3.1).
+    pub fn item_scope(repeat: NodeId, k: usize) -> Option<NodeId> {
+        if k as u64 >= (1 << 32) || repeat.is_session() {
             return None;
         }
         let mut path: Vec<u64> = repeat.path().iter().map(|n| n.0).collect();
         path.push(ITEM_BASE + k as u64);
+        Some(NodeId(expanded_raw(&path)))
+    }
+
+    /// Item `k` of repeat `repeat`'s copy of template node `local` (its
+    /// last path step: the authored node a template node copies).
+    pub fn item(repeat: NodeId, k: usize, local: NodeId) -> Option<NodeId> {
+        let last = *local.path().last()?;
+        if last.0 & EXPANDED != 0 || last.0 >= SESSION_BASE {
+            return None;
+        }
+        let mut path: Vec<u64> = NodeId::item_scope(repeat, k)?.path().iter().map(|n| n.0).collect();
         path.push(last.0);
         Some(NodeId(expanded_raw(&path)))
     }
 
-    /// Which item of `repeat` this node is part of: the copy of a template
-    /// node, or anything inside one. `None` for the template itself.
+    /// Which item of `repeat` this node is, or is part of: the item's own
+    /// node, a copy of a template node, or anything inside one. `None` for
+    /// the template itself.
     pub fn item_of(self, repeat: NodeId) -> Option<usize> {
         let (mine, theirs) = (self.path(), repeat.path());
         let k = mine.get(theirs.len())?.0;
-        (mine.len() > theirs.len() + 1 && mine[..theirs.len()] == theirs[..] && is_item_step(k)).then(|| (k - ITEM_BASE) as usize)
+        (mine[..theirs.len()] == theirs[..] && is_item_step(k)).then(|| (k - ITEM_BASE) as usize)
+    }
+
+    /// For a node inside a repeat item (or the item's own node): the
+    /// repeat, the item's index, and the template node this is a copy of
+    /// (the repeat itself, for the item's node). The innermost repeat's.
+    pub fn repeat_item(self) -> Option<(NodeId, usize, NodeId)> {
+        let path = expanded_path(self.0)?;
+        let at = path.iter().rposition(|&n| is_item_step(n))?;
+        let node = |steps: &[u64]| match steps {
+            [one] => Some(NodeId(*one)),
+            many => Some(NodeId(expanded_raw(many))),
+        };
+        let repeat = node(&path[..at])?;
+        let template: Vec<u64> = path[..at].iter().chain(&path[at + 1..]).copied().collect();
+        // A template node of an authored repeat is authored: its own id.
+        let template = if path[at + 1..].is_empty() { repeat } else if at == 1 && repeat.0 & EXPANDED == 0 { NodeId(*path.last()?) } else { node(&template)? };
+        Some((repeat, (path[at] - ITEM_BASE) as usize, template))
+    }
+
+    /// Whether this is a repeat item's own node (`#g/~k`).
+    pub fn is_item_scope(self) -> bool {
+        expanded_path(self.0).and_then(|p| p.last().copied()).is_some_and(is_item_step)
+    }
+
+    /// How many scopes this node is inside (reactivity.md §3.3): one for
+    /// each instance it is derived for and each repeat item it is part of.
+    /// 0 for an authored node.
+    pub fn nesting(self) -> usize {
+        match expanded_path(self.0) {
+            Some(p) => p.iter().filter(|&&n| !is_item_step(n)).count().saturating_sub(1),
+            None => 0,
+        }
     }
 
     /// The node's path: `[self]` for an authored node, the instance and
@@ -292,7 +335,9 @@ impl RelationId {
     /// relation `local`, named by the owner's path and the relation's id.
     pub fn expanded(owner: NodeId, local: RelationId) -> RelationId {
         let mut path: Vec<u64> = owner.path().iter().map(|n| n.0).collect();
-        path.push(local.0);
+        // A relation that is itself derived (a repeat inside a picture)
+        // is named by the authored relation it copies.
+        path.push(expanded_path(local.0).and_then(|p| p.last().copied()).unwrap_or(local.0));
         RelationId(expanded_raw(&path))
     }
 

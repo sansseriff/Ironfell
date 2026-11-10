@@ -361,7 +361,7 @@ fn bake(key: &str) -> Baked {
         let parent = node.parent.and_then(|p| index.iter().position(|&x| x == p));
         let facets: Vec<Facet> = doc
             .facets_of(id)
-            .filter(|f| !matches!(f, Facet::Anchor(_) | Facet::Repeat(_)))
+            .filter(|f| !matches!(f, Facet::Anchor(_) | Facet::Repeat(_) | Facet::Item(_)))
             .map(|f| {
                 let mut f = f.clone();
                 for field in f.field_names() {

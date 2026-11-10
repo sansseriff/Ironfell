@@ -78,6 +78,21 @@ const SUMMARY_SAMPLES: usize = 2;
 /// Which cluster maintains each solver variable, for `.by` markers.
 pub type By = std::collections::BTreeMap<crate::expr::Leaf, NodeId>;
 
+thread_local! {
+    /// What is wrong, by the node that shows it, while a view is rendered
+    /// (`with_problems`): a view prints each as a `problem` attribute.
+    static PROBLEMS: std::cell::RefCell<std::collections::BTreeMap<NodeId, Vec<String>>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+/// Render with `problems` shown on their nodes (reactivity.md §4.3), as
+/// `expr::TokenScope` scopes the tokens formulas read.
+pub fn with_problems<T>(problems: std::collections::BTreeMap<NodeId, Vec<String>>, f: impl FnOnce() -> T) -> T {
+    let before = PROBLEMS.with(|p| std::mem::replace(&mut *p.borrow_mut(), problems));
+    let out = f();
+    PROBLEMS.with(|p| *p.borrow_mut() = before);
+    out
+}
+
 pub fn render_tree(
     doc: &Document,
     reactive: &crate::graph::Reactive,
@@ -132,6 +147,9 @@ fn node(
     let n = doc.live(id).expect("live");
     let indent = "  ".repeat(level as usize + 1);
     let mut attrs = leaf_attrs(doc, reactive, by, q, id);
+    if let Some(notes) = PROBLEMS.with(|p| p.borrow().get(&id).cloned()) {
+        attrs.push(("problem".into(), notes.join("; ")));
+    }
     // A table reads as its rows of words (layout-and-tables.md §5.2), unless
     // its cells are asked for (`expand`).
     if n.ty.name() == "table" && q.fidelity != Fidelity::Skeleton && !q.expand.contains(&id) {
@@ -199,13 +217,17 @@ fn node(
         .copied()
         .filter(|k| match k.expanded_parts() {
             None => true,
+            // A repeat's items show when the repeat is asked for, and with
+            // them their copies (`<look expand="#repeat"/>`).
+            Some(_) if k.is_item_scope() => q.expand.contains(&id),
+            Some(_) if id.is_item_scope() => true,
             Some((owner, _)) => q.expand.contains(&owner) || doc.live(*k).is_some_and(|n| n.ty.name() == "port"),
         })
         .collect();
     let kids = kids_vec.as_slice();
-    // A repeat shows its template; its copies are derived and only counted.
+    // A repeat shows its template; its items are derived and only counted.
     if doc.facet(id, crate::facet::FacetKind::Repeat).is_some() {
-        attrs.push(("copies".into(), kids_all.iter().filter(|k| k.item_of(id).is_some()).count().to_string()));
+        attrs.push(("copies".into(), kids_all.iter().filter(|k| k.is_item_scope() && k.item_of(id).is_some()).count().to_string()));
     }
     if id.is_expanded() {
         attrs.push(("derived".into(), "true".into()));

@@ -402,6 +402,7 @@ pub(crate) fn sync_document(
         && load.0.is_none()
         && gestures.0.is_empty()
         && !store.0.has_changes()
+        && !store.0.has_derived_ops()
         && store.0.document().version() == synced.0
         && !build_latency
     {
@@ -512,6 +513,11 @@ pub(crate) fn sync_document(
         for op in tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(tx.expanded.iter()) {
             structure |= collect_ids(op, &mut affected);
         }
+    }
+    // Structure derived outside a transaction: a repeat's items following a
+    // drag, a published value or the clock (reactivity.md §3.3).
+    for op in store.0.take_derived_ops() {
+        structure |= collect_ids(&op, &mut affected);
     }
     // The Library tab's composition (component-authoring.md §6): session
     // state, built when missing (at start, and after a load replaces the store).

@@ -60,6 +60,9 @@ pub struct Row {
     /// The entity this node pictures, if it is a figure.
     pub entity: Option<String>,
     pub chips: Vec<Chip>,
+    /// What is wrong with this node or with what it derives
+    /// (`Store::problem_notes`), one note a line; the caller fills it.
+    pub problem: Option<String>,
 }
 
 fn is_layer(doc: &Document, id: NodeId) -> bool {
@@ -168,6 +171,7 @@ fn walk(doc: &Document, ids: &[NodeId], dims: Option<Dims>, chain: &mut Vec<Node
             embed: shown.map(|c| (c.to_string(), name_of(doc, c))),
             entity: entity.map(|e| e.to_string()),
             chips: entity.map(|e| chips(doc, e, composition::composition_of(doc, id))).unwrap_or_default(),
+            problem: None,
         });
         if !children.is_empty() && open.contains(&k) {
             walk(doc, &children, child_dims, chain, depth + 1, embeds + u32::from(is_embed), open, out);

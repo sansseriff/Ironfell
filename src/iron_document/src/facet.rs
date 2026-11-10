@@ -413,14 +413,23 @@ facets! {
     /// the template for one item and are not drawn; the copies are derived
     /// (expand.rs), with ids `#group/~k/local`. Inside the template,
     /// `#group.repeat.item` reads the item and `#group.repeat.index` its
-    /// index; each copy reads its own. The template reads item 0. How many
-    /// copies there are follows `each` and `count` whenever a transaction
-    /// commits; between commits (a drag) a copy past the end is hidden.
+    /// index; each copy reads its own item's (`#group/~k.item.value`). The
+    /// template reads item 0. The copies follow `each` and `count` whenever
+    /// either changes: an edit, a drag, a published value, the clock.
     Repeat / "repeat" => Repeat {
         each: Any = Value::Number(f64::NAN),
         count: Number = Value::Number(0.0),
         max: Number = Value::Number(1000.0),
         item: Any = Value::Number(0.0),
+        index: Number = Value::Number(0.0),
+    }
+
+    /// One item of a repeat (plans/specs/reactivity.md §3.1): on the derived
+    /// group `#g/~k` that holds the item's copies. `value` is its element
+    /// of `each` (its index, for a `count`) and `index` its position, both
+    /// published by the store when structure settles; the copies read them.
+    Item / "item" => Item {
+        value: Any = Value::Number(0.0),
         index: Number = Value::Number(0.0),
     }
 

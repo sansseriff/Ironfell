@@ -231,10 +231,21 @@ pub struct Store {
     /// read by rules that match `state:`).
     interaction: BTreeMap<NodeId, Vec<&'static str>>,
     /// What the last expansion could not derive (component-model.md §3).
-    expansion_problems: Vec<String>,
-    /// How many copies each drawn repeat has (plans/specs/repeat.md), as
+    expansion_problems: Vec<expand::Problem>,
+    /// How many items each drawn repeat has (plans/specs/repeat.md), as
     /// last settled from its `each` and `count`.
     repeats: BTreeMap<NodeId, usize>,
+    /// The drawn repeats, and each one's `each` and `count` as last
+    /// settled: what `settle_repeats` compares before doing any work.
+    /// `None` after structure changed, until the next settle.
+    repeat_inputs: Option<Vec<(NodeId, Option<Value>, Option<Value>)>>,
+    /// Repeats that asked for more items than `repeat.max` allows.
+    truncated: Vec<expand::Problem>,
+    /// Derived structure made outside a transaction (a repeat that grew
+    /// during a drag, or when a producer published), for the host to
+    /// materialise (`take_derived_ops`). Never history.
+    derived_ops: Vec<Op>,
+    settling: bool,
     /// The gesture whose previews are in the overlay (`gesture`).
     gesture: Option<gesture::ActiveGesture>,
     /// How the last gesture ended, for its tool to find out.
@@ -335,6 +346,10 @@ impl Store {
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
+            repeat_inputs: None,
+            truncated: Vec::new(),
+            derived_ops: Vec::new(),
+            settling: false,
             gesture: None,
             ended: None,
             next_gesture: 1,
@@ -350,6 +365,7 @@ impl Store {
         store.reactive.rebuild(&store.doc);
         store.resample();
         store.settle_repeats();
+        store.derived_ops.clear();
         store.rebuild_clusters();
         store.resolve_physics();
         store
@@ -1192,6 +1208,7 @@ impl Store {
         // view's) is otherwise never indexed, so presses miss it.
         self.geometry.note_ops(ops.iter());
         if structural {
+            self.repeat_inputs = None;
             self.reactive.rebuild(&self.doc);
         } else {
             let changed: Vec<Leaf> = ops.iter().filter_map(|op| match op { Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }), _ => None }).collect();
@@ -1218,52 +1235,149 @@ impl Store {
         Ok(())
     }
 
-    /// Bring every drawn repeat's copies to its live count
-    /// (plans/specs/repeat.md §4): the length of `each` when it is a series,
-    /// else `count`, at most `max` (and 10,000). Where that differs from the
-    /// copies it has, re-expand and rebuild the graph; a repeat inside new
-    /// copies settles in the next round. Returns the ops applied, which
-    /// belong to the transaction that changed the counts.
+    /// Bring every drawn repeat's items to what its `each` and `count`
+    /// say now (reactivity.md §3.3): as many items as `each` has elements
+    /// when it is a series, else `count`, at most `max` (and 10,000), each
+    /// item's value and index published on its node. Runs whenever values
+    /// may have moved: after a transaction, a publish, a preview, the
+    /// clock. Where the number of items changed it re-expands and rebuilds
+    /// the graph; a repeat inside new items settles in the next round.
+    /// Returns the structural ops applied.
     fn settle_repeats(&mut self) -> Vec<Op> {
-        let group = TypeId::lookup("group").expect("registered");
-        let mut applied = Vec::new();
-        for _ in 0..8 {
-            let counts: BTreeMap<NodeId, usize> = self
-                .doc
-                .nodes_of_type(group)
-                .filter(|&g| self.doc.is_live(g) && expand::draws_repeat(&self.doc, g, &self.doc.facets_of(g).cloned().collect::<Vec<_>>()))
-                .map(|r| {
-                    let read = |f: &str| self.reactive.read(&self.doc, Leaf { node: r, path: LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf") });
-                    let n = match read("each") {
-                        Some(Value::Series { data, .. }) => data.len() as f64,
-                        _ => read("count").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                    };
-                    let max = read("max").and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0);
-                    (r, if n.is_finite() { n.floor().clamp(0.0, max) as usize } else { 0 })
-                })
-                .collect();
-            if counts == self.repeats {
-                break;
-            }
-            self.repeats = counts;
-            let stamp = self.doc.version();
-            let (ops, problems) = expand::expand(&mut self.doc, stamp, &self.repeats);
-            self.expansion_problems = problems;
-            if ops.is_empty() {
-                break;
-            }
-            self.geometry.note_ops(ops.iter());
-            self.reactive.rebuild(&self.doc);
-            self.resample();
-            applied.extend(ops);
+        if self.settling {
+            return Vec::new();
         }
+        self.settling = true;
+        let mut applied = Vec::new();
+        let path = |f: &str| LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf");
+        let item = |f: &str| LeafPath::new(facet::FacetKind::Item, f).expect("declared leaf");
+        // A round per level of nesting, and one more to see nothing change.
+        for round in 0..=expand::DEPTH_MAX + 1 {
+            let repeats: Vec<NodeId> = match &self.repeat_inputs {
+                Some(known) => known.iter().map(|k| k.0).collect(),
+                None => expand::drawn_repeats(&self.doc),
+            };
+            let inputs: Vec<(NodeId, Option<Value>, Option<Value>)> = repeats.iter().map(|&r| (r, self.reactive.read(&self.doc, Leaf { node: r, path: path("each") }), self.reactive.read(&self.doc, Leaf { node: r, path: path("count") }))).collect();
+            // NaN is a value here ("no series"), so compare by text too.
+            if self.repeat_inputs.as_ref().is_some_and(|known| known.len() == inputs.len() && known.iter().zip(&inputs).all(|(a, b)| a == b || format!("{a:?}") == format!("{b:?}"))) {
+                break;
+            }
+            let mut counts = BTreeMap::new();
+            let mut values = BTreeMap::new();
+            let mut truncated = Vec::new();
+            for (r, each, count) in &inputs {
+                let max = self.reactive.read(&self.doc, Leaf { node: *r, path: path("max") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0) as usize;
+                let series = match each {
+                    Some(Value::Series { data, dim }) => Some((data.clone(), *dim)),
+                    _ => None,
+                };
+                let asked = match &series {
+                    Some((data, _)) => data.len(),
+                    None => count.as_ref().and_then(|v| v.as_f64()).filter(|n| n.is_finite()).map_or(0, |n| n.floor().max(0.0) as usize),
+                };
+                let n = asked.min(max);
+                if asked > max {
+                    truncated.push(expand::Problem { node: *r, kind: "truncated", message: format!("{asked} items asked for; repeat.max allows {max}") });
+                }
+                counts.insert(*r, n);
+                let element = |k: usize| match &series {
+                    Some((data, dim)) => Value::quantity(data[k], *dim),
+                    None => Value::Number(k as f64),
+                };
+                // The template reads the first item's.
+                if n > 0 {
+                    values.insert(Leaf { node: *r, path: path("item") }, element(0));
+                }
+                for k in 0..n {
+                    let Some(scope) = NodeId::item_scope(*r, k) else { break };
+                    values.insert(Leaf { node: scope, path: item("value") }, element(k));
+                    values.insert(Leaf { node: scope, path: item("index") }, Value::Number(k as f64));
+                }
+            }
+            self.truncated = truncated;
+            self.repeat_inputs = Some(inputs);
+            let structural = counts != self.repeats;
+            if structural {
+                self.repeats = counts;
+                let stamp = self.doc.version();
+                let (ops, problems) = expand::expand(&mut self.doc, stamp, &self.repeats);
+                self.expansion_problems = problems;
+                if round == expand::DEPTH_MAX + 1 && !ops.is_empty() {
+                    self.expansion_problems.push(expand::Problem { node: repeats[0], kind: "depth_blocked", message: "repeats did not settle: their counts keep changing each other".into() });
+                }
+                self.geometry.note_ops(ops.iter());
+                applied.extend(ops);
+            }
+            if values != self.reactive.published_by(ProducerId::ITEMS) {
+                self.signal_stamp += 1;
+                self.reactive.publish(&self.doc, ProducerId::ITEMS, values, self.signal_stamp);
+            }
+            if structural {
+                // New items may hold repeats: look again.
+                self.repeat_inputs = None;
+                self.reactive.rebuild(&self.doc);
+                self.resample();
+            }
+        }
+        self.settling = false;
         applied
+    }
+
+    /// Structure derived since the last take, outside any transaction
+    /// (`settle_repeats`): the host materialises it as it does a
+    /// transaction's ops.
+    /// `problems`, by the node that shows each: the node itself, or for a
+    /// derived node the authored one it is derived for (an instance, a
+    /// repeat), named in the note. At most three notes a node.
+    pub fn problem_notes(&self) -> BTreeMap<NodeId, Vec<String>> {
+        let mut out: BTreeMap<NodeId, Vec<String>> = BTreeMap::new();
+        let mut more: BTreeMap<NodeId, usize> = BTreeMap::new();
+        for p in self.problems() {
+            let shown = p.node.path()[0];
+            // A repeat's template is evaluated for item 0 only so that it
+            // has values; what fails there fails in the items too.
+            if p.kind == "binding" && (expand::in_repeat_template(&self.doc, p.node) || !self.doc.is_live(p.node)) {
+                continue;
+            }
+            let note = if shown == p.node { p.message } else { format!("{}: {}", p.node, p.message) };
+            let notes = out.entry(shown).or_default();
+            if notes.len() < 3 {
+                notes.push(note);
+            } else {
+                *more.entry(shown).or_default() += 1;
+            }
+        }
+        for (node, n) in more {
+            out.entry(node).or_default().push(format!("and {n} more"));
+        }
+        out
+    }
+
+    pub fn has_derived_ops(&self) -> bool {
+        !self.derived_ops.is_empty()
+    }
+
+    pub fn take_derived_ops(&mut self) -> Vec<Op> {
+        std::mem::take(&mut self.derived_ops)
+    }
+
+    /// Everything wrong that a node can show (reactivity.md §4.3): what
+    /// expansion could not derive or derived past a limit, repeats cut at
+    /// their `max`, and bindings that failed.
+    pub fn problems(&self) -> Vec<expand::Problem> {
+        let mut out = self.expansion_problems.clone();
+        out.extend(self.truncated.iter().cloned());
+        out.extend(self.reactive.errors.iter().map(|(leaf, message)| expand::Problem { node: leaf.node, kind: "binding", message: format!("{}: {message}", leaf.path) }));
+        out
     }
 
     /// Recompute what the store derives after every change: the
     /// across/through network's solution, then the layouts that place
     /// groups' children (`layout.rs`), which may read it.
     pub fn resolve_physics(&mut self) {
+        // Structure first: what follows places and styles the new items.
+        let derived = self.settle_repeats();
+        self.derived_ops.extend(derived);
         self.solve_network();
         self.resolve_theme();
         self.resolve_layout();
@@ -1591,7 +1705,7 @@ impl Store {
     }
 
     /// What the last expansion could not derive, if anything.
-    pub fn expansion_problems(&self) -> &[String] {
+    pub fn expansion_problems(&self) -> &[expand::Problem] {
         &self.expansion_problems
     }
 
@@ -1691,6 +1805,7 @@ impl Store {
         }
         // Repeats whose count this changed get their copies, as part of
         // this transaction's derived structure.
+        self.repeat_inputs = None;
         let copies = self.settle_repeats();
         tx.expanded.extend(copies);
         self.rebuild_clusters();
@@ -2068,7 +2183,7 @@ impl Store {
     }
 
     pub fn view(&self, q: &ViewQuery) -> Result<String, ViewError> {
-        view::render_tree(&self.doc, &self.reactive, &self.clusters.var_cluster, q)
+        view::with_problems(self.problem_notes(), || view::render_tree(&self.doc, &self.reactive, &self.clusters.var_cluster, q))
     }
 
     pub fn save(&self) -> String {

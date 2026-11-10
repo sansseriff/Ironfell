@@ -285,11 +285,14 @@ ${p.contextFields}`,
   its index, and each copy reads its own. Write ONE template, never the copies:
     <create id="$g" type="group" parent="#C" name="dots" repeat.each="{= range(0, 300, 13)}"/>
     <create type="ellipse" parent="$g" x="{= $g.repeat.item}" y="{= 40 + 10 * sin($g.repeat.index)}" rx="4" ry="4"/>
-  The copies are derived, never saved, with ids like #4/~3/7 (copy 3 of template
-  node #7); you cannot edit one, edit the template. Their number follows each and count
-  when an edit applies. A path with generated path data (segments, circles, bars) is
-  lighter for marks that need no node each; use a repeat when each copy is its own
-  node: a label, a cell with its own colour, a component's part.
+  The items are derived, never saved: #4/~3 is item 3 (a group), #4/~3/7 its copy of
+  template node #7. You cannot edit one, edit the template; the view shows the repeat
+  with copies="N", and <look expand="#4"/> shows the items. Their number follows each
+  and count as they change. The template may hold a component: an entity bound to the
+  item (args.in="{= $g.repeat.item * 1 mW}") and a use with a figures link to it give
+  every item its own instance. A path with generated path data (segments, circles,
+  bars) is lighter for marks that need no node each; use a repeat when each copy is
+  its own node: a label, a cell with its own colour, a component.
   A let names a value for bindings to read, computed once: a series, a number, a
   function. <create id="$aw" type="let" parent="#C" name="area w" value="{= #F.size.w - 70}"/>,
   then {= $aw.let.value / 2}. In a definition's template each picture has its own copy,
@@ -404,6 +407,9 @@ VIEW
   a binding as attr="{= expr}" (attr.bind="expr" is accepted too).
   <driven-by ref="#clip" prop="…"/> means a clip animates that leaf. A node with
   elided has children you were not shown; count="N" is the real count.
+  problem="…" on a node says what is wrong with it or with what it derives: a binding
+  that failed (whatever reads it fails too, "depends on #x…": mend the one named), a
+  repeat cut at its max, nesting deeper than 16. A failed leaf shows its last good value.
 
 NODE TYPES  (facet? = optional)
 ${types}

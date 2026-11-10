@@ -2,7 +2,9 @@
 
 **Proposed 2026-11-08. Phase 1 built 2026-11-09** (§9), with `let` (§7) and node markup
 (§8), so that `std:plot` is defined by markup alone. Where §2–§4 and §9 differ, §9 says
-what was built. Phase 2 (value keys, enter and exit) is open.
+what was built. **Reworked the same day** by reactivity.md phases 1–2 (§9, second
+entry): item nodes, live settling. Phase 2 (value keys, enter and exit) is open and
+now belongs to reactivity.md phases 3 and 7.
 
 ## 1. Why
 
@@ -150,6 +152,18 @@ key. Nothing in Rust knows what a standard component draws.
   load, a resize adding labels in the same transaction); `tests/plot.rs` unchanged but
   for reading labels from the copies; `markup.rs`'s unit test.
 
-**Not yet:** value keys and enter/exit (phase 2); a `use` inside a repeat's template
-(repeating a component); overrides on a copy; layout groups ignoring a repeat's
+**2026-11-09, later: scopes** ([reactivity.md §13](reactivity.md#13-done)), replacing
+parts of the entry above:
+
+- Each item is a derived group `#g/~k` holding `item.value` and `item.index`, which the
+  store publishes; copies are `#g/~k/local` and read those leaves (not a rewritten
+  `at(each, k)`).
+- The count follows values live: a drag, a clip or a producer's publish adds and
+  removes copies without a transaction. No copy is hidden by an opacity guard.
+- A component (an entity and its `use`) inside a template is repeated, one instance per
+  item. Repeats inside a template expand only in its copies.
+- An edit aimed at a copy is refused, naming the template. A repeat cut at its `max`
+  is a problem on the repeat, shown in the view and the layers panel.
+
+**Not yet:** value keys and enter/exit; overrides on a copy; layout groups ignoring a repeat's
 template; a list-of-series input, so the plot's three series could be one repeat.

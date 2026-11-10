@@ -553,10 +553,19 @@ fn check_binding(
     }
     // Interaction state is presentation: it may drive how a node looks,
     // never what the document holds (affordances.md §8.1).
-    if expr.deps().iter().any(|d| d.path.facet == FacetKind::Interaction)
-        && !matches!(target.path.facet, FacetKind::Appearance | FacetKind::Fill | FacetKind::Gradient | FacetKind::Stroke | FacetKind::Shadow)
-    {
-        return Err(cx.err(ErrorKind::OutOfScope, format!("{target} reads interaction state, which may drive only how a node looks (appearance, fill, gradient, stroke, shadow)")));
+    // The rule follows values through bindings: a `let` may carry such a
+    // value on its way to a look (a shared hover colour), and nothing that
+    // is content may read it, however many lets lie between
+    // (reactivity.md §4.2).
+    let look = |f: FacetKind| matches!(f, FacetKind::Appearance | FacetKind::Fill | FacetKind::Gradient | FacetKind::Stroke | FacetKind::Shadow);
+    if doc.reads_interaction(expr) {
+        if target.path.facet == FacetKind::Let {
+            if let Some((reader, _)) = doc.bound_slots().find(|(l, e)| !look(l.path.facet) && l.path.facet != FacetKind::Let && doc.binding_cycles(target, e)) {
+                return Err(cx.err(ErrorKind::OutOfScope, format!("{target} would read interaction state, but {reader} reads it, and interaction state may drive only how a node looks (appearance, fill, gradient, stroke, shadow)")));
+            }
+        } else if !look(target.path.facet) {
+            return Err(cx.err(ErrorKind::OutOfScope, format!("{target} reads interaction state, which may drive only how a node looks (appearance, fill, gradient, stroke, shadow)")));
+        }
     }
     if doc.binding_cycles(target, expr) {
         return Err(cx.err(ErrorKind::Cycle, format!("binding {target} would depend on itself")));

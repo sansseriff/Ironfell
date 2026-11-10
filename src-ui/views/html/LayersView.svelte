@@ -26,6 +26,7 @@
   import Spline from "@lucide/svelte/icons/spline";
   import Box from "@lucide/svelte/icons/box";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
+  import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import PictureInPicture2 from "@lucide/svelte/icons/picture-in-picture-2";
   import Video from "@lucide/svelte/icons/video";
   import Locate from "@lucide/svelte/icons/locate";
@@ -42,6 +43,8 @@
   type Row = {
     key: string; depth: number; id: string; kind: string; name: string | null; count: number; dims: string;
     embed: [string, string | null] | null; entity: string | null; chips: Chip[];
+    /** What is wrong with the node or what it derives, a note a line. */
+    problem: string | null;
   };
   type Reply = { ok: boolean; error?: string; composition: string; dims: string; rows: Row[]; total: number };
   type Picked = { node: string; panel: string | null; chain: string | null };
@@ -437,6 +440,7 @@
               {#if r.embed}<span class="tag" title="An embed of {r.embed[1] ?? r.embed[0]}: editing inside it changes that composition">→ {r.embed[1] ?? r.embed[0]}</span>{/if}
               {#if r.count >= 10 && !open}<span class="tag">{r.count}</span>{/if}
               <span class="grow"></span>
+              {#if r.problem}<span class="problem" role="img" title={r.problem} aria-label="Problem: {r.problem}"><TriangleAlert size={13} strokeWidth={1.75} /></span>{/if}
               {#each r.chips.slice(0, 2) as chip (chip.composition)}
                 <button class="chip" tabindex="-1" title="Show in {chip.name ?? chip.composition}" aria-label="Show in {chip.name ?? chip.composition}"
                   onclick={(e) => { e.stopPropagation(); void showIn({ node: chip.node, composition: chip.composition, chain: chip.chain }); }}>
@@ -495,6 +499,7 @@
   .chip span { overflow: hidden; text-overflow: ellipsis; }
   .chip:hover { border-color: var(--accent); color: var(--fg); }
   .chip.more { cursor: default; }
+  .problem { display: inline-flex; flex: none; color: var(--danger); }
   footer { flex: none; padding: 6px 16px; border-top: 1px solid var(--border); font-size: 10px; color: var(--fg-faint); }
   .empty, .error { padding: 12px 16px; color: var(--fg-faint); }
   .error { color: var(--danger); overflow-wrap: anywhere; }

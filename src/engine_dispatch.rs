@@ -95,6 +95,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "inspect_bind" => { arity(args,3)?; crate::engine_api::document_inspect_bind(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "text_style" => { arity(args,2)?; crate::engine_api::document_text_style(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "fonts" => { arity(args,0)?; crate::engine_api::fonts() },
+        "query_result" => { arity(args,4)?; crate::engine_api::query_result(app,argument::<String>(args,0)?,argument::<u64>(args,1)?,argument::<bool>(args,2)?,argument::<serde_json::Value>(args,3)?)? },
         "font_previews" => { arity(args,1)?; crate::engine_api::font_previews(argument::<Vec<String>>(args,0)?) },
         _=>return Err(format!("unknown document operation: {name}")),
     })

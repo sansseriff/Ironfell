@@ -19,6 +19,9 @@ pub enum EngineEvent {
     Clipboard { text: String },
     /// Font files the engine wants, most needed first (plans/specs/text.md §4).
     Fonts { fonts: Vec<FontRequest> },
+    /// Questions for Models (iron_document `query.rs`): the host carries
+    /// each out and answers with the `query_result` command.
+    Queries { requests: Vec<QueryRequest> },
     /// Text editing on the canvas (`bevy_app::text_tool`): the draft and
     /// its selection (UTF-16 offsets) for the host's hidden textarea, and
     /// the caret's top-left and height in window px, where the textarea
@@ -49,6 +52,16 @@ pub struct FontRequest {
     pub family: String,
     /// Relative to the host's font root.
     pub file: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryRequest {
+    pub node: String,
+    /// Names the request among the node's: the answer repeats it.
+    pub seq: u64,
+    /// Which Model: to the web host, a URL to POST `input` to.
+    pub model: String,
+    pub input: serde_json::Value,
 }
 
 #[derive(Resource, Default)]

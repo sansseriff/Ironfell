@@ -60,6 +60,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `workspace.txt` | ~25 s |
 | `layers.txt` (`GPU=1`) | ~22 s (21.5 s, 2026-11-06) |
 | `scope-menu.txt` | ~20 s |
+| `query.txt` (`GPU=1`, with `model-server.ts`): a plot of a 1.5 s Model's answer | ~12 s (2026-11-10) |
 | `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
@@ -155,6 +156,23 @@ from the start, two numbers, with one new version; lit throughout after 2 s, an 
 dash; after the second click `0 gap lit 1`, the tail travelling; dark again), then
 `(no page errors)`. Inspect `screenshots/fiber-travel.png` and `fiber-tail.png`: a pale
 stretch on the amber curve. The version rises only by the two clicks.
+
+## Queries to a slow Model (2026-11-10)
+
+`plans/specs/reactivity.md` §13 (phase 6). `query.txt` needs the test Model running:
+`model-server.ts` answers `POST /wave?ms=1500` with `{xs, ys}` (ys = sin(k x)) after
+that delay, with CORS headers. The script makes a `query` node reading a `let` `k`, a
+status text, and a `std:plot` bound to the answer, then changes `k`.
+
+```sh
+cd .claude/skills/run-iron && (bun run model-server.ts >/dev/null 2>&1 &) && sleep 1 \
+  && GPU=1 SIZE=1680x1000@1 bun run drive.ts < query.txt; pkill -f model-server.ts; cd -
+```
+
+Expected: four `assertion passed` lines (`pending 2`, the placeholder's two points;
+`ready 41` with the version unchanged; `pending stale 41` after `k` changes; `ready 41`
+one version later), then `(no page errors)`. `screenshots/query-again.png` shows three
+periods of a sine in the plot. Without the server the status reads `error`.
 
 ## Local agent runtime bootstrap
 
@@ -562,7 +580,7 @@ interaction a unit test cannot reach: a real pointer or keyboard gesture through
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `sequence.txt`, `text.txt`,
 `text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
-`narrative.txt`, `actions.txt`, `fiber.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
+`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
 `selection-cache.txt`. Retired: `smoke-full.txt` (split into `regression.txt` and

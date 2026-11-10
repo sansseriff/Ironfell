@@ -72,3 +72,32 @@ pub fn advance_steps(mut store: ResMut<DocumentStore>, time: Res<Time>, mut sour
     sources.0.extend(comps.iter().copied());
     *marked = comps;
 }
+
+/// Queries to Models (iron_document `query.rs`): the store says which
+/// requests are due and the host carries them out (`EngineEvent::Queries`,
+/// answered by the `query_result` command). The compositions holding a
+/// waiting query keep rendering, so its pending state shows and its answer
+/// is picked up.
+pub fn advance_queries(mut store: ResMut<DocumentStore>, time: Res<Time>, events: Res<crate::host_events::HostEvents>, mut sources: ResMut<LiveSources>, mut marked: Local<BTreeSet<NodeId>>, mut was: Local<Vec<NodeId>>) {
+    let due = store.bypass_change_detection().0.advance_queries(time.elapsed_secs_f64());
+    if !due.is_empty() {
+        let requests = due.into_iter().map(|r| crate::host_events::QueryRequest { node: r.node.to_string(), seq: r.seq, model: r.model, input: iron_document::query::to_plain(&r.input) }).collect();
+        events.push(crate::host_events::EngineEvent::Queries { requests });
+    }
+    let waiting = store.0.pending_queries();
+    if waiting.is_empty() && marked.is_empty() && was.is_empty() {
+        return;
+    }
+    // Including the frame the last answer lands on.
+    if waiting != *was {
+        store.set_changed();
+    }
+    let doc = store.0.document();
+    let comps: BTreeSet<NodeId> = waiting.iter().filter_map(|&n| iron_document::composition::composition_of(doc, n)).collect();
+    for c in marked.difference(&comps) {
+        sources.0.remove(c);
+    }
+    sources.0.extend(comps.iter().copied());
+    *marked = comps;
+    *was = waiting;
+}

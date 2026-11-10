@@ -574,3 +574,55 @@ fn a_delayed_fiber_carries_a_pulse_to_its_far_end() {
     assert_eq!(light(&store), "", "lit throughout");
     assert_eq!(format!("{}", out(&store)), "5 mW", "the far end has it");
 }
+
+/// Phase 6 (reactivity.md §8): a query asks a Model while something reads
+/// it, once its input rests; shows pending over the last good value; and
+/// drops an answer a newer request has overtaken.
+#[test]
+fn a_query_asks_when_read_debounces_and_drops_a_late_answer() {
+    let (mut store, _, n) = sheet(
+        r##"<let id="k" name="k" value="1"/>
+        <query id="q" name="q" model="sim" input="{= record(k: $k)}" debounce="0.5" initial="{= 0}"/>
+        <query id="unread" name="unread" model="sim" input="{= record(k: $k)}"/>
+        <text id="t" name="t" content="{= $q.query.status + ' ' + fmt($q) + ($q.query.stale ? ' (old)' : '')}"/>"##,
+    );
+    let text = |s: &Store| text_of(s, n["t"]);
+    let set_k = |s: &mut Store, k: f64| s.apply(tx("k", vec![Op::Set { id: n["k"], path: path("let.value"), slot: Slot::Const(Value::Number(k)) }])).unwrap();
+    let answer = |k: f64| Ok(query::from_plain(&serde_json::json!(k * 3.0)));
+    let history = store.history().past().len();
+    // The first request goes at once, and only for the query that is read.
+    let due = store.advance_queries(0.0);
+    assert_eq!(due.len(), 1);
+    assert_eq!((due[0].node, due[0].model.as_str()), (n["q"], "sim"));
+    assert_eq!(query::to_plain(&due[0].input), serde_json::json!({"k": 1.0}));
+    assert!(store.advance_queries(0.1).is_empty());
+    assert_eq!(text(&store), "pending 0", "the placeholder shows until an answer");
+    assert!(store.resolve_query(n["q"], due[0].seq, answer(1.0)));
+    store.advance_queries(0.2);
+    assert_eq!(text(&store), "ready 3");
+    assert!(store.pending_queries().is_empty());
+    // A change waits for the input to rest; meanwhile the old value is stale.
+    set_k(&mut store, 2.0);
+    assert!(store.advance_queries(1.0).is_empty());
+    assert_eq!(text(&store), "ready 3 (old)");
+    set_k(&mut store, 3.0);
+    assert!(store.advance_queries(1.3).is_empty(), "moved again: the wait restarts");
+    assert!(store.advance_queries(1.7).is_empty());
+    let second = store.advance_queries(1.9);
+    assert_eq!(query::to_plain(&second[0].input), serde_json::json!({"k": 3.0}));
+    assert_eq!(text(&store), "pending 3 (old)");
+    // A newer request overtakes it: the late answer is dropped.
+    set_k(&mut store, 4.0);
+    assert!(store.advance_queries(3.0).is_empty());
+    let third = store.advance_queries(3.6);
+    assert_eq!(third.len(), 1);
+    assert!(!store.resolve_query(n["q"], second[0].seq, answer(3.0)), "overtaken");
+    store.advance_queries(3.7);
+    assert_eq!(text(&store), "pending 3 (old)");
+    // A failure keeps the last good value and says why.
+    assert!(store.resolve_query(n["q"], third[0].seq, Err("the model is down".into())));
+    store.advance_queries(3.8);
+    assert_eq!(text(&store), "error 3 (old)");
+    assert_eq!(store.resolved(n["q"], path("query.error")), Some(Value::Str("the model is down".into())));
+    assert_eq!(store.history().past().len(), history + 3, "answers are never transactions");
+}

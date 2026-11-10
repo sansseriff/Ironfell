@@ -2225,6 +2225,17 @@ pub fn solve_bench(iterations: u32, repeats: u32) -> String {
 
 const INSPECTOR_OPTIONAL: &[&str] = &["fill", "stroke", "corners", "arc", "shadow", "appearance", "gradient", "group_clip", "layout", "layout_item", "rules", "trim", "constraints"];
 
+/// A host's answer to an `EngineEvent::Queries` request (iron_document
+/// `query.rs`): the Model's plain JSON when `ok`, else what went wrong.
+/// Answers whether it was taken (a newer request drops it).
+pub fn query_result(app: &mut WorkerApp, node: String, seq: u64, ok: bool, payload: serde_json::Value) -> Result<String, String> {
+    let node = node.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
+    let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+    let result = if ok { Ok(iron_document::query::from_plain(&payload)) } else { Err(payload.as_str().map_or_else(|| payload.to_string(), str::to_owned)) };
+    let taken = store.bypass_change_detection().0.resolve_query(node, seq, result);
+    Ok(serde_json::json!({"taken": taken}).to_string())
+}
+
 /// The font picker's list (plans/specs/text.md §4): the catalog, the
 /// installed families on a native host, and which are loaded now.
 pub fn fonts() -> String {

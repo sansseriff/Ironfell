@@ -59,7 +59,9 @@ impl ProducerId {
     /// The first id a host producer receives.
     /// Traces and accumulators (step.rs).
     pub const STEPS: ProducerId = ProducerId(8);
-    pub const FIRST_HOST: ProducerId = ProducerId(9);
+    /// Queries' status and answers (query.rs).
+    pub const QUERIES: ProducerId = ProducerId(9);
+    pub const FIRST_HOST: ProducerId = ProducerId(10);
 }
 
 /// One published value: who published it and at which of their frames.
@@ -211,6 +213,11 @@ impl Reactive {
     /// Release everything `producer` publishes.
     pub fn retract(&mut self, doc: &Document, producer: ProducerId) {
         self.publish(doc, producer, BTreeMap::new(), 0);
+    }
+
+    /// Whether any binding reads `leaf`.
+    pub fn is_read(&self, leaf: Leaf) -> bool {
+        self.dependents.get(&leaf).is_some_and(|d| !d.is_empty())
     }
 
     pub fn is_bound(&self, leaf: Leaf) -> bool {

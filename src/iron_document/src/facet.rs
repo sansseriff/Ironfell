@@ -505,6 +505,23 @@ facets! {
         values: Any = Value::Number(f64::NAN),
     }
 
+    /// A question to a Model (query.rs): `model` names it (to the host, a
+    /// URL), `input` is what it is asked (usually a `record(…)`), and
+    /// `debounce` how many seconds the input must rest before asking
+    /// again. The store publishes `status`, `value` (`initial` until the
+    /// first answer), `error`, and `stale`: the value answers older
+    /// input. Asked only while something reads it.
+    Query / "query" => Query {
+        model: Str = Value::Str(String::new()),
+        input: Any = Value::Number(f64::NAN),
+        debounce: Number = Value::Number(0.2),
+        initial: Any = Value::Number(f64::NAN),
+        status: Enum = Value::Enum("idle".to_owned()) => ["idle", "pending", "ready", "error"],
+        value: Any = Value::Number(f64::NAN),
+        error: Str = Value::Str(String::new()),
+        stale: Bool = Value::Bool(false),
+    }
+
     /// A value its own formula advances once a frame (step.rs): `next`
     /// reads `value` and `dt` (the seconds the last step took) and gives
     /// the next value; `reset` puts it back to `initial`. The store

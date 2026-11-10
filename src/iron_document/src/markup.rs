@@ -173,6 +173,7 @@ fn resolve(text: &str, named: &BTreeMap<String, (NodeId, TypeId)>) -> Result<Str
         out.push_str(match ty.name() {
             "let" => ".let.value",
             "trace" => ".trace.out",
+            "query" => ".query.value",
             "accumulate" => ".accumulate.value",
             "port_spec" => ".port.signal",
             "channel" => ".channel.value",

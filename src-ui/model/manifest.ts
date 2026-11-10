@@ -316,8 +316,8 @@ ${p.contextFields}`,
   },
   state: {
     summary: 'state and actions: a let that clicks change (toggle, counter, current tab), on click/enter/leave, session state, reading the selected node',
-    doc: /type="on"|<on |keep="session"|deref\(|selection\.|<trace |<accumulate |provide="/,
-    request: /\b(?:click\w*|toggl\w*|buttons?|accordions?|tabs?|expand\w*|collaps\w*|hover\w*|state|counters?|interactive|press\w*|selected node|inspector|delay\w*|pulses?|travel\w*|accumulat\w*|integrat\w*|running|smooth\w*|context|provide\w*)\b/i,
+    doc: /type="on"|<on |keep="session"|deref\(|selection\.|<trace |<accumulate |<query |provide="/,
+    request: /\b(?:click\w*|toggl\w*|buttons?|accordions?|tabs?|expand\w*|collaps\w*|hover\w*|state|counters?|interactive|press\w*|selected node|inspector|delay\w*|pulses?|travel\w*|accumulat\w*|integrat\w*|running|smooth\w*|context|provide\w*|quer\w*|fetch\w*|api|server|simulat\w*|slow|loading|spinner)\b/i,
     text: () => `STATE AND ACTIONS
   State is a let holding a constant: <create id="$open" type="let" parent="#C"
   name="open" value="false"/>. Where it is declared says whose it is: in a
@@ -361,7 +361,19 @@ ${p.contextFields}`,
   accumulate.next="{= $q.accumulate.value + #rate.let.value * $q.accumulate.dt}"/>
   (dt is the seconds of the last step; accumulate.reset="true" restarts it). A smoothed
   value: next="{= v + (target - v) * min(1, dt / 0.3)}". A count of clicks that should
-  undo is an on with verb step on a let instead.`,
+  undo is an on with verb step on a let instead.
+  A QUERY asks a Model (a URL that takes the input as JSON by POST and answers JSON)
+  for a value that may take seconds, without blocking:
+    <create id="$q" type="query" parent="#C" name="wave" query.model="https://…/wave"
+      query.input="{= record(k: #k.let.value, n: 41)}"
+      query.initial="{= record(xs: series(0, 1), ys: series(0, 0))}"/>
+  $q.query.value is the answer (initial until the first; an array of numbers is a
+  series, an object a record: get($q.query.value, 'ys')); $q.query.status is idle,
+  pending, ready or error; $q.query.stale is true while the value answers older
+  input; $q.query.error says why it failed. It asks only while something reads it,
+  again once its input has rested query.debounce seconds, and keeps the last good
+  value meanwhile. Show waiting by binding to status: appearance.opacity="{=
+  $q.query.status == 'pending' ? 0.4 : 1}". Never saved, never an edit.`,
   },
   tables: {
     summary: 'tables: rows of words, merged cells, presets, the <table> verb',

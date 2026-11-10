@@ -59,6 +59,7 @@ pub mod layers;
 pub mod layout;
 pub mod list;
 pub mod step;
+pub mod query;
 pub mod narrative;
 pub mod table;
 pub mod time;
@@ -231,6 +232,8 @@ pub struct Store {
     machines: machine::Player,
     /// Traces and accumulators (step.rs): presentation state.
     steps: step::Steps,
+    /// Queries to Models (query.rs): presentation state.
+    queries: query::Queries,
     /// Nodes' interaction states, as the host last reported them (session;
     /// read by rules that match `state:`).
     interaction: BTreeMap<NodeId, Vec<&'static str>>,
@@ -355,6 +358,7 @@ impl Store {
             motion: Motion::default(),
             machines: machine::Player::default(),
             steps: step::Steps::default(),
+            queries: query::Queries::default(),
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
@@ -1751,6 +1755,35 @@ impl Store {
             self.publish(ProducerId::MACHINES, values);
         }
         running
+    }
+
+    /// Publish how each query stands at `now` (seconds, the host's clock)
+    /// and answer the requests that became due, for the host to carry out
+    /// and answer with `resolve_query` (query.rs).
+    pub fn advance_queries(&mut self, now: f64) -> Vec<query::Request> {
+        let (values, due) = {
+            let reactive = &self.reactive;
+            let doc = &self.doc;
+            let read = |l: Leaf| reactive.read(doc, l);
+            let wanted = |n: NodeId| query::OUTPUTS.iter().any(|f| reactive.is_read(Leaf { node: n, path: LeafPath { facet: FacetKind::Query, field: f } }));
+            self.queries.advance(doc, &read, &wanted, now)
+        };
+        if values != self.reactive.published_by(ProducerId::QUERIES) {
+            self.publish(ProducerId::QUERIES, values);
+        }
+        due
+    }
+
+    /// The host's answer to a request. False when a newer request has
+    /// replaced it: the answer is dropped. Shown at the next
+    /// `advance_queries`.
+    pub fn resolve_query(&mut self, node: NodeId, seq: u64, result: Result<Value, String>) -> bool {
+        self.queries.resolve(node, seq, result)
+    }
+
+    /// The queries with a request unanswered or still to send.
+    pub fn pending_queries(&self) -> Vec<NodeId> {
+        self.queries.pending().collect()
     }
 
     /// Step the traces and accumulators to `now` (seconds, the host's

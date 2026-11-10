@@ -6,6 +6,7 @@ import { FrameHoldWriter } from './frame_hold';
 import { CadenceProbe } from './cadence_probe';
 import { dispatchEngineMessage } from './engine_messages';
 import { FontLoader } from './font_loader';
+import { ModelLoader } from './model_loader';
 import type { UiEvent, UiRequest } from './protocol';
 import { installWasmEvents } from './wasm_events';
 
@@ -30,8 +31,13 @@ export class BrowserRuntime {
     families => this.emit({ ty: 'fontsLoaded', families }),
   );
 
+  private models = new ModelLoader((node, seq, ok, payload) => {
+    if (this.disposed || this.appHandle === 0n) return;
+    this.engine.document_call(this.appHandle, 'query_result', JSON.stringify([node, seq, ok, payload]));
+  });
+
   constructor(private readonly mode: BrowserMode) {
-    installWasmEvents(globalThis, this.emit, requests => this.fonts.request(requests));
+    installWasmEvents(globalThis, this.emit, requests => this.fonts.request(requests), requests => this.models.request(requests));
   }
 
   async postMessage(data: UiRequest, _transfer?: Transferable[]): Promise<void> {
@@ -102,6 +108,7 @@ export class BrowserRuntime {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.models.dispose();
     this.releaseApp();
     this.onmessage = null;
   }

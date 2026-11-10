@@ -237,7 +237,7 @@ static TYPES: &[TypeSpec] = &[
         name: "definition",
         facets: &[(K::Name, true), (K::Import, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port_spec", "equation", "template", "entity", "connection", "channel", "machine", "let", "trace", "accumulate"]),
+        children: ChildPolicy::Only(&["port_spec", "equation", "template", "entity", "connection", "channel", "machine", "let", "trace", "accumulate", "query"]),
     },
     // A component's state machine (plans/specs/machines.md), named for the
     // `in` port whose value is its state: definition data a player reads.
@@ -279,6 +279,13 @@ static TYPES: &[TypeSpec] = &[
     TypeSpec {
         name: "trace",
         facets: &[(K::Name, false), (K::Trace, true)],
+        default_host: Host::Canvas,
+        children: ChildPolicy::None,
+    },
+    // A question to a Model (query.rs). Never drawn.
+    TypeSpec {
+        name: "query",
+        facets: &[(K::Name, false), (K::Query, true)],
         default_host: Host::Canvas,
         children: ChildPolicy::None,
     },
@@ -443,7 +450,7 @@ static TYPES: &[TypeSpec] = &[
         name: "entity",
         facets: &[(K::Instance, true), (K::Args, true), (K::Name, false)],
         default_host: Host::Canvas,
-        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection", "channel", "machine", "let", "trace", "accumulate"]),
+        children: ChildPolicy::Only(&["port", "equation", "override", "entity", "connection", "channel", "machine", "let", "trace", "accumulate", "query"]),
     },
     // A relationship between operand nodes, solved in whatever direction a
     // drag chooses (constraint-system.md §4). Never materialised as content;

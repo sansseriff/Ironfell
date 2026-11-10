@@ -448,6 +448,28 @@ Phase 6, first part (2026-11-10): context, traces, accumulators.
   `light` path over the curve shows it travelling. `fiber.txt` (run-iron) clicks a
   button and watches the pulse leave, arrive and its tail follow.
 
+Phase 6, second part (2026-11-10): the query node.
+
+- **`query`** (§8, `query.rs`, `ProducerId::QUERIES`): `model`, `input` (usually a
+  `record(…)`), `debounce` (seconds, default 0.2) and `initial`; published `status`
+  (`idle`, `pending`, `ready`, `error`), `value` (`initial` until the first answer),
+  `error`, `stale` (the value answers older input). The store never calls out:
+  `Store::advance_queries(now)` answers the requests that became due and
+  `resolve_query(node, seq, result)` takes an answer, dropping one a newer request
+  overtook. Asked only while a binding reads one of its outputs; the first request
+  is immediate, later ones wait for the input to rest; a failure keeps the last good
+  value. May be a child of a definition, per instance, as a trace is.
+- **The host**: `motion::advance_queries` sends `EngineEvent::Queries` and the
+  `query_result` command takes the answer. The web host's `ModelLoader`
+  (`src-ui/runtime/model_loader.ts`, in the worker) treats `model` as a URL: POST the
+  input as JSON, the response's JSON is the value (`query::from_plain`: an array of
+  numbers is a series, an object a record). A newer request aborts the one in
+  flight; 60 s is a timeout. This is the smallest tier 1 of `model-interop.md`, over
+  HTTP rather than its WebSocket protocol, with no `describe`, progress or cancel
+  message to the Model.
+- `query.txt` (run-iron) plots a 1.5 s Model's answer through `std:plot` and reads
+  pending, ready, pending-stale and ready again.
+
 **Differs from the proposal:**
 
 - Numbers are keyed by index unless `repeat.key` is given (§3.2 said by value when
@@ -465,6 +487,8 @@ Phase 6, first part (2026-11-10): context, traces, accumulators.
   A definition does not declare what it reads; its template's `@names` are the list.
 - A trace shows on or off along the path, not a level: analog light (brightness
   following power along the fiber) needs a gradient the trace does not yet give.
+- A query has no native host yet (the Tauri shell does not answer `Queries`), no
+  progress, and the Model's reply carries no units: numbers arrive plain.
 - Still whole-document: any change to a repeat's items or a conditional re-expands
   the document and rebuilds the graph.
 

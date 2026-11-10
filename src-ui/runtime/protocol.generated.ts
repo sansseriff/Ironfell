@@ -84,6 +84,7 @@ export type DocumentCommand =
   | { op: 'inspect_bind'; node: string; leaf: string; expr: string }
   | { op: 'text_style'; node: string; patch: string }
   | { op: 'fonts' }
+  | { op: 'query_result'; node: string; seq: number; ok: boolean; payload: unknown }
   | { op: 'font_previews'; names: (string)[] }
 ;
 
@@ -173,6 +174,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'inspect_bind': return { fn: command.op, args: [command.node, command.leaf, command.expr] };
     case 'text_style': return { fn: command.op, args: [command.node, command.patch] };
     case 'fonts': return { fn: command.op, args: [] };
+    case 'query_result': return { fn: command.op, args: [command.node, command.seq, command.ok, command.payload] };
     case 'font_previews': return { fn: command.op, args: [command.names] };
   }
 }
@@ -222,6 +224,7 @@ export type EngineEvent =
   | { ty: 'convertQuestion'; question: unknown }
   | { ty: 'clipboard'; text: string }
   | { ty: 'fonts'; fonts: ({ family: string; file: string })[] }
+  | { ty: 'queries'; requests: ({ node: string; seq: number; model: string; input: unknown })[] }
   | { ty: 'textEdit'; active: boolean; node: string; text: string; anchor: number; focus: number; caret: [number, number, number] }
   | { ty: 'linkDrop'; spec: string; node: string; x: number; y: number }
   | { ty: 'focus'; panel: string; palette: string; keys: string }

@@ -101,3 +101,21 @@ pub fn advance_queries(mut store: ResMut<DocumentStore>, time: Res<Time>, events
     *marked = comps;
     *was = waiting;
 }
+
+/// Items entering and leaving a repeat or a conditional
+/// (`Store::advance_presence`): the compositions holding one on its way
+/// keep rendering until it has arrived or gone.
+pub fn advance_presence(mut store: ResMut<DocumentStore>, time: Res<Time>, mut sources: ResMut<LiveSources>, mut marked: Local<BTreeSet<NodeId>>) {
+    let active = store.bypass_change_detection().0.advance_presence(time.elapsed_secs_f64());
+    if active.is_empty() && marked.is_empty() {
+        return;
+    }
+    store.set_changed();
+    let doc = store.0.document();
+    let comps: BTreeSet<NodeId> = active.iter().filter_map(|&n| iron_document::composition::composition_of(doc, n)).collect();
+    for c in marked.difference(&comps) {
+        sources.0.remove(c);
+    }
+    sources.0.extend(comps.iter().copied());
+    *marked = comps;
+}

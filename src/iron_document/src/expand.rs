@@ -404,6 +404,11 @@ fn want_items(doc: &Document, r: NodeId, keys: &[String], out: &mut Wanted) {
             if leaf.node == r && leaf.path == path("index") {
                 return Leaf { node: scope, path: item_path("index") };
             }
+            // A repeat's or a conditional's `presence` and `leaving` are
+            // each item's own.
+            if leaf.node == r && owns_items(leaf.path.facet) && matches!(leaf.path.field, "presence" | "leaving") {
+                return Leaf { node: scope, path: item_path(leaf.path.field) };
+            }
             match inside.contains(&leaf.node).then(|| NodeId::item(r, k, leaf.node)).flatten() {
                 Some(node) => Leaf { node, path: leaf.path },
                 None => leaf,

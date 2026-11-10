@@ -626,3 +626,53 @@ fn a_query_asks_when_read_debounces_and_drops_a_late_answer() {
     assert_eq!(store.resolved(n["q"], path("query.error")), Some(Value::Str("the model is down".into())));
     assert_eq!(store.history().past().len(), history + 3, "answers are never transactions");
 }
+
+/// Phase 7 (reactivity.md §13): an item that joins a repeat rises into
+/// view, one that leaves is kept while it fades and then goes, and one
+/// wanted again while leaving turns back from where it is. A conditional's
+/// children do the same.
+#[test]
+fn items_enter_and_leave_over_time() {
+    let (mut store, _, n) = sheet(
+        r##"<let id="names" name="names" value="{= list('a', 'b')}"/>
+        <group id="rows" name="rows" repeat.each="{= $names}" repeat.enter_ms="200" repeat.exit_ms="400">
+          <text name="row" content="{= $rows.repeat.item}" appearance.opacity="{= $rows.repeat.presence}"/>
+        </group>
+        <let id="open" name="open" value="false"/>
+        <group id="body" name="body" when="{= $open}" when.exit_ms="100">
+          <rect name="panel" w="10" h="10" appearance.opacity="{= $body.when.presence}"/>
+        </group>"##,
+    );
+    let rows = |s: &Store| -> Vec<(String, f64)> {
+        named(s, n["rows"], "row").iter().map(|&r| (text_of(s, r), s.resolved(r, path("appearance.opacity")).unwrap().as_f64().unwrap())).collect()
+    };
+    let set_names = |s: &mut Store, e: &str| s.apply(tx("names", vec![Op::Set { id: n["names"], path: path("let.value"), slot: bind(e) }])).unwrap();
+    store.advance_presence(0.0);
+    assert_eq!(rows(&store), vec![("a".into(), 1.0), ("b".into(), 1.0)], "what is there at the start is simply there");
+    // `c` joins unseen and rises; `a` is kept, leaving.
+    set_names(&mut store, "list('b', 'c')");
+    assert_eq!(rows(&store), vec![("b".into(), 1.0), ("c".into(), 0.0), ("a".into(), 1.0)]);
+    assert_eq!(store.advance_presence(0.1), vec![n["rows"]]);
+    assert_eq!(rows(&store), vec![("b".into(), 1.0), ("c".into(), 0.5), ("a".into(), 0.75)]);
+    // `a` is wanted again half way out: it turns back, the same node.
+    let a = named(&store, n["rows"], "row")[2];
+    store.advance_presence(0.2);
+    set_names(&mut store, "list('a', 'b')");
+    assert_eq!(named(&store, n["rows"], "row")[0], a);
+    assert_eq!(rows(&store), vec![("a".into(), 0.5), ("b".into(), 1.0), ("c".into(), 1.0)]);
+    for t in [0.3, 0.4, 0.5, 0.6, 0.7] {
+        store.advance_presence(t);
+    }
+    assert_eq!(rows(&store), vec![("a".into(), 1.0), ("b".into(), 1.0)], "c has gone, a is back");
+    assert!(store.advance_presence(0.8).is_empty());
+    // A conditional with only an exit: opens at once, closes over 100 ms.
+    let panel = |s: &Store| named(s, n["body"], "panel").iter().map(|&p| (s.resolved(p, path("appearance.opacity")).unwrap().as_f64().unwrap() * 1000.0).round() / 1000.0).collect::<Vec<_>>();
+    let set_open = |s: &mut Store, v: bool| s.apply(tx("open", vec![Op::Set { id: n["open"], path: path("let.value"), slot: Slot::Const(Value::Bool(v)) }])).unwrap();
+    set_open(&mut store, true);
+    assert_eq!(panel(&store), vec![1.0]);
+    set_open(&mut store, false);
+    store.advance_presence(0.85);
+    assert_eq!(panel(&store), vec![0.5]);
+    store.advance_presence(0.95);
+    assert!(panel(&store).is_empty());
+}

@@ -99,9 +99,9 @@ fn leaf(ty: TypeId, attr: &str) -> Result<(FacetKind, String), String> {
     if let Some(found) = spec.facets.iter().map(|(k, _)| *k).find(|k| k.fields().iter().any(|(n, _)| *n == attr)) {
         return Ok((found, attr.to_owned()));
     }
-    // A facet with one field, by the facet's name: `when="{= … }"`.
-    match FacetKind::from_name(attr).filter(|k| spec.allows(*k)).map(|k| (k, k.fields())) {
-        Some((k, [(only, _)])) => Ok((k, (*only).to_owned())),
+    // A conditional by its facet's name: `when="{= … }"` is `when.is`.
+    match FacetKind::from_name(attr).filter(|k| spec.allows(*k)) {
+        Some(FacetKind::When) => Ok((FacetKind::When, "is".to_owned())),
         _ => Err(format!("{attr:?} is not a field of {}", spec.name)),
     }
 }

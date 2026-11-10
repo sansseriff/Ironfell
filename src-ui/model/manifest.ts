@@ -312,7 +312,15 @@ ${p.contextFields}`,
   A let names a value for bindings to read, computed once: a series, a number, a
   function. <create id="$aw" type="let" parent="#C" name="area w" value="{= #F.size.w - 70}"/>,
   then {= $aw.let.value / 2}. In a definition's template each picture has its own copy,
-  so it may read the picture's box; in a definition's body each instance has one.`,
+  so it may read the picture's box; in a definition's body each instance has one.
+  ENTER AND EXIT: repeat.enter_ms and repeat.exit_ms (when.enter_ms, when.exit_ms on a
+  conditional) make items arrive and leave over time. An item that joins has
+  $g.repeat.presence rise 0 to 1; one that leaves is kept, with $g.repeat.leaving true,
+  while presence falls to 0, then it is removed. Bind how that looks in the template:
+  appearance.opacity="{= $g.repeat.presence}", or a slide
+  y="{= $g.repeat.index * 26 + (1 - ease('ease_out', $g.repeat.presence)) * 8}".
+  Without them items appear and go at once. Give repeat.key (or a list of words) so an
+  item is the same node as the list changes.`,
   },
   state: {
     summary: 'state and actions: a let that clicks change (toggle, counter, current tab), on click/enter/leave, session state, reading the selected node',

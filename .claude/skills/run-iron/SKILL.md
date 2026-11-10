@@ -137,7 +137,9 @@ Expected: six `assertion passed` lines (closed and grey at version 2; hovered bl
 the version unchanged; open with three rows at version 3 and nothing selected; grey
 again off the header; closed at version 4; open again after Cmd+Z), then
 `applied "toggle legend"` twice and `applied "undo: toggle legend"`, and
-`(no page errors)`. Inspect `screenshots/actions-open.png`. A text made by a model edit
+`(no page errors)`. Inspect `screenshots/actions-open.png`. The body fades in and out
+over 150 ms (`when.enter_ms`, `when.exit_ms`, opacity bound to `when.presence`); the
+waits are longer than that. A text made by a model edit
 needs a `fill.color` to draw, which the script gives its texts.
 
 ## Time-aware values: the delayed fiber (2026-11-10)

@@ -61,7 +61,9 @@ impl ProducerId {
     pub const STEPS: ProducerId = ProducerId(8);
     /// Queries' status and answers (query.rs).
     pub const QUERIES: ProducerId = ProducerId(9);
-    pub const FIRST_HOST: ProducerId = ProducerId(10);
+    /// Items entering and leaving (`Store::advance_presence`).
+    pub const PRESENCE: ProducerId = ProducerId(10);
+    pub const FIRST_HOST: ProducerId = ProducerId(11);
 }
 
 /// One published value: who published it and at which of their frames.

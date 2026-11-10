@@ -430,6 +430,14 @@ facets! {
         key: Any = Value::Number(f64::NAN),
         item: Any = Value::Number(0.0),
         index: Number = Value::Number(0.0),
+        // Enter and exit (reactivity.md §13, phase 7): an item that joins
+        // has `presence` rise 0 to 1 over `enter_ms`; one that leaves is
+        // kept, `leaving`, while it falls to 0 over `exit_ms`, then goes.
+        // The template reads `presence` and `leaving` as it reads `item`.
+        enter_ms: Number = Value::Number(0.0),
+        exit_ms: Number = Value::Number(0.0),
+        presence: Number = Value::Number(1.0),
+        leaving: Bool = Value::Bool(false),
     }
 
     /// A conditional (reactivity.md §3.1): a group whose children exist
@@ -438,6 +446,11 @@ facets! {
     /// and removed when it does not, with whatever session state it held.
     When / "when" => When {
         is: Bool = Value::Bool(true),
+        // As a repeat's: the children fade in and out when these are set.
+        enter_ms: Number = Value::Number(0.0),
+        exit_ms: Number = Value::Number(0.0),
+        presence: Number = Value::Number(1.0),
+        leaving: Bool = Value::Bool(false),
     }
 
     /// One item of a repeat (plans/specs/reactivity.md §3.1): on the derived
@@ -447,6 +460,8 @@ facets! {
     Item / "item" => Item {
         value: Any = Value::Number(0.0),
         index: Number = Value::Number(0.0),
+        presence: Number = Value::Number(1.0),
+        leaving: Bool = Value::Bool(false),
     }
 
     /// A named value (plans/specs/repeat.md §7): any value a binding

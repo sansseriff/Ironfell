@@ -234,6 +234,10 @@ pub struct Store {
     steps: step::Steps,
     /// Queries to Models (query.rs): presentation state.
     queries: query::Queries,
+    /// Items entering and leaving, by owner (a repeat or a conditional):
+    /// presentation state (reactivity.md §13, phase 7).
+    presence: BTreeMap<NodeId, Presence>,
+    presence_at: Option<f64>,
     /// Nodes' interaction states, as the host last reported them (session;
     /// read by rules that match `state:`).
     interaction: BTreeMap<NodeId, Vec<&'static str>>,
@@ -359,6 +363,8 @@ impl Store {
             machines: machine::Player::default(),
             steps: step::Steps::default(),
             queries: query::Queries::default(),
+            presence: BTreeMap::new(),
+            presence_at: None,
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
@@ -1295,14 +1301,20 @@ impl Store {
                 let is_repeat = self.doc.facet(r, facet::FacetKind::Repeat).is_some();
                 // A conditional that fails to evaluate shows nothing.
                 let shown = self.doc.facet(r, facet::FacetKind::When).is_none() || (shown.as_ref().and_then(|v| v.as_bool()) == Some(true) && !self.reactive.errors.contains_key(&Leaf { node: r, path: when }));
+                let timing = |f: &str| {
+                    let kind = if is_repeat { facet::FacetKind::Repeat } else { facet::FacetKind::When };
+                    self.reactive.read(&self.doc, Leaf { node: r, path: LeafPath::new(kind, f).expect("declared leaf") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(0.0).max(0.0)
+                };
+                let (enter_ms, exit_ms) = (timing("enter_ms"), timing("exit_ms"));
                 if !is_repeat {
-                    if shown && let Some(scope) = NodeId::item_scope(r, "on") {
-                        counts.insert(r, vec!["on".to_owned()]);
-                        values.insert(Leaf { node: scope, path: item("value") }, Value::Bool(true));
-                        values.insert(Leaf { node: scope, path: item("index") }, Value::Number(0.0));
-                    } else {
-                        counts.insert(r, Vec::new());
+                    let wanted = if shown { vec![("on".to_owned(), Value::Bool(true))] } else { Vec::new() };
+                    let all = settle_presence(&mut self.presence, r, wanted, enter_ms, exit_ms);
+                    for (k, (key, element)) in all.iter().enumerate() {
+                        let Some(scope) = NodeId::item_scope(r, key) else { continue };
+                        values.insert(Leaf { node: scope, path: item("value") }, element.clone());
+                        values.insert(Leaf { node: scope, path: item("index") }, Value::Number(k as f64));
                     }
+                    counts.insert(r, all.into_iter().map(|(k, _)| k).collect());
                     continue;
                 }
                 let max = self.reactive.read(&self.doc, Leaf { node: r, path: path("max") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0) as usize;
@@ -1328,18 +1340,28 @@ impl Store {
                         (0..elements.len()).map(|k| k.to_string()).collect()
                     }
                 };
-                if shown {
-                    for (k, (key, element)) in keys.iter().zip(elements).enumerate() {
-                        let Some(scope) = NodeId::item_scope(r, key) else { continue };
-                        values.insert(Leaf { node: scope, path: item("value") }, element);
-                        values.insert(Leaf { node: scope, path: item("index") }, Value::Number(k as f64));
-                    }
-                    counts.insert(r, keys);
-                } else {
-                    counts.insert(r, Vec::new());
+                let wanted: Vec<(String, Value)> = if shown { keys.into_iter().zip(elements).collect() } else { Vec::new() };
+                let here = wanted.len();
+                // Those leaving come after, keeping the element and index
+                // they had.
+                let all = settle_presence(&mut self.presence, r, wanted, enter_ms, exit_ms);
+                for (k, (key, element)) in all.iter().enumerate() {
+                    let Some(scope) = NodeId::item_scope(r, key) else { continue };
+                    values.insert(Leaf { node: scope, path: item("value") }, element.clone());
+                    let index = if k < here { k as f64 } else { self.presence.get(&r).and_then(|p| p.items.get(key)).map_or(k as f64, |e| e.index) };
+                    values.insert(Leaf { node: scope, path: item("index") }, Value::Number(index));
                 }
+                if let Some(p) = self.presence.get_mut(&r) {
+                    for (k, (key, _)) in all.iter().enumerate().take(here) {
+                        if let Some(e) = p.items.get_mut(key) {
+                            e.index = k as f64;
+                        }
+                    }
+                }
+                counts.insert(r, all.into_iter().map(|(k, _)| k).collect());
             }
             self.truncated = truncated;
+            self.presence.retain(|r, _| inputs.iter().any(|(n, _)| n == r));
             self.repeat_inputs = Some(inputs);
             let structural = counts != self.repeats;
             if structural {
@@ -1357,6 +1379,8 @@ impl Store {
                 self.signal_stamp += 1;
                 self.reactive.publish(&self.doc, ProducerId::ITEMS, values, self.signal_stamp);
             }
+            // An item that has just joined starts unseen, in this same pass.
+            self.publish_presence();
             if structural {
                 // New items may hold repeats: look again.
                 self.repeat_inputs = None;
@@ -1367,6 +1391,61 @@ impl Store {
         }
         self.settling = false;
         applied
+    }
+
+    /// Publish where each entering or leaving item has got to.
+    fn publish_presence(&mut self) {
+        let leaf = |node: NodeId, f: &str| Leaf { node, path: LeafPath::new(facet::FacetKind::Item, f).expect("declared leaf") };
+        let mut values = BTreeMap::new();
+        for (r, p) in &self.presence {
+            for (key, e) in &p.items {
+                let Some(scope) = NodeId::item_scope(*r, key).filter(|s| self.doc.is_live(*s)) else { continue };
+                if e.p < 1.0 || e.leaving {
+                    values.insert(leaf(scope, "presence"), Value::Number(e.p));
+                    values.insert(leaf(scope, "leaving"), Value::Bool(e.leaving));
+                }
+            }
+        }
+        if values != self.reactive.published_by(ProducerId::PRESENCE) {
+            self.signal_stamp += 1;
+            self.reactive.publish(&self.doc, ProducerId::PRESENCE, values, self.signal_stamp);
+        }
+    }
+
+    /// Move the items entering and leaving to `now` (seconds, the host's
+    /// clock): `presence` rises over its owner's `enter_ms` and falls over
+    /// `exit_ms`, and an item that has finished leaving is removed.
+    /// Returns the owners with an item still on its way.
+    pub fn advance_presence(&mut self, now: f64) -> Vec<NodeId> {
+        let dt = self.presence_at.map_or(0.0, |l| (now - l).clamp(0.0, 0.1)) * 1000.0;
+        self.presence_at = Some(now);
+        let mut gone = false;
+        let mut active = Vec::new();
+        for (r, p) in &mut self.presence {
+            let (enter_ms, exit_ms) = (p.enter_ms, p.exit_ms);
+            p.items.retain(|_, e| {
+                if e.leaving {
+                    e.p = if exit_ms > 0.0 { e.p - dt / exit_ms } else { 0.0 };
+                    gone |= e.p <= 0.0;
+                    e.p > 0.0
+                } else {
+                    if e.p < 1.0 {
+                        e.p = if enter_ms > 0.0 { (e.p + dt / enter_ms).min(1.0) } else { 1.0 };
+                    }
+                    true
+                }
+            });
+            if p.items.values().any(|e| e.leaving || e.p < 1.0) {
+                active.push(*r);
+            }
+        }
+        if gone {
+            // The structure changes: settle again, without the ones gone.
+            self.repeat_inputs = None;
+            self.resolve_physics();
+        }
+        self.publish_presence();
+        active
     }
 
     /// Publish the session state cells (`let.keep = session`) that still
@@ -2566,6 +2645,57 @@ fn args_set(ops: &[Op]) -> Vec<NodeId> {
             _ => None,
         })
         .collect()
+}
+
+/// An owner's items as they enter and leave (`Store::advance_presence`).
+#[derive(Default)]
+struct Presence {
+    enter_ms: f64,
+    exit_ms: f64,
+    items: BTreeMap<String, Present>,
+}
+
+struct Present {
+    /// 0, unseen, to 1, here.
+    p: f64,
+    leaving: bool,
+    /// The element and index it had when last wanted.
+    value: Value,
+    index: f64,
+}
+
+/// Fold what an owner wants now into who is present: a new key enters
+/// (from 0 when the owner has an `enter_ms` and was already showing, else
+/// at once), a key no longer wanted leaves (kept while `exit_ms` runs, else
+/// dropped), and one wanted again while leaving turns back from where it
+/// is. Answers the keys to expand, the wanted ones first, with each one's
+/// element.
+fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, r: NodeId, wanted: Vec<(String, Value)>, enter_ms: f64, exit_ms: f64) -> Vec<(String, Value)> {
+    let first = !all.contains_key(&r);
+    let p = all.entry(r).or_default();
+    (p.enter_ms, p.exit_ms) = (enter_ms, exit_ms);
+    for (key, value) in &wanted {
+        match p.items.get_mut(key) {
+            Some(e) => {
+                e.leaving = false;
+                e.value = value.clone();
+            }
+            None => {
+                p.items.insert(key.clone(), Present { p: if first || enter_ms <= 0.0 { 1.0 } else { 0.0 }, leaving: false, value: value.clone(), index: 0.0 });
+            }
+        }
+    }
+    p.items.retain(|key, e| {
+        if wanted.iter().any(|(k, _)| k == key) {
+            return true;
+        }
+        e.leaving = true;
+        exit_ms > 0.0 && e.p > 0.0
+    });
+    let mut out = wanted;
+    let leaving: Vec<(String, Value)> = p.items.iter().filter(|(_, e)| e.leaving).map(|(k, e)| (k.clone(), e.value.clone())).collect();
+    out.extend(leaving);
+    out
 }
 
 /// Whether a set of this leaf changes what `@name` resolves to: a rename,

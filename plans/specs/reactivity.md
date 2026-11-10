@@ -470,6 +470,20 @@ Phase 6, second part (2026-11-10): the query node.
 - `query.txt` (run-iron) plots a 1.5 s Model's answer through `std:plot` and reads
   pending, ready, pending-stale and ready again.
 
+Phase 7, first part (2026-11-10): enter and exit.
+
+- **Presence**: `repeat.enter_ms` and `repeat.exit_ms` (`when.enter_ms`,
+  `when.exit_ms`). A key that joins has `presence` rise 0 to 1; a key no longer
+  wanted is kept, `leaving`, with the element and index it had, while `presence`
+  falls, and is then removed; a key wanted again while leaving turns back from where
+  it is (machines.md M8's rule). The template reads `$g.repeat.presence` and
+  `.leaving` as it reads `item`: expansion maps them to the item's own leaves
+  (`item.presence`, `item.leaving`, `ProducerId::PRESENCE`). What it looks like is a
+  binding (opacity, an offset through `ease`), so there is no second animation
+  vocabulary. `Store::advance_presence(now)` on presentation time; what is there
+  when an owner first settles is simply there.
+- Leaving items come after the wanted ones in order. They are still pickable.
+
 **Differs from the proposal:**
 
 - Numbers are keyed by index unless `repeat.key` is given (§3.2 said by value when
@@ -489,6 +503,9 @@ Phase 6, second part (2026-11-10): the query node.
   following power along the fiber) needs a gradient the trace does not yet give.
 - A query has no native host yet (the Tauri shell does not answer `Queries`), no
   progress, and the Model's reply carries no units: numbers arrive plain.
+- Enter and exit are a `presence` number, not a `vis` machine on the item (repeat.md
+  §3 said machines): a template that wants a designed appear binds its component's
+  `vis` to `presence > 0.5` or `!leaving`. Linear in time; shape it with `ease`.
 - Still whole-document: any change to a repeat's items or a conditional re-expands
   the document and rebuilds the graph.
 

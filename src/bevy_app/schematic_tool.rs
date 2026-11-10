@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn a_wire_turns_once_per_corner_and_tidies_straight_runs() {
         let a = Point::new(0.0, 0.0);
-        let w = Wire { panel: "p".into(), from: (Terminal::Pin(parts::End { pin: NodeId::from_raw(1), anchor: NodeId::from_raw(2) }), a), corners: vec![], vertical_first: false };
+        let w = Wire { panel: "p".into(), from: (Terminal::Pin(parts::End { pin: "#1".parse::<NodeId>().unwrap(), anchor: "#2".parse::<NodeId>().unwrap() }), a), corners: vec![], vertical_first: false };
         assert_eq!(w.points(Point::new(30.0, 20.0)), [a, Point::new(30.0, 0.0), Point::new(30.0, 20.0)]);
         assert_eq!(tidy(vec![a, Point::new(10.0, 0.0), Point::new(20.0, 0.0), Point::new(20.0, 0.0), Point::new(20.0, 5.0)]), [a, Point::new(20.0, 0.0), Point::new(20.0, 5.0)]);
         assert_eq!(snap(Point::new(14.0, 26.0), 10.0), Point::new(10.0, 30.0));

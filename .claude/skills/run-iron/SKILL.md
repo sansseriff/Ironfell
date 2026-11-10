@@ -3170,9 +3170,10 @@ Repeat with `BACKEND=webgl2`, `RUNTIME=main` and `DPR=2`. Expected output:
 Capture's Rust unit tests (`encode()` row padding and premultiplied flattening,
 abandoned-ticket expiry) run natively: `cargo test -p ironfell --lib --features
 native --target aarch64-apple-darwin --profile dev-opt capture::tests` (~9 s warm,
-~3 min cold). **Known broken (2026-11-09, also on `master`):** the crate's lib tests
-do not compile, because `bevy_app/schematic_tool.rs`'s test calls the private
-`NodeId::from_raw`; to run these, patch it locally to `"#1".parse::<NodeId>()`.
+~3 min cold). Without the filter the crate's whole lib suite runs (8 tests,
+1m 25s on a warm dependency cache, 2026-11-09). It did not compile from 2026-10-27
+to 2026-11-09 (a test called the crate-private `NodeId::from_raw`) because no
+routine check builds it; run it after changing Rust in the `ironfell` crate.
 Agent-log check: call records keep image references, and images are files under
 the log folder's `images/` (`tests/agent-runtime.test.ts`).
 Captures and chat screenshots are in `.agents/vision/` (ignored). Native package

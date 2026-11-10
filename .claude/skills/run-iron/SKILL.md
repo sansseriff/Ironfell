@@ -62,6 +62,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `scope-menu.txt` | ~20 s |
 | `query.txt` (`GPU=1`, with `model-server.ts`): a plot of a 1.5 s Model's answer | ~12 s (2026-11-10) |
 | `plot-view.txt`, `pulses.txt` (`GPU=1`) | ~12 s each (2026-11-10) |
+| `idle.txt`, `context.txt` (`GPU=1`) | ~8 s each (2026-11-10) |
 | `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
@@ -187,6 +188,23 @@ Expected: four `assertion passed` lines (a dash with at least four runs, so two 
 on the curve at once; at least eight different dashes; the meter reading both 12 mW and
 0; the version unchanged), `(no page errors)`. `screenshots/pulses.png` shows pale
 dashes along the amber fiber.
+
+`idle.txt` places a laser that is not pulsing, a fiber, a meter and a plot, and counts
+what is drawn over 1.5 s of rest. `context.txt` defines a component whose template
+reads `@gap` with a default, places one on the page and one in a group that provides
+`gap`, and reads the inspector's "From context" rows.
+
+```sh
+cd .claude/skills/run-iron && GPU=1 bun run drive.ts < idle.txt; GPU=1 bun run drive.ts < context.txt; cd -
+```
+
+Expected, `idle.txt`: `{"changed":0,"encode":0,"sync":0}` and two `assertion passed`
+lines. Anything above 0 means a producer publishes every frame (an accumulator's `dt`
+did, until 2026-11-10). Expected, `context.txt`: `["@gap8default"]`,
+`["@gap40from wide"]`, an `out_of_scope` failure saying `@margin` is one "its
+definition does not declare", three `assertion passed` lines, and
+`screenshots/context-inspector.png` with "From context · @gap 40 · from wide" in the
+inspector. Both end with `(no page errors)`.
 
 ## Queries to a slow Model (2026-11-10)
 
@@ -611,7 +629,7 @@ interaction a unit test cannot reach: a real pointer or keyboard gesture through
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `sequence.txt`, `text.txt`,
 `text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
-`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
+`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `idle.txt`, `context.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
 `selection-cache.txt`. Retired: `smoke-full.txt` (split into `regression.txt` and

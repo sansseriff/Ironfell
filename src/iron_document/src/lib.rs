@@ -1743,6 +1743,27 @@ impl Store {
     /// Everything wrong that a node can show (reactivity.md §4.3): what
     /// expansion could not derive or derived past a limit, repeats cut at
     /// their `max`, and bindings that failed.
+    /// The context a picture reads (reactivity.md §6): each `@name` read
+    /// under `figure` that is not a colour token, with the node providing
+    /// it, or `None` where the picture's own default serves. For the
+    /// inspector: what placement gives this instance.
+    pub fn context_reads(&self, figure: NodeId) -> Vec<(String, Option<NodeId>, Option<Value>)> {
+        let mut out: BTreeMap<String, (Option<NodeId>, Option<Value>)> = BTreeMap::new();
+        for (leaf, ctx) in self.reactive.contexts() {
+            if leaf.node != figure && !self.doc.is_ancestor(figure, leaf.node) {
+                continue;
+            }
+            for (name, provider) in ctx {
+                if palette::is_token(&self.doc, name) && provider.path.facet == facet::FacetKind::Token {
+                    continue;
+                }
+                let own = self.doc.is_ancestor(figure, provider.node);
+                out.entry(name.clone()).or_insert_with(|| ((!own).then_some(provider.node), self.reactive.read(&self.doc, *provider)));
+            }
+        }
+        out.into_iter().map(|(n, (p, v))| (n, p, v)).collect()
+    }
+
     pub fn problems(&self) -> Vec<expand::Problem> {
         let mut out = self.expansion_problems.clone();
         out.extend(self.truncated.iter().cloned());
@@ -1928,15 +1949,35 @@ impl Store {
     /// clock) and publish them (step.rs). Returns the nodes still
     /// changing, so the host keeps their compositions drawing.
     pub fn advance_steps(&mut self, now: f64) -> Vec<NodeId> {
-        // The step's length first, so each accumulator's formula is
-        // evaluated with it before the store reads the result.
-        let dts = self.steps.begin(&self.doc, now);
-        if !dts.is_empty() {
+        // Each accumulator's formula reads the step's length, so it is
+        // published before the formulas are read: but only while one of
+        // them is moving. Frame times jitter, and republishing a length
+        // nothing uses would redraw every frame (step.rs `restless`).
+        let dt = self.steps.tick(now);
+        let leaves = step::Steps::dt_leaves(&self.doc);
+        if !leaves.is_empty() {
             let mut shown = self.reactive.published_by(ProducerId::STEPS);
-            shown.extend(dts.clone());
-            self.signal_stamp += 1;
-            self.reactive.publish(&self.doc, ProducerId::STEPS, shown, self.signal_stamp);
+            let positive = |v: Option<&Value>| v.and_then(Value::as_f64).is_some_and(|x| x > 0.0);
+            if leaves.iter().any(|l| !positive(shown.get(l))) {
+                for l in &leaves {
+                    if !positive(shown.get(l)) {
+                        shown.insert(*l, Value::Number(1.0 / 60.0));
+                    }
+                }
+                self.signal_stamp += 1;
+                self.reactive.publish(&self.doc, ProducerId::STEPS, shown.clone(), self.signal_stamp);
+            }
+            let restless = {
+                let (reactive, doc) = (&self.reactive, &self.doc);
+                self.steps.restless(doc, &|l: Leaf| reactive.read(doc, l))
+            };
+            if restless {
+                shown.extend(leaves.iter().map(|l| (*l, Value::Number(dt))));
+                self.signal_stamp += 1;
+                self.reactive.publish(&self.doc, ProducerId::STEPS, shown, self.signal_stamp);
+            }
         }
+        let dts: BTreeMap<Leaf, Value> = self.reactive.published_by(ProducerId::STEPS).into_iter().filter(|(l, _)| leaves.contains(l)).collect();
         let (mut values, active) = {
             let reactive = &self.reactive;
             let doc = &self.doc;
@@ -2596,6 +2637,17 @@ impl Store {
                     errors.push(e);
                 }
                 if let Err(message) = expand::check_scope(&work, op) {
+                    errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });
+                }
+                // What may take a context declaration away (expand.rs).
+                let undeclares = match op {
+                    Op::Set { id, path, .. } if names_context(path) => Some(*id),
+                    Op::Delete { id } | Op::Reparent { id, .. } => Some(*id),
+                    _ => None,
+                };
+                if let Some(id) = undeclares.filter(|id| !id.is_expanded())
+                    && let Err(message) = expand::check_context(&work, id)
+                {
                     errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });
                 }
             }

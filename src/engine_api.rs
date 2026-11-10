@@ -1576,7 +1576,22 @@ fn inspect_component(store: &iron_document::Store, id: iron_document::NodeId) ->
         })
         .collect();
     let linked = iron_document::expand::linked_definition(doc, entity).is_some();
-    serde_json::json!({"entity": entity.to_string(), "name": name_of(entity), "def": name_of(def), "linked": linked, "inputs": fields})
+    // What this picture reads from where it is placed (reactivity.md §6):
+    // the selected picture's, or the entity's first.
+    let figure = if is_entity { iron_document::composition::figures_of(doc, entity).first().copied() } else { Some(id) };
+    let context: Vec<serde_json::Value> = figure
+        .map(|f| store.context_reads(f))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, provider, value)| {
+            let from = provider.map(|p| {
+                let holder = doc.live(p).and_then(|n| n.parent);
+                holder.and_then(name_of).or_else(|| holder.map(|h| h.to_string())).unwrap_or_else(|| "the document".into())
+            });
+            serde_json::json!({"name": name, "from": from, "provider": provider.map(|p| p.to_string()), "text": value.map(|v| v.to_string())})
+        })
+        .collect();
+    serde_json::json!({"entity": entity.to_string(), "name": name_of(entity), "def": name_of(def), "linked": linked, "inputs": fields, "context": context})
 }
 
 pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: bool) -> String {

@@ -460,7 +460,7 @@ fn a_component_reads_context_from_wherever_it_is_placed() {
     let def_markup = r##"<definition name="spaced">
         <template notation="free">
           <let name="gap" provide="default" value="8"/>
-          <rect name="box" x="{= @gap}" y="0" w="10" h="10"/>
+          <rect name="box" x="{= @gap}" y="0" w="10" h="10" fill.color="#000000ff"/>
         </template>
       </definition>"##;
     let built = markup::ops(def_markup, Some(library), OrderKey::first(), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
@@ -473,6 +473,28 @@ fn a_component_reads_context_from_wherever_it_is_placed() {
     let box_x = |s: &Store, under: NodeId| x_of(s, named(s, under, "box")[0]);
     assert_eq!(box_x(&store, plain), 8.0, "the component's own default");
     assert_eq!(box_x(&store, wide), 40.0, "the provider above it");
+    // The inspector's list: what each picture reads, and from where.
+    let reads = |s: &Store, under: NodeId| s.context_reads(s.document().children(under).iter().copied().find(|&c| s.document().live(c).is_some_and(|n| n.ty.name() == "use")).unwrap());
+    assert_eq!(reads(&store, plain), vec![("gap".to_owned(), None, Some(Value::Number(8.0)))], "its own default");
+    let provider = store.document().children(wide).iter().copied().find(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "let"));
+    assert_eq!(reads(&store, wide), vec![("gap".to_owned(), provider, Some(Value::Number(40.0)))]);
+    // A definition declares what it reads: an undeclared name, a read
+    // outside the template, and taking the declaration away are refused.
+    let template = store.document().children(def).iter().copied().find(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "template")).unwrap();
+    let part = |name: &str| store.document().children(template).iter().copied().find(|&c| store.document().get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap();
+    let (the_box, the_default) = (part("box"), part("gap"));
+    let refused = |s: &mut Store, ops: Vec<Op>| s.apply(tx("no", ops)).unwrap_err()[0].message.clone();
+    let why = refused(&mut store, vec![Op::Set { id: the_box, path: path("transform2d.y"), slot: bind("@margin") }]);
+    assert!(why.contains("does not declare"), "{why}");
+    let themed = store.apply(tx("theme", vec![Op::Set { id: the_box, path: path("fill.color"), slot: bind("@ink") }]));
+    assert!(themed.is_ok(), "colour tokens need no declaration: {themed:?}");
+    let why = refused(&mut store, vec![Op::Set { id: the_default, path: path("let.provide"), slot: Slot::Const(Value::Enum("no".into())) }]);
+    assert!(why.contains("does not declare"), "{why}");
+    let why = refused(&mut store, vec![Op::Delete { id: the_default }]);
+    assert!(why.contains("does not declare"), "{why}");
+    let outside = markup::ops(r#"<let name="model_level" value="{= @gap}"/>"#, Some(def), OrderKey::after(&OrderKey::after(&OrderKey::first())), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let why = refused(&mut store, outside.ops);
+    assert!(why.contains("outside a template"), "{why}");
     // The provider's value is live, and ceasing to provide falls back.
     let gap = store.document().children(wide).iter().copied().find(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "let")).unwrap();
     store.apply(tx("gap", vec![Op::Set { id: gap, path: path("let.value"), slot: Slot::Const(Value::Number(60.0)) }])).unwrap();
@@ -573,6 +595,37 @@ fn a_delayed_fiber_carries_a_pulse_to_its_far_end() {
     store.advance_steps(2.01);
     assert_eq!(light(&store), "", "lit throughout");
     assert_eq!(format!("{}", out(&store)), "5 mW", "the far end has it");
+}
+
+/// A laser that is not pulsing and a fiber carrying a steady value are at
+/// rest: nothing keeps the frame loop awake.
+#[test]
+fn steady_stepped_producers_are_at_rest() {
+    let (mut store, comp, _) = sheet(r#"<group name="spare"/>"#);
+    let laser = store.place_standard("laser", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let fiber = store.place_standard("fiber", comp, [200.0, 0.0], Actor::Human).unwrap();
+    store.place_standard("plot", comp, [0.0, 200.0], Actor::Human).unwrap();
+    let entity = |s: &Store, u: NodeId| expand::use_entity(s.document(), u).unwrap();
+    let port = |s: &Store, u: NodeId, name: &str| {
+        let e = entity(s, u);
+        s.document().children(e).iter().copied().find(|&p| s.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
+    };
+    let read = |l: Leaf| store.resolved(l.node, l.path);
+    let ops = author::connect(store.document(), &read, port(&store, laser, "out"), port(&store, fiber, "in")).unwrap();
+    store.apply(tx("plug", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    store.advance_steps(0.0);
+    store.advance_presence(0.0);
+    store.advance_steps(0.01);
+    store.drain_changes();
+    for i in 1..20 {
+        let now = i as f64 * 0.0163 + (i % 3) as f64 * 0.001;
+        assert_eq!(store.advance_steps(now), vec![], "steps at frame {i}");
+        assert_eq!(store.advance_presence(now), vec![], "presence at frame {i}");
+        assert!(store.advance_queries(now).is_empty() && store.pending_queries().is_empty());
+        assert!(store.advance_motion(now).is_empty(), "motion at frame {i}");
+        let moved: Vec<String> = store.drain_changes().iter().map(|c| c.leaf.to_string()).collect();
+        assert!(moved.is_empty(), "frame {i} changed {moved:?}");
+    }
 }
 
 /// Phase 6 (reactivity.md §8): a query asks a Model while something reads

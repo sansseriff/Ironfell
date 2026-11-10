@@ -234,6 +234,12 @@ impl Reactive {
         self.nodes.get(&leaf).map(|n| &n.expr)
     }
 
+    /// Each bound leaf that reads context, with the provider each `@name`
+    /// resolved to.
+    pub fn contexts(&self) -> impl Iterator<Item = (Leaf, &BTreeMap<String, Leaf>)> {
+        self.nodes.iter().filter(|(_, n)| !n.ctx.is_empty()).map(|(l, n)| (*l, &n.ctx))
+    }
+
     /// Every leaf `leaf` reads, directly or through other bindings.
     pub fn transitive_deps(&self, leaf: Leaf) -> BTreeSet<Leaf> {
         let mut out = BTreeSet::new();

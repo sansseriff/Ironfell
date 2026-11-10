@@ -1031,6 +1031,11 @@ pub fn check_scope(doc: &Document, op: &Op) -> Result<(), String> {
         return Ok(());
     }
     let home = definition_of(doc, node);
+    if let Some(def) = home {
+        for e in &exprs {
+            context_fault(doc, def, node, e)?;
+        }
+    }
     for dep in exprs.iter().flat_map(|e| e.deps()) {
         match home {
             Some(def) => {
@@ -1052,6 +1057,44 @@ pub fn check_scope(doc: &Document, op: &Op) -> Result<(), String> {
                     return Err(format!("{node} reads {dep}, inside instance {owner}; read one of its ports, or give its definition an `out` port for this"));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// A definition's context reads (reactivity.md §6). `@name` depends on
+/// where a picture is placed, so inside a definition it may be read only
+/// in a template, and only a name the template itself declares with a
+/// `let` that provides it (`provide="default"` is the fallback). Colour
+/// tokens are the theme and need neither.
+fn context_fault(doc: &Document, def: NodeId, node: NodeId, expr: &Expr) -> Result<(), String> {
+    for name in expr.tokens() {
+        if crate::palette::is_token(doc, &name) {
+            continue;
+        }
+        let mut in_template = false;
+        let mut at = Some(node);
+        while let Some(n) = at.filter(|&a| a != def).and_then(|a| doc.node(a)) {
+            in_template |= n.ty.name() == "template";
+            at = n.parent;
+        }
+        if !in_template {
+            return Err(format!("{node} reads @{name} outside a template: context depends on where a picture is placed, so only a definition's template may read it. Give the definition an input port for this instead"));
+        }
+        if !crate::palette::declared(doc, node, &name, def) {
+            return Err(format!("{node} reads @{name}, which its definition does not declare: add <let name=\"{name}\" provide=\"default\" value=\"…\"/> to the template, the value used where nothing above provides {name}"));
+        }
+    }
+    Ok(())
+}
+
+/// Every context fault in the definition `node` is part of: checked when a
+/// rename, a delete or a change of `provide` may have removed a declaration.
+pub fn check_context(doc: &Document, node: NodeId) -> Result<(), String> {
+    let Some(def) = definition_of(doc, node) else { return Ok(()) };
+    for (leaf, expr) in doc.bound_slots() {
+        if !leaf.node.is_expanded() && doc.is_ancestor(def, leaf.node) {
+            context_fault(doc, def, leaf.node, expr)?;
         }
     }
     Ok(())

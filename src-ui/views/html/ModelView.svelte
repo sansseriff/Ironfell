@@ -12,7 +12,7 @@
 </script>
 
 <section class="html-view model-view">
-  <ChatPanel {session} {history} target="Document and compositions" send={(text, history, turn, live) => doc.ask(text, { history, allowTextReply: true, turnId: turn.id }, live)} />
+  <ChatPanel {session} {history} target="Document and compositions" send={(text, history, turn, live) => doc.ask(text, { history, allowTextReply: true, turnId: turn.id, images: turn.images }, live)} />
 </section>
 
 <style>

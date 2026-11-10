@@ -516,7 +516,7 @@ export class DocumentClient {
         provider: this.agentProvider, endpoint: this.agentEndpoint, token: this.agentToken, model: this.agentModel || undefined, effort: this.effectiveEffort || undefined, serviceTier: this.effectiveTier || undefined,
       };
       if (live.signal?.aborted) throw new Error(STOPPED);
-      const payload = { instruction, apiKey: runtime ? '' : this.apiKey, model: this.modelName, effort: runtime ? undefined : this.effectiveEffort || undefined, runtime, ...conversation };
+      const payload = { instruction, apiKey: runtime ? '' : this.apiKey, model: this.modelName, effort: runtime ? undefined : this.effectiveEffort || undefined, runtime, ...$state.snapshot(conversation) };
       let askId = -1;
       const cancel = () => { if (askId >= 0) this.post?.({ ty: 'modelAskCancel', askId } as UiRequest); };
       live.signal?.addEventListener('abort', cancel, { once: true });

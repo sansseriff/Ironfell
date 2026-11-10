@@ -66,3 +66,41 @@ test('scope storage keeps chats.json per scope, counted in its size', async () =
   await storage.writeChats('missing', 'x');
   assert.equal(await storage.readChats('missing'), null);
 });
+
+test('saved chat images and image-only drafts round trip, invalid attachments are dropped', () => {
+  const image = { name: 'picture.png', mediaType: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==' };
+  const chat = thread('images', [{ ...turn('image', 'Inspect this'), images: [image] }]);
+  chat.draftImages = [image];
+  const saved = savedView([chat], chat.id);
+  const loaded = parseChats(JSON.stringify({ version: 1, views: { model: saved } })).views.model.threads[0];
+  assert.deepEqual(loaded.turns[0].images, [image]);
+  assert.deepEqual(loaded.draftImages, [image]);
+  const draft = thread('draft', []); draft.draftImages = [image];
+  assert.equal(mergeView([draft], draft.id, saved).current, draft.id);
+  const malformed = JSON.stringify({ version: 1, views: { model: saved } }).replaceAll('image/png', 'image/svg+xml');
+  assert.deepEqual(parseChats(malformed).views.model.threads[0].turns[0].images, []);
+  // A declared type the bytes do not match is dropped too.
+  const mislabelled = JSON.stringify({ version: 1, views: { model: saved } }).replaceAll('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'AAAA');
+  assert.deepEqual(parseChats(mislabelled).views.model.threads[0].turns[0].images, []);
+});
+
+test('saved history keeps full images only within its budget; older ones keep their thumbnail', () => {
+  const thumb = '/9j/4AAQSkZJRgABAQAAAQABAAD/';
+  const big = (name: string) => ({ name, mediaType: 'image/png' as const, data: 'iVBORw0KGgoAAAAN' + 'A'.repeat(2_800_000 - 16), thumb });
+  // Newest first (2.8 M characters each): b2 and b1 fit in the 8 M budget, a1 and older do not.
+  const older = thread('older', [{ ...turn('o', 'old'), images: [big('o1'), { ...big('o2'), thumb: undefined }] }]);
+  older.updated = 1;
+  const newer = thread('newer', [{ ...turn('a', 'first'), images: [big('a1')] }, { ...turn('b', 'second'), images: [big('b1'), big('b2')] }]);
+  newer.updated = 2;
+  const saved = savedView([older, newer], newer.id);
+  const [n, o] = saved.threads;
+  assert.deepEqual(n.turns[1].images!.map(i => [i.name, !!i.preview]), [['b1', false], ['b2', false]]);
+  assert.deepEqual(n.turns[0].images!.map(i => [i.name, !!i.preview]), [['a1', true]]);
+  assert.equal(n.turns[0].images![0].data, thumb);
+  // Over budget with no thumbnail: dropped, not kept whole.
+  assert.deepEqual(o.turns[0].images!.map(i => i.name), ['o1']);
+  assert.ok(JSON.stringify(saved).length < 8_000_000 + 100_000);
+  // Previews survive a reload as previews.
+  const loaded = parseChats(JSON.stringify({ version: 1, views: { model: saved } })).views.model.threads[0];
+  assert.equal(loaded.turns[0].images![0].preview, true);
+});

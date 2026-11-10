@@ -54,7 +54,7 @@ export const ANTHROPIC_API_MODELS: ModelEntry[] = [
 export interface CompletionRequest {
   provider: 'codex' | 'claude';
   system: string;
-  messages: { role: 'user' | 'assistant'; content: string }[];
+  messages: import('./conversation').ConversationMessage[];
   model?: string;
   effort?: string;
   serviceTier?: string;

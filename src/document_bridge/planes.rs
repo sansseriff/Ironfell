@@ -191,7 +191,7 @@ pub(super) fn sync_planes(
     spatial: Res<super::SpatialScene>,
     cameras: Query<(&Camera, &GlobalTransform, &RenderLayers)>,
     mut planes: Query<(Entity, &crate::document_bridge::Provenance, &GlobalTransform, &RenderLayers, Option<&mut EmbedPlane>), With<InComposition>>,
-    mut views: Query<(Entity, &mut PlaneLayer, &mut VectorView, Option<&ViewTarget2d>, Ref<DisplayList>)>,
+    mut views: Query<(Entity, &mut PlaneLayer, &mut VectorView, Option<&ViewTarget2d>, Ref<DisplayList>), Without<super::capture::CaptureView>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<PlaneMaterial>>,
     mut active: Query<&mut crate::bevy_app::ActiveStateMarker>,

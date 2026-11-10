@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CLAUDE_EFFORTS, type CompletionRequest, type ModelEntry } from '../../src-ui/model/runtime-options';
@@ -145,7 +145,16 @@ export function codexRuntime(command = process.env.IRON_CODEX_BIN ?? 'codex'): R
         developerInstructions: 'Follow the Iron response format in the supplied instructions: return edit markup for document changes, or Markdown for an allowed conversational reply. Do not use tools, access files, execute commands, or research. All needed document data is in the prompt.',
         ...(request.model ? { model: request.model } : {}),
       });
-      await rpc.request('turn/start', { threadId: thread.id, summary: 'auto', ...(request.effort ? { effort: request.effort } : {}), ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}), input: [{ type: 'text', text: transcript(request) }] });
+      const input: object[] = [];
+      for (const [index, message] of request.messages.entries()) {
+        input.push({ type: 'text', text: `${message.role.toUpperCase()}\n${message.content}` });
+        for (const [imageIndex, image] of (message.images ?? []).entries()) {
+          const path = join(cwd, `image-${index}-${imageIndex}.${image.mediaType.split('/')[1]}`);
+          await writeFile(path, Buffer.from(image.data, 'base64'), { mode: 0o600 });
+          input.push({ type: 'localImage', path });
+        }
+      }
+      await rpc.request('turn/start', { threadId: thread.id, summary: 'auto', ...(request.effort ? { effort: request.effort } : {}), ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}), input: request.messages.some(m => m.images?.length) ? input : [{ type: 'text', text: transcript(request) }] });
       return await completed;
     } finally {
       await rpc.close();
@@ -220,7 +229,7 @@ export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude',
   return async (request, signal, onEvent = () => {}) => {
     if (auth === 'api-key' && !baseEnv.ANTHROPIC_API_KEY) throw new Error('IRON_CLAUDE_AUTH=api-key needs ANTHROPIC_API_KEY on the bridge; unset IRON_CLAUDE_AUTH to use your Claude subscription');
     const cwd = await mkdtemp(join(tmpdir(), 'iron-agent-'));
-    const child = spawn(command, ['-p', auth === 'api-key' ? '--bare' : '--safe-mode', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--tools', '',
+    const child = spawn(command, ['-p', auth === 'api-key' ? '--bare' : '--safe-mode', '--output-format', 'stream-json', ...(request.messages.some(m => m.images?.length) ? ['--input-format', 'stream-json'] : []), '--verbose', '--include-partial-messages', '--tools', '',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
       '--no-session-persistence', '--system-prompt', request.system,
       ...(request.model ? ['--model', request.model] : []),
@@ -279,7 +288,14 @@ export function claudeRuntime(command = process.env.IRON_CLAUDE_BIN ?? 'claude',
             resolve({ text: result.result, usage });
           } catch (error) { reject(error); }
         });
-        child.stdin.end(transcript(request));
+        if (request.messages.some(m => m.images?.length)) {
+          const content: object[] = [];
+          for (const message of request.messages) {
+            content.push({ type: 'text', text: `${message.role.toUpperCase()}\n${message.content}` });
+            for (const image of message.images ?? []) content.push({ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } });
+          }
+          child.stdin.end(JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n');
+        } else child.stdin.end(transcript(request));
       });
     } finally {
       if (child.pid && child.exitCode === null && child.signalCode === null) {

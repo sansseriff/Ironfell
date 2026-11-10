@@ -22,6 +22,9 @@ export interface ApplyResult {
 type MaybePromise<T> = T | Promise<T>;
 
 export interface DocumentApi {
+  /** A content-only GPU picture of a 2D composition, and the composition's id
+   *  (`#…`) when the engine resolved it. */
+  picture?(source: string, signal?: AbortSignal): Promise<import('./images').ModelImage & { node?: string }>;
   schema(): MaybePromise<Schema>;
   view(query: {
     scope?: string | null;
@@ -107,6 +110,24 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
   let schema: Promise<Schema> | null = null;
   const json = async <T>(command: DocumentCommand): Promise<T> => JSON.parse(await call(command));
   return {
+    picture: async (source, signal) => {
+      const start = await json<{ ok: boolean; ticket?: number; error?: string }>({ op: 'picture', source });
+      if (!start.ok || start.ticket === undefined) throw new Error(start.error ?? 'Could not capture composition');
+      const ticket = start.ticket;
+      try {
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+          signal?.throwIfAborted();
+          const result = await json<{ pending?: boolean; ok?: boolean; image?: import('./images').ModelImage; node?: string; error?: string }>({ op: 'picture_poll', ticket, cancel: false });
+          if (!result.pending) {
+            if (!result.ok || !result.image) throw new Error(result.error ?? 'Could not capture composition');
+            return { ...result.image, ...(result.node ? { node: result.node } : {}) };
+          }
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw new Error('Composition capture timed out');
+      } finally { await json({ op: 'picture_poll', ticket, cancel: true }).catch(() => {}); }
+    },
     schema: () => (schema ??= json<Schema>({ op: 'schema' }).catch(error => {
       schema = null;
       throw error;

@@ -19,6 +19,7 @@
 //!   transaction touched are read off its ops and inverse; only those nodes
 //!   are re-examined.
 
+pub mod capture;
 pub mod chunks;
 pub mod clock;
 mod demo;
@@ -294,6 +295,7 @@ impl Plugin for DocumentPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(DocumentStore(Store::new()))
             .init_resource::<PendingTransactions>()
+            .init_resource::<capture::Captures>()
             .init_resource::<LatencyRequested>()
             .init_resource::<NodeMap>()
             .init_resource::<Drawables>()
@@ -340,6 +342,7 @@ impl Plugin for DocumentPlugin {
                     planes::sync_planes.after(TransformSystems::Propagate).before(render::render_document_layer),
                     spatial::prepare_spatial.after(TransformSystems::Propagate).before(render::render_document_layer).before(crate::bevy_app::select::draw_select_overlay),
                     render::render_document_layer.after(TransformSystems::Propagate),
+                    capture::advance.after(spatial::prepare_spatial).before(render::render_document_layer),
                     inspector::draw_render_inspectors.after(render::render_document_layer),
                     propagate_begin.before(TransformSystems::Propagate).after(sync_document),
                     propagate_end.after(TransformSystems::Propagate).before(spatial::prepare_spatial),

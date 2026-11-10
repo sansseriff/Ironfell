@@ -45,7 +45,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ `build.sh` (both backends), warm | ~1–1.5 min (1m 04s, 2026-11-04; ~55 s after a `web_ffi.rs` edit, 2026-11-06) |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
 | ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09): the document crate rebuilds everything above it |
-| ⏱ `build.sh` cold | ~5 min (5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06) |
+| ⏱ `build.sh` cold | ~5 min (5m 21s for agent-vision, 2026-11-09; 5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06) |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4 min (cargo 3m 25s, plus binding generation; 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |
 | `regression.txt` (`GPU=1`): bindings, model edits, the pendulum, linking, save/load | ~1 min (1m 09s, 2026-11-09) |
@@ -64,6 +64,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `timeline.txt` | ~30 s |
 | ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–2.5 min (2m 28s with every test binary relinking, 2026-11-09) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
+| `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s (2026-11-09) |
 | `bun run attachments.ts` | ~10 s (9.52 s, 2026-11-04) |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `agent-runtime.ts`, fixture runtime, worker or main | ~2 s (1.90 s, 2026-11-03) |
@@ -3130,3 +3131,31 @@ waits for a queryable demo document, avoiding the startup race where `.loading`
 has not mounted yet. The new fast default smoke passes all six assertions in
 **4.72 s**; the original broad script is preserved byte-for-byte as
 `smoke-full.txt`. No additional broad-suite run is claimed for this integration.
+
+
+### Agent vision (2026-11-09)
+
+`agent-vision.ts` verifies an unopened composition's GPU pixels (a red rectangle),
+unchanged document serialization, invalid/cancelled capture requests, file/paste/drop
+attachments, removal, SVG rejection, model bridge image bytes and transcript
+thumbnails. It uses a fixture model, without live inference. Run from the repo
+root with a worktree-local Vite server:
+
+```sh
+URL=http://localhost:5183/Ironfell/ BACKEND=webgpu RUNTIME=worker DPR=1 bun run .claude/skills/run-iron/agent-vision.ts
+```
+
+Repeat with `BACKEND=webgl2`, `RUNTIME=main` and `DPR=2`. Expected output:
+`PASS <backend> <runtime> DPR <n>: offscreen GPU pixels, read-only capture, image attachment through bridge, transcript thumbnail`.
+Capture's Rust unit tests (`encode()` row padding and premultiplied flattening,
+abandoned-ticket expiry) run natively: `cargo test -p ironfell --lib --features
+native --target aarch64-apple-darwin --profile dev-opt capture::tests` (~9 s warm,
+~3 min cold). **Known broken (2026-11-09, also on `master`):** the crate's lib tests
+do not compile, because `bevy_app/schematic_tool.rs`'s test calls the private
+`NodeId::from_raw`; to run these, patch it locally to `"#1".parse::<NodeId>()`.
+Agent-log check: call records keep image references, and images are files under
+the log folder's `images/` (`tests/agent-runtime.test.ts`).
+Captures and chat screenshots are in `.agents/vision/` (ignored). Native package
+and live-provider inference are separate checks and were not run for this change.
+The existing fast smoke, regression and gestures expected outputs are unchanged;
+all passed on the branch rebased onto `a3880ee`.

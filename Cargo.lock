@@ -4390,6 +4390,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "app-surface",
+ "base64 0.22.1",
  "bevy",
  "console_error_panic_hook",
  "console_log",
@@ -4403,6 +4404,7 @@ dependencies = [
  "kurbo",
  "log",
  "peniko",
+ "png 0.18.1",
  "raw-window-handle",
  "serde",
  "serde_json",

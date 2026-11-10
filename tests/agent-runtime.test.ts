@@ -8,7 +8,7 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type Runtime } from '../scripts/agent-bridge/runtimes';
-import { LocalRuntimeTransport } from '../src-ui/model/transport';
+import { LocalRuntimeTransport, anthropicMessages } from '../src-ui/model/transport';
 import { localEndpoint, type CompletionRequest } from '../src-ui/model/runtime-options';
 import { ask } from '../src-ui/model/agent';
 import { discoverLocalAgent } from '../src-ui/model/local-pairing';
@@ -475,4 +475,138 @@ test('ask sends the turn id with each call and logs each reply\'s fate once the 
   calls = 1;
   await ask(fixtureDoc.api, transport, 'add another');
   assert.equal(records.length, 1);
+});
+
+const testImage = { name: 'reference.png', mediaType: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==' };
+
+test('image request validation rejects SVG, malformed bytes and excess attachments', () => {
+  const withImages = (images: unknown) => ({ ...payload, messages: [{ role: 'user', content: 'reference', images }] });
+  assert.equal(validateRequest(withImages([testImage])).messages[0].images?.length, 1);
+  for (const images of [[{ ...testImage, mediaType: 'image/svg+xml' }], [{ ...testImage, data: 'https://example.com/image' }], Array(5).fill(testImage)]) assert.throws(() => validateRequest(withImages(images)));
+});
+
+test('agent receives pasted pixels and can inspect an applied edit then refine it', async () => {
+  const fixtureDoc = documentFixture();
+  let captured = 0;
+  fixtureDoc.api.picture = async () => { assert.ok(fixtureDoc.calls() > 0); captured++; return testImage; };
+  let calls = 0;
+  const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
+    calls++;
+    if (calls === 1) {
+      assert.deepEqual(messages.at(-1)?.images, [testImage]);
+      return { text: '<edit><create type="rect" parent="#1"/></edit><look picture="test"/>' };
+    }
+    assert.deepEqual(messages.at(-1)?.images, [testImage]);
+    if (calls === 2) return { text: '<edit><set id="#fixture" x="240"/></edit><look picture="test"/>' };
+    return { text: 'The composition now matches the reference.' };
+  } }, 'Match this picture', { images: [testImage], allowTextReply: true });
+  assert.equal(result.ok, true);
+  assert.equal(captured, 2);
+  assert.equal(fixtureDoc.calls(), 2);
+  assert.equal(fixtureDoc.nodes['#fixture'].x, 240);
+  assert.equal(result.outcome?.ok, true);
+});
+
+test('capture failures are reported to the model and repeated pictures are bounded', async () => {
+  const fixtureDoc = documentFixture();
+  let captures = 0;
+  fixtureDoc.api.picture = async () => { captures++; throw new Error('readback failed'); };
+  const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
+    if (captures) assert.match(messages.at(-1)!.content, /Picture failed/);
+    return { text: '<look picture="test"/>' };
+  } }, 'Inspect this', { allowTextReply: false });
+  assert.equal(captures, 3);
+  assert.equal(result.ok, false);
+});
+
+
+test('both local runtime subprocesses receive actual image bytes', async () => {
+  const request: CompletionRequest = { ...payload, messages: [{ role: 'user', content: 'image-wire-test', images: [testImage] }] };
+  assert.equal((await codexRuntime(fixture)(request, AbortSignal.timeout(3000))).text, 'image received');
+  assert.equal((await claudeRuntime(fixture, 'subscription')(request, AbortSignal.timeout(3000))).text, 'image received');
+});
+
+test('the agent log keeps image references, never image bytes, and writes each image once beside it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'iron-agent-log-'));
+  const log = agentLog(dir);
+  const bridge = createAgentBridge({ token, origins: ['http://localhost:5173'], log, runtimes: { codex: async () => ({ text: 'seen' }), claude: async () => ({ text: 'seen' }) } });
+  bridge.server.listen(0, '127.0.0.1');
+  await once(bridge.server, 'listening');
+  const endpoint = `http://127.0.0.1:${(bridge.server.address() as { port: number }).port}`;
+  try {
+    const transport = new LocalRuntimeTransport({ provider: 'codex', endpoint, token });
+    const messages = [{ role: 'user' as const, content: 'match this', images: [testImage, testImage] }];
+    await transport.complete(payload.system, messages, { turn: 'turn-img' });
+    await transport.complete(payload.system, messages, { turn: 'turn-img' });
+    await log.flushed();
+    const day = (await readdir(dir)).find(name => name.endsWith('.jsonl'))!;
+    const text = await readFile(join(dir, day), 'utf8');
+    assert.ok(!text.includes(testImage.data), 'image bytes in the JSONL');
+    const call = text.trim().split('\n').map(line => JSON.parse(line)).find(r => r.kind === 'call');
+    const [ref] = call.messages[0].images;
+    assert.deepEqual(Object.keys(ref).sort(), ['bytes', 'file', 'mediaType', 'name', 'sha256']);
+    assert.equal(ref.bytes, Buffer.from(testImage.data, 'base64').length);
+    assert.match(ref.file, /^images\/[0-9a-f]{32}\.png$/);
+    assert.deepEqual(await readFile(join(dir, ref.file)), Buffer.from(testImage.data, 'base64'));
+    assert.equal((await readdir(join(dir, 'images'))).length, 1);
+  } finally { bridge.stop(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('the bridge keeps its 1 MB limit for everything but completions', async () => {
+  await bridgeTest(async () => ({ text: 'ok' }), async endpoint => {
+    const big = JSON.stringify({ turn: 'turn-big', note: 'x'.repeat(1_500_000) });
+    const response = await fetch(`${endpoint}/log`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: big });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /1 MB/);
+  });
+});
+
+test('Claude API messages carry text then base64 image blocks, and no saved previews', () => {
+  const preview = { name: 'old', mediaType: 'image/jpeg' as const, data: '/9j/4AAQSkZJRgABAQAAAQABAAD/', preview: true as const };
+  const [plain, withImages] = anthropicMessages([
+    { role: 'assistant', content: 'hello' },
+    { role: 'user', content: 'see', images: [{ ...testImage, thumb: '/9j/4AAQSkZJRgABAQAAAQABAAD/' }, preview] },
+  ]);
+  assert.deepEqual(plain, { role: 'assistant', content: 'hello' });
+  assert.deepEqual(withImages, { role: 'user', content: [
+    { type: 'text', text: 'see' },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: testImage.data } },
+  ] });
+});
+
+test('a refinement sends the captured composition\'s view, not the whole document again', async () => {
+  const fixtureDoc = documentFixture();
+  const queries: any[] = [];
+  const view = fixtureDoc.api.view.bind(fixtureDoc.api);
+  fixtureDoc.api.view = ((query: any) => { queries.push(query); return view(query); }) as DocumentApi['view'];
+  fixtureDoc.api.picture = async () => ({ ...testImage, node: '#1' });
+  let calls = 0;
+  const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
+    calls++;
+    if (calls === 1) return { text: '<edit><create type="rect" parent="#1"/></edit><look picture="test"/>' };
+    const last = messages.at(-1)!;
+    assert.deepEqual(last.images, [testImage]);
+    assert.match(last.content, /^Edit applied successfully\. Current #1:/);
+    assert.match(last.content, /PICTURE of test/);
+    return { text: 'Done.' };
+  } }, 'Match this', { allowTextReply: true });
+  assert.equal(result.ok, true);
+  const before = queries.length;
+  assert.ok(queries.some(q => q.scope === '#1'));
+  assert.equal(queries.filter(q => q.scope === undefined || q.scope === null).length, before - 1, 'one scoped view after the edit; the rest are the initial read');
+});
+
+test('once its pictures are spent, the agent is told so rather than the turn failing on a bare look', async () => {
+  const fixtureDoc = documentFixture();
+  let captures = 0;
+  fixtureDoc.api.picture = async () => { captures++; return testImage; };
+  let told = false;
+  const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
+    if (/No more pictures this request \(at most 3\)/.test(messages.at(-1)!.content)) { told = true; return { text: 'It looks right.' }; }
+    return { text: '<look picture="test"/>' };
+  } }, 'Inspect this', { allowTextReply: true });
+  assert.equal(captures, 3);
+  assert.ok(told);
+  assert.equal(result.ok, true);
+  assert.equal(result.note, 'It looks right.');
 });

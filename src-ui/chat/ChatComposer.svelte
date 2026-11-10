@@ -98,11 +98,11 @@
   onsubmit={(event) => { event.preventDefault(); sync(); if (!blocked) { imageError = ''; submit(); } }}>
   <div class="surface">
     <div class="target">{#if targetControl}{@render targetControl()}{:else}<span>{target}</span>{/if}</div>
-    {#if images.length}<div class="attachments">{#each images as image, index}<div class="attachment"><img src={imageUrl(image)} alt={image.name} /><IconButton icon={X} label={`Remove ${image.name}`} onclick={() => { images = images.filter((_, i) => i !== index); }} /></div>{/each}</div>{/if}
+    {#if images.length}<div class="attachments">{#each images as image, index}<div class="attachment"><img src={imageUrl(image)} alt={image.name} /><IconButton icon={X} label={`Remove ${image.name}`} size={12} class="attachment-remove" onclick={() => { images = images.filter((_, i) => i !== index); }} /></div>{/each}</div>{/if}
     {#if imageError}<p class="image-error" role="alert">{imageError}</p>{/if}
     {#if reading}<p class="hint" role="status">Reading images…</p>{/if}
     <TextInput multiline class={overflowing ? 'overflowing' : ''} bind:element={field} aria-label="Agent instruction" rows={compact ? 1 : 2} placeholder="Ask, explain, or change something…" bind:value onblur={sync} onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); sync(); if (!blocked) { imageError = ''; submit(); } } }} />
-    <input hidden type="file" bind:this={picker} accept="image/png,image/jpeg,image/webp,image/gif" multiple onchange={() => { void attach(Array.from(picker.files ?? [])); picker.value = ''; }} />
+    <input hidden type="file" bind:this={picker} accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif,image/svg+xml,.heic,.heif,.svg" multiple onchange={() => { void attach(Array.from(picker.files ?? [])); picker.value = ''; }} />
     <div class="footer">
       <IconButton icon={ImagePlus} label="Attach images" disabled={busy || reading} onclick={() => picker.click()} />
       <Select value={doc.agentProvider} items={providers} label="Agent runtime" disabled={busy || doc.asking} onChange={(provider) => doc.configureAgent({ provider })} />
@@ -120,9 +120,16 @@
 </form>
 
 <style>
-  .attachments { display: flex; gap: 8px; padding: 8px 16px; flex-wrap: wrap; }
-  .attachment { display: flex; align-items: flex-start; border: 1px solid var(--border); border-radius: 6px; padding: 3px; }
-  .attachment img { width: 72px; height: 72px; object-fit: contain; }
+  .attachments { display: flex; gap: 10px; padding: 10px 16px 4px; flex-wrap: wrap; }
+  .attachment { position: relative; width: 72px; height: 72px; flex: none; }
+  .attachment img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: 10px; }
+  .attachment :global(.attachment-remove) {
+    position: absolute; top: -6px; right: -6px; width: 22px; height: 22px;
+    border: 2px solid var(--bg-input); border-radius: 50%;
+    background: var(--fg); color: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+  }
+  .attachment :global(.attachment-remove:hover) { background: var(--danger); color: white; }
+  .attachment :global(.attachment-remove:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .image-error { color: var(--danger); margin: 8px 16px; font-size: 12px; }
   .composer { flex: none; padding: 6px 16px 14px; background: var(--bg); }
   .surface {

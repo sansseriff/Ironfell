@@ -1,13 +1,20 @@
 # Agent image input and composition capture
 
-**Status:** Built 2026-11-09 on `t3/agent-image-vision`, started from `8cba756` and rebased onto committed `a3880ee`.
+**Status:** Built 2026-11-09 on `t3/agent-image-vision`, started from `8cba756` and rebased onto committed `a3880ee`. HEIC and SVG input added 2026-11-10.
 
 The Model and Lesson chats accept pasted, dropped, or selected PNG, JPEG, WebP,
 and GIF files. The composer decodes and normalizes them to PNG, with a JPEG fallback for detailed photos (first frame for
 animation), caps the long edge at 1568 px, and accepts up to four attachments.
 Source files are limited to 20 MB; normalized base64 is limited to 2.8 million
-characters per image. Invalid formats, including SVG, produce a visible error.
+characters per image. Invalid formats and malformed SVG produce a visible error.
 Thumbnails, removal, retry restoration and saved chat history carry the images.
+The composer also accepts HEIC/HEIF and SVG. `heic-to/next` decodes HEIC in a
+worker; `@resvg/resvg-wasm` rasterizes SVG in an image-processing worker. All
+attachments are resized off the UI thread to at most 1568 px on the long edge
+and encoded as PNG or JPEG before model transport. SVG source is capped at 2 MB
+and image processing at 30 seconds. SVG text uses bundled Roboto (OFL) as the
+fallback font. The composer preview has no outer box; its
+remove button sits over the image's corner.
 Recent model history has a separate 4-million-character image budget, applied per
 image, newest first; a message whose images were left out says so to the model.
 

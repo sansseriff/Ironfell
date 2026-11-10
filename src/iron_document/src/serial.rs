@@ -19,7 +19,7 @@ use std::fmt;
 /// bumps it and drops the old reader rather than migrating. Schema 9 named
 /// the scope in the header (scopes.md §3); 8 packed paths' outlines into
 /// `path.d`; history before that is in git.
-pub const SCHEMA: u64 = 9;
+pub const SCHEMA: u64 = 10;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadError(pub String);

@@ -299,3 +299,135 @@ fn keyed_state_scrubs_and_one_occurrence_retimes() {
     store.undo(0).unwrap().unwrap();
     assert_eq!(at(&mut store, 3.0), 0.0, "undo restores the transition's own length");
 }
+
+/// A parent over its children (machines.md §10): two cards nested in a
+/// `pair`. The pair's own machine has a channel per card, and its `appear`
+/// gives each a slice; each card's machine is driven along its own states
+/// by that channel (`machine.at`) while the pair moves, and follows its own
+/// state when the pair rests. So the pair composes when, each card owns
+/// what its appearing looks like, and one card can still be hidden alone.
+#[test]
+fn a_parents_transition_sequences_its_childrens_own() {
+    let Card { mut store, entity: a, fade, reveal, u: ua, .. } = card();
+    let doc = store.document();
+    let def = expand::linked_definition(doc, a).unwrap();
+    let machine = doc.children(def).iter().copied().find(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "machine")).unwrap();
+    let bench = doc.roots()[0];
+    // The card takes a position from outside: a `vis_at` input its machine follows.
+    let at_port = doc.next_id();
+    let mut p = Port::default();
+    p.kind = str_("value");
+    p.dir = Slot::Const(Value::Enum("in".into()));
+    p.signal = n(-1.0);
+    let mut mf = facet::Machine::default();
+    mf.at = Slot::Bound(Expr::parse(&format!("{at_port}.port.signal")).unwrap());
+    store
+        .apply(tx("driven", vec![
+            Op::Create { id: at_port, ty: ty("port_spec"), parent: Some(def), order: OrderKey::after(&OrderKey::after(&OrderKey::after(&OrderKey::after(&OrderKey::after(&OrderKey::first()))))), facets: vec![named("vis_at"), p.wrap()] },
+            Op::AddFacet { id: machine, facet: mf.wrap() },
+        ]))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let (ops, _) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="40" y="0"/>"#)).unwrap();
+    store.apply(tx("second", ops)).unwrap();
+    let ub = *store.document().children(bench).last().unwrap();
+    let (made, input) = store.make_component(&[ua, ub], "pair", Actor::Human).unwrap();
+    store.apply(input).unwrap_or_else(|e| panic!("{e:?}"));
+    // The pair: a `vis` input, a channel per card, and a machine whose
+    // appear brings the first card in over its first half, the second after.
+    let pair = made.definition;
+    let doc = store.document();
+    let inner: Vec<NodeId> = doc.children(pair).iter().copied().filter(|&c| !c.is_expanded() && doc.live(c).is_some_and(|n| n.ty.name() == "entity")).collect();
+    assert_eq!(inner.len(), 2);
+    let ids = doc.next_ids(10);
+    let [vis, pa, pb, pm, hidden, shown, appear, ta, tb, on_b] = ids[..] else { unreachable!() };
+    let k = |i: u32| (0..i + 20).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let mut vis_port = Port::default();
+    vis_port.kind = str_("value");
+    vis_port.dir = Slot::Const(Value::Enum("in".into()));
+    vis_port.signal = Slot::Const(Value::Enum("shown".into()));
+    let mut b_port = Port::default();
+    b_port.kind = str_("value");
+    b_port.dir = Slot::Const(Value::Enum("in".into()));
+    b_port.signal = Slot::Const(Value::Bool(true));
+    let channel_at = |rest: f64| {
+        let mut ch = Channel::default();
+        ch.value = n(rest);
+        ch.wrap()
+    };
+    let pose = |x: f64, y: f64| {
+        let mut args = Args::default();
+        args.insert("pa", n(x));
+        args.insert("pb", n(y));
+        args.wrap()
+    };
+    let mut t = Transition::default();
+    t.from = str_("hidden");
+    t.to = str_("shown");
+    t.ms = n(2000.0);
+    t.ease = str_("linear");
+    let tween = |c: &str, a: f64, b: f64| {
+        let mut tw = Tween::default();
+        tw.channel = str_(c);
+        tw.start = n(a);
+        tw.end = n(b);
+        tw.ease = str_("linear");
+        tw.wrap()
+    };
+    let bind = |e: String| Slot::Bound(Expr::parse(&e).unwrap());
+    store
+        .apply(tx("pair machine", vec![
+            Op::Create { id: vis, ty: ty("port_spec"), parent: Some(pair), order: k(0), facets: vec![named("vis"), vis_port.wrap()] },
+            Op::Create { id: pa, ty: ty("channel"), parent: Some(pair), order: k(2), facets: vec![named("pa"), channel_at(1.0)] },
+            Op::Create { id: pb, ty: ty("channel"), parent: Some(pair), order: k(3), facets: vec![named("pb"), channel_at(1.0)] },
+            Op::Create { id: pm, ty: ty("machine"), parent: Some(pair), order: k(4), facets: vec![named("vis"), facet::Machine::default().wrap()] },
+            Op::Create { id: hidden, ty: ty("state"), parent: Some(pm), order: k(0), facets: vec![named("hidden"), pose(0.0, 0.0)] },
+            Op::Create { id: shown, ty: ty("state"), parent: Some(pm), order: k(1), facets: vec![named("shown"), pose(1.0, 1.0)] },
+            Op::Create { id: appear, ty: ty("transition"), parent: Some(pm), order: k(2), facets: vec![named("appear"), t.wrap()] },
+            Op::Create { id: ta, ty: ty("tween"), parent: Some(appear), order: k(0), facets: vec![tween("pa", 0.0, 0.5)] },
+            Op::Create { id: tb, ty: ty("tween"), parent: Some(appear), order: k(1), facets: vec![tween("pb", 0.5, 1.0)] },
+            Op::Create { id: on_b, ty: ty("port_spec"), parent: Some(pair), order: k(1), facets: vec![named("second"), b_port.wrap()] },
+            // Each card is shown when the pair is, the second only if asked for;
+            // while the pair moves, its channel is the card's position.
+            Op::Set { id: inner[0], path: path("args.vis"), slot: bind(format!("{vis}.port.signal")) },
+            Op::Set { id: inner[1], path: path("args.vis"), slot: bind(format!("{on_b}.port.signal ? {vis}.port.signal : 'hidden'")) },
+            Op::Set { id: inner[0], path: path("args.vis_at"), slot: bind(format!("{pm}.machine.running ? {pa}.channel.value : -1")) },
+            Op::Set { id: inner[1], path: path("args.vis_at"), slot: bind(format!("{pm}.machine.running && {on_b}.port.signal ? {pb}.channel.value : -1")) },
+        ]))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let e = made.entity;
+    let card_of = |s: &Store, i: usize| NodeId::expanded(e, inner[i]).filter(|c| s.document().is_live(*c)).unwrap();
+    let fades = |s: &Store| [0, 1].map(|i| (channel(s, card_of(s, i), fade) * 1000.0).round() / 1000.0);
+    let reveals = |s: &Store| [0, 1].map(|i| (channel(s, card_of(s, i), reveal) * 1000.0).round() / 1000.0);
+    store.advance_machines(0.0);
+    assert_eq!(fades(&store), [1.0, 1.0]);
+    // Hidden: no transition back in the pair, so everything snaps.
+    set_vis(&mut store, e, "hidden");
+    store.advance_machines(0.1);
+    store.advance_machines(0.2);
+    // The cards play their own disappear (400 ms), on their own.
+    store.advance_machines(1.0);
+    assert_eq!(fades(&store), [0.0, 0.0]);
+    // Shown: the pair's appear runs 2 s; the first card goes through its own
+    // appear over the first second, the second over the next.
+    set_vis(&mut store, e, "shown");
+    store.advance_machines(2.0);
+    store.advance_machines(2.01);
+    store.advance_machines(2.5);
+    assert_eq!(fades(&store), [0.5, 0.0], "the first card is half way through its own appear");
+    assert_eq!(reveals(&store), [0.0, 0.0], "whose reveal waits for its second half");
+    store.advance_machines(2.75);
+    assert_eq!((fades(&store), reveals(&store)), ([0.75, 0.0], [0.5, 0.0]));
+    store.advance_machines(3.5);
+    assert_eq!(fades(&store), [1.0, 0.5]);
+    store.advance_machines(4.1);
+    store.advance_machines(4.2);
+    assert_eq!(fades(&store), [1.0, 1.0]);
+    assert!(store.advance_machines(4.3).is_empty(), "handed back at rest: nothing replays");
+    // One part alone: the second card hides by its own disappear.
+    store.apply(tx("alone", vec![Op::Set { id: e, path: path("args.second"), slot: Slot::Const(Value::Bool(false)) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.advance_machines(5.0);
+    store.advance_machines(5.2);
+    assert_eq!(fades(&store), [1.0, 0.5]);
+    store.advance_machines(5.5);
+    assert_eq!(fades(&store), [1.0, 0.0]);
+}

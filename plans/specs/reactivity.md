@@ -484,6 +484,11 @@ Phase 7, first part (2026-11-10): enter and exit.
   when an owner first settles is simply there.
 - Leaving items come after the wanted ones in order. They are still pickable.
 
+Phase 7, second part (2026-11-10): a parent's machine over its children's
+(machines.md, "Parents over children"). `machine.at` drives a machine to a position
+along its states, `machine.running` says a machine is moving, and a parent's tweened
+channels walk each nested part through the part's own transition, handing back at rest.
+
 **Differs from the proposal:**
 
 - Numbers are keyed by index unless `repeat.key` is given (§3.2 said by value when

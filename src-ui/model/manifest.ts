@@ -171,7 +171,20 @@ ${p.standard}
   transition, so retiming keeps proportions; shape="{= p => …}" for any curve); no
   transition snaps. Channel values are not saved. A transition's ms may read an input
   ({= $len.port.signal}), so each instance times its own; setting ms on an instance's
-  copy of the transition overrides it there only.`,
+  copy of the transition overrides it there only.
+  A PARENT OVER ITS PARTS: do not write one machine for every combination. Each part
+  that appears on its own is a component with its own vis machine; the parent forwards
+  an input to it (the inner instance's args.vis bound to the parent's port, e.g.
+  {= #legend_on.port.signal ? #vis.port.signal : 'hidden'}), so toggling that input
+  plays only that part's transition. To make the parent's transition bring the parts
+  in one after another, give the part's definition a number input and bind its
+  machine to it (<machine name="vis" machine.at="{= #vis_at.port.signal}">): at 0 or
+  more is a position along the machine's states in order (0.5 is half way through the
+  first transition), below 0 means "follow my state". The parent has a channel per
+  part, tweens each over its own slice of the parent's transition, and gives the part
+  args.vis_at="{= #M.machine.running ? #part_p.channel.value : -1}" (#M is the parent's
+  machine, which needs a machine facet: machine.at="-1"). While the parent moves it
+  drives each part through the part's own transition; at rest each follows its state.`,
   },
   ports: {
     summary: 'ports and signals between entities, connections, across/through pairs',

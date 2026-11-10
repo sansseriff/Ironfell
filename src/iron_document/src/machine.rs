@@ -173,6 +173,10 @@ struct Known {
     state: String,
     values: BTreeMap<NodeId, f64>,
     run: Option<Run>,
+    /// Where it was last driven to (`machine.at`), and whether it was
+    /// going down the states then.
+    at: Option<f64>,
+    down: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -217,6 +221,8 @@ impl Player {
         let snap = std::mem::take(&mut self.snap);
         let mut seen = std::collections::BTreeSet::new();
         let mut running = Vec::new();
+        // The machines (an instance's copies) with a transition under way.
+        let mut busy = std::collections::BTreeSet::new();
         let entity_ty = crate::registry::TypeId::lookup("entity").expect("registered");
         for e in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e)).collect::<Vec<_>>() {
             let Some(def) = crate::expand::linked_definition(doc, e) else { continue };
@@ -231,15 +237,34 @@ impl Player {
                     seen.insert((e, m));
                     if let Some(r) = run {
                         running.push(Running { entity: e, transition: r.0, progress: r.1, from: r.2.clone(), to: r.3.clone() });
+                        busy.insert(mc);
                     }
-                    self.known.insert((e, m), Known { state, values, run: None });
+                    self.known.insert((e, m), Known { state, values, run: None, at: None, down: false });
                     continue;
+                }
+                // Driven from outside (`machine.at`): a parent's transition
+                // moves this machine through its own.
+                if let Some(at) = read_num(read, mc, "machine.at").filter(|a| *a >= 0.0 && doc.facet(mc, crate::facet::FacetKind::Machine).is_some()) {
+                    let before = self.known.get(&(e, m));
+                    let down = match before.and_then(|k| k.at) {
+                        Some(was) if at < was => true,
+                        Some(was) if at > was => false,
+                        _ => before.is_some_and(|k| k.down),
+                    };
+                    if let Some((values, nearest, moving)) = driven(doc, read, def, mc, at, down) {
+                        seen.insert((e, m));
+                        if let Some((t, p, from, to)) = moving {
+                            running.push(Running { entity: e, transition: t, progress: p, from, to });
+                        }
+                        self.known.insert((e, m), Known { state: nearest, values, run: None, at: Some(at), down });
+                        continue;
+                    }
                 }
                 let Some(to) = pose(doc, read, def, mc, &state) else { continue };
                 seen.insert((e, m));
                 match self.known.get_mut(&(e, m)) {
                     None => {
-                        self.known.insert((e, m), Known { state, values: to, run: None });
+                        self.known.insert((e, m), Known { state, values: to, run: None, at: None, down: false });
                     }
                     Some(k) if k.state != state => {
                         let from_state = std::mem::replace(&mut k.state, state.clone());
@@ -275,7 +300,10 @@ impl Player {
         }
         let mut out = BTreeMap::new();
         let value_path: LeafPath = "channel.value".parse().expect("declared leaf");
-        for (&(e, _), k) in self.known.iter_mut() {
+        for (&(e, m), k) in self.known.iter_mut() {
+            if k.run.is_some() {
+                busy.insert(copy_of(doc, Some(e), m));
+            }
             if let Some(run) = &k.run {
                 let p = ((now - run.start) * 1000.0 / run.plan.ms).clamp(0.0, 1.0);
                 for (&c, &to) in &run.to {
@@ -299,9 +327,50 @@ impl Player {
             }
         }
         out.extend(pinned_out);
+        // Only while moving, so a resting instance publishes nothing.
+        let running_path: LeafPath = "machine.running".parse().expect("declared leaf");
+        for mc in busy {
+            if doc.facet(mc, crate::facet::FacetKind::Machine).is_some() {
+                out.insert(Leaf { node: mc, path: running_path }, Value::Bool(true));
+            }
+        }
         self.running = running.clone();
         (out, running)
     }
+}
+
+/// A machine driven to position `at` along its states in order: the
+/// channels' values, the nearest state, and the transition it is part way
+/// through. Between states `i` and `i + 1` it shows their transition at the
+/// fraction, the one going down when `down` (so a child disappears by its
+/// own disappear), and eases plainly where there is none. A pure function
+/// of `at`: a parent keyed on the clock scrubs its children with it.
+#[allow(clippy::type_complexity)]
+fn driven(doc: &Document, read: Read, def: NodeId, machine: NodeId, at: f64, down: bool) -> Option<(BTreeMap<NodeId, f64>, String, Option<(NodeId, f64, String, String)>)> {
+    let states = state_names(doc, machine);
+    let last = states.len().checked_sub(1)?;
+    let at = at.min(last as f64);
+    let nearest = states[at.round() as usize].clone();
+    let i = (at.floor() as usize).min(last.saturating_sub(1));
+    let f = at - i as f64;
+    if last == 0 || f <= 0.0 {
+        return Some((pose(doc, read, def, machine, &states[i])?, nearest, None));
+    }
+    let (lo, hi) = (pose(doc, read, def, machine, &states[i])?, pose(doc, read, def, machine, &states[i + 1])?);
+    if f >= 1.0 {
+        return Some((hi, nearest, None));
+    }
+    // Going down, from the upper state to the lower at 1 - f.
+    let (from, to, from_name, to_name, p) = if down { (&hi, &lo, &states[i + 1], &states[i], 1.0 - f) } else { (&lo, &hi, &states[i], &states[i + 1], f) };
+    let plan = plan(doc, read, def, machine, from_name, to_name);
+    let values = to
+        .iter()
+        .map(|(&c, &b)| {
+            let a = from.get(&c).copied().unwrap_or(b);
+            (c, a + (b - a) * plan.as_ref().map_or(p, |pl| pl.shaped(c, p)))
+        })
+        .collect();
+    Some((values, nearest, plan.map(|pl| (pl.transition, p, from_name.clone(), to_name.clone()))))
 }
 
 /// A machine whose state is keyed on the timeline, at clock time `clock`:

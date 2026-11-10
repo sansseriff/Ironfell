@@ -1824,13 +1824,21 @@ impl Store {
         {
             self.machines.pinned = None;
         }
-        let (values, running) = {
-            let reactive = &self.reactive;
-            let doc = &self.doc;
-            let read = |l: Leaf| reactive.read(doc, l);
-            self.machines.advance(doc, &read, now, self.time())
-        };
-        if values != self.reactive.published_by(ProducerId::MACHINES) {
+        // A machine driven by another's channel (`machine.at`) reads what
+        // that one publishes: go round again, at the same time, until
+        // nothing more moves, so a child is never a frame behind its parent.
+        let mut running = Vec::new();
+        for _ in 0..4 {
+            let (values, now_running) = {
+                let reactive = &self.reactive;
+                let doc = &self.doc;
+                let read = |l: Leaf| reactive.read(doc, l);
+                self.machines.advance(doc, &read, now, self.time())
+            };
+            running = now_running;
+            if values == self.reactive.published_by(ProducerId::MACHINES) {
+                break;
+            }
             self.publish(ProducerId::MACHINES, values);
         }
         running

@@ -522,3 +522,34 @@ whole workspace and the editor's use of space. In the editor:
 - Not done: the dock's default sizes (a taller timeline, under the canvas only) wait,
   because the smoke scripts drag at absolute window coordinates and all move with it.
 
+### Parents over children (2026-11-10)
+
+Asked for with the reactivity work (reactivity.md §13): a plot with a legend, labels
+and two lines, each able to appear alone, must not become one machine with every
+combination as a state. Statecharts' answer is parallel regions; here that is one
+machine per part, and two small additions.
+
+- **Each part keeps its own machine; the parent forwards an input.** Already possible:
+  an inner instance's state argument is a binding on the parent's ports
+  (`{= $legend ? $vis : 'hidden'}`), so a part is shown only when the parent and its
+  own input both say so, and toggling the input plays that part's transition alone.
+- **`machine.at`** (the `machine` facet, optional on a machine): at 0 or more it is a
+  position along the machine's states in order, and the machine shows that instead of
+  following its state input: between states `i` and `i + 1`, their transition at the
+  fraction (the downward one when the position is falling). A pure function of the
+  number, so it scrubs. A definition opts in with a number input bound to it.
+- **`machine.running`** is published true while one of a machine's transitions is
+  under way (its own player's, or a clocked one).
+- **Sequencing:** the parent has a channel per part, tweened over that part's slice
+  of the parent's transition, and gives the part
+  `vis_at="{= #M.machine.running ? #p.channel.value : -1}"`. The parent composes
+  when; the part owns what its appearing looks like (M5). **Handover:** when the
+  parent rests the position goes below 0, and the part resumes from where it is drawn
+  in the state nearest its position, so nothing replays (M8).
+- `Store::advance_machines` goes round until nothing more moves, so a driven child is
+  never a frame behind its parent.
+- Test: `tests/machines.rs` `a_parents_transition_sequences_its_childrens_own` (two
+  cards nested in a pair: staggered appear, hand back at rest, one card hidden alone).
+- **Not yet:** a state row cannot name a child's state directly (it sets a channel a
+  binding reads); `std:plot` is still one machine, not split into legend, labels and
+  series parts; the machine panel shows none of this.

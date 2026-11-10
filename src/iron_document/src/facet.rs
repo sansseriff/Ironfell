@@ -407,6 +407,19 @@ facets! {
         value: Number = Value::Number(0.0),
     }
 
+    /// How a machine is driven from outside, and whether it is moving
+    /// (machines.md §10, parents over children). `at`, when 0 or more, is
+    /// a position along the machine's states in order (1.5 is half way
+    /// from the second to the third): the machine shows that, whatever its
+    /// state input says, so a parent's transition can move a child through
+    /// its own appear by animating a number. Below 0 (the default) the
+    /// machine follows its state input and plays itself. `running` is
+    /// published true while one of its transitions is under way.
+    Machine / "machine" => Machine {
+        at: Number = Value::Number(-1.0),
+        running: Bool = Value::Bool(false),
+    }
+
     /// A repeat (plans/specs/repeat.md): a group that draws its children
     /// once per element of `each` (a series), or `count` times when `each`
     /// is not a series, never more than `max`. The group's own children are

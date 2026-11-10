@@ -243,7 +243,7 @@ static TYPES: &[TypeSpec] = &[
     // `in` port whose value is its state: definition data a player reads.
     TypeSpec {
         name: "machine",
-        facets: &[(K::Name, true)],
+        facets: &[(K::Name, true), (K::Machine, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Only(&["state", "transition"]),
     },

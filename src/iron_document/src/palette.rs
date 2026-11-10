@@ -83,6 +83,39 @@ pub fn leaves(doc: &Document) -> BTreeMap<String, Leaf> {
     tokens(doc).into_iter().map(|(n, t)| (n, color_leaf(t))).collect()
 }
 
+/// The leaf `@name` reads from `reader` (reactivity.md §6): the nearest
+/// `let` of that name with `let.provide="yes"` among the children of the
+/// reader's ancestors, then the document's colour token, then the nearest
+/// `provide="default"` let. A let never reads itself, so a provider may
+/// refine the value it shadows.
+pub fn provided(doc: &Document, reader: NodeId, name: &str, tokens: &BTreeMap<String, Leaf>) -> Option<Leaf> {
+    let value = |n: NodeId| Leaf { node: n, path: LeafPath { facet: FacetKind::Let, field: "value" } };
+    let mut fallback = None;
+    let mut at = doc.node(reader).and_then(|n| n.parent);
+    loop {
+        let siblings = match at {
+            Some(p) => doc.children(p),
+            None => doc.roots(),
+        };
+        for &c in siblings {
+            if c == reader || !doc.is_live(c) || name_of(doc, c).as_deref() != Some(name) {
+                continue;
+            }
+            let Some(l) = doc.get::<crate::facet::Let>(c) else { continue };
+            match l.provide.constant().and_then(Value::as_str) {
+                Some("yes") => return Some(value(c)),
+                Some("default") if fallback.is_none() => fallback = Some(value(c)),
+                _ => {}
+            }
+        }
+        match at {
+            Some(p) => at = doc.node(p).and_then(|n| n.parent),
+            None => break,
+        }
+    }
+    tokens.get(name).copied().or(fallback)
+}
+
 /// `token.color` for each token in the theme (`dark` or light): what the
 /// store publishes.
 pub fn publish(doc: &Document, dark: bool) -> BTreeMap<Leaf, Value> {

@@ -44,7 +44,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `BACKENDS=webgl2 build.sh`, warm, after a source change | ~45 s (cargo ~25 s) |
 | ⏱ `build.sh` (both backends), warm | ~1–1.5 min (1m 04s, 2026-11-04; ~55 s after a `web_ffi.rs` edit, 2026-11-06) |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
-| ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09): the document crate rebuilds everything above it |
+| ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09; 2m 30s, 2026-11-10): the document crate rebuilds everything above it |
 | ⏱ `build.sh` cold | ~5 min (5m 21s for agent-vision, 2026-11-09; 5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06) |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4 min (cargo 3m 25s, plus binding generation; 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |
@@ -60,6 +60,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `workspace.txt` | ~25 s |
 | `layers.txt` (`GPU=1`) | ~22 s (21.5 s, 2026-11-06) |
 | `scope-menu.txt` | ~20 s |
+| `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
 | `timeline.txt` | ~30 s |
@@ -137,6 +138,23 @@ again off the header; closed at version 4; open again after Cmd+Z), then
 `applied "toggle legend"` twice and `applied "undo: toggle legend"`, and
 `(no page errors)`. Inspect `screenshots/actions-open.png`. A text made by a model edit
 needs a `fill.color` to draw, which the script gives its texts.
+
+## Time-aware values: the delayed fiber (2026-11-10)
+
+`plans/specs/reactivity.md` §13 (phase 6). `fiber.txt` makes a button (a group with an
+`on` that toggles a `let`) and places `std:fiber` with `delay_s="2"` and its `in` bound
+to that `let`, then clicks the button twice with the real pointer and reads the
+`light` path's `stroke.dash` as the pulse travels.
+
+```sh
+cd .claude/skills/run-iron && GPU=1 SIZE=1680x1000@1 bun run drive.ts < fiber.txt; cd -
+```
+
+Expected: five `assertion passed` lines (dark, `0 1`; 0.9 s after the click a lit run
+from the start, two numbers, with one new version; lit throughout after 2 s, an empty
+dash; after the second click `0 gap lit 1`, the tail travelling; dark again), then
+`(no page errors)`. Inspect `screenshots/fiber-travel.png` and `fiber-tail.png`: a pale
+stretch on the amber curve. The version rises only by the two clicks.
 
 ## Local agent runtime bootstrap
 
@@ -544,7 +562,7 @@ interaction a unit test cannot reach: a real pointer or keyboard gesture through
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `sequence.txt`, `text.txt`,
 `text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
-`narrative.txt`, `actions.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
+`narrative.txt`, `actions.txt`, `fiber.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
 `selection-cache.txt`. Retired: `smoke-full.txt` (split into `regression.txt` and

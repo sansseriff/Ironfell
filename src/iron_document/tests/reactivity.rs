@@ -442,3 +442,135 @@ fn a_tracked_read_follows_a_reference_and_reports_a_cycle() {
     let why = store.reactive().errors.get(&Leaf { node: n["w"], path: path("let.value") }).cloned().unwrap_or_default();
     assert!(why.contains("cycle"), "{:?}", store.reactive().errors);
 }
+
+/// Phase 6 (reactivity.md §6): `@name` reads the nearest provider above the
+/// reader. A component reads it with no port in between; a default inside
+/// the component serves where nothing above provides; a group may shadow a
+/// colour token for what is under it.
+#[test]
+fn a_component_reads_context_from_wherever_it_is_placed() {
+    let (mut store, _, named_ids) = sheet(
+        r##"<group id="plain" name="plain"/>
+        <group id="wide" name="wide"><let name="gap" provide="yes" value="40"/></group>
+        <group id="night" name="night"><let id="ink" name="ink" provide="yes" value="#ffffffff"/><rect id="r" name="r" w="4" h="4" fill.color="@ink"/></group>
+        <rect id="day" name="day" w="4" h="4" fill.color="@ink"/>"##,
+    );
+    let library = store.document().next_id();
+    store.apply(tx("library", vec![Op::Create { id: library, ty: ty("library"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![] }])).unwrap();
+    let def_markup = r##"<definition name="spaced">
+        <template notation="free">
+          <let name="gap" provide="default" value="8"/>
+          <rect name="box" x="{= @gap}" y="0" w="10" h="10"/>
+        </template>
+      </definition>"##;
+    let built = markup::ops(def_markup, Some(library), OrderKey::first(), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let def = built.roots[0];
+    store.apply(tx("define", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let (plain, wide) = (named_ids["plain"], named_ids["wide"]);
+    let place = format!(r#"<place def="{def}" in="{plain}" name="A"/><place def="{def}" in="{wide}" name="B"/>"#);
+    let (ops, _) = compose::compose_ops(&store, &place).unwrap_or_else(|e| panic!("{e}"));
+    store.apply(tx("place", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let box_x = |s: &Store, under: NodeId| x_of(s, named(s, under, "box")[0]);
+    assert_eq!(box_x(&store, plain), 8.0, "the component's own default");
+    assert_eq!(box_x(&store, wide), 40.0, "the provider above it");
+    // The provider's value is live, and ceasing to provide falls back.
+    let gap = store.document().children(wide).iter().copied().find(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "let")).unwrap();
+    store.apply(tx("gap", vec![Op::Set { id: gap, path: path("let.value"), slot: Slot::Const(Value::Number(60.0)) }])).unwrap();
+    assert_eq!(box_x(&store, wide), 60.0);
+    store.apply(tx("stop", vec![Op::Set { id: gap, path: path("let.provide"), slot: Slot::Const(Value::Enum("no".into())) }])).unwrap();
+    assert_eq!(box_x(&store, wide), 8.0);
+    // A group's own `ink` shadows the theme's for what is under it.
+    let fill = |s: &Store, n: NodeId| s.resolved(n, path("fill.color")).unwrap();
+    assert_eq!(fill(&store, named_ids["r"]), Value::Color([1.0, 1.0, 1.0, 1.0]));
+    assert_ne!(fill(&store, named_ids["day"]), Value::Color([1.0, 1.0, 1.0, 1.0]), "the theme's ink");
+    // Nothing provides it: a problem on the leaf, not a silent value.
+    let err = store.apply(tx("lost", vec![Op::Set { id: named_ids["day"], path: path("transform2d.x"), slot: bind("@nowhere") }]));
+    assert!(err.is_err() || store.problems().iter().any(|p| p.message.contains("nothing provides @nowhere")), "{:?}", store.problems());
+}
+
+/// Phase 6 (reactivity.md §8): a trace gives a value as it was a while
+/// ago, and where along a path it was on; an accumulator steps a formula
+/// of its own past. Both run on presentation time and save nothing.
+#[test]
+fn a_trace_delays_a_click_and_an_accumulator_integrates() {
+    let (mut store, _, n) = sheet(
+        r##"<let id="lit" name="lit" value="false"/>
+        <trace id="tr" name="tr" of="{= $lit}" delay="2"/>
+        <rect id="lamp" name="lamp" w="4" h="4" fill.opacity="{= $tr ? 1 : 0.2}"/>
+        <path id="glow" name="glow" stroke.path_length="1" stroke.cap="butt" stroke.dash="{= $tr.trace.dash}"/>
+        <let id="rate" name="rate" value="3"/>
+        <accumulate id="acc" name="acc" initial="10" next="{= $acc + $rate * $acc.accumulate.dt}"/>
+        <text id="t" name="t" content="{= fmt($acc, 2)}"/>"##,
+    );
+    let version = store.history().past().len();
+    let out = |s: &Store| s.resolved(n["tr"], path("trace.out")).unwrap();
+    let dash = |s: &Store| s.resolved(n["glow"], path("stroke.dash")).unwrap().as_str().unwrap().to_owned();
+    let acc = |s: &Store| s.resolved(n["acc"], path("accumulate.value")).unwrap().as_f64().unwrap();
+    assert!(store.advance_steps(0.0).contains(&n["acc"]), "the accumulator starts");
+    assert_eq!((out(&store), dash(&store).as_str()), (Value::Bool(false), "0 1"));
+    assert_eq!(acc(&store), 10.0);
+    // On at 1 s: the far end still shows off; the lit run grows from the start.
+    store.apply(tx("on", vec![Op::Set { id: n["lit"], path: path("let.value"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
+    assert!(store.advance_steps(1.0).contains(&n["tr"]));
+    store.advance_steps(1.05);
+    let a = acc(&store);
+    store.advance_steps(1.1);
+    assert!((acc(&store) - (a + 3.0 * 0.05)).abs() < 1e-9, "a step of 0.05 s at 3 a second");
+    store.advance_steps(1.5);
+    assert_eq!(out(&store), Value::Bool(false));
+    assert_eq!(dash(&store), "0.2500 1");
+    // Off at 2 s: a pulse one second long travels the path.
+    store.apply(tx("off", vec![Op::Set { id: n["lit"], path: path("let.value"), slot: Slot::Const(Value::Bool(false)) }])).unwrap();
+    store.advance_steps(2.0);
+    store.advance_steps(2.5);
+    assert_eq!(dash(&store), "0 0.2500 0.5000 1");
+    // 2 s after the click the far end turns on, and what reads it follows.
+    store.advance_steps(3.1);
+    assert_eq!(out(&store), Value::Bool(true));
+    assert_eq!(store.resolved(n["lamp"], path("fill.opacity")), Some(Value::Number(1.0)));
+    store.advance_steps(4.1);
+    assert_eq!(out(&store), Value::Bool(false));
+    // The pulse has left: the trace rests, and nothing was ever committed.
+    assert!(!store.advance_steps(4.2).contains(&n["tr"]));
+    assert_eq!(dash(&store), "0 1");
+    assert_eq!(store.history().past().len(), version + 2, "only the two clicks");
+    // Reset puts the accumulator back.
+    store.apply(tx("reset", vec![Op::Set { id: n["acc"], path: path("accumulate.reset"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
+    store.advance_steps(4.3);
+    assert_eq!(acc(&store), 10.0);
+}
+
+/// The fiber with a delay: a laser switched on at one end reaches the
+/// other end that many seconds later, lit along the way.
+#[test]
+fn a_delayed_fiber_carries_a_pulse_to_its_far_end() {
+    let (mut store, comp, _) = sheet(r#"<group name="spare"/>"#);
+    let laser = store.place_standard("laser", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let fiber = store.place_standard("fiber", comp, [200.0, 0.0], Actor::Human).unwrap();
+    let entity = |s: &Store, u: NodeId| expand::use_entity(s.document(), u).unwrap();
+    let port = |s: &Store, u: NodeId, name: &str| {
+        let e = entity(s, u);
+        s.document().children(e).iter().copied().find(|&p| s.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
+    };
+    let (le, fe) = (entity(&store, laser), entity(&store, fiber));
+    let (from, to) = (port(&store, laser, "out"), port(&store, fiber, "in"));
+    let read = |l: Leaf| store.resolved(l.node, l.path);
+    let mut ops = author::connect(store.document(), &read, from, to).unwrap();
+    ops.push(Op::Set { id: fe, path: path("args.delay_s"), slot: Slot::Const(Value::Number(1.0)) });
+    ops.push(Op::Set { id: fe, path: path("args.loss_db_per_km"), slot: Slot::Const(Value::Number(0.0)) });
+    let watts = |t: &str| Slot::Const(Expr::parse(t).unwrap().eval(&|_| None).unwrap());
+    ops.push(Op::Set { id: le, path: path("args.power"), slot: watts("0 mW") });
+    store.apply(tx("plug", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let out = |s: &Store| s.resolved(port(s, fiber, "out"), path("port.signal")).unwrap();
+    let light = |s: &Store| s.resolved(named(s, fiber, "light")[0], path("stroke.dash")).unwrap().as_str().unwrap().to_owned();
+    store.advance_steps(0.0);
+    assert_eq!(light(&store), "0 1");
+    store.apply(tx("on", vec![Op::Set { id: le, path: path("args.power"), slot: watts("5 mW") }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.advance_steps(1.0);
+    store.advance_steps(1.5);
+    assert_eq!(light(&store), "0.5000 1", "half way along");
+    assert_eq!(format!("{}", out(&store)), "0 W");
+    store.advance_steps(2.01);
+    assert_eq!(light(&store), "", "lit throughout");
+    assert_eq!(format!("{}", out(&store)), "5 mW", "the far end has it");
+}

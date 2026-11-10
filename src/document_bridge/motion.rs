@@ -53,3 +53,22 @@ pub fn advance_machines(mut store: ResMut<DocumentStore>, time: Res<Time>, mut s
     *marked = comps;
 }
 
+
+/// Traces and accumulators on the frame clock (iron_document `step.rs`):
+/// the store steps them, and the compositions holding the ones still
+/// changing (a pulse travelling a fiber) keep rendering until they rest.
+pub fn advance_steps(mut store: ResMut<DocumentStore>, time: Res<Time>, mut sources: ResMut<LiveSources>, mut marked: Local<BTreeSet<NodeId>>) {
+    let active = store.bypass_change_detection().0.advance_steps(time.elapsed_secs_f64());
+    if active.is_empty() && marked.is_empty() {
+        return;
+    }
+    // Including the frame the last one rests on: its final value publishes.
+    store.set_changed();
+    let doc = store.0.document();
+    let comps: BTreeSet<NodeId> = active.iter().filter_map(|&n| iron_document::composition::composition_of(doc, n)).collect();
+    for c in marked.difference(&comps) {
+        sources.0.remove(c);
+    }
+    sources.0.extend(comps.iter().copied());
+    *marked = comps;
+}

@@ -1,0 +1,23 @@
+nav
+ready
+eval __iron.snapping(false)
+eval (window.__fib=async()=>{const v=await __iron.view({fidelity:'full'});const u=(v.match(/<use id="(#[^"]+)"/)||[])[1];const w=u?await __iron.view({fidelity:'full',scope:u,expand:[u]}):'';const el=(w.match(/<path[^>]*name="light"[^>]*>/)||[''])[0];const d=(el.match(/dash="([^"]*)"/)||[])[1];return {dash:d??'',parts:(d??'').split(' ').filter(Boolean).map(Number),found:!!el,version:+(v.match(/<document version="(\d+)"/)||[])[1],lit:(v.match(/name="lit"[^>]*value="([^"]*)"/)||[])[1]}}, true)
+eval (async()=>{const r=await __iron.edit("<edit><create id=\"$lit\" type=\"let\" parent=\"#1\" name=\"lit\" value=\"false\"/><create id=\"$btn\" type=\"group\" parent=\"#1\" name=\"btn\" x=\"40\" y=\"30\"/><create type=\"rect\" parent=\"$btn\" name=\"bbar\" x=\"0\" y=\"0\" w=\"120\" h=\"32\" fill.color=\"{= $lit.let.value ? rgb(255, 210, 90) : rgb(215, 215, 215)}\"/><create type=\"on\" parent=\"$btn\" name=\"toggle laser\" event=\"click\" write.target=\"$lit\" write.to=\"{= !$lit.let.value}\"/></edit>");return r.ok?true:r})()
+sleep 400
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const id=(v.match(/<let id="(#[^"]+)" name="lit"/)||[])[1];const r=await __iron.edit('<edit><place def="std:fiber" in="#1" x="40" y="140" name="F1" delay_s="2" args.in="{= '+id+'.let.value ? 5 mW : 0 W}"/></edit>');return r.ok?true:r})()
+sleep 800
+assert (async()=>{const a=await __fib();window.__v0=a.version;return a.found&&a.dash==='0 1'&&a.lit==='false'})()
+dclick 100 46
+sleep 900
+assert (async()=>{const a=await __fib();return a.lit==='true'&&a.parts.length===2&&a.parts[0]>0.2&&a.parts[0]<0.9&&a.version===window.__v0+1})()
+shot fiber-travel
+sleep 2200
+assert (async()=>{const a=await __fib();return a.found&&a.dash===''&&a.version===window.__v0+1})()
+dclick 100 46
+sleep 900
+assert (async()=>{const a=await __fib();return a.parts.length===4&&a.parts[0]===0&&a.parts[1]>0.2&&a.version===window.__v0+2})()
+shot fiber-tail
+sleep 2200
+assert (async()=>{const a=await __fib();return a.dash==='0 1'&&a.version===window.__v0+2})()
+errors
+quit

@@ -351,7 +351,7 @@ fn bake(key: &str) -> Baked {
         let Some(node) = doc.live(id) else { continue };
         // A repeat's template is not drawn, nor is a let: the copies are
         // baked as plain shapes.
-        if crate::expand::in_repeat_template(doc, id) || matches!(node.ty.name(), "let" | "on" | "set") {
+        if crate::expand::in_repeat_template(doc, id) || matches!(node.ty.name(), "let" | "on" | "set" | "trace" | "accumulate") {
             continue;
         }
         // Anchors mark ports; a preview has none.

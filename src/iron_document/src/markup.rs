@@ -172,6 +172,8 @@ fn resolve(text: &str, named: &BTreeMap<String, (NodeId, TypeId)>) -> Result<Str
         }
         out.push_str(match ty.name() {
             "let" => ".let.value",
+            "trace" => ".trace.out",
+            "accumulate" => ".accumulate.value",
             "port_spec" => ".port.signal",
             "channel" => ".channel.value",
             // Any other node, bare, is the node itself: `list($a, $b)`.

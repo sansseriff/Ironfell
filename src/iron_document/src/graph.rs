@@ -57,7 +57,9 @@ impl ProducerId {
     /// What is selected, on nodes that ask (`selection` facet).
     pub const SELECTION: ProducerId = ProducerId(7);
     /// The first id a host producer receives.
-    pub const FIRST_HOST: ProducerId = ProducerId(8);
+    /// Traces and accumulators (step.rs).
+    pub const STEPS: ProducerId = ProducerId(8);
+    pub const FIRST_HOST: ProducerId = ProducerId(9);
 }
 
 /// One published value: who published it and at which of their frames.
@@ -72,6 +74,8 @@ pub struct Signal {
 struct BoundNode {
     expr: Expr,
     deps: BTreeSet<Leaf>,
+    /// What each `@name` it reads resolved to when the graph was built.
+    ctx: BTreeMap<String, Leaf>,
     /// Whether the expression holds a tracked read (`deref`).
     tracks: bool,
     /// What its tracked reads read at the last evaluation, beyond `deps`.
@@ -257,8 +261,11 @@ impl Reactive {
         let tokens = crate::palette::leaves(doc);
         for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
             let mut deps = expr.deps();
-            // `@name` reads its token's colour (palette.rs).
-            deps.extend(expr.tokens().iter().filter_map(|n| tokens.get(n).copied()));
+            // `@name` reads the nearest provider above this node, a colour
+            // token at the root (palette.rs).
+            let ctx: BTreeMap<String, Leaf> =
+                expr.tokens().into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
+            deps.extend(ctx.values().copied());
             for d in &deps {
                 self.dependents.entry(*d).or_default().insert(leaf);
             }
@@ -269,6 +276,7 @@ impl Reactive {
                 BoundNode {
                     expr: expr.clone(),
                     deps,
+                    ctx,
                     tracks,
                     tracked: BTreeSet::new(),
                     height: 0,
@@ -425,7 +433,6 @@ impl Reactive {
     /// it depends on a leaf evaluated after it; when that leaf changes, the
     /// binding is queued again.
     fn evaluate(&mut self, doc: &Document, dirty: &BTreeSet<Leaf>, primed: &BTreeSet<Leaf>) {
-        let _tokens = crate::expr::TokenScope::new(crate::palette::leaves(doc));
         let mut primed = primed.clone();
         let mut queue: BTreeSet<(u32, Leaf)> = dirty.iter().map(|l| (self.nodes[l].height, *l)).collect();
         // Static dependencies never queue a node twice; tracked ones may, a
@@ -443,6 +450,7 @@ impl Reactive {
             self.evaluations += 1;
             let expr = self.nodes[&leaf].expr.clone();
             let tracks = self.nodes[&leaf].tracks;
+            let _ctx = crate::expr::TokenScope::new(self.nodes[&leaf].ctx.clone());
             let reads: std::cell::RefCell<BTreeSet<Leaf>> = Default::default();
             let result = {
                 let overlay = &self.overlay;

@@ -58,6 +58,7 @@ pub mod text;
 pub mod layers;
 pub mod layout;
 pub mod list;
+pub mod step;
 pub mod narrative;
 pub mod table;
 pub mod time;
@@ -228,6 +229,8 @@ pub struct Store {
     motion: Motion,
     /// Component state machines' player (machine.rs): presentation state.
     machines: machine::Player,
+    /// Traces and accumulators (step.rs): presentation state.
+    steps: step::Steps,
     /// Nodes' interaction states, as the host last reported them (session;
     /// read by rules that match `state:`).
     interaction: BTreeMap<NodeId, Vec<&'static str>>,
@@ -351,6 +354,7 @@ impl Store {
             dark: false,
             motion: Motion::default(),
             machines: machine::Player::default(),
+            steps: step::Steps::default(),
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
@@ -1209,7 +1213,7 @@ impl Store {
             }
             structural |= match op {
                 Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Reparent { .. } => true,
-                Op::Set { id, path, slot } => slot.expr().is_some() || self.reactive.is_bound(Leaf { node: *id, path: *path }),
+                Op::Set { id, path, slot } => slot.expr().is_some() || self.reactive.is_bound(Leaf { node: *id, path: *path }) || names_context(path),
                 _ => false,
             };
         }
@@ -1749,6 +1753,32 @@ impl Store {
         running
     }
 
+    /// Step the traces and accumulators to `now` (seconds, the host's
+    /// clock) and publish them (step.rs). Returns the nodes still
+    /// changing, so the host keeps their compositions drawing.
+    pub fn advance_steps(&mut self, now: f64) -> Vec<NodeId> {
+        // The step's length first, so each accumulator's formula is
+        // evaluated with it before the store reads the result.
+        let dts = self.steps.begin(&self.doc, now);
+        if !dts.is_empty() {
+            let mut shown = self.reactive.published_by(ProducerId::STEPS);
+            shown.extend(dts.clone());
+            self.signal_stamp += 1;
+            self.reactive.publish(&self.doc, ProducerId::STEPS, shown, self.signal_stamp);
+        }
+        let (mut values, active) = {
+            let reactive = &self.reactive;
+            let doc = &self.doc;
+            let read = |l: Leaf| reactive.read(doc, l);
+            self.steps.advance(doc, &read, now)
+        };
+        values.extend(dts);
+        if values != self.reactive.published_by(ProducerId::STEPS) {
+            self.publish(ProducerId::STEPS, values);
+        }
+        active
+    }
+
     /// Advance the transitions in flight to `now` (seconds, the host's
     /// clock) and publish where they have got to. Returns the nodes that
     /// moved, so the host renders them; empty when nothing is in flight.
@@ -2027,8 +2057,8 @@ impl Store {
         self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(tx.expanded.iter()));
         let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(tx.expanded.iter()).any(|op| match op {
             // A link can be a connection's end, which derives a signal.
-            Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
-            Op::Set { slot, .. } => slot.expr().is_some(),
+            Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } | Op::Reparent { .. } => true,
+            Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path),
             _ => false,
         });
         if structural {
@@ -2503,6 +2533,12 @@ fn args_set(ops: &[Op]) -> Vec<NodeId> {
             _ => None,
         })
         .collect()
+}
+
+/// Whether a set of this leaf changes what `@name` resolves to: a rename,
+/// or a let starting or ceasing to provide (palette.rs `provided`).
+fn names_context(path: &LeafPath) -> bool {
+    path.facet == FacetKind::Name || (path.facet == FacetKind::Let && path.field == "provide")
 }
 
 /// An item's key from a value (reactivity.md §3.2): a number or quantity

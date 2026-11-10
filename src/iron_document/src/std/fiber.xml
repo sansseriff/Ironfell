@@ -1,14 +1,24 @@
 <!-- std:fiber: optical power through a lossy length; the curve follows
-     its two ends, so plugging either end bends it. -->
+     its two ends, so plugging either end bends it. With a delay, what goes
+     in comes out that many seconds later, and is seen travelling: a trace
+     of the input (step.rs) lights the stretch of the curve it has reached. -->
 <definition name="fiber">
   <port_spec id="loss" name="loss_db_per_km" kind="value" dir="in" signal="0.5"/>
   <port_spec id="length" name="length_km" kind="value" dir="in" signal="2"/>
   <port_spec id="in" name="in" kind="optical_power" dir="in" signal="0 W"/>
-  <port_spec id="out" name="out" kind="optical_power" dir="out" signal="{= $in * pow(10, -$loss * $length / 10)}"/>
+  <port_spec id="delay" name="delay_s" kind="value" dir="in" signal="0"/>
+  <trace id="travel" name="travel" of="{= $in}" delay="{= $delay}" out="0 W"/>
+  <port_spec id="out" name="out" kind="optical_power" dir="out" signal="{= ($delay > 0 ? $travel : $in) * pow(10, -$loss * $length / 10)}"/>
   <template notation="free">
     <empty id="a" name="in" x="0" y="0" anchor.port="$in" anchor.follow="true"/>
     <empty id="b" name="out" x="300" y="0" anchor.port="$out" anchor.follow="true"/>
     <path name="fiber" x="0" y="0" stroke.color="#f5b326" stroke.width="6">
+      <contour>
+        <point x="{= $a.transform2d.x}" y="{= $a.transform2d.y}" ix="{= -($b.transform2d.x - $a.transform2d.x) / 2}" iy="0" ox="{= ($b.transform2d.x - $a.transform2d.x) / 2}" oy="0"/>
+        <point x="{= $b.transform2d.x}" y="{= $b.transform2d.y}" ix="{= -($b.transform2d.x - $a.transform2d.x) / 2}" iy="0" ox="{= ($b.transform2d.x - $a.transform2d.x) / 2}" oy="0"/>
+      </contour>
+    </path>
+    <path name="light" x="0" y="0" stroke.color="#fff6d6" stroke.width="2" stroke.cap="butt" stroke.path_length="1" stroke.dash="{= $travel.trace.dash}">
       <contour>
         <point x="{= $a.transform2d.x}" y="{= $a.transform2d.y}" ix="{= -($b.transform2d.x - $a.transform2d.x) / 2}" iy="0" ox="{= ($b.transform2d.x - $a.transform2d.x) / 2}" oy="0"/>
         <point x="{= $b.transform2d.x}" y="{= $b.transform2d.y}" ix="{= -($b.transform2d.x - $a.transform2d.x) / 2}" iy="0" ox="{= ($b.transform2d.x - $a.transform2d.x) / 2}" oy="0"/>

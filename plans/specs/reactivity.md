@@ -422,6 +422,32 @@ Phase 5, tracked reads:
   `.nodes` and `.count` published by the store, so a binding can read the selected
   node.
 
+Phase 6, first part (2026-11-10): context, traces, accumulators.
+
+- **Context** (§6): `@name` is the context read, and colour tokens are its root
+  providers rather than a special case. `let.provide` is `no`, `yes` or `default`;
+  `palette::provided` finds the nearest providing `let` of that name among the
+  children of the reader's ancestors, then the document's token, then the nearest
+  `default` let (a component's own fallback). Resolved per reader when the graph is
+  built (a rename, a reparent or a change of `provide` rebuilds), so a component reads
+  it with no port, and a group's own `ink` shadows the theme's for what is under it.
+  A definition may read `@name`: it is the one sanctioned read past its boundary.
+- **Stepped producers** (§8, `step.rs`, `ProducerId::STEPS`, `Store::advance_steps`):
+  presentation time only, never saved, never undone, **not seekable** (decided
+  2026-11-10: a wire is watched in the immediate mode, and scrubbing leaves it be).
+  - A **`trace`** node records when the value it follows (`trace.of`) changed, for
+    `trace.delay` seconds: change events with times, not per-frame samples, so a
+    one-frame pulse is not missed. Published: `out` (the value that long ago), `dash`
+    (where it was on along a path of length 1, as a `stroke.dash`), `ages`, `values`.
+  - An **`accumulate`** node: `next` is a formula of its own `value` and `dt`. The
+    store publishes the step's `dt`, reads `next`, and publishes it as `value`;
+    `reset` returns it to `initial`. A step is at most 0.1 s.
+  - Both may be children of a definition, copied to each instance as channels are
+    (a signal's delay is the model's, not one picture's).
+- **`std:fiber`** has a `delay_s` input: `out` is the input that long ago, and a
+  `light` path over the curve shows it travelling. `fiber.txt` (run-iron) clicks a
+  button and watches the pulse leave, arrive and its tail follow.
+
 **Differs from the proposal:**
 
 - Numbers are keyed by index unless `repeat.key` is given (§3.2 said by value when
@@ -435,6 +461,10 @@ Phase 5, tracked reads:
   `when` held), so a false conditional costs its template's bindings, not its copies'.
 - `deref` inside a lambda's body does not resolve (the body is closed before it runs).
 - Tracked reads are opaque to render analysis: a part that uses one is drawn live.
+- `ctx.name` is written `@name`, and there is no `provide` node: a `let` provides.
+  A definition does not declare what it reads; its template's `@names` are the list.
+- A trace shows on or off along the path, not a level: analog light (brightness
+  following power along the fiber) needs a gradient the trace does not yet give.
 - Still whole-document: any change to a repeat's items or a conditional re-expands
   the document and rebuilds the graph.
 

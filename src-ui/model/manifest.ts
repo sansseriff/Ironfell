@@ -316,8 +316,8 @@ ${p.contextFields}`,
   },
   state: {
     summary: 'state and actions: a let that clicks change (toggle, counter, current tab), on click/enter/leave, session state, reading the selected node',
-    doc: /type="on"|<on |keep="session"|deref\(|selection\./,
-    request: /\b(?:click\w*|toggl\w*|buttons?|accordions?|tabs?|expand\w*|collaps\w*|hover\w*|state|counters?|interactive|press\w*|selected node|inspector)\b/i,
+    doc: /type="on"|<on |keep="session"|deref\(|selection\.|<trace |<accumulate |provide="/,
+    request: /\b(?:click\w*|toggl\w*|buttons?|accordions?|tabs?|expand\w*|collaps\w*|hover\w*|state|counters?|interactive|press\w*|selected node|inspector|delay\w*|pulses?|travel\w*|accumulat\w*|integrat\w*|running|smooth\w*|context|provide\w*)\b/i,
     text: () => `STATE AND ACTIONS
   State is a let holding a constant: <create id="$open" type="let" parent="#C"
   name="open" value="false"/>. Where it is declared says whose it is: in a
@@ -342,7 +342,26 @@ ${p.contextFields}`,
   with the viewer's selection: a let or group given selection.count="0" has
   selection.node (the first selected node), selection.nodes (a list) and
   selection.count published on it:
-    content="{= $sel.selection.count == 0 ? '' : fmt(deref($sel.selection.node, 'size.w', 0))}"`,
+    content="{= $sel.selection.count == 0 ? '' : fmt(deref($sel.selection.node, 'size.w', 0))}"
+  CONTEXT: @name reads the nearest value of that name provided above the reader, with
+  no port in between, so one component reads different values where it is placed. A
+  let provides: <create type="let" parent="#group" name="gap" let.provide="yes"
+  value="40"/> serves everything under #group as {= @gap}. let.provide="default" in a
+  definition's template serves only where nothing above provides the name. Colour
+  tokens (@ink) are the document's providers; a group's own let named ink shadows the
+  token for what is under it. A name nothing provides is a problem on the leaf.
+  TIME (never saved, runs as the picture plays, not on the timeline):
+  a trace remembers a value: <create id="$tr" type="trace" parent="#C" name="tr"
+  trace.of="{= #lit.let.value}" trace.delay="2"/> gives $tr.trace.out, the value as it
+  was 2 seconds ago, and $tr.trace.dash, where it was on along a path of length 1: put
+  stroke.path_length="1" stroke.cap="butt" stroke.dash="{= $tr.trace.dash}" on a path
+  and a pulse travels it, start to end. std:fiber's delay_s input does this.
+  an accumulate steps a formula of its own value once a frame:
+  <create id="$q" type="accumulate" parent="#C" name="q" accumulate.initial="0"
+  accumulate.next="{= $q.accumulate.value + #rate.let.value * $q.accumulate.dt}"/>
+  (dt is the seconds of the last step; accumulate.reset="true" restarts it). A smoothed
+  value: next="{= v + (target - v) * min(1, dt / 0.3)}". A count of clicks that should
+  undo is an on with verb step on a let instead.`,
   },
   tables: {
     summary: 'tables: rows of words, merged cells, presets, the <table> verb',

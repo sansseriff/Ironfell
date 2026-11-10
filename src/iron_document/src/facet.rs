@@ -463,6 +463,7 @@ facets! {
     Let / "let" => Let {
         value: Any = Value::Number(f64::NAN),
         keep: Enum = Value::Enum("document".to_owned()) => ["document", "session"],
+        provide: Enum = Value::Enum("no".to_owned()) => ["no", "yes", "default"],
     }
 
     /// What the viewer has selected, for bindings to read (reactivity.md
@@ -487,6 +488,33 @@ facets! {
         event: Enum = Value::Enum("click".to_owned()) => ["click", "press", "release", "enter", "leave"],
         node: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
         emit: Str = Value::Str(String::new()),
+    }
+
+    /// A value's recent past (step.rs): `of` is what it follows, `delay`
+    /// how many seconds it remembers. The store publishes `out`, the value
+    /// as it was `delay` seconds ago; `dash`, where the value was on along
+    /// a path of length 1 (a `stroke.dash` for `stroke.path_length="1"`),
+    /// newest at the path's start; `ages` and `values`, the changes still
+    /// remembered, newest first. Session state on presentation time.
+    Trace / "trace" => Trace {
+        of: Any = Value::Number(0.0),
+        delay: Number = Value::Number(1.0),
+        out: Any = Value::Number(0.0),
+        dash: Str = Value::Str("0 1".to_owned()),
+        ages: Any = Value::Number(f64::NAN),
+        values: Any = Value::Number(f64::NAN),
+    }
+
+    /// A value its own formula advances once a frame (step.rs): `next`
+    /// reads `value` and `dt` (the seconds the last step took) and gives
+    /// the next value; `reset` puts it back to `initial`. The store
+    /// publishes `value` and `dt`. Session state on presentation time.
+    Accumulate / "accumulate" => Accumulate {
+        initial: Any = Value::Number(0.0),
+        next: Any = Value::Number(f64::NAN),
+        reset: Bool = Value::Bool(false),
+        value: Any = Value::Number(0.0),
+        dt: Number = Value::Number(0.0),
     }
 
     /// One write of an action: `target`'s leaf `prop` (a `let`'s value,

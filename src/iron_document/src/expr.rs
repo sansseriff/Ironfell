@@ -409,7 +409,7 @@ impl Expr {
             Expr::Ref(l) => read(*l).ok_or(EvalError::Unresolved(*l)),
             Expr::Var(name) => lookup(env, name),
             Expr::Token(name) => {
-                let leaf = TOKENS.with(|t| t.borrow().get(name).copied()).ok_or_else(|| EvalError::Type(format!("no colour token @{name}")))?;
+                let leaf = TOKENS.with(|t| t.borrow().get(name).copied()).ok_or_else(|| EvalError::Type(format!("nothing provides @{name}")))?;
                 read(leaf).ok_or(EvalError::Unresolved(leaf))
             }
             Expr::Lambda(params, body) => Ok(Value::Fn(std::sync::Arc::new(Closure { params: params.clone(), body: body.close(read, env, params)? }))),

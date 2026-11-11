@@ -5,14 +5,9 @@
   // demand (never; what it shows does not bubble out, and producers seen
   // only through it pause). In developer mode, the render inspector toggle
   // (plans/specs/render-inspector.md §8), which splits the tab. "Show FPS"
-  // turns on the view's frame-rate readout, in its lower right corner. For a
-  // document's 2D composition, its grid: off, lines or dots, the spacing,
-  // and whether moves, resizes and new shapes snap to it (the composition's
-  // `grid`, `grid_spacing` and `grid_snap`, edited as in the inspector's
-  // Composition section, one `inspect_patch` transaction each).
+  // turns on the view's frame-rate readout, in its lower right corner.
   import { DropdownMenu } from "bits-ui";
   import Check from "@lucide/svelte/icons/check";
-  import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import Settings2 from "@lucide/svelte/icons/settings-2";
   import { onDestroy } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
@@ -64,38 +59,6 @@
     await refresh();
   }
 
-  // ── Grid ──────────────────────────────────────────────────────────────
-  type Grid = "off" | "lines" | "dots";
-  const GRIDS: { id: Grid; label: string }[] = [
-    { id: "off", label: "Off" },
-    { id: "lines", label: "Lines" },
-    { id: "dots", label: "Dots" },
-  ];
-  const SPACINGS = [4, 8, 10, 16, 20, 24, 32, 40, 50, 64, 100];
-  const comp = $derived(doc.compositions.find((c) => !c.session && c.dims === "2d" && (c.id === spec.source || c.name === spec.source)));
-  type Field = { field: string; text: string | null };
-  let grid = $state<{ node: string; mode: Grid; spacing: number; snap: boolean } | null>(null);
-  async function loadGrid() {
-    const node = comp?.id;
-    if (!node) { grid = null; return; }
-    try {
-      const r = await doc.command<{ components: { kind: string; fields: Field[] }[] } | null>({ op: "inspect", node });
-      const fields = r?.components?.find((c) => c.kind === "composition")?.fields ?? [];
-      const text = (f: string) => fields.find((x) => x.field === f)?.text ?? "";
-      if (node === comp?.id) grid = { node, mode: (text("grid") || "off") as Grid, spacing: Number(text("grid_spacing")) || 20, snap: text("grid_snap") === "true" };
-    } catch { grid = null; }
-  }
-  $effect(() => {
-    void doc.generation;
-    void comp?.id;
-    if (open) void loadGrid();
-  });
-  async function setGrid(leaf: "grid" | "grid_spacing" | "grid_snap", value: string) {
-    if (!grid) return;
-    await doc.command({ op: "inspect_patch", node: grid.node, patch: JSON.stringify({ values: { [`composition.${leaf}`]: value }, label: "edit composition settings" }) });
-    await loadGrid();
-  }
-
   const status = $derived(
     !info ? "" : info.live ? (info.running.length ? `Running: ${info.running.join(", ")}` : "Running") : "Frozen until input",
   );
@@ -120,44 +83,6 @@
           {/each}
           <div class="ui-menu-separator"></div>
           <div class="ui-menu-heading status" data-status>{status}</div>
-          {#if grid}
-            <div class="ui-menu-separator"></div>
-            <div class="ui-menu-heading">Grid</div>
-            {#each GRIDS as g (g.id)}
-              <DropdownMenu.Item class="ui-menu-item" closeOnSelect={false} onSelect={() => setGrid("grid", g.id)} data-grid={g.id}>
-                <span class="ui-menu-check">{#if grid.mode === g.id}<Check size={14} strokeWidth={1.75} />{/if}</span>
-                <span>{g.label}</span>
-              </DropdownMenu.Item>
-            {/each}
-            <DropdownMenu.Sub>
-              <DropdownMenu.SubTrigger class="ui-menu-item" disabled={grid.mode === "off"} data-grid-spacing>
-                <span class="ui-menu-check"></span>
-                <span>Spacing</span>
-                <span class="ui-hint">{grid.spacing} px</span>
-                <ChevronRight class="ui-submenu-chevron" size={14} strokeWidth={1.75} />
-              </DropdownMenu.SubTrigger>
-              <DropdownMenu.SubContent class="ui-menu" sideOffset={4}>
-                {#each SPACINGS as s (s)}
-                  <DropdownMenu.Item class="ui-menu-item" onSelect={() => setGrid("grid_spacing", String(s))} data-spacing={s}>
-                    <span class="ui-menu-check">{#if grid.spacing === s}<Check size={14} strokeWidth={1.75} />{/if}</span>
-                    <span>{s} px</span>
-                  </DropdownMenu.Item>
-                {/each}
-                {#if !SPACINGS.includes(grid.spacing)}
-                  <DropdownMenu.Item class="ui-menu-item" disabled>
-                    <span class="ui-menu-check"><Check size={14} strokeWidth={1.75} /></span>
-                    <span>{grid.spacing} px</span>
-                    <span class="ui-hint">set in the inspector</span>
-                  </DropdownMenu.Item>
-                {/if}
-              </DropdownMenu.SubContent>
-            </DropdownMenu.Sub>
-            <DropdownMenu.Item class="ui-menu-item" closeOnSelect={false} disabled={grid.mode === "off"} onSelect={() => setGrid("grid_snap", String(!grid!.snap))} data-grid-snap>
-              <span class="ui-menu-check">{#if grid.snap}<Check size={14} strokeWidth={1.75} />{/if}</span>
-              <span>Snap to grid</span>
-              <span class="ui-hint">Ctrl or Cmd places freely</span>
-            </DropdownMenu.Item>
-          {/if}
           <div class="ui-menu-separator"></div>
           <DropdownMenu.Item class="ui-menu-item" onSelect={onShowFps} data-show-fps>
             <span class="ui-menu-check">{#if showFps}<Check size={14} strokeWidth={1.75} />{/if}</span>

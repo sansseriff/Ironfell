@@ -60,11 +60,12 @@ eval (() => { const t = document.querySelector('textarea[aria-label="Text"]'); r
 shot text-pan
 key Escape
 sleep 500
-# The canvas gear menu sets the spacing (the Main view's button is the first).
-clickel button[aria-label="Composition settings"]
-clickel [data-grid-spacing]
-shot grid-menu
-clickel [data-spacing="40"]
-assert __wait(async () => (await __iron.view({fidelity:'full'})).match(/<composition[^>]*name="main"[^>]*>/)[0].includes('grid_spacing="40"'))
+# The inspector's Composition section (empty selection) sets the grid's
+# opacity: one place for every grid setting.
+key Escape
+sleep 300
+eval (() => { const i = document.querySelector('[data-section="composition"] input[aria-label="Grid opacity"]'); if (!i) return 'no field'; i.focus(); i.value = '50'; i.dispatchEvent(new Event('change', {bubbles: true})); return 1; })()
+assert __wait(async () => (await __iron.view({fidelity:'full'})).match(/<composition[^>]*name="main"[^>]*>/)[0].includes('grid_opacity="0.5"'))
+shot grid-opacity
 errors
 quit

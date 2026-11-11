@@ -924,6 +924,8 @@ facets! {
         // Moving, resizing and drawing shapes snap to the shown grid's
         // points (document px, `grid_spacing` apart).
         grid_snap: Bool = Value::Bool(true),
+        // The grid marks' opacity, 0 to 1, over the background.
+        grid_opacity: Number = Value::Number(0.15),
     }
 
     @dynamic {

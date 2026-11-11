@@ -278,6 +278,7 @@ fn canvas_settings_are_local_undoable_and_saved() {
         ("composition.grid", Value::Enum("dots".into())),
         ("composition.grid_spacing", Value::Number(32.0)),
         ("composition.grid_snap", Value::Bool(false)),
+        ("composition.grid_opacity", Value::Number(0.4)),
     ];
     store.apply(tx("canvas appearance", values.iter().map(|(p, v)| Op::Set { id: cartoon, path: leaf(p), slot: Slot::Const(v.clone()) }).collect())).unwrap();
     for (p, v) in &values { assert_eq!(store.resolved(cartoon, leaf(p)), Some(v.clone())); }

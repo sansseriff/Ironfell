@@ -44,6 +44,9 @@
       if (f.field === "grid_spacing" && !/^\s*(=|\{=)/.test(value) && (!Number.isFinite(Number(value)) || Number(value) <= 0)) {
         throw new Error("Grid spacing must be greater than zero.");
       }
+      if (f.field === "grid_opacity" && !/^\s*(=|\{=)/.test(value) && !(Number(value) >= 0 && Number(value) <= 1)) {
+        throw new Error("Grid opacity must be between 0% and 100%.");
+      }
       const r = await doc.command({ op: "inspect_patch", node: id, patch: JSON.stringify({ values: { [f.leaf]: value }, label: "edit composition settings" }) });
       if (!r.ok) throw new Error(r.error);
       await refresh();
@@ -74,6 +77,9 @@
         <div class="setting"><span class="ui-subheading">Grid</span><Select label="Composition grid" value={text("grid")} items={[{value: "off", label: "Off"}, {value: "lines", label: "Lines"}, {value: "dots", label: "Dots"}]} onChange={v => choose("grid", v)} /></div>
         {#if text("grid") !== "off" && field("grid_spacing")}
           <PropertyField field={field("grid_spacing")!} node={current.id} label="Grid spacing (px)" onSet={set} onRefresh={refresh} onError={e => error = e} />
+        {/if}
+        {#if text("grid") !== "off" && field("grid_opacity")}
+          <PropertyField field={field("grid_opacity")!} node={current.id} label="Grid opacity" onSet={set} onRefresh={refresh} onError={e => error = e} />
         {/if}
       </div>
       {#if text("grid") !== "off" && field("grid_snap")}

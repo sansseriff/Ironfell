@@ -52,7 +52,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `regression.txt` (`GPU=1`): bindings, model edits, the pendulum, linking, save/load | ~1 min (1m 09s, 2026-11-09) |
 | ⏱ `gestures.txt` (`GPU=1`): select tool, pen, shapes, clipboard, Alt-drag, gizmo, SVG, components | ~2.5 min (2m 25s, 2026-11-09) |
 | `snapping.txt` | ~30 s |
-| `canvas-grid.txt` (`GPU=1`): grid snapping, text edit under a pan, token rebinding, the gear menu's spacing | ~15 s (15.2 s, 2026-11-11) |
+| `canvas-grid.txt` (`GPU=1`): grid snapping, text edit under a pan, token rebinding, grid opacity | ~15 s (15.2 s, 2026-11-11) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, after a facet change, worktree-local cache | ~1 min (1m 07s, 2026-11-11) |
 | `layout.txt` | ~35 s |
 | `contexts.txt` | ~35 s |
@@ -138,7 +138,7 @@ resizes its bottom right corner by (13, 17), draws a rectangle from (903, 603) t
 (961, 647), turns `grid_snap` off and moves it by (7, 3); picks `@accent` then
 `@series-2` for the square's fill in the Fill popover; makes a text, types, pans
 with the middle button and reads where the hidden textarea (placed at the caret)
-went; and picks 40 px from the canvas gear menu's Spacing submenu.
+went; and types 50 into the inspector's Grid opacity field.
 
 ```sh
 cd .claude/skills/run-iron && GPU=1 SIZE=1680x1000@1 bun run drive.ts < canvas-grid.txt; cd -
@@ -146,11 +146,11 @@ cd .claude/skills/run-iron && GPU=1 SIZE=1680x1000@1 bun run drive.ts < canvas-g
 
 Expected: ten `assertion passed` lines (the square at 520, 420; 100 × 100 after the
 resize; the rectangle at 900, 600, 60 × 40; 527, 423 with snapping off; bound to
-`@accent`, then to `@series-2`; the caret moved `[90,45]` with the pan; spacing 40),
+`@accent`, then to `@series-2`; the caret moved `[90,45]` with the pan; `grid_opacity="0.5"`),
 `[false,null]` (the other token is enabled while one is bound), and
 `(no page errors)`. Inspect `screenshots/grid-dots.png` (faint dots, 20 px apart),
 `text-pan.png` (the edit box and caret on the text after the pan) and
-`grid-menu.png`.
+`grid-opacity.png` (darker dots).
 
 ## State and actions (2026-11-09)
 

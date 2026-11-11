@@ -29,7 +29,7 @@
   const doc = controllerManager.docClient;
   const locked = $derived(f.edit === "locked");
   const numeric = $derived(channel === "alpha" || f.kind === "number");
-  const percent = $derived(channel === "alpha" || f.field === "opacity" || f.leaf === "arc.inner");
+  const percent = $derived(channel === "alpha" || f.field === "opacity" || f.leaf === "arc.inner" || f.leaf === "composition.grid_opacity");
   const angle = $derived(f.leaf === "transform2d.rot" || f.leaf === "arc.start" || f.leaf === "arc.sweep");
   const factor = $derived(percent ? 100 : angle ? 180 / Math.PI : 1);
   // Stored as a percent already (plans/specs/text.md §2): shown with %, unscaled.

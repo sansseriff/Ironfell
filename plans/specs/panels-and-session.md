@@ -445,11 +445,14 @@ ellipse tools put both corners on grid points, in the view's document px, at
 mover's origin. Ctrl or Cmd bypasses both, as for object snapping; on a grid,
 object snapping is off. `view_focus::canvas_grid` reads the settings.
 
-**Where to set it.** The inspector's Composition section adds a "Snap to grid"
-checkbox under the spacing; the canvas gear menu (`CompositionSettings.svelte`)
-adds a Grid group for a document's 2D composition: Off, Lines, Dots, a Spacing
-submenu (4–100 px presets; any other value is set in the inspector) and Snap to
-grid. Each is one `inspect_patch` transaction.
+**Opacity.** `composition.grid_opacity` (Number 0–1, default 0.15) is the
+marks' alpha for both lines and dots (they were fixed at 0.09 and 0.22); 0 hides
+the marks but keeps snapping.
+
+**Where to set it.** Every grid setting lives in one place, the inspector's
+Composition section (empty selection): Grid, spacing, opacity (shown as a
+percent) and a "Snap to grid" checkbox, each one `inspect_patch` transaction.
+The canvas gear menu does not repeat them.
 
 Validation: `canvas-grid.txt` (run-iron skill), the fast smoke and
 `snapping.txt` pass; 345 document tests pass.

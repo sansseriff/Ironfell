@@ -106,7 +106,9 @@ fn draw_backdrop(b: &mut crate::vector::DisplayListBuilder<'_>, store: &iron_doc
     let c = bg.components;
     let light = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] > 0.5;
     let ink = if light { 0.0 } else { 1.0 };
-    let color = peniko::Color::new([ink, ink, ink, if mode == "dots" { 0.22 } else { 0.09 }]);
+    let opacity = value("composition.grid_opacity").and_then(|v| v.as_f64()).filter(|o| o.is_finite()).unwrap_or(0.15).clamp(0.0, 1.0);
+    if opacity == 0.0 { return; }
+    let color = peniko::Color::new([ink, ink, ink, opacity as f32]);
     let cols = ((rect.x1 - x0) / step).ceil().max(0.0) as usize;
     let rows = ((rect.y1 - y0) / step).ceil().max(0.0) as usize;
     // Marks are clamped to the view rather than clipped: a clip layer would

@@ -13,6 +13,10 @@
  * TURN_MINUTES=10   per-turn limit; the turn is stopped and the run ends there
  * APP_PATH='/Ironfell/?gfx=webgl2&demo'   page path and query on the probe's own server
  * RUNTIME=worker|main   HEADED=1 to watch   SIZE=1600x1000
+ *
+ * A prompt line `@image <path>` attaches that image (PNG, JPEG, SVG, HEIC…) to the
+ * turn through the composer's file input, as a dropped image would be; the line
+ * itself is not sent.
  */
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:net';
@@ -110,7 +114,8 @@ try {
   await page.waitForFunction(async () => {
     try { return !!(await (window as any).__iron.call('schema')).types; } catch { return false; }
   }, undefined, { timeout: 30000 });
-  await page.getByRole('tab', { name: 'Model', exact: true }).click();
+  // The left side's view strip (its tab bar is hidden) switches to the Model chat.
+  await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().click();
   // Automatic pairing looks on port 4318; the probe's bridge is on its own port.
   await page.evaluate(({ endpoint, token, provider, model }) =>
     (window as any).__iron.configureAgent({ provider, endpoint, token, ...(model ? { model } : {}) }),
@@ -136,7 +141,13 @@ try {
     const before = `turn-${n}-before.xml`, after = `turn-${n}-after.xml`, shot = `turn-${n}.png`;
     await writeFile(join(runDir, before), await view());
     const seen = await page.locator('.chat-turn').evaluateAll(ts => ts.map(t => t.getAttribute('data-turn-id')));
-    await prompt.fill(text);
+    const images = [...text.matchAll(/^@image\s+(.+)$/gm)].map(m => resolve(m[1].trim()));
+    const message = text.replace(/^@image\s+.+\n?/gm, '').trim();
+    if (images.length) {
+      await page.locator('input[type=file][accept^="image/png"]').setInputFiles(images);
+      await page.waitForFunction(n => document.querySelectorAll('.attachment img').length >= n, images.length, { timeout: 30000 });
+    }
+    await prompt.fill(message);
     await prompt.press('Enter');
     const started = Date.now();
     console.log(`turn ${n}/${prompts.length}: sent (limit ${turnMs / 60000} min)`);
@@ -170,8 +181,9 @@ try {
   await session.stop();
 }
 
-// The run's agent log: one file a day, normally one.
-const lines = (await Promise.all((await readdir(logDir).catch(() => [] as string[])).sort().map(f => readFile(join(logDir, f), 'utf8')))).join('');
+// The run's agent log: one file a day, normally one (beside it, images/ holds
+// the turns' pictures).
+const lines = (await Promise.all((await readdir(logDir).catch(() => [] as string[])).filter(f => f.endsWith('.jsonl')).sort().map(f => readFile(join(logDir, f), 'utf8')))).join('');
 await writeFile(join(runDir, 'agent-log.jsonl'), lines);
 const records = lines.trim() ? lines.trim().split('\n').map(line => JSON.parse(line)) : [];
 

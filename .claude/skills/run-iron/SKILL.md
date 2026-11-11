@@ -396,6 +396,13 @@ PROVIDER=claude MODEL=claude-opus-5-5 bun .claude/skills/run-iron/agent-probe.ts
 FIXTURE=1 bun .claude/skills/run-iron/agent-probe.ts chat-test-prose chat-test-stream   # no model usage
 ```
 
+A prompt line `@image <path>` attaches that image to the turn through the composer's
+file input (PNG, JPEG, SVG, HEIC; SVG is rasterised as a dropped one is), and is not sent
+as text. The left side's view strip opens the chat (the "Model (the agent)" button; the
+probe looked for a Model tab until 2026-11-10, broken by the layout council's hidden tab
+bar). The first run after Vite starts cold can time out on the attachment while Vite
+optimises the image dependencies; rerun.
+
 Settings: `PROVIDER=codex|claude` (default codex), `MODEL` (default: the runtime's own),
 `TURN_MINUTES` (per-turn limit, default 10; a turn past it is stopped and the run ends),
 `APP_PATH` (path and query on the probe's server, default `/Ironfell/?gfx=webgl2&demo`),
